@@ -15,15 +15,16 @@ UI/UX work for the hosted/mobile PWA should target the React client in `packages
 ## CI checks
 
 CI runs on GitHub Actions (`.github/workflows/ci.yml`) for every push and pull
-request — lint, typecheck, core/unit tests, control-plane, relay, and the remote
-e2e suites, path-filtered to the areas your change touches. There is no local
-pre-push gate; run the checks yourself before pushing when you want a fast local
-signal:
+request — lint, typecheck, core/unit tests, a docs link checker, control-plane,
+relay, and the remote e2e suites, path-filtered to the areas your change
+touches. There is no local pre-push gate; run the checks yourself before
+pushing when you want a fast local signal:
 
 ```bash
 npm run lint
 npm run typecheck
 npm run test:unit
+npm run check:links
 ```
 
 ## Pull requests

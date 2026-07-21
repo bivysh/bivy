@@ -4,8 +4,7 @@ Bivy supports multiple agents, but they are not all equally production-ready. Th
 
 The agent **picker** shows the ten most-used coding agents (the rows below with a
 non-italic tier). Everything else stays in the catalog and is runnable via
-`BIVY_RUNTIME=<id>`, but is hidden from the picker (see
-`agents-not-fully-supported.md`).
+`BIVY_RUNTIME=<id>`, but is hidden from the picker.
 
 | Runtime | id | Tier | In picker | Start web/mobile | Start CLI | Resume | Model picker | Approvals | Auth owner | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -16,7 +15,7 @@ non-italic tier). Everything else stays in the catalog and is runnable via
 | Gemini CLI | `gemini` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Native sandbox (`--approval-mode`) | Gemini CLI | `gemini-json` final-object parser; native auth; resumes via `-r <id>` (tier-aware `--approval-mode`). |
 | Qwen Code | `qwen` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Native sandbox (`--approval-mode`) | Qwen Code CLI | Gemini-CLI fork: reuses the `gemini-json` parser, approval-mode containment, and `--resume <id>` form. |
 | Goose | `goose` | Beta | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | Goose CLI | `goose-stream-json` streaming parser; resumes via `--resume --session-id <id>`. |
-| Aider | `aider` | Beta | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | Bivy/provider or Aider config | `aider --message --yes-always`; git-native, single-turn per prompt. No native "continue session `<id>`" flag upstream — its own `--restore-chat-history` continuity is cwd-scoped, not id-based, so it can't plug into the generic primitive (see `agents-not-fully-supported.md`). |
+| Aider | `aider` | Beta | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | Bivy/provider or Aider config | `aider --message --yes-always`; git-native, single-turn per prompt. No native "continue session `<id>`" flag upstream — its own `--restore-chat-history` continuity is cwd-scoped, not id-based, so it can't plug into the generic primitive. |
 | Cline | `cline` | Beta | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | Cline CLI | Autonomous (`-y`) single task; best-effort flags, override with `BIVY_CLINE_ARGS`; resumes via `--id <id>`. |
 | Crush | `crush` | Beta | Yes | Yes | Yes | No | No | Effect-level (FS/MCP/net) | Crush CLI | `crush run -q`; best-effort flags, override with `BIVY_CRUSH_ARGS`. No resume flag upstream yet for `crush run` (tracked in charmbracelet/crush#1982, #1015). |
 | Codex (exec) | `codex` | *Supported* | No | Yes | Yes | Yes | No | Effect-level sandbox | Codex CLI/OpenAI | Fast no-approval path; superseded in the picker by `codex-approvals`. Runnable via `BIVY_RUNTIME=codex`. |
@@ -42,8 +41,7 @@ above: a `resume.template` arg array in `CLI_AGENT_SPECS`
 per-agent runtime code, matching the ProtocolRuntime resume primitive
 (`session.create.resume`) added for Codex/Bivy-agent-protocol. It's `No` only
 where the underlying CLI genuinely has no native "continue session `<id>`" form
-today (Aider, Crush, Hermes) or the adapter itself isn't there yet (OpenClaw);
-see `agents-not-fully-supported.md` for the reasoning behind each.
+today (Aider, Crush, Hermes) or the adapter itself isn't there yet (OpenClaw).
 
 Beyond start/resume/model/approvals, the shared layer also surfaces, where the
 agent emits it: **token usage** (parsed from the agent's JSON — Gemini/Qwen/Goose
