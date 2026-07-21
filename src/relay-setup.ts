@@ -261,7 +261,7 @@ async function main() {
   }
 
   console.log(`\n✓ Signed in and enrolled this node. Wrote ${filePath}`);
-  console.log('Use "bivy link" or the UI\'s "Link remote device" button to pair a phone.');
+  console.log('Run "bivy link" to pair a phone, or use "Link remote device" in the app (bivy open).');
 }
 
 main().catch((error) => {
