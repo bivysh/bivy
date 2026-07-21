@@ -23,7 +23,7 @@
     "@xterm/xterm": "^5.5.0",
     "highlight.js": "^11.11.1",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@types/react": "^19.2.0",
