@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Multiple GitHub Apps per account.** A *private* GitHub App can only be installed on the account that owns it, so a single app could never cover both a user's personal repositories and their organizations — and making it public would let anyone install it and enqueue work against the owner's account. A node now serves several apps: one per GitHub account/org. Each keeps its own private key in the node's vault (`github.app.<appId>`, tracked in a new `<dataDir>/github-apps.json` registry), its own control-plane webhook, and its own `@`-mention handle, so mentioning one app never triggers another. Work items now carry the `appId` of the hook that received the delivery, so the node knows which key to mint with instead of guessing; repo→installation lookups try the app owned by that same account first, keeping the common case to a single API call. Settings → GitHub App lists every connected app with its owner, install count, and serving node, and disconnect is per-app. `bivy github:app-create --org <org>` creates an app under an organization. The single-app environment configuration (`BIVY_GITHUB_APP_ID`) still works and is surfaced as one registry entry, so container and ephemeral-runner setups are unaffected. (`src/github-apps.ts`, `src/server.ts`, `src/github-app-connect.ts`, `services/control-plane/src/{store,postgres-store,index}.ts`, `packages/core/src/account.ts`, `packages/web/src/components/Settings.tsx`, `packages/web/src/components/GithubQueue.tsx`.)
+
+### Fixed
+- Direct-mode `github.app.disconnect` sent an empty body, so disconnecting a single app would have wiped every GitHub App key on the node. It now forwards the `appId`. (`packages/core/src/transport-direct.ts`.)
+
 ## [0.1.0] - 2026-07-21
 
 First public release.

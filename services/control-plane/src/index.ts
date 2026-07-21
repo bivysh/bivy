@@ -1148,10 +1148,14 @@ app.post("/node/hooks", requireNode, asyncHandler(async (req, res) => {
 // when the account has no github_app hook yet (caller then creates one).
 app.get("/node/hooks/github_app", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  const hook = await store.getGithubAppHook(node.accountId);
+  // An account may have several apps (personal + one per org), each with its own
+  // hook and its own webhook secret. Ask by app id so a node reconnecting app B
+  // can't adopt app A's hook and start verifying deliveries with the wrong secret.
+  const appId = typeof req.query.appId === "string" ? req.query.appId.trim() : "";
+  const hook = await store.getGithubAppHook(node.accountId, appId || undefined);
   if (!hook) return res.status(404).json({ error: "No GitHub App hook for this account" });
   const url = `${baseUrl(req)}/webhooks/github_app/${hook.id}`;
-  res.json({ ok: true, id: hook.id, secret: hook.secret, url });
+  res.json({ ok: true, id: hook.id, secret: hook.secret, url, appId: hook.appId });
 }));
 
 // Adopt an externally-generated secret for a hook (GitHub App manifest returns
@@ -1187,12 +1191,21 @@ app.post("/node/hooks/:id/app-meta", requireNode, asyncHandler(async (req, res) 
 // the real name without reconnecting). Resolves the account's github_app hook.
 app.post("/node/github-app/meta", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  const hook = await store.getGithubAppHook(node.accountId);
-  if (!hook) return res.json({ ok: false, reason: "no-github-app-hook" });
   const mention = typeof req.body?.mention === "string" ? req.body.mention : undefined;
   const name = typeof req.body?.name === "string" ? req.body.name : undefined;
   const appId = typeof req.body?.appId === "string" ? req.body.appId : undefined;
-  const updated = await store.setInboundHookAppMeta(node.accountId, hook.id, { mention, name, appId });
+  const owner = typeof req.body?.owner === "string" ? req.body.owner : undefined;
+  const ownerType = typeof req.body?.ownerType === "string" ? req.body.ownerType : undefined;
+  // Match the hook for THIS app. Without the app id we'd stamp one app's slug
+  // onto another app's hook, and mentions would route to the wrong place.
+  const hook =
+    (appId ? await store.getGithubAppHook(node.accountId, appId) : undefined) ??
+    // An app connected before it had metadata has a hook with no app_id yet;
+    // fall back to the account's primary hook so those self-heal.
+    (await store.listGithubAppHooks(node.accountId)).find((h) => !h.appId) ??
+    (appId ? undefined : await store.getGithubAppHook(node.accountId));
+  if (!hook) return res.json({ ok: false, reason: "no-github-app-hook" });
+  const updated = await store.setInboundHookAppMeta(node.accountId, hook.id, { mention, name, appId, owner, ownerType });
   // The node that backfills app-meta is the one holding the key → mark it serving.
   await store.setInboundHookServingNode(node.accountId, hook.id, node.id);
   res.json({ ok: true, mention: updated?.botMention, name: updated?.appName });
@@ -1206,7 +1219,8 @@ app.post("/node/github-app/installations", requireNode, asyncHandler(async (req,
   const node = (req as Request & { node: NodeRecord }).node;
   const count = Number(req.body?.count);
   if (!Number.isFinite(count) || count < 0) return res.status(400).json({ error: "Missing or invalid count" });
-  const hook = await store.getGithubAppHook(node.accountId);
+  const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
+  const hook = await store.getGithubAppHook(node.accountId, appId || undefined);
   if (!hook) return res.json({ ok: false, reason: "no-github-app-hook" });
   const updated = await store.setInboundHookInstallStatus(node.accountId, hook.id, count);
   res.json({ ok: true, installCount: updated?.installCount });
@@ -1217,43 +1231,53 @@ app.post("/node/github-app/installations", requireNode, asyncHandler(async (req,
 app.get("/account/github-app", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  const hook = await store.getGithubAppHook(client.accountId);
-  if (!hook) return res.json({ connected: false });
-  const slug = hook.botMention || "";
-  // Which node holds the app key and is servicing it. The control plane can't run
-  // the app itself, so "connected" (a hook exists) is not the same as "a live node
-  // is serving it" — a deleted/reinstalled node clears servingNodeId. Surface both
-  // so the UI can prompt to (re)connect on a node instead of lying "connected".
+  const hooks = await store.listGithubAppHooks(client.accountId);
+  if (!hooks.length) return res.json({ connected: false, apps: [] });
+  // Which node holds each app's key and is servicing it. The control plane can't
+  // run an app itself, so "connected" (a hook exists) is not the same as "a live
+  // node is serving it" — a deleted/reinstalled node clears servingNodeId.
   const nodes = await store.listNodes(client.accountId);
-  const servingNode = hook.servingNodeId ? nodes.find((n) => n.id === hook.servingNodeId) : undefined;
-  const servedBy = servingNode
-    ? { id: servingNode.id, name: servingNode.name, online: Boolean(servingNode.online), lastSeenAt: servingNode.lastSeenAt }
-    : null;
-  res.json({
-    connected: true,
-    name: hook.appName || slug || "GitHub App",
-    slug,
-    mention: slug,
-    editUrl: slug ? `https://github.com/settings/apps/${encodeURIComponent(slug)}` : "https://github.com/settings/apps",
-    // Numeric App ID (display/pre-fill only), so the "connect existing app" form
-    // can pre-fill it when reconnecting the same app onto another node.
-    appId: hook.appId,
-    // The app delivers no events until it's installed on at least one repo, so
-    // the connected UI links here to add/manage repositories.
-    installUrl: slug ? `https://github.com/apps/${encodeURIComponent(slug)}/installations/new` : "https://github.com/settings/installations",
-    // Install status the node last reported (it holds the key). undefined =
-    // never synced (node offline / pre-feature); `installed:false` = a positive
-    // "installed on zero repos" signal the UI can warn on.
-    installCount: hook.installCount,
-    installed: typeof hook.installCount === "number" ? hook.installCount > 0 : undefined,
-    // The node-label suffix (e.g. "macbook") that untagged/generic `bivy`-routed
-    // work defaults to. undefined = no default (shared-queue behavior).
-    defaultNode: hook.defaultNode,
-    // The node currently servicing the app (holds the key), or null if none — the
-    // signal that lets the UI say "no node is running this app; connect one".
-    servedBy,
-    servingNodeSeenAt: hook.servingNodeSeenAt,
-  });
+  const describe = (hook: (typeof hooks)[number]) => {
+    const slug = hook.botMention || "";
+    const servingNode = hook.servingNodeId ? nodes.find((n) => n.id === hook.servingNodeId) : undefined;
+    const servedBy = servingNode
+      ? { id: servingNode.id, name: servingNode.name, online: Boolean(servingNode.online), lastSeenAt: servingNode.lastSeenAt }
+      : null;
+    return {
+      connected: true,
+      name: hook.appName || slug || "GitHub App",
+      slug,
+      mention: slug,
+      editUrl: slug ? `https://github.com/settings/apps/${encodeURIComponent(slug)}` : "https://github.com/settings/apps",
+      // Numeric App ID (display/pre-fill only), and the key the UI addresses an
+      // individual app by for disconnect / default-node.
+      appId: hook.appId,
+      hookId: hook.id,
+      // Which GitHub account this app covers — with several connected, this is
+      // what distinguishes "my personal app" from "the acme org app".
+      owner: hook.appOwner,
+      ownerType: hook.appOwnerType,
+      // The app delivers no events until it's installed on at least one repo, so
+      // the connected UI links here to add/manage repositories.
+      installUrl: slug ? `https://github.com/apps/${encodeURIComponent(slug)}/installations/new` : "https://github.com/settings/installations",
+      // Install status the node last reported (it holds the key). undefined =
+      // never synced (node offline / pre-feature); `installed:false` = a positive
+      // "installed on zero repos" signal the UI can warn on.
+      installCount: hook.installCount,
+      installed: typeof hook.installCount === "number" ? hook.installCount > 0 : undefined,
+      // The node-label suffix (e.g. "macbook") that untagged/generic `bivy`-routed
+      // work defaults to. undefined = no default (shared-queue behavior).
+      defaultNode: hook.defaultNode,
+      // The node currently servicing the app (holds the key), or null if none — the
+      // signal that lets the UI say "no node is running this app; connect one".
+      servedBy,
+      servingNodeSeenAt: hook.servingNodeSeenAt,
+    };
+  };
+  const apps = hooks.map(describe);
+  // Flat top-level fields describe the first app, so clients written against the
+  // single-app shape keep working against a multi-app account.
+  res.json({ ...apps[0], apps });
 }));
 
 // Set (or clear) the account's default node: untagged issues/comments that
@@ -1262,10 +1286,19 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
 app.post("/account/github-app/default-node", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  const hook = await store.getGithubAppHook(client.accountId);
-  if (!hook) return res.status(404).json({ error: "No GitHub App connected" });
+  const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
+  // The default node is an account-level preference stored per hook. Without an
+  // app id, set it on every app so the account has one answer rather than N.
+  const hooks = appId
+    ? [await store.getGithubAppHook(client.accountId, appId)].filter(Boolean as unknown as (h: unknown) => boolean)
+    : await store.listGithubAppHooks(client.accountId);
+  const targets = hooks as Array<{ id: string }>;
+  if (!targets.length) return res.status(404).json({ error: "No GitHub App connected" });
   const node = typeof req.body?.node === "string" ? req.body.node.trim() : "";
-  const updated = await store.setInboundHookDefaultNode(client.accountId, hook.id, node || undefined);
+  let updated: { defaultNode?: string } | undefined;
+  for (const target of targets) {
+    updated = (await store.setInboundHookDefaultNode(client.accountId, target.id, node || undefined)) ?? updated;
+  }
   // Re-route work already waiting on the shared/default queue to the new default,
   // so changing the default node also moves pending items (not just future ones).
   const rerouted = await store.rerouteDefaultRoutedPending(client.accountId, applyDefaultNode("bivy", updated?.defaultNode));
@@ -1279,9 +1312,14 @@ app.post("/account/github-app/default-node", asyncHandler(async (req, res) => {
 app.delete("/account/github-app", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  // Remove ALL github_app hooks, not just the newest — abandoned create flows
-  // leave orphans, and deleting one would let the next resurface as "connected".
-  const removed = await store.deleteGithubAppHooks(client.accountId);
+  // With an app id, disconnect just that app and leave the account's others
+  // alone. Without one, remove ALL github_app hooks — abandoned create flows
+  // leave orphans, and deleting only the newest would let one resurface as
+  // "connected".
+  const appId = typeof req.query.appId === "string" ? req.query.appId.trim() : "";
+  const removed = appId
+    ? await store.deleteGithubAppHooksForApp(client.accountId, appId)
+    : await store.deleteGithubAppHooks(client.accountId);
   res.json({ ok: true, removed });
 }));
 
@@ -1449,6 +1487,7 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
       // account's default node changes.
       defaultRouted: rawLabel === "bivy",
       installationId,
+      appId: hook.appId,
     });
     void notifyRelaysWorkAvailable(hook.accountId, item);
     return res.json({ ok: true, enqueued: true, id: item.id, label });
@@ -1477,6 +1516,7 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     collapseKey: `gh-issue:${issue.repo}#${issue.issueNumber}`,
     defaultRouted: rawLabel === "bivy",
     installationId,
+    appId: hook.appId,
   });
   void notifyRelaysWorkAvailable(hook.accountId, item);
   res.json({ ok: true, enqueued: true, id: item.id, label });

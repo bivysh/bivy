@@ -267,6 +267,8 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS app_name    TEXT;
       -- The GitHub App's numeric App ID (display/pre-fill only, not a credential).
       ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS app_id      TEXT;
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS app_owner      TEXT;
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS app_owner_type TEXT;
       -- How many repos/orgs the GitHub App is installed on, reported by the node
       -- (which holds the key). NULL = never synced. Drives the "not installed
       -- yet" warning, since the app is inert until installed somewhere.
@@ -298,7 +300,8 @@ export class PostgresStore implements MeshStore {
         completed_at       TIMESTAMPTZ,
         created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
         dedupe_key         TEXT,
-        installation_id    TEXT
+        installation_id    TEXT,
+        app_id             TEXT
       );
 
       -- Idempotency: a redelivered webhook (same delivery id) must not enqueue a
@@ -306,6 +309,7 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
       -- GitHub App installation the node should mint a token for (flavor A).
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS installation_id TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS app_id TEXT;
       -- Collapse the many webhook deliveries one issue emits (opened/labeled/edited)
       -- into a single PENDING item, while still allowing a fresh run after the prior
       -- one finished. default_routed marks shared-queue items re-routable when the
@@ -924,15 +928,29 @@ export class PostgresStore implements MeshStore {
     return rows[0] ? mapHook(rows[0]) : undefined;
   }
 
-  async setInboundHookAppMeta(accountId: string, id: string, meta: { mention?: string; name?: string; appId?: string }): Promise<InboundHook | undefined> {
+  async setInboundHookAppMeta(
+    accountId: string,
+    id: string,
+    meta: { mention?: string; name?: string; appId?: string; owner?: string; ownerType?: string },
+  ): Promise<InboundHook | undefined> {
     // COALESCE keeps the existing value when a field isn't being updated.
     const { rows } = await this.query(
       `UPDATE inbound_hooks
-         SET bot_mention = COALESCE($3, bot_mention),
-             app_name    = COALESCE($4, app_name),
-             app_id      = COALESCE($5, app_id)
+         SET bot_mention    = COALESCE($3, bot_mention),
+             app_name       = COALESCE($4, app_name),
+             app_id         = COALESCE($5, app_id),
+             app_owner      = COALESCE($6, app_owner),
+             app_owner_type = COALESCE($7, app_owner_type)
        WHERE id = $2 AND account_id = $1 RETURNING *`,
-      [accountId, id, meta.mention?.trim() || null, meta.name?.trim() || null, meta.appId?.trim() || null],
+      [
+        accountId,
+        id,
+        meta.mention?.trim() || null,
+        meta.name?.trim() || null,
+        meta.appId?.trim() || null,
+        meta.owner?.trim() || null,
+        meta.ownerType?.trim() || null,
+      ],
     );
     return rows[0] ? mapHook(rows[0]) : undefined;
   }
@@ -963,7 +981,25 @@ export class PostgresStore implements MeshStore {
     return rows[0] ? mapHook(rows[0]) : undefined;
   }
 
-  async getGithubAppHook(accountId: string): Promise<InboundHook | undefined> {
+  async listGithubAppHooks(accountId: string): Promise<InboundHook[]> {
+    // Completed hooks (mention registered) first; abandoned create-flow orphans last.
+    const { rows } = await this.query(
+      `SELECT * FROM inbound_hooks WHERE account_id = $1 AND kind = 'github_app'
+       ORDER BY (bot_mention IS NOT NULL) DESC, created_at DESC`,
+      [accountId],
+    );
+    return rows.map(mapHook);
+  }
+
+  async getGithubAppHook(accountId: string, appId?: string): Promise<InboundHook | undefined> {
+    if (appId) {
+      const { rows } = await this.query(
+        `SELECT * FROM inbound_hooks WHERE account_id = $1 AND kind = 'github_app' AND app_id = $2
+         ORDER BY (bot_mention IS NOT NULL) DESC, created_at DESC LIMIT 1`,
+        [accountId, appId],
+      );
+      return rows[0] ? mapHook(rows[0]) : undefined;
+    }
     // Prefer a completed hook (mention registered) over an abandoned-flow orphan.
     const { rows } = await this.query(
       `SELECT * FROM inbound_hooks WHERE account_id = $1 AND kind = 'github_app'
@@ -971,6 +1007,14 @@ export class PostgresStore implements MeshStore {
       [accountId],
     );
     return rows[0] ? mapHook(rows[0]) : undefined;
+  }
+
+  async deleteGithubAppHooksForApp(accountId: string, appId: string): Promise<number> {
+    const { rowCount } = await this.query(
+      `DELETE FROM inbound_hooks WHERE account_id = $1 AND kind = 'github_app' AND app_id = $2`,
+      [accountId, appId],
+    );
+    return rowCount ?? 0;
   }
 
   async deleteInboundHook(accountId: string, id: string): Promise<boolean> {
@@ -996,8 +1040,8 @@ export class PostgresStore implements MeshStore {
     // per-issue collapse key (only against the still-pending row). ON CONFLICT DO
     // NOTHING covers both; on either conflict we return the existing item.
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -1016,6 +1060,7 @@ export class PostgresStore implements MeshStore {
         input.runtimeId ?? null,
         input.model ?? null,
         input.installationId ?? null,
+        input.appId ?? null,
       ],
     );
     if (rows[0]) return mapWorkItem(rows[0]);
@@ -1127,6 +1172,8 @@ function mapHook(row: any): InboundHook {
     botMention: row.bot_mention ?? undefined,
     appName: row.app_name ?? undefined,
     appId: row.app_id ?? undefined,
+    appOwner: row.app_owner ?? undefined,
+    appOwnerType: row.app_owner_type ?? undefined,
     installCount: row.install_count ?? undefined,
     installsSyncedAt: row.installs_synced_at ? new Date(row.installs_synced_at).toISOString() : undefined,
     defaultNode: row.default_node ?? undefined,
@@ -1157,6 +1204,7 @@ function mapWorkItem(row: any): WorkItem {
     runtimeId: row.runtime_id ?? undefined,
     model: row.model ?? undefined,
     installationId: row.installation_id ?? undefined,
+    appId: row.app_id ?? undefined,
     ephemeral: row.ephemeral ?? undefined,
   };
 }

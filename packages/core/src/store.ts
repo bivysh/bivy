@@ -288,6 +288,10 @@ export interface OauthState {
  * State for the GitHub App one-click (manifest) flow. `phase` drives the UI:
  * idle → starting (waiting for the node's manifest) → submitting (browser is at
  * GitHub) → completing (relaying the returned code) → done | error.
+ *
+ * One flow at a time, even though an account can end up with several apps (one
+ * per GitHub owner): each create allocates its own hook and finishes before the
+ * next starts, so this stays a single transient phase machine rather than a map.
  */
 export interface GithubAppState {
   phase: "idle" | "starting" | "submitting" | "completing" | "done" | "error";

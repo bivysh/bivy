@@ -491,6 +491,76 @@ await test("getGithubAppHook prefers a completed hook; deleteGithubAppHooks remo
   assert.equal(await store.getInboundHook(orphan.id), undefined);
 });
 
+// A private GitHub App only installs on the account that owns it, so covering a
+// personal account plus organizations takes one app each. Every app gets its own
+// hook: the hook's secret is what GitHub signs that app's deliveries with, and
+// the hook is how an inbound delivery identifies which key should mint the token.
+await test("an account can hold several GitHub Apps, each addressable by app id", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("multi@example.com");
+
+  const personal = await store.createInboundHook(acct.id, "github_app");
+  await store.setInboundHookAppMeta(acct.id, personal.id, { mention: "bivy-me", name: "Bivy Personal", appId: "100" });
+  const org = await store.createInboundHook(acct.id, "github_app");
+  await store.setInboundHookAppMeta(acct.id, org.id, { mention: "bivy-acme", name: "Bivy Acme", appId: "200" });
+
+  const all = await store.listGithubAppHooks(acct.id);
+  assert.equal(all.length, 2);
+  assert.deepEqual(all.map((h) => h.appId).sort(), ["100", "200"]);
+
+  // Addressing by app id must return that app's own hook — handing back the
+  // wrong one would make the node verify deliveries with the wrong secret.
+  assert.equal((await store.getGithubAppHook(acct.id, "100"))?.id, personal.id);
+  assert.equal((await store.getGithubAppHook(acct.id, "200"))?.id, org.id);
+  assert.equal(await store.getGithubAppHook(acct.id, "999"), undefined);
+
+  // Each app keeps its own mention handle, so a mention of one can't fire the other.
+  assert.equal((await store.getGithubAppHook(acct.id, "100"))?.botMention, "bivy-me");
+  assert.equal((await store.getGithubAppHook(acct.id, "200"))?.botMention, "bivy-acme");
+});
+
+await test("disconnecting one app leaves the account's other apps connected", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("multi-disconnect@example.com");
+  const personal = await store.createInboundHook(acct.id, "github_app");
+  await store.setInboundHookAppMeta(acct.id, personal.id, { mention: "bivy-me", appId: "100" });
+  const org = await store.createInboundHook(acct.id, "github_app");
+  await store.setInboundHookAppMeta(acct.id, org.id, { mention: "bivy-acme", appId: "200" });
+
+  assert.equal(await store.deleteGithubAppHooksForApp(acct.id, "100"), 1);
+  const left = await store.listGithubAppHooks(acct.id);
+  assert.deepEqual(left.map((h) => h.appId), ["200"]);
+  assert.equal(await store.getInboundHook(personal.id), undefined);
+
+  // Removing an app that isn't there is a no-op, not an error.
+  assert.equal(await store.deleteGithubAppHooksForApp(acct.id, "100"), 0);
+
+  // A foreign account cannot disconnect this account's app.
+  const other = await store.findOrCreateAccount("multi-disconnect2@example.com");
+  assert.equal(await store.deleteGithubAppHooksForApp(other.id, "200"), 0);
+  assert.equal((await store.listGithubAppHooks(acct.id)).length, 1);
+});
+
+// The node may hold several apps' keys, so a work item has to say which app's
+// installation it belongs to — otherwise the node has to guess which key to mint with.
+await test("work items carry the app id of the hook that received the delivery", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("workitem-app@example.com");
+  const item = await store.enqueueWorkItem(acct.id, {
+    label: "bivy",
+    source: "github:issue",
+    title: "Fix it",
+    repo: "acme/widgets",
+    issueNumber: 7,
+    installationId: "555",
+    appId: "200",
+  });
+  assert.equal(item.appId, "200");
+  assert.equal(item.installationId, "555");
+  const pending = await store.listPendingWorkItems(acct.id, ["bivy"]);
+  assert.equal(pending[0]?.appId, "200", "app id must survive the round trip to the node");
+});
+
 await test("listWorkItems returns all the account's items regardless of status", async () => {
   const store = await makeStore();
   const acct = await store.findOrCreateAccount("q@example.com");

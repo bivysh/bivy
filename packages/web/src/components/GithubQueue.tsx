@@ -307,8 +307,11 @@ export function GithubQueuePanel({
     });
   }, [queue, claimedRefs]);
 
-  // Connected app but no live node holding its key → nothing will pull the queue.
-  const appConnectedNoServer = Boolean(appInfo?.connected && appInfo.servedBy === null);
+  // Connected apps with no live node holding their key → nothing will pull their
+  // work. An account can have several apps (one per GitHub owner), and they're
+  // served independently, so this counts rather than tests a single flag.
+  const apps = appInfo?.apps ?? [];
+  const unservedApps = apps.filter((a) => a.servedBy === null);
   // No persistent node online at all (any hosted-queue setup, not just GitHub
   // App) — the signal the ephemeral-queue-default watches for.
   const anyNodeOnline = useMemo(() => nodes.some((n) => n.online), [nodes]);
@@ -353,7 +356,7 @@ export function GithubQueuePanel({
           </div>
         )}
 
-        {canQuery && workQueueEnabled !== false && appInfo && !appInfo.connected && (
+        {canQuery && workQueueEnabled !== false && appInfo && apps.length === 0 && (
           <div className="banner info inline">
             No GitHub App connected yet.{" "}
             <button className="link-btn" onClick={onOpenGithubSettings}>
@@ -362,11 +365,13 @@ export function GithubQueuePanel({
           </div>
         )}
 
-        {canQuery && workQueueEnabled !== false && appConnectedNoServer && (
+        {canQuery && workQueueEnabled !== false && unservedApps.length > 0 && (
           <div className="banner warn inline">
-            Your GitHub App is set up, but no online node is running it — nothing will pick these up.{" "}
+            {unservedApps.length === apps.length
+              ? `${apps.length === 1 ? "Your GitHub App is" : "Your GitHub Apps are"} set up, but no online node is running ${apps.length === 1 ? "it" : "them"} — nothing will pick these up.`
+              : `${unservedApps.length} of your ${apps.length} GitHub Apps (${unservedApps.map((a) => a.name || a.mention || a.appId).join(", ")}) aren't running on any node — work for those won't be picked up.`}{" "}
             <button className="link-btn" onClick={onOpenGithubSettings}>
-              Connect it on a node →
+              {unservedApps.length === 1 ? "Connect it on a node →" : "Connect them on a node →"}
             </button>
           </div>
         )}

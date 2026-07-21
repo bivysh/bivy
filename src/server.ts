@@ -98,7 +98,16 @@ import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { EventLog } from "./session/event-log.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereqInput, type ForkPrereq } from "./session/fork-prereqs.js";
 import { SecretVault } from "./secrets.js";
-import { loadGitHubAppConfig, InstallationTokenCache, createAppJwt, resolveInstallationId, type GitHubAppConfig } from "./github-app-auth.js";
+import { InstallationTokenCache, createAppJwt, resolveInstallationId, type GitHubAppConfig } from "./github-app-auth.js";
+import {
+  loadGitHubAppConfigs,
+  orderAppsForOwner,
+  listGitHubApps,
+  removeGitHubApp,
+  upsertGitHubApp,
+  privateKeyIdFor,
+  type GitHubAppRecord,
+} from "./github-apps.js";
 import { buildAppManifest, convertManifest, renderManifestForm } from "./github-app-manifest.js";
 import { redactSecrets } from "./redact.js";
 import {
@@ -2266,8 +2275,10 @@ const RELAY_COMMANDS: Record<string, Command> = {
   },
   "github.app.disconnect"(msg) {
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
-    disconnectGithubApp();
-    relay?.sendEvent({ type: "github.app.disconnected", requestId, ok: true });
+    // appId scopes the disconnect to one app; omitted = disconnect them all.
+    const appId = typeof msg.appId === "string" && msg.appId.trim() ? msg.appId.trim() : undefined;
+    disconnectGithubApp(appId);
+    relay?.sendEvent({ type: "github.app.disconnected", requestId, ok: true, appId });
   },
   "workspaces.list"() {
     relay?.sendEvent({
@@ -3850,22 +3861,35 @@ let controlPlanePoller: ControlPlaneTaskPoller | undefined;
  * clone of the item's repo, using the node's own token. Other items (Slack, no
  * repo) start a background session in the default workspace with the prompt.
  */
-// Lazily-built GitHub App state. `githubAppTokenCache === null` = we checked and
-// no app is configured on this node (fall back to the PAT path). The
-// owner/repo→installationId map is cached (a repo's installation is stable);
-// `null` value = looked up and the app isn't installed there.
-let githubAppTokenCache: InstallationTokenCache | null | undefined;
-let githubAppConfig: GitHubAppConfig | null | undefined;
-const installationIdByRepo = new Map<string, string | null>();
+// Lazily-built GitHub App state. A node can serve several apps — a private app
+// can only be installed on the account that owns it, so covering a personal
+// account plus one or more orgs takes one app each. `githubApps === undefined`
+// means "not looked up yet"; an empty array means no app is configured and the
+// PAT path applies.
+//
+// The owner/repo→installation map is cached (a repo's installation is stable);
+// a `null` value means "looked up, no configured app is installed there".
+type LoadedGitHubApp = { cfg: GitHubAppConfig; record: GitHubAppRecord; cache: InstallationTokenCache };
+let githubApps: LoadedGitHubApp[] | undefined;
+const installationIdByRepo = new Map<string, { appId: string; installationId: string } | null>();
 
-/** Resolve (once) whether a GitHub App is configured on this node. */
-async function ensureGitHubApp(): Promise<{ cache: InstallationTokenCache; cfg: GitHubAppConfig } | null> {
-  if (githubAppTokenCache === undefined) {
-    const cfg = await loadGitHubAppConfig();
-    githubAppConfig = cfg ?? null;
-    githubAppTokenCache = cfg ? new InstallationTokenCache(cfg.appId, cfg.privateKeyPem) : null;
+/** Resolve (once) the GitHub Apps configured on this node. */
+async function ensureGitHubApps(): Promise<LoadedGitHubApp[]> {
+  if (githubApps === undefined) {
+    const configs = await loadGitHubAppConfigs(appDir);
+    githubApps = configs.map((c) => ({
+      cfg: { appId: c.appId, privateKeyPem: c.privateKeyPem },
+      record: c.record,
+      cache: new InstallationTokenCache(c.appId, c.privateKeyPem),
+    }));
   }
-  return githubAppTokenCache && githubAppConfig ? { cache: githubAppTokenCache, cfg: githubAppConfig } : null;
+  return githubApps;
+}
+
+/** Forget cached app state so a newly connected app is picked up without a restart. */
+function invalidateGitHubApps(): void {
+  githubApps = undefined;
+  installationIdByRepo.clear();
 }
 
 /**
@@ -3876,8 +3900,19 @@ async function ensureGitHubApp(): Promise<{ cache: InstallationTokenCache; cfg: 
  */
 async function resolveTokenForWorkItem(item: ControlPlaneWorkItem): Promise<string | undefined> {
   if (item.installationId) {
-    const app = await ensureGitHubApp();
-    if (app) return app.cache.get(item.installationId);
+    const apps = await ensureGitHubApps();
+    // The control plane tells us which app the webhook arrived on (each inbound
+    // hook belongs to exactly one app). Older control planes don't, so fall back
+    // to trying each app: minting with the wrong key just fails, and the right
+    // one is usually first.
+    const candidates = item.appId ? apps.filter((a) => a.cfg.appId === item.appId) : apps;
+    for (const app of candidates.length ? candidates : apps) {
+      try {
+        return await app.cache.get(item.installationId);
+      } catch {
+        // wrong app for this installation, or a transient mint failure — try the next
+      }
+    }
   }
   return resolveGitHubToken();
 }
@@ -3893,22 +3928,37 @@ async function resolveTokenForWorkItem(item: ControlPlaneWorkItem): Promise<stri
  * endpoints like `/user/repos` — an installation token can't call those.)
  */
 async function resolveTokenForRepo(owner: string, repo: string): Promise<string | undefined> {
-  const app = await ensureGitHubApp();
-  if (app) {
+  const apps = await ensureGitHubApps();
+  if (apps.length) {
     const key = `${owner}/${repo}`;
-    let installationId = installationIdByRepo.get(key);
-    if (installationId === undefined) {
-      installationId =
-        (await resolveInstallationId({ appId: app.cfg.appId, privateKeyPem: app.cfg.privateKeyPem, owner, repo }).catch(
-          () => undefined,
-        )) ?? null;
-      installationIdByRepo.set(key, installationId);
+    let hit = installationIdByRepo.get(key);
+    if (hit === undefined) {
+      hit = null;
+      // An app owned by the same account as the repo is almost always the right
+      // one, so try it first: the common case stays a single API call rather
+      // than one per configured app.
+      for (const app of orderAppsForOwner(apps, owner)) {
+        const installationId = await resolveInstallationId({
+          appId: app.cfg.appId,
+          privateKeyPem: app.cfg.privateKeyPem,
+          owner,
+          repo,
+        }).catch(() => undefined);
+        if (installationId) {
+          hit = { appId: app.cfg.appId, installationId };
+          break;
+        }
+      }
+      installationIdByRepo.set(key, hit);
     }
-    if (installationId) {
-      try {
-        return await app.cache.get(installationId);
-      } catch {
-        // mint failed (revoked install, transient API error) — fall back to PAT
+    if (hit) {
+      const app = apps.find((a) => a.cfg.appId === hit.appId);
+      if (app) {
+        try {
+          return await app.cache.get(hit.installationId);
+        } catch {
+          // mint failed (revoked install, transient API error) — fall back to PAT
+        }
       }
     }
   }
@@ -3970,66 +4020,102 @@ function startControlPlaneTasksIfConfigured() {
   controlPlanePoller.start();
 }
 
-let githubAppMetaRegistered = false;
+const githubAppMetaRegistered = new Set<string>();
+
+/**
+ * Tell the control plane each app's slug (its unique `@`-mention handle) and
+ * name, so mentions route correctly and the UI can show what's connected.
+ *
+ * Per app: a node may serve several, and each has its own inbound hook. The
+ * slug is fetched from `GET /app`, which needs only an RS256 app JWT.
+ */
 async function registerGithubAppMeta(): Promise<void> {
-  if (githubAppMetaRegistered) return;
-  const cfg = await loadGitHubAppConfig();
   const relay = loadRelayConfig(appDir);
-  if (!cfg || !relay?.controlPlaneUrl || !relay?.enrollmentToken) return;
-  try {
-    // GET /app returns the app's own slug + name (the slug is the unique
-    // `@`-mention handle). RS256 JWT auth, no installation needed.
-    const jwt = createAppJwt(cfg.appId, cfg.privateKeyPem, Math.floor(Date.now() / 1000));
-    const appRes = await fetch("https://api.github.com/app", {
-      headers: { authorization: `Bearer ${jwt}`, accept: "application/vnd.github+json", "user-agent": "bivy" },
-    });
-    if (!appRes.ok) return;
-    const data = (await appRes.json().catch(() => ({}))) as { slug?: string; name?: string };
-    const slug = String(data.slug ?? "");
-    if (!slug) return;
-    const res = await fetch(`${relay.controlPlaneUrl.replace(/\/$/, "")}/node/github-app/meta`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${relay.enrollmentToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ mention: slug, name: String(data.name ?? slug), appId: cfg.appId }),
-    });
-    if (res.ok) {
-      githubAppMetaRegistered = true;
-      process.env.BIVY_GITHUB_APP_SLUG = slug;
+  if (!relay?.controlPlaneUrl || !relay?.enrollmentToken) return;
+  const apps = await ensureGitHubApps();
+  const slugs: string[] = [];
+  for (const app of apps) {
+    if (githubAppMetaRegistered.has(app.cfg.appId)) {
+      if (app.record.slug) slugs.push(app.record.slug);
+      continue;
     }
-  } catch {
-    // best effort — retried on the next boot / reconnect
+    try {
+      const jwt = createAppJwt(app.cfg.appId, app.cfg.privateKeyPem, Math.floor(Date.now() / 1000));
+      const appRes = await fetch("https://api.github.com/app", {
+        headers: { authorization: `Bearer ${jwt}`, accept: "application/vnd.github+json", "user-agent": "bivy" },
+      });
+      if (!appRes.ok) continue;
+      const data = (await appRes.json().catch(() => ({}))) as {
+        slug?: string;
+        name?: string;
+        owner?: { login?: string; type?: string };
+      };
+      const slug = String(data.slug ?? "");
+      if (!slug) continue;
+      const res = await fetch(`${relay.controlPlaneUrl.replace(/\/$/, "")}/node/github-app/meta`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${relay.enrollmentToken}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          mention: slug,
+          name: String(data.name ?? slug),
+          appId: app.cfg.appId,
+          owner: data.owner?.login,
+          ownerType: data.owner?.type,
+        }),
+      });
+      if (!res.ok) continue;
+      githubAppMetaRegistered.add(app.cfg.appId);
+      slugs.push(slug);
+      // Remember the owner so repo→installation lookups can try the right app
+      // first, and so the UI can say which account each app covers.
+      app.record.slug = slug;
+      app.record.name = String(data.name ?? slug);
+      app.record.owner = data.owner?.login ?? app.record.owner;
+      app.record.ownerType = data.owner?.type === "Organization" ? "Organization" : "User";
+      if (listGitHubApps(appDir).some((a) => a.appId === app.cfg.appId)) {
+        upsertGitHubApp(appDir, app.record);
+      }
+    } catch {
+      // best effort — retried on the next boot / reconnect
+    }
   }
+  // Kept for the single-app env path and for anything still reading the slug.
+  if (slugs.length) process.env.BIVY_GITHUB_APP_SLUG = slugs[0];
 }
 
 /**
- * Tell the control plane how many repos/orgs this node's GitHub App is installed
- * on. Only the node can know — it holds the app key and queries GitHub's
+ * Tell the control plane how many repos/orgs each of this node's GitHub Apps is
+ * installed on. Only the node can know — it holds the app keys and queries
  * `/app/installations` (RS256 JWT, no installation token needed). The control
- * plane serves the count back via `/account/github-app` so the connected UI can
- * warn when the app is installed on nothing (it receives no events until it is).
+ * plane serves the total back via `/account/github-app` so the connected UI can
+ * warn when an app is installed on nothing (it receives no events until it is).
  * Best-effort and re-run on each boot/connect, so installing a repo after setup
  * is picked up without a manual step.
  */
 async function reportGithubAppInstallations(): Promise<void> {
-  const cfg = await loadGitHubAppConfig();
   const relay = loadRelayConfig(appDir);
-  if (!cfg || !relay?.controlPlaneUrl || !relay?.enrollmentToken) return;
-  try {
-    const jwt = createAppJwt(cfg.appId, cfg.privateKeyPem, Math.floor(Date.now() / 1000));
-    const res = await fetch("https://api.github.com/app/installations?per_page=100", {
-      headers: { authorization: `Bearer ${jwt}`, accept: "application/vnd.github+json", "user-agent": "bivy" },
-    });
-    if (!res.ok) return;
-    const list = await res.json().catch(() => []);
-    const count = Array.isArray(list) ? list.length : 0;
-    await fetch(`${relay.controlPlaneUrl.replace(/\/$/, "")}/node/github-app/installations`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${relay.enrollmentToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ count }),
-    }).catch(() => {});
-  } catch {
-    // best effort — retried on the next boot / reconnect
+  if (!relay?.controlPlaneUrl || !relay?.enrollmentToken) return;
+  const apps = await ensureGitHubApps();
+  if (!apps.length) return;
+  let total = 0;
+  for (const app of apps) {
+    try {
+      const jwt = createAppJwt(app.cfg.appId, app.cfg.privateKeyPem, Math.floor(Date.now() / 1000));
+      const res = await fetch("https://api.github.com/app/installations?per_page=100", {
+        headers: { authorization: `Bearer ${jwt}`, accept: "application/vnd.github+json", "user-agent": "bivy" },
+      });
+      if (!res.ok) continue;
+      const list = await res.json().catch(() => []);
+      total += Array.isArray(list) ? list.length : 0;
+    } catch {
+      // best effort — one unreachable app must not hide the others' counts
+    }
   }
+  await fetch(`${relay.controlPlaneUrl.replace(/\/$/, "")}/node/github-app/installations`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${relay.enrollmentToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ count: total }),
+  }).catch(() => {});
 }
 
 function publicCommands() {
@@ -7808,15 +7894,23 @@ async function completeAppManifest(input: { code: string; state: string }): Prom
 
 /** Adopt the account's existing github_app hook (same webhook URL + secret the
  *  app is already configured with), or create one if the account has none. */
-async function getOrCreateGithubAppHook(): Promise<{ id: string; url: string; secret: string }> {
+async function getOrCreateGithubAppHook(appId?: string): Promise<{ id: string; url: string; secret: string }> {
   const cfg = loadRelayConfig(appDir);
   if (!cfg?.controlPlaneUrl || !cfg.enrollmentToken) throw new Error("Hosted relay is not configured. Run bivy relay:setup first.");
-  const res = await fetch(`${cfg.controlPlaneUrl.replace(/\/$/, "")}/node/hooks/github_app`, {
+  // Each app gets its own hook, so the control plane can tell which app an event
+  // arrived on (and therefore which key the node should mint with). Asking by
+  // app id reuses the hook when the same app is reconnected — on this node or
+  // another — so the app's existing webhook config keeps working untouched.
+  const query = appId ? `?appId=${encodeURIComponent(appId)}` : "";
+  const res = await fetch(`${cfg.controlPlaneUrl.replace(/\/$/, "")}/node/hooks/github_app${query}`, {
     headers: { authorization: `Bearer ${cfg.enrollmentToken}` },
   });
   if (res.ok) {
-    const data = (await res.json().catch(() => ({}))) as { id?: string; url?: string; secret?: string };
-    if (data?.id && data.url && data.secret) return { id: data.id, url: data.url, secret: data.secret };
+    const data = (await res.json().catch(() => ({}))) as { id?: string; url?: string; secret?: string; appId?: string };
+    // Never adopt a hook that already belongs to a *different* app: its secret
+    // is the one GitHub signs that app's deliveries with.
+    const mismatch = appId && data?.appId && data.appId !== appId;
+    if (data?.id && data.url && data.secret && !mismatch) return { id: data.id, url: data.url, secret: data.secret };
   }
   return createControlPlaneHook("github_app");
 }
@@ -7851,9 +7945,11 @@ async function connectExistingApp(input: { appId: string; privateKeyPem: string;
     throw new Error("Could not verify the App ID/private key against GitHub. Check they match and try again.");
   }
 
-  // Private key → node vault (never leaves the machine).
-  new SecretVault(appDir).setLocal("github.app-private-key", pem, "GitHub App private key");
-  const hook = await getOrCreateGithubAppHook();
+  // Private key → node vault (never leaves the machine). Keyed per app, so a
+  // node can hold several apps' keys side by side (personal account + orgs).
+  const keyId = privateKeyIdFor(appId);
+  new SecretVault(appDir).setLocal(keyId, pem, `GitHub App private key (${slug || appId})`);
+  const hook = await getOrCreateGithubAppHook(appId);
 
   // Point the app's OWN webhook at the adopted hook (url + secret). Unlike the
   // manifest/create flow — where GitHub sets the webhook from the manifest — an
@@ -7876,15 +7972,21 @@ async function connectExistingApp(input: { appId: string; privateKeyPem: string;
   const label = process.env.BIVY_GITHUB_LABEL?.trim() || "bivy";
   const rawNodeLabel = input.nodeLabel?.trim();
   const nodeLabel = rawNodeLabel ? (rawNodeLabel.includes("/") ? rawNodeLabel : `bivy/${rawNodeLabel}`) : undefined;
-  process.env.BIVY_GITHUB_APP_ID = appId;
-  process.env.BIVY_GITHUB_APP_PRIVATE_KEY = "secret://github.app-private-key";
+  // Record the app in the node's registry. This is what makes several apps
+  // possible: the env vars below only ever describe one, and are kept for
+  // container/ephemeral setups configured purely through the environment.
+  upsertGitHubApp(appDir, {
+    appId,
+    slug: slug || undefined,
+    name: name || undefined,
+    privateKeyRef: `secret://${keyId}`,
+    hookId: hook.id,
+  });
   process.env.BIVY_GITHUB_HOSTED_TASKS = "1";
   process.env.BIVY_GITHUB_LABEL = label;
   if (slug) process.env.BIVY_GITHUB_APP_SLUG = slug;
   if (nodeLabel) process.env.BIVY_NODE_LABEL = nodeLabel;
   saveCliEnv({
-    BIVY_GITHUB_APP_ID: appId,
-    BIVY_GITHUB_APP_PRIVATE_KEY: "secret://github.app-private-key",
     BIVY_GITHUB_HOSTED_TASKS: "1",
     BIVY_GITHUB_LABEL: label,
     BIVY_GITHUB_APP_SLUG: slug || undefined,
@@ -7894,7 +7996,7 @@ async function connectExistingApp(input: { appId: string; privateKeyPem: string;
   // Register slug/name (also records this node as the app's serving node) so the
   // UI reflects a live connection, then start polling + report install count.
   if (hook.id && slug) await setControlPlaneHookAppMeta(hook.id, { mention: slug, name, appId });
-  githubAppMetaRegistered = false; // let boot registration refresh it later
+  invalidateGitHubApps(); // pick the new app up without a restart
   startControlPlaneTasksIfConfigured();
   void reportGithubAppInstallations();
   const installUrl = slug ? `https://github.com/apps/${encodeURIComponent(slug)}/installations/new` : "https://github.com/settings/installations";
@@ -7906,24 +8008,39 @@ async function connectExistingApp(input: { appId: string; privateKeyPem: string;
  * clear the app env, so the node stops minting tokens for it. The control plane
  * drops the hook separately. Local, idempotent; leaves other config untouched.
  */
-function disconnectGithubApp(): void {
-  try {
-    new SecretVault(appDir).delete("github.app-private-key");
-  } catch {
-    /* key may already be gone */
+function disconnectGithubApp(appId?: string): void {
+  const vault = new SecretVault(appDir);
+  const targets = appId ? listGitHubApps(appDir).filter((a) => a.appId === appId) : listGitHubApps(appDir);
+  for (const app of targets) {
+    try {
+      // Only drop a key we own. An `op://` or `env://` reference points at
+      // something the user manages elsewhere; deleting the vault entry for it
+      // would be both useless and surprising.
+      if (app.privateKeyRef.startsWith("secret://")) vault.delete(app.privateKeyRef.slice("secret://".length));
+    } catch {
+      /* key may already be gone */
+    }
+    removeGitHubApp(appDir, app.appId);
   }
-  delete process.env.BIVY_GITHUB_APP_ID;
-  delete process.env.BIVY_GITHUB_APP_PRIVATE_KEY;
-  delete process.env.BIVY_GITHUB_APP_SLUG;
-  githubAppTokenCache = undefined; // re-evaluated (→ null) on the next work item
-  githubAppConfig = undefined;
-  installationIdByRepo.clear();
+  // The env-configured single app (containers, ephemeral runners) has no
+  // registry entry to remove, so clear it explicitly when disconnecting it.
+  if (!appId || process.env.BIVY_GITHUB_APP_ID === appId) {
+    try {
+      vault.delete("github.app-private-key");
+    } catch {
+      /* key may already be gone */
+    }
+    delete process.env.BIVY_GITHUB_APP_ID;
+    delete process.env.BIVY_GITHUB_APP_PRIVATE_KEY;
+    delete process.env.BIVY_GITHUB_APP_SLUG;
+    saveCliEnv({
+      BIVY_GITHUB_APP_ID: undefined,
+      BIVY_GITHUB_APP_PRIVATE_KEY: undefined,
+      BIVY_GITHUB_APP_SLUG: undefined,
+    });
+  }
+  invalidateGitHubApps(); // re-evaluated on the next work item
   invalidateGithubListingCaches(); // repo/branch listings may change with auth
-  saveCliEnv({
-    BIVY_GITHUB_APP_ID: undefined,
-    BIVY_GITHUB_APP_PRIVATE_KEY: undefined,
-    BIVY_GITHUB_APP_SLUG: undefined,
-  });
 }
 
 app.get("/github/app/manifest/new", async (req, res, next) => {
@@ -7983,8 +8100,24 @@ app.post("/api/github/app/connect-existing", async (req, res) => {
   }
 });
 
-app.post("/api/github/app/disconnect", async (_req, res) => {
-  disconnectGithubApp();
+app.get("/api/github/apps", async (_req, res) => {
+  // What this node actually holds keys for. The control plane knows which apps
+  // an account has connected; only the node knows which it can serve.
+  res.json({
+    apps: listGitHubApps(appDir).map((a) => ({
+      appId: a.appId,
+      slug: a.slug,
+      name: a.name,
+      owner: a.owner,
+      ownerType: a.ownerType,
+      hookId: a.hookId,
+    })),
+  });
+});
+
+app.post("/api/github/app/disconnect", async (req, res) => {
+  const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
+  disconnectGithubApp(appId || undefined);
   res.json({ ok: true });
 });
 

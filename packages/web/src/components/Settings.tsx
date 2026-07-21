@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
@@ -937,16 +937,20 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   // only available on the hosted/relay client, not direct mode.
   const canQuery = !controller.direct;
   const [info, setInfo] = useState<GithubAppInfo | null>(null);
-  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
-  const [disconnecting, setDisconnecting] = useState(false);
-  const [disconnectErr, setDisconnectErr] = useState<string | null>(null);
+  const [confirmDisconnect, setConfirmDisconnect] = useState<GithubAppEntry | null>(null);
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
+  // Keyed by app so an error stays attached to the row it belongs to.
+  const [disconnectErr, setDisconnectErr] = useState<{ id: string; message: string } | null>(null);
   const [nodes, setNodes] = useState<AccountNode[]>([]);
   const [defaultNode, setDefaultNode] = useState("");
   const [savingDefaultNode, setSavingDefaultNode] = useState(false);
   const [defaultNodeMsg, setDefaultNodeMsg] = useState<string | null>(null);
   // "Connect an existing GitHub App" (App ID + .pem) — for reconnecting an app
   // this account already set up onto the active node, without creating a new one.
+  // `ceApp` is the connected app the form was opened for (null = a fresh app the
+  // account doesn't know yet); it decides where the form renders and what it pre-fills.
   const [showConnectExisting, setShowConnectExisting] = useState(false);
+  const [ceApp, setCeApp] = useState<GithubAppEntry | null>(null);
   const [ceAppId, setCeAppId] = useState("");
   const [cePem, setCePem] = useState("");
   const [ceNodeLabel, setCeNodeLabel] = useState("");
@@ -959,6 +963,19 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   const [ephemeralErr, setEphemeralErr] = useState<string | null>(null);
   const app = state.githubApp;
   const phase = app?.phase ?? "idle";
+  // Identity for list keys and per-row busy/error state. Hooks created before
+  // Bivy recorded App IDs have neither appId nor slug — fall back to the hook id.
+  const appKey = (entry: GithubAppEntry) => entry.appId || entry.hookId || entry.slug || "";
+  const installHref = (entry: GithubAppEntry) =>
+    entry.installUrl || (entry.slug ? `https://github.com/apps/${entry.slug}/installations/new` : "https://github.com/settings/installations");
+  // Opening the reconnect form for a different app moves it rather than closing it.
+  const toggleConnectExisting = (entry?: GithubAppEntry) => {
+    const target = entry ?? null;
+    const sameApp = showConnectExisting && (ceApp ? appKey(ceApp) : "") === (target ? appKey(target) : "");
+    setShowConnectExisting(!sameApp);
+    setCeApp(target);
+    setCeAppId(target?.appId ?? "");
+  };
   const submitConnectExisting = () => {
     controller.githubAppConnectExisting({ appId: ceAppId.trim(), privateKeyPem: cePem.trim(), nodeLabel: ceNodeLabel.trim() || undefined });
   };
@@ -974,11 +991,11 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   };
   const renderConnectExisting = () => (
     <div className="ce-form">
-      {info?.editUrl && (
+      {ceApp?.editUrl && (
         <p className="muted">
           Get these from your app on GitHub:{" "}
-          <a href={info.editUrl} target="_blank" rel="noopener noreferrer">
-            open {info.mention ? `@${info.mention}` : "the app"}’s settings →
+          <a href={ceApp.editUrl} target="_blank" rel="noopener noreferrer">
+            open {ceApp.mention ? `@${ceApp.mention}` : "the app"}’s settings →
           </a>{" "}
           — the App ID is at the top; scroll to <em>Private keys → Generate a private key</em> to download the .pem.
         </p>
@@ -1038,15 +1055,16 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   useEffect(() => {
     if (phase === "done") refresh();
   }, [phase]);
+  const apps = info?.apps ?? [];
+  // The default node is one account-level setting written to every app, so any
+  // app that has it answers for all of them.
+  const storedDefaultNode = apps.find((a) => a.defaultNode)?.defaultNode ?? "";
   // Seed the editable field from the account's stored default whenever it
   // changes (initial load, or after a save round-trip elsewhere).
-  useEffect(() => { setDefaultNode(info?.defaultNode ?? ""); }, [info?.defaultNode]);
-  // Pre-fill the App ID for the "connect existing app" form when the account
-  // already knows it (a reconnect of the same app onto another node), unless the
-  // user has started typing their own.
-  useEffect(() => { setCeAppId((cur) => (cur ? cur : info?.appId ?? "")); }, [info?.appId]);
+  useEffect(() => { setDefaultNode(storedDefaultNode); }, [storedDefaultNode]);
 
-  const connected = info?.connected;
+  // The apps share the same routing copy; show the first one's handle as the example.
+  const primaryMention = apps.find((a) => a.mention)?.mention;
   const configuredProviders = ephemeralKeys.filter((k) => k.configured);
   const defaultProviderConfigured = Boolean(
     ephemeralDefault?.provider && ephemeralKeys.find((k) => k.id === ephemeralDefault.provider)?.configured,
@@ -1067,7 +1085,7 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
     setSavingDefaultNode(true);
     try {
       const saved = await controller.setGithubAppDefaultNode(defaultNode.trim());
-      setInfo((cur) => (cur ? { ...cur, defaultNode: saved } : cur));
+      setInfo((cur) => (cur ? { ...cur, defaultNode: saved, apps: cur.apps.map((a) => ({ ...a, defaultNode: saved })) } : cur));
       setDefaultNodeMsg("Saved");
       setTimeout(() => setDefaultNodeMsg(null), 1500);
     } catch (e) {
@@ -1076,108 +1094,191 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
       setSavingDefaultNode(false);
     }
   };
-  const disconnect = async () => {
+  const disconnect = async (entry: GithubAppEntry) => {
+    const id = appKey(entry);
     setDisconnectErr(null);
-    setDisconnecting(true);
+    setDisconnectingId(id);
     try {
-      await controller.githubAppDisconnect();
-      // Re-read the truth rather than optimistically flipping: if the hook is
-      // really gone the panel returns to the create form; if not, say so.
+      await controller.githubAppDisconnect(entry.appId);
+      // Re-read the truth rather than optimistically dropping the row: if the hook
+      // is really gone the app leaves the list; if not, say so.
       const next = await controller.fetchGithubApp();
       setInfo(next);
-      if (next.connected) setDisconnectErr("Disconnect didn't take effect. The control plane may be mid-deploy — try again shortly.");
-      else refresh();
+      if (next.apps.some((a) => appKey(a) === id)) {
+        setDisconnectErr({ id, message: "Disconnect didn't take effect. The control plane may be mid-deploy — try again shortly." });
+      } else {
+        // The reconnect form may have been open for the app that just went away.
+        if (ceApp && appKey(ceApp) === id) {
+          setShowConnectExisting(false);
+          setCeApp(null);
+        }
+        refresh();
+      }
     } catch (e) {
-      setDisconnectErr(String((e as Error)?.message || e));
+      setDisconnectErr({ id, message: String((e as Error)?.message || e) });
     } finally {
-      setDisconnecting(false);
+      setDisconnectingId(null);
     }
   };
+  const renderApp = (entry: GithubAppEntry) => (
+    <div className="gh-connected" key={appKey(entry)}>
+      <div className="gh-connected-head">
+        <span className="gh-connected-status">✓ Connected</span>
+        <strong className="gh-connected-name">{entry.name}</strong>
+        {/* Which GitHub account this app covers. With several connected, the app
+            names alone are easy to confuse; the owner is what tells them apart. */}
+        {entry.owner ? (
+          <span className="gh-connected-owner">
+            {entry.ownerType === "Organization" ? "org" : "personal"} · {entry.owner}
+          </span>
+        ) : null}
+        {entry.editUrl ? (
+          <a className="gh-connected-edit" href={entry.editUrl} target="_blank" rel="noopener noreferrer">
+            Edit on GitHub →
+          </a>
+        ) : null}
+      </div>
+      {entry.mention ? (
+        <p className="gh-connected-hint">
+          Trigger it in an issue comment with <code>@{entry.mention}</code>
+        </p>
+      ) : null}
+      {entry.installed === false ? (
+        <p className="banner warn inline gh-connected-hint">
+          ⚠ Not installed on any repository — the app can't receive issues or comments until you install it.{" "}
+          <a href={installHref(entry)} target="_blank" rel="noopener noreferrer">
+            Install it now →
+          </a>
+        </p>
+      ) : (
+        <p className="gh-connected-hint">
+          {entry.installed
+            ? `Installed on ${entry.installCount} ${entry.installCount === 1 ? "repository/org" : "repositories/orgs"}. Nothing happening?`
+            : "Nothing happening? The app only receives events from repos it's installed on."}{" "}
+          <a href={installHref(entry)} target="_blank" rel="noopener noreferrer">
+            {entry.installed ? "Add / manage repositories →" : "Install / add repositories →"}
+          </a>
+        </p>
+      )}
+      {/* The account has the app set up, but no online node holds its key — so
+          nothing can run its queue. Offer to (re)connect it on the active node. */}
+      {entry.servedBy === null ? (
+        <div className="banner warn inline gh-serving-banner">
+          ⚠ No online node is running this app right now — queued work won't be picked up. Connect it on a node (this
+          account already has the app, so just add its key here).{" "}
+          <button className="link-btn" onClick={() => toggleConnectExisting(entry)}>
+            {showConnectExisting && ceApp && appKey(ceApp) === appKey(entry) ? "Hide" : "Connect on this node →"}
+          </button>
+        </div>
+      ) : (
+        entry.servedBy && (
+          <p className="gh-connected-hint">
+            Served by <strong>{entry.servedBy.name || entry.servedBy.id}</strong>
+            {entry.servedBy.online ? "" : " (offline)"}.
+          </p>
+        )
+      )}
+      {showConnectExisting && ceApp && appKey(ceApp) === appKey(entry) && renderConnectExisting()}
+      <div className="row-actions">
+        <button
+          className="btn danger-ghost"
+          disabled={disconnectingId !== null}
+          onClick={() => setConfirmDisconnect(entry)}
+        >
+          {disconnectingId === appKey(entry) ? "Disconnecting…" : "Disconnect"}
+        </button>
+      </div>
+      {disconnectErr?.id === appKey(entry) && <div className="banner error inline">{disconnectErr.message}</div>}
+    </div>
+  );
+  // The create + "connect an app you already have" pair. Always available: an
+  // account needs one app per GitHub owner, so "add another" is a normal action,
+  // not something reserved for the empty state.
+  const renderAddApp = () => (
+    <>
+      <label className="field-label">Organization (optional — leave blank for your personal account)</label>
+      <input
+        className="picker-search"
+        value={org}
+        placeholder="my-org"
+        disabled={phase === "starting" || phase === "submitting" || phase === "completing"}
+        onChange={(e) => setOrg(e.target.value)}
+      />
+      {ready ? (
+        <form method="post" action={app!.action} onSubmit={markGithubAppPending}>
+          <input type="hidden" name="manifest" value={JSON.stringify(app!.manifest)} />
+          <button className="btn primary block" type="submit">
+            Continue to GitHub →
+          </button>
+        </form>
+      ) : (
+        <button
+          className="btn primary"
+          disabled={phase === "starting" || phase === "completing"}
+          onClick={() => controller.githubAppManifestStart(org.trim() || undefined)}
+        >
+          {phase === "starting" ? "Preparing…" : phase === "completing" ? "Finishing…" : "Create GitHub App"}
+        </button>
+      )}
+      {/* Both flows share one phase machine, so suppress the create-flow status
+          while the reconnect form (which reports the same phases) is the one running. */}
+      {!showConnectExisting && phase === "completing" && <p className="muted">Exchanging the code on the node…</p>}
+      {!showConnectExisting && phase === "done" && (
+        <div className="banner info inline">
+          ✓ App created — the key is stored on this node. <strong>One step left:</strong> the app won't
+          receive any issues or comments until you install it on a repo.{" "}
+          <a href={app?.installUrl || "https://github.com/settings/installations"} target="_blank" rel="noopener noreferrer">
+            Install it on your repositories →
+          </a>
+        </div>
+      )}
+      {!showConnectExisting && phase === "error" && <div className="banner error inline">{app?.error || "GitHub App setup failed."}</div>}
+
+      <h4 className="settings-subhead">Already have a GitHub App?</h4>
+      <p className="muted">
+        Connect an app you already created (e.g. on another node) by adding its App ID + private key here — no need to
+        create a duplicate.{" "}
+        <button className="link-btn" onClick={() => toggleConnectExisting()}>
+          {showConnectExisting && !ceApp ? "Hide" : "Connect existing app →"}
+        </button>
+      </p>
+      {showConnectExisting && !ceApp && renderConnectExisting()}
+    </>
+  );
   return (
     <div className="settings-form">
       {confirmDisconnect && (
         <ConfirmDialog
           title="Disconnect GitHub App?"
-          message="This node stops handling this app and its key is wiped here. It does not delete the app on GitHub — do that from GitHub's app settings if you want it gone entirely."
+          message={
+            confirmDisconnect.appId
+              ? "This node stops handling this app and its key is wiped here. It does not delete the app on GitHub — do that from GitHub's app settings if you want it gone entirely."
+              : "This app was set up before Bivy recorded App IDs, so it can only be disconnected together with every other app on this account. Nothing is deleted on GitHub."
+          }
           confirmLabel="Disconnect"
           danger
-          onCancel={() => setConfirmDisconnect(false)}
-          onConfirm={() => { setConfirmDisconnect(false); disconnect(); }}
+          onCancel={() => setConfirmDisconnect(null)}
+          onConfirm={() => { const entry = confirmDisconnect; setConfirmDisconnect(null); disconnect(entry); }}
         />
       )}
-      {connected ? (
+      {apps.length > 0 ? (
         <>
-          <div className="gh-connected">
-            <div className="gh-connected-head">
-              <span className="gh-connected-status">✓ Connected</span>
-              <strong className="gh-connected-name">{info!.name}</strong>
-              {info!.editUrl ? (
-                <a className="gh-connected-edit" href={info!.editUrl} target="_blank" rel="noopener noreferrer">
-                  Edit on GitHub →
-                </a>
-              ) : null}
-            </div>
-            {info!.mention ? (
-              <p className="gh-connected-hint">
-                Trigger it in an issue comment with <code>@{info!.mention}</code>
-              </p>
-            ) : null}
-            {info!.installed === false ? (
-              <p className="banner warn inline gh-connected-hint">
-                ⚠ Not installed on any repository — the app can't receive issues or comments until you install it.{" "}
-                <a
-                  href={info!.installUrl || (info!.slug ? `https://github.com/apps/${info!.slug}/installations/new` : "https://github.com/settings/installations")}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Install it now →
-                </a>
-              </p>
-            ) : (
-              <p className="gh-connected-hint">
-                {info!.installed
-                  ? `Installed on ${info!.installCount} ${info!.installCount === 1 ? "repository/org" : "repositories/orgs"}. Nothing happening?`
-                  : "Nothing happening? The app only receives events from repos it's installed on."}{" "}
-                <a
-                  href={info!.installUrl || (info!.slug ? `https://github.com/apps/${info!.slug}/installations/new` : "https://github.com/settings/installations")}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {info!.installed ? "Add / manage repositories →" : "Install / add repositories →"}
-                </a>
-              </p>
-            )}
-          </div>
-          <button className="btn danger-ghost" disabled={disconnecting} onClick={() => setConfirmDisconnect(true)}>
-            {disconnecting ? "Disconnecting…" : "Disconnect"}
-          </button>
-          {disconnectErr && <div className="banner error inline">{disconnectErr}</div>}
+          {apps.map(renderApp)}
 
-          {/* The account has the app set up, but no online node holds its key — so
-              nothing can run the queue. Offer to (re)connect it on the active node. */}
-          {info!.servedBy === null ? (
-            <div className="banner warn inline gh-serving-banner">
-              ⚠ No online node is running this app right now — queued work won't be picked up. Connect it on a node (this
-              account already has the app, so just add its key here).{" "}
-              <button className="link-btn" onClick={() => setShowConnectExisting((v) => !v)}>
-                {showConnectExisting ? "Hide" : "Connect on this node →"}
-              </button>
-            </div>
-          ) : (
-            info!.servedBy && (
-              <p className="muted">
-                Served by <strong>{info!.servedBy.name || info!.servedBy.id}</strong>
-                {info!.servedBy.online ? "" : " (offline)"}.
-              </p>
-            )
-          )}
-          {showConnectExisting && renderConnectExisting()}
+          <h4 className="settings-subhead">Add an app</h4>
+          <p className="muted">
+            A GitHub App can only be installed on the account that owns it, so add one per personal account or
+            organization you want Bivy to work in. Each gets its own webhook, and its key is created and kept on this
+            node.
+          </p>
+          {renderAddApp()}
 
           <h4 className="settings-subhead">Default node</h4>
           <p className="muted">
-            Untagged issues and <code>@{info!.mention || "mention"}</code> comments route to the shared <code>bivy</code> queue,
+            Untagged issues and <code>@{primaryMention || "mention"}</code> comments route to the shared <code>bivy</code> queue,
             where any online node may claim them. Pick a default node so that work lands on one machine instead — it must
             match the label that node serves (its name below, or whatever it was started with via <code>--node-label</code>).
+            One setting for the whole account: it applies to every app above.
           </p>
           {nodes.length > 0 ? (
             <select className="picker-search" value={defaultNode} onChange={(e) => setDefaultNode(e.target.value)}>
@@ -1209,7 +1310,7 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
           <ul className="settings-list">
             <li><code>bivy</code> — shared queue: the default node above, or any online node if none is set.</li>
             <li><code>bivy/&lt;node&gt;</code> — a specific node's label, e.g. <code>bivy/macbook</code>.</li>
-            <li><code>@{info!.mention || "bivy"} on &lt;node&gt;</code> — in a comment or the issue body, same effect as the label.</li>
+            <li><code>@{primaryMention || "bivy"} on &lt;node&gt;</code> — in a comment or the issue body, same effect as the label.</li>
           </ul>
 
           <h4 className="settings-subhead">Ephemeral runner</h4>
@@ -1251,54 +1352,12 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
       ) : (
         <>
           <p className="muted">
-            One app, one webhook — covers every repo you install it on, and replies post as the app. The private key is
-            created and kept on this node; the control plane only ever sees the webhook signing secret.
+            Bivy reaches GitHub through an app you own: one webhook covering every repo you install it on, with replies
+            posting as the app. The private key is created and kept on this node; the control plane only ever sees the
+            webhook signing secret. An app can only be installed on the account that owns it, so add one per personal
+            account or organization.
           </p>
-          <label className="field-label">Organization (optional — leave blank for your personal account)</label>
-          <input
-            className="picker-search"
-            value={org}
-            placeholder="my-org"
-            disabled={phase === "starting" || phase === "submitting" || phase === "completing"}
-            onChange={(e) => setOrg(e.target.value)}
-          />
-          {ready ? (
-            <form method="post" action={app!.action} onSubmit={markGithubAppPending}>
-              <input type="hidden" name="manifest" value={JSON.stringify(app!.manifest)} />
-              <button className="btn primary block" type="submit">
-                Continue to GitHub →
-              </button>
-            </form>
-          ) : (
-            <button
-              className="btn primary"
-              disabled={phase === "starting" || phase === "completing"}
-              onClick={() => controller.githubAppManifestStart(org.trim() || undefined)}
-            >
-              {phase === "starting" ? "Preparing…" : phase === "completing" ? "Finishing…" : "Create GitHub App"}
-            </button>
-          )}
-          {phase === "completing" && <p className="muted">Exchanging the code on the node…</p>}
-          {phase === "done" && (
-            <div className="banner info inline">
-              ✓ App created — the key is stored on this node. <strong>One step left:</strong> the app won't
-              receive any issues or comments until you install it on a repo.{" "}
-              <a href={app?.installUrl || "https://github.com/settings/installations"} target="_blank" rel="noopener noreferrer">
-                Install it on your repositories →
-              </a>
-            </div>
-          )}
-          {phase === "error" && <div className="banner error inline">{app?.error || "GitHub App setup failed."}</div>}
-
-          <h4 className="settings-subhead">Already have a GitHub App?</h4>
-          <p className="muted">
-            Connect an app you already created (e.g. on another node) by adding its App ID + private key here — no need to
-            create a duplicate.{" "}
-            <button className="link-btn" onClick={() => setShowConnectExisting((v) => !v)}>
-              {showConnectExisting ? "Hide" : "Connect existing app →"}
-            </button>
-          </p>
-          {showConnectExisting && renderConnectExisting()}
+          {renderAddApp()}
         </>
       )}
 

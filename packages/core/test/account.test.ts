@@ -12,6 +12,8 @@ import {
   removePairedDevice,
   logout,
   setGithubAppDefaultNode,
+  disconnectGithubApp,
+  fetchGithubApp,
   assignWorkItem,
   fetchEphemeralQueueDefault,
   setEphemeralQueueDefault,
@@ -91,10 +93,23 @@ describe("setGithubAppDefaultNode", () => {
       seenBody = String(init?.body || "");
       return { ok: true, json: async () => ({ ok: true, defaultNode: "macbook" }) } as Response;
     }) as unknown as typeof fetch;
-    const result = await setGithubAppDefaultNode(store, "macbook", fakeFetch);
+    const result = await setGithubAppDefaultNode(store, "macbook", undefined, fakeFetch);
     expect(seenUrl).toBe("https://app.bivy.sh/account/github-app/default-node");
+    // No appId = every connected app, which is what the account-level setting wants.
     expect(JSON.parse(seenBody)).toEqual({ node: "macbook" });
     expect(result).toBe("macbook");
+  });
+
+  it("scopes the default to a single app when given an appId", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    let seenBody = "";
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      seenBody = String(init?.body || "");
+      return { ok: true, json: async () => ({ ok: true, defaultNode: "macbook" }) } as Response;
+    }) as unknown as typeof fetch;
+    await setGithubAppDefaultNode(store, "macbook", "12345", fakeFetch);
+    expect(JSON.parse(seenBody)).toEqual({ node: "macbook", appId: "12345" });
   });
 
   it("throws with the server's error message on a non-2xx response", async () => {
@@ -102,7 +117,69 @@ describe("setGithubAppDefaultNode", () => {
     store.cp = "https://app.bivy.sh";
     const fakeFetch = (async () =>
       ({ ok: false, status: 404, json: async () => ({ error: "No GitHub App connected" }) }) as Response) as unknown as typeof fetch;
-    await expect(setGithubAppDefaultNode(store, "macbook", fakeFetch)).rejects.toThrow("No GitHub App connected");
+    await expect(setGithubAppDefaultNode(store, "macbook", undefined, fakeFetch)).rejects.toThrow("No GitHub App connected");
+  });
+});
+
+describe("fetchGithubApp", () => {
+  const appsResponse = {
+    connected: true,
+    name: "Bivy personal",
+    mention: "bivy-personal",
+    appId: "1",
+    apps: [
+      { connected: true, name: "Bivy personal", mention: "bivy-personal", appId: "1", servedBy: null },
+      { connected: true, name: "Bivy acme", mention: "bivy-acme", appId: "2", servedBy: { id: "n1", online: true } },
+    ],
+  };
+
+  it("returns every connected app alongside the flat first-app fields", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () => ({ ok: true, json: async () => appsResponse }) as Response) as unknown as typeof fetch;
+    const info = await fetchGithubApp(store, fakeFetch);
+    expect(info.connected).toBe(true);
+    expect(info.apps.map((a) => a.appId)).toEqual(["1", "2"]);
+    expect(info.name).toBe("Bivy personal");
+  });
+
+  it("derives a one-element list from a control plane that predates `apps`", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const flat = { connected: true, name: "Bivy", mention: "bivy", appId: "7", servedBy: null };
+    const fakeFetch = (async () => ({ ok: true, json: async () => flat }) as Response) as unknown as typeof fetch;
+    const info = await fetchGithubApp(store, fakeFetch);
+    expect(info.apps).toEqual([flat]);
+    expect(info.apps[0].servedBy).toBe(null);
+  });
+
+  it("reports nothing connected for either empty shape", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    for (const body of [{ connected: false, apps: [] }, { connected: false }]) {
+      const fakeFetch = (async () => ({ ok: true, json: async () => body }) as Response) as unknown as typeof fetch;
+      const info = await fetchGithubApp(store, fakeFetch);
+      expect(info.connected).toBe(false);
+      expect(info.apps).toEqual([]);
+    }
+  });
+});
+
+describe("disconnectGithubApp", () => {
+  it("targets one app by id, and the whole account without one", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const seen: string[] = [];
+    const fakeFetch = (async (url: string) => {
+      seen.push(String(url));
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    }) as unknown as typeof fetch;
+    await disconnectGithubApp(store, "12 345", fakeFetch);
+    await disconnectGithubApp(store, undefined, fakeFetch);
+    expect(seen).toEqual([
+      "https://app.bivy.sh/account/github-app?appId=12%20345",
+      "https://app.bivy.sh/account/github-app",
+    ]);
   });
 });
 

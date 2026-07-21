@@ -37,6 +37,7 @@ export interface WorkItem {
   runtimeId?: string; // agent/runtime override chosen via the queue "Run…" action
   model?: string; // model override chosen via the queue "Run…" action
   installationId?: string; // GitHub App install to mint a token for (flavor A)
+  appId?: string; // which configured app that installation belongs to (a node may serve several)
 }
 
 /**

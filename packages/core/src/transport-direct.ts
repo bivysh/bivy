@@ -501,7 +501,8 @@ export class DirectTransport implements Transport {
           }
           break;
         case "github.app.disconnect":
-          await this.directApi("/api/github/app/disconnect", { method: "POST", body: "{}" });
+          // No appId = wipe every app's key on this node (the account-wide disconnect).
+          await this.directApi("/api/github/app/disconnect", { method: "POST", body: JSON.stringify({ appId: obj.appId }) });
           this.emit({ type: "github.app.disconnected", requestId: String(obj.requestId ?? ""), ok: true });
           break;
         case "approval":

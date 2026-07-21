@@ -1382,6 +1382,7 @@ select.picker-search { appearance: auto; }
 }
 .gh-connected-status { color: var(--ok); font-weight: 700; font-size: 13px; white-space: nowrap; }
 .gh-connected-name { font-size: 14px; color: var(--ink); word-break: break-word; }
+.gh-connected-owner { font-size: 12px; color: var(--ink-dim); white-space: nowrap; }
 .gh-connected-edit { margin-left: auto; font-size: 13px; white-space: nowrap; }
 .gh-connected-hint { margin: 0; font-size: 13px; line-height: 1.5; color: var(--muted); }
 .gh-connected-hint code { white-space: nowrap; }

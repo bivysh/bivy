@@ -173,6 +173,11 @@ Label an issue `bivy` (or `bivy/<node>` to target a machine), or mention the Biv
 GitHub App in a comment. A node you own claims the work, runs the agent in an
 isolated worktree, and the agent opens the pull request itself.
 
+A private GitHub App only installs on the account that owns it, so connect one
+app per GitHub account — one for your personal repos, one per organization
+(`bivy github:app-create --org <org>`). A node can serve several at once, each
+with its own key and `@`-mention handle.
+
 See [`docs/github-work-queue.md`](docs/github-work-queue.md).
 
 ## Development

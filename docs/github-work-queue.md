@@ -91,10 +91,9 @@ Bivy does **not** store repository files, diffs, terminal output, model transcri
 
 ## Setup
 
-Setup is a **GitHub App** — one app, one webhook, covering every repo you install
-it on (no per-repo webhook or repo-admin token). See
-[`github-app-ingestion.md`](./github-app-ingestion.md) for the full design. Three
-ways to set it up, all of which keep the app's private key on the node:
+Setup is a **GitHub App** — one webhook covering every repo you install it on
+(no per-repo webhook or repo-admin token). Three ways to set it up, all of which
+keep the app's private key on the node:
 
 - **From the web app:** *Settings → GitHub App → Create GitHub App*. Works
   remotely (through the hosted control plane) as well as on a local node.
@@ -102,6 +101,27 @@ ways to set it up, all of which keep the app's private key on the node:
   CLI (opens a browser, or prints instructions on a headless box).
 - **`bivy github:app-connect --app-id <id> --key <path.pem>`:** connect an app
   you created yourself, no browser required.
+
+### Personal repos and organizations
+
+A **private** GitHub App can only be installed on the account that owns it. One
+app therefore cannot cover both your personal repositories and an organization's.
+
+So connect one app per GitHub account: one owned by you, and one owned by each
+org you want Bivy to work in. The create flow takes an organization — *Settings →
+GitHub App → Add an app*, fill in the organization field, or
+`bivy github:app-create --org <org>` — which creates the app under that org
+instead of your user account.
+
+A node can hold several apps at once. Each keeps its own private key in the
+node's vault and its own webhook, and each gets its own `@`-mention handle, so
+mentioning one app never triggers another. When Bivy needs a token for a
+repository it picks the app that is installed there, trying the app owned by that
+same account first.
+
+The alternative — making a single app public so it can be installed anywhere — is
+not recommended: a public app can be installed by anyone, and every installation
+delivers to the owner's webhook.
 
 Then install the app on your repositories and label an issue with `bivy` (or
 `@`-mention the bot in a comment). To target a specific node, add a node label

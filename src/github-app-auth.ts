@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { createSign } from "node:crypto";
-import { resolveSecret } from "./secrets.js";
 
 /**
  * GitHub App installation tokens (M2, flavor A: user-owned app, key on the node).
@@ -134,21 +133,4 @@ export interface GitHubAppConfig {
   privateKeyPem: string;
 }
 
-/**
- * Load the node's user-owned GitHub App credentials from env + vault:
- *   BIVY_GITHUB_APP_ID           — the app id
- *   BIVY_GITHUB_APP_PRIVATE_KEY  — a secret:// ref (default secret://github.app-private-key)
- *                                  or an inline PEM.
- * Returns undefined when no app is configured (node falls back to the PAT path).
- */
-export async function loadGitHubAppConfig(env: NodeJS.ProcessEnv = process.env): Promise<GitHubAppConfig | undefined> {
-  const appId = env.BIVY_GITHUB_APP_ID?.trim();
-  if (!appId) return undefined;
-  const ref = env.BIVY_GITHUB_APP_PRIVATE_KEY?.trim() || "secret://github.app-private-key";
-  const privateKeyPem =
-    ref.startsWith("secret://") || ref.startsWith("op://") || ref.startsWith("env://")
-      ? await resolveSecret(ref)
-      : ref;
-  if (!privateKeyPem) return undefined;
-  return { appId, privateKeyPem };
-}
+

@@ -1383,9 +1383,10 @@ export class AppController {
   fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> {
     return fetchGithubQueue(this.local, limit);
   }
-  /** Set (empty string clears) the account's default node for untagged GitHub work. */
-  setGithubAppDefaultNode(node: string): Promise<string | undefined> {
-    return setGithubAppDefaultNode(this.local, node);
+  /** Set (empty string clears) the default node for untagged GitHub work. Without
+   *  an appId it covers every connected app — it's an account-level preference. */
+  setGithubAppDefaultNode(node: string, appId?: string): Promise<string | undefined> {
+    return setGithubAppDefaultNode(this.local, node, appId);
   }
   /** Manually dispatch a pending queue item to a chosen node + agent/model. */
   assignWorkItem(id: string, input: { node?: string; runtimeId?: string; model?: string; ephemeral?: boolean }): Promise<void> {
@@ -1399,13 +1400,17 @@ export class AppController {
   clearWorkQueue(): Promise<number> {
     return clearWorkQueue(this.local);
   }
-  /** Disconnect the GitHub App: drop the control-plane hook AND wipe the node's key. */
-  async githubAppDisconnect(): Promise<void> {
+  /**
+   * Disconnect a GitHub App: drop the control-plane hook AND wipe the node's key.
+   * `appId` scopes it to one of the account's apps; without one every app goes,
+   * which is the only option for a hook old enough to have no App ID recorded.
+   */
+  async githubAppDisconnect(appId?: string): Promise<void> {
     // Tell the node to clear its local key/config (over the active transport)…
-    this.send({ kind: "github.app.disconnect", requestId: requestId() });
+    this.send({ kind: "github.app.disconnect", requestId: requestId(), appId: appId || undefined });
     // …and drop the account's hooks on the control plane. Errors propagate so the
     // UI can tell the user it didn't take (e.g. control plane mid-deploy).
-    await disconnectGithubApp(this.local);
+    await disconnectGithubApp(this.local, appId);
   }
   async removeNode(nodeId: string): Promise<void> {
     await removeAccountNode(this.local, nodeId);

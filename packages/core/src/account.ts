@@ -227,12 +227,22 @@ export interface PairedDevice {
   updatedAt: string;
 }
 
-export interface GithubAppInfo {
+/**
+ * One GitHub App connected to the account. A private GitHub App can only be
+ * installed on the account that owns it, so covering a personal account plus
+ * every org means one app per owner — hence a list, not a single app.
+ */
+export interface GithubAppEntry {
   connected: boolean;
   name?: string;
   slug?: string;
   mention?: string; // the `@`-handle that triggers work (the app slug)
-  appId?: string; // numeric App ID (display/pre-fill only), for the reconnect form
+  appId?: string; // numeric App ID — also the key every per-app call addresses
+  hookId?: string; // the control-plane inbound hook backing this app
+  // The GitHub account this app covers. With several apps connected, this is
+  // what distinguishes "my personal app" from "the acme org app".
+  owner?: string;
+  ownerType?: string; // "User" | "Organization"
   editUrl?: string; // GitHub settings page to rename/configure the app
   installUrl?: string; // GitHub "install on repositories" page — the app does
   // nothing until it's installed on at least one repo, so the UI must surface this.
@@ -250,29 +260,56 @@ export interface GithubAppInfo {
   servingNodeSeenAt?: string;
 }
 
-/** The account's connected GitHub App (name + unique mention handle), if any. */
+export interface GithubAppInfo extends GithubAppEntry {
+  /** Every connected app; empty when nothing is set up. The flat fields above
+   *  mirror `apps[0]` — the control plane keeps serving them so a client written
+   *  against the single-app shape still works. */
+  apps: GithubAppEntry[];
+}
+
+/**
+ * Coerce a `/account/github-app` body into the multi-app shape. A control plane
+ * older than multi-app support answers with the flat single-app object and no
+ * `apps` array, so derive a one-element list from it — the UI then only ever
+ * renders one shape.
+ */
+export function normalizeGithubAppInfo(data: unknown): GithubAppInfo {
+  const { apps, ...flat } = (data && typeof data === "object" ? data : {}) as Partial<GithubAppInfo>;
+  const list = Array.isArray(apps)
+    ? apps.filter((a): a is GithubAppEntry => Boolean(a?.connected))
+    : flat.connected
+      ? [flat as GithubAppEntry]
+      : [];
+  return { ...list[0], ...flat, connected: list.length > 0, apps: list };
+}
+
+/** The account's connected GitHub Apps (name + unique mention handle each). */
 export async function fetchGithubApp(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<GithubAppInfo> {
   const res = await fetchImpl(`${cpBase(store)}/account/github-app`, { headers: authHeaders(store) });
   if (!res.ok) throw new Error(`github-app request failed: ${res.status}`);
-  return (await res.json()) as GithubAppInfo;
+  return normalizeGithubAppInfo(await res.json());
 }
 
-/** Disconnect the account's GitHub App (drops the control-plane hook). */
-export async function disconnectGithubApp(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<void> {
-  const res = await fetchImpl(`${cpBase(store)}/account/github-app`, { method: "DELETE", headers: authHeaders(store) });
+/** Disconnect one GitHub App by its App ID (drops that app's control-plane
+ *  hook), or every app on the account when `appId` is omitted. */
+export async function disconnectGithubApp(store: LocalStore, appId?: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const query = appId ? `?appId=${encodeURIComponent(appId)}` : "";
+  const res = await fetchImpl(`${cpBase(store)}/account/github-app${query}`, { method: "DELETE", headers: authHeaders(store) });
   if (!res.ok) throw new Error(`disconnect failed: ${res.status}`);
 }
 
 /**
  * Set (or, with an empty string, clear) the account's default node — the
  * node-label suffix that untagged/generic `bivy`-routed issues and comments
- * route to instead of the shared queue. Returns the resulting value.
+ * route to instead of the shared queue. Returns the resulting value. Without an
+ * `appId` it applies to every connected app, which is what the account-level
+ * setting in the UI wants.
  */
-export async function setGithubAppDefaultNode(store: LocalStore, node: string, fetchImpl: typeof fetch = fetch): Promise<string | undefined> {
+export async function setGithubAppDefaultNode(store: LocalStore, node: string, appId?: string, fetchImpl: typeof fetch = fetch): Promise<string | undefined> {
   const res = await fetchImpl(`${cpBase(store)}/account/github-app/default-node`, {
     method: "POST",
     headers: authHeaders(store),
-    body: JSON.stringify({ node }),
+    body: JSON.stringify(appId ? { node, appId } : { node }),
   });
   const data: any = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `set default node failed: ${res.status}`);

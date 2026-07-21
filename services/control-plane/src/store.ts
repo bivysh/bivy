@@ -225,6 +225,7 @@ export interface WorkItem {
   runtimeId?: string; // agent/runtime override (manual trigger); node default when unset
   model?: string; // model override (manual trigger); node default when unset
   installationId?: string; // GitHub App installation id — the node mints a token for it
+  appId?: string; // which GitHub App that installation belongs to (a node may serve several)
   // True when a device dispatched this item to a freshly-provisioned ephemeral
   // server rather than an already-running node (issue #532). Display only —
   // `label` alone drives routing; an ephemeral machine serves a one-off
@@ -251,6 +252,7 @@ export type WorkItemInput = {
   runtimeId?: string;
   model?: string;
   installationId?: string;
+  appId?: string;
 };
 
 // Per-account inbound hook: a stable id + secret a user configures in GitHub /
@@ -270,6 +272,10 @@ export interface InboundHook {
   // only (never a credential) — lets the "connect existing app" form pre-fill the
   // App ID when reconnecting the same app onto another node.
   appId?: string;
+  // Which GitHub account the app belongs to. With several apps connected this is
+  // the only thing that tells them apart at a glance (personal vs each org).
+  appOwner?: string;
+  appOwnerType?: string;
   // How many repos/orgs the GitHub App is installed on, as last reported by the
   // node (which holds the key and queries GitHub). undefined = never synced.
   // Powers the "not installed on any repo yet" warning — the app is inert until
@@ -488,7 +494,11 @@ export interface MeshStore {
   setInboundHookSecret(accountId: string, id: string, secret: string): Promise<InboundHook | undefined>;
   // Register GitHub App display/routing metadata (slug → mention handle, name, and
   // the numeric App ID for the reconnect form's pre-fill).
-  setInboundHookAppMeta(accountId: string, id: string, meta: { mention?: string; name?: string; appId?: string }): Promise<InboundHook | undefined>;
+  setInboundHookAppMeta(
+    accountId: string,
+    id: string,
+    meta: { mention?: string; name?: string; appId?: string; owner?: string; ownerType?: string },
+  ): Promise<InboundHook | undefined>;
   // Record that `nodeId` currently serves this hook's GitHub App (holds the key,
   // polls the queue). Stamps servingNodeSeenAt. Called when a node registers its
   // app-meta on connect/boot. Scoped to the owning account.
@@ -504,12 +514,21 @@ export interface MeshStore {
   // The account's GitHub App hook, if one is connected (flavor A: one per
   // account). Prefers a completed hook (one with a registered mention) over an
   // orphan left by an abandoned create flow.
-  getGithubAppHook(accountId: string): Promise<InboundHook | undefined>;
+  // The account's github_app hooks. A node may serve several apps (a private
+  // GitHub App only installs on the account that owns it, so covering a personal
+  // account plus orgs takes one app each), and every app gets its own hook so an
+  // inbound delivery identifies the app whose key should mint the token.
+  listGithubAppHooks(accountId: string): Promise<InboundHook[]>;
+  // A single github_app hook. With `appId`, the hook belonging to that app;
+  // without it, the account's primary one (completed hooks preferred).
+  getGithubAppHook(accountId: string, appId?: string): Promise<InboundHook | undefined>;
   // Remove a hook (e.g. the user disconnected their GitHub App). Account-scoped.
   deleteInboundHook(accountId: string, id: string): Promise<boolean>;
   // Remove ALL of an account's github_app hooks (disconnect, incl. orphans left
   // by abandoned create flows). Returns how many were removed.
   deleteGithubAppHooks(accountId: string): Promise<number>;
+  // Remove just one app's hooks (disconnecting a single app, leaving the rest).
+  deleteGithubAppHooksForApp(accountId: string, appId: string): Promise<number>;
   enqueueWorkItem(accountId: string, input: WorkItemInput): Promise<WorkItem>;
   // Pending items a node may run: the account's items whose label the node serves
   // (a node serving "bivy" also serves "bivy/<self>"; pass the labels it accepts).
