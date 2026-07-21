@@ -1,0 +1,105 @@
+name: Release
+
+# Tag-triggered npm release, via npm Trusted Publishing (OIDC) -- see
+# "Trusted publishing" in docs/releasing.md.
+#
+# `npm run publish:npm` (scripts/build-release.mjs --publish) has always
+# existed, but nothing called it -- publishing was a manual, unattested
+# `npm publish` from a laptop. There is no NPM_TOKEN secret: this workflow
+# authenticates to the registry with the same GitHub Actions OIDC identity
+# (`permissions: id-token: write`) that npm also uses to generate the
+# provenance attestation -- the replacement for the old self-managed Ed25519
+# manifest signature. npm only accepts that identity for a publish because
+# the `bivy` package's trusted publisher is configured (on npmjs.com) to trust
+# exactly this repository and this workflow file, so nothing else can
+# impersonate this release path -- and there is no long-lived credential
+# anywhere to leak, rotate, or guard.
+#
+# npm can only configure a trusted publisher for a package that already
+# exists, so this depends on a one-time manual bootstrap publish having
+# already happened -- see "Bootstrapping" in docs/releasing.md.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+# Never cancel a release run mid-publish -- a superseded/duplicate tag push is
+# vanishingly rare, and cancelling between "npm publish" and "create the
+# GitHub release" would leave the two out of sync.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Re-run the exact gate a pull request would have to pass. A tag can be
+  # pushed from any local checkout of any commit, so this is what actually
+  # guarantees the thing about to be published builds, lints, and passes
+  # tests -- not just that CI was green on `main` at some earlier point.
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      pull-requests: read
+
+  publish:
+    name: Publish to npm and create the GitHub release
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create the GitHub release
+      id-token: write # OIDC: authenticates the trusted publish and signs provenance
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1; Node 22.19.0 (pinned repo-wide
+      # in package.json engines / ci.yml) bundles an older npm. Upgrade just
+      # the CLI here rather than bumping the pinned Node version for this one
+      # job.
+      - name: Upgrade npm for trusted publishing (requires npm >= 11.5.1)
+        run: npm install -g npm@^11
+
+      - run: npm ci
+
+      # The tag is the source of truth for what version ships. Catch a
+      # forgotten version bump (or a wrong tag) here, with a clear message,
+      # rather than publishing a package whose version doesn't match its own
+      # git tag.
+      - name: Verify tag matches package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag v$tag does not match package.json version $pkg. Bump the version (all workspaces must agree) and re-tag -- see docs/releasing.md." >&2
+            exit 1
+          fi
+
+      # No token: npm authenticates this publish via the job's OIDC identity
+      # against the trusted publisher configured for the `bivy` package, and
+      # attaches the provenance attestation automatically as part of that --
+      # scripts/build-release.mjs's own --provenance flag (added whenever
+      # GITHUB_ACTIONS + id-token are present) is redundant here but harmless,
+      # so the script needs no change to support either auth path.
+      - name: Publish to npm
+        run: npm run publish:npm
+
+      - name: Extract CHANGELOG section for this tag
+        run: node scripts/extract-changelog.mjs "$GITHUB_REF_NAME" > release-notes.md
+
+      # Use the preinstalled `gh` CLI rather than another third-party action --
+      # `contents: write` (above) is all it needs to create a release.
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md
