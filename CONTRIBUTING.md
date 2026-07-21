@@ -33,6 +33,17 @@ npm run test:unit
 - Update docs when changing user-visible behavior.
 - Do not commit secrets, tokens, private deployment details, or customer/user data.
 
+## License of your contribution
+
+Bivy is licensed under the Functional Source License, version 1.1, with Apache
+2.0 as the future license (FSL-1.1-ALv2) — see [LICENSE](LICENSE). Each
+release converts to Apache-2.0 two years after it ships.
+
+By submitting a contribution, you agree it is licensed to the project under
+those same terms: FSL-1.1-ALv2 today, converting to Apache-2.0 on the same
+two-years-after-release schedule as the rest of the codebase. You retain
+copyright in your contribution.
+
 ## Certificate of Origin
 
 By contributing, you certify that you have the right to submit your contribution under this project's license and agree to the Developer Certificate of Origin 1.1. Use signed-off commits when possible:

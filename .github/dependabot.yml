@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # Root workspace plus every package/service that has its own package.json.
+  # Directories without a manifest (e.g. packages/ui) are skipped automatically.
+  - package-ecosystem: "npm"
+    directories:
+      - "/"
+      - "/packages/*"
+      - "/services/*"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
