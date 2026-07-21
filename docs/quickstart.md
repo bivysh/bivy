@@ -126,4 +126,5 @@ bivy logs -f   # tail the node logs
 ```
 
 Something broken? [troubleshooting.md](troubleshooting.md). Want to run your own
-control plane and relay? [self-host.md](self-host.md).
+control plane and relay? [self-host-quickstart.md](self-host-quickstart.md).
+Curious what Bivy explicitly does *not* do yet? [faq.md](faq.md).
