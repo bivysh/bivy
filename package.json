@@ -30,8 +30,6 @@
     "typecheck:web": "npm run typecheck -w @bivy/core && npm run typecheck -w @bivy/web",
     "check:licenses": "node scripts/check-licenses.mjs",
     "check:secrets": "node scripts/secret-scan.mjs",
-    "check:version": "node scripts/sync-version.mjs --check",
-    "sync:version": "node scripts/sync-version.mjs",
     "build:release": "node scripts/build-release.mjs",
     "publish:npm": "node scripts/build-release.mjs --publish",
     "publish:npm:dry": "node scripts/build-release.mjs --publish --dry-run",

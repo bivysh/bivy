@@ -2414,7 +2414,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "session.error", sessionId: sid || undefined, error: "Session not found" });
       return;
     }
-    const settled = buildHistoryEvent({
+    relay?.sendEvent(buildHistoryEvent({
       sessionId: record.id,
       workspace: record.workspace,
       source: record.source,
@@ -2422,21 +2422,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       isStreaming: sessionBusy(record),
       messages: conversationMessages(record),
       cursor: historyCursorFrom(msg),
-    });
-    // Skip a byte-identical repeat of the fast paint. For a session that was
-    // already open the resume above is a no-op, so this event is exactly what we
-    // just sent — re-sending it costs a second copy of the transcript on the wire
-    // and a redundant full re-render on the client, for nothing. The hash/mode/count
-    // gate is the cheap pre-check; the deep compare only runs when it passes, and
-    // catches the metadata that differs after a real resume (sessionFile, usage,
-    // costUsd, bivySession…), so nothing the client needs is ever dropped.
-    const sameAsEarly =
-      early !== null &&
-      early.historyHash === settled.historyHash &&
-      early.mode === settled.mode &&
-      early.count === settled.count &&
-      JSON.stringify(early) === JSON.stringify(settled);
-    if (!sameAsEarly) relay?.sendEvent(settled);
+    }));
     // A reconnecting/opening client missed the one-shot card broadcast; put
     // any still-pending question/approval back so it can be answered.
     replayPendingInteractions(record.id);

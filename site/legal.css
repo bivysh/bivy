@@ -1,0 +1,102 @@
+/* Shared styling for the legal pages (terms, privacy, contact).
+   Mirrors the light, typographic theme of the marketing site (site/index.html). */
+:root {
+  color-scheme: light dark;
+  --bg:      #fbfaf8;
+  --surface: #ffffff;
+  --sunken:  #f4f2ee;
+  --ink:     #17181a;
+  --ink-2:   #3d4045;
+  --muted:   #6b6f76;
+  --faint:   #999da4;
+  --line:    #e3e0da;
+  --line-2:  #efece7;
+  --accent:  #9a4d10;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:      #131315;
+    --surface: #1a1a1d;
+    --sunken:  #202024;
+    --ink:     #ececea;
+    --ink-2:   #c9c8c5;
+    --muted:   #9a9a98;
+    --faint:   #737373;
+    --line:    #2e2e32;
+    --line-2:  #252528;
+    --accent:  #d99155;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16.5px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.wrap { max-width: 720px; margin: 0 auto; padding: 44px 22px 84px; }
+
+a { color: var(--accent); }
+p { color: var(--ink-2); }
+
+header.bar { border-bottom: 1px solid var(--line-2); background: var(--bg); }
+header.bar .wrap { padding: 16px 22px; display: flex; align-items: center; gap: 9px; }
+header.bar img { width: 22px; height: 22px; border-radius: 4px; display: block; }
+header.bar a.brand {
+  color: var(--ink); text-decoration: none; font-weight: 600;
+  font-size: 16px; letter-spacing: -0.015em;
+  display: inline-flex; align-items: center; gap: 9px;
+}
+
+h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.021em; margin: 10px 0 6px; }
+h2 { font-size: 18px; font-weight: 600; letter-spacing: -0.015em; margin: 36px 0 8px; }
+
+.muted { color: var(--muted); }
+.updated { color: var(--faint); font-size: 14px; margin-bottom: 30px; }
+
+ul { padding-left: 20px; color: var(--ink-2); }
+li { margin: 6px 0; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.89em; background: var(--sunken);
+  padding: 1px 5px; border-radius: 3px;
+}
+
+table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 15px; }
+th, td {
+  border-bottom: 1px solid var(--line-2);
+  padding: 10px 12px; text-align: left; vertical-align: top;
+  color: var(--ink-2);
+}
+thead th {
+  border-bottom: 1px solid var(--line);
+  color: var(--faint); font-weight: 500; font-size: 13px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+
+.note {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 7px 7px 0;
+  padding: 16px 20px;
+  margin: 24px 0;
+  font-size: 15px;
+  color: var(--ink-2);
+}
+
+footer.site { border-top: 1px solid var(--line-2); }
+footer.site .wrap {
+  padding: 26px 22px; color: var(--muted); font-size: 14.5px;
+  display: flex; gap: 18px; flex-wrap: wrap;
+}
+footer.site a { color: var(--muted); text-decoration: none; }
+footer.site a:hover { color: var(--ink); }

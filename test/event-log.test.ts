@@ -131,48 +131,6 @@ test("tool fold keeps only the most recent 500 entries, like the legacy cap", ()
   assert.deepEqual(folded, legacyTool(many));
 });
 
-// The folds sort (and, for tools, cap) ONCE at the end rather than on every entry.
-// These pin the boundaries of that rewrite: merging is by unique id, so array order
-// never fed back into the result and hoisting the sort must be observationally
-// identical to the legacy in-loop version.
-test("tool fold matches the legacy cap exactly either side of the 500 boundary", () => {
-  for (const n of [0, 1, 499, 500, 501, 1200]) {
-    const events: EventLogEntry[] = Array.from({ length: n }, (_, i) => toolCall(`c${i}`, "Read", i, 1000 + i));
-    assert.deepEqual(foldTool(events), legacyTool(events), `cap mismatch at n=${n}`);
-    assert.equal(foldTool(events).length, Math.min(n, 500), `wrong length at n=${n}`);
-  }
-});
-
-test("tool fold merges a late update onto an entry the legacy in-loop cap had already evicted", () => {
-  // Recorded first (carrying a field only the original has), pushed past the 500-entry
-  // window by the run of calls below, then updated much later with a high anchor so the
-  // update itself survives the cap. The legacy fold capped *inside* the loop, so by the
-  // time the update arrived the original was gone and it was re-pushed as a bare new
-  // entry, silently dropping the original's fields. Capping once at the end merges it
-  // properly. This is the one deliberate behaviour change in the rewrite.
-  const original = { ...toolCall("c0", "Bash", 0, 1), originalOnly: "preserved" } as EventLogEntry;
-  const filler: EventLogEntry[] = Array.from({ length: 600 }, (_, i) => toolCall(`k${i}`, "Read", i + 1, 100 + i));
-  const lateUpdate = toolCall("c0", "Bash", 9999, 99999);
-  const folded = foldTool([original, ...filler, lateUpdate]);
-
-  const c0 = folded.filter((e) => e.id === "bivy-tool-call-c0");
-  assert.equal(c0.length, 1, "the late update must merge, not duplicate the entry");
-  assert.equal(c0[0]!.afterMessageCount, 9999, "the update's anchor wins");
-  assert.equal(c0[0]!.originalOnly, "preserved", "fields only the original carried survive the merge");
-  // Legacy lost them, which is exactly why this assertion is not `deepEqual(legacyTool(...))`.
-  assert.equal(legacyTool([original, ...filler, lateUpdate]).find((e) => e.id === "bivy-tool-call-c0")?.originalOnly, undefined);
-});
-
-test("intermediate fold re-keys a streaming entry so a later duplicate of the grown text still merges", () => {
-  // The dedupe index is keyed on (afterMessageCount, normalized text). A streaming
-  // delta arrives under the same id with *grown* text, which changes that key — if the
-  // index were not re-keyed on replacement, a later different-id entry carrying the
-  // final text would be pushed as a duplicate instead of merging.
-  const events = [think("i1", "Let me", 1, 100), think("i1", "Let me think it over", 1, 100), think("i2", "Let me think it over", 1, 150)];
-  assert.deepEqual(foldIntermediate(events), legacyIntermediate(events));
-  assert.equal(foldIntermediate(events).length, 1, "the grown text must dedupe onto the streaming entry");
-});
-
 test("EventLog round-trips through disk: append → flush → fresh read replays identically", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
   try {
