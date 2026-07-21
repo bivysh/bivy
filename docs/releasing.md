@@ -19,10 +19,14 @@ npm provides the same guarantees without that liability:
 - the registry serves content-addressed tarballs and npm verifies each package's
   integrity hash on install;
 - packages published from CI with `--provenance` carry a signed attestation,
-  recording the workflow, repository, and commit that built them.
+  recording the workflow, repository, and commit that built them;
+- publishing itself is authenticated via **Trusted Publishing** (OIDC) rather
+  than a long-lived npm access token, so there is no npm credential of any
+  kind to leak, rotate, or guard either. See "Trusted publishing" below.
 
 So the key we would otherwise have to guard forever is replaced by Sigstore's
-short-lived, transparency-logged certificates.
+short-lived, transparency-logged certificates, and by npm's own OIDC-based
+publish authentication.
 
 ## Verifying a release
 
@@ -38,20 +42,50 @@ npm view bivy@0.1.0 dist.attestations
 The provenance attestation is also shown on the package page under
 "Provenance", linking back to the exact workflow run and commit.
 
-## Required secrets
+## Trusted publishing
 
-`.github/workflows/release.yml` runs on every `v*` tag push, and needs one
-repository secret to publish:
+`.github/workflows/release.yml` needs **no `NPM_TOKEN` secret**. It publishes
+via npm's [Trusted Publishing](https://docs.npmjs.com/trusted-publishers/):
+the job's GitHub Actions OIDC identity (`permissions: id-token: write`) is
+exchanged directly with the registry for a short-lived publish credential,
+scoped to exactly this repository and workflow file — nothing else can
+authenticate as this release path, and there is no standing token to leak,
+rotate, or revoke. Provenance is generated automatically as part of the same
+exchange.
 
-| Secret | Used for |
+Configure it once, on the `bivy` package's **Settings → Trusted Publishers**
+page on npmjs.com (requires the package to already exist — see
+"Bootstrapping" below):
+
+| Field | Value |
 |---|---|
-| `NPM_TOKEN` | An npm access token (Automation or Publish permission) for the `bivy` package, used by `npm publish` inside `scripts/build-release.mjs`. |
+| Provider | GitHub Actions |
+| Organization or user | `bivysh` |
+| Repository | `bivy` |
+| Workflow filename | `release.yml` |
+| Environment name | *(leave blank — this workflow doesn't use a GitHub environment)* |
 
-Add it under **Settings → Secrets and variables → Actions → New repository
-secret**. If it's missing, the workflow fails fast with a clear error instead
-of publishing an unattested package — `npm publish --provenance` can only
-succeed when it's run from CI with a valid registry token, and this repo would
-rather fail the release than ship one without the attestation described above.
+npm's CLI needs to be `>= 11.5.1` to speak the trusted-publishing protocol;
+`release.yml` upgrades it explicitly (`npm install -g npm@^11`) rather than
+bumping the repo's pinned Node version just for that.
+
+### Bootstrapping
+
+npm can only configure a trusted publisher for a package that **already
+exists** — there's no equivalent of "reserve this name for CI" for a brand
+new package. So the very first publish of `bivy` has to happen once by hand,
+with a maintainer's own npm login (or a short-lived classic Automation
+token), *before* the table above can be filled in:
+
+```bash
+npm run publish:npm:dry   # inspect what would ship
+npm login                 # if not already
+npm run publish:npm       # first publish only — no provenance yet, that's expected
+```
+
+Once `bivy@<version>` exists on the registry, configure the trusted publisher
+above. Every tagged release after that goes through the workflow, with no
+token involved.
 
 ## Cutting a release
 
@@ -61,10 +95,9 @@ rather fail the release than ship one without the attestation described above.
 4. Tag: `git tag -a v0.1.0 -m "Bivy 0.1.0" && git push origin v0.1.0`.
 5. The tag-triggered release workflow (`.github/workflows/release.yml`) checks
    out the tag, runs the full CI gate (`.github/workflows/ci.yml`, reused via
-   `workflow_call`), publishes to npm with provenance (`id-token: write` lets
-   `scripts/build-release.mjs` pass `--provenance`), and creates the GitHub
-   release from the matching `## [x.y.z]` section of `CHANGELOG.md`
-   (`scripts/extract-changelog.mjs`).
+   `workflow_call`), publishes to npm via Trusted Publishing (with automatic
+   provenance), and creates the GitHub release from the matching
+   `## [x.y.z]` section of `CHANGELOG.md` (`scripts/extract-changelog.mjs`).
 
 To publish by hand:
 

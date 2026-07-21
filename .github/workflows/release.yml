@@ -1,16 +1,23 @@
 name: Release
 
-# Tag-triggered npm release.
+# Tag-triggered npm release, via npm Trusted Publishing (OIDC) -- see
+# "Trusted publishing" in docs/releasing.md.
 #
 # `npm run publish:npm` (scripts/build-release.mjs --publish) has always
 # existed, but nothing called it -- publishing was a manual, unattested
-# `npm publish` from a laptop. That matters more now that npm is the only
-# distribution channel (see docs/releasing.md): npm can only attach a signed
+# `npm publish` from a laptop. There is no NPM_TOKEN secret: this workflow
+# authenticates to the registry with the same GitHub Actions OIDC identity
+# (`permissions: id-token: write`) that npm also uses to generate the
 # provenance attestation -- the replacement for the old self-managed Ed25519
-# manifest signature -- to a package it can trace back to a CI run. This
-# workflow is that CI run: it is the only place `NPM_TOKEN` and
-# `id-token: write` exist together, so a release built here is attested and a
-# release built anywhere else can't be.
+# manifest signature. npm only accepts that identity for a publish because
+# the `bivy` package's trusted publisher is configured (on npmjs.com) to trust
+# exactly this repository and this workflow file, so nothing else can
+# impersonate this release path -- and there is no long-lived credential
+# anywhere to leak, rotate, or guard.
+#
+# npm can only configure a trusted publisher for a package that already
+# exists, so this depends on a one-time manual bootstrap publish having
+# already happened -- see "Bootstrapping" in docs/releasing.md.
 on:
   push:
     tags:
@@ -43,24 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # to create the GitHub release
-      id-token: write # required so `npm publish --provenance` can attest (scripts/build-release.mjs)
+      id-token: write # OIDC: authenticates the trusted publish and signs provenance
     steps:
-      # Fail closed, with a clear reason, before doing any work. Without this,
-      # a missing secret surfaces as an opaque 401 from `npm publish` deep
-      # inside build-release.mjs, or -- worse -- build-release.mjs silently
-      # falls back to an unattested publish when run outside conditions it
-      # recognizes. Neither is acceptable for a release. (The `secrets`
-      # context isn't available in a step `if:` condition, so this checks the
-      # env-mapped value in the shell instead.)
-      - name: Require NPM_TOKEN
-        run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "::error::NPM_TOKEN secret is not set on this repository, so this workflow refuses to publish. Add it under Settings > Secrets and variables > Actions before re-running (see docs/releasing.md#required-secrets); a publish without it would have no provenance attestation." >&2
-            exit 1
-          fi
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -68,6 +59,13 @@ jobs:
           node-version: '22.19.0'
           cache: npm
           registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1; Node 22.19.0 (pinned repo-wide
+      # in package.json engines / ci.yml) bundles an older npm. Upgrade just
+      # the CLI here rather than bumping the pinned Node version for this one
+      # job.
+      - name: Upgrade npm for trusted publishing (requires npm >= 11.5.1)
+        run: npm install -g npm@^11
 
       - run: npm ci
 
@@ -84,14 +82,14 @@ jobs:
             exit 1
           fi
 
-      # Provenance is automatic here: build-release.mjs adds --provenance
-      # whenever GITHUB_ACTIONS=true and ACTIONS_ID_TOKEN_REQUEST_URL is set,
-      # both of which the runner provides because this job has
-      # `id-token: write` above. See scripts/build-release.mjs for the check.
+      # No token: npm authenticates this publish via the job's OIDC identity
+      # against the trusted publisher configured for the `bivy` package, and
+      # attaches the provenance attestation automatically as part of that --
+      # scripts/build-release.mjs's own --provenance flag (added whenever
+      # GITHUB_ACTIONS + id-token are present) is redundant here but harmless,
+      # so the script needs no change to support either auth path.
       - name: Publish to npm
         run: npm run publish:npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Extract CHANGELOG section for this tag
         run: node scripts/extract-changelog.mjs "$GITHUB_REF_NAME" > release-notes.md
