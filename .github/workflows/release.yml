@@ -1,0 +1,107 @@
+name: Release
+
+# Tag-triggered npm release.
+#
+# `npm run publish:npm` (scripts/build-release.mjs --publish) has always
+# existed, but nothing called it -- publishing was a manual, unattested
+# `npm publish` from a laptop. That matters more now that npm is the only
+# distribution channel (see docs/releasing.md): npm can only attach a signed
+# provenance attestation -- the replacement for the old self-managed Ed25519
+# manifest signature -- to a package it can trace back to a CI run. This
+# workflow is that CI run: it is the only place `NPM_TOKEN` and
+# `id-token: write` exist together, so a release built here is attested and a
+# release built anywhere else can't be.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+# Never cancel a release run mid-publish -- a superseded/duplicate tag push is
+# vanishingly rare, and cancelling between "npm publish" and "create the
+# GitHub release" would leave the two out of sync.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Re-run the exact gate a pull request would have to pass. A tag can be
+  # pushed from any local checkout of any commit, so this is what actually
+  # guarantees the thing about to be published builds, lints, and passes
+  # tests -- not just that CI was green on `main` at some earlier point.
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      pull-requests: read
+
+  publish:
+    name: Publish to npm and create the GitHub release
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create the GitHub release
+      id-token: write # required so `npm publish --provenance` can attest (scripts/build-release.mjs)
+    steps:
+      # Fail closed, with a clear reason, before doing any work. Without this,
+      # a missing secret surfaces as an opaque 401 from `npm publish` deep
+      # inside build-release.mjs, or -- worse -- build-release.mjs silently
+      # falls back to an unattested publish when run outside conditions it
+      # recognizes. Neither is acceptable for a release. (The `secrets`
+      # context isn't available in a step `if:` condition, so this checks the
+      # env-mapped value in the shell instead.)
+      - name: Require NPM_TOKEN
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN secret is not set on this repository, so this workflow refuses to publish. Add it under Settings > Secrets and variables > Actions before re-running (see docs/releasing.md#required-secrets); a publish without it would have no provenance attestation." >&2
+            exit 1
+          fi
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm ci
+
+      # The tag is the source of truth for what version ships. Catch a
+      # forgotten version bump (or a wrong tag) here, with a clear message,
+      # rather than publishing a package whose version doesn't match its own
+      # git tag.
+      - name: Verify tag matches package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag v$tag does not match package.json version $pkg. Bump the version (all workspaces must agree) and re-tag -- see docs/releasing.md." >&2
+            exit 1
+          fi
+
+      # Provenance is automatic here: build-release.mjs adds --provenance
+      # whenever GITHUB_ACTIONS=true and ACTIONS_ID_TOKEN_REQUEST_URL is set,
+      # both of which the runner provides because this job has
+      # `id-token: write` above. See scripts/build-release.mjs for the check.
+      - name: Publish to npm
+        run: npm run publish:npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Extract CHANGELOG section for this tag
+        run: node scripts/extract-changelog.mjs "$GITHUB_REF_NAME" > release-notes.md
+
+      # Use the preinstalled `gh` CLI rather than another third-party action --
+      # `contents: write` (above) is all it needs to create a release.
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md

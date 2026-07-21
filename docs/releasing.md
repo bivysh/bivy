@@ -38,14 +38,33 @@ npm view bivy@0.1.0 dist.attestations
 The provenance attestation is also shown on the package page under
 "Provenance", linking back to the exact workflow run and commit.
 
+## Required secrets
+
+`.github/workflows/release.yml` runs on every `v*` tag push, and needs one
+repository secret to publish:
+
+| Secret | Used for |
+|---|---|
+| `NPM_TOKEN` | An npm access token (Automation or Publish permission) for the `bivy` package, used by `npm publish` inside `scripts/build-release.mjs`. |
+
+Add it under **Settings → Secrets and variables → Actions → New repository
+secret**. If it's missing, the workflow fails fast with a clear error instead
+of publishing an unattested package — `npm publish --provenance` can only
+succeed when it's run from CI with a valid registry token, and this repo would
+rather fail the release than ship one without the attestation described above.
+
 ## Cutting a release
 
 1. Land everything on `main` and make sure CI is green.
 2. Bump the version (all workspaces must agree; see `scripts/sync-version.mjs`).
 3. Update `CHANGELOG.md` — move `[Unreleased]` into a dated section.
 4. Tag: `git tag -a v0.1.0 -m "Bivy 0.1.0" && git push origin v0.1.0`.
-5. The tag-triggered release workflow builds, tests, and publishes to npm with
-   provenance, then creates the GitHub release.
+5. The tag-triggered release workflow (`.github/workflows/release.yml`) checks
+   out the tag, runs the full CI gate (`.github/workflows/ci.yml`, reused via
+   `workflow_call`), publishes to npm with provenance (`id-token: write` lets
+   `scripts/build-release.mjs` pass `--provenance`), and creates the GitHub
+   release from the matching `## [x.y.z]` section of `CHANGELOG.md`
+   (`scripts/extract-changelog.mjs`).
 
 To publish by hand:
 
