@@ -1,0 +1,220 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (c) 2026 Petter André Sjulstad
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import fs from "node:fs";
+import path from "node:path";
+import { resolveSecret } from "./secrets.js";
+import { cleanRemoteUrl, credConfigArgs, gitNonInteractiveEnv, configureRepoCredentialHelper } from "./git-auth.js";
+
+const exec = promisify(execFile);
+
+/**
+ * Start a session on a GitHub repo: clone it into a local git workspace (once per
+ * repo, reused after) so the agent works in a real checkout. Pairs with the
+ * autonomy boundary (writes confined to the clone) and the existing worktree/PR
+ * flow. Token auth is used when available (private repos); public repos clone
+ * without one. Args are passed to git via execFile (no shell), so a validated
+ * `owner/repo` is safe from injection.
+ */
+
+export interface ParsedRepo {
+  owner: string;
+  repo: string;
+  slug: string;
+}
+
+/** Parse "owner/repo" (also tolerates a full github.com URL or trailing .git). */
+export function parseRepo(input: string): ParsedRepo | undefined {
+  const cleaned = String(input)
+    .trim()
+    .replace(/^https?:\/\/github\.com\//i, "")
+    .replace(/^git@github\.com:/i, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "");
+  const m = cleaned.match(/^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/);
+  return m ? { owner: m[1], repo: m[2], slug: `${m[1]}/${m[2]}` } : undefined;
+}
+
+/** Parse a GitHub owner/repo slug from a git remote URL. */
+export function parseGitHubRemote(input: string): ParsedRepo | undefined {
+  const value = String(input).trim();
+  const https = value.match(/^https?:\/\/(?:[^/@]+(?::[^/@]*)?@)?github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  if (https) return parseRepo(`${https[1]}/${https[2]}`);
+  const ssh = value.match(/^(?:ssh:\/\/)?git@github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  if (ssh) return parseRepo(`${ssh[1]}/${ssh[2]}`);
+  return undefined;
+}
+
+/** Infer owner/repo from a workspace's origin remote, if it is a GitHub checkout. */
+export async function inferGitHubRepoFromWorkspace(workspace: string): Promise<ParsedRepo | undefined> {
+  try {
+    const { stdout } = await exec("git", ["-C", workspace, "remote", "get-url", "origin"]);
+    return parseGitHubRemote(stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A GitHub token from env or the local `gh` login, or undefined (public only). */
+export async function resolveGitHubToken(env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
+  const fromEnv = env.BIVY_GITHUB_TOKEN?.trim();
+  if (fromEnv) {
+    if (fromEnv.startsWith("secret://") || fromEnv.startsWith("op://") || fromEnv.startsWith("env://")) return resolveSecret(fromEnv);
+    return fromEnv;
+  }
+  try {
+    const { stdout } = await exec("gh", ["auth", "token"]);
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Refresh the remote-tracking refs so a session branches off the CURRENT state
+ * of `origin`, not whatever the local checkout last saw. Best-effort: an offline
+ * node (or a checkout with no reachable origin) keeps its existing refs and the
+ * caller branches off those. `cloneOrUpdateRepo` already fetches on the clone
+ * path, so this is for the "workspace is an existing local checkout" path, which
+ * otherwise never pulls the latest origin before cutting a branch.
+ */
+export async function fetchOrigin(repoDir: string): Promise<void> {
+  try {
+    await exec("git", ["-C", repoDir, "fetch", "origin", "--prune"], { timeout: 120_000 });
+  } catch {
+    // offline / no origin / no rights — branch off the refs we already have.
+  }
+}
+
+/**
+ * Resolve the ref a new branch should be cut from: the remote's default branch
+ * (`origin/main`, `origin/master`, …). Falls back to `origin/main` when the
+ * remote HEAD isn't recorded. Used so a repo-backed session branches off the
+ * upstream default rather than whatever the shared checkout happens to be on.
+ */
+export async function resolveDefaultBaseRef(repoDir: string): Promise<string> {
+  // origin/HEAD points at the remote's default branch when it's been recorded.
+  try {
+    const { stdout } = await exec("git", ["-C", repoDir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+    const ref = stdout.trim();
+    if (ref) return ref; // e.g. "origin/main"
+  } catch {
+    // origin/HEAD is often unset on a fresh clone — record it, then retry.
+  }
+  try {
+    await exec("git", ["-C", repoDir, "remote", "set-head", "origin", "--auto"]);
+    const { stdout } = await exec("git", ["-C", repoDir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+    const ref = stdout.trim();
+    if (ref) return ref;
+  } catch {
+    // best effort
+  }
+  return "origin/main";
+}
+
+/**
+ * Resolve the ref to branch a new session from when the caller (the composer's
+ * branch pill) requested a SPECIFIC remote branch instead of the repo's
+ * default. `cloneOrUpdateRepo`/`fetchOrigin` have already brought every remote
+ * branch's tracking ref down before this runs, so this only needs to verify
+ * `origin/<branch>` actually exists — surfacing a clear error instead of
+ * silently falling back to the default when the requested branch is missing
+ * (e.g. typo'd, deleted upstream since the picker's list was fetched).
+ */
+export async function resolveBranchBaseRef(repoDir: string, branch: string): Promise<string> {
+  const ref = `origin/${branch}`;
+  try {
+    await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", ref]);
+    return ref;
+  } catch {
+    throw new Error(`Branch "${branch}" was not found on the remote.`);
+  }
+}
+
+/**
+ * Whether an existing Bivy-owned checkout at `dest` can be reused as-is, i.e. it
+ * has a `.git` entry AND `git rev-parse` accepts it as a real repository. A
+ * `.git` can survive an interrupted/corrupt clone, so presence alone is not
+ * enough — callers that reuse on presence alone hand a broken directory to the
+ * worktree flow, which then fails with "Not a git repository". Exported for
+ * tests.
+ */
+export async function isReusableCheckout(dest: string): Promise<boolean> {
+  if (!fs.existsSync(path.join(dest, ".git"))) return false;
+  try {
+    await exec("git", ["-C", dest, "rev-parse", "--show-toplevel"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ensure a working clone of the repo exists under `root` and return its path.
+ * Clones on first use; on later use fetches the latest. One checkout per repo.
+ */
+// The remote URL is now token-free — auth goes through the daemon credential
+// helper (see src/git-auth.ts), so no token is written into `.git/config`.
+// Still tighten `.git/config` to 0600 (git writes it 0644 by default): it holds
+// the credential-helper config and other local settings, and a least-readable
+// posture is cheap insurance. Best-effort.
+function hardenGitConfigPerms(dest: string): void {
+  try {
+    fs.chmodSync(path.join(dest, ".git", "config"), 0o600);
+  } catch {
+    // no .git/config yet, or a filesystem without POSIX modes — ignore
+  }
+}
+
+export async function cloneOrUpdateRepo(opts: { owner: string; repo: string; token?: string; root: string }): Promise<string> {
+  const dest = path.join(opts.root, `${opts.owner}__${opts.repo}`);
+  // Keep the remote URL token-free; auth flows through the daemon credential
+  // helper (see src/git-auth.ts), which fetches a fresh token on demand — so no
+  // token is written into this clone's `.git/config`, where an agent (or
+  // `git remote -v` / a log / a screenshot) could read it.
+  const url = cleanRemoteUrl(opts.owner, opts.repo);
+  const env = gitNonInteractiveEnv();
+  const cc = credConfigArgs();
+
+  // Reuse the existing checkout only if it is a REAL git repository. A `.git`
+  // entry can survive a clone that was interrupted (network drop, killed
+  // process) or otherwise left corrupt — the directory exists and has a `.git`,
+  // but `git rev-parse` rejects it. Trusting `.git`'s mere presence took the
+  // fetch path and returned that broken directory, so every later "new session
+  // on this repo" failed downstream in createWorktree with "Not a git
+  // repository" — permanently, because the wipe-and-reclone repair below only
+  // ran when `.git` was entirely absent. Validate first; if it's broken, fall
+  // through and rebuild it.
+  if (await isReusableCheckout(dest)) {
+    try {
+      // Rewrite origin to the clean URL. This also MIGRATES any pre-existing
+      // clone whose remote still carries an embedded token from before this fix.
+      await exec("git", ["-C", dest, "remote", "set-url", "origin", url]);
+      await configureRepoCredentialHelper((a) => exec("git", a), dest);
+      await exec("git", ["-C", dest, ...cc, "fetch", "--all", "--prune"], { timeout: 120_000, env });
+      // Re-point origin/HEAD at the remote's CURRENT default branch. Without
+      // this a cached checkout keeps whatever default it recorded at first
+      // clone, so if the repo's default later changed (e.g. main → master) a new
+      // session would branch off the stale remote default. --auto is best-effort
+      // and only rewrites the local origin/HEAD pointer, never a branch.
+      await exec("git", ["-C", dest, "remote", "set-head", "origin", "--auto"]);
+    } catch {
+      // offline / fetch failed — reuse the existing checkout as-is
+    }
+    hardenGitConfigPerms(dest);
+    return dest;
+  }
+
+  fs.mkdirSync(opts.root, { recursive: true });
+  // A failed/interrupted/corrupt clone can leave a non-repository (or broken
+  // repository) directory behind; because this path is Bivy-owned
+  // (<root>/<owner>__<repo>), repair it instead of letting every later "new repo
+  // session" fail with "destination exists" or "Not a git repository".
+  if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
+  await exec("git", [...cc, "clone", url, dest], { timeout: 600_000, env });
+  // Persist the helper config so agent-run git in this clone authenticates too.
+  await configureRepoCredentialHelper((a) => exec("git", a), dest);
+  hardenGitConfigPerms(dest);
+  return dest;
+}

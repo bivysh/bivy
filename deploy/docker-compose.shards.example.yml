@@ -1,0 +1,63 @@
+# Example: run the relay as a SHARDED fleet to scale routing past one CPU core.
+# See docs/scaling.md.
+#
+# The base docker-compose.yml runs a single `relay`. The relay routes on one
+# Node thread (one core), so to use more cores you run several identical relay
+# processes and let the control plane hash each node to one of them. This file is
+# an OVERRIDE that adds a second relay; copy/extend it for more shards.
+#
+# Usage:
+#   docker compose \
+#     -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.shards.example.yml \
+#     --env-file deploy/.env up -d --build --remove-orphans
+#
+# Required .env wiring (the control plane is what assigns shards):
+#   RELAY_SHARD_URLS=wss://relay-0.bivy.sh,wss://relay-1.bivy.sh
+#
+# And Caddy must route each public hostname to the right shard — see
+# deploy/Caddyfile.shards.example.
+#
+# NOTE: changing the NUMBER of shards reshuffles node->shard placement and forces
+# reconnects. Do it in a maintenance window.
+
+services:
+  # Rename the base single relay to shard 0 by giving it an explicit shard id.
+  relay:
+    environment:
+      RELAY_SHARD_ID: "relay-0"
+
+  relay-1:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.relay
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "4500"
+      RELAY_SHARD_ID: "relay-1"
+      RELAY_SECRET: "${RELAY_SECRET}"
+      CONTROL_PLANE_URL: "http://control-plane:4400"
+      ENFORCE_ENTITLEMENTS: "${ENFORCE_ENTITLEMENTS:-0}"
+      RELAY_MAX_FRAME_BYTES: "${RELAY_MAX_FRAME_BYTES:-1048576}"
+      RELAY_MAX_MESSAGES_PER_MINUTE: "${RELAY_MAX_MESSAGES_PER_MINUTE:-120}"
+      RELAY_MAX_CONNECTIONS_PER_IP: "${RELAY_MAX_CONNECTIONS_PER_IP:-50}"
+      RELAY_IDLE_TIMEOUT_MS: "${RELAY_IDLE_TIMEOUT_MS:-120000}"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    expose:
+      - "4500"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4500/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  # Caddy must wait for the new shard too.
+  caddy:
+    depends_on:
+      relay-1:
+        condition: service_healthy

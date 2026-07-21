@@ -1,0 +1,22 @@
+# Copy to deploy/Caddyfile on the server and replace the domains below.
+# Caddy fetches Let's Encrypt certs automatically, giving real https:// and
+# wss:// (WebSocket over TLS).
+
+app.bivy.sh {
+	reverse_proxy control-plane:4400
+}
+
+relay.bivy.sh {
+	# WebSocket upgrades are proxied transparently by Caddy.
+	reverse_proxy relay:4500
+}
+
+# Optional: serve the static marketing/install site (../site) on your apex/www
+# domain. Mount it into the caddy container, e.g. add this to the caddy service
+# volumes in docker-compose.yml:
+#   - ../site:/srv/site:ro
+bivy.sh {
+	root * /srv/site
+	file_server
+	encode gzip
+}

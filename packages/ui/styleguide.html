@@ -1,0 +1,1273 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Bivy UI — Styleguide (Phase 0)</title>
+  <!--
+    Design tokens inlined below (mirror of tokens.css) so this styleguide is a
+    single self-contained file, easy to open/review on a phone with nothing
+    alongside it. Source of truth remains packages/ui/tokens.css — keep them in
+    sync (or re-inline) when tokens change.
+  -->
+  <style>
+    :root {
+      color-scheme: light;
+
+      /* ---- Brand / accent ------------------------------------------------ */
+      --accent: #005a2b;
+      --accent-contrast: #ffffff;
+      /* Derived from --accent, so an accent preset only needs to set --accent. */
+      --accent-hover: color-mix(in srgb, var(--accent), #000 12%);
+      --accent-active: color-mix(in srgb, var(--accent), #000 22%);
+      --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--surface));
+
+      /* ---- Surfaces & text (semantic) ----------------------------------- */
+      --bg: #eef2f7;
+      --surface: #ffffff;
+      --surface-2: #f8fafc;
+      --surface-3: #f1f5f9;
+      --overlay: rgba(15, 23, 42, 0.45);
+
+      --text: #0f172a;
+      --text-muted: #475569;
+      --text-subtle: #94a3b8;
+      --text-inverse: #ffffff;
+
+      --border: #e2e8f0;
+      --border-strong: #cbd5e1;
+
+      /* ---- Status ------------------------------------------------------- */
+      --success: #16a34a;  --success-soft: #dcfce7;
+      --warning: #d97706;  --warning-soft: #fef3c7;
+      --danger:  #dc2626;  --danger-soft:  #fee2e2;
+      --info:    #2563eb;  --info-soft:    #dbeafe;
+
+      --focus-ring: color-mix(in srgb, var(--accent) 45%, transparent);
+
+      /* ---- Typography --------------------------------------------------- */
+      --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+      --text-xs: 12px;   --lh-xs: 16px;
+      --text-sm: 13px;   --lh-sm: 18px;
+      --text-base: 14px; --lh-base: 21px;
+      --text-md: 15px;   --lh-md: 22px;
+      --text-lg: 17px;   --lh-lg: 24px;
+      --text-xl: 20px;   --lh-xl: 28px;
+      --text-2xl: 24px;  --lh-2xl: 32px;
+      --text-3xl: 30px;  --lh-3xl: 38px;
+
+      --weight-normal: 400;
+      --weight-medium: 500;
+      --weight-semibold: 600;
+      --weight-bold: 700;
+      --weight-heavy: 800;
+
+      /* ---- Spacing (4px rhythm) ----------------------------------------- */
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 24px;
+      --space-6: 32px;
+      --space-7: 48px;
+      --space-8: 64px;
+
+      /* ---- Radius ------------------------------------------------------- */
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --radius-xl: 20px;
+      --radius-full: 999px;
+
+      /* ---- Elevation ---------------------------------------------------- */
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.08);
+      --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+      --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.12);
+      --shadow-xl: 0 24px 70px rgba(15, 23, 42, 0.16);
+
+      /* ---- Motion ------------------------------------------------------- */
+      --dur-fast: 120ms;
+      --dur: 200ms;
+      --dur-slow: 320ms;
+      --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+      --ease-emphasized: cubic-bezier(0.2, 0, 0, 1.2);
+
+      /* ---- Z-index ------------------------------------------------------ */
+      --z-base: 0;
+      --z-dropdown: 100;
+      --z-sticky: 200;
+      --z-sheet: 300;
+      --z-modal: 400;
+      --z-toast: 500;
+
+      /* ---- Layout ------------------------------------------------------- */
+      --sidebar-width: 320px;
+    }
+
+    /* Dark theme: explicit opt-in, or follow OS when not set. */
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+
+      --accent: #005a2b;
+      --accent-contrast: #ffffff;
+      /* hover/active/soft derive from --accent (defined in :root) */
+
+      --bg: #0b1220;
+      --surface: #111827;
+      --surface-2: #161f30;
+      --surface-3: #1e293b;
+      --overlay: rgba(0, 0, 0, 0.6);
+
+      --text: #e5e9f0;
+      --text-muted: #9aa6b8;
+      --text-subtle: #64748b;
+      --text-inverse: #0b1220;
+
+      --border: #243044;
+      --border-strong: #334155;
+
+      --success: #34d399;  --success-soft: #064e3b;
+      --warning: #fbbf24;  --warning-soft: #4a2f08;
+      --danger:  #f87171;  --danger-soft:  #4c1d1d;
+      --info:    #60a5fa;  --info-soft:    #1e3a5f;
+
+      --focus-ring: color-mix(in srgb, var(--accent) 50%, transparent);
+
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+      --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+      --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+      --shadow-xl: 0 24px 70px rgba(0, 0, 0, 0.6);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+
+        --accent: #005a2b;
+        --accent-contrast: #ffffff;
+
+        --bg: #0b1220;
+        --surface: #111827;
+        --surface-2: #161f30;
+        --surface-3: #1e293b;
+        --overlay: rgba(0, 0, 0, 0.6);
+
+        --text: #e5e9f0;
+        --text-muted: #9aa6b8;
+        --text-subtle: #64748b;
+        --text-inverse: #0b1220;
+
+        --border: #243044;
+        --border-strong: #334155;
+
+        --success: #34d399;  --success-soft: #064e3b;
+        --warning: #fbbf24;  --warning-soft: #4a2f08;
+        --danger:  #f87171;  --danger-soft:  #4c1d1d;
+        --info:    #60a5fa;  --info-soft:    #1e3a5f;
+
+        --focus-ring: color-mix(in srgb, var(--accent) 50%, transparent);
+
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+        --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+        --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+        --shadow-xl: 0 24px 70px rgba(0, 0, 0, 0.6);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      :root {
+        --dur-fast: 0ms;
+        --dur: 0ms;
+        --dur-slow: 0ms;
+      }
+    }
+
+    /* Accent presets — set data-accent on <html> to recolor the whole UI.
+       Only --accent (and contrast where needed) changes; everything else derives.
+       Placed after the dark blocks so a chosen accent also applies in dark. */
+    :root[data-accent="indigo"]   { --accent: #4f46e5; }
+    :root[data-accent="violet"]   { --accent: #7c3aed; }
+    :root[data-accent="emerald"]  { --accent: #059669; }
+    :root[data-accent="british"]  { --accent: #004225; --accent-contrast: #ffffff; }
+    :root[data-accent="racing"]   { --accent: #005a2b; --accent-contrast: #ffffff; }
+    :root[data-accent="forest"]   { --accent: #228b22; --accent-contrast: #ffffff; }
+    :root[data-accent="pine"]     { --accent: #0b6b4b; --accent-contrast: #ffffff; }
+    :root[data-accent="moss"]     { --accent: #556b2f; --accent-contrast: #ffffff; }
+    :root[data-accent="sage"]     { --accent: #6b8f71; --accent-contrast: #08130d; }
+    :root[data-accent="teal"]     { --accent: #0d9488; }
+    :root[data-accent="cyan"]     { --accent: #0891b2; }
+    :root[data-accent="amber"]    { --accent: #d97706; --accent-contrast: #1a1206; }
+    :root[data-accent="orange"]   { --accent: #ea580c; }
+    :root[data-accent="rose"]     { --accent: #e11d48; }
+    :root[data-accent="graphite"] { --accent: #475569; }
+    :root[data-theme="dark"][data-accent="graphite"] { --accent: #94a3b8; --accent-contrast: #0b1220; }
+  </style>
+  <style>
+    /*
+     * Phase-0 styleguide. Component CSS here is a *spec preview* built on the
+     * shared tokens; in Phase 1 these become real components in packages/ui.
+     * Iteration history is in CHANGELOG.md.
+     */
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      font-size: var(--text-base);
+      line-height: var(--lh-base);
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+      transition: background var(--dur) var(--ease-standard), color var(--dur) var(--ease-standard);
+    }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 0 var(--space-5) var(--space-8); }
+
+    /* Native-feel polish */
+    html { accent-color: var(--accent); -webkit-tap-highlight-color: transparent; }
+    ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+    * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--radius-full); border: 3px solid transparent; background-clip: padding-box; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-subtle); background-clip: padding-box; }
+
+    /* Status dot utility (replaces repeated inline styles) */
+    .status-dot { width: 8px; height: 8px; border-radius: var(--radius-full); flex: none; background: var(--text-subtle); }
+    .status-dot.is-accent { background: var(--accent); }
+    .status-dot.is-ok { background: var(--success); }
+    .status-dot.is-muted { background: var(--text-subtle); }
+
+    /* Sticky header */
+    header.top {
+      position: sticky; top: 0; z-index: var(--z-sticky);
+      display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+      padding: var(--space-4) var(--space-5);
+      background: color-mix(in srgb, var(--bg) 82%, transparent);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      margin-bottom: var(--space-6);
+    }
+    .top .title { font-size: var(--text-lg); line-height: var(--lh-lg); font-weight: var(--weight-heavy); }
+    .top .subtitle { color: var(--text-muted); font-size: var(--text-xs); }
+
+    h2.section {
+      font-size: var(--text-xs); letter-spacing: .08em; text-transform: uppercase;
+      font-weight: var(--weight-heavy); color: var(--text-subtle);
+      margin: var(--space-7) 0 var(--space-2);
+    }
+    .section-note { color: var(--text-muted); font-size: var(--text-sm); margin: 0 0 var(--space-3); max-width: 60ch; }
+
+    .row { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+    .stack { display: grid; gap: var(--space-3); }
+    .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-4); align-items: start; }
+    .panel {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); padding: var(--space-5); box-shadow: var(--shadow-sm);
+    }
+
+    /* Icons — Heroicons outline via <use>. Stroke/fill set here so the cloned
+       <use> instances paint (the symbol's parent attrs don't reach them). */
+    .icon, .icon-lg { fill: none; stroke: currentColor; stroke-width: 1.5; display: inline-block; flex: none; }
+    .icon { width: 16px; height: 16px; vertical-align: -3px; }
+    .icon-lg { width: 20px; height: 20px; vertical-align: -4px; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+      height: 36px; padding: 0 var(--space-4); border-radius: var(--radius-md);
+      font-weight: var(--weight-semibold); font-size: var(--text-base); white-space: nowrap;
+      border: 1px solid transparent; cursor: pointer; user-select: none;
+      transition: background var(--dur-fast) var(--ease-standard), border-color var(--dur-fast), transform var(--dur-fast), box-shadow var(--dur-fast);
+    }
+    .btn:hover:not([disabled]) { transform: translateY(-1px); }
+    .btn:active:not([disabled]) { transform: translateY(0); }
+    .btn:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+    .btn[disabled] { opacity: .5; pointer-events: none; }
+    .btn-sm { height: 28px; padding: 0 var(--space-3); font-size: var(--text-sm); border-radius: var(--radius-sm); }
+    .btn-icon { width: 36px; padding: 0; }
+    .btn-icon.btn-sm { width: 28px; }
+    .btn-primary { background: var(--accent); color: var(--accent-contrast); }
+    .btn-primary:hover { background: var(--accent-hover); box-shadow: var(--shadow-sm); }
+    .btn-secondary { background: var(--surface-3); color: var(--text); border-color: var(--border); }
+    .btn-secondary:hover { background: var(--surface-2); }
+    .btn-ghost { background: transparent; color: var(--text-muted); }
+    .btn-ghost:hover { background: var(--surface-3); color: var(--text); }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger:hover { filter: brightness(1.05); }
+    .spin { animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+    /* Accent picker — pure CSS (radio + :has) so it works even where JS is
+       blocked, e.g. sandboxed mobile file previews. */
+    .acc-radio { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    .accent-chip { width: 30px; height: 30px; border-radius: var(--radius-full); border: 2px solid var(--surface);
+      box-shadow: 0 0 0 1px var(--border-strong); background: var(--c); cursor: pointer; padding: 0; flex: none; display: inline-block;
+      transition: transform var(--dur-fast) var(--ease-standard); }
+    .accent-chip:hover { transform: scale(1.12); }
+    .acc-radio:checked + .accent-chip { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+    .acc-radio:focus-visible + .accent-chip { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+    /* Recolor the whole UI from the checked swatch (mirrors the data-accent presets). */
+    :root:has(#acc-indigo:checked)   { --accent: #4f46e5; }
+    :root:has(#acc-violet:checked)   { --accent: #7c3aed; }
+    :root:has(#acc-emerald:checked)  { --accent: #059669; }
+    :root:has(#acc-british:checked)  { --accent: #004225; --accent-contrast: #ffffff; }
+    :root:has(#acc-racing:checked)   { --accent: #005a2b; --accent-contrast: #ffffff; }
+    :root:has(#acc-forest:checked)   { --accent: #228b22; --accent-contrast: #ffffff; }
+    :root:has(#acc-pine:checked)     { --accent: #0b6b4b; --accent-contrast: #ffffff; }
+    :root:has(#acc-moss:checked)     { --accent: #556b2f; --accent-contrast: #ffffff; }
+    :root:has(#acc-sage:checked)     { --accent: #6b8f71; --accent-contrast: #08130d; }
+    :root:has(#acc-teal:checked)     { --accent: #0d9488; }
+    :root:has(#acc-cyan:checked)     { --accent: #0891b2; }
+    :root:has(#acc-amber:checked)    { --accent: #d97706; --accent-contrast: #1a1206; }
+    :root:has(#acc-orange:checked)   { --accent: #ea580c; }
+    :root:has(#acc-rose:checked)     { --accent: #e11d48; }
+    :root:has(#acc-graphite:checked) { --accent: #475569; }
+    :root[data-theme="dark"]:has(#acc-graphite:checked) { --accent: #94a3b8; --accent-contrast: #0b1220; }
+
+    /* Inputs */
+    .input {
+      height: 36px; width: 260px; max-width: 100%; padding: 0 var(--space-3);
+      border-radius: var(--radius-md); border: 1px solid var(--border-strong);
+      background: var(--surface); color: var(--text); font-size: var(--text-base);
+    }
+    .input::placeholder { color: var(--text-subtle); }
+    .input:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 1px; border-color: var(--accent); }
+    .input-group { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-3);
+      height: 36px; width: 320px; max-width: 100%; border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md); background: var(--surface); color: var(--text-subtle); }
+    .input-group input { border: none; outline: none; background: none; color: var(--text); width: 100%; font-size: var(--text-base); }
+
+    /* Badges + status dots */
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px;
+      border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: var(--weight-semibold);
+    }
+    .badge .dot { width: 7px; height: 7px; border-radius: var(--radius-full); flex: none; }
+    .badge-ok { background: var(--success-soft); color: var(--success); }
+    .badge-ok .dot { background: var(--success); }
+    .badge-warn { background: var(--warning-soft); color: var(--warning); }
+    .badge-warn .dot { background: var(--warning); }
+    .badge-danger { background: var(--danger-soft); color: var(--danger); }
+    .badge-danger .dot { background: var(--danger); }
+    .badge-info { background: var(--info-soft); color: var(--info); }
+    .badge-info .dot { background: var(--info); }
+
+    /* Connection badge */
+    .conn { display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--text-muted); }
+    .conn .dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--success); box-shadow: 0 0 0 4px var(--success-soft); flex: none; }
+    .conn.warn .dot { background: var(--warning); box-shadow: 0 0 0 4px var(--warning-soft); }
+    .conn.off .dot { background: var(--text-subtle); box-shadow: 0 0 0 4px var(--surface-3); }
+
+    /* Type specimen */
+    .type-row { display: flex; align-items: baseline; gap: var(--space-4); padding: var(--space-2) 0; border-bottom: 1px dashed var(--border); }
+    .type-row .tag { width: 96px; flex: none; color: var(--text-subtle); font-size: var(--text-xs); font-family: var(--font-mono); }
+    .t-3xl { font-size: var(--text-3xl); line-height: var(--lh-3xl); font-weight: var(--weight-heavy); }
+    .t-2xl { font-size: var(--text-2xl); line-height: var(--lh-2xl); font-weight: var(--weight-bold); }
+    .t-xl  { font-size: var(--text-xl);  line-height: var(--lh-xl);  font-weight: var(--weight-bold); }
+    .t-lg  { font-size: var(--text-lg);  line-height: var(--lh-lg);  font-weight: var(--weight-semibold); }
+    .t-base{ font-size: var(--text-base);line-height: var(--lh-base); }
+    .t-sm  { font-size: var(--text-sm);  line-height: var(--lh-sm); color: var(--text-muted); }
+    .t-xs  { font-size: var(--text-xs);  line-height: var(--lh-xs); color: var(--text-subtle); }
+
+    /* Colors */
+    .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--space-3); }
+    .swatch { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+    .swatch .chip { height: 52px; }
+    .swatch .label { padding: 7px 10px; font-size: var(--text-xs); color: var(--text-muted); font-family: var(--font-mono); }
+
+    /* Icon grid */
+    .icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: var(--space-2); }
+    .icon-cell { display: grid; gap: 6px; justify-items: center; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--text-muted); }
+    .icon-cell span { font-size: var(--text-xs); font-family: var(--font-mono); color: var(--text-subtle); }
+
+    /* Session list item */
+    .session-item { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border-radius: var(--radius-md); cursor: pointer; }
+    .session-item:hover { background: var(--surface-3); }
+    .session-item.active { background: var(--accent-soft); }
+    .session-item .meta { flex: 1; min-width: 0; }
+    .session-item .name { font-weight: var(--weight-semibold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .session-item .sub { font-size: var(--text-xs); color: var(--text-subtle); }
+
+    /* Messages */
+    .msg { max-width: 78%; padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); }
+    .msg.user { margin-left: auto; background: var(--accent); color: var(--accent-contrast); border-bottom-right-radius: var(--radius-sm); }
+    .msg.assistant { background: var(--surface-3); color: var(--text); border-bottom-left-radius: var(--radius-sm); }
+
+    /* Tool-call card */
+    .tool { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; background: var(--surface); }
+    .tool .head { display: flex; align-items: center; gap: 8px; padding: var(--space-3); background: var(--surface-2); font-size: var(--text-sm); }
+    .mono { font-family: var(--font-mono); font-size: var(--text-sm); }
+    .tool .body { padding: var(--space-3); color: var(--text-muted); }
+
+    /* Approval card — the moat component */
+    .approval { border: 1px solid var(--border); border-left: 4px solid var(--warning);
+      border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-md);
+      padding: var(--space-5); max-width: 460px; }
+    .approval .who { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+    .approval .who .name { font-weight: var(--weight-bold); display: inline-flex; align-items: center; gap: 8px; }
+    .approval .consequence { margin: var(--space-3) 0; font-size: var(--text-md); line-height: var(--lh-md); font-weight: var(--weight-semibold); }
+    .approval .detail { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); margin-bottom: var(--space-4); }
+    .approval .detail .k { font-size: var(--text-xs); color: var(--text-subtle); text-transform: uppercase; letter-spacing: .05em; }
+    .approval .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+    .approval .actions .spacer { flex: 1; }
+
+    /* Toast */
+    .toast { display: inline-flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4);
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); max-width: 400px; }
+
+    /* Skeleton */
+    .skeleton { height: 14px; border-radius: var(--radius-sm); background: linear-gradient(90deg, var(--surface-3), var(--surface-2), var(--surface-3)); background-size: 200% 100%; animation: sk 1.2s var(--ease-standard) infinite; }
+    @keyframes sk { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+    @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+
+    /* Approval severity variants (iteration 2) */
+    .approval.sev-low { border-left-color: var(--success); }
+    .approval.sev-medium { border-left-color: var(--warning); }
+    .approval.sev-high { border-left-color: var(--danger); }
+    .approval.sev-critical { border-left-color: var(--danger); box-shadow: 0 0 0 1px var(--danger-soft), var(--shadow-lg); }
+    .approval .scopes { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-3); }
+    .chip-toggle { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; font-size: var(--text-sm);
+      border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-muted); border-radius: var(--radius-full); cursor: pointer; }
+    .chip-toggle[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+    /* "What changes" diff preview */
+    .diff { font-family: var(--font-mono); font-size: var(--text-sm); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+    .diff div { padding: 2px var(--space-3); }
+    .diff .del { background: var(--danger-soft); color: var(--danger); }
+    .diff .add { background: var(--success-soft); color: var(--success); }
+
+    /* Command palette / model picker */
+    .palette { width: 420px; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xl); overflow: hidden; }
+    .palette .search { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); color: var(--text-subtle); }
+    .palette .search input { border: none; outline: none; background: none; color: var(--text); width: 100%; font-size: var(--text-md); }
+    .palette .opt { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); cursor: pointer; }
+    .palette .opt .meta { flex: 1; min-width: 0; }
+    .palette .opt .sub { font-size: var(--text-xs); color: var(--text-subtle); }
+    .palette .opt[aria-selected="true"] { background: var(--accent-soft); }
+
+    /* kbd */
+    kbd { font-family: var(--font-mono); font-size: 11px; line-height: 1; padding: 3px 6px; border-radius: 6px;
+      background: var(--surface-3); border: 1px solid var(--border-strong); border-bottom-width: 2px; color: var(--text-muted); }
+
+    /* Inline alert */
+    .alert { display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); border: 1px solid var(--border); }
+    .alert .icon { margin-top: 2px; }
+    .alert-info { background: var(--info-soft); border-color: transparent; color: var(--info); }
+    .alert-warn { background: var(--warning-soft); border-color: transparent; color: var(--warning); }
+    .alert-danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+    .alert b { color: inherit; }
+
+    /* Segmented control */
+    .segmented { display: inline-flex; padding: 3px; background: var(--surface-3); border-radius: var(--radius-md); gap: 2px; }
+    .segmented button { height: 28px; padding: 0 14px; border: none; background: none; border-radius: var(--radius-sm); font-weight: var(--weight-semibold); font-size: var(--text-sm); color: var(--text-muted); cursor: pointer; }
+    .segmented button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+
+    /* Switch */
+    .switch { position: relative; width: 40px; height: 24px; flex: none; }
+    .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+    .switch .track { position: absolute; inset: 0; background: var(--border-strong); border-radius: var(--radius-full); transition: background var(--dur-fast) var(--ease-standard); }
+    .switch .thumb { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; background: #fff; border-radius: var(--radius-full); box-shadow: var(--shadow-sm); transition: transform var(--dur-fast) var(--ease-standard); }
+    .switch input:checked ~ .track { background: var(--accent); }
+    .switch input:checked ~ .thumb { transform: translateX(16px); }
+    .switch input:focus-visible ~ .track { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+
+    /* Empty state */
+    .empty { text-align: center; padding: var(--space-7) var(--space-5); color: var(--text-muted); }
+    .empty .glyph { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-full); background: var(--surface-3); color: var(--text-subtle); margin-bottom: var(--space-3); }
+    .empty h3 { margin: 0 0 6px; font-size: var(--text-md); color: var(--text); }
+    .empty p { margin: 0 auto var(--space-4); max-width: 38ch; font-size: var(--text-sm); }
+
+    .setting-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0; border-bottom: 1px solid var(--border); }
+    .setting-row:last-child { border: none; }
+    .setting-row .label { font-weight: var(--weight-semibold); }
+    .setting-row .desc { font-size: var(--text-xs); color: var(--text-subtle); }
+
+    /* Composed app-shell mock (iteration 3) */
+    .shell { display: grid; grid-template-columns: 248px 1fr; height: 460px; border: 1px solid var(--border);
+      border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-md); background: var(--surface); }
+    .shell .side { border-right: 1px solid var(--border); background: var(--surface-2); display: flex; flex-direction: column; min-width: 0; }
+    .shell .side .shead { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); }
+    .shell .side .brand { font-weight: var(--weight-heavy); display: inline-flex; align-items: center; gap: 8px; }
+    .shell .side .list { padding: var(--space-2); overflow: auto; flex: 1; display: grid; gap: 2px; align-content: start; }
+    .shell .side .foot { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); }
+    /* min-height:0 lets the scroll areas shrink instead of overflowing the
+       fixed-height card and pushing the composer/footer past the clipped edge. */
+    .shell .side, .shell .main { min-height: 0; }
+    .shell .side .list, .shell .main .thread { min-height: 0; }
+    .shell .main { display: flex; flex-direction: column; min-width: 0; }
+    .shell .main .bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); }
+    .shell .main .thread { flex: 1; overflow: auto; padding: var(--space-4); display: grid; gap: var(--space-3); align-content: start; }
+    .shell .main .composer { border-top: 1px solid var(--border); padding: var(--space-3); display: flex; gap: var(--space-2); }
+    .shell .main .composer .input { flex: 1; width: auto; }
+
+    /* Mobile bottom-sheet approval */
+    .phone { width: 320px; height: 640px; border: 10px solid #0b1220; border-radius: 40px; overflow: hidden; position: relative; background: var(--bg); box-shadow: var(--shadow-lg); }
+    .phone .pbar { height: 28px; display: flex; align-items: center; justify-content: center; font-size: var(--text-xs); color: var(--text-subtle); }
+    .phone .scrim { position: absolute; inset: 28px 0 0; background: var(--overlay); }
+    .phone .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--surface); border-radius: var(--radius-xl) var(--radius-xl) 0 0; padding: var(--space-5); box-shadow: var(--shadow-xl); }
+    .phone .grabber { width: 36px; height: 4px; border-radius: 999px; background: var(--border-strong); margin: 0 auto var(--space-4); }
+    .phone .sheet .actions { display: grid; gap: var(--space-2); margin-top: var(--space-4); }
+    .phone .sheet .btn { width: 100%; height: 44px; }
+
+    /* Mobile app screens — full conversation, not just approve/deny */
+    .phones { display: flex; flex-wrap: wrap; gap: var(--space-6); align-items: flex-start; }
+    .phone-wrap { display: grid; }
+    .phone-label { text-align: center; font-size: var(--text-xs); color: var(--text-subtle); margin-top: var(--space-2); font-family: var(--font-mono); }
+    .phone .screen { position: absolute; inset: 28px 0 0; display: flex; flex-direction: column; background: var(--bg); }
+    .pnav { display: flex; align-items: center; gap: var(--space-1); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-1); border-bottom: 1px solid var(--border); background: var(--surface); }
+    .pnav .ptitle { flex: 1; min-width: 0; }
+    .pnav .ptitle .pname { font-weight: var(--weight-bold); font-size: var(--text-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pnav .ptitle .psub { font-size: var(--text-xs); color: var(--text-subtle); display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .pnav .ptitle .psub > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pnav .iconbtn { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; color: var(--text-muted); border-radius: var(--radius-md); cursor: pointer; flex: none; }
+    .pnav .iconbtn:hover { background: var(--surface-3); color: var(--text); }
+    .pthread { flex: 1; min-height: 0; overflow: auto; padding: var(--space-3); display: grid; gap: var(--space-3); align-content: start; }
+    .pthread .msg { max-width: 86%; }
+    .pthread .msg-col { max-width: 86%; }
+    .pcomposer { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3);
+      padding-bottom: max(var(--space-2), env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); }
+    .pfield { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; height: 40px;
+      background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius-full); padding: 0 4px 0 var(--space-4); }
+    .pfield .pinput { flex: 1; min-width: 0; height: 100%; border: none; background: none; padding: 0; color: var(--text); font-size: var(--text-md); }
+    .pfield .pinput::placeholder { color: var(--text-subtle); }
+    .pmic { width: 30px; height: 30px; flex: none; border: none; background: none; color: var(--text-subtle); display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-full); cursor: pointer; }
+    .pmic:hover { color: var(--text); }
+    .round { width: 40px; height: 40px; flex: none; border-radius: var(--radius-full); display: inline-flex; align-items: center; justify-content: center; border: none; cursor: pointer; transition: transform var(--dur-fast) var(--ease-standard); }
+    .round:active { transform: scale(0.92); }
+    .round.ghost { background: var(--surface-3); color: var(--text-muted); }
+    .round.accent { background: var(--accent); color: var(--accent-contrast); }
+    .plist { flex: 1; min-height: 0; overflow: auto; padding: var(--space-2); display: grid; gap: 2px; align-content: start; }
+    .ptabbar { display: flex; border-top: 1px solid var(--border); background: var(--surface); }
+    .ptabbar a { flex: 1; display: grid; justify-items: center; gap: 3px; padding: var(--space-2) 0; padding-bottom: calc(var(--space-2) + env(safe-area-inset-bottom));
+      font-size: 10px; font-weight: var(--weight-semibold); color: var(--text-subtle); text-decoration: none; cursor: pointer; }
+    .ptabbar a.active { color: var(--accent); }
+
+    /* === Mobile density: less real estate → tighter, smaller, fuller-width === */
+    /* Pass 1 — global scale */
+    .phone { font-size: 13px; }
+    .phone .pnav { padding: 6px 6px 6px 4px; gap: 2px; }
+    .phone .pnav .ptitle .pname { font-size: 14px; }
+    .phone .pnav .ptitle .psub { font-size: 11px; }
+    .phone .pnav .iconbtn { width: 30px; height: 30px; }
+    .phone .pnav .iconbtn .icon-lg { width: 18px; height: 18px; }
+    .phone .pthread { padding: 8px; gap: 8px; }
+    .phone .msg-meta { font-size: 11px; gap: 6px; }
+    .phone .avatar { width: 22px; height: 22px; font-size: 10px; }
+    .phone .avatar .icon { width: 13px; height: 13px; }
+
+    /* Pass 2 — fuller-width messages: assistant spans width (no bubble), user stays a compact bubble */
+    .phone .msg { font-size: 13px; line-height: 19px; }
+    .phone .msg-row .msg-col { max-width: 100%; }
+    .phone .msg.assistant { background: transparent; padding: 2px 0; max-width: 100%; border-radius: 0; }
+    .phone .msg-row.user .msg-col { max-width: 84%; }
+    .phone .msg.user { padding: 7px 11px; border-radius: 14px; border-bottom-right-radius: var(--radius-sm); }
+
+    /* Pass 3 — compact cards (approval, tool, session list, badges) */
+    .phone .approval { max-width: none; padding: 10px; box-shadow: var(--shadow-sm); }
+    .phone .approval .who .name { font-size: 13px; gap: 6px; }
+    .phone .approval .consequence { font-size: 13px; line-height: 18px; margin: 6px 0 8px; }
+    .phone .approval .actions { gap: 6px; }
+    .phone .btn-sm { height: 26px; padding: 0 10px; font-size: 12px; }
+    .phone .badge { height: 20px; font-size: 11px; padding: 0 8px; gap: 5px; }
+    .phone .tool .head { padding: 7px 9px; font-size: 12px; gap: 6px; }
+    .phone .tool .body { padding: 7px 9px; }
+    .phone .mono, .phone .t-xs { font-size: 12px; }
+    .phone .plist { padding: 6px; }
+    .phone .session-item { padding: 8px 10px; gap: 10px; }
+    .phone .session-item .name { font-size: 13px; }
+    .phone .session-item .sub { font-size: 11px; }
+
+    /* Pass 4 — slim composer, tab bar, sheet */
+    .phone .pcomposer { padding: 7px 8px; gap: 6px; }
+    .phone .pfield { height: 36px; padding: 0 4px 0 12px; }
+    .phone .pfield .pinput { font-size: 13px; }
+    .phone .round { width: 36px; height: 36px; }
+    .phone .round .icon-lg { width: 18px; height: 18px; }
+    .phone .pmic { width: 28px; height: 28px; }
+    .phone .pmic .icon { width: 16px; height: 16px; }
+    .phone .ptabbar a { padding: 5px 0; padding-bottom: calc(5px + env(safe-area-inset-bottom)); font-size: 10px; gap: 2px; }
+    .phone .ptabbar a .icon-lg { width: 18px; height: 18px; }
+    .phone .sheet { padding: 16px; }
+    .phone .sheet .consequence { font-size: 14px; line-height: 20px; }
+    .phone .sheet .btn { height: 42px; }
+
+    /* Avatar (iteration 6) */
+    .avatar { width: 26px; height: 26px; border-radius: var(--radius-full); display: inline-flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: var(--weight-bold); background: var(--accent-soft); color: var(--accent); flex: none; }
+    .avatar.assistant { background: var(--surface-3); color: var(--text-muted); }
+
+    /* Rich message rows */
+    .msg-row { display: flex; gap: var(--space-3); align-items: flex-start; }
+    .msg-row.user { flex-direction: row-reverse; }
+    .msg-row .msg-col { display: grid; gap: 4px; max-width: 78%; }
+    .msg-meta { font-size: var(--text-xs); color: var(--text-subtle); display: flex; gap: 8px; align-items: center; }
+    .msg-row.user .msg-meta { flex-direction: row-reverse; }
+    .thinking { display: inline-flex; gap: 4px; align-items: center; padding: var(--space-3) var(--space-4); width: max-content;
+      background: var(--surface-3); border-radius: var(--radius-lg); border-bottom-left-radius: var(--radius-sm); }
+    .thinking i { width: 6px; height: 6px; border-radius: var(--radius-full); background: var(--text-subtle); animation: blink 1.4s var(--ease-standard) infinite; }
+    .thinking i:nth-child(2) { animation-delay: .2s; }
+    .thinking i:nth-child(3) { animation-delay: .4s; }
+    @keyframes blink { 0%, 60%, 100% { opacity: .3; } 30% { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .thinking i { animation: none; } }
+
+    /* Tool-call meta */
+    .tool .head .grow { flex: 1; }
+    .tool .head .chev { color: var(--text-subtle); }
+
+    /* Tabs */
+    .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+    .tabs button { height: 36px; padding: 0 var(--space-3); border: none; background: none; color: var(--text-muted);
+      font-weight: var(--weight-semibold); font-size: var(--text-sm); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .tabs button:hover { color: var(--text); }
+    .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+
+    /* Tooltip */
+    .tip { position: relative; }
+    .tip::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(4px);
+      background: var(--text); color: var(--surface); font-size: var(--text-xs); font-weight: var(--weight-medium); padding: 5px 9px; border-radius: var(--radius-sm);
+      white-space: nowrap; opacity: 0; pointer-events: none; box-shadow: var(--shadow-md);
+      transition: opacity var(--dur-fast) var(--ease-standard), transform var(--dur-fast) var(--ease-standard); }
+    .tip:hover::after, .tip:focus-visible::after { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* Wayfinding + foundations (iteration 7) */
+    html { scroll-behavior: smooth; }
+    h2.section { scroll-margin-top: 88px; }
+    .toc { display: flex; gap: var(--space-2); overflow-x: auto; padding: var(--space-1) 0 var(--space-4); }
+    .toc a { flex: none; font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--text-muted); text-decoration: none;
+      padding: 5px 10px; border-radius: var(--radius-full); background: var(--surface-3); white-space: nowrap; transition: color var(--dur-fast), background var(--dur-fast); }
+    .toc a:hover { color: var(--text); background: var(--accent-soft); }
+    .cap { font-size: var(--text-xs); color: var(--text-subtle); font-family: var(--font-mono); }
+    .tile { display: grid; gap: 8px; }
+    .radius-demo { height: 60px; background: var(--accent-soft); border: 1px solid var(--accent); }
+    .shadow-demo { height: 60px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+    .space-demo { height: 16px; background: var(--accent); border-radius: var(--radius-sm); }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+    @media (max-width: 760px) {
+      .shell { grid-template-columns: 1fr; height: 420px; }
+      .shell .side { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <!--
+    Icon sprite — Heroicons v2 (MIT, https://heroicons.com), outline 24px.
+    Path data is copied verbatim from the `heroicons` npm package
+    (node_modules/heroicons/24/outline/*.svg). Stroke/fill are applied via the
+    `.icon` CSS rule so <use> instances paint correctly. To add an icon: copy the
+    <path> from the corresponding Heroicons file into a new <symbol>.
+  -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-check" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></symbol>
+      <symbol id="i-zap" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z"/></symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z"/></symbol>
+      <symbol id="i-mail" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></symbol>
+      <symbol id="i-wifi" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 0 1 7.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12.53 18.22l-.53.53-.53-.53a.75.75 0 0 1 1.06 0Z"/></symbol>
+      <symbol id="i-loader" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5"/></symbol>
+      <symbol id="i-mic" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z"/></symbol>
+      <symbol id="i-send" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 12.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 18.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 0 1-.825-.242m9.345-8.334a2.126 2.126 0 0 0-.476-.095 48.64 48.64 0 0 0-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0 0 11.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></symbol>
+      <symbol id="i-cog" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 9.563C9 9.252 9.252 9 9.563 9h4.874c.311 0 .563.252.563.563v4.874c0 .311-.252.563-.563.563H9.564A.562.562 0 0 1 9 14.437V9.564Z"/></symbol>
+    </defs>
+  </svg>
+
+  <header class="top">
+    <div>
+      <div class="title">Bivy UI — Styleguide</div>
+      <div class="subtitle">Phase 0 · design tokens + base components · light & dark</div>
+    </div>
+    <button class="btn btn-secondary" id="themeToggle" type="button"><svg class="icon"><use href="#i-zap"/></svg> Toggle theme</button>
+  </header>
+
+  <div class="wrap">
+
+    <nav class="toc" id="toc" aria-label="On this page"></nav>
+
+    <h2 class="section">Accent — try a color</h2>
+    <p class="section-note">Tap a swatch to recolor the whole UI (works in light &amp; dark). Everything below updates live — buttons, links, badges, the active states, focus rings, and the mobile mocks.</p>
+    <div class="panel row" id="accentPicker" role="radiogroup" aria-label="Accent color">
+      <input class="acc-radio" type="radio" name="accent" id="acc-blue" />
+      <label class="accent-chip" for="acc-blue" style="--c:#2563eb" title="Blue" aria-label="Blue"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-indigo" />
+      <label class="accent-chip" for="acc-indigo" style="--c:#4f46e5" title="Indigo" aria-label="Indigo"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-violet" />
+      <label class="accent-chip" for="acc-violet" style="--c:#7c3aed" title="Violet" aria-label="Violet"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-emerald" />
+      <label class="accent-chip" for="acc-emerald" style="--c:#059669" title="Emerald" aria-label="Emerald"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-british" />
+      <label class="accent-chip" for="acc-british" style="--c:#004225" title="British racing green" aria-label="British racing green"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-racing" checked />
+      <label class="accent-chip" for="acc-racing" style="--c:#005a2b" title="Racing green (default)" aria-label="Racing green (default)"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-forest" />
+      <label class="accent-chip" for="acc-forest" style="--c:#228b22" title="Forest green" aria-label="Forest green"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-pine" />
+      <label class="accent-chip" for="acc-pine" style="--c:#0b6b4b" title="Pine" aria-label="Pine"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-moss" />
+      <label class="accent-chip" for="acc-moss" style="--c:#556b2f" title="Moss" aria-label="Moss"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-sage" />
+      <label class="accent-chip" for="acc-sage" style="--c:#6b8f71" title="Sage" aria-label="Sage"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-teal" />
+      <label class="accent-chip" for="acc-teal" style="--c:#0d9488" title="Teal" aria-label="Teal"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-cyan" />
+      <label class="accent-chip" for="acc-cyan" style="--c:#0891b2" title="Cyan" aria-label="Cyan"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-amber" />
+      <label class="accent-chip" for="acc-amber" style="--c:#d97706" title="Amber" aria-label="Amber"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-orange" />
+      <label class="accent-chip" for="acc-orange" style="--c:#ea580c" title="Orange" aria-label="Orange"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-rose" />
+      <label class="accent-chip" for="acc-rose" style="--c:#e11d48" title="Rose" aria-label="Rose"></label>
+      <input class="acc-radio" type="radio" name="accent" id="acc-graphite" />
+      <label class="accent-chip" for="acc-graphite" style="--c:#475569" title="Graphite (neutral)" aria-label="Graphite (neutral)"></label>
+    </div>
+
+    <h2 class="section">Composed — desktop app shell</h2>
+    <p class="section-note">The components above, assembled. This is the bar to clear: one calm, dense, legible product surface.</p>
+    <div class="shell">
+      <aside class="side">
+        <div class="shead">
+          <span class="brand"><svg class="icon" style="color:var(--accent)"><use href="#i-zap"/></svg> Bivy</span>
+          <button class="btn btn-icon btn-sm btn-ghost" aria-label="New session"><svg class="icon"><use href="#i-search"/></svg></button>
+        </div>
+        <div class="list">
+          <div class="session-item active">
+            <span class="status-dot is-accent"></span>
+            <div class="meta"><div class="name">Draft client update</div><div class="sub">working · 2m</div></div>
+          </div>
+          <div class="session-item">
+            <span class="status-dot is-ok"></span>
+            <div class="meta"><div class="name">Summarize acme proposal</div><div class="sub">idle · 1h</div></div>
+          </div>
+          <div class="session-item">
+            <span class="status-dot is-muted"></span>
+            <div class="meta"><div class="name">Expense report June</div><div class="sub">idle · yesterday</div></div>
+          </div>
+        </div>
+        <div class="foot"><span class="conn"><span class="dot"></span> Online · MacBook Pro</span></div>
+      </aside>
+      <section class="main">
+        <div class="bar">
+          <strong>Draft client update</strong>
+          <div class="row">
+            <button class="btn btn-sm btn-secondary"><svg class="icon"><use href="#i-zap"/></svg> Opus 4.8</button>
+            <span class="badge badge-info"><span class="dot"></span> Working</span>
+          </div>
+        </div>
+        <div class="thread">
+          <div class="msg user">Clean up downloads and email the team a summary.</div>
+          <div class="msg assistant">Reviewing the folder now. I'll ask before deleting or sending.</div>
+          <div class="tool">
+            <div class="head"><span class="badge badge-info"><svg class="icon"><use href="#i-terminal"/></svg> bash</span> <span class="mono">ls -la ~/Downloads</span></div>
+          </div>
+          <div class="approval sev-medium" role="dialog" aria-label="Approval required" style="max-width:none">
+            <div class="who">
+              <span class="name"><svg class="icon-lg" style="color:var(--warning)"><use href="#i-mail"/></svg> Agent wants to send email</span>
+              <span class="badge badge-warn"><span class="dot"></span> Medium</span>
+            </div>
+            <div class="consequence">This will email 12 clients — they receive it immediately.</div>
+            <div class="actions">
+              <button class="btn btn-primary"><svg class="icon"><use href="#i-check"/></svg> Approve once</button>
+              <button class="btn btn-secondary">Preview</button>
+              <span class="spacer"></span>
+              <button class="btn btn-danger"><svg class="icon"><use href="#i-x"/></svg> Reject</button>
+            </div>
+          </div>
+        </div>
+        <div class="composer">
+          <input class="input" placeholder="Message the agent…  ⌘↵ to send" />
+          <button class="btn btn-primary">Send</button>
+        </div>
+      </section>
+    </div>
+
+    <h2 class="section">Composed — mobile app</h2>
+    <p class="section-note">Talk to the agent on the phone exactly like on desktop — a full conversation with a real composer (type, attach, voice), live tool calls, and a streaming reply. Approvals appear inline in the thread and as a push → bottom sheet. Mirrors the desktop shell; touch-first ergonomics (44px targets, safe areas, bottom sheet).</p>
+    <div class="phones">
+
+      <!-- Phone 1: Chat (the main surface) -->
+      <div class="phone-wrap">
+        <div class="phone">
+          <div class="pbar">9:41</div>
+          <div class="screen">
+            <div class="pnav">
+              <button class="iconbtn" aria-label="Back to sessions"><svg class="icon-lg"><use href="#i-back"/></svg></button>
+              <div class="ptitle">
+                <div class="pname">Draft client update</div>
+                <div class="psub"><span class="status-dot is-ok"></span> Online · Opus 4.8</div>
+              </div>
+              <button class="iconbtn" aria-label="More"><svg class="icon-lg"><use href="#i-more"/></svg></button>
+            </div>
+            <div class="pthread">
+              <div class="msg-row user"><span class="avatar">PS</span><div class="msg-col"><div class="msg-meta">You</div><div class="msg user">Clean up downloads and email the team a summary.</div></div></div>
+              <div class="msg-row"><span class="avatar assistant"><svg class="icon"><use href="#i-zap"/></svg></span><div class="msg-col"><div class="msg-meta">Opus 4.8</div><div class="msg assistant">On it — reviewing the folder now.</div></div></div>
+              <div class="tool"><div class="head"><span class="badge badge-ok"><svg class="icon"><use href="#i-check"/></svg> bash</span> <span class="mono">ls ~/Downloads</span><span class="grow"></span><span class="t-xs">0.4s</span></div></div>
+              <div class="approval sev-medium" role="dialog" aria-label="Approval required">
+                <div class="who"><span class="name"><svg class="icon" style="color:var(--warning)"><use href="#i-mail"/></svg> Send email?</span><span class="badge badge-warn"><span class="status-dot"></span> Medium</span></div>
+                <div class="consequence">Emails 12 clients immediately.</div>
+                <div class="actions">
+                  <button class="btn btn-sm btn-primary"><svg class="icon"><use href="#i-check"/></svg> Approve</button>
+                  <button class="btn btn-sm btn-danger">Reject</button>
+                  <button class="btn btn-sm btn-ghost">Preview</button>
+                </div>
+              </div>
+            </div>
+            <div class="pcomposer">
+              <button class="round ghost" aria-label="Attach"><svg class="icon-lg"><use href="#i-plus"/></svg></button>
+              <div class="pfield">
+                <input class="pinput" placeholder="Message…" />
+                <button class="pmic" aria-label="Voice input"><svg class="icon"><use href="#i-mic"/></svg></button>
+              </div>
+              <button class="round accent" aria-label="Send"><svg class="icon-lg"><use href="#i-send"/></svg></button>
+            </div>
+          </div>
+        </div>
+        <div class="phone-label">Chat — talk to the agent</div>
+      </div>
+
+      <!-- Phone 2: Sessions list + node picker -->
+      <div class="phone-wrap">
+        <div class="phone">
+          <div class="pbar">9:41</div>
+          <div class="screen">
+            <div class="pnav" style="padding-left:var(--space-3)">
+              <div class="ptitle">
+                <div class="pname">Sessions</div>
+                <div class="psub"><span class="status-dot is-ok"></span> MacBook Pro · online</div>
+              </div>
+              <button class="iconbtn" aria-label="Switch node"><svg class="icon-lg"><use href="#i-chevron"/></svg></button>
+              <button class="iconbtn" aria-label="New session"><svg class="icon-lg"><use href="#i-plus"/></svg></button>
+            </div>
+            <div class="plist">
+              <div class="session-item active"><span class="status-dot is-accent"></span><div class="meta"><div class="name">Draft client update</div><div class="sub">working · 2m</div></div><span class="badge badge-warn"><span class="status-dot"></span> Approve</span></div>
+              <div class="session-item"><span class="status-dot is-ok"></span><div class="meta"><div class="name">Summarize acme proposal</div><div class="sub">idle · 1h</div></div></div>
+              <div class="session-item"><span class="status-dot is-muted"></span><div class="meta"><div class="name">Expense report June</div><div class="sub">idle · yesterday</div></div></div>
+              <div class="session-item"><span class="status-dot is-muted"></span><div class="meta"><div class="name">Research competitors</div><div class="sub">idle · 3d</div></div></div>
+            </div>
+            <div class="ptabbar">
+              <a class="active"><svg class="icon-lg"><use href="#i-chat"/></svg> Chats</a>
+              <a><svg class="icon-lg"><use href="#i-clock"/></svg> Activity</a>
+              <a><svg class="icon-lg"><use href="#i-cog"/></svg> Settings</a>
+            </div>
+          </div>
+        </div>
+        <div class="phone-label">Sessions — pick a node &amp; chat</div>
+      </div>
+
+      <!-- Phone 3: Approval push → bottom sheet -->
+      <div class="phone-wrap">
+        <div class="phone">
+          <div class="pbar">9:41</div>
+          <div class="scrim"></div>
+          <div class="sheet" role="dialog" aria-label="Approval required">
+            <div class="grabber"></div>
+            <div class="who" style="display:flex;align-items:center;justify-content:space-between">
+              <span class="name" style="font-weight:var(--weight-bold);display:inline-flex;gap:8px;align-items:center"><svg class="icon-lg" style="color:var(--danger)"><use href="#i-trash"/></svg> Delete files</span>
+              <span class="badge badge-danger"><svg class="icon"><use href="#i-alert"/></svg> Permanent</span>
+            </div>
+            <div class="consequence" style="margin:var(--space-3) 0;font-weight:var(--weight-semibold)">Permanently deletes 40 files (2.3 GB) in ~/Downloads. Can't be undone.</div>
+            <div class="actions">
+              <button class="btn btn-danger"><svg class="icon"><use href="#i-trash"/></svg> Delete 40 files</button>
+              <button class="btn btn-secondary">Review list</button>
+              <button class="btn btn-ghost">Not now</button>
+            </div>
+          </div>
+        </div>
+        <div class="phone-label">Approval — push → bottom sheet</div>
+      </div>
+
+    </div>
+
+    <h2 class="section">Typography</h2>
+    <div class="panel">
+      <div class="type-row"><span class="tag">3xl / 30</span><span class="t-3xl">Your agents, on a leash</span></div>
+      <div class="type-row"><span class="tag">2xl / 24</span><span class="t-2xl">Approve before it acts</span></div>
+      <div class="type-row"><span class="tag">xl / 20</span><span class="t-xl">Draft client update</span></div>
+      <div class="type-row"><span class="tag">lg / 17</span><span class="t-lg">Section heading</span></div>
+      <div class="type-row"><span class="tag">base / 14</span><span class="t-base">Body text — the default reading size for the interface.</span></div>
+      <div class="type-row"><span class="tag">sm / 13</span><span class="t-sm">Secondary text and metadata.</span></div>
+      <div class="type-row" style="border:none"><span class="tag">xs / 12</span><span class="t-xs">Captions, timestamps, labels.</span></div>
+    </div>
+
+    <h2 class="section">Connection state</h2>
+    <p class="section-note">Always legible — never a spinner to nowhere. Drives Termius's "feels solid" quality.</p>
+    <div class="panel row" style="gap: var(--space-6)">
+      <span class="conn"><span class="dot"></span> <svg class="icon"><use href="#i-wifi"/></svg> Online · MacBook Pro</span>
+      <span class="conn warn"><span class="dot"></span> Reconnecting…</span>
+      <span class="conn off"><span class="dot"></span> Offline</span>
+    </div>
+
+    <h2 class="section">Buttons</h2>
+    <div class="panel stack">
+      <div class="row">
+        <button class="btn btn-primary"><svg class="icon"><use href="#i-check"/></svg> Approve once</button>
+        <button class="btn btn-secondary">Details</button>
+        <button class="btn btn-ghost">Cancel</button>
+        <button class="btn btn-danger"><svg class="icon"><use href="#i-x"/></svg> Reject</button>
+        <button class="btn btn-primary" disabled>Disabled</button>
+        <button class="btn btn-primary"><svg class="icon spin"><use href="#i-loader"/></svg> Working…</button>
+      </div>
+      <div class="row">
+        <button class="btn btn-sm btn-primary">Small</button>
+        <button class="btn btn-sm btn-secondary">Small</button>
+        <button class="btn btn-icon btn-secondary" aria-label="Search"><svg class="icon"><use href="#i-search"/></svg></button>
+        <button class="btn btn-icon btn-sm btn-ghost" aria-label="More"><svg class="icon"><use href="#i-chevron"/></svg></button>
+      </div>
+    </div>
+
+    <h2 class="section">Inputs</h2>
+    <div class="panel row">
+      <input class="input" placeholder="Message the agent…" />
+      <span class="input-group"><svg class="icon"><use href="#i-search"/></svg><input placeholder="Search sessions…" /></span>
+    </div>
+
+    <h2 class="section">Status badges</h2>
+    <div class="panel row">
+      <span class="badge badge-ok"><span class="dot"></span> Idle</span>
+      <span class="badge badge-info"><span class="dot"></span> Working</span>
+      <span class="badge badge-warn"><span class="dot"></span> Needs approval</span>
+      <span class="badge badge-danger"><span class="dot"></span> Error</span>
+    </div>
+
+    <div class="grid2">
+      <div>
+        <h2 class="section">Session list</h2>
+        <div class="panel stack">
+          <div class="session-item active">
+            <span class="status-dot is-accent"></span>
+            <div class="meta"><div class="name">Draft client update</div><div class="sub">working · 2m ago</div></div>
+            <span class="badge badge-info"><span class="dot"></span> Working</span>
+          </div>
+          <div class="session-item">
+            <span class="status-dot is-ok"></span>
+            <div class="meta"><div class="name">Summarize acme proposal</div><div class="sub">idle · 1h ago</div></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <h2 class="section">Messages</h2>
+        <div class="panel stack">
+          <div class="msg-row user">
+            <span class="avatar">PS</span>
+            <div class="msg-col">
+              <div class="msg-meta">You · 2:14 PM</div>
+              <div class="msg user">Clean up the downloads folder and email the team a summary.</div>
+            </div>
+          </div>
+          <div class="msg-row">
+            <span class="avatar assistant"><svg class="icon"><use href="#i-zap"/></svg></span>
+            <div class="msg-col">
+              <div class="msg-meta">Opus 4.8 · 2:14 PM</div>
+              <div class="msg assistant">I'll review the folder first and ask before deleting anything or sending mail.</div>
+            </div>
+          </div>
+          <div class="msg-row">
+            <span class="avatar assistant"><svg class="icon"><use href="#i-zap"/></svg></span>
+            <div class="msg-col">
+              <div class="thinking" aria-label="Assistant is thinking"><i></i><i></i><i></i></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="section">Tool call</h2>
+    <div class="stack">
+      <div class="tool">
+        <div class="head">
+          <span class="badge badge-info"><svg class="icon"><use href="#i-terminal"/></svg> bash</span>
+          <span class="mono">npm install</span>
+          <span class="grow"></span>
+          <span class="badge badge-ok"><svg class="icon"><use href="#i-check"/></svg> Done</span>
+          <span class="t-xs">1.2s</span>
+          <svg class="icon chev"><use href="#i-chevron"/></svg>
+        </div>
+        <div class="body mono">added 311 packages, audited 312 packages in 29s</div>
+      </div>
+      <div class="tool">
+        <div class="head">
+          <span class="badge badge-info"><svg class="icon"><use href="#i-terminal"/></svg> bash</span>
+          <span class="mono">npm run build</span>
+          <span class="grow"></span>
+          <span class="badge badge-info"><svg class="icon spin"><use href="#i-loader"/></svg> Running</span>
+          <svg class="icon chev"><use href="#i-chevron"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="section">Approval card — the moat component</h2>
+    <p class="section-note">Plain-language consequence translation, not a raw tool dump — severity coded, with reusable scopes and a "what changes" preview so a non-technical user can judge it.</p>
+    <div class="row" style="margin-bottom: var(--space-3)">
+      <span class="badge badge-ok"><span class="dot"></span> Low</span>
+      <span class="badge badge-warn"><span class="dot"></span> Medium</span>
+      <span class="badge badge-danger"><span class="dot"></span> High</span>
+      <span class="badge badge-danger"><svg class="icon"><use href="#i-alert"/></svg> Critical / destructive</span>
+    </div>
+    <div class="grid2" style="align-items: start;">
+      <!-- Medium: email -->
+      <div class="approval sev-medium">
+        <div class="who">
+          <span class="name"><svg class="icon-lg" style="color:var(--warning)"><use href="#i-mail"/></svg> Agent wants to send email</span>
+          <span class="badge badge-warn"><span class="dot"></span> Medium risk</span>
+        </div>
+        <div class="consequence">This will email 12 clients from petter@acme.com — they receive it immediately.</div>
+        <div class="detail">
+          <div class="k">What it's doing</div>
+          <div class="mono" style="margin-top:6px">gmail.send → 12 recipients · subject "Weekly update"</div>
+        </div>
+        <div class="scopes">
+          <button class="chip-toggle" aria-pressed="false">Always allow email in this project</button>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary"><svg class="icon"><use href="#i-check"/></svg> Approve once</button>
+          <button class="btn btn-secondary">Preview email</button>
+          <span class="spacer"></span>
+          <button class="btn btn-danger"><svg class="icon"><use href="#i-x"/></svg> Reject</button>
+        </div>
+      </div>
+
+      <!-- Critical: destructive delete, with diff preview -->
+      <div class="approval sev-critical">
+        <div class="who">
+          <span class="name"><svg class="icon-lg" style="color:var(--danger)"><use href="#i-trash"/></svg> Agent wants to delete files</span>
+          <span class="badge badge-danger"><svg class="icon"><use href="#i-alert"/></svg> Permanent</span>
+        </div>
+        <div class="consequence">This permanently deletes 40 files (2.3 GB) in ~/Downloads. This cannot be undone.</div>
+        <div class="detail" style="padding:0; background:none; border:none">
+          <div class="k" style="margin-bottom:6px">What changes</div>
+          <div class="diff">
+            <div class="del">− old-invoice-drafts/ (37 files)</div>
+            <div class="del">− screenshot-2021-*.png (3 files)</div>
+            <div class="add">+ nothing created</div>
+          </div>
+        </div>
+        <div class="actions" style="margin-top: var(--space-4)">
+          <button class="btn btn-secondary">Review file list</button>
+          <span class="spacer"></span>
+          <button class="btn btn-danger"><svg class="icon"><use href="#i-trash"/></svg> Delete 40 files</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div>
+        <h2 class="section">Command palette / model picker</h2>
+        <div class="palette">
+          <div class="search"><svg class="icon"><use href="#i-search"/></svg><input placeholder="Search models…" /></div>
+          <div class="opt" aria-selected="true">
+            <span class="status-dot is-accent"></span>
+            <div class="meta"><div>Claude Opus 4.8</div><div class="sub">anthropic · 200k context</div></div>
+            <kbd>↵</kbd>
+          </div>
+          <div class="opt">
+            <span class="status-dot is-muted"></span>
+            <div class="meta"><div>Claude Sonnet 4.6</div><div class="sub">anthropic · 200k context</div></div>
+          </div>
+          <div class="opt">
+            <span class="status-dot is-muted"></span>
+            <div class="meta"><div>Local · llama3</div><div class="sub">ollama · on this node</div></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <h2 class="section">Inline alerts</h2>
+        <div class="stack">
+          <div class="alert alert-info"><svg class="icon"><use href="#i-zap"/></svg><div>This node runs the <b>Pi</b> runtime. Capabilities shown adapt per runtime.</div></div>
+          <div class="alert alert-warn"><svg class="icon"><use href="#i-alert"/></svg><div>Approvals are off. The agent can act without asking.</div></div>
+          <div class="alert alert-danger"><svg class="icon"><use href="#i-x"/></svg><div>Model not available — add a provider key to continue.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="section">Settings controls</h2>
+    <div class="panel">
+      <div class="setting-row">
+        <div><div class="label">Approval mode</div><div class="desc">When the agent must pause for your OK.</div></div>
+        <div class="segmented">
+          <button>Never</button>
+          <button aria-pressed="true">Risky only</button>
+          <button>Always</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div><div class="label">Push approvals to phone</div><div class="desc">Get a notification when the agent needs you.</div></div>
+        <label class="switch"><input type="checkbox" checked /><span class="track"></span><span class="thumb"></span></label>
+      </div>
+      <div class="setting-row">
+        <div><div class="label">Dark mode follows system</div><div class="desc">Match your OS appearance automatically.</div></div>
+        <label class="switch"><input type="checkbox" /><span class="track"></span><span class="thumb"></span></label>
+      </div>
+    </div>
+
+    <h2 class="section">Tabs, tooltip &amp; avatar</h2>
+    <div class="panel stack">
+      <div class="tabs">
+        <button aria-selected="true">Chat</button>
+        <button>Files</button>
+        <button>Activity</button>
+        <button>Settings</button>
+      </div>
+      <div class="row">
+        <span class="avatar">PS</span>
+        <span class="avatar assistant"><svg class="icon"><use href="#i-zap"/></svg></span>
+        <button class="btn btn-icon btn-secondary tip" data-tip="Search  ⌘K" aria-label="Search"><svg class="icon"><use href="#i-search"/></svg></button>
+        <button class="btn btn-icon btn-secondary tip" data-tip="New session" aria-label="New session"><svg class="icon"><use href="#i-folder"/></svg></button>
+        <span class="t-sm">← hover the icon buttons for tooltips</span>
+      </div>
+    </div>
+
+    <h2 class="section">Empty state</h2>
+    <div class="panel">
+      <div class="empty">
+        <div class="glyph"><svg class="icon-lg"><use href="#i-folder"/></svg></div>
+        <h3>No sessions yet</h3>
+        <p>Pick a folder and ask the agent to do something. It'll show up here.</p>
+        <button class="btn btn-primary"><svg class="icon"><use href="#i-folder"/></svg> Choose a workspace</button>
+      </div>
+    </div>
+
+    <h2 class="section">Keyboard</h2>
+    <div class="panel row" style="gap: var(--space-5)">
+      <span><kbd>⌘</kbd> <kbd>K</kbd> &nbsp;Command palette</span>
+      <span><kbd>⌘</kbd> <kbd>↵</kbd> &nbsp;Send</span>
+      <span><kbd>Esc</kbd> &nbsp;Abort</span>
+    </div>
+
+    <h2 class="section">Toast</h2>
+    <div class="panel row" role="status" aria-live="polite">
+      <div class="toast"><span class="badge badge-ok"><span class="dot"></span></span> Session saved</div>
+      <div class="toast"><span class="badge badge-danger"><span class="dot"></span></span> Lost connection — retrying… <button class="btn btn-sm btn-ghost">Retry</button></div>
+    </div>
+
+    <h2 class="section">Loading (skeleton)</h2>
+    <div class="panel stack" style="max-width:360px">
+      <div class="skeleton" style="width:70%"></div>
+      <div class="skeleton" style="width:90%"></div>
+      <div class="skeleton" style="width:55%"></div>
+    </div>
+
+    <h2 class="section">Icons</h2>
+    <div class="panel icon-grid">
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-check"/></svg><span>check</span></div>
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-x"/></svg><span>x</span></div>
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-alert"/></svg><span>alert</span></div>
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-zap"/></svg><span>zap</span></div>
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-terminal"/></svg><span>terminal</span></div>
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-mail"/></svg><span>mail</span></div>
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-trash"/></svg><span>trash</span></div>
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-folder"/></svg><span>folder</span></div>
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-search"/></svg><span>search</span></div>
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-wifi"/></svg><span>wifi</span></div>
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-chevron"/></svg><span>chevron</span></div>
+      <div class="icon-cell"><svg class="icon-lg"><use href="#i-loader"/></svg><span>loader</span></div>
+    </div>
+
+    <h2 class="section">Foundations — radii, elevation &amp; spacing</h2>
+    <div class="grid2">
+      <div class="panel">
+        <div class="t-sm" style="margin-bottom:var(--space-3)">Radii</div>
+        <div class="swatches">
+          <div class="tile"><div class="radius-demo" style="border-radius:var(--radius-sm)"></div><div class="cap">sm · 8</div></div>
+          <div class="tile"><div class="radius-demo" style="border-radius:var(--radius-md)"></div><div class="cap">md · 12</div></div>
+          <div class="tile"><div class="radius-demo" style="border-radius:var(--radius-lg)"></div><div class="cap">lg · 16</div></div>
+          <div class="tile"><div class="radius-demo" style="border-radius:var(--radius-xl)"></div><div class="cap">xl · 20</div></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="t-sm" style="margin-bottom:var(--space-3)">Elevation</div>
+        <div class="swatches">
+          <div class="tile"><div class="shadow-demo" style="box-shadow:var(--shadow-sm)"></div><div class="cap">sm</div></div>
+          <div class="tile"><div class="shadow-demo" style="box-shadow:var(--shadow-md)"></div><div class="cap">md</div></div>
+          <div class="tile"><div class="shadow-demo" style="box-shadow:var(--shadow-lg)"></div><div class="cap">lg</div></div>
+          <div class="tile"><div class="shadow-demo" style="box-shadow:var(--shadow-xl)"></div><div class="cap">xl</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="panel stack" style="margin-top:var(--space-4)">
+      <div class="t-sm">Spacing — 4px rhythm</div>
+      <div class="row" style="gap:var(--space-3)"><span class="cap" style="width:54px">1 · 4</span><span class="space-demo" style="width:var(--space-1)"></span></div>
+      <div class="row" style="gap:var(--space-3)"><span class="cap" style="width:54px">2 · 8</span><span class="space-demo" style="width:var(--space-2)"></span></div>
+      <div class="row" style="gap:var(--space-3)"><span class="cap" style="width:54px">3 · 12</span><span class="space-demo" style="width:var(--space-3)"></span></div>
+      <div class="row" style="gap:var(--space-3)"><span class="cap" style="width:54px">4 · 16</span><span class="space-demo" style="width:var(--space-4)"></span></div>
+      <div class="row" style="gap:var(--space-3)"><span class="cap" style="width:54px">5 · 24</span><span class="space-demo" style="width:var(--space-5)"></span></div>
+      <div class="row" style="gap:var(--space-3)"><span class="cap" style="width:54px">6 · 32</span><span class="space-demo" style="width:var(--space-6)"></span></div>
+      <div class="row" style="gap:var(--space-3)"><span class="cap" style="width:54px">7 · 48</span><span class="space-demo" style="width:var(--space-7)"></span></div>
+      <div class="row" style="gap:var(--space-3)"><span class="cap" style="width:54px">8 · 64</span><span class="space-demo" style="width:var(--space-8)"></span></div>
+    </div>
+
+    <h2 class="section">Color tokens</h2>
+    <div class="panel swatches">
+      <div class="swatch"><div class="chip" style="background:var(--accent)"></div><div class="label">--accent</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--accent-soft)"></div><div class="label">--accent-soft</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--surface)"></div><div class="label">--surface</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--surface-3)"></div><div class="label">--surface-3</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--text)"></div><div class="label">--text</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--text-muted)"></div><div class="label">--text-muted</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--border-strong)"></div><div class="label">--border-strong</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--success)"></div><div class="label">--success</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--warning)"></div><div class="label">--warning</div></div>
+      <div class="swatch"><div class="chip" style="background:var(--danger)"></div><div class="label">--danger</div></div>
+    </div>
+
+  </div>
+
+  <script>
+    const html = document.documentElement;
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      html.setAttribute('data-theme', html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    });
+    // Accent picker is pure CSS (radio + :has) — no JS needed, so it works in
+    // sandboxed mobile previews where scripts are blocked.
+
+    // Build the "on this page" nav from section headings.
+    (function buildToc() {
+      const toc = document.getElementById('toc');
+      document.querySelectorAll('h2.section').forEach((h) => {
+        const id = h.textContent.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        h.id = id;
+        const a = document.createElement('a');
+        a.href = '#' + id;
+        a.textContent = h.textContent.replace(/\s*\(.*$/, '').trim();
+        toc.appendChild(a);
+      });
+    })();
+
+    // Demonstrate stateful controls.
+    document.querySelectorAll('.chip-toggle').forEach((el) => {
+      el.addEventListener('click', () => el.setAttribute('aria-pressed', el.getAttribute('aria-pressed') === 'true' ? 'false' : 'true'));
+    });
+    document.querySelectorAll('.segmented').forEach((seg) => {
+      seg.addEventListener('click', (e) => {
+        const btn = e.target.closest('button'); if (!btn) return;
+        seg.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', 'false'));
+        btn.setAttribute('aria-pressed', 'true');
+      });
+    });
+    document.querySelectorAll('.palette').forEach((p) => {
+      p.addEventListener('click', (e) => {
+        const opt = e.target.closest('.opt'); if (!opt) return;
+        p.querySelectorAll('.opt').forEach((o) => o.setAttribute('aria-selected', 'false'));
+        opt.setAttribute('aria-selected', 'true');
+      });
+    });
+    document.querySelectorAll('.tabs').forEach((t) => {
+      t.addEventListener('click', (e) => {
+        const b = e.target.closest('button'); if (!b) return;
+        t.querySelectorAll('button').forEach((x) => x.setAttribute('aria-selected', 'false'));
+        b.setAttribute('aria-selected', 'true');
+      });
+    });
+  </script>
+</body>
+</html>

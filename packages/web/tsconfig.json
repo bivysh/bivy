@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["vite/client", "vite-plugin-pwa/client"],
+    "noEmit": true
+  },
+  "include": ["src"],
+  "//": "sw.ts is a WebWorker context (ServiceWorkerGlobalScope + workbox globals) whose lib conflicts with the app's DOM lib; vite-plugin-pwa bundles it separately via injectManifest, so it is typechecked by its own tsconfig.worker.json.",
+  "exclude": ["src/sw.ts"]
+}

@@ -1,0 +1,14 @@
+{
+  "//": "Typechecks the service worker (src/sw.ts) in a WebWorker context. Kept separate from tsconfig.json because the WebWorker lib conflicts with the app's DOM lib.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["vite-plugin-pwa/info"],
+    "noEmit": true
+  },
+  "include": ["src/sw.ts"]
+}

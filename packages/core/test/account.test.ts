@@ -1,0 +1,317 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (c) 2026 Petter André Sjulstad
+import { describe, expect, it } from "vitest";
+import {
+  b64url,
+  consumeLinkPayload,
+  createLocalStore,
+  fetchAccountNodes,
+  startGithubDeviceLogin,
+  pollDeviceLogin,
+  fetchPairedDevices,
+  removePairedDevice,
+  logout,
+  setGithubAppDefaultNode,
+  assignWorkItem,
+  fetchEphemeralQueueDefault,
+  setEphemeralQueueDefault,
+} from "../src/index.js";
+
+function mem(): Storage {
+  const m = new Map<string, string>();
+  return {
+    getItem: (k: string) => (m.has(k) ? m.get(k)! : null),
+    setItem: (k: string, v: string) => void m.set(k, String(v)),
+    removeItem: (k: string) => void m.delete(k),
+    clear: () => m.clear(),
+    key: () => null,
+    get length() {
+      return m.size;
+    },
+  } as unknown as Storage;
+}
+
+function encode(payload: unknown): string {
+  return "#" + b64url(new TextEncoder().encode(JSON.stringify(payload)));
+}
+
+describe("consumeLinkPayload", () => {
+  it("captures a session token + urls from a sign-in redirect hash", () => {
+    const store = createLocalStore(mem(), mem());
+    const ok = consumeLinkPayload(store, encode({ session: "tok123", controlPlane: "https://app.bivy.sh", relay: "wss://r" }));
+    expect(ok).toBe(true);
+    expect(store.s).toBe("tok123");
+    expect(store.cp).toBe("https://app.bivy.sh");
+    expect(store.relay).toBe("wss://r");
+  });
+
+  it("captures node id + pairing material from a QR link", () => {
+    const store = createLocalStore(mem(), mem());
+    consumeLinkPayload(store, encode({ node: { id: "n1", pub: "PUB" }, pairSecret: "SEC" }));
+    expect(store.cur).toBe("n1");
+    expect(store.nodePubs().n1).toBe("PUB");
+    expect(store.pairSecrets().n1).toBe("SEC");
+  });
+
+  it("returns false for empty/garbage input", () => {
+    const store = createLocalStore(mem(), mem());
+    expect(consumeLinkPayload(store, "")).toBe(false);
+    expect(consumeLinkPayload(store, "#not-base64!!")).toBe(false);
+  });
+});
+
+describe("fetchAccountNodes", () => {
+  it("GETs /nodes with the bearer token and returns the list", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenAuth = "";
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenAuth = String((init?.headers as Record<string, string>)?.authorization || "");
+      return { ok: true, json: async () => [{ id: "n1", name: "Laptop", online: true }] } as Response;
+    }) as unknown as typeof fetch;
+    const nodes = await fetchAccountNodes(store, fakeFetch);
+    expect(seenUrl).toBe("https://app.bivy.sh/nodes");
+    expect(seenAuth).toBe("Bearer tok");
+    expect(nodes).toEqual([{ id: "n1", name: "Laptop", online: true }]);
+  });
+});
+
+describe("setGithubAppDefaultNode", () => {
+  it("POSTs the trimmed node label and returns the stored value", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenBody = "";
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenBody = String(init?.body || "");
+      return { ok: true, json: async () => ({ ok: true, defaultNode: "macbook" }) } as Response;
+    }) as unknown as typeof fetch;
+    const result = await setGithubAppDefaultNode(store, "macbook", fakeFetch);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/github-app/default-node");
+    expect(JSON.parse(seenBody)).toEqual({ node: "macbook" });
+    expect(result).toBe("macbook");
+  });
+
+  it("throws with the server's error message on a non-2xx response", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () =>
+      ({ ok: false, status: 404, json: async () => ({ error: "No GitHub App connected" }) }) as Response) as unknown as typeof fetch;
+    await expect(setGithubAppDefaultNode(store, "macbook", fakeFetch)).rejects.toThrow("No GitHub App connected");
+  });
+});
+
+describe("assignWorkItem", () => {
+  it("POSTs node/runtime/model plus an ephemeral flag defaulting to false", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenBody = "";
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenBody = String(init?.body || "");
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    }) as unknown as typeof fetch;
+    await assignWorkItem(store, "wi_1", { node: "laptop", runtimeId: "pi", model: "m" }, fakeFetch);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/work-items/wi_1/assign");
+    expect(JSON.parse(seenBody)).toEqual({ node: "laptop", runtimeId: "pi", model: "m", ephemeral: false });
+  });
+
+  it("marks the item ephemeral when dispatched to a freshly-provisioned server (issue #532)", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    let seenBody = "";
+    const fakeFetch = (async (_u: string, init?: RequestInit) => {
+      seenBody = String(init?.body || "");
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    }) as unknown as typeof fetch;
+    await assignWorkItem(store, "wi_2", { node: "ab12cd34", ephemeral: true }, fakeFetch);
+    expect(JSON.parse(seenBody)).toEqual({ node: "ab12cd34", runtimeId: "", model: "", ephemeral: true });
+  });
+
+  it("throws with the server's error message on a non-2xx response", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () =>
+      ({ ok: false, status: 403, json: async () => ({ error: "The work queue is a paid feature." }) }) as Response) as unknown as typeof fetch;
+    await expect(assignWorkItem(store, "wi_3", {}, fakeFetch)).rejects.toThrow("paid feature");
+  });
+});
+
+describe("ephemeral queue default (issue #532)", () => {
+  it("fetchEphemeralQueueDefault GETs the account preference", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    const fakeFetch = (async (url: string) => {
+      seenUrl = String(url);
+      return { ok: true, json: async () => ({ enabled: true, provider: "hetzner", region: "nbg1" }) } as Response;
+    }) as unknown as typeof fetch;
+    const result = await fetchEphemeralQueueDefault(store, fakeFetch);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/ephemeral-default");
+    expect(result).toEqual({ enabled: true, provider: "hetzner", region: "nbg1", size: undefined, ttlMinutes: undefined });
+  });
+
+  it("setEphemeralQueueDefault PUTs a partial patch and returns the merged value", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenMethod = "";
+    let seenBody = "";
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenMethod = String(init?.method || "");
+      seenBody = String(init?.body || "");
+      return { ok: true, json: async () => ({ enabled: true, provider: "fly" }) } as Response;
+    }) as unknown as typeof fetch;
+    const result = await setEphemeralQueueDefault(store, { enabled: true, provider: "fly" }, fakeFetch);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/ephemeral-default");
+    expect(seenMethod).toBe("PUT");
+    expect(JSON.parse(seenBody)).toEqual({ enabled: true, provider: "fly" });
+    expect(result).toEqual({ enabled: true, provider: "fly", region: undefined, size: undefined, ttlMinutes: undefined });
+  });
+
+  it("throws with the server's error message on a non-2xx response", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () => ({ ok: false, status: 401, json: async () => ({ error: "Unauthorized" }) }) as Response) as unknown as typeof fetch;
+    await expect(setEphemeralQueueDefault(store, { enabled: true }, fakeFetch)).rejects.toThrow("Unauthorized");
+  });
+});
+
+describe("paired devices", () => {
+  it("fetchPairedDevices GETs /devices with the bearer token", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenAuth = "";
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenAuth = String((init?.headers as Record<string, string>)?.authorization || "");
+      return { ok: true, json: async () => [{ id: "pk-a", label: "Phone", updatedAt: "2026-01-01T00:00:00Z" }] } as Response;
+    }) as unknown as typeof fetch;
+    const devices = await fetchPairedDevices(store, fakeFetch);
+    expect(seenUrl).toBe("https://app.bivy.sh/devices");
+    expect(seenAuth).toBe("Bearer tok");
+    expect(devices).toEqual([{ id: "pk-a", label: "Phone", updatedAt: "2026-01-01T00:00:00Z" }]);
+  });
+
+  it("removePairedDevice DELETEs /devices/:id (url-encoded)", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenMethod = "";
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenMethod = String(init?.method || "");
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    }) as unknown as typeof fetch;
+    await removePairedDevice(store, "pk/a+b", fakeFetch);
+    expect(seenMethod).toBe("DELETE");
+    expect(seenUrl).toBe("https://app.bivy.sh/devices/pk%2Fa%2Bb");
+  });
+
+  it("removePairedDevice throws on a non-2xx response", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () => ({ ok: false, status: 404, json: async () => ({}) }) as Response) as unknown as typeof fetch;
+    await expect(removePairedDevice(store, "pk-a", fakeFetch)).rejects.toThrow("404");
+  });
+
+  it("logout posts the device public key so the server frees the slot", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenBody = "";
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenBody = String(init?.body || "");
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    }) as unknown as typeof fetch;
+    await logout(store, "device-pub-1", fakeFetch);
+    expect(seenUrl).toBe("https://app.bivy.sh/auth/logout");
+    expect(JSON.parse(seenBody)).toEqual({ devicePublicKeyB64: "device-pub-1" });
+  });
+
+  it("logout omits the device key when none is given", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    let seenBody = "";
+    const fakeFetch = (async (_u: string, init?: RequestInit) => {
+      seenBody = String(init?.body || "");
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    }) as unknown as typeof fetch;
+    await logout(store, undefined, fakeFetch);
+    expect(JSON.parse(seenBody)).toEqual({});
+  });
+});
+
+describe("startGithubDeviceLogin", () => {
+  it("POSTs /auth/device/github/start and returns credentials + authorize URL", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenMethod = "";
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenMethod = String(init?.method || "");
+      return {
+        ok: true,
+        json: async () => ({ ok: true, deviceId: "d1", deviceSecret: "s1", authorizeUrl: "https://app.bivy.sh/auth/github/start?device=d1", intervalMs: 3000, expiresInMs: 60000 }),
+      } as Response;
+    }) as unknown as typeof fetch;
+    const login = await startGithubDeviceLogin(store, fakeFetch);
+    expect(seenUrl).toBe("https://app.bivy.sh/auth/device/github/start");
+    expect(seenMethod).toBe("POST");
+    expect(login).toEqual({
+      deviceId: "d1",
+      deviceSecret: "s1",
+      authorizeUrl: "https://app.bivy.sh/auth/github/start?device=d1",
+      intervalMs: 3000,
+      expiresInMs: 60000,
+    });
+  });
+
+  it("throws when the control plane has GitHub sign-in disabled", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () =>
+      ({ ok: false, json: async () => ({ error: "GitHub sign-in not configured" }) }) as Response) as unknown as typeof fetch;
+    await expect(startGithubDeviceLogin(store, fakeFetch)).rejects.toThrow("GitHub sign-in not configured");
+  });
+});
+
+describe("pollDeviceLogin", () => {
+  it("POSTs device credentials and passes through the pending/complete status", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    let seenBody = "";
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenBody = String(init?.body || "");
+      return { ok: true, json: async () => ({ status: "complete", token: "sess-xyz" }) } as Response;
+    }) as unknown as typeof fetch;
+    const result = await pollDeviceLogin(store, "d1", "s1", fakeFetch);
+    expect(JSON.parse(seenBody)).toEqual({ deviceId: "d1", deviceSecret: "s1" });
+    expect(result).toEqual({ status: "complete", token: "sess-xyz" });
+  });
+
+  it("maps a non-2xx response to an error status", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () =>
+      ({ ok: false, status: 400, json: async () => ({ error: "Missing device credentials" }) }) as Response) as unknown as typeof fetch;
+    const result = await pollDeviceLogin(store, "", "", fakeFetch);
+    expect(result).toEqual({ status: "error", error: "Missing device credentials" });
+  });
+});

@@ -1,0 +1,149 @@
+# Production-ish deploy for the control plane + relay behind Caddy (auto-TLS).
+#
+# Prereqs on the VPS:
+#   - Docker + compose plugin
+#   - Two DNS A records pointing at the VPS:
+#       app.example.com    -> control plane
+#       relay.example.com -> relay
+#   - Edit deploy/Caddyfile and deploy/.env with your domains/secret.
+#
+# Run:
+#   cd deploy && cp .env.example .env && $EDITOR .env Caddyfile
+#   docker compose up -d --build
+#
+# Then on your PC (the node):
+#   npm run relay:setup -- \
+#     --control-plane https://app.example.com \
+#     --relay wss://relay.example.com \
+#     --email you@example.com
+#   npm run dev   # node dials the relay; use "Link remote device" to pair a phone
+#
+# NOTE: defaults to NODE_ENV=production, so the services refuse to boot with
+# insecure defaults and dev-login is disabled. For a throwaway staging box that
+# still wants dev-login, set NODE_ENV= (empty) and DISABLE_DEV_LOGIN=0 in .env.
+# Configure real Stripe keys + webhook secret before taking live payments.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      # NOTE: POSTGRES_USER/POSTGRES_DB only take effect when postgres runs
+      # initdb on a FIRST, empty data dir. If you change them on a box whose
+      # postgres_data volume already exists, the new role/database are NOT
+      # created and the control plane crash-loops connecting to a role that
+      # doesn't exist. After changing these, reset the volume once (run the
+      # "Deploy staging" workflow with reset_volumes=true) so postgres
+      # re-initializes under the new identifiers.
+      POSTGRES_DB: "${POSTGRES_DB:-bivy_control_plane}"
+      POSTGRES_USER: "${POSTGRES_USER:-bivy}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-bivy} -d $${POSTGRES_DB:-bivy_control_plane}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  control-plane:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.control-plane
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "4400"
+      RELAY_SECRET: "${RELAY_SECRET}"
+      RELAY_PUBLIC_URL: "${RELAY_PUBLIC_URL}"
+      PUBLIC_CONTROL_PLANE_URL: "${PUBLIC_CONTROL_PLANE_URL}"
+      DISABLE_DEV_LOGIN: "${DISABLE_DEV_LOGIN:-0}"
+      RESEND_API_KEY: "${RESEND_API_KEY:-}"
+      AUTH_EMAIL_FROM: "${AUTH_EMAIL_FROM:-Bivy <login@localhost>}"
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+      STRIPE_PRICE_INDIVIDUAL: "${STRIPE_PRICE_INDIVIDUAL:-}"
+      STRIPE_PRICE_TEAM: "${STRIPE_PRICE_TEAM:-}"
+      GITHUB_OAUTH_CLIENT_ID: "${GITHUB_OAUTH_CLIENT_ID:-}"
+      GITHUB_OAUTH_CLIENT_SECRET: "${GITHUB_OAUTH_CLIENT_SECRET:-}"
+      WEB_PUSH_VAPID_PUBLIC_KEY: "${WEB_PUSH_VAPID_PUBLIC_KEY:-}"
+      WEB_PUSH_VAPID_PRIVATE_KEY: "${WEB_PUSH_VAPID_PRIVATE_KEY:-}"
+      WEB_PUSH_SUBJECT: "${WEB_PUSH_SUBJECT:-}"
+      BILLING_SUCCESS_URL: "${BILLING_SUCCESS_URL:-}"
+      BILLING_CANCEL_URL: "${BILLING_CANCEL_URL:-}"
+      BILLING_PORTAL_RETURN_URL: "${BILLING_PORTAL_RETURN_URL:-}"
+      DATABASE_POOL_MAX: "${DATABASE_POOL_MAX:-10}"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-bivy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bivy_control_plane}"
+    # Raise the open-file-descriptor limit. Each enrolled node/phone introspection
+    # and DB connection consumes FDs; the default 1024 caps concurrency well below
+    # the hardware. See docs/scaling.md.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    expose:
+      - "4400"
+    # /readyz (not /healthz) so the container reports unhealthy when Postgres is
+    # unreachable — a DB outage shows up in `docker compose ps` instead of a green
+    # light over a control plane that 500s every request.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4400/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  relay:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.relay
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "4500"
+      RELAY_SECRET: "${RELAY_SECRET}"
+      CONTROL_PLANE_URL: "http://control-plane:4400"
+      ENFORCE_ENTITLEMENTS: "${ENFORCE_ENTITLEMENTS:-0}"
+      RELAY_MAX_FRAME_BYTES: "${RELAY_MAX_FRAME_BYTES:-1048576}"
+      RELAY_MAX_MESSAGES_PER_MINUTE: "${RELAY_MAX_MESSAGES_PER_MINUTE:-120}"
+      RELAY_MAX_CONNECTIONS_PER_IP: "${RELAY_MAX_CONNECTIONS_PER_IP:-50}"
+      RELAY_IDLE_TIMEOUT_MS: "${RELAY_IDLE_TIMEOUT_MS:-120000}"
+    # The relay holds one WebSocket per node plus one per connected phone, so it
+    # is the most FD-hungry service. At ~2 FDs/user the default 1024 limit walls
+    # concurrency around ~500 users regardless of CPU/RAM. See docs/scaling.md.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    expose:
+      - "4500"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4500/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      relay:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

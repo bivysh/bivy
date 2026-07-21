@@ -1,0 +1,46 @@
+/* Bivy UI component classes shared by the static templates. Requires tokens.css. */
+.status-dot { width: 8px; height: 8px; border-radius: var(--radius-full, 999px); flex: none; background: currentColor; }
+.badge { min-height: 22px; display: inline-flex; align-items: center; gap: 6px; width: max-content; border-radius: var(--radius-full, 999px); padding: 0 9px; font-size: var(--text-xs, 12px); font-weight: var(--weight-bold, 700); white-space: nowrap; }
+.badge-ok { background: var(--success-soft); color: var(--success); }
+.badge-warn { background: var(--warning-soft); color: var(--warning); }
+.badge-danger { background: var(--danger-soft); color: var(--danger); }
+.badge-info { background: var(--info-soft, var(--accent-soft)); color: var(--info, var(--accent)); }
+
+.btn, .primary-button, .small-action, .mini-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: var(--radius-md, 12px); font: inherit; font-weight: var(--weight-bold, 700); cursor: pointer; }
+.primary-button, .btn-primary { border: 0; background: var(--accent); color: var(--accent-contrast); }
+.primary-button:hover, .btn-primary:hover { background: var(--accent-hover); }
+.small-action, .mini-button, .btn-secondary { border: 1px solid var(--border, var(--line)); background: var(--surface); color: var(--text, var(--ink)); }
+.mini-button.danger, .btn-danger { border-color: transparent; background: var(--danger); color: #fff; }
+
+.msg-row { display: flex; gap: var(--space-3, 12px); align-items: flex-start; }
+/* Remote PWA chat header — prevent long agent/model names from pushing send button */
+.pnav .ptitle .psub { min-width:0; }
+.pnav .ptitle .psub > span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.msg-row.user { flex-direction: row-reverse; }
+.msg-col { display: grid; gap: 4px; max-width: 78%; }
+.msg-meta { font-size: var(--text-xs, 12px); color: var(--text-subtle, var(--muted)); display: flex; gap: 8px; align-items: center; }
+.avatar { width: 26px; height: 26px; border-radius: var(--radius-full, 999px); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: var(--weight-bold, 700); background: var(--accent-soft); color: var(--accent); flex: none; }
+.avatar.assistant { background: var(--surface-3); color: var(--text-muted, var(--muted)); }
+
+.approval { border-left: 4px solid var(--warning); }
+.approval.sev-low { border-left-color: var(--success); }
+.approval.sev-high, .approval.sev-critical { border-left-color: var(--danger); }
+.approval-card { display: grid; gap: var(--space-3, 12px); }
+.approval-who { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3, 12px); }
+.approval-title { margin: 0; color: var(--text, var(--ink)); font-size: var(--text-lg, 17px); font-weight: var(--weight-heavy, 800); letter-spacing: -0.02em; display: inline-flex; align-items: center; gap: 8px; }
+.approval-title-icon { color: var(--warning); }
+.sev-high .approval-title-icon, .sev-critical .approval-title-icon { color: var(--danger); }
+.approval-consequence { color: var(--text, var(--ink)); font-size: var(--text-md, 15px); line-height: var(--lh-md, 22px); font-weight: var(--weight-semibold, 600); }
+.approval-reason { color: var(--text-muted, var(--muted)); font-size: var(--text-sm, 13px); line-height: var(--lh-sm, 18px); }
+.approval-fields { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border, var(--line)); border-radius: var(--radius-md, 12px); background: var(--surface-2, var(--surface-soft)); }
+.approval-field { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 10px; font-size: var(--text-sm, 13px); line-height: var(--lh-sm, 18px); }
+.approval-label { color: var(--text-muted, var(--muted)); font-weight: var(--weight-heavy, 800); text-transform: uppercase; letter-spacing: .04em; font-size: 11px; }
+.approval-value { min-width: 0; overflow-wrap: anywhere; }
+.approval-command, .approval-details pre { margin: 0; padding: 11px 12px; border: 1px solid var(--border, var(--line)); border-radius: var(--radius-md, 12px); background: var(--surface-2, var(--surface-soft)); color: var(--text, var(--ink)); font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.approval-details summary { color: var(--text-muted, var(--muted)); font-size: var(--text-xs, 12px); font-weight: var(--weight-bold, 700); cursor: pointer; }
+.approval-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.approval-actions .spacer { flex: 1; }
+
+.tool { overflow: hidden; border: 1px solid var(--border, var(--line)); border-radius: var(--radius-lg, 16px); background: var(--surface); }
+.tool .head { display: flex; align-items: center; gap: var(--space-2, 8px); padding: var(--space-3, 12px) var(--space-4, 16px); border-bottom: 1px solid var(--border, var(--line)); }
+.tool .body { padding: var(--space-3, 12px); color: var(--text-muted, var(--muted)); }

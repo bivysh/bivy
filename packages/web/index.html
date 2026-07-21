@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- Two static, media-scoped tags give the *system-default* browser-chrome
+         color correctly before any JS runs (no flash of the wrong color on cold
+         load) — theme.ts's applyTheme() only needs to touch these for an
+         explicit light/dark override, not the common "system" case. -->
+    <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <!-- icon-192/512.png are plain, fully-cropped tent icons (manifest purpose
+         "any"), and double as the favicon / apple-touch-icon (neither applies
+         adaptive masking, so a cropped icon is correct here).
+         tent-logo.png is the full-bleed *maskable* source (purpose "maskable"),
+         carrying the edge bleed adaptive-icon masking expects — kept separate so
+         the un-masked "any" contexts don't render it padded/off-center. All are
+         served from the app root by the node daemon and control plane. -->
+    <link rel="icon" type="image/png" href="/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <title>Bivy</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

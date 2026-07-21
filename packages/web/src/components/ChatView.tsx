@@ -1,0 +1,474 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (c) 2026 Petter André Sjulstad
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolActivity, type TranscriptEntry } from "@bivy/core";
+import { ToolGroup } from "./ToolGroup.js";
+import { decorateCodeBlocks, highlightCode } from "../highlight.js";
+import { writeClipboard } from "../clipboard.js";
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function base64ToBlobUrl(base64: string, mimeType: string): string | null {
+  try {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return URL.createObjectURL(new Blob([bytes], { type: mimeType || "application/octet-stream" }));
+  } catch {
+    return null; // malformed base64 — fall back to a non-clickable chip
+  }
+}
+
+/**
+ * A single attachment the user sent with this message, shown as a clickable
+ * thumbnail (image) or file chip so they can re-open what they attached. The
+ * node never echoes real attachment bytes back (only a text placeholder), so
+ * this only ever has content to show on the client that actually sent it —
+ * see attachmentsByText in packages/core/src/store.ts.
+ */
+function AttachmentChip({ attachment }: { attachment: PromptAttachment }) {
+  const url = useMemo(() => {
+    if (attachment.omitted) return null;
+    if (attachment.kind === "image" && attachment.data) return base64ToBlobUrl(attachment.data, attachment.mimeType);
+    if (attachment.text !== undefined) {
+      try {
+        return URL.createObjectURL(new Blob([attachment.text], { type: attachment.mimeType || "text/plain" }));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-derive only when the attachment identity changes
+  }, [attachment]);
+
+  useEffect(() => {
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [url]);
+
+  if (attachment.kind === "image" && url) {
+    return (
+      <a className="msg-attachment image" href={url} target="_blank" rel="noopener" title={attachment.name}>
+        <img src={url} alt={attachment.name} />
+      </a>
+    );
+  }
+  const label = (
+    <>
+      <span className="attach-glyph">{attachment.kind === "image" ? "🖼" : "📄"}</span>
+      <span className="attach-name">{attachment.name}</span>
+      <span className="attach-size">{fmtBytes(attachment.size)}</span>
+    </>
+  );
+  return url ? (
+    <a className="msg-attachment file" href={url} download={attachment.name} title={`Open ${attachment.name}`}>
+      {label}
+    </a>
+  ) : (
+    <span className="msg-attachment file omitted" title="Content not available">
+      {label}
+    </span>
+  );
+}
+
+// Friendly label for an inline notice action button. Falls back to the raw
+// command so a newer node advertising an action this client doesn't know still
+// renders something tappable.
+function actionLabel(action: string): string {
+  if (action === "/pr") return "Create pull request";
+  if (action === "/new") return "New session";
+  return `Run ${action}`;
+}
+
+/** Clipboard glyph (two overlapping sheets) — the resting state of a copy
+ *  affordance. Shared look with the per-code-block button (see decorateCodeBlocks
+ *  in highlight.ts), so "copy" reads the same everywhere. */
+function CopyGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+/** Checkmark shown briefly after a successful copy. */
+function CheckGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
+/**
+ * Icon-only copy affordance for an assistant reply — copies the raw markdown
+ * (not the rendered HTML) so pasting elsewhere keeps formatting like code
+ * fences and lists intact. Hover-revealed on the row (see `.assistant-row` in
+ * styles.css), always faintly visible on touch devices where hover doesn't
+ * apply. Swaps to a checkmark for a moment on success.
+ */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const onClick = useCallback(() => {
+    void writeClipboard(text).then((ok) => {
+      if (!ok) return;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+  }, [text]);
+  return (
+    <button
+      type="button"
+      className={`msg-copy-btn${copied ? " copied" : ""}`}
+      onClick={onClick}
+      title={copied ? "Copied" : "Copy message"}
+      aria-label="Copy message"
+    >
+      {copied ? <CheckGlyph /> : <CopyGlyph />}
+    </button>
+  );
+}
+
+// Memoized so a streaming token that produces a new transcript array only
+// re-renders the entries whose object identity actually changed. The store
+// preserves references for untouched entries (map/spread keep them), so with a
+// stable `entry` prop React skips the thousands of unchanged rows in a long
+// session — the single biggest win for long-conversation rendering.
+const EntryView = memo(function EntryView({
+  entry,
+  onAction,
+}: {
+  entry: TranscriptEntry;
+  onAction?: (action: string) => void;
+}) {
+  // Assistant prose is markdown. The store no longer renders it for the whole
+  // transcript up front (that eager pass over every message is what made opening
+  // a long session slow and blocking) — history entries arrive as plain `text`,
+  // so we render markdown here. Because only the mounted window ever calls this,
+  // the cost scales with what's on screen, not with the conversation length.
+  // A streaming/optimistic entry already carries `html`, so we reuse it. Hooks
+  // must run unconditionally, so this sits above the role branches; the ternary
+  // keeps the (unused) markdown pass off the non-assistant roles.
+  const html = useMemo(
+    () => (entry.role === "assistant" ? entry.html ?? toHtml(entry.text) : ""),
+    [entry.role, entry.html, entry.text],
+  );
+  // Syntax-highlight fenced code blocks once the assistant HTML is in the DOM.
+  // Re-runs as streaming replaces the markup; hooks stay above the role branches.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (entry.role === "assistant") {
+      highlightCode(bodyRef.current);
+      decorateCodeBlocks(bodyRef.current);
+    }
+  }, [entry.role, html]);
+  if (entry.role === "system")
+    return (
+      <div className="msg system">
+        <span className="system-text" dangerouslySetInnerHTML={{ __html: toHtml(entry.text) }} />
+        {entry.action && onAction && (
+          <button type="button" className="notice-action" onClick={() => onAction(entry.action!)}>
+            {actionLabel(entry.action)}
+          </button>
+        )}
+      </div>
+    );
+  if (entry.role === "thinking")
+    return <div className={`msg thinking${entry.streaming ? " streaming" : ""}`}>{entry.text}</div>;
+  if (entry.role === "error")
+    return (
+      <div className="msg error" role="alert">
+        <span className="msg-error-icon" aria-hidden>
+          !
+        </span>
+        <span className="msg-error-text">{entry.text}</span>
+      </div>
+    );
+  if (entry.role === "user") {
+    const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
+    // With the attachments shown as thumbnails/chips, the node's appended
+    // "[Image attachment: …]" placeholder lines are redundant — strip them so the
+    // bubble reads the same as the optimistic one shown at send time (which never
+    // had them). Kept verbatim when no attachment was recovered, so the reader
+    // still sees that something was attached.
+    const text = hasAttachments ? stripAttachmentPlaceholders(entry.text) : entry.text;
+    return (
+      <div className="msg user">
+        {hasAttachments && (
+          <div className="msg-attachments">
+            {entry.attachments!.map((a, i) => (
+              <AttachmentChip key={`${a.name}-${i}`} attachment={a} />
+            ))}
+          </div>
+        )}
+        {text}
+      </div>
+    );
+  }
+  return (
+    <div className="assistant-row">
+      <div
+        ref={bodyRef}
+        className={`msg assistant${entry.streaming ? " streaming" : ""}`}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      {!entry.streaming && entry.text && <CopyButton text={entry.text} />}
+    </div>
+  );
+});
+
+type RenderItem =
+  | { kind: "entry"; key: string; entry: TranscriptEntry }
+  | { kind: "tools"; key: string; tools: ToolActivity[] };
+
+/**
+ * Focus view: drop the interim chatter so the transcript reads as just the
+ * conversation — user prompts, the agent's final answer for each turn, and any
+ * system notice (errors, the inline "Create PR" action). "Interim" is the
+ * agent's working-out: thinking blocks, tool-call cards, and the intermediate
+ * assistant messages it emits between tool calls. Within each user-bounded
+ * turn only the last assistant prose entry survives (the turn's conclusion); a
+ * still-streaming reply is naturally that last entry, so it stays visible and
+ * keeps updating. Pure filter over the array — the surviving entries keep their
+ * object identity, so EntryView's memoization still skips unchanged rows.
+ */
+function collapseInterim(entries: TranscriptEntry[]): TranscriptEntry[] {
+  const keep: TranscriptEntry[] = [];
+  let lastAssistant: TranscriptEntry | null = null;
+  const flush = () => {
+    if (lastAssistant) keep.push(lastAssistant);
+    lastAssistant = null;
+  };
+  for (const e of entries) {
+    if (e.tool || e.role === "thinking") continue; // interim working-out
+    if (e.role === "assistant") {
+      lastAssistant = e; // hold; only the turn's last assistant prose is kept
+      continue;
+    }
+    // user / system entry ends the current assistant run — emit the held final
+    // assistant prose before it so ordering is preserved.
+    flush();
+    keep.push(e);
+  }
+  flush();
+  return keep;
+}
+
+/** Stable React key for a tool-run group. Keyed on the first tool's runtime
+ *  `callId` — NOT the transcript entry `id` — because reconciling a live turn
+ *  with canonical history (store.applyHistory → renderHistory) rebuilds the
+ *  whole transcript with freshly-generated entry ids. Keying on those made an
+ *  open ToolGroup remount on every such reconcile, resetting its local `open`
+ *  state and slamming the activity sheet shut mid-run. `callId` comes from the
+ *  runtime and is preserved across re-renders, so the group — and any sheet the
+ *  user opened on it — stays put until they close it themselves. Falls back to
+ *  the entry id for the rare tool with no callId. */
+function toolRunKey(first: TranscriptEntry): string {
+  return `g:${first.tool?.callId || first.id}`;
+}
+
+/** Collapse runs of consecutive tool entries into a single grouped item. */
+function groupEntries(entries: TranscriptEntry[]): RenderItem[] {
+  const out: RenderItem[] = [];
+  let run: TranscriptEntry[] | null = null;
+  for (const e of entries) {
+    if (e.tool) {
+      if (!run) run = [];
+      run.push(e);
+    } else {
+      if (run) {
+        out.push({ kind: "tools", key: toolRunKey(run[0]!), tools: run.map((r) => r.tool!) });
+        run = null;
+      }
+      out.push({ kind: "entry", key: e.id, entry: e });
+    }
+  }
+  if (run) out.push({ kind: "tools", key: toolRunKey(run[0]!), tools: run.map((r) => r.tool!) });
+  return out;
+}
+
+// Cap the number of live DOM nodes. A session can have thousands of messages;
+// mounting (and markdown-rendering) them all is what makes a big session janky
+// and slow to open. Open on just the most recent INITIAL_WINDOW entries, then
+// reveal older history a page at a time on tap ("show earlier" below).
+const INITIAL_WINDOW = 20;
+const WINDOW_STEP = 40;
+
+export function ChatView({
+  entries,
+  working,
+  workingLabel,
+  draftRoute,
+  sessionKey,
+  collapsed,
+  onAction,
+  footer,
+}: {
+  entries: TranscriptEntry[];
+  working: boolean;
+  workingLabel: string;
+  /** The URL is the source of truth for whether this is a fresh draft. Only
+   *  `/sessions/new` may show the start prompt; `/sessions/:id` always represents
+   *  a real session whose empty transcript is still being fetched. */
+  draftRoute: boolean;
+  /** Identity of the open session; switching it re-pins to latest + resets the window. */
+  sessionKey: string | null;
+  /** Focus view: hide thinking, tool cards, and interim assistant messages —
+   *  leaving user prompts, each turn's final answer, and system notices. */
+  collapsed?: boolean;
+  /** Run a slash command from an inline notice action button (e.g. "/pr"). */
+  onAction?: (action: string) => void;
+  /** Rendered at the tail of the scroll area so approval/question cards flow
+   *  inline with the transcript and scroll with it, rather than sitting in a
+   *  pinned region between the chat and the composer. A newly-arrived card grows
+   *  the content box, so the auto-follow layout-effect scrolls it into view on
+   *  its own when the user is pinned to the bottom — no separate key needed. */
+  footer?: ReactNode;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [pinned, setPinned] = useState(true);
+  const [limit, setLimit] = useState(INITIAL_WINDOW);
+  // Mirror `pinned` into a ref so the layout-effect and ResizeObserver below —
+  // which run outside React's render cycle — can read the current value without
+  // being re-subscribed on every scroll tick.
+  const pinnedRef = useRef(true);
+  const setPinnedState = useCallback((v: boolean) => {
+    pinnedRef.current = v;
+    setPinned(v);
+  }, []);
+
+  const atBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }, []);
+
+  // Snap to the bottom with no animation. Auto-follow must be instant: while a
+  // turn streams, every chunk (tool card, working row, an assistant message
+  // landing) grows the content, and a smooth scroll would start a fresh animation
+  // toward a target that's already moved — the visible jitter, and the "blank gap
+  // at the bottom, then a jump" the chat used to show. Instant keeps the newest
+  // line glued just above the composer.
+  const pinToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+
+  // The explicit "↓ Latest" affordance is a user gesture, so a smooth glide reads
+  // as intentional (unlike the streaming auto-follow above).
+  const jumpToLatest = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    setPinnedState(true);
+  }, [setPinnedState]);
+
+  // In focus view the transcript is the interim-free projection; everything
+  // downstream (windowing, auto-scroll, "show earlier" counts) operates on that
+  // filtered list so the counts and the visible rows stay in agreement.
+  const source = useMemo(() => (collapsed ? collapseInterim(entries) : entries), [collapsed, entries]);
+
+  // Switching sessions must start pinned to that session's latest message with a
+  // fresh window — not inherit the previous session's scroll position or an
+  // expanded "show earlier" limit (which would mount far more rows than intended).
+  const total = source.length;
+  useEffect(() => {
+    setLimit(INITIAL_WINDOW);
+    setPinnedState(true);
+  }, [sessionKey, setPinnedState]);
+
+  // Keep the view pinned to the newest line as content grows — streamed tool
+  // cards, the working row, an assistant reply landing, an inline approval card.
+  // This runs after every commit but before paint, so growth never flashes a gap
+  // at the bottom or shunts the latest message off-screen. It only follows when
+  // the user is already at the bottom (pinnedRef); scrolling up to read history is
+  // never yanked back down. No dependency array on purpose: it must re-pin on
+  // every render that changed layout, not just when a hand-picked field changes.
+  useLayoutEffect(() => {
+    if (pinnedRef.current) pinToBottom();
+  });
+
+  // Async layout that arrives without a React render — images decoding, code
+  // blocks, web fonts settling — changes height after the effect above ran, which
+  // would leave the newest line above the fold (the "empty space at the bottom"
+  // symptom). Re-pin whenever the content box actually resizes while following.
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (pinnedRef.current) pinToBottom();
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [pinToBottom]);
+
+  const start = Math.max(0, total - limit);
+  const visible = start > 0 ? source.slice(start) : source;
+  const items = groupEntries(visible);
+
+  return (
+    <div className="chat-wrap">
+      <div className="chat" ref={scrollRef} onScroll={() => setPinnedState(atBottom())}>
+        <div className="chat-inner" ref={contentRef}>
+          {total === 0 && !draftRoute && (
+            <div className="chat-loading" role="status" aria-live="polite">
+              <span className="chat-loading-spinner" aria-hidden />
+              <p>Fetching transcript…</p>
+            </div>
+          )}
+          {total === 0 && draftRoute && (
+            <div className="chat-empty">
+              <p className="chat-empty-title">Start a new session</p>
+              <p className="chat-empty-sub">
+                Choose the <b>node</b> to run on in the header, then the{" "}
+                <b>agent</b> and <b>model</b> below. Describe your task to
+                begin.
+              </p>
+              <p className="chat-empty-sub chat-empty-note">
+                You can switch the model at any time, or hand off to a new
+                agent to continue in a fresh session.
+              </p>
+            </div>
+          )}
+          {start > 0 && (
+            <button
+              className="load-earlier"
+              onClick={() => setLimit((n) => n + WINDOW_STEP)}
+            >
+              ↑ Show earlier messages ({start} more)
+            </button>
+          )}
+          {items.map((it) =>
+            it.kind === "tools" ? (
+              <ToolGroup key={it.key} tools={it.tools} />
+            ) : (
+              <EntryView key={it.key} entry={it.entry} onAction={onAction} />
+            ),
+          )}
+          {working && (
+            <div className="working-row">
+              <span className="working-dots" aria-hidden>
+                <i />
+                <i />
+                <i />
+              </span>
+              <span className="working-label">{workingLabel || "working…"}</span>
+            </div>
+          )}
+          {footer}
+        </div>
+      </div>
+      {!pinned && total > 0 && (
+        <button className="jump-latest" onClick={jumpToLatest} aria-label="Jump to latest">
+          ↓ Latest
+        </button>
+      )}
+    </div>
+  );
+}

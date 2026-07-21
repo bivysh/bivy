@@ -1,0 +1,11 @@
+# Replace the domains below with yours. Caddy fetches Let's Encrypt certs
+# automatically, giving you real https:// and wss:// (WebSocket over TLS).
+
+app.example.com {
+	reverse_proxy control-plane:4400
+}
+
+relay.example.com {
+	# WebSocket upgrades are proxied transparently by Caddy.
+	reverse_proxy relay:4500
+}

@@ -1,0 +1,19 @@
+# Example Caddyfile for a SHARDED relay fleet (docs/scaling.md).
+# Pair with deploy/docker-compose.shards.example.yml and set in .env:
+#   RELAY_SHARD_URLS=wss://relay-0.bivy.sh,wss://relay-1.bivy.sh
+#
+# Each public relay hostname maps to one relay container. The control plane hands
+# each node/client the hostname for its shard; Caddy just terminates TLS and
+# proxies each hostname to the matching container.
+
+app.bivy.sh {
+	reverse_proxy control-plane:4400
+}
+
+relay-0.bivy.sh {
+	reverse_proxy relay:4500
+}
+
+relay-1.bivy.sh {
+	reverse_proxy relay-1:4500
+}

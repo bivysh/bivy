@@ -1,0 +1,73 @@
+{
+  "name": "bivy",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "FSL-1.1-ALv2",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "bin": {
+    "bivy": "bin/bivy.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepare": "node scripts/disable-git-hooks.mjs",
+    "setup": "node bin/bivy.mjs setup",
+    "bivy": "node bin/bivy.mjs",
+    "dev": "tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "agent-service": "tsx src/runtime/agent-service-bin.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "build:web": "npm run build -w @bivy/web",
+    "dev:web": "npm run dev -w @bivy/web",
+    "test:core": "npm run test -w @bivy/core",
+    "typecheck:web": "npm run typecheck -w @bivy/core && npm run typecheck -w @bivy/web",
+    "check:licenses": "node scripts/check-licenses.mjs",
+    "check:secrets": "node scripts/secret-scan.mjs",
+    "build:release": "node scripts/build-release.mjs",
+    "publish:npm": "node scripts/build-release.mjs --publish",
+    "publish:npm:dry": "node scripts/build-release.mjs --publish --dry-run",
+    "test:remote": "tsx test/remote-e2e.ts",
+    "test:unit": "node scripts/run-tests.mjs",
+    "test:browser": "playwright test",
+    "agent": "tsx src/native-pi.ts",
+    "agent:login": "tsx src/native-pi.ts /login",
+    "agent:config": "tsx src/native-pi.ts config",
+    "agent:list": "tsx src/native-pi.ts list",
+    "agent:update": "tsx src/native-pi.ts update",
+    "pi": "tsx src/native-pi.ts",
+    "pi:login": "tsx src/native-pi.ts /login",
+    "pi:config": "tsx src/native-pi.ts config",
+    "pi:list": "tsx src/native-pi.ts list",
+    "pi:update": "tsx src/native-pi.ts update",
+    "relay:setup": "node bin/bivy.mjs relay:setup"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.199",
+    "@earendil-works/pi-ai": "0.80.9",
+    "@earendil-works/pi-coding-agent": "0.80.9",
+    "express": "^5.2.1",
+    "node-pty": "^1.1.0",
+    "typebox": "^1.2.16",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.61.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.3",
+    "@types/ws": "^8.18.1",
+    "eslint": "^10.6.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "heroicons": "^2.2.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.63.0"
+  }
+}

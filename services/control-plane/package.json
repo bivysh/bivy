@@ -1,0 +1,28 @@
+{
+  "name": "bivy-control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hostable/Bivy Cloud control plane: accounts, node registry, entitlements, billing hooks. Data plane lives in the node daemon.",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "tsx test/store.test.ts && tsx test/store-contract.test.ts && tsx test/session-index.test.ts && tsx test/session-count.test.ts && tsx test/relay-shards.test.ts && tsx test/redirect.test.ts && tsx test/webhooks.test.ts && tsx test/billing-lifecycle.test.ts && tsx test/push-entitlements.test.ts && tsx test/notification-preferences.test.ts"
+  },
+  "dependencies": {
+    "@types/web-push": "^3.6.4",
+    "express": "^5.2.1",
+    "pg": "^8.22.0",
+    "pg-mem": "^3.0.14",
+    "stripe": "^22.2.2",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.0.0",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

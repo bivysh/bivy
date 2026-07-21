@@ -1,0 +1,127 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (c) 2026 Petter André Sjulstad
+import path from "node:path";
+
+/**
+ * The autonomy boundary.
+ *
+ * Bivy runs agents without per-action approval by default. Safety comes not from
+ * prompting on every tool call but from a hard floor that holds in *every* mode:
+ * catastrophic commands and writes outside the workspace are blocked outright.
+ * Above that floor, `approvalMode` decides how chatty to be.
+ *
+ * Pure functions only (no daemon state) so they are unit-testable in isolation —
+ * see `test/autonomy.test.ts`.
+ */
+
+export type ApprovalMode = "never" | "risky" | "always" | "autonomous";
+export type GuardDecision = "allow" | "ask" | "deny";
+
+export function bashCommand(input: unknown): string {
+  if (!input || typeof input !== "object") return "";
+  const command = (input as { command?: unknown }).command;
+  return typeof command === "string" ? command : "";
+}
+
+/** Heuristic for the legacy "risky" mode (prompt-heavy). */
+export function looksRiskyBash(command: string): boolean {
+  const normalized = command.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    /(^|[;&|()\s])(rm|rmdir|mv|cp|chmod|chown|dd|mkfs|sudo|su|kill|pkill|curl|wget|git\s+(commit|push|reset|clean|checkout|switch|merge|rebase)|npm\s+(install|update|publish)|pnpm\s+(install|update|publish)|yarn\s+(add|install|upgrade|publish))([;&|()\s]|$)/.test(normalized) ||
+    /(^|\s)(>|>>|2>|&>|tee\s+)/.test(normalized)
+  );
+}
+
+/**
+ * Catastrophic, irreversible, system-wide actions. Blocked OUTRIGHT in every mode
+ * — the boundary that makes unattended autonomy safe rather than reckless.
+ */
+export function looksCatastrophic(command: string): boolean {
+  const c = command.trim().toLowerCase();
+  if (!c) return false;
+  return (
+    /\brm\s+(-\S*[rf]\S*\s+)+(\/|~|\$home|\/\*)(\s|$|\/)/.test(c) || // rm -rf / | ~ | /*
+    /\bmkfs(\.\w+)?\b/.test(c) ||
+    /\bdd\b[^\n]*\bof=\/dev\/(sd|nvme|hd|disk)/.test(c) ||
+    />\s*\/dev\/(sd|nvme|hd|disk)/.test(c) ||
+    /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/.test(c) || // fork bomb
+    /\bchmod\s+-\S*r\S*\s+777\s+\/(\s|$)/.test(c) ||
+    /(^|[;&|]\s*)(shutdown|reboot|halt|poweroff)\b/.test(c)
+  );
+}
+
+/**
+ * Irreversible / outward-facing actions that pause for a human even in autonomous
+ * mode (the "backstop"): publishing, deploying, force-pushing, pushing to the
+ * default branch, privilege escalation.
+ */
+export function looksBackstop(command: string): boolean {
+  const c = command.trim().toLowerCase();
+  if (!c) return false;
+  return (
+    /\bgit\s+push\b[^\n]*(--force|--force-with-lease|\s-f\b)/.test(c) ||
+    /\bgit\s+push\b[^\n]*\b(main|master)\b/.test(c) ||
+    /\bnpm\s+publish\b/.test(c) ||
+    /\b(kubectl\s+apply|terraform\s+apply|docker\s+push|fly\s+deploy|vercel\s+(deploy|--prod)|netlify\s+deploy|gh\s+release\s+create)\b/.test(c) ||
+    /(^|[;&|]\s*)(mail|mailx|sendmail|ssmtp)\b/.test(c) || // send email from the shell
+    /(^|[;&|]\s*)sudo\b/.test(c)
+  );
+}
+
+/** Extract a filesystem path from a write/edit tool input, if present. */
+export function toolPath(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const o = input as Record<string, unknown>;
+  for (const key of ["path", "file_path", "filePath", "file"]) {
+    if (typeof o[key] === "string" && o[key]) return o[key] as string;
+  }
+  return undefined;
+}
+
+/** True if `p` resolves outside `workspace` (so a write there escapes the boundary). */
+export function pathEscapesWorkspace(workspace: string, p: string): boolean {
+  const root = path.resolve(workspace);
+  const abs = path.resolve(root, p);
+  return abs !== root && !abs.startsWith(root + path.sep);
+}
+
+/**
+ * Decide what to do with a tool call. The hard floor (catastrophic commands,
+ * writes outside the session workspace) applies in every mode. Above that floor,
+ * `mode` decides how often to prompt.
+ */
+export function guardToolCall(
+  workspace: string,
+  toolName: string,
+  input: unknown,
+  mode: ApprovalMode,
+  isRiskyIntegration: (tool: string) => boolean,
+): { decision: GuardDecision; reason?: string } {
+  // --- Hard floor: blocked in every mode ---
+  if (toolName === "bash" && looksCatastrophic(bashCommand(input))) {
+    return { decision: "deny", reason: "Blocked: catastrophic command (outside the safety boundary)" };
+  }
+  if (toolName === "write" || toolName === "edit") {
+    const p = toolPath(input);
+    if (p && pathEscapesWorkspace(workspace, p)) {
+      return { decision: "deny", reason: "Blocked: write outside the workspace boundary" };
+    }
+  }
+
+  if (mode === "never") return { decision: "allow" };
+
+  // Integration tools flagged risky (send email, upload, ...) always confirm.
+  if (isRiskyIntegration(toolName)) return { decision: "ask" };
+
+  if (mode === "autonomous") {
+    if (toolName === "bash" && looksBackstop(bashCommand(input))) return { decision: "ask" };
+    return { decision: "allow" };
+  }
+  if (mode === "always") {
+    return { decision: ["bash", "write", "edit"].includes(toolName) ? "ask" : "allow" };
+  }
+  // "risky"
+  if (toolName === "bash") return { decision: looksRiskyBash(bashCommand(input)) ? "ask" : "allow" };
+  return { decision: ["write", "edit"].includes(toolName) ? "ask" : "allow" };
+}
