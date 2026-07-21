@@ -78,21 +78,49 @@ function isRecord(value: unknown): value is LogRecord {
  */
 export function foldIntermediate(entries: readonly EventLogEntry[]): EventLogEntry[] {
   const out: EventLogEntry[] = [];
+  // Index by id and by anchor (afterMessageCount + normalized text) so each entry
+  // costs a hash lookup instead of a linear scan, and sort once at the end instead
+  // of on every iteration. Scanning a *sorted* array was never load-bearing: the
+  // id lookup is unique, and the dup merge below keeps `out` free of two entries
+  // sharing an anchor, so at most one candidate can ever match.
+  const byId = new Map<unknown, number>();
+  const byAnchor = new Map<string, number>();
+  // The anchor each `out` slot currently occupies, so an in-place replacement can
+  // re-key itself — a streaming delta arrives under the same id with grown text.
+  const anchorAt: string[] = [];
+  // NUL separates the two fields: normalizedIntermediateText collapses all
+  // whitespace, so the text side can never contain one and two distinct
+  // (count, text) pairs can never collide on the same key.
+  const anchorOf = (entry: EventLogEntry): string => {
+    const text = normalizedIntermediateText(thinkingTextFromContent(entry.content));
+    return text ? `${entry.afterMessageCount}\u0000${text}` : "";
+  };
   for (const entry of entries) {
-    const entryText = normalizedIntermediateText(thinkingTextFromContent(entry.content));
-    const index = out.findIndex((m) => m.id != null && m.id === entry.id);
-    if (index >= 0) {
+    const index = entry.id != null ? byId.get(entry.id) : undefined;
+    if (index !== undefined) {
+      const prev = anchorAt[index]!;
+      if (prev && byAnchor.get(prev) === index) byAnchor.delete(prev);
       out[index] = entry;
-    } else {
-      const dup = entryText
-        ? out.findIndex((m) => m.id !== entry.id && m.afterMessageCount === entry.afterMessageCount && normalizedIntermediateText(thinkingTextFromContent(m.content)) === entryText)
-        : -1;
-      if (dup >= 0) out[dup] = { ...out[dup], ...entry, id: out[dup]!.id, createdAt: Math.min(out[dup]!.createdAt, entry.createdAt) };
-      else out.push(entry);
+      const next = anchorOf(entry);
+      anchorAt[index] = next;
+      if (next && !byAnchor.has(next)) byAnchor.set(next, index);
+      continue;
     }
-    out.sort((a, b) => a.afterMessageCount - b.afterMessageCount || a.createdAt - b.createdAt);
+    const anchor = anchorOf(entry);
+    const dup = anchor ? byAnchor.get(anchor) : undefined;
+    if (dup !== undefined && out[dup]!.id !== entry.id) {
+      // Same text at the same anchor under a different id: merge onto the first,
+      // keeping its id and the earlier createdAt. The anchor is unchanged by
+      // construction (we matched on it), so no re-keying is needed here.
+      out[dup] = { ...out[dup], ...entry, id: out[dup]!.id, createdAt: Math.min(out[dup]!.createdAt, entry.createdAt) };
+      continue;
+    }
+    const at = out.push(entry) - 1;
+    anchorAt[at] = anchor;
+    if (entry.id != null) byId.set(entry.id, at);
+    if (anchor && !byAnchor.has(anchor)) byAnchor.set(anchor, at);
   }
-  return out;
+  return out.sort((a, b) => a.afterMessageCount - b.afterMessageCount || a.createdAt - b.createdAt);
 }
 
 /**
@@ -101,15 +129,25 @@ export function foldIntermediate(entries: readonly EventLogEntry[]): EventLogEnt
  * `afterMessageCount` then `createdAt`; keep only the most recent 500.
  */
 export function foldTool(entries: readonly EventLogEntry[]): EventLogEntry[] {
-  let out: EventLogEntry[] = [];
+  const out: EventLogEntry[] = [];
+  // Merge by id through a Map, then sort and cap ONCE. The sort and the 500-cap
+  // used to run per entry, making this O(n² log n) — the dominant cost of building
+  // a history event for a long session. Merging is purely by (unique) id, so array
+  // order never affected the result and hoisting the sort is behaviour-preserving.
+  // Capping at the end is also strictly more faithful to "keep the most recent
+  // 500": capping inside the loop could drop an entry that a later record would
+  // have merged into, which then reappeared as a duplicate.
+  const byId = new Map<unknown, number>();
   for (const entry of entries) {
-    const index = out.findIndex((m) => m.id != null && m.id === entry.id);
-    if (index >= 0) out[index] = { ...out[index], ...entry };
-    else out.push(entry);
-    out.sort((a, b) => a.afterMessageCount - b.afterMessageCount || a.createdAt - b.createdAt);
-    out = out.slice(-500);
+    const index = entry.id != null ? byId.get(entry.id) : undefined;
+    if (index !== undefined) out[index] = { ...out[index], ...entry };
+    else {
+      const at = out.push(entry) - 1;
+      if (entry.id != null) byId.set(entry.id, at);
+    }
   }
-  return out;
+  out.sort((a, b) => a.afterMessageCount - b.afterMessageCount || a.createdAt - b.createdAt);
+  return out.length > 500 ? out.slice(-500) : out;
 }
 
 /**
