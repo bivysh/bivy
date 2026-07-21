@@ -89,6 +89,7 @@ jobs:
       # excluded here: the public repo starts from a fresh commit, and scanning
       # every historical patch on each CI run is slow and noisy.
       - run: npm run check:secrets -- --current-only
+      - run: npm run check:version
       - run: npm run lint
       - run: npm run typecheck
       # Typecheck + test the web client packages (@bivy/core / @bivy/web). These
