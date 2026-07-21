@@ -836,14 +836,30 @@ export class AppController {
     // transcript. Without this the previous session's messages linger (or the
     // pane blanks) until the network answers.
     this.store.beginOpen(sessionId);
-    this.send({ kind: "session.open", sessionId, path });
     // Seed from the persistent cache first (paints even before the node answers),
-    // then request history with the cursor so the node sends only the new tail.
-    void this.seedAndRequestHistory(sessionId);
+    // then open + request history with the cursor so the node sends only the new tail.
+    void this.seedAndOpen(sessionId, path);
   }
 
-  /** Preload the persisted transcript, then request history echoing its cursor. */
-  private async seedAndRequestHistory(sessionId: string): Promise<void> {
+  /**
+   * Preload the persisted transcript, then send `session.open` echoing the cursor
+   * that seed produced, and finally request history.
+   *
+   * The seed MUST come first. The node answers `session.open` with a
+   * `session.history` built from whatever cursor the message carries, and a
+   * cursor-less open forces `mode: "full"` — the entire transcript, sent *twice*
+   * (once for the fast on-disk paint, again after the runtime resume). On a long
+   * session that is several MB per copy, which over the relay is exactly the
+   * multi-second gap between the cached transcript painting and the newest
+   * messages landing — even though the client already holds all but the tail in
+   * IndexedDB. Echoing the cached cursor collapses both sends to an empty-or-short
+   * append.
+   *
+   * Safe by construction: the node hash-validates the cursor against its own
+   * messages and falls back to a full send on any mismatch (see history-sync.ts),
+   * so a stale, truncated or corrupt cache costs a round trip, never correctness.
+   */
+  private async seedAndOpen(sessionId: string, path?: string): Promise<void> {
     try {
       const cached = await this.transcriptCache.get(sessionId);
       // A slow disk read must not clobber a session the user already switched away from.
@@ -854,8 +870,9 @@ export class AppController {
         this.store.seedHistory(sessionId, cached.messages, cached.count, cached.historyHash);
       }
     } catch {
-      /* cache miss / unavailable — fall through to a full history request */
+      /* cache miss / unavailable — the empty cursor below asks for a full send */
     }
+    this.send({ kind: "session.open", sessionId, path, ...this.store.getHistoryCursor(sessionId) });
     this.requestHistory(sessionId);
   }
 
