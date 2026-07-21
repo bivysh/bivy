@@ -2,13 +2,10 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { SecretVault } from "./secrets.js";
+import { resolveDataDir } from "./data-dir.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
-const appDir = process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy");
+const appDir = resolveDataDir();
 const vault = new SecretVault(appDir);
 
 async function askHidden(question: string): Promise<string> {

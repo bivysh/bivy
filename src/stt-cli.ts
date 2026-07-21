@@ -8,8 +8,7 @@
 
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolveDataDir } from "./data-dir.js";
 import {
   STT_PROVIDERS,
   getSttConfig,
@@ -22,9 +21,7 @@ import {
   type SttProvider,
 } from "./stt.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
-const appDir = process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy");
+const appDir = resolveDataDir();
 
 async function askHidden(question: string): Promise<string> {
   if (!input.isTTY) {

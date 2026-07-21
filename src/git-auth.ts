@@ -11,15 +11,17 @@
 // since both run under a live daemon.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { resolveDataDir } from "./data-dir.js";
 
 // Set by configureGitAuth() at daemon startup. Falls back to BIVY_DATA_DIR / the
-// default data dir so the module still works in tests and one-off scripts.
+// default data dir (src/data-dir.ts — shared with secrets.ts, the server, and
+// the agent service so they can never disagree on the root) so the module
+// still works in tests and one-off scripts.
 let credRootOverride: string | null = null;
 
 function dataDir(): string {
-  return process.env.BIVY_DATA_DIR ? path.resolve(process.env.BIVY_DATA_DIR) : path.join(os.homedir(), ".bivy");
+  return resolveDataDir();
 }
 function credDir(): string {
   return credRootOverride ?? path.join(dataDir(), "git-cred");
@@ -122,12 +124,24 @@ export function writeGitCredentialEndpoint(url: string, secret: string): void {
  * `-c` flags that make a single git invocation use the helper for github.com with
  * the repo path (so the helper can resolve owner/repo). Non-secret (only the
  * helper's path). Use for daemon-run clone/fetch/push against a clean URL.
+ *
+ * The empty `credential.https://github.com.helper=` entry BEFORE the real one
+ * resets git's helper list for that URL (documented behavior — see
+ * gitcredentials(7)) so this invocation only ever asks OUR helper, never
+ * whatever a system/global/repo-local config happens to already have
+ * configured for github.com (e.g. a stale entry left by a previous clone, or —
+ * on a machine that also runs a real Bivy daemon — that daemon's own helper).
+ * Without the reset, git asks every configured helper in turn, and an ambient
+ * one that answers first wins even though it was never asked for by this
+ * invocation.
  */
 export function credConfigArgs(): string[] {
   const helper = ensureCredentialHelper();
   return [
     "-c",
     "credential.https://github.com.useHttpPath=true",
+    "-c",
+    "credential.https://github.com.helper=",
     "-c",
     `credential.https://github.com.helper=${helper}`,
   ];

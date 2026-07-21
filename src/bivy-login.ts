@@ -4,14 +4,12 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { fileURLToPath } from "node:url";
 import { createCredentialVault } from "./runtime/credential-store.js";
 import { listPiProviders } from "./runtime/pi-oauth.js";
 import { loginModelOAuth, type AuthInteraction, type AuthPrompt, type AuthEvent } from "./runtime/oauth/model-oauth.js";
+import { resolveDataDir } from "./data-dir.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
-const dataDir = process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy");
+const dataDir = resolveDataDir();
 const piDir = path.join(dataDir, "pi");
 // The shared, agent-neutral credential vault (not inside any agent's dir).
 const credsDir = path.join(dataDir, "credentials");

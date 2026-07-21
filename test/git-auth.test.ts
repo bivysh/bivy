@@ -26,6 +26,11 @@ async function check(name: string, fn: () => void | Promise<void>) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-git-auth-"));
 const dataDir = path.join(tmp, "data");
 fs.mkdirSync(dataDir, { recursive: true });
+// Set BIVY_DATA_DIR too (not just the configureGitAuth override below) so this
+// process's data dir is isolated end to end — any code path that falls back to
+// the shared default (src/data-dir.ts) rather than an explicit override still
+// lands in this tmp dir, not a real install's.
+process.env.BIVY_DATA_DIR = dataDir;
 configureGitAuth(dataDir);
 
 // A stub of the daemon's loopback git-credential endpoint. Records each request
@@ -62,9 +67,20 @@ writeGitCredentialEndpoint(endpointUrl, SECRET);
 // to serve the stub endpoint while the credential helper calls it — mirroring the
 // daemon, which spawns git via async execFile. A synchronous git call would
 // deadlock: the in-process stub couldn't answer the helper mid-call.
-function git(args: string[], input?: string): Promise<string> {
+//
+// cwd defaults to `tmp` — NOT this test process's own cwd — so a bare `git
+// credential fill` (no `-C <repo>`, used below) never picks up this checkout's
+// own repository-local git config. On a machine that also runs a real Bivy
+// daemon managing this very checkout (e.g. self-hosted CI), that local config
+// legitimately points `credential.https://github.com.helper` at the daemon's
+// real credential helper; git consults every configured helper for a matching
+// URL in turn, so without this the real helper would answer ahead of (or
+// alongside) the fake one this test configures below, leaking a real token
+// into what should be an isolated test. `tmp` is a plain directory, not a git
+// repo, so no repo-local config exists there to consult.
+function git(args: string[], input?: string, cwd: string = tmp): Promise<string> {
   return new Promise((resolve, reject) => {
-    const cp = execFile("git", args, { encoding: "utf8" }, (err, stdout) => {
+    const cp = execFile("git", args, { encoding: "utf8", cwd }, (err, stdout) => {
       if (err) reject(Object.assign(err as Error, { stdout }));
       else resolve(stdout);
     });

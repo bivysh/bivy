@@ -9,7 +9,7 @@
  * docs/agent-runtime-rpc.md).
  *
  *   BIVY_AGENT_SERVICE_LISTEN            where to listen: "unix:/path.sock" | "PORT" | "host:PORT"
- *   BIVY_DATA_DIR                        data dir (defaults to <cwd>/.bivy), same as the daemon
+ *   BIVY_DATA_DIR                        data dir (defaults to <install>/.bivy, src/data-dir.ts), same as the daemon
  *   BIVY_REMOTE_RUNTIME_DETACH_REAP_MS   optional: reap a detached, idle session after this many ms (off by default)
  *
  * Dev:  tsx src/runtime/agent-service-bin.ts
@@ -29,6 +29,7 @@ import { encodeFrame, FrameDecoder, type ClientMessage } from "./rpc-protocol.js
 import { parseRemoteAddress } from "./remote.js";
 import { makeRuntime, type AgentRuntime } from "./index.js";
 import type { SandboxTier } from "../harness/sandbox.js";
+import { resolveDataDir } from "../data-dir.js";
 
 /** Adapt a raw socket to the transport-agnostic ServiceConnection. */
 export function socketConnection(socket: net.Socket): ServiceConnection {
@@ -89,7 +90,12 @@ export function startAgentServiceServer(options: ServiceServerOptions): Promise<
 
 /** Build the default runtime provider backed by the real runtime registry. */
 export function defaultRuntimeProvider(): (runtimeId: string, sandbox?: string) => AgentRuntime {
-  const appDir = process.env.BIVY_DATA_DIR ?? path.join(process.cwd(), ".bivy");
+  // Shared default with the daemon (src/server.ts) and git-auth.ts / secrets.ts
+  // (src/data-dir.ts) — this process runs separately from the daemon, so if it
+  // fell back to its own cwd-relative default instead, a daemon + agent-service
+  // pair launched from different working directories would silently read/write
+  // two different credential vaults (credsDir, below) for model provider auth.
+  const appDir = resolveDataDir();
   const piDir = path.join(appDir, "pi");
   const sessionsDir = path.join(piDir, "sessions");
   // The shared, agent-neutral credential vault (not inside any agent's dir).

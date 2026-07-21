@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { resolveDataDir } from "./data-dir.js";
 
 const exec = promisify(execFile);
 
@@ -32,7 +33,10 @@ function empty(): SecretFile { return { version: 1, records: {} }; }
 
 export function defaultSecretsDir(appDir?: string) {
   if (appDir) return appDir;
-  return process.env.BIVY_DATA_DIR || path.join(process.cwd(), ".bivy");
+  // Shared with git-auth.ts / server.ts / agent-service-bin.ts (src/data-dir.ts)
+  // so the secret vault and the git credential helper always agree on the data
+  // dir root when neither is given an explicit appDir.
+  return resolveDataDir();
 }
 
 export function normalizeSecretId(id: string): string {

@@ -3,9 +3,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { connectRepoScope, deviceFlowClientId } from "./github-device-auth.js";
 import { SecretVault } from "./secrets.js";
+import { resolveDataDir } from "./data-dir.js";
 
 /**
  * `bivy github:connect` — staged repo-scope authorization (C3).
@@ -18,9 +18,7 @@ import { SecretVault } from "./secrets.js";
  * involved, so it never sees the token.
  */
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
-const appDir = process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy");
+const appDir = resolveDataDir();
 const cliConfigPath = path.join(appDir, "cli.json");
 
 function openBrowser(target: string): void {

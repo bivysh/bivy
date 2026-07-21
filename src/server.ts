@@ -60,6 +60,7 @@ import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type Sandb
 import { injectMcpProxyForSession } from "./harness/mcp-inject.js";
 import { parseRepo, inferGitHubRepoFromWorkspace, resolveGitHubToken, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
+import { resolveDataDir } from "./data-dir.js";
 import {
   GitHubTaskPoller,
   resolveGitHubTaskConfig,
@@ -134,7 +135,10 @@ const repoRoot = path.resolve(__dirname, "..");
 // running from source. Packaged/release builds may override them (BIVY_ASSET_ROOT,
 // BIVY_DATA_DIR) so it can write outside the read-only app bundle.
 const assetRoot = process.env.BIVY_ASSET_ROOT ?? repoRoot;
-const appDir = process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy");
+// Shared default with git-auth.ts / secrets.ts / agent-service-bin.ts
+// (src/data-dir.ts) — resolves to the same `<repoRoot>/.bivy` as before here,
+// but keeps the fallback in one place so those modules can't drift from it.
+const appDir = resolveDataDir();
 // Load persisted env from cli.json into process.env so config written there —
 // e.g. connecting a GitHub App (BIVY_GITHUB_APP_ID / BIVY_GITHUB_HOSTED_TASKS /
 // BIVY_NODE_LABEL) — takes effect on the NEXT restart even if the service

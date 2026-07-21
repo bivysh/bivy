@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { SecretVault } from "./secrets.js";
+import { resolveDataDir } from "./data-dir.js";
 import { privateKeyIdFor, upsertGitHubApp } from "./github-apps.js";
 import { createAppJwt } from "./github-app-auth.js";
 
@@ -43,9 +43,7 @@ async function fetchAppIdentity(appId: string, privateKeyPem: string): Promise<{
  *                           [--label bivy] [--node-label <name>]
  */
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
-const appDir = process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy");
+const appDir = resolveDataDir();
 const cliConfigPath = path.join(appDir, "cli.json");
 const relayConfigPath = path.join(appDir, "relay.json");
 
