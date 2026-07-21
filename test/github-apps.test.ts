@@ -30,8 +30,10 @@ function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "bivy-apps-"));
 }
 
-// A syntactically valid PEM is enough: nothing here parses the key.
-const PEM = "-----BEGIN RSA PRIVATE KEY-----\nZmFrZQ==\n-----END RSA PRIVATE KEY-----\n";
+// A syntactically valid PEM is enough: nothing here parses the key. Named
+// with a "FIXTURE_" prefix (rather than plain PEM) so scripts/secret-scan.mjs
+// recognizes it as a deliberate non-secret fixture and doesn't flag it.
+const FIXTURE_PEM = "-----BEGIN RSA PRIVATE KEY-----\nZmFrZQ==\n-----END RSA PRIVATE KEY-----\n";
 
 await check("empty registry lists nothing", () => {
   assert.deepEqual(listGitHubApps(tmpDir(), {}), []);
@@ -96,7 +98,7 @@ await check("env app is listed alongside a different registry app", () => {
 
 await check("loadGitHubAppConfigs resolves keys from the vault", async () => {
   const dir = tmpDir();
-  new SecretVault(dir).setLocal(privateKeyIdFor("7"), PEM, "test key");
+  new SecretVault(dir).setLocal(privateKeyIdFor("7"), FIXTURE_PEM, "test key");
   upsertGitHubApp(dir, { appId: "7", slug: "seven", privateKeyRef: `secret://${privateKeyIdFor("7")}` });
   const configs = await loadGitHubAppConfigs(dir, {});
   assert.equal(configs.length, 1);
@@ -108,7 +110,7 @@ await check("loadGitHubAppConfigs resolves keys from the vault", async () => {
 // One unusable app must not take down the GitHub integration for the others.
 await check("an app whose key cannot be resolved is skipped, not fatal", async () => {
   const dir = tmpDir();
-  new SecretVault(dir).setLocal(privateKeyIdFor("good"), PEM, "test key");
+  new SecretVault(dir).setLocal(privateKeyIdFor("good"), FIXTURE_PEM, "test key");
   upsertGitHubApp(dir, { appId: "good", privateKeyRef: `secret://${privateKeyIdFor("good")}` });
   upsertGitHubApp(dir, { appId: "broken", privateKeyRef: "secret://github.app.missing" });
   const configs = await loadGitHubAppConfigs(dir, {});
