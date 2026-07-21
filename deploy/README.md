@@ -77,30 +77,46 @@ openssl rand -base64 32   # POSTGRES_PASSWORD
 Caddy obtains Let's Encrypt certificates automatically, so you get real
 `https://` and `wss://` with no extra steps.
 
-## 3. Continuous deployment (optional)
+## 3. GitHub Actions deployment pipeline
 
-Bivy does not ship a production deploy workflow in this repository. Deploying a
-self-hosted control plane and relay is your own operation, and the shape of it
-depends entirely on where you run it.
+This repo includes `.github/workflows/deploy-staging.yml`.
 
-If you want CI-driven deploys, a workflow that does the following is enough:
+Add these GitHub repo secrets:
 
-1. run typechecks and the relay + remote-path e2e tests,
-2. verify the target directory exists and is writable by the deploy user,
-3. rsync (or `git pull`) the repo onto the host,
-4. run `docker compose -f deploy/docker-compose.yml up -d --build`.
+- `HETZNER_HOST` — server IP or hostname
+- `HETZNER_USER` — `github` for this setup
+- `HETZNER_SSH_KEY` — private key allowed to SSH into the server
+- `RELAY_SECRET` — shared relay/control-plane secret
+- `POSTGRES_PASSWORD` — Postgres password
 
-The secrets such a workflow needs are the same ones `deploy/.env` needs --
-`RELAY_SECRET`, `POSTGRES_PASSWORD`, your domains, and whichever of the email,
-OAuth, and Stripe values you actually use. Keep them in your CI provider's secret
-store, never in the repository.
+Optional GitHub Environment vars/secrets:
 
-> Self-hosting is unsupported: no SLA, community best-effort via GitHub issues.
-> You own TLS, backups, upgrades, and hardening.
+- `CP_DOMAIN` — defaults to `app.bivy.sh`
+- `RELAY_DOMAIN` — defaults to `relay.bivy.sh`
+- `AUTH_EMAIL_FROM`, `RESEND_API_KEY`
+- `BIVY_GITHUB_OAUTH_CLIENT_ID`, `BIVY_GITHUB_OAUTH_CLIENT_SECRET`
+- Stripe keys/prices and entitlement toggles
+
+On push to `main`, the workflow:
+
+1. runs root/control-plane/relay typechecks,
+2. runs relay + remote-path e2e tests,
+3. verifies `/opt/bivy` exists and is writable by `HETZNER_USER`,
+4. rsyncs the repo to `/opt/bivy`,
+5. runs `deploy/staging-deploy.sh`, which executes Docker Compose.
+
+Manual deploys are also available from GitHub Actions via **Run workflow**.
 
 ## 4. Manual deploy command
 
-On the server, from the directory you deployed into:
+On the server:
+
+```bash
+cd /opt/bivy
+bash deploy/staging-deploy.sh
+```
+
+Or, directly:
 
 ```bash
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build --remove-orphans

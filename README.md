@@ -23,9 +23,20 @@ curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
 macOS and Linux. Requires Node 22.19 or newer; the installer sets it up if
-missing. It installs Bivy, then runs the guided `bivy setup` wizard — workspace,
-model login, optional remote access, and an auto-start background service
-(launchd on macOS, systemd on Linux).
+missing. It installs the [`bivy`](https://www.npmjs.com/package/bivy) package
+from npm, then runs the guided `bivy setup` wizard — workspace, model login,
+optional remote access, and an auto-start background service (launchd on macOS,
+systemd on Linux).
+
+Already have Node? The installer is optional:
+
+```bash
+npm install -g bivy
+bivy setup
+```
+
+Releases are published from CI with provenance attestations; verify with
+`npm audit signatures`. See [`docs/releasing.md`](docs/releasing.md).
 
 Already have the repository checked out:
 

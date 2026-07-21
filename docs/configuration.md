@@ -66,7 +66,6 @@ process, so the daemon, agents and helper scripts all agree.
 | `node.json` | Stable node identity (id, name) | The node |
 | `pairing.json` | Paired remote devices | The node |
 | `metadata.json` | Cross-agent session index | The node |
-| `install.json` | Release manifest of the installed build | `install.sh` |
 | `integrations.json` | Connected third-party integrations | The node |
 | `credentials/` | Shared, agent-neutral model credential vault (`auth.enc`, `auth.key`) | `bivy login`, the web app |
 | `pi/` | Pi's own config, `models.json` projection, and sessions | Pi |
@@ -301,7 +300,7 @@ The hosted endpoints all derive from one domain, so you normally set nothing.
 | `BIVY_NODE_LABEL` | label | unset | Supported override — an **extra** work-queue label this node serves, on top of `<base>` and `<base>/<node-name>`. Accepts `bivy/x` or a bare `x`. Rarely needed; the node name is used automatically |
 | `BIVY_URL` | URL | `http://localhost:<PORT>` | Supported — which node the `bivy exec` / attach clients talk to. `--url` wins |
 | `BIVY_DEVICE_TOKEN` | token | unset | Supported — bearer for those clients. `--token` wins |
-| `BIVY_UPDATE_MANIFEST_URL` | URL | `https://bivy.sh/downloads/bivy-latest.json` | Supported — release manifest the node polls for update notices |
+| `BIVY_UPDATE_REGISTRY_URL` | URL | `https://registry.npmjs.org/bivy/latest` | Supported — registry endpoint the node polls for update notices. Point at a mirror or private registry |
 | `BIVY_MODEL_CATALOG_URL` | URL | `https://bivy.sh/api/models/local-catalog.json` | Supported — remote local-model presets. Fetched best-effort with a 2.5 s timeout; failure is silent |
 
 ## GitHub work queue
@@ -497,13 +496,9 @@ Maintainer tooling. You do not need any of these to run Bivy.
 | Variable | Type | Default | Status |
 | --- | --- | --- | --- |
 | `BIVY_HOME` | path | `$HOME/.bivy/app` | Supported — install destination |
-| `BIVY_TARBALL_URL` | URL | `https://bivy.sh/downloads/bivy-latest.tar.gz` | Supported — mirror or private channel |
-| `BIVY_MANIFEST_URL` | URL | `https://bivy.sh/downloads/bivy-latest.json` | Supported |
+| `BIVY_VERSION` | npm version or dist-tag | `latest` | Supported — install a specific version, e.g. `0.1.0` |
+| `BIVY_NPM_PREFIX` | path | npm's global prefix | Supported — install into a user-owned prefix instead of needing sudo |
 | `BIVY_INSTALL_ALL_AGENTS` | `1` | unset | Supported — preinstall every bundled agent instead of just the one setup picks |
-| `BIVY_RELEASE_VERIFY_KEY_PEM` | Ed25519 public key PEM | the key embedded at build time | Maintainer / private channels |
-| `BIVY_EMBEDDED_RELEASE_VERIFY_KEY_PEM` | Ed25519 public key PEM | empty | Maintainer — seeds the line the release build replaces with a literal key |
-| `BIVY_ALLOW_UNSIGNED_MANIFEST` | `1` | unset | **Escape hatch** — skip the manifest signature check. The SHA-256 check still runs |
-| `BIVY_ALLOW_UNVERIFIED_INSTALL` | `1` | unset | **Escape hatch** — tolerate a missing manifest, a missing `sha256`, an empty manifest, and a missing verify key. A checksum *mismatch* is still fatal with no override |
 
 What `install.sh` does: installs prerequisites (including Node 22 via
 NodeSource on apt systems), downloads the tarball and manifest, verifies the
@@ -522,10 +517,6 @@ available.
 
 | Variable | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `BIVY_RELEASE_SIGNING_KEY_PEM` | Ed25519 private key PEM | `""` | Signs the release manifest. Without it the manifest is written **unsigned** |
-| `BIVY_RELEASE_SIGNING_KEY_FILE` | path | `""` | File form, used only when `_PEM` is empty |
-| `BIVY_RELEASE_VERIFY_KEY_PEM` | Ed25519 public key PEM | `""` | Baked into the served `site/install.sh`. Without it the served installer ships an empty embedded key |
-| `BIVY_RELEASE_VERIFY_KEY_FILE` | path | `""` | File form |
 
 Publishing is driven by flags, not environment: `--publish`, `--dry-run`.
 
@@ -557,4 +548,5 @@ For operators running the self-hosted stack on a box.
 | `BIVY_KEEP` | `prune-node-keep.sh` | integer ≥ 0 | `5` |
 | `DRY_RUN` | `prune-node-keep.sh` | `1` previews | `0` — **it deletes by default** |
 | `BIVY_PRUNE` | `self-host.sh` | `0` \| `1` \| unset | unset = prune only when a stack already exists |
+| `APP_DIR` | `staging-deploy.sh` | path | `/opt/bivy` |
 | `CP_DOMAIN`, `RELAY_DOMAIN` | `self-host.sh` | hostname | prompted |

@@ -17,31 +17,55 @@ The installer:
 1. checks for Node.js 22.19+ (on Debian/Ubuntu it can install it for you; on
    macOS it warns if Xcode Command Line Tools are missing, which the native
    `node-pty` module needs to build),
-2. downloads the prebuilt release **tarball** and installs it into `~/.bivy/app`
-   (staged first, so a failure leaves your existing install untouched; your
-   local state in `.bivy/` is preserved across updates),
-3. installs production dependencies (`npm ci --omit=dev`),
-4. symlinks a `bivy` command into `~/.local/bin`,
-5. launches the interactive `bivy setup` wizard (or, on an existing install,
-   restarts the service). Setup asks which agent you want as the default and
-   installs only that agent for a fast first run. Set `BIVY_INSTALL_ALL_AGENTS=1`
-   if you want the installer to preinstall every bundled runtime.
+2. runs `npm install -g bivy`,
+3. migrates state from a previous tarball install, if it finds one (see below),
+4. launches the interactive `bivy setup` wizard, or restarts the background
+   service on an existing install.
+
+Bivy is distributed on npm. npm verifies each package's integrity hash on
+install, and releases published from CI carry a provenance attestation you can
+check with `npm audit signatures`. See [releasing.md](releasing.md).
+
+If you already have Node.js 22.19+, the installer is optional:
+
+```bash
+npm install -g bivy
+bivy setup
+```
 
 Override defaults with environment variables:
 
 ```bash
-# Point at your own release artifact / install location:
-BIVY_TARBALL_URL=https://example.com/bivy-latest.tar.gz BIVY_HOME=~/.bivy/app \
-  bash install.sh
+# Install a specific version rather than the latest.
+BIVY_VERSION=0.1.0 bash install.sh
+
+# Install into a user-owned prefix instead of npm's global one (no sudo).
+BIVY_NPM_PREFIX=~/.local bash install.sh
+
+# Preinstall every bundled agent runtime rather than just your default.
+BIVY_INSTALL_ALL_AGENTS=1 bash install.sh
 ```
 
-`BIVY_MANIFEST_URL` overrides the checksum/signature manifest. The installer
-requires a manifest with a matching `sha256` by default and is wired to require
-an Ed25519 manifest signature for production releases. Until Bivy's production
-release public key is embedded in the served installer, trusted internal tests can
-set `BIVY_ALLOW_UNSIGNED_MANIFEST=1`; set `BIVY_ALLOW_UNVERIFIED_INSTALL=1` only
-for a fully trusted internal artifact. `BIVY_RELEASE_VERIFY_KEY_PEM` overrides
-the embedded public key for private/self-hosted release channels.
+If npm's global prefix isn't writable, the installer falls back to `~/.local`
+automatically rather than escalating with sudo — installing as root leaves files
+you can't update later without sudo.
+
+## Where your data lives
+
+Node state — config, node identity, relay keys, sessions, logs — lives in
+`~/.bivy`. The npm package directory is replaced on every update, so nothing
+durable is kept there.
+
+Installs created by the older tarball installer kept state *inside* the app
+directory at `~/.bivy/app/.bivy`. The installer moves it to `~/.bivy` once, and
+only when `~/.bivy/cli.json` doesn't already exist, so it can never overwrite
+newer state. The old tree is left in place; remove it when you're satisfied:
+
+```bash
+rm -rf ~/.bivy/app
+```
+
+Override the location with `BIVY_DATA_DIR`.
 
 ## The setup wizard
 

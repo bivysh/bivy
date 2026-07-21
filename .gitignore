@@ -10,6 +10,3 @@ test-results/
 packages/*/dist
 packages/*/node_modules
 .bivy-test-*
-site/install.sh
-site/downloads/bivy-latest.tar.gz
-site/downloads/bivy-latest.json

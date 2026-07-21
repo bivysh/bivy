@@ -180,7 +180,6 @@ const eventLogDir = path.join(appDir, "event-log");
 // session's stale file.
 const transcriptsDir = path.join(appDir, "transcripts");
 const settingsPath = path.join(appDir, "settings.json");
-const installInfoPath = path.join(appDir, "install.json");
 // Bivy owns the local/custom model registry (local-model-store.ts, PI-FREE).
 // `<appDir>/local-models.json` is the source of truth; Pi's own `models.json`
 // is a regenerated *projection* Pi reads as a downstream consumer — never the
@@ -323,7 +322,9 @@ async function persistLocalModelRemove(id: string): Promise<void> {
   void pushModelAuthToControlPlane().catch(() => {});
   await broadcastLocalModels();
 }
-const updateManifestUrl = process.env.BIVY_UPDATE_MANIFEST_URL ?? "https://bivy.sh/downloads/bivy-latest.json";
+// Bivy is distributed on npm, so "is there a newer version?" is a registry
+// question. Overridable for self-hosted or mirrored registries.
+const updateRegistryUrl = process.env.BIVY_UPDATE_REGISTRY_URL ?? "https://registry.npmjs.org/bivy/latest";
 fs.mkdirSync(sessionsDir, { recursive: true });
 fs.mkdirSync(credsDir, { recursive: true, mode: 0o700 });
 // One-time migration for installs created before the shared vault was split out
@@ -567,7 +568,30 @@ function capabilitiesWithCommands(runtimeId: string, session: RuntimeSession): R
   return base;
 }
 
-type ReleaseInfo = { version?: string; commit?: string; builtAt?: string; artifact?: string };
+type ReleaseInfo = { version?: string };
+
+/** The version of the running package, read once from its own package.json. */
+function currentVersion(): string | undefined {
+  try {
+    const pkgPath = path.join(repoRoot, "package.json");
+    return (JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: string }).version;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Compare dotted numeric versions. Returns true when `latest` is newer. */
+function isNewerVersion(latest: string, current: string): boolean {
+  const parse = (v: string) => v.split("-")[0].split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const a = parse(latest);
+  const b = parse(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
 
 function readJsonFile<T>(file: string): T | undefined {
   try {
@@ -575,10 +599,6 @@ function readJsonFile<T>(file: string): T | undefined {
   } catch {
     return undefined;
   }
-}
-
-function releaseKey(info: ReleaseInfo | undefined): string {
-  return String(info?.commit || info?.version || info?.builtAt || "");
 }
 
 async function maybeNotifyBivyUpdate(record: SessionRecord) {
@@ -590,18 +610,17 @@ async function maybeNotifyBivyUpdate(record: SessionRecord) {
   if (now - lastUpdateCheckAt < 6 * 60 * 60 * 1000) return;
   lastUpdateCheckAt = now;
 
-  const current = readJsonFile<ReleaseInfo>(installInfoPath);
+  const current = currentVersion();
   if (!current) return;
 
   try {
-    const res = await fetch(updateManifestUrl, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(updateRegistryUrl, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return;
-    const latest = (await res.json()) as ReleaseInfo;
-    const currentKey = releaseKey(current);
-    const latestKey = releaseKey(latest);
-    if (!latestKey || latestKey === currentKey || updateNoticeSentFor === latestKey) return;
-    updateNoticeSentFor = latestKey;
-    const label = latest.version ? ` ${latest.version}` : "";
+    const latestVersion = ((await res.json()) as ReleaseInfo).version;
+    if (!latestVersion || !isNewerVersion(latestVersion, current)) return;
+    if (updateNoticeSentFor === latestVersion) return;
+    updateNoticeSentFor = latestVersion;
+    const label = ` ${latestVersion}`;
     broadcast({
       type: "session.notice",
       sessionId: record.id,

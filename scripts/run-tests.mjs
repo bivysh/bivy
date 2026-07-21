@@ -24,7 +24,7 @@ const tsSuites = readdirSync(testDir)
   .map((f) => ({ name: f, cmd: tsxBin, args: [path.join(testDir, f)] }));
 
 // Shell installer tests (previously the tail of the chain).
-const shSuites = ["installer-state-preservation.sh", "installer-permission-safety.sh", "installer-verification.sh"].map((f) => ({
+const shSuites = ["installer-migration.sh"].map((f) => ({
   name: f,
   cmd: "bash",
   args: [path.join(testDir, f)],

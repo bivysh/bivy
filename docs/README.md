@@ -39,7 +39,7 @@ run your first agent session.
 | [security-model.md](security-model.md) | Anyone evaluating what Bivy protects, what it doesn't, and its 0.1 limits. |
 | [key-management.md](key-management.md) | Users deciding where their API keys and tokens live. |
 | [credential-sync.md](credential-sync.md) | Users running more than one node who want credentials on all of them. |
-| [release-signing.md](release-signing.md) | Anyone verifying that a downloaded Bivy release is authentic. |
+| [releasing.md](releasing.md) | How Bivy is distributed on npm, how to verify a release, and how to cut one. |
 
 ## Self-hosting
 
