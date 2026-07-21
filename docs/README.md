@@ -46,14 +46,22 @@ run your first agent session.
 
 | Doc | Who it's for |
 | --- | --- |
-| [self-host.md](self-host.md) | Operators running their own relay and control plane instead of Bivy Cloud. |
+| [self-host-quickstart.md](self-host-quickstart.md) | Operators who want the fast, numbered path from an empty VPS to a running stack, plus the full environment variable checklist. |
+| [self-host.md](self-host.md) | Operators running their own relay and control plane instead of Bivy Cloud — the deeper ops reference (backups, restore drills, secret rotation, security boundary). |
 
 ## Integrations
 
 | Doc | Who it's for |
 | --- | --- |
-| [github-oauth-setup.md](github-oauth-setup.md) | Users connecting Bivy to GitHub, and operators configuring the OAuth app. |
-| [github-work-queue.md](github-work-queue.md) | Users who want GitHub issues to dispatch agent runs automatically. |
+| [github-setup.md](github-setup.md) | Users connecting Bivy to their GitHub account/org so labeled issues dispatch agent runs — the multi-app connect walkthrough. |
+| [github-oauth-setup.md](github-oauth-setup.md) | Users connecting Bivy to GitHub for sign-in, and operators configuring the OAuth app (now parameterized for self-hosted domains). |
+| [github-work-queue.md](github-work-queue.md) | Users who want the full mechanics of how GitHub issues dispatch agent runs. |
+
+## Questions
+
+| Doc | Who it's for |
+| --- | --- |
+| [faq.md](faq.md) | Anyone checking a common assumption about Bivy against what's actually true today. |
 
 ---
 
