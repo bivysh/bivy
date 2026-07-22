@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { captureDirtyPatch, applyDirtyPatch } from "../src/session/fork-dirty.js";
+import { captureDirtyPatch, captureTransportableDirtyPatch, applyDirtyPatch } from "../src/session/fork-dirty.js";
 
 // Verifies fork's uncommitted-work transport: capture a working tree's tracked
 // edits + untracked files as a patch, then re-apply it onto a fresh checkout at
@@ -79,6 +79,15 @@ test("oversized working tree falls back to pushedInstead instead of inlining", (
   git(dst, ["clone", "-q", src, "."]);
   applyDirtyPatch(dst, dirty);
   assert.ok(!fs.existsSync(path.join(dst, "big.bin")), "no-op: destination reproduces from the pushed commit, not the patch");
+});
+
+test("transportable capture fails instead of silently dropping oversized dirty work", () => {
+  const src = initRepo();
+  fs.writeFileSync(path.join(src, "big.bin"), Buffer.alloc(64 * 1024, 7));
+  assert.throws(
+    () => captureTransportableDirtyPatch(src, { maxBytes: 1024 }),
+    /too much uncommitted work/,
+  );
 });
 
 console.log(`fork-dirty: all ${passed} tests passed`);

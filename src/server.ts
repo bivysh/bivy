@@ -93,7 +93,7 @@ import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession, type PrRef } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
 import { buildForkBundle, materializeFork, type ForkBundle, type ForkRecord, type ForkPlan } from "./session/fork.js";
-import { captureDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
+import { captureTransportableDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { EventLog } from "./session/event-log.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereqInput, type ForkPrereq } from "./session/fork-prereqs.js";
@@ -2805,7 +2805,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       };
       let dirtyPatch;
       if (rec.worktree) {
-        try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort — omit dirty state */ }
+        dirtyPatch = captureTransportableDirtyPatch(rec.worktree.path);
       }
       // Refresh the account model-auth vault so the destination node can pull
       // this session's model credentials during import (fork credential-move,
@@ -2887,7 +2887,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       // re-applies it into the fork's fresh worktree. Local git ops only.
       let dirtyPatch;
       if (rec.worktree) {
-        try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort */ }
+        dirtyPatch = captureTransportableDirtyPatch(rec.worktree.path);
       }
       // Same runtime → the bundle carries the native payload → full fidelity.
       const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId });

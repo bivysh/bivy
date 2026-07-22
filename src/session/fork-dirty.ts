@@ -55,6 +55,19 @@ export function captureDirtyPatch(repoDir: string, opts: { maxBytes?: number } =
 }
 
 /**
+ * Capture dirty state for the current fork transport. We do not currently
+ * implement the commit-and-push fallback, so an oversized patch must stop the
+ * fork instead of creating a fork that silently drops work-in-progress.
+ */
+export function captureTransportableDirtyPatch(repoDir: string, opts: { maxBytes?: number } = {}): ForkDirtyPatch {
+  const dirty = captureDirtyPatch(repoDir, opts);
+  if (dirty.pushedInstead) {
+    throw new Error("This session has too much uncommitted work to include in a fork. Commit or reduce large/binary changes, then try again.");
+  }
+  return dirty;
+}
+
+/**
  * Re-apply a captured patch onto a fresh checkout at `repoDir`. A no-op when the
  * source pushed the branch instead (`pushedInstead`) or the working tree was
  * clean (empty patch). Uses `git apply` so both tracked hunks and untracked
