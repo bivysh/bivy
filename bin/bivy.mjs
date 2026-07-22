@@ -2997,7 +2997,7 @@ async function cmdStatus(args = []) {
   if (relay?.controlPlaneUrl && relay?.enrollmentToken) {
     try {
       const acct = await controlPlaneNodeApi(relay, "/node/account");
-      const planName = { free: "Free", individual: "Pro", team: "Team" }[acct?.plan] || acct?.plan || "Free";
+      const planName = { free: "Free", pro: "Pro", individual: "Pro", team: "Team" }[acct?.plan] || acct?.plan || "Free";
       const cap = acct?.entitlements?.maxNodes ?? "∞";
       const nodeLine = `${acct?.counts?.nodes ?? "?"} / ${cap} nodes`;
       const extras = acct?.entitlements?.workQueueEnabled ? "" : c.dim("  (Pro: unlimited nodes, push, GitHub queue)");

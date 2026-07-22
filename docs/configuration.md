@@ -434,7 +434,17 @@ unauthenticated dev login enabled.
 | `DISABLE_DEV_LOGIN` | `1` | **unset — dev login is enabled outside production** | Hard kill switch for `POST /auth/dev-login`, which mints a full account session for any email with no verification. **Set this to `1`** |
 | `ALLOW_DEV_LOGIN` | `1` | unset | Re-enables dev login under `NODE_ENV=production`. Setting it in production makes the service exit 1 |
 
-## Billing (Stripe)
+## Billing (hosted only)
+
+Everything in this section exists to run Bivy as a paid hosted service. **If you
+are self-hosting, skip it.** Leave these unset along with `ENFORCE_ENTITLEMENTS`
+and every account on your stack gets every feature — there is no paywall to
+unlock and nothing to configure. `deploy/.env.example` and `deploy/self-host.sh`
+deliberately omit these variables for that reason.
+
+The paid single-user plan has the internal id `pro` and is sold as "Pro". It was
+`individual` before; the control plane migrates stored accounts on boot and still
+accepts the old id from clients released before the rename.
 
 | Variable | Type | Default | Notes |
 | --- | --- | --- | --- |

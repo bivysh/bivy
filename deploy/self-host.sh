@@ -63,16 +63,14 @@ POSTGRES_DB=bivy_control_plane
 POSTGRES_USER=bivy
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 
-# Optional hosted features. Fill these in when you want login email, GitHub OAuth,
-# Stripe billing, or web push on this self-hosted deployment.
+# Optional features. Fill these in when you want login email, GitHub OAuth, or
+# web push on this self-hosted deployment. Billing is deliberately not here —
+# subscriptions exist to run paid hosting, and entitlements stay unenforced on a
+# self-hosted stack, so every feature is already on for every account.
 RESEND_API_KEY=
 AUTH_EMAIL_FROM=Bivy <login@${APP_DOMAIN}>
 GITHUB_OAUTH_CLIENT_ID=
 GITHUB_OAUTH_CLIENT_SECRET=
-STRIPE_SECRET_KEY=
-STRIPE_WEBHOOK_SECRET=
-STRIPE_PRICE_PRO=
-STRIPE_PRICE_TEAM=
 WEB_PUSH_VAPID_PUBLIC_KEY=
 WEB_PUSH_VAPID_PRIVATE_KEY=
 WEB_PUSH_SUBJECT=mailto:admin@${APP_DOMAIN}

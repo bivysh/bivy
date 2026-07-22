@@ -73,12 +73,14 @@ const IconBell = () => (
   <Glyph><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></Glyph>
 );
 
-// Display name for a plan id. The billing/entitlement machinery uses the
-// internal ids ("free" | "individual" | "team"), but the marketing site sells
-// the paid tier as "Pro" — so a customer who clicked "Pro" must see "Pro" here,
-// not the raw "individual". Presentational only; does not touch entitlements.
+// Display name for a plan id — capitalization only, now that the internal ids
+// ("free" | "pro" | "team") match what the marketing site sells. `individual` is
+// the pre-rename id for Pro, kept here so an account that somehow escaped the
+// boot migration still renders as "Pro" instead of falling through to a raw
+// lowercase id. Presentational only; does not touch entitlements.
 const PLAN_LABELS: Record<string, string> = {
   free: "Free",
+  pro: "Pro",
   individual: "Pro",
   team: "Team",
 };

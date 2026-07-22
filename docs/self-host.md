@@ -89,11 +89,8 @@ AUTH_EMAIL_FROM=Bivy <login@app.example.com>
 GITHUB_OAUTH_CLIENT_ID=...
 GITHUB_OAUTH_CLIENT_SECRET=...
 
-# Stripe billing, if you are operating paid plans
-STRIPE_SECRET_KEY=...
-STRIPE_WEBHOOK_SECRET=...
-STRIPE_PRICE_PRO=...
-STRIPE_PRICE_TEAM=...
+# Billing is omitted on purpose — see "Billing (hosted only)" in configuration.md.
+# Self-hosted stacks leave entitlements unenforced, so there is nothing to unlock.
 
 # Web push (phone/PWA notifications). Push stays disabled until BOTH VAPID keys
 # are set; generate a pair with `npx web-push generate-vapid-keys`. With
@@ -169,7 +166,6 @@ These are rotated in the provider's dashboard, then mirrored into `deploy/.env` 
 
 - `RESEND_API_KEY` — magic-link email.
 - `GITHUB_OAUTH_CLIENT_SECRET` — GitHub sign-in (rotate under the OAuth app's settings).
-- `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` — billing (roll the key, then re-point/roll the webhook signing secret).
 - `WEB_PUSH_VAPID_PRIVATE_KEY` (+ public) — rotating the VAPID pair invalidates existing push subscriptions; clients re-subscribe on next load. Regenerate with `npx web-push generate-vapid-keys`.
 
 After rotating anything, confirm the stack is healthy: `docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps` should show `control-plane` and `relay` as `healthy`.

@@ -471,7 +471,7 @@ export async function logout(store: LocalStore, devicePublicKeyB64?: string, fet
 }
 
 /** Start a Stripe checkout; returns the URL to redirect to. */
-export async function billingCheckout(store: LocalStore, plan = "individual", fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function billingCheckout(store: LocalStore, plan = "pro", fetchImpl: typeof fetch = fetch): Promise<string> {
   const res = await fetchImpl(`${cpBase(store)}/billing/checkout`, {
     method: "POST",
     headers: authHeaders(store),

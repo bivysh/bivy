@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
-import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
@@ -152,9 +152,19 @@ async function accountPushAllowed(accountId: string): Promise<boolean> {
   return (await store.entitlements(accountId)).pushEnabled;
 }
 const stripePrices: Partial<Record<Plan, string>> = {
-  individual: process.env.STRIPE_PRICE_PRO,
+  pro: process.env.STRIPE_PRICE_PRO,
   team: process.env.STRIPE_PRICE_TEAM,
 };
+
+// Plan ids arrive from two places whose version we do not control: the published
+// CLI (packages/core's billingCheckout) and the dev-mode billing webhook used by
+// tests and local stacks. Both sent `individual` before the plan was renamed to
+// `pro`, so translate rather than 400 a client that is merely older than this
+// deploy. Unrecognised ids pass through unchanged and fail the caller's own
+// validation. Accounts already stored under the old id are migrated at boot.
+function normalizePlan(plan: string): string {
+  return LEGACY_PLAN_IDS[plan] ?? plan;
+}
 const app = express();
 
 // Operational counters for the relay ticket mint path. These are intentionally
@@ -344,14 +354,20 @@ function sendDeviceSignedIn(res: Response, email: string): void {
 }
 
 function stripePriceToPlan(priceId: string | null | undefined): Plan | undefined {
-  if (priceId && stripePrices.individual && priceId === stripePrices.individual) return "individual";
+  if (priceId && stripePrices.pro && priceId === stripePrices.pro) return "pro";
   if (priceId && stripePrices.team && priceId === stripePrices.team) return "team";
   return undefined;
 }
 
 function planFromSubscription(subscription: Stripe.Subscription): Plan {
   const priceId = subscription.items.data[0]?.price.id;
-  return stripePriceToPlan(priceId) ?? (subscription.metadata.plan as Plan | undefined) ?? "free";
+  // The metadata fallback reads a value Stripe has been holding since the
+  // subscription was created, so subscriptions opened before the rename still say
+  // `individual` there. Normalize it — this is live data we cannot backfill.
+  const fromMetadata = subscription.metadata.plan
+    ? (normalizePlan(subscription.metadata.plan) as Plan)
+    : undefined;
+  return stripePriceToPlan(priceId) ?? fromMetadata ?? "free";
 }
 
 function subscriptionIsPaid(subscription: Stripe.Subscription): boolean {
@@ -1684,8 +1700,8 @@ app.post("/client/relay-ticket", asyncHandler(async (req, res) => {
 
 app.post("/billing/checkout", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
-  const plan = String(req.body?.plan ?? "individual") as Plan;
-  if (plan !== "individual" && !(plan === "team" && stripePrices.team)) return res.status(400).json({ error: "Invalid plan" });
+  const plan = normalizePlan(String(req.body?.plan ?? "pro")) as Plan;
+  if (plan !== "pro" && !(plan === "team" && stripePrices.team)) return res.status(400).json({ error: "Invalid plan" });
 
   if (!stripe) {
     if (process.env.NODE_ENV === "production") throw new Error("STRIPE_SECRET_KEY is required for production checkout");
@@ -1747,8 +1763,8 @@ app.post("/billing/webhook", asyncHandler(async (req, res) => {
     if (process.env.NODE_ENV === "production") throw new Error("STRIPE_SECRET_KEY is required for production webhooks");
     const body = Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString("utf8")) : req.body;
     const accountId = String(body?.accountId ?? "");
-    const plan = String(body?.plan ?? "") as Plan;
-    if (accountId && ["free", "individual", "team"].includes(plan)) await store.setPlan(accountId, plan, body?.stripeCustomerId);
+    const plan = normalizePlan(String(body?.plan ?? "")) as Plan;
+    if (accountId && ["free", "pro", "team"].includes(plan)) await store.setPlan(accountId, plan, body?.stripeCustomerId);
     return res.json({ received: true, dev: true });
   }
 
