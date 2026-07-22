@@ -152,7 +152,7 @@ async function accountPushAllowed(accountId: string): Promise<boolean> {
   return (await store.entitlements(accountId)).pushEnabled;
 }
 const stripePrices: Partial<Record<Plan, string>> = {
-  individual: process.env.STRIPE_PRICE_INDIVIDUAL,
+  individual: process.env.STRIPE_PRICE_PRO,
   team: process.env.STRIPE_PRICE_TEAM,
 };
 const app = express();

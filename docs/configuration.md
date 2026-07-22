@@ -439,7 +439,7 @@ unauthenticated dev login enabled.
 | Variable | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `STRIPE_SECRET_KEY` | `sk_…` | unset | With no Stripe client, billing endpoints return stub URLs **and the webhook applies plan changes without verifying a signature** |
-| `STRIPE_PRICE_INDIVIDUAL` | `price_…` | unset | Checkout returns 500 without it |
+| `STRIPE_PRICE_PRO` | `price_…` | unset | Checkout returns 500 without it |
 | `STRIPE_PRICE_TEAM` | `price_…` | unset | Also gates whether the `team` plan is accepted at all |
 | `BILLING_SUCCESS_URL` | URL | `<base>/?checkout=success` | |
 | `BILLING_CANCEL_URL` | URL | `<base>/?checkout=cancel` | |
