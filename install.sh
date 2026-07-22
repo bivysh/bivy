@@ -17,16 +17,29 @@
 #   npm audit signatures
 #   npm view bivy dist.integrity
 #
+# If the package is not on the registry yet, the script falls back to the
+# self-hosted release tarball (see "Tarball fallback" below) so that a fresh
+# install — and `bivy update`, which shells out to this script for packaged
+# installs — keeps working through the cutover to npm.
+#
 # Overrides:
 #   BIVY_VERSION=0.1.0            install a specific version instead of latest
 #   BIVY_NPM_PREFIX=~/.local      install into a user-owned npm prefix (no sudo)
 #   BIVY_INSTALL_ALL_AGENTS=1     preinstall every bundled agent runtime
+#   BIVY_NO_TARBALL_FALLBACK=1    fail instead of falling back to the tarball
 #
 set -euo pipefail
 
 PKG_VERSION="${BIVY_VERSION:-latest}"
 DATA_DIR="${BIVY_DATA_DIR:-$HOME/.bivy}"
+# Also the destination for a tarball-fallback install, whose state lives inside
+# the app directory rather than at $DATA_DIR.
 LEGACY_APP_DIR="${BIVY_HOME:-$HOME/.bivy/app}"
+TARBALL_URL="${BIVY_TARBALL_URL:-https://bivy.sh/downloads/bivy-latest.tar.gz}"
+MANIFEST_URL="${BIVY_MANIFEST_URL:-https://bivy.sh/downloads/bivy-latest.json}"
+# "npm" until install_globally decides otherwise; the post-install steps differ
+# because a tarball install keeps a different layout.
+INSTALL_MODE="npm"
 
 info() { printf '\033[36m==>\033[0m %s\n' "$1"; }
 warn() { printf '\033[33m==>\033[0m %s\n' "$1"; }
@@ -100,6 +113,125 @@ npm_global_bin() {
   [ -n "$prefix" ] && printf '%s/bin' "$prefix"
 }
 
+# ------------------------------------------------------------ tarball fallback
+#
+# npm is the distribution channel, but a registry 404 — the package is not
+# published yet, or was unpublished — must not leave users stranded. It would
+# strand two groups at once: anyone running this script for a fresh install,
+# and every existing *packaged* install, because `bivy update` shells out to
+# this very script for those (see runUpdate() in bin/bivy.mjs).
+#
+# So fall back to the self-hosted release archive, verified against the sha256
+# in its manifest. Deliberately integrity-checked but unsigned: the manifest
+# carries a sha256 and no signature, which is what the pre-npm installer
+# enforced in practice — its signature branch needed a verification key that
+# was never embedded. This therefore reintroduces no key to guard or rotate.
+
+extract_tarball() {
+  # GNU tar warns about macOS-created archives carrying extended-attribute
+  # headers; it can ignore them quietly, and other tars never warn at all.
+  if tar --version 2>/dev/null | grep -qi 'gnu tar'; then
+    tar --warning=no-unknown-keyword --no-same-owner -xzf "$1" -C "$2"
+  else
+    tar -xzf "$1" -C "$2"
+  fi
+}
+
+sha256_of() {
+  node -e 'const fs=require("fs"),c=require("crypto");process.stdout.write(c.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "$1"
+}
+
+install_from_tarball() {
+  INSTALL_MODE="tarball"
+  local parent stage staged backup expected actual
+  parent="$(dirname "$LEGACY_APP_DIR")"
+
+  # A previous install owned by another user (the classic cause: a first
+  # install run under sudo) cannot be replaced by us. Detect it now, while the
+  # working install is still untouched, rather than partway through the swap.
+  if [ -e "$LEGACY_APP_DIR" ] && [ "$(id -u)" -ne 0 ] && [ ! -w "$LEGACY_APP_DIR" ]; then
+    die "Cannot install: $LEGACY_APP_DIR is not writable by $(id -un) — it was likely installed with sudo or as another user. Re-run as the owner, or reclaim it with 'sudo chown -R $(id -un) $LEGACY_APP_DIR'. Your current install was left untouched."
+  fi
+
+  info "Downloading the release archive"
+  curl -fsSL "$TARBALL_URL" -o "$TMP_DIR/bivy.tar.gz" || die "Could not download $TARBALL_URL."
+
+  expected=""
+  if curl -fsSL "$MANIFEST_URL" -o "$TMP_DIR/bivy-latest.json" 2>/dev/null && [ -s "$TMP_DIR/bivy-latest.json" ]; then
+    expected="$(node -e 'const fs=require("fs");try{const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(typeof m.sha256==="string"?m.sha256:"")}catch{}' "$TMP_DIR/bivy-latest.json")"
+  fi
+  if [ -n "$expected" ]; then
+    actual="$(sha256_of "$TMP_DIR/bivy.tar.gz")"
+    [ "$actual" = "$expected" ] || die "Release archive checksum mismatch (expected $expected, got $actual). Refusing to install; please re-run."
+  elif [ "${BIVY_ALLOW_UNVERIFIED_INSTALL:-}" = "1" ]; then
+    warn "No sha256 available for the release archive; continuing because BIVY_ALLOW_UNVERIFIED_INSTALL=1."
+  else
+    die "Could not verify the release archive: no sha256 in $MANIFEST_URL. Re-run, or set BIVY_ALLOW_UNVERIFIED_INSTALL=1 only if you trust $TARBALL_URL."
+  fi
+
+  mkdir -p "$parent"
+  stage="$(mktemp -d "$parent/.bivy-install.XXXXXX")"
+  extract_tarball "$TMP_DIR/bivy.tar.gz" "$stage"
+  staged="$stage/bivy"
+  [ -d "$staged" ] || die "The release archive did not contain a bivy/ directory."
+  chmod +x "$staged/bin/bivy.mjs"
+
+  info "Installing production dependencies"
+  if ! ( cd "$staged" && if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --no-fund; else npm install --omit=dev --no-audit --no-fund; fi ); then
+    rm -rf "$stage"
+    die "Could not install Bivy's dependencies. Your current install was left untouched."
+  fi
+
+  # Swap it in: move any existing install aside, carry its state across, then
+  # move the new tree into place — restoring the old one if any step fails, so
+  # a failure can never leave the node with no app directory.
+  backup=""
+  if [ -e "$LEGACY_APP_DIR" ]; then
+    backup="$parent/.bivy-backup.$$"
+    rm -rf "$backup"
+    if ! mv "$LEGACY_APP_DIR" "$backup"; then
+      rm -rf "$stage"
+      die "Could not move the existing install at $LEGACY_APP_DIR aside (it may be a mount point or on a separate filesystem). Your current install was left untouched."
+    fi
+    if [ -d "$backup/.bivy" ]; then
+      info "Carrying existing local state into the new release"
+      rm -rf "$staged/.bivy"
+      if ! mv "$backup/.bivy" "$staged/.bivy"; then
+        mv "$backup" "$LEGACY_APP_DIR"
+        rm -rf "$stage"
+        die "Could not carry your existing state (.bivy) into the new release; the previous install was restored."
+      fi
+    fi
+  fi
+
+  mkdir -p "$staged/.bivy"
+  if [ -s "$TMP_DIR/bivy-latest.json" ]; then
+    cp "$TMP_DIR/bivy-latest.json" "$staged/.bivy/install.json"
+    chmod 600 "$staged/.bivy/install.json" 2>/dev/null || true
+  fi
+
+  if ! mv "$staged" "$LEGACY_APP_DIR"; then
+    if [ -n "$backup" ]; then
+      # Put the preserved state back before restoring, or it would be lost.
+      if [ -d "$staged/.bivy" ] && [ ! -e "$backup/.bivy" ]; then
+        mv "$staged/.bivy" "$backup/.bivy" 2>/dev/null || true
+      fi
+      mv "$backup" "$LEGACY_APP_DIR"
+    fi
+    rm -rf "$stage"
+    die "Could not move the new release into $LEGACY_APP_DIR; the previous install was restored."
+  fi
+
+  rm -rf "$stage"
+  if [ -n "$backup" ]; then rm -rf "$backup"; fi
+
+  mkdir -p "$HOME/.local/bin"
+  ln -sfn "$LEGACY_APP_DIR/bin/bivy.mjs" "$HOME/.local/bin/bivy"
+  BIN_DIR="$HOME/.local/bin"
+  BIVY_BIN="$BIN_DIR/bivy"
+  info "Installed Bivy into $LEGACY_APP_DIR"
+}
+
 install_globally() {
   local args=(install -g "bivy@${PKG_VERSION}" --no-audit --no-fund)
   if [ -n "${BIVY_NPM_PREFIX:-}" ]; then
@@ -121,20 +253,37 @@ install_globally() {
     npm "${args[@]}" --prefix "$BIVY_NPM_PREFIX"
     return
   fi
+  # The package is not on the registry. Confirm with a direct lookup rather
+  # than trusting the error text alone — a 404 in the install log could just as
+  # easily come from a missing transitive dependency, which the tarball (built
+  # from the same package.json) would not fix either.
+  if grep -qiE 'E404|404 Not Found' "$ERR_LOG" && ! npm view "bivy@${PKG_VERSION}" version >/dev/null 2>&1; then
+    if [ "${BIVY_NO_TARBALL_FALLBACK:-}" = "1" ]; then
+      cat "$ERR_LOG" >&2
+      die "bivy@${PKG_VERSION} is not published on npm, and BIVY_NO_TARBALL_FALLBACK=1."
+    fi
+    warn "bivy@${PKG_VERSION} is not on the npm registry yet — using the release archive instead."
+    install_from_tarball
+    return
+  fi
   cat "$ERR_LOG" >&2
   die "npm could not install bivy. See the error above."
 }
 
 ERR_LOG="$(mktemp)"
-trap 'rm -f "$ERR_LOG"' EXIT
+TMP_DIR="$(mktemp -d)"
+trap 'rm -f "$ERR_LOG"; rm -rf "$TMP_DIR"' EXIT
 install_globally
 
-if [ -n "${BIVY_NPM_PREFIX:-}" ]; then
-  BIN_DIR="$BIVY_NPM_PREFIX/bin"
-else
-  BIN_DIR="$(npm_global_bin)"
+# A tarball fallback has already set BIN_DIR/BIVY_BIN to the install it made.
+if [ "$INSTALL_MODE" = "npm" ]; then
+  if [ -n "${BIVY_NPM_PREFIX:-}" ]; then
+    BIN_DIR="$BIVY_NPM_PREFIX/bin"
+  else
+    BIN_DIR="$(npm_global_bin)"
+  fi
+  BIVY_BIN="$BIN_DIR/bivy"
 fi
-BIVY_BIN="$BIN_DIR/bivy"
 [ -x "$BIVY_BIN" ] || die "bivy was installed but no executable was found at $BIVY_BIN."
 
 # ------------------------------------------------------- migrate legacy state
@@ -144,7 +293,7 @@ BIVY_BIN="$BIN_DIR/bivy"
 # on every update, so state now lives at ~/.bivy. Move it once, and only when
 # the destination is empty, so this can never clobber newer state.
 
-if [ -d "$LEGACY_APP_DIR/.bivy" ] && [ ! -f "$DATA_DIR/cli.json" ]; then
+if [ "$INSTALL_MODE" = "npm" ] && [ -d "$LEGACY_APP_DIR/.bivy" ] && [ ! -f "$DATA_DIR/cli.json" ]; then
   info "Migrating existing Bivy state to $DATA_DIR"
   mkdir -p "$DATA_DIR"
   if ! (cd "$LEGACY_APP_DIR/.bivy" && tar cf - .) | (cd "$DATA_DIR" && tar xf -); then
@@ -159,7 +308,7 @@ fi
 # A stale symlink from the old installer can shadow the npm-installed binary if
 # ~/.local/bin comes first on PATH. Remove it only if it points at the old tree.
 STALE_LINK="$HOME/.local/bin/bivy"
-if [ -L "$STALE_LINK" ]; then
+if [ "$INSTALL_MODE" = "npm" ] && [ -L "$STALE_LINK" ]; then
   TARGET="$(readlink "$STALE_LINK" || true)"
   case "$TARGET" in
     "$LEGACY_APP_DIR"/*)
@@ -179,14 +328,22 @@ esac
 
 # ------------------------------------------------------------------- finish
 
+# An npm install keeps state at $DATA_DIR; a tarball install keeps it inside
+# the app directory, which is also where its state was just carried across to.
+if [ "$INSTALL_MODE" = "tarball" ]; then
+  STATE_DIR="$LEGACY_APP_DIR/.bivy"
+else
+  STATE_DIR="$DATA_DIR"
+fi
+
 if [ "${BIVY_INSTALL_ALL_AGENTS:-}" = "1" ]; then
   info "Installing all bundled agent runtimes"
   "$BIVY_BIN" agents:install || warn "Could not install every bundled agent runtime. Bivy still works; run 'bivy agents:install' later to retry."
 fi
 
-if [ -f "$DATA_DIR/cli.json" ]; then
+if [ -f "$STATE_DIR/cli.json" ]; then
   info "Existing Bivy configuration found; skipping first-run setup."
-  if node -e 'const fs=require("fs");process.exit(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).service===true?0:1)' "$DATA_DIR/cli.json" 2>/dev/null; then
+  if node -e 'const fs=require("fs");process.exit(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).service===true?0:1)' "$STATE_DIR/cli.json" 2>/dev/null; then
     info "Restarting the background service…"
     "$BIVY_BIN" restart || warn "Could not restart the service automatically. Run: bivy restart"
   else
