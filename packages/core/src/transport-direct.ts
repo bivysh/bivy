@@ -327,6 +327,21 @@ export class DirectTransport implements Transport {
           // synthetic emit gives the acting client immediate feedback.
           this.emit({ type: "session.rewound", sessionId: String(obj.sessionId ?? ""), checkpointId: String(obj.checkpointId ?? "") });
           break;
+        case "session.fork.export": {
+          const event = await this.directApi("/api/session/fork/export", { method: "POST", body: JSON.stringify(obj) });
+          this.emit({ requestId: String(obj.requestId ?? ""), ...((event as Record<string, unknown>) || {}) });
+          break;
+        }
+        case "session.fork.import": {
+          const event = await this.directApi("/api/session/fork/import", { method: "POST", body: JSON.stringify(obj) });
+          this.emit({ requestId: String(obj.requestId ?? ""), ...((event as Record<string, unknown>) || {}) });
+          break;
+        }
+        case "session.fork.local": {
+          const event = await this.directApi("/api/session/fork/local", { method: "POST", body: JSON.stringify(obj) });
+          this.emit({ requestId: String(obj.requestId ?? ""), ...((event as Record<string, unknown>) || {}) });
+          break;
+        }
         case "session.question.answer":
           // No synthetic event here, same as "approval" below: the node
           // confirms via its own session.question.resolved broadcast (which

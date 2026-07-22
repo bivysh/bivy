@@ -46,10 +46,11 @@ class FakeWS {
   }
 }
 
-function okFetch(calls: string[]): typeof fetch {
+function okFetch(calls: string[], responses: Record<string, unknown> = {}): typeof fetch {
   return (async (url: string) => {
     calls.push(String(url));
-    return { ok: true, json: async () => ({}) };
+    const pathname = new URL(String(url), "http://node.local").pathname;
+    return { ok: true, json: async () => responses[pathname] ?? {} };
   }) as unknown as typeof fetch;
 }
 
@@ -88,5 +89,27 @@ describe("DirectTransport", () => {
     expect(ws.sent.map((s) => JSON.parse(s))).toEqual([{ kind: "ping", requestId: "r1" }]);
     expect(events).toEqual([]);
     expect(statuses).toContain("online");
+  });
+
+  it("routes session forks through the direct REST API and emits the returned fork event", async () => {
+    const fetchCalls: string[] = [];
+    const events: ServerEvent[] = [];
+    const transport = new DirectTransport({
+      origin: "http://node.local",
+      tokenStore: mem({ bivy_local_token: "token" }),
+      fetchImpl: okFetch(fetchCalls, {
+        "/api/session/fork/local": { type: "session.fork.done", requestId: "r-fork", sessionId: "fork-1", fidelity: "full", missing: [] },
+      }),
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      handlers: {
+        onEvent: (e) => events.push(e),
+        onStatus: () => {},
+      },
+    });
+
+    await transport.send({ kind: "session.fork.local", requestId: "r-fork", sessionId: "source-1" });
+
+    expect(fetchCalls).toEqual(["http://node.local/api/session/fork/local"]);
+    expect(events).toEqual([{ type: "session.fork.done", requestId: "r-fork", sessionId: "fork-1", fidelity: "full", missing: [] }]);
   });
 });

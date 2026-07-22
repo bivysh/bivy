@@ -2777,14 +2777,14 @@ const RELAY_COMMANDS: Record<string, Command> = {
       broadcast({ type: "session.error", sessionId: record.id, error: String(error?.stack ?? error) });
     });
   },
-  async "session.fork.export"(msg) {
+  async "session.fork.export"(msg, ctx) {
     // Source side of a session fork (docs/session-fork-plan.md): package the
     // session's transcript + portable metadata + any uncommitted worktree
     // changes into an E2E bundle the client carries to the destination node.
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
     const rec = resolveSession(msg.sessionId);
     if (!rec || !rec.sessionFile) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found or not resumable on this node." });
+      ctx.reply({ type: "session.fork.error", requestId, error: "Session not found or not resumable on this node." });
       return;
     }
     try {
@@ -2815,12 +2815,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
       // bundle omits the native payload for a cross-runtime fork (it could
       // never be replayed there — see buildForkBundle). Unset => keep it.
       const bundle = buildForkBundle({ runtime: getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: agentFrom(msg) });
-      relay?.sendEvent({ type: "session.fork.bundle", requestId, bundle });
+      ctx.reply({ type: "session.fork.bundle", requestId, bundle });
     } catch (error) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
+      ctx.reply({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "session.fork.import"(msg) {
+  async "session.fork.import"(msg, ctx) {
     // Destination side of a fork: rebuild the repo/worktree, materialise the
     // transcript into the (possibly different) target runtime — full fidelity
     // for a same-runtime fork, a seeded continuation prompt otherwise — and
@@ -2829,7 +2829,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
     const bundle = msg.bundle as ForkBundle | undefined;
     if (!bundle?.record || !bundle.normalized) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Malformed fork bundle." });
+      ctx.reply({ type: "session.fork.error", requestId, error: "Malformed fork bundle." });
       return;
     }
     try {
@@ -2844,15 +2844,15 @@ const RELAY_COMMANDS: Record<string, Command> = {
         detectPrereqs: true,
       });
       if (!outcome.ok) {
-        relay?.sendEvent({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
+        ctx.reply({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
         return;
       }
-      relay?.sendEvent(forkDoneEvent(requestId, outcome.record, outcome.plan, outcome.missing));
+      ctx.reply(forkDoneEvent(requestId, outcome.record, outcome.plan, outcome.missing));
     } catch (error) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
+      ctx.reply({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "session.fork.local"(msg) {
+  async "session.fork.local"(msg, ctx) {
     // Fast path (docs/session-fork-plan.md): fork a session on the SAME node
     // and SAME runtime WITHOUT round-tripping the transcript out to the client
     // and back. We build the fork bundle in-process and stand the new session
@@ -2863,7 +2863,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
     const rec = resolveSession(msg.sessionId);
     if (!rec || !rec.sessionFile) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found or not resumable on this node." });
+      ctx.reply({ type: "session.fork.error", requestId, error: "Session not found or not resumable on this node." });
       return;
     }
     try {
@@ -2902,12 +2902,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
         fallback: { workspace: rec.workspace, cwd: rec.session.cwd || rec.worktree?.path || rec.workspace },
       });
       if (!outcome.ok) {
-        relay?.sendEvent({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
+        ctx.reply({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
         return;
       }
-      relay?.sendEvent(forkDoneEvent(requestId, outcome.record, outcome.plan, outcome.missing));
+      ctx.reply(forkDoneEvent(requestId, outcome.record, outcome.plan, outcome.missing));
     } catch (error) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
+      ctx.reply({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
     }
   },
   async "session.new"(msg) {
@@ -7613,6 +7613,29 @@ app.post("/api/session", async (req, res, next) => {
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
   }
+});
+
+async function runDirectCommand(kind: string, body: unknown): Promise<unknown> {
+  const command = RELAY_COMMANDS[kind];
+  if (!command) throw new Error(`Unsupported command: ${kind}`);
+  let reply: unknown;
+  await command({ ...((body as Record<string, unknown>) || {}), kind } as ClientMessage, {
+    reply: (event) => { reply = event; },
+    broadcast,
+  });
+  return reply ?? { ok: true };
+}
+
+app.post("/api/session/fork/export", async (req, res) => {
+  res.json(await runDirectCommand("session.fork.export", req.body));
+});
+
+app.post("/api/session/fork/import", async (req, res) => {
+  res.json(await runDirectCommand("session.fork.import", req.body));
+});
+
+app.post("/api/session/fork/local", async (req, res) => {
+  res.json(await runDirectCommand("session.fork.local", req.body));
 });
 
 app.get("/api/github/issues", async (_req, res, next) => {
