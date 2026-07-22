@@ -709,6 +709,27 @@ function resolveWorkspaceDir({ clone, workspace }) {
   return dest;
 }
 
+// Where a `bivy run` with neither --workspace nor --clone should start.
+//
+// The PTY is spawned by the daemon, not by this process, so it has no idea where
+// you typed the command. Without this, running an agent from your checkout would
+// silently root it in the node's configured workspace: a relative command
+// (`bivy run -- ./my-agent`) fails to resolve, and — worse — a relative argument
+// (`--repo .`) resolves to the wrong repo and the agent happily does the wrong
+// work. Adopting the cwd makes the common case ("run an agent on the repo I'm
+// standing in") correct by default.
+//
+// Only when the cwd is inside a git work tree: a bare `bivy` from $HOME or /tmp
+// should still land in the configured workspace rather than turning an agent
+// loose on the home directory. Uses the cwd itself, not the repo root, to match
+// `--workspace .` and to respect an intentional `cd` into a monorepo package.
+function defaultRunWorkspace(config) {
+  const fallback = config.workspace || repoRoot;
+  const cwd = process.cwd();
+  const res = runQuiet("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree"]);
+  return res.code === 0 && res.stdout.trim() === "true" ? cwd : fallback;
+}
+
 // --- nodes registry ---------------------------------------------------------
 // Other Bivy nodes this machine can reach directly (LAN, Tailscale, SSH tunnel,
 // VPN). name → { url, token }. `bivy run --node <name>` starts the session on
@@ -1484,7 +1505,14 @@ async function cmdRun(args = []) {
     process.exit(1);
     return;
   }
-  const spec = { ...resolved.spec, name, model, workspace: clonedWorkspace || config.workspace || repoRoot };
+  // No --clone/--workspace: start in the repo the user is standing in (see
+  // defaultRunWorkspace). Announce it when it isn't the configured workspace, so
+  // where the agent is rooted is never a silent surprise.
+  const workspaceDir = clonedWorkspace || defaultRunWorkspace(config);
+  if (!clonedWorkspace && workspaceDir !== (config.workspace || repoRoot)) {
+    console.log(c.dim(`workspace ${workspaceDir}`));
+  }
+  const spec = { ...resolved.spec, name, model, workspace: workspaceDir };
 
   let token;
   try { token = await localDeviceToken(config); }
@@ -3472,7 +3500,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy run <agent> --model <model>")}  Run with a specific model (passed to the agent, shown in the cockpit)
   ${c.cyan("bivy run <agent> --node <name>")}  Start the session on another registered node
   ${c.cyan("bivy run <agent> --clone [remote]")}  Start in a fresh clone (current repo, or a given remote)
-  ${c.cyan("bivy run <agent> --workspace <dir>")}  Start in an existing directory
+  ${c.cyan("bivy run <agent> --workspace <dir>")}  Start in an existing directory (default: current repo, else the configured workspace)
   ${c.cyan("bivy nodes")}       List/add/remove other nodes (add <name> <url> --token <t>)
   ${c.cyan("bivy agents")}      List the supported agents and which are installed (--json)
   ${c.cyan("bivy shim install <agent>")}  Make interactive '<agent>' launch its native TUI in a Bivy PTY (remote-visible)
