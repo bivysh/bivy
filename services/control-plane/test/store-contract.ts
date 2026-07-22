@@ -99,7 +99,7 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
   // is scoped both to the account and to the single node (never other nodes').
   await test("listNodeSessions is node-scoped and retains the agent-service address", async (store) => {
     const acct = await store.findOrCreateAccount("contract-nodesessions@example.com");
-    await store.setPlan(acct.id, "individual"); // lift the free plan's 1-node cap
+    await store.setPlan(acct.id, "pro"); // lift the free plan's 1-node cap
     const { node: a } = await store.enrollNode(acct.id, "node-adopt-a", "Laptop A");
     const { node: b } = await store.enrollNode(acct.id, "node-adopt-b", "Laptop B");
     await store.replaceNodeSessions(acct.id, a.id, [
@@ -251,7 +251,7 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
       () => store.enrollNode(acct.id, "n2", "Second"),
       (err: unknown) => (err as { status?: number }).status === 402,
     );
-    await store.setPlan(acct.id, "individual");
+    await store.setPlan(acct.id, "pro");
     assert.equal((await store.enrollNode(acct.id, "n2", "Second")).node.id, "n2");
   });
 

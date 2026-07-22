@@ -135,6 +135,13 @@ export class PostgresStore implements MeshStore {
       -- queue when no persistent node is online. NULL = disabled (never set).
       -- Non-secret preferences only — see EphemeralQueueDefault in store.ts.
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ephemeral_queue_default JSONB;
+      -- The paid single-user plan was renamed 'individual' -> 'pro' to match what
+      -- it is sold as. The plan column is plain TEXT with no enum or CHECK, so the
+      -- backfill is a straight UPDATE; it is idempotent (the second run matches no
+      -- rows) and runs before the process serves traffic, so no request can observe
+      -- the old id. Stripe subscription metadata cannot be backfilled this way and
+      -- is normalized on read instead — see planFromSubscription in index.ts.
+      UPDATE accounts SET plan = 'pro' WHERE plan = 'individual';
 
       CREATE TABLE IF NOT EXISTS login_tokens (
         token_hash  TEXT PRIMARY KEY,

@@ -26,13 +26,13 @@ await test("billing lifecycle updates plan and subscription metadata", async () 
   assert.equal((await store.entitlements(account.id)).relayEnabled, true);
 
   await store.setSubscriptionState(account.id, {
-    plan: "individual",
+    plan: "pro",
     stripeCustomerId: "cus_test_123",
     stripeSubscriptionId: "sub_test_123",
     subscriptionStatus: "active",
   });
   const upgraded = await store.getAccount(account.id);
-  assert.equal(upgraded?.plan, "individual");
+  assert.equal(upgraded?.plan, "pro");
   assert.equal(upgraded?.stripeCustomerId, "cus_test_123");
   assert.equal(upgraded?.stripeSubscriptionId, "sub_test_123");
   assert.equal(upgraded?.subscriptionStatus, "active");

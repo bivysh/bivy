@@ -65,7 +65,7 @@ await test("enrollNode enforces the plan's maxNodes limit", async () => {
     (err: unknown) => (err as { status?: number }).status === 402,
   );
   // Upgrading the plan lifts the limit — paid plans are unlimited (no cap).
-  await store.setPlan(account.id, "individual");
+  await store.setPlan(account.id, "pro");
   const result = await store.enrollNode(account.id, "node-2", "Second");
   assert.equal(result.node.id, "node-2");
   // A third (and beyond) also enrolls — unlimited means unlimited.
@@ -121,7 +121,7 @@ await test("listPairedDevices and removePairedDevice manage the account's device
   assert.equal(await store.removePairedDevice(account.id, "pk-a"), false);
 });
 
-await test("free vs individual entitlements match the published pricing table", () => {
+await test("free vs pro entitlements match the published pricing table", () => {
   const free = entitlementsForPlan("free");
   assert.equal(free.maxNodes, 1, "free: one machine");
   // Device and session caps were removed for every plan (fields no longer exist).
@@ -129,11 +129,11 @@ await test("free vs individual entitlements match the published pricing table", 
   assert.equal(free.relayEnabled, true, "free: one hosted relay node");
   assert.equal(free.workQueueEnabled, false, "free: no hosted work queue");
 
-  const individual = entitlementsForPlan("individual");
-  assert.equal(individual.maxNodes, undefined, "individual: unlimited nodes (no cap)");
-  assert.equal(individual.pushEnabled, true, "individual: push notifications");
-  assert.equal(individual.relayEnabled, true, "individual: remote relay");
-  assert.equal(individual.workQueueEnabled, true, "individual: hosted work queue");
+  const pro = entitlementsForPlan("pro");
+  assert.equal(pro.maxNodes, undefined, "pro: unlimited nodes (no cap)");
+  assert.equal(pro.pushEnabled, true, "pro: push notifications");
+  assert.equal(pro.relayEnabled, true, "pro: remote relay");
+  assert.equal(pro.workQueueEnabled, true, "pro: hosted work queue");
 
   const team = entitlementsForPlan("team");
   assert.equal(team.maxNodes, undefined, "team: unlimited nodes (no cap)");
@@ -144,13 +144,13 @@ await test("setSubscriptionState records full billing metadata and updates entit
   const store = await makeStore();
   const account = await store.findOrCreateAccount("e@example.com");
   await store.setSubscriptionState(account.id, {
-    plan: "individual",
+    plan: "pro",
     stripeCustomerId: "cus_123",
     stripeSubscriptionId: "sub_123",
     subscriptionStatus: "active",
   });
   const updated = await store.getAccount(account.id);
-  assert.equal(updated?.plan, "individual");
+  assert.equal(updated?.plan, "pro");
   assert.equal(updated?.stripeCustomerId, "cus_123");
   assert.equal(updated?.stripeSubscriptionId, "sub_123");
   assert.equal(updated?.subscriptionStatus, "active");
@@ -304,7 +304,7 @@ await test("assignWorkItem targets a pending item to a node + agent; rejects non
 await test("node names are unique per account: auto-suffix on enroll, reject on rename", async () => {
   const store = await makeStore();
   const acct = await store.findOrCreateAccount("names@example.com");
-  await store.setSubscriptionState(acct.id, { plan: "individual", subscriptionStatus: "active" }); // unlimited nodes
+  await store.setSubscriptionState(acct.id, { plan: "pro", subscriptionStatus: "active" }); // unlimited nodes
   const a = await store.enrollNode(acct.id, "node_a", "Mac.home");
   assert.equal(a.node.name, "Mac.home");
   // A second node enrolling with the same name is auto-suffixed (hyphen, so it

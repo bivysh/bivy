@@ -108,7 +108,7 @@ set_secret RESEND_API_KEY "$(get RESEND_API_KEY)"
 set_secret AUTH_EMAIL_FROM "$(get AUTH_EMAIL_FROM)"
 set_secret STRIPE_SECRET_KEY "$(get STRIPE_SECRET_KEY)"
 set_secret STRIPE_WEBHOOK_SECRET "$(get STRIPE_WEBHOOK_SECRET)"
-set_secret STRIPE_PRICE_INDIVIDUAL "$(get STRIPE_PRICE_INDIVIDUAL)"
+set_secret STRIPE_PRICE_PRO "$(get STRIPE_PRICE_PRO)"
 set_secret STRIPE_PRICE_TEAM "$(get STRIPE_PRICE_TEAM)"
 
 # Web push (VAPID) keys and subject. deploy-staging.yml reads WEB_PUSH_SUBJECT

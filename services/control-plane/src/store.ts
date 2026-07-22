@@ -17,7 +17,14 @@ import { createHash } from "node:crypto";
  * nodes can share API keys/OAuth logins across the user's runners.
  */
 
-export type Plan = "free" | "individual" | "team";
+export type Plan = "free" | "pro" | "team";
+
+// The paid single-user plan was originally called `individual` internally while
+// being sold as "Pro". The id is now `pro` everywhere; this alias exists only to
+// translate requests from clients released before the rename (the published CLI
+// sends a plan id over the wire — see normalizePlan in index.ts). Accounts stored
+// under the old id are migrated at boot by postgres-store's schema init.
+export const LEGACY_PLAN_IDS: Record<string, Plan> = { individual: "pro" };
 
 export interface Entitlements {
   plan: Plan;
@@ -373,7 +380,7 @@ export const PLAN_ENTITLEMENTS: Record<Plan, Omit<Entitlements, "plan">> = {
   // Push notifications and the hosted work queue remain paid. Paid plans omit
   // `maxNodes` entirely, which the enforcement paths read as "unlimited".
   free: { maxNodes: 1, pushEnabled: false, relayEnabled: true, workQueueEnabled: false },
-  individual: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true },
+  pro: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true },
   team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true },
 };
 
