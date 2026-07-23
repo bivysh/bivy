@@ -1601,6 +1601,72 @@ app.post("/node/link-grant", requireNode, asyncHandler(async (req, res) => {
   res.json({ ok: true, sessionToken, nodeId: node.id, nodeName: node.name, relayUrl: relayUrlForNode(node.id) });
 }));
 
+// Session replication (docs/session-replication.md) --------------------------
+//
+// A node mints a client-scoped grant for a SIBLING node it co-owns, so an owner
+// daemon can connect to its standby as a relay client (the only way to reach a
+// node over the relay). This closes the "credential gap": an enrollment token
+// can enumerate siblings but couldn't otherwise mint a client credential. The
+// grant is node-scoped to the sibling and expiring — least privilege.
+app.post("/node/sibling-link-grant", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const siblingId = String(req.body?.nodeId ?? "").trim();
+  if (!siblingId) return res.status(400).json({ error: "Missing nodeId" });
+  if (siblingId === node.id) return res.status(400).json({ error: "A node cannot replicate to itself" });
+  const owns = (await store.listNodes(node.accountId)).some((n) => n.id === siblingId);
+  if (!owns) return res.status(404).json({ error: "Unknown sibling node" });
+  const grant = await store.createLinkGrant(node.accountId, siblingId, LINK_GRANT_TTL_MS);
+  res.json({ ok: true, grant, nodeId: siblingId, relayUrl: relayUrlForNode(siblingId) });
+}));
+
+// The current owner declares (or clears) the standby for a session it owns.
+app.post("/node/sessions/:sessionId/standby", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
+  const standbyNodeId = req.body?.standbyNodeId ? String(req.body.standbyNodeId).trim() : undefined;
+  if (standbyNodeId) {
+    const owns = (await store.listNodes(node.accountId)).some((n) => n.id === standbyNodeId);
+    if (!owns) return res.status(404).json({ error: "Unknown standby node" });
+    if (standbyNodeId === node.id) return res.status(400).json({ error: "A node cannot be its own standby" });
+  }
+  const ownership = await store.setSessionStandby(node.accountId, sessionId, node.id, standbyNodeId);
+  res.json({ ok: true, ownership });
+}));
+
+// Read a session's ownership/epoch (owner needs its epoch to stamp frames; the
+// standby reads it to promote with the right expectedEpoch).
+app.get("/node/sessions/:sessionId/ownership", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  const ownership = await store.getSessionOwnership(node.accountId, sessionId);
+  res.json({ ok: true, ownership: ownership ?? null });
+}));
+
+// Promote a node to owner via compare-and-set on the epoch. Authorized to the
+// designated standby taking over (toNodeId === caller) or the current owner
+// handing off. A stale expectedEpoch loses the race → 409 (the fence).
+app.post("/node/sessions/:sessionId/promote", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  const toNodeId = String(req.body?.toNodeId ?? "").trim();
+  const expectedEpoch = Number(req.body?.expectedEpoch);
+  if (!sessionId || !toNodeId || !Number.isInteger(expectedEpoch)) {
+    return res.status(400).json({ error: "Missing sessionId, toNodeId, or expectedEpoch" });
+  }
+  const current = await store.getSessionOwnership(node.accountId, sessionId);
+  if (!current) return res.status(404).json({ error: "Session is not replicated" });
+  // Only the current owner (handoff) or the node being promoted may promote.
+  if (node.id !== current.ownerNodeId && node.id !== toNodeId) {
+    return res.status(403).json({ error: "Not authorized to promote this session" });
+  }
+  const owns = (await store.listNodes(node.accountId)).some((n) => n.id === toNodeId);
+  if (!owns) return res.status(404).json({ error: "Unknown target node" });
+  const promoted = await store.promoteSession(node.accountId, sessionId, toNodeId, expectedEpoch);
+  if (!promoted) return res.status(409).json({ error: "Epoch mismatch — promotion lost the race", current });
+  res.json({ ok: true, ownership: promoted });
+}));
+
 // A node or client exchanges its long-lived bearer (over TLS, directly to the
 // control plane) for a short-lived, single-use relay ticket. Only the ticket is
 // ever handed to the relay, so a compromised relay never learns a reusable
