@@ -341,7 +341,7 @@ export function App() {
                   <pre className="code-snippet"><code>curl -fsSL https://bivy.sh/install.sh | bash</code></pre>
                 </li>
                 <li>
-                  <strong>No machine handy?</strong> Launch an ephemeral server below — it spins up in the cloud and self-destructs after its TTL.
+                  <strong>No machine handy?</strong> Launch an ephemeral server below (<strong>Pro</strong>) — it spins up in the cloud and self-destructs after its TTL.
                 </li>
               </ul>
             </div>

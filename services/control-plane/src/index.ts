@@ -1056,6 +1056,14 @@ const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "ssm.ap-northeast-1.amazonaws.com",
 ]);
 app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
+  // Quick ephemeral servers are a paid feature. The persistent installer stays
+  // free; this cold-start relay (spin a cloud box up from just a phone) is gated
+  // to Pro/Team when entitlements are enforced (Bivy Cloud). Mirrors the client
+  // gate in EphemeralSheet — this is the authoritative check.
+  const account = (req as Request & { account: Account }).account;
+  if (enforceEntitlements && !(await store.entitlements(account.id)).ephemeralEnabled) {
+    return res.status(403).json({ error: "Quick ephemeral servers are a Pro feature. Upgrade to launch cloud runners." });
+  }
   const url = String(req.body?.url ?? "");
   let host: string;
   try { host = new URL(url).host; } catch { return res.status(400).json({ error: `Bad provider URL` }); }

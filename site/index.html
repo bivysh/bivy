@@ -29,7 +29,11 @@
       --faint:   #999da4;
       --line:    #e3e0da;
       --line-2:  #efece7;
-      --accent:  #9a4d10;
+      /* A warmer, richer orange than the old muddy brown. Dark enough on the
+         light background to double as link text (~4.9:1) and to carry white
+         button labels. */
+      --accent:  #c2410c;
+      --accent-ink: #ffffff;
       --ok:      #2f6b40;
       --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
       --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -48,7 +52,11 @@
         --faint:   #737373;
         --line:    #2e2e32;
         --line-2:  #252528;
-        --accent:  #d99155;
+        /* A vivid orange that pops on the dark background. It's light, so button
+           labels switch to near-black ink (--accent-ink) — the old washed-out
+           tan with white text was nearly invisible (see the "Go Pro" pill). */
+        --accent:  #f97316;
+        --accent-ink: #1c1206;
         --ok:      #7bb98c;
       }
     }
@@ -289,7 +297,7 @@
       padding: 10px 18px; border-radius: 7px; cursor: pointer;
       text-decoration: none; border: 1px solid transparent; white-space: nowrap;
     }
-    .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
     .btn-primary:hover { filter: brightness(1.06); }
     .btn-ghost { background: var(--panel); color: var(--ink); border-color: var(--line); }
     .btn-ghost:hover { border-color: var(--muted); }

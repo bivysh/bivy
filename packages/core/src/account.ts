@@ -196,6 +196,7 @@ export interface AccountMe {
     relayEnabled?: boolean;
     pushEnabled?: boolean;
     workQueueEnabled?: boolean;
+    ephemeralEnabled?: boolean;
   };
   counts?: { nodes?: number; sessions?: number; devices?: number };
   [k: string]: unknown;
