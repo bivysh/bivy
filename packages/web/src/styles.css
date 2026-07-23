@@ -1392,6 +1392,9 @@ select.picker-search { appearance: auto; }
 .gh-connected-hint code { white-space: nowrap; }
 .gh-ephemeral-toggle { display: flex; flex-direction: row; align-items: center; gap: 8px; font-size: 13px; }
 .gh-ephemeral-toggle input { flex: none; }
+.gh-installations { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.gh-installation-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.gh-installation-account { color: var(--ink); word-break: break-word; }
 .node-picker { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .node-pick { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); color: var(--ink); }
 .node-pick:hover { border-color: var(--accent); }

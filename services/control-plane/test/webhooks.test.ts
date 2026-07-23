@@ -13,6 +13,7 @@ import {
   parseGithubCommentEvent,
   pickCommentRoutingLabel,
   parseInstallationId,
+  parseInstallationEvent,
   applyDefaultNode,
 } from "../src/webhooks.js";
 
@@ -141,6 +142,26 @@ await test("installation id: read from a GitHub App payload, undefined otherwise
   assert.equal(parseInstallationId({ installation: { id: 987 }, action: "created" }), "987");
   assert.equal(parseInstallationId({ action: "opened" }), undefined); // classic per-repo webhook
   assert.equal(parseInstallationId(null), undefined);
+});
+
+await test("installation event parse: action + id + account from an `installation` payload (issue #15)", () => {
+  const created = parseInstallationEvent({
+    action: "created",
+    installation: { id: 987, account: { login: "acme", type: "Organization" } },
+  });
+  assert.equal(created?.action, "created");
+  assert.equal(created?.installationId, "987");
+  assert.equal(created?.account, "acme");
+  assert.equal(created?.accountType, "Organization");
+
+  const deleted = parseInstallationEvent({ action: "deleted", installation: { id: 987 } });
+  assert.equal(deleted?.action, "deleted");
+  assert.equal(deleted?.installationId, "987");
+  assert.equal(deleted?.account, undefined);
+
+  // No installation object at all → undefined (not an `installation` event).
+  assert.equal(parseInstallationEvent({ action: "opened" }), undefined);
+  assert.equal(parseInstallationEvent(null), undefined);
 });
 
 await test("slack signature: v0 hmac with replay window", () => {

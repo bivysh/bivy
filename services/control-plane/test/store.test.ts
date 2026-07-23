@@ -544,6 +544,87 @@ await test("disconnecting one app leaves the account's other apps connected", as
   assert.equal((await store.listGithubAppHooks(acct.id)).length, 1);
 });
 
+// Issue #15: a hook maintains an allowlist of the GitHub App installations it
+// has actually seen (via the `installation` webhook), scoped to the hook (not
+// just the account) since one account can have several apps installed on
+// different accounts/orgs.
+await test("installation allowlist: authorise/revoke/list, scoped to the account, trust-on-first-use", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("install-allow@example.com");
+  const hook = await store.createInboundHook(acct.id, "github_app");
+
+  // Trust-on-first-use: nothing recorded yet must not block a working queue —
+  // this is what lets an account that predates the feature keep working.
+  assert.equal(await store.isInstallationAuthorized(hook.id, "111"), true);
+  // A classic (non-App) webhook carries no installation id at all — nothing to check.
+  assert.equal(await store.isInstallationAuthorized(hook.id, undefined), true);
+  assert.equal((await store.listAuthorizedInstallations(acct.id, hook.id)).length, 0);
+
+  // The `installation` webhook (action: created) authorises an install.
+  await store.authorizeInstallation(acct.id, hook.id, "111", { account: "acme", accountType: "Organization" });
+  const list = await store.listAuthorizedInstallations(acct.id, hook.id);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].installationId, "111");
+  assert.equal(list[0].account, "acme");
+  assert.equal(list[0].accountType, "Organization");
+
+  // Once at least one installation is recorded, enforcement turns on: the
+  // recorded one is authorised, an unrecorded one is not.
+  assert.equal(await store.isInstallationAuthorized(hook.id, "111"), true);
+  assert.equal(await store.isInstallationAuthorized(hook.id, "222"), false);
+
+  // Re-authorising the same installation updates its metadata rather than duplicating.
+  await store.authorizeInstallation(acct.id, hook.id, "111", { account: "acme-renamed" });
+  assert.equal((await store.listAuthorizedInstallations(acct.id, hook.id)).length, 1);
+  assert.equal((await store.listAuthorizedInstallations(acct.id, hook.id))[0]?.account, "acme-renamed");
+
+  // The `installation` webhook (action: deleted) revokes it. With nothing left
+  // recorded, the hook is back to trusting everything — an account that
+  // uninstalls its only app isn't permanently locked out once it reinstalls.
+  assert.equal(await store.revokeInstallation(acct.id, hook.id, "111"), true);
+  assert.equal((await store.listAuthorizedInstallations(acct.id, hook.id)).length, 0);
+  assert.equal(await store.isInstallationAuthorized(hook.id, "222"), true);
+  // Revoking again is a no-op, not an error.
+  assert.equal(await store.revokeInstallation(acct.id, hook.id, "111"), false);
+
+  // Scoped to the owning account: a foreign account can't authorise or revoke
+  // installations against this hook.
+  const other = await store.findOrCreateAccount("install-allow2@example.com");
+  await store.authorizeInstallation(other.id, hook.id, "333");
+  assert.equal((await store.listAuthorizedInstallations(acct.id, hook.id)).length, 0);
+  await store.authorizeInstallation(acct.id, hook.id, "333");
+  assert.equal(await store.revokeInstallation(other.id, hook.id, "333"), false);
+  assert.equal((await store.listAuthorizedInstallations(acct.id, hook.id))[0]?.installationId, "333");
+});
+
+// The webhook route only enqueues a delivery once `isInstallationAuthorized`
+// says yes (see index.ts) — simulate that guard here with store calls alone so
+// the "unauthorised must not enqueue, authorised must" requirement (issue #15)
+// is covered at the store level, with no HTTP layer involved.
+await test("installation allowlist gates enqueueing: an unauthorised installation is skipped, an authorised one enqueues", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("install-enqueue@example.com");
+  const hook = await store.createInboundHook(acct.id, "github_app");
+  await store.authorizeInstallation(acct.id, hook.id, "111");
+
+  const maybeEnqueue = async (installationId: string) => {
+    if (!(await store.isInstallationAuthorized(hook.id, installationId))) return undefined;
+    return store.enqueueWorkItem(acct.id, { source: "github:issue", title: "t", label: "bivy", installationId, appId: hook.appId });
+  };
+
+  const ok = await maybeEnqueue("111");
+  assert.ok(ok);
+  assert.equal(ok?.installationId, "111");
+
+  const rejected = await maybeEnqueue("999");
+  assert.equal(rejected, undefined);
+
+  // Only the authorised installation's item made it onto the queue.
+  const pending = await store.listPendingWorkItems(acct.id, ["bivy"]);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.installationId, "111");
+});
+
 // The node may hold several apps' keys, so a work item has to say which app's
 // installation it belongs to — otherwise the node has to guess which key to mint with.
 await test("work items carry the app id of the hook that received the delivery", async () => {

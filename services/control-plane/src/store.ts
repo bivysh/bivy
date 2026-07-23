@@ -328,6 +328,19 @@ export interface InboundHook {
   servingNodeSeenAt?: string; // ISO time the serving node last (re)registered
 }
 
+// A GitHub App installation a hook has recorded as authorised (issue #15). Bound
+// to the hook (not just the account) since one account can have several apps,
+// each installed on different accounts/orgs. `account`/`accountType` are
+// display-only (the GitHub login/org the installation is on and "User" |
+// "Organization"), populated from the `installation` webhook payload so the
+// Settings UI can show a human-readable list rather than bare numeric ids.
+export interface HookInstallation {
+  installationId: string;
+  account?: string;
+  accountType?: string;
+  createdAt: string;
+}
+
 // --- Shared normalization helpers --------------------------------------------
 // Pure, DB-agnostic value normalization used by PostgresStore. Keeping the rules
 // here — rather than inlining the same expression at each call site — means a rule
@@ -590,6 +603,35 @@ export interface MeshStore {
   deleteGithubAppHooks(accountId: string): Promise<number>;
   // Remove just one app's hooks (disconnecting a single app, leaving the rest).
   deleteGithubAppHooksForApp(accountId: string, appId: string): Promise<number>;
+
+  // Installation allowlist (issue #15): which GitHub App installations a hook
+  // has recorded as authorised. Maintained from the `installation` webhook event
+  // (created/deleted) and enforced before a delivery from an unrecognised
+  // installation is allowed to enqueue.
+  //
+  // Record (or refresh the display metadata of) an authorised installation.
+  // Scoped to the owning account; a no-op if `hookId` isn't the account's.
+  authorizeInstallation(
+    accountId: string,
+    hookId: string,
+    installationId: string,
+    meta?: { account?: string; accountType?: string },
+  ): Promise<void>;
+  // Revoke a previously-authorised installation (the app was uninstalled, or the
+  // user pruned it from Settings). Returns whether a row was removed.
+  revokeInstallation(accountId: string, hookId: string, installationId: string): Promise<boolean>;
+  // The hook's full authorised-installations list, for the Settings UI.
+  listAuthorizedInstallations(accountId: string, hookId: string): Promise<HookInstallation[]>;
+  // True when `installationId` may enqueue work for this hook: it's undefined
+  // (a classic per-repo webhook carries no installation), it's already on the
+  // hook's authorised list, or the hook has never recorded ANY installation.
+  // The last case is trust-on-first-use — an account that predates this
+  // feature, or whose GitHub App isn't subscribed to the `installation` event,
+  // keeps working unmodified rather than having a working queue silently break.
+  // Enforcement only turns on once at least one installation has actually been
+  // seen for this hook.
+  isInstallationAuthorized(hookId: string, installationId: string | undefined): Promise<boolean>;
+
   enqueueWorkItem(accountId: string, input: WorkItemInput): Promise<WorkItem>;
   // Pending items a node may run: the account's items whose label the node serves
   // (a node serving "bivy" also serves "bivy/<self>"; pass the labels it accepts).

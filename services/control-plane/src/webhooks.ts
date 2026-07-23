@@ -88,6 +88,34 @@ export function parseInstallationId(payload: unknown): string | undefined {
   return id === undefined || id === null ? undefined : String(id);
 }
 
+export interface ParsedInstallationEvent {
+  action: string; // "created" | "deleted" | ... (anything else is ignored by the caller)
+  installationId: string;
+  account?: string; // the GitHub login the app was (un)installed on
+  accountType?: string; // "User" | "Organization"
+}
+
+/**
+ * Parse a GitHub App `installation` webhook payload (fired when a user installs
+ * or uninstalls the app on an account/org) into the bits needed to maintain a
+ * hook's authorised-installations allowlist (issue #15). Undefined when the
+ * payload carries no `installation.id` at all — every real `installation` event
+ * has one, so this only guards against a malformed/unrelated payload.
+ */
+export function parseInstallationEvent(payload: unknown): ParsedInstallationEvent | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const o = payload as Record<string, any>;
+  const installation = o.installation;
+  const id = installation?.id;
+  if (id === undefined || id === null) return undefined;
+  return {
+    action: String(o.action ?? ""),
+    installationId: String(id),
+    account: installation?.account?.login ? String(installation.account.login) : undefined,
+    accountType: installation?.account?.type ? String(installation.account.type) : undefined,
+  };
+}
+
 /** Extract GitHub `@mention` logins from free text (comment/issue body). */
 export function extractMentions(text: string): string[] {
   const out: string[] = [];

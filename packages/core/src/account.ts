@@ -229,6 +229,18 @@ export interface PairedDevice {
 }
 
 /**
+ * One GitHub App installation a hook has recorded as authorised (issue #15) —
+ * the account/org the app is installed on. Shown in Settings → GitHub App so a
+ * user can see, and revoke, which installations may enqueue work through it.
+ */
+export interface GithubAppInstallation {
+  id: string; // the installation id (GitHub's, as a string)
+  account?: string; // the GitHub login/org the install is on
+  accountType?: string; // "User" | "Organization"
+  createdAt: string;
+}
+
+/**
  * One GitHub App connected to the account. A private GitHub App can only be
  * installed on the account that owns it, so covering a personal account plus
  * every org means one app per owner — hence a list, not a single app.
@@ -259,6 +271,10 @@ export interface GithubAppEntry {
   // the UI should prompt to (re)connect it on a node rather than say "connected".
   servedBy?: { id: string; name?: string; online: boolean; lastSeenAt?: string } | null;
   servingNodeSeenAt?: string;
+  // Installations this app's hook has recorded as authorised (issue #15). Empty
+  // doesn't mean "nothing installed" — it can also mean trust-on-first-use
+  // hasn't recorded anything yet (an account that predates this feature).
+  installations?: GithubAppInstallation[];
 }
 
 export interface GithubAppInfo extends GithubAppEntry {
@@ -297,6 +313,28 @@ export async function disconnectGithubApp(store: LocalStore, appId?: string, fet
   const query = appId ? `?appId=${encodeURIComponent(appId)}` : "";
   const res = await fetchImpl(`${cpBase(store)}/account/github-app${query}`, { method: "DELETE", headers: authHeaders(store) });
   if (!res.ok) throw new Error(`disconnect failed: ${res.status}`);
+}
+
+/**
+ * Revoke one of a GitHub App's authorised installations (Settings → GitHub App
+ * → an installation's "Revoke" button; issue #15). After this, a delivery from
+ * that installation is rejected the same way one that was never authorised
+ * would be — it does not touch the actual GitHub App installation, just this
+ * account's allowlist. `appId` scopes it to one of the account's apps, same as
+ * `disconnectGithubApp`.
+ */
+export async function revokeGithubAppInstallation(
+  store: LocalStore,
+  installationId: string,
+  appId?: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const query = appId ? `?appId=${encodeURIComponent(appId)}` : "";
+  const res = await fetchImpl(`${cpBase(store)}/account/github-app/installations/${encodeURIComponent(installationId)}${query}`, {
+    method: "DELETE",
+    headers: authHeaders(store),
+  });
+  if (!res.ok) throw new Error(`revoke installation failed: ${res.status}`);
 }
 
 /**

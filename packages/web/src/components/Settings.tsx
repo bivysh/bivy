@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubAppInstallation, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
@@ -943,6 +943,10 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   // Keyed by app so an error stays attached to the row it belongs to.
   const [disconnectErr, setDisconnectErr] = useState<{ id: string; message: string } | null>(null);
+  // Authorised-installations allowlist (issue #15). Keyed by `${appKey}:${installationId}`
+  // so a revoke in one app's list can't be confused with another's.
+  const [revokingInstallation, setRevokingInstallation] = useState<string | null>(null);
+  const [revokeErr, setRevokeErr] = useState<{ id: string; message: string } | null>(null);
   const [nodes, setNodes] = useState<AccountNode[]>([]);
   const [defaultNode, setDefaultNode] = useState("");
   const [savingDefaultNode, setSavingDefaultNode] = useState(false);
@@ -1122,6 +1126,22 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
       setDisconnectingId(null);
     }
   };
+  // Revoke a single authorised installation (issue #15): future deliveries from
+  // it are rejected, without touching the actual GitHub App installation.
+  const revokeInstallation = async (entry: GithubAppEntry, installation: GithubAppInstallation) => {
+    const rowId = `${appKey(entry)}:${installation.id}`;
+    setRevokeErr(null);
+    setRevokingInstallation(rowId);
+    try {
+      await controller.revokeGithubAppInstallation(installation.id, entry.appId);
+      // Re-read the truth rather than optimistically dropping the row.
+      setInfo(await controller.fetchGithubApp());
+    } catch (e) {
+      setRevokeErr({ id: rowId, message: String((e as Error)?.message || e) });
+    } finally {
+      setRevokingInstallation(null);
+    }
+  };
   const renderApp = (entry: GithubAppEntry) => (
     <div className="gh-connected" key={appKey(entry)}>
       <div className="gh-connected-head">
@@ -1181,6 +1201,37 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
         )
       )}
       {showConnectExisting && ceApp && appKey(ceApp) === appKey(entry) && renderConnectExisting()}
+      {/* Authorised installations (issue #15): which accounts/orgs may enqueue
+          work through this app, so a user can see and prune the list. Empty
+          doesn't necessarily mean "nothing installed" — an account that
+          predates this feature hasn't recorded any yet, and everything keeps
+          working (trust-on-first-use) until at least one is recorded. */}
+      {entry.installations && entry.installations.length > 0 && (
+        <div className="gh-installations">
+          <p className="field-label">Authorised installations</p>
+          {entry.installations.map((installation) => {
+            const rowId = `${appKey(entry)}:${installation.id}`;
+            return (
+              <div key={installation.id}>
+                <div className="gh-installation-row">
+                  <span className="gh-installation-account">
+                    {installation.account || `installation ${installation.id}`}
+                    {installation.accountType ? ` (${installation.accountType === "Organization" ? "org" : "personal"})` : ""}
+                  </span>
+                  <button
+                    className="link-btn danger"
+                    disabled={revokingInstallation !== null}
+                    onClick={() => revokeInstallation(entry, installation)}
+                  >
+                    {revokingInstallation === rowId ? "Revoking…" : "Revoke"}
+                  </button>
+                </div>
+                {revokeErr?.id === rowId && <div className="banner error inline">{revokeErr.message}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="row-actions">
         <button
           className="btn danger-ghost"

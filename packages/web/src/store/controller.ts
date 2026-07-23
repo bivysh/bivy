@@ -22,6 +22,7 @@ import {
   deleteWorkItem,
   clearWorkQueue,
   disconnectGithubApp,
+  revokeGithubAppInstallation,
   setGithubAppDefaultNode,
   fetchEphemeralQueueDefault,
   setEphemeralQueueDefault,
@@ -1448,6 +1449,14 @@ export class AppController {
     // …and drop the account's hooks on the control plane. Errors propagate so the
     // UI can tell the user it didn't take (e.g. control plane mid-deploy).
     await disconnectGithubApp(this.local, appId);
+  }
+  /**
+   * Revoke one of a GitHub App's authorised installations (issue #15) — future
+   * deliveries from it are rejected, without touching the app's actual GitHub
+   * installation. `appId` scopes it to one of the account's several apps.
+   */
+  revokeGithubAppInstallation(installationId: string, appId?: string): Promise<void> {
+    return revokeGithubAppInstallation(this.local, installationId, appId);
   }
   async removeNode(nodeId: string): Promise<void> {
     await removeAccountNode(this.local, nodeId);

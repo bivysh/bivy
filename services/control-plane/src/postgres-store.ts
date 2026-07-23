@@ -26,6 +26,7 @@ import {
   type ModelAuthKeyRequest,
   type SubscriptionState,
   type InboundHook,
+  type HookInstallation,
   type WorkItem,
   type WorkItemInput,
   entitlementsForPlan,
@@ -305,6 +306,19 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS serving_node_id      TEXT;
       ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS serving_node_seen_at TIMESTAMPTZ;
 
+      -- Installation allowlist (issue #15): which GitHub App installations a hook
+      -- has recorded as authorised, maintained from the "installation" webhook
+      -- event. A child table (not a column) since it's a set that's added to /
+      -- pruned one row at a time, rather than a flat per-hook value.
+      CREATE TABLE IF NOT EXISTS hook_installations (
+        hook_id         TEXT NOT NULL REFERENCES inbound_hooks(id) ON DELETE CASCADE,
+        installation_id TEXT NOT NULL,
+        account         TEXT,
+        account_type    TEXT,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (hook_id, installation_id)
+      );
+
       CREATE TABLE IF NOT EXISTS work_items (
         id                 TEXT PRIMARY KEY,
         account_id         TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -352,6 +366,7 @@ export class PostgresStore implements MeshStore {
       CREATE INDEX IF NOT EXISTS idx_session_index_account ON session_index(account_id);
       CREATE INDEX IF NOT EXISTS idx_push_subscriptions_account ON push_subscriptions(account_id);
       CREATE INDEX IF NOT EXISTS idx_inbound_hooks_account ON inbound_hooks(account_id);
+      CREATE INDEX IF NOT EXISTS idx_hook_installations_hook ON hook_installations(hook_id);
       CREATE INDEX IF NOT EXISTS idx_work_items_pending ON work_items(account_id, status, label);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_dedupe ON work_items(account_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
       -- One PENDING item per (account, collapse_key). The partial predicate on
@@ -1086,6 +1101,53 @@ export class PostgresStore implements MeshStore {
     return rowCount ?? 0;
   }
 
+  async authorizeInstallation(
+    accountId: string,
+    hookId: string,
+    installationId: string,
+    meta?: { account?: string; accountType?: string },
+  ): Promise<void> {
+    // Scoped via the WHERE EXISTS check: a hook id that isn't this account's is a
+    // no-op, same as the UPDATE-based setters above.
+    await this.query(
+      `INSERT INTO hook_installations (hook_id, installation_id, account, account_type)
+       SELECT $2, $3, $4, $5
+       WHERE EXISTS (SELECT 1 FROM inbound_hooks WHERE id = $2 AND account_id = $1)
+       ON CONFLICT (hook_id, installation_id) DO UPDATE
+         SET account = COALESCE(EXCLUDED.account, hook_installations.account),
+             account_type = COALESCE(EXCLUDED.account_type, hook_installations.account_type)`,
+      [accountId, hookId, installationId, meta?.account?.trim() || null, meta?.accountType?.trim() || null],
+    );
+  }
+
+  async revokeInstallation(accountId: string, hookId: string, installationId: string): Promise<boolean> {
+    const { rowCount } = await this.query(
+      `DELETE FROM hook_installations
+       WHERE hook_id = $2 AND installation_id = $3
+         AND EXISTS (SELECT 1 FROM inbound_hooks WHERE id = $2 AND account_id = $1)`,
+      [accountId, hookId, installationId],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  async listAuthorizedInstallations(accountId: string, hookId: string): Promise<HookInstallation[]> {
+    const { rows } = await this.query(
+      `SELECT hi.* FROM hook_installations hi
+       JOIN inbound_hooks h ON h.id = hi.hook_id
+       WHERE h.id = $2 AND h.account_id = $1
+       ORDER BY hi.created_at ASC`,
+      [accountId, hookId],
+    );
+    return rows.map(mapHookInstallation);
+  }
+
+  async isInstallationAuthorized(hookId: string, installationId: string | undefined): Promise<boolean> {
+    if (!installationId) return true; // classic per-repo webhook — nothing to check
+    const { rows } = await this.query(`SELECT installation_id FROM hook_installations WHERE hook_id = $1`, [hookId]);
+    if (rows.length === 0) return true; // trust-on-first-use: nothing recorded yet
+    return rows.some((r: any) => r.installation_id === installationId);
+  }
+
   async deleteInboundHook(accountId: string, id: string): Promise<boolean> {
     const { rowCount } = await this.query(
       `DELETE FROM inbound_hooks WHERE id = $2 AND account_id = $1`,
@@ -1248,6 +1310,15 @@ function mapHook(row: any): InboundHook {
     defaultNode: row.default_node ?? undefined,
     servingNodeId: row.serving_node_id ?? undefined,
     servingNodeSeenAt: row.serving_node_seen_at ? new Date(row.serving_node_seen_at).toISOString() : undefined,
+  };
+}
+
+function mapHookInstallation(row: any): HookInstallation {
+  return {
+    installationId: row.installation_id,
+    account: row.account ?? undefined,
+    accountType: row.account_type ?? undefined,
+    createdAt: new Date(row.created_at).toISOString(),
   };
 }
 

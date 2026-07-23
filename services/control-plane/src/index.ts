@@ -19,6 +19,7 @@ import {
   parseGithubCommentEvent,
   pickCommentRoutingLabel,
   parseInstallationId,
+  parseInstallationEvent,
   verifySlackSignature,
   parseSlackCommand,
   applyDefaultNode,
@@ -1261,12 +1262,17 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
   // run an app itself, so "connected" (a hook exists) is not the same as "a live
   // node is serving it" — a deleted/reinstalled node clears servingNodeId.
   const nodes = await store.listNodes(client.accountId);
-  const describe = (hook: (typeof hooks)[number]) => {
+  const describe = async (hook: (typeof hooks)[number]) => {
     const slug = hook.botMention || "";
     const servingNode = hook.servingNodeId ? nodes.find((n) => n.id === hook.servingNodeId) : undefined;
     const servedBy = servingNode
       ? { id: servingNode.id, name: servingNode.name, online: Boolean(servingNode.online), lastSeenAt: servingNode.lastSeenAt }
       : null;
+    // The installations this hook has recorded as authorised (issue #15), so the
+    // Settings UI can show them and let the user revoke one. Empty = either
+    // nothing installed yet, or trust-on-first-use hasn't recorded anything (an
+    // account that predates this feature) — the UI treats both the same way.
+    const installations = await store.listAuthorizedInstallations(client.accountId, hook.id);
     return {
       connected: true,
       name: hook.appName || slug || "GitHub App",
@@ -1296,12 +1302,28 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
       // signal that lets the UI say "no node is running this app; connect one".
       servedBy,
       servingNodeSeenAt: hook.servingNodeSeenAt,
+      installations: installations.map((i) => ({ id: i.installationId, account: i.account, accountType: i.accountType, createdAt: i.createdAt })),
     };
   };
-  const apps = hooks.map(describe);
+  const apps = await Promise.all(hooks.map(describe));
   // Flat top-level fields describe the first app, so clients written against the
   // single-app shape keep working against a multi-app account.
   res.json({ ...apps[0], apps });
+}));
+
+// Revoke one of a hook's authorised GitHub App installations (Settings → GitHub
+// App → an entry's "Revoke" button; issue #15). With `appId`, targets that app's
+// hook; without one, the account's primary github_app hook (mirrors the other
+// per-app endpoints above). A revoked installation's future deliveries are
+// rejected the same way an installation that was never authorised would be.
+app.delete("/account/github-app/installations/:installationId", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const appId = typeof req.query.appId === "string" ? req.query.appId.trim() : "";
+  const hook = await store.getGithubAppHook(client.accountId, appId || undefined);
+  if (!hook) return res.status(404).json({ error: "No GitHub App connected" });
+  const removed = await store.revokeInstallation(client.accountId, hook.id, String(req.params.installationId));
+  res.json({ ok: true, removed });
 }));
 
 // Set (or clear) the account's default node: untagged issues/comments that
@@ -1467,6 +1489,26 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   }
   const event = String(req.headers["x-github-event"] ?? "");
   if (event === "ping") return res.json({ ok: true, pong: true });
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw.toString("utf8"));
+  } catch {
+    return res.status(400).json({ error: "Invalid JSON" });
+  }
+  // installation: the user (de)authorised this GitHub App on an account/org.
+  // Maintain the hook's authorised-installations allowlist (issue #15) — bound to
+  // THIS hook, not just the account, so a multi-app account's several installs
+  // each bind to the app that actually owns them. Not gated on plan: keeping the
+  // allowlist current costs nothing and free accounts may later upgrade.
+  if (event === "installation") {
+    const evt = parseInstallationEvent(payload);
+    if (evt?.action === "created") {
+      await store.authorizeInstallation(hook.accountId, hook.id, evt.installationId, { account: evt.account, accountType: evt.accountType });
+    } else if (evt?.action === "deleted") {
+      await store.revokeInstallation(hook.accountId, hook.id, evt.installationId);
+    }
+    return res.json({ ok: true, enqueued: false });
+  }
   // Plan gate: the hosted work queue (label/@-mention → PR on your node) is a
   // paid feature. Ack with 200 so GitHub marks the delivery successful (a non-2xx
   // would make GitHub retry forever) but enqueue nothing for free accounts.
@@ -1477,15 +1519,18 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   // key: a redelivered webhook returns the existing item instead of duplicating.
   const deliveryId = String(req.headers["x-github-delivery"] ?? "");
   const dedupeKey = deliveryId ? `gh:${deliveryId}` : undefined;
-  let payload: unknown;
-  try {
-    payload = JSON.parse(raw.toString("utf8"));
-  } catch {
-    return res.status(400).json({ error: "Invalid JSON" });
-  }
   // For a GitHub App, the payload names the installation the node mints a token
   // for. Classic per-repo webhooks have none (the node uses its PAT).
   const installationId = parseInstallationId(payload);
+  // Reject work from an installation this hook hasn't authorised. Trust-on-
+  // first-use: a hook with no recorded installations yet (an account that
+  // predates this feature, or whose GitHub App isn't subscribed to the
+  // `installation` event) keeps working unmodified — enforcement only kicks in
+  // once at least one installation has actually been seen for this hook, so a
+  // working queue never breaks silently (issue #15).
+  if (!(await store.isInstallationAuthorized(hook.id, installationId))) {
+    return res.json({ ok: true, enqueued: false, reason: "installation" });
+  }
 
   // issue_comment: an `@`-mention of the bot handle turns the comment into work
   // routed to a node (the comment text is the instruction the node acts on).
