@@ -597,7 +597,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .github-pill.pr.merged { border-color: var(--merged); color: var(--merged); }
 .github-pill.pr.closed { border-color: var(--muted); color: var(--muted); }
 .github-pill.issue { border-color: var(--accent); color: var(--accent); }
-.github-pill .gh-text { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.github-pill .gh-text { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Compact PR badge on a sidebar row (open/merged/closed), colour-matched to the
    header pill. Non-interactive — it sits inside the row's <button>. */
@@ -1237,7 +1237,11 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 }
 
 /* ---- Buttons ---- */
-.btn { padding: 7px 14px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); }
+/* `.btn` styles both <button> and <a> (e.g. the onboarding "Download installer").
+   Force inline-flex centering, a pointer cursor and no underline so an anchor
+   reads as a real button rather than an underlined link inside a filled pill. */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 14px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font: inherit; text-decoration: none; cursor: pointer; }
+.btn:disabled { cursor: default; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
 .btn.ghost { background: transparent; }
 .btn.danger-ghost { background: transparent; color: var(--danger); border-color: var(--danger); }

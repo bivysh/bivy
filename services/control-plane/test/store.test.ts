@@ -128,16 +128,19 @@ await test("free vs pro entitlements match the published pricing table", () => {
   assert.equal(free.pushEnabled, false, "free: no push notifications");
   assert.equal(free.relayEnabled, true, "free: one hosted relay node");
   assert.equal(free.workQueueEnabled, false, "free: no hosted work queue");
+  assert.equal(free.ephemeralEnabled, false, "free: no quick ephemeral servers");
 
   const pro = entitlementsForPlan("pro");
   assert.equal(pro.maxNodes, undefined, "pro: unlimited nodes (no cap)");
   assert.equal(pro.pushEnabled, true, "pro: push notifications");
   assert.equal(pro.relayEnabled, true, "pro: remote relay");
   assert.equal(pro.workQueueEnabled, true, "pro: hosted work queue");
+  assert.equal(pro.ephemeralEnabled, true, "pro: quick ephemeral servers");
 
   const team = entitlementsForPlan("team");
   assert.equal(team.maxNodes, undefined, "team: unlimited nodes (no cap)");
   assert.equal(team.workQueueEnabled, true, "team: hosted work queue");
+  assert.equal(team.ephemeralEnabled, true, "team: quick ephemeral servers");
 });
 
 await test("setSubscriptionState records full billing metadata and updates entitlements", async () => {

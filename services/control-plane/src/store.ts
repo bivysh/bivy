@@ -39,6 +39,10 @@ export interface Entitlements {
   relayEnabled: boolean;
   // Hosted GitHub/Slack work queue (label an issue → PR on your node). Paid only.
   workQueueEnabled: boolean;
+  // Quick ephemeral cloud servers brokered from a phone (Fly/Hetzner/AWS/… with
+  // the user's own token, proxied through the control-plane cold-start relay).
+  // Paid only — the persistent installer stays free for everyone.
+  ephemeralEnabled: boolean;
 }
 
 export interface Account {
@@ -400,9 +404,9 @@ export const PLAN_ENTITLEMENTS: Record<Plan, Omit<Entitlements, "plan">> = {
   // onboarding can go straight from installer → remote PWA without a paywall.
   // Push notifications and the hosted work queue remain paid. Paid plans omit
   // `maxNodes` entirely, which the enforcement paths read as "unlimited".
-  free: { maxNodes: 1, pushEnabled: false, relayEnabled: true, workQueueEnabled: false },
-  pro: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true },
-  team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true },
+  free: { maxNodes: 1, pushEnabled: false, relayEnabled: true, workQueueEnabled: false, ephemeralEnabled: false },
+  pro: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
+  team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
 };
 
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000; // 30 days
