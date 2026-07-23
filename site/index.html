@@ -100,6 +100,8 @@
     nav.top { display: flex; align-items: center; gap: 22px; font-size: 14.5px; }
     nav.top a { color: var(--muted); text-decoration: none; }
     nav.top a:hover { color: var(--ink); }
+    nav.top a.btn-primary,
+    nav.top a.btn-primary:hover { color: #fff; }
     @media (max-width: 700px) { nav.top a.hide-sm { display: none; } }
 
     /* ---------- hero ---------- */
@@ -282,6 +284,8 @@
     .plan ul { list-style: none; margin: 0; padding: 0; font-size: 14.5px; color: var(--ink-2); }
     .plan li { padding: 5px 0 5px 17px; position: relative; }
     .plan li::before { content: "—"; position: absolute; left: 0; color: var(--faint); }
+    .plan li.soon { padding-left: 0; color: var(--muted); font-style: italic; }
+    .plan li.soon::before { content: none; }
     .plan.featured { background: var(--panel); box-shadow: inset 0 0 0 1.5px var(--accent); }
     .plan .badge {
       display: inline-block; font-size: 11px; font-weight: 600;
@@ -366,7 +370,7 @@
       <a href="#pricing" class="hide-sm">Pricing</a>
       <a href="https://github.com/bivysh/bivy" class="hide-sm">GitHub</a>
       <a href="https://app.bivy.sh" class="hide-sm">Log in</a>
-      <a href="https://app.bivy.sh" class="btn btn-primary btn-sm">Go Pro</a>
+      <a href="https://app.bivy.sh" class="btn btn-primary btn-sm">Try for free</a>
     </nav>
   </div>
 </header>
@@ -379,12 +383,8 @@
       <h1>Run coding agents on machines you own.</h1>
       <p class="lede">
         Bivy runs Claude Code, Codex, Gemini CLI, Aider and other agent CLIs on your
-        own laptop or server — with your keys, your repository, and your toolchain —
-        then makes those sessions reachable from your phone, browser, or another terminal.
-      </p>
-      <p class="sub">
-        Your code is never uploaded. Agents run in real terminals on hardware you
-        control. Bivy adds the session layer, approvals, and remote access around them.
+        own laptop or server — with your keys, your repo, and your toolchain — then
+        makes those sessions reachable from your phone, browser, or another terminal.
       </p>
 
       <div class="install">
@@ -392,16 +392,19 @@
         <button id="copy" type="button" aria-label="Copy install command">Copy</button>
       </div>
       <p class="install-note">
-        macOS and Linux. Requires Node 22.19 or newer — the installer sets it up if missing.
-        Prefer to read it first? <a href="https://bivy.sh/install.sh">View the script</a>.
+        macOS and Linux. Needs Node 22.19 or newer, and the installer sets that up for you
+        if it's missing. Want to read it first? <a href="https://bivy.sh/install.sh">View the script</a>.
       </p>
 
       <div class="hero-cta">
-        <a href="https://app.bivy.sh" class="btn btn-primary">Go Pro — $15/mo</a>
+        <a href="https://app.bivy.sh" class="btn btn-primary">Try for free</a>
         <a href="#pricing" class="btn btn-ghost">See pricing</a>
       </div>
-      <p class="sub" style="margin:16px 0 0">
-        Free forever on one machine, including 5 GitHub issue-to-PR runs a month. Go Pro to
+
+      <p class="sub" style="margin:22px 0 0">
+        Your code never leaves your machine. Agents run in real terminals on hardware you
+        control, and Bivy adds the session layer, approvals, and remote access around them.
+        It's free on one machine — including 5 GitHub issue-to-PR runs a month. Go Pro to
         reach every machine, get push notifications, and run the queue without limits.
       </p>
 
@@ -484,6 +487,17 @@
           session is still there, transcript and diffs intact.</p>
         </div>
         <div class="feature">
+          <h3>Reach it from anywhere</h3>
+          <p>Your node dials out to the relay, so there's no port to open and no tunnel to
+          run. Attach from the web app, the installable PWA on your phone, or another
+          terminal — behind NAT and corporate firewalls all the same.</p>
+        </div>
+        <div class="feature">
+          <h3>Push notifications <span class="tag-pro">Pro</span></h3>
+          <p>Get pinged when an agent finishes, needs an approval, or hits an error, so you
+          can kick something off and walk away instead of babysitting the terminal.</p>
+        </div>
+        <div class="feature">
           <h3>Approvals wherever you are</h3>
           <p>Agents run unattended by default. Catastrophic commands and writes outside
           the workspace are blocked in every mode, and force-push, publish, deploy and
@@ -524,6 +538,71 @@
           provider token — which stays on your device and is never sent to Bivy.</p>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- PRICING -->
+  <section id="pricing">
+    <div class="wrap">
+      <p class="kicker">Pricing</p>
+      <h2>We charge for reachability, never for tokens.</h2>
+      <p class="prose">
+        You bring your own providers, keys, and machines. What we sell is hosted relay
+        uptime and remote access. Running Bivy locally — and self-hosting the whole thing —
+        stays free.
+      </p>
+
+      <div class="plans">
+        <div class="plan">
+          <h3>Free</h3>
+          <div class="price">$0</div>
+          <p class="who">All the agents, on one machine, reachable from your phone.</p>
+          <ul>
+            <li>All ten agents, plus your own</li>
+            <li>Durable sessions and worktrees</li>
+            <li>Approvals and sandbox tiers</li>
+            <li>1 relay-connected node</li>
+            <li>GitHub work queue — 5 runs / month</li>
+            <li>Phone and browser access</li>
+            <li>Community support</li>
+          </ul>
+          <div class="cta-row">
+            <a href="https://app.bivy.sh" class="btn btn-ghost btn-block">Log in</a>
+          </div>
+        </div>
+        <div class="plan featured">
+          <span class="badge">Most popular</span>
+          <h3>Pro</h3>
+          <div class="price">$15 <span>/ month</span></div>
+          <p class="who">Every machine reachable, and agents working while you're away.</p>
+          <ul>
+            <li>Everything in Free</li>
+            <li>Unlimited nodes</li>
+            <li>Push notifications</li>
+            <li>Unlimited GitHub work queue</li>
+            <li>Cross-node session index</li>
+            <li>Email support</li>
+          </ul>
+          <div class="cta-row">
+            <a href="https://app.bivy.sh" class="btn btn-primary btn-block">Go Pro — $15/mo</a>
+          </div>
+        </div>
+        <div class="plan">
+          <h3>Team</h3>
+          <div class="price">Soon</div>
+          <p class="who">Shared nodes, roles, and audit for a whole team.</p>
+          <ul>
+            <li class="soon">Coming soon…</li>
+          </ul>
+          <div class="cta-row">
+            <a href="./contact.html" class="btn btn-ghost btn-block">Get early access</a>
+          </div>
+        </div>
+      </div>
+      <p class="install-note" style="margin-top:18px;max-width:var(--prose)">
+        Community support means public GitHub issues, with no guaranteed response.
+        Self-hosting is unsupported on every plan.
+      </p>
     </div>
   </section>
 
@@ -574,8 +653,8 @@
     <div class="wrap">
       <p class="kicker">Security</p>
       <h2>What each part can see.</h2>
-      <p class="prose">The useful question is not whether a system is secure, but what it
-      is able to read. Here is the answer.</p>
+      <p class="prose">"Is it secure?" is the wrong question. The one that matters is what
+      each part can actually read. Here's the whole table, nothing hidden.</p>
 
       <div class="table-scroll">
         <table class="matrix">
@@ -602,7 +681,7 @@
       </div>
 
       <div class="notice">
-        <p><b>Known limits, stated plainly.</b></p>
+        <p><b>Known limits.</b></p>
         <p>Sandbox tiers — <code>read-only</code>, <code>workspace-write</code>,
         <code>danger-full-access</code> — are enforced natively by the agents that
         support them (Codex, Claude Code, Gemini CLI, Qwen Code). Agents without a native
@@ -720,74 +799,6 @@
     </div>
   </section>
 
-  <!-- PRICING -->
-  <section id="pricing">
-    <div class="wrap">
-      <p class="kicker">Pricing</p>
-      <h2>We charge for reachability, never for tokens.</h2>
-      <p class="prose">
-        You bring your own providers, keys, and machines. Bivy Cloud sells hosted relay
-        uptime and remote access. Running Bivy locally, and self-hosting all of it, is free.
-      </p>
-
-      <div class="plans">
-        <div class="plan">
-          <h3>Free</h3>
-          <div class="price">$0</div>
-          <p class="who">All the agents, on one machine, reachable from your phone.</p>
-          <ul>
-            <li>All ten agents, plus your own</li>
-            <li>Durable sessions and worktrees</li>
-            <li>Approvals and sandbox tiers</li>
-            <li>1 relay-connected node</li>
-            <li>GitHub work queue — 5 runs / month</li>
-            <li>Phone and browser access</li>
-            <li>Community support</li>
-          </ul>
-          <div class="cta-row">
-            <a href="https://app.bivy.sh" class="btn btn-ghost btn-block">Log in</a>
-          </div>
-        </div>
-        <div class="plan featured">
-          <span class="badge">Most popular</span>
-          <h3>Pro</h3>
-          <div class="price">$15 <span>/ month</span></div>
-          <p class="who">Every machine reachable, and agents working while you're away.</p>
-          <ul>
-            <li>Everything in Free</li>
-            <li>Unlimited nodes</li>
-            <li>Push notifications</li>
-            <li>Unlimited GitHub work queue</li>
-            <li>Cross-node session index</li>
-            <li>Email support</li>
-          </ul>
-          <div class="cta-row">
-            <a href="https://app.bivy.sh" class="btn btn-primary btn-block">Go Pro</a>
-          </div>
-        </div>
-        <div class="plan">
-          <h3>Team</h3>
-          <div class="price">Soon</div>
-          <p class="who">Shared nodes, roles, and audit. Not in 0.1.</p>
-          <ul>
-            <li>Everything in Pro</li>
-            <li>Shared nodes and roles</li>
-            <li>Shared approval policy</li>
-            <li>Audit log</li>
-            <li>Provider allowlists</li>
-          </ul>
-          <div class="cta-row">
-            <a href="./contact.html" class="btn btn-ghost btn-block">Get early access</a>
-          </div>
-        </div>
-      </div>
-      <p class="install-note" style="margin-top:18px;max-width:var(--prose)">
-        Community support means public GitHub issues, with no guaranteed response.
-        Self-hosting is unsupported on every plan.
-      </p>
-    </div>
-  </section>
-
   <!-- FAQ -->
   <section>
     <div class="wrap">
@@ -856,9 +867,10 @@
   <!-- CTA -->
   <section class="cta">
     <div class="wrap">
-      <h2>Start the real agent on the real machine.</h2>
-      <p>One command. Free for one node, phone included. Go Pro to reach every machine
-      and let agents ship PRs while you're away.</p>
+      <h2>Real agents, on a real machine you own.</h2>
+      <p>It's one command to get started, and it's free for one node with your phone
+      included. Go Pro when you want to reach every machine and have agents ship PRs
+      while you're away.</p>
       <div class="install">
         <code id="cmd2"><span class="p">$ </span>curl -fsSL https://bivy.sh/install.sh | bash</code>
         <button id="copy2" type="button" aria-label="Copy install command">Copy</button>
