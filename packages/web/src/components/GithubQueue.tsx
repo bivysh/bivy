@@ -370,14 +370,14 @@ export function GithubQueuePanel({
           <div className={`banner ${runsUsed >= runLimit ? "warn" : "info"} inline`}>
             {runsUsed >= runLimit ? (
               <>
-                You've used all {runLimit} of this month's free work-queue runs. New runs resume next month.{" "}
+                Free plan — you've used all {runLimit} work-queue runs this month. New runs resume next month.{" "}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
                   Upgrade for unlimited →
                 </button>
               </>
             ) : (
               <>
-                {Math.max(0, runLimit - runsUsed)} of {runLimit} free work-queue runs left this month.{" "}
+                Free plan — {Math.max(0, runLimit - runsUsed)} of {runLimit} work-queue runs left this month.{" "}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
                   Upgrade for unlimited →
                 </button>
