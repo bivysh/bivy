@@ -117,6 +117,45 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal((await store.listNodeSessions(outsider.id, a.id)).length, 0);
   });
 
+  // --- Session replication ownership (docs/session-replication.md) -----------
+  await test("session ownership: standby round-trips and promotion is a compare-and-set on the epoch", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-ownership@example.com");
+    await store.setPlan(acct.id, "pro"); // lift the free plan's 1-node cap
+    const { node: a } = await store.enrollNode(acct.id, "own-a", "Laptop A");
+    const { node: b } = await store.enrollNode(acct.id, "own-b", "Laptop B");
+
+    // Not replicated yet.
+    assert.equal(await store.getSessionOwnership(acct.id, "s1"), undefined);
+
+    // Owner A declares B as the standby; epoch starts at 0.
+    const declared = await store.setSessionStandby(acct.id, "s1", a.id, b.id);
+    assert.equal(declared.ownerNodeId, a.id);
+    assert.equal(declared.standbyNodeId, b.id);
+    assert.equal(declared.ownerEpoch, 0);
+
+    // Re-declaring (e.g. owner reconnect) must NOT reset the epoch.
+    const redeclared = await store.setSessionStandby(acct.id, "s1", a.id, b.id);
+    assert.equal(redeclared.ownerEpoch, 0, "epoch is stable across re-declare");
+
+    // A stale promotion (wrong expected epoch) is rejected — the fence holds.
+    assert.equal(await store.promoteSession(acct.id, "s1", b.id, 7), undefined);
+    assert.equal((await store.getSessionOwnership(acct.id, "s1"))?.ownerNodeId, a.id, "owner unchanged after a lost race");
+
+    // A correct promotion moves ownership to B, bumps the epoch, clears standby.
+    const promoted = await store.promoteSession(acct.id, "s1", b.id, 0);
+    assert.equal(promoted?.ownerNodeId, b.id);
+    assert.equal(promoted?.ownerEpoch, 1);
+    assert.equal(promoted?.standbyNodeId, undefined, "standby cleared on promotion");
+
+    // The old epoch no longer works (can't double-promote) — idempotent under retry.
+    assert.equal(await store.promoteSession(acct.id, "s1", a.id, 0), undefined);
+    assert.equal((await store.getSessionOwnership(acct.id, "s1"))?.ownerNodeId, b.id);
+
+    // Foreign accounts see nothing.
+    const other = await store.findOrCreateAccount("contract-ownership2@example.com");
+    assert.equal(await store.getSessionOwnership(other.id, "s1"), undefined);
+  });
+
   // --- Inbound hooks ---------------------------------------------------------
   await test("inbound hooks: create, app-meta, serving node cleared on node delete", async (store) => {
     const acct = await store.findOrCreateAccount("contract-hook@example.com");

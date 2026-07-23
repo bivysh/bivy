@@ -15,6 +15,7 @@ import {
   type ResolvedClient,
   type SessionAdvert,
   type SessionIndexEntry,
+  type SessionOwnership,
   type PushSubscriptionRecord,
   type NotificationPreferences,
   normalizeNotificationPreferences,
@@ -211,6 +212,19 @@ export class PostgresStore implements MeshStore {
       -- up. Routing metadata like node_id, not E2E payload. ADD COLUMN IF NOT
       -- EXISTS keeps this a safe, idempotent migration on existing databases.
       ALTER TABLE session_index ADD COLUMN IF NOT EXISTS agent_service_address TEXT;
+
+      -- Session replication ownership (docs/session-replication.md). Keyed by
+      -- session, NOT node, so it survives the wholesale rewrite of session_index
+      -- on every advertise. owner_epoch is the promotion fence (compare-and-set).
+      CREATE TABLE IF NOT EXISTS session_ownership (
+        account_id      TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id      TEXT NOT NULL,
+        owner_node_id   TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        standby_node_id TEXT REFERENCES nodes(id) ON DELETE SET NULL,
+        owner_epoch     INTEGER NOT NULL DEFAULT 0,
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, session_id)
+      );
 
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -794,6 +808,54 @@ export class PostgresStore implements MeshStore {
     }));
   }
 
+  async getSessionOwnership(accountId: string, sessionId: string): Promise<SessionOwnership | undefined> {
+    const { rows } = await this.query(
+      `SELECT * FROM session_ownership WHERE account_id = $1 AND session_id = $2`,
+      [accountId, sessionId],
+    );
+    return rows[0] ? mapOwnership(rows[0]) : undefined;
+  }
+
+  async setSessionStandby(
+    accountId: string,
+    sessionId: string,
+    ownerNodeId: string,
+    standbyNodeId: string | undefined,
+  ): Promise<SessionOwnership> {
+    // Upsert without disturbing owner_epoch: a re-declare (new standby, owner
+    // reconnect) must not reset the fence. ON CONFLICT keeps the existing epoch.
+    const { rows } = await this.query(
+      `INSERT INTO session_ownership (account_id, session_id, owner_node_id, standby_node_id, updated_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (account_id, session_id)
+       DO UPDATE SET owner_node_id = EXCLUDED.owner_node_id,
+                     standby_node_id = EXCLUDED.standby_node_id,
+                     updated_at = now()
+       RETURNING *`,
+      [accountId, sessionId, ownerNodeId, standbyNodeId ?? null],
+    );
+    return mapOwnership(rows[0]);
+  }
+
+  async promoteSession(
+    accountId: string,
+    sessionId: string,
+    toNodeId: string,
+    expectedEpoch: number,
+  ): Promise<SessionOwnership | undefined> {
+    // Compare-and-set on owner_epoch: only the caller holding the current epoch
+    // wins. The row moves to the new owner, the fence advances, and the standby
+    // is cleared (the new owner re-declares one). A mismatch returns no rows.
+    const { rows } = await this.query(
+      `UPDATE session_ownership
+          SET owner_node_id = $3, owner_epoch = owner_epoch + 1, standby_node_id = NULL, updated_at = now()
+        WHERE account_id = $1 AND session_id = $2 AND owner_epoch = $4
+      RETURNING *`,
+      [accountId, sessionId, toNodeId, expectedEpoch],
+    );
+    return rows[0] ? mapOwnership(rows[0]) : undefined;
+  }
+
   async upsertPushSubscription(accountId: string, endpoint: string, subscription: unknown): Promise<void> {
     await this.query(
       `INSERT INTO push_subscriptions (account_id, endpoint, subscription, created_at, updated_at)
@@ -1238,5 +1300,16 @@ function mapNode(row: any): NodeRecord {
     online: row.online,
     lastSeenAt: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+function mapOwnership(row: any): SessionOwnership {
+  return {
+    sessionId: row.session_id,
+    accountId: row.account_id,
+    ownerNodeId: row.owner_node_id,
+    standbyNodeId: row.standby_node_id ?? undefined,
+    ownerEpoch: Number(row.owner_epoch),
+    updatedAt: new Date(row.updated_at).toISOString(),
   };
 }

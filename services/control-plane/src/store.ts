@@ -95,6 +95,27 @@ export interface SessionIndexEntry {
 }
 export type SessionAdvert = Omit<SessionIndexEntry, "nodeId" | "updatedAt">;
 
+/**
+ * Ownership + warm-standby routing for a replicated session
+ * (docs/session-replication.md). Kept in its OWN table, keyed by session (not
+ * node), because `session_index` is rewritten wholesale on every advertise — a
+ * poor home for a monotonic epoch. This row is the authority for "who owns this
+ * session and who is its standby", and `ownerEpoch` is the fence that promotion
+ * advances via compare-and-set so a superseded owner can't keep writing.
+ *
+ * All fields are ROUTING metadata (node ids), never E2E payload — the control
+ * plane still never sees transcripts or workspace data.
+ */
+export interface SessionOwnership {
+  sessionId: string;
+  accountId: string;
+  ownerNodeId: string;
+  standbyNodeId?: string;
+  /** Monotonic ownership fence; +1 on each successful promotion. */
+  ownerEpoch: number;
+  updatedAt: string;
+}
+
 export interface PushSubscriptionRecord {
   accountId: string;
   endpoint: string;
@@ -465,6 +486,35 @@ export interface MeshStore {
   // its still-live sessions by looking their host address up here). Account-scoped
   // to `accountId` so a node can only ever see rows it owns.
   listNodeSessions(accountId: string, nodeId: string): Promise<SessionIndexEntry[]>;
+
+  // Session replication ownership (docs/session-replication.md). Separate from
+  // the session_index churn so the epoch is stable.
+  /** Read a session's ownership/standby row, or undefined if not replicated. */
+  getSessionOwnership(accountId: string, sessionId: string): Promise<SessionOwnership | undefined>;
+  /**
+   * The current owner declares (or clears, with `standbyNodeId: undefined`) the
+   * standby for a session it owns. Upserts the row without touching `ownerEpoch`.
+   * Returns the effective ownership row.
+   */
+  setSessionStandby(
+    accountId: string,
+    sessionId: string,
+    ownerNodeId: string,
+    standbyNodeId: string | undefined,
+  ): Promise<SessionOwnership>;
+  /**
+   * Promote `toNodeId` to owner via compare-and-set on `ownerEpoch`: succeeds
+   * only when `expectedEpoch` matches the stored epoch, bumping it by one, moving
+   * ownership, and clearing the standby. Returns the updated row, or `undefined`
+   * on an epoch mismatch (a lost race / stale caller) — the fence that prevents
+   * two nodes from both believing they own the session.
+   */
+  promoteSession(
+    accountId: string,
+    sessionId: string,
+    toNodeId: string,
+    expectedEpoch: number,
+  ): Promise<SessionOwnership | undefined>;
 
   // Web Push subscriptions for hosted PWA notifications.
   upsertPushSubscription(accountId: string, endpoint: string, subscription: unknown): Promise<void>;
