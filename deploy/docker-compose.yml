@@ -73,6 +73,11 @@ services:
       BILLING_PORTAL_RETURN_URL: "${BILLING_PORTAL_RETURN_URL:-}"
       DATABASE_POOL_MAX: "${DATABASE_POOL_MAX:-10}"
       DATABASE_URL: "postgres://${POSTGRES_USER:-bivy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bivy_control_plane}"
+      # Optional Sentry error reporting (off when unset). See docs/ops/monitoring.md.
+      SENTRY_DSN: "${SENTRY_DSN_CONTROL_PLANE:-}"
+      SENTRY_ENVIRONMENT: "${NODE_ENV:-}"
+      SENTRY_RELEASE: "${SENTRY_RELEASE:-}"
+      SENTRY_TRACES_SAMPLE_RATE: "${SENTRY_TRACES_SAMPLE_RATE:-0}"
     # Raise the open-file-descriptor limit. Each enrolled node/phone introspection
     # and DB connection consumes FDs; the default 1024 caps concurrency well below
     # the hardware. See docs/scaling.md.
@@ -110,6 +115,11 @@ services:
       RELAY_MAX_MESSAGES_PER_MINUTE: "${RELAY_MAX_MESSAGES_PER_MINUTE:-120}"
       RELAY_MAX_CONNECTIONS_PER_IP: "${RELAY_MAX_CONNECTIONS_PER_IP:-50}"
       RELAY_IDLE_TIMEOUT_MS: "${RELAY_IDLE_TIMEOUT_MS:-120000}"
+      # Optional Sentry error reporting (off when unset). See docs/ops/monitoring.md.
+      SENTRY_DSN: "${SENTRY_DSN_RELAY:-}"
+      SENTRY_ENVIRONMENT: "${NODE_ENV:-}"
+      SENTRY_RELEASE: "${SENTRY_RELEASE:-}"
+      SENTRY_TRACES_SAMPLE_RATE: "${SENTRY_TRACES_SAMPLE_RATE:-0}"
     # The relay holds one WebSocket per node plus one per connected phone, so it
     # is the most FD-hungry service. At ~2 FDs/user the default 1024 limit walls
     # concurrency around ~500 users regardless of CPU/RAM. See docs/scaling.md.

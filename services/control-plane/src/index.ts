@@ -12,6 +12,8 @@ import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
+import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector } from "./metrics.js";
+import { initSentry } from "./instrument.js";
 import {
   verifyGithubSignature,
   parseGithubIssueEvent,
@@ -91,6 +93,10 @@ try {
   );
   process.exit(1);
 }
+
+// Optional error reporting. Resolves to no-ops unless SENTRY_DSN is set, and only
+// then is @sentry/node loaded (see instrument.ts).
+const Sentry = await initSentry();
 
 const port = Number(process.env.PORT ?? 4400);
 const relayPublicUrl = process.env.RELAY_PUBLIC_URL ?? "ws://localhost:4500";
@@ -198,6 +204,10 @@ const relayTicketMetrics = {
   clientMinted: 0,
   clientFailed: 0,
 };
+// Mirror the ticket counters into the Prometheus registry, and start refreshing
+// the business/usage gauges from the store on an interval.
+bindRelayTicketMetrics(() => relayTicketMetrics);
+startUsageCollector(store);
 
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -237,6 +247,9 @@ app.use("/billing/webhook", express.raw({ type: "application/json", limit: "1mb"
 // urlencoded — match any content-type).
 app.use("/webhooks", express.raw({ type: () => true, limit: "1mb" }));
 app.use(express.json({ limit: "1mb" }));
+// Time every request under its matched route pattern for the /metrics
+// histogram. Cheap; records on response finish. Must run before the routes.
+app.use(httpMetricsMiddleware);
 // Liveness: the process is up and serving. Deliberately does NOT touch the
 // database — restarting the app can't fix an unreachable DB, so tying liveness
 // to the DB would just kill a healthy process during a transient blip and drop
@@ -245,7 +258,21 @@ app.get("/healthz", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/metrics", (_req, res) => {
+// Prometheus exposition for Alloy/Prometheus scrapers. Scraped over the internal
+// docker network only — Caddy blocks /metrics publicly. register.metrics() is
+// async (gauge collect callbacks), so resolve then send. See
+// docs/ops/monitoring.md in bivysh/bivy-cloud.
+app.get("/metrics", (_req, res, next) => {
+  register
+    .metrics()
+    .then((body) => {
+      res.setHeader("Content-Type", register.contentType);
+      res.end(body);
+    })
+    .catch(next);
+});
+// Backcompat: the pre-Prometheus JSON counters.
+app.get("/metrics.json", (_req, res) => {
   res.json({ ok: true, relayTickets: relayTicketMetrics });
 });
 
@@ -2013,6 +2040,7 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   // Postgres hostnames or stack internals.
   if (status >= 500) {
     console.error(`Unhandled ${status} on ${req.method} ${req.path}:`, error);
+    Sentry.captureException(error);
     return res.status(status).json({ error: "Something went wrong on our end. Please try again." });
   }
   res.status(status).json({ error: message });
