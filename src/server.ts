@@ -96,6 +96,7 @@ import { buildForkBundle, materializeFork, type ForkBundle, type ForkRecord, typ
 import { captureDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { EventLog } from "./session/event-log.js";
+import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereqInput, type ForkPrereq } from "./session/fork-prereqs.js";
 import { SecretVault } from "./secrets.js";
 import { InstallationTokenCache, createAppJwt, resolveInstallationId, type GitHubAppConfig } from "./github-app-auth.js";
@@ -2089,39 +2090,12 @@ interface CommandCtx {
 }
 type Command = (msg: ClientMessage, ctx: CommandCtx) => void | Promise<void>;
 
-// --- Idempotent session.new (mobile background/reconnect recovery) ------------
-// Mobile Safari can silently drop a backgrounded PWA's WebSocket reply without
-// ever closing the socket, so the `session.history` answer to a `session.new`
-// never reaches the client and its view wedges on the opening spinner forever.
-// The client recovers by re-firing the SAME `session.new` (same requestId) once
-// it reconnects. To make that retry safe, we dedupe creation by requestId:
-// concurrent or later requests carrying a requestId we've already handled adopt
-// the session the first request created instead of spawning a duplicate. The
-// in-flight Promise is stored synchronously (before any await) so a retry that
-// races the original still joins it rather than creating a second session.
-const sessionNewByRequestId = new Map<string, Promise<SessionRecord>>();
-// Keep a fulfilled entry around long enough to cover a realistic background →
-// foreground → reconnect window, then evict so the map can't grow unbounded.
-const SESSION_NEW_DEDUP_MS = 10 * 60_000;
-
-function dedupeSessionNew(
-  requestId: string | undefined,
-  create: () => Promise<SessionRecord>,
-): Promise<SessionRecord> {
-  // No requestId → nothing to key on; fall back to plain creation.
-  if (!requestId) return create();
-  const inflight = sessionNewByRequestId.get(requestId);
-  if (inflight) return inflight;
-  const p = create();
-  sessionNewByRequestId.set(requestId, p);
-  p.then(
-    () => setTimeout(() => sessionNewByRequestId.delete(requestId), SESSION_NEW_DEDUP_MS).unref(),
-    // A failed creation must not be cached: drop it immediately so a genuine
-    // retry of the same requestId can attempt creation again.
-    () => sessionNewByRequestId.delete(requestId),
-  );
-  return p;
-}
+// Idempotency for `session.new` keyed by requestId: a client's post-reconnect
+// retry adopts the session the first request created instead of spawning a
+// duplicate. See ./session/session-new-dedupe for the full rationale.
+const sessionNewDedupe = createSessionNewDedupe<SessionRecord>();
+const dedupeSessionNew = (requestId: string | undefined, create: () => Promise<SessionRecord>) =>
+  sessionNewDedupe.run(requestId, create);
 
 const RELAY_COMMANDS: Record<string, Command> = {
   ping(msg, ctx) {
