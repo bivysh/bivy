@@ -9,6 +9,12 @@
   <meta property="og:title" content="Bivy — Run coding agents on machines you own">
   <meta property="og:description" content="Coding agents on your hardware, with your keys, reachable from anywhere. Source-available, self-hostable, no repo upload.">
   <meta property="og:type" content="website">
+  <meta property="og:url" content="https://bivy.sh">
+  <meta property="og:image" content="https://bivy.sh/screenshots/app-session.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Bivy — Run coding agents on machines you own">
+  <meta name="twitter:description" content="Coding agents on your hardware, with your keys, reachable from anywhere. Source-available, self-hostable, no repo upload.">
+  <meta name="twitter:image" content="https://bivy.sh/screenshots/app-session.png">
   <link rel="icon" href="./icon.svg">
   <link rel="icon" type="image/png" href="./tent.png">
   <link rel="apple-touch-icon" href="./tent.png">
@@ -268,6 +274,42 @@
     .plan ul { list-style: none; margin: 0; padding: 0; font-size: 14.5px; color: var(--ink-2); }
     .plan li { padding: 5px 0 5px 17px; position: relative; }
     .plan li::before { content: "—"; position: absolute; left: 0; color: var(--faint); }
+    .plan.featured { background: var(--panel); box-shadow: inset 0 0 0 1.5px var(--accent); }
+    .plan .badge {
+      display: inline-block; font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--accent); margin: 0 0 6px;
+    }
+    .plan .cta-row { margin: 20px 0 0; }
+
+    /* ---------- buttons ---------- */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 8px; font: inherit; font-size: 14.5px; font-weight: 500;
+      padding: 10px 18px; border-radius: 7px; cursor: pointer;
+      text-decoration: none; border: 1px solid transparent; white-space: nowrap;
+    }
+    .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-primary:hover { filter: brightness(1.06); }
+    .btn-ghost { background: var(--panel); color: var(--ink); border-color: var(--line); }
+    .btn-ghost:hover { border-color: var(--muted); }
+    .btn-block { width: 100%; }
+    .btn-sm { padding: 8px 15px; font-size: 14px; }
+
+    /* inline "Pro" tag */
+    .tag-pro {
+      display: inline-block; font-size: 11.5px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--accent); border: 1px solid var(--accent);
+      border-radius: 999px; padding: 1px 9px; vertical-align: middle;
+      margin-left: 8px;
+    }
+    .upgrade-line { margin-top: 22px; font-size: 14.5px; color: var(--muted); }
+    .upgrade-line a { color: var(--accent); font-weight: 500; text-decoration: none; }
+    .upgrade-line a:hover { text-decoration: underline; }
+
+    /* hero CTA row */
+    .hero-cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 22px 0 0; }
 
     /* ---------- faq ---------- */
     .faq { margin-top: 26px; max-width: var(--prose); }
@@ -314,7 +356,9 @@
       <a href="#trust" class="hide-sm">Security</a>
       <a href="#docs">Docs</a>
       <a href="#pricing" class="hide-sm">Pricing</a>
-      <a href="https://github.com/bivysh/bivy">GitHub</a>
+      <a href="https://github.com/bivysh/bivy" class="hide-sm">GitHub</a>
+      <a href="https://app.bivy.sh" class="hide-sm">Log in</a>
+      <a href="https://app.bivy.sh" class="btn btn-primary btn-sm">Go Pro</a>
     </nav>
   </div>
 </header>
@@ -328,7 +372,7 @@
       <p class="lede">
         Bivy runs Claude Code, Codex, Gemini CLI, Aider and other agent CLIs on your
         own laptop or server — with your keys, your repository, and your toolchain —
-        then makes those sessions reachable from your phone or browser.
+        then makes those sessions reachable from your phone, browser, or another terminal.
       </p>
       <p class="sub">
         Your code is never uploaded. Agents run in real terminals on hardware you
@@ -342,6 +386,15 @@
       <p class="install-note">
         macOS and Linux. Requires Node 22.19 or newer — the installer sets it up if missing.
         Prefer to read it first? <a href="https://bivy.sh/install.sh">View the script</a>.
+      </p>
+
+      <div class="hero-cta">
+        <a href="https://app.bivy.sh" class="btn btn-primary">Go Pro — $15/mo</a>
+        <a href="#pricing" class="btn btn-ghost">See pricing</a>
+      </div>
+      <p class="sub" style="margin:16px 0 0">
+        Free forever on one machine. Go Pro to reach every machine, get push notifications,
+        and let agents turn GitHub issues into pull requests while you're away.
       </p>
 
       <p class="runs-on">
@@ -470,7 +523,7 @@
   <section>
     <div class="wrap">
       <p class="kicker">GitHub work queue</p>
-      <h2>Label an issue. Get a pull request back.</h2>
+      <h2>Label an issue. Get a pull request back. <span class="tag-pro">Pro</span></h2>
       <p class="prose">
         Work happens on a machine you own, with your local toolchain and your
         credentials. Bivy's control plane sees the issue title, body, and routing
@@ -500,6 +553,11 @@
           pushes a branch, and opens the pull request. Review it from your phone.</span>
         </li>
       </ol>
+
+      <p class="upgrade-line">
+        The GitHub work queue and push notifications are part of
+        <a href="#pricing">Pro — $15/mo</a>. Log in at app.bivy.sh to turn it on.
+      </p>
     </div>
   </section>
 
@@ -666,30 +724,23 @@
 
       <div class="plans">
         <div class="plan">
-          <h3>Local</h3>
+          <h3>Free</h3>
           <div class="price">$0</div>
-          <p class="who">Everything on your own machine. No account required.</p>
+          <p class="who">All the agents, on one machine, reachable from your phone.</p>
           <ul>
             <li>All ten agents, plus your own</li>
             <li>Durable sessions and worktrees</li>
             <li>Approvals and sandbox tiers</li>
-            <li>Terminal takeover</li>
-            <li>Self-host relay + control plane</li>
-          </ul>
-        </div>
-        <div class="plan">
-          <h3>Free</h3>
-          <div class="price">$0</div>
-          <p class="who">Add hosted remote access for one machine.</p>
-          <ul>
-            <li>Everything in Local</li>
             <li>1 relay-connected node</li>
             <li>Phone and browser access</li>
-            <li>Installable web app</li>
             <li>Community support</li>
           </ul>
+          <div class="cta-row">
+            <a href="https://app.bivy.sh" class="btn btn-ghost btn-block">Log in</a>
+          </div>
         </div>
-        <div class="plan">
+        <div class="plan featured">
+          <span class="badge">Most popular</span>
           <h3>Pro</h3>
           <div class="price">$15 <span>/ month</span></div>
           <p class="who">Every machine reachable, and agents working while you're away.</p>
@@ -701,10 +752,13 @@
             <li>Cross-node session index</li>
             <li>Email support</li>
           </ul>
+          <div class="cta-row">
+            <a href="https://app.bivy.sh" class="btn btn-primary btn-block">Go Pro</a>
+          </div>
         </div>
         <div class="plan">
           <h3>Team</h3>
-          <div class="price">Later</div>
+          <div class="price">Soon</div>
           <p class="who">Shared nodes, roles, and audit. Not in 0.1.</p>
           <ul>
             <li>Everything in Pro</li>
@@ -713,6 +767,9 @@
             <li>Audit log</li>
             <li>Provider allowlists</li>
           </ul>
+          <div class="cta-row">
+            <a href="./contact.html" class="btn btn-ghost btn-block">Get early access</a>
+          </div>
         </div>
       </div>
       <p class="install-note" style="margin-top:18px;max-width:var(--prose)">
@@ -791,10 +848,15 @@
   <section class="cta">
     <div class="wrap">
       <h2>Start the real agent on the real machine.</h2>
-      <p>One command. Free for one node, phone included.</p>
+      <p>One command. Free for one node, phone included. Go Pro to reach every machine
+      and let agents ship PRs while you're away.</p>
       <div class="install">
         <code id="cmd2"><span class="p">$ </span>curl -fsSL https://bivy.sh/install.sh | bash</code>
         <button id="copy2" type="button" aria-label="Copy install command">Copy</button>
+      </div>
+      <div class="hero-cta">
+        <a href="https://app.bivy.sh" class="btn btn-primary">Go Pro — $15/mo</a>
+        <a href="#pricing" class="btn btn-ghost">Compare plans</a>
       </div>
     </div>
   </section>
