@@ -96,6 +96,8 @@ import { buildForkBundle, materializeFork, type ForkBundle, type ForkRecord, typ
 import { captureDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { EventLog } from "./session/event-log.js";
+import { ReplicationService } from "./session/replication-service.js";
+import type { ReplWireFrame } from "./session/replicator.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereqInput, type ForkPrereq } from "./session/fork-prereqs.js";
 import { SecretVault } from "./secrets.js";
 import { InstallationTokenCache, createAppJwt, resolveInstallationId, type GitHubAppConfig } from "./github-app-auth.js";
@@ -1063,6 +1065,7 @@ type NodeSettings = {
   githubIssuePrompt: string;
   sessionSync: boolean;
   worktreeSync: boolean;
+  syncStandbyNodeId?: string;
 };
 
 /** The node's default model for new sessions, or null (= use the runtime default). */
@@ -1099,6 +1102,10 @@ function nodeSettingsSnapshot(): NodeSettings {
     sessionSync: readSettings().sessionSync === true,
     // Worktree sync only has meaning when session sync is on.
     worktreeSync: readSettings().sessionSync === true && readSettings().worktreeSync === true,
+    syncStandbyNodeId: (() => {
+      const v = readSettings().syncStandbyNodeId;
+      return typeof v === "string" && v.trim() ? v.trim() : undefined;
+    })(),
   };
 }
 
@@ -1144,6 +1151,10 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   }
   if ("worktreeSync" in patch) {
     settings.worktreeSync = patch.worktreeSync === true && settings.sessionSync === true;
+  }
+  if ("syncStandbyNodeId" in patch) {
+    const v = typeof patch.syncStandbyNodeId === "string" ? patch.syncStandbyNodeId.trim() : "";
+    settings.syncStandbyNodeId = v || undefined;
   }
   writeSettings(settings);
   const snapshot = nodeSettingsSnapshot();
@@ -1872,6 +1883,54 @@ function eventLogPath(sessionId: string): string {
 // eventLog.deriveHistory. `redactSecrets` scrubs credentials at the single flush
 // choke point before anything lands on the synced-to-PWA disk.
 const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets);
+
+// --- Warm session replication (docs/session-replication.md) -----------------
+// A standby's replica repo lives under appDir/replicas/<id>: a self-contained git
+// repo that receives checkpoint bundles and is checked out on promotion. Created
+// lazily on the first frame that carries a bundle.
+const replicasDir = path.join(appDir, "replicas");
+async function ensureReplicaRepo(sessionId: string): Promise<string> {
+  const dir = path.join(replicasDir, encodeURIComponent(sessionId));
+  await fs.promises.mkdir(dir, { recursive: true });
+  if (!fs.existsSync(path.join(dir, ".git"))) {
+    spawnSync("git", ["-C", dir, "init", "-q"], { timeout: 5000 });
+  }
+  return dir;
+}
+// Assembled from daemon accessors; entirely inert unless sessionSync + a standby
+// are configured (both default off), so it cannot affect the default daemon path.
+const replication = new ReplicationService({
+  controlPlaneUrl: () => sessionAdvertiseTarget?.controlPlaneUrl,
+  enrollmentToken: () => sessionAdvertiseTarget?.enrollmentToken,
+  relayUrl: () => undefined, // the control plane returns the sharded relay URL
+  settings: () => {
+    const snap = nodeSettingsSnapshot();
+    return { sessionSync: snap.sessionSync, worktreeSync: snap.worktreeSync, standbyNodeId: snap.syncStandbyNodeId };
+  },
+  readRecords: (id) => eventLog.entries(id),
+  checkpointHead: async (id) => {
+    try {
+      return (await harness.checkpoints(id))[0]?.id;
+    } catch {
+      return undefined;
+    }
+  },
+  repoDirFor: (id) => {
+    const rec = openSessions.get(id);
+    return rec ? harnessDirFor(rec) : undefined;
+  },
+  runtimeSessionRef: (id) => openSessions.get(id)?.sessionFile,
+  replicaRepoDir: (id) => ensureReplicaRepo(id),
+  persistReplicaRecords: (id, records) => eventLog.rewrite(id, records),
+  upsertReplicaMeta: (id, info) => {
+    try {
+      metadata.upsertSession({ id, source: `replica${info.ownerNodeId ? `:${info.ownerNodeId}` : ""}`, status: "saved" });
+    } catch {
+      /* best-effort replica listing */
+    }
+  },
+  log: (m) => console.error(`[replication] ${m}`),
+});
 
 // Retire the legacy overlay sidecars. The append-only log is the sole overlay
 // store now and every session was migrated into it by the prior release's boot
@@ -2663,6 +2722,18 @@ const RELAY_COMMANDS: Record<string, Command> = {
     } catch (error) {
       relay?.sendEvent({ type: "transcription", requestId, error: error instanceof Error ? error.message : String(error) });
     }
+  },
+  // Session replication (docs/session-replication.md): the STANDBY receives a
+  // replication frame from the owner (which is connected as a relay CLIENT in
+  // this node's room) and applies it into the replica transcript + worktree,
+  // replying with the cursor so the owner can advance. Inert unless the owner
+  // opted in — a frame only arrives when a sibling chose this node as its standby.
+  async "session.replica.frame"(msg, ctx) {
+    const requestId = String(msg.requestId ?? "");
+    const frame = msg.frame as ReplWireFrame | undefined;
+    if (!frame) return;
+    const ack = await replication.handleReplicaFrame(frame, typeof msg.ownerNodeId === "string" ? msg.ownerNodeId : undefined);
+    ctx.reply({ type: "session.replica.ack", requestId, ack });
   },
   // Ephemeral provisioning transport (node-broker path). A remote device that
   // holds the user's cloud credentials asks this node to make ONE allowlisted
@@ -5426,7 +5497,12 @@ function attachSessionListeners(record: SessionRecord) {
       void refreshSessionUsage(record);
       // Snapshot the worktree and broadcast the structured diff this turn made —
       // universal edit review + rewind target, for every runtime.
-      void harnessEndTurn(record);
+      // Warm-replicate this turn to the standby AFTER the checkpoint is committed
+      // (so the shipped frame carries this turn's transcript AND its checkpoint).
+      // Gated on session sync — inert by default.
+      void harnessEndTurn(record).finally(() => {
+        void replication.onTurnComplete(record.id);
+      });
       // A turn that ended in a terminal model/provider error (e.g. an expired
       // credential or a 4xx from the API) otherwise vanished: working cleared,
       // no reply, no signal. Surface it as a session-scoped error so the client
@@ -8262,6 +8338,23 @@ app.post("/api/session/abort", async (req, res, next) => {
     if (!record) return res.status(404).json({ error: "No active session" });
     await record.session.abort();
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Promote a replicated session onto THIS node (the standby taking over an offline
+// owner). Runs the control-plane compare-and-set on the ownership epoch, then
+// materializes the replicated worktree so the session can be resumed locally.
+// Manual — triggered from the app or `bivy sessions promote` (docs/session-replication.md).
+app.post("/api/session/promote", async (req, res, next) => {
+  try {
+    const sessionId = String(req.body?.sessionId ?? "").trim();
+    if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
+    const epoch = await replication.promote(sessionId, identity.nodeId);
+    if (epoch === undefined) return res.status(409).json({ error: "Promotion lost the epoch race (another node owns it, or it isn't replicated)" });
+    scheduleAdvertise();
+    res.json({ ok: true, epoch });
   } catch (error) {
     next(error);
   }

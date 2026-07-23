@@ -409,6 +409,9 @@ export interface NodeSettings {
    *  standby so the promoted session can keep *working*, not just show history.
    *  Requires sessionSync; ignored when the workspace is not a git repo. */
   worktreeSync: boolean;
+  /** The account node this node replicates its sessions TO (the standby). Empty
+   *  = sync configured but no standby chosen yet (nothing is replicated). */
+  syncStandbyNodeId?: string;
 }
 
 export interface AppState {
