@@ -186,7 +186,11 @@ The node↔node streaming can't run in CI. To validate end-to-end:
 - **Resume-after-promote**: promotion runs the CAS + materializes the worktree; wiring the
   promoted session straight into a live runtime (vs. `bivy resume <id>` as a second step)
   is a small follow-up on `resolveOrResumeSession`.
-- **Reconnect/backoff** for the sibling client (connects lazily and drops on error today).
+- ~~**Reconnect/backoff** for the sibling client~~ — **done.** The standby connection is now a
+  supervised `ReconnectingConnection` (`src/session/reconnect.ts`): exponential backoff + jitter
+  on connect failure, prompt reconnect on a healthy connection's drop, and clean teardown when
+  sync is disabled or the standby changes. Replication survives relay blips instead of pausing
+  until the next turn. Unit-tested in `test/reconnect.test.ts`.
 - *(Optional)* lease-TTL **auto-promotion**; finer **dirty-working-tree** sync.
 
 ## Out of scope (v1)
