@@ -1153,10 +1153,6 @@ const commands: MeshCommand[] = [
   { name: "/clear", description: "Clear the local chat.", kind: "server" },
   { name: "/sessions", description: "Refresh and show saved sessions.", kind: "server" },
   { name: "/issue", description: "Pick up a configured GitHub issue on this computer.", kind: "server" },
-  { name: "/pr", description: "Commit, push, and open a pull request for this GitHub repo session.", kind: "server", run: async () => {
-    if (!active) return { ok: false, error: "No active session" };
-    return openPrForRepoSession(active);
-  } },
   { name: "/github-status", description: "Force a fresh GitHub PR status check for this session.", kind: "server", run: async () => {
     if (!active) return { ok: false, error: "No active session" };
     const changed = await refreshPullRequests(active);
@@ -2131,23 +2127,10 @@ const RELAY_COMMANDS: Record<string, Command> = {
       ctx.reply({ type: "session.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "session.pr.open"(msg, ctx) {
-    // Resume the session if the node has dropped it from memory so a PR can still
-    // be opened after a restart, not just while it's live.
-    let rec: SessionRecord | undefined;
-    try {
-      rec = await resolveOrResumeSession(msg.sessionId, msg.path);
-    } catch (error) {
-      ctx.reply({ type: "session.pr_result", sessionId: msg.sessionId, ok: false, error: error instanceof Error ? error.message : String(error) });
-      return;
-    }
-    const result = rec ? await openPrForRepoSession(rec) : { ok: false, error: "Session not found" };
-    ctx.reply({ type: "session.pr_result", sessionId: rec?.id ?? msg.sessionId, ...result });
-  },
   async "session.pr.refresh"(msg, ctx) {
     // Force a refresh regardless of live/attached state — resume the session if
-    // the node dropped it from memory, same as session.pr.open above, so a
-    // finished/detached session can still be reconciled on demand.
+    // the node dropped it from memory, so a finished/detached session can still
+    // be reconciled on demand.
     let rec: SessionRecord | undefined;
     try {
       rec = await resolveOrResumeSession(msg.sessionId, msg.path);
@@ -5439,12 +5422,10 @@ function attachSessionListeners(record: SessionRecord) {
       }
       // First real commit on a repo-backed worktree → publish the branch to the
       // remote (sets upstream), so the work is visible on GitHub. No-op until
-      // there's a commit, and only pushes once. Then either adopt a PR the agent
-      // opened itself (gh/API/web) so the badge lights up, or — if there's none —
-      // ask the user whether Bivy should open one.
+      // there's a commit, and only pushes once. Then adopt a PR the agent opened
+      // itself (gh/API/web) so the badge lights up.
       void maybePushWorktreeBranch(record)
-        .then(() => maybeDetectPullRequest(record))
-        .then(() => maybeSuggestPullRequest(record));
+        .then(() => maybeDetectPullRequest(record));
     }
     const sessionEventPayload = { type: "session.event", sessionId: record.id, event };
     if (event.type === "message_update") {
@@ -6213,10 +6194,9 @@ async function createGitWorkspaceSession(repoDir: string, parsed: ParsedRepo, op
  * kinds of GitHub-connected sessions: a regular repo-backed session
  * (`repo:owner/repo`) and a GitHub-issue pickup (`issue:owner/repo#N` — the
  * trailing issue number is stripped before parsing). Sharing this lookup is
- * what lets `maybePushWorktreeBranch`/`maybeDetectPullRequest`/
- * `maybeSuggestPullRequest` below — and the manual `/pr` chat command — work
- * the same way for both: publish the branch, adopt/track a PR the agent opens
- * itself, and offer a fallback if it doesn't, with no issue-specific code.
+ * what lets `maybePushWorktreeBranch`/`maybeDetectPullRequest` below work the
+ * same way for both: publish the branch and adopt/track a PR the agent opens
+ * itself, with no issue-specific code.
  */
 /** Parse a `record.source`/`MetadataSession.source` tag ("repo:owner/repo" or
  *  "issue:owner/repo#N") into its repo — shared by `repoSessionParts` (live
@@ -6270,21 +6250,6 @@ async function maybePushWorktreeBranch(record: SessionRecord) {
   } finally {
     record.branchPushing = false;
   }
-}
-
-async function maybeSuggestPullRequest(record: SessionRecord) {
-  const parts = repoSessionParts(record);
-  if (!parts || record.prUrl || record.prSuggested || record.prOpening) return;
-  const base = await resolveDefaultBaseRef(parts.wt.repoRoot);
-  const dirty = (runGit(["status", "--porcelain"], parts.wt.path) ?? "").trim();
-  if (!dirty && gitAheadCount(base, parts.wt.path) <= 0) return;
-  record.prSuggested = true;
-  broadcast({
-    type: "session.notice",
-    sessionId: record.id,
-    message: `Ready to create a pull request for ${parts.parsed.slug}. Run /pr when you want Bivy to commit changes, push ${parts.wt.branch}, and open the PR.`,
-    action: "/pr",
-  });
 }
 
 /** The single "primary" PR to surface on a one-badge row: an open PR if there
@@ -6477,57 +6442,6 @@ async function maybeDetectPullRequest(record: SessionRecord) {
     await refreshPullRequests(record);
   } finally {
     record.prDetecting = false;
-  }
-}
-
-async function openPrForRepoSession(record: SessionRecord) {
-  const parts = repoSessionParts(record);
-  if (!parts) return { ok: false, error: "This session is not connected to a GitHub repo worktree." };
-  if (record.prUrl) return { ok: true, prUrl: record.prUrl, text: `Pull request already exists: ${record.prUrl}` };
-  if (record.prOpening) return { ok: false, error: "A pull request is already being opened for this session." };
-
-  const { wt, parsed } = parts;
-  record.prOpening = true;
-  try {
-    const token = await resolveTokenForRepo(parsed.owner, parsed.repo);
-    if (!token) return { ok: false, error: "No GitHub token is available on this node. Run bivy github:connect or paste/connect GitHub credentials first." };
-
-    const title = record.session.getName() || `Bivy session ${record.id.slice(0, 8)}`;
-    const committed = await commitAll(wt.path, title);
-    const base = await resolveDefaultBaseRef(wt.repoRoot);
-    if (!committed && gitAheadCount(base, wt.path) <= 0) return { ok: false, error: "No file changes or unpushed commits to turn into a pull request." };
-
-    const cfg: GitHubTaskConfig = { token, owner: parsed.owner, repo: parsed.repo, repoDir: wt.repoRoot, label: "bivy", claimLabel: "bivy:in-progress", pollMs: 60_000 };
-    await pushBranch(cfg, wt.path, wt.branch);
-    record.branchPushed = true;
-    let pr = await openPullRequest(cfg, {
-      head: wt.branch,
-      base: base.replace(/^origin\//, ""),
-      title,
-      body: `_Opened by Bivy from a regular GitHub-connected session._\n\nSession: ${record.id}`,
-    });
-    // Creation fails with 422 when a PR already exists for this branch (e.g. the
-    // agent opened one itself, or a node restart lost the in-memory prUrl). Adopt
-    // the existing PR instead of erroring, so /pr is idempotent and the badge
-    // lights up either way.
-    let adopted = false;
-    if (!pr) {
-      pr = await findOpenPullRequestForBranch(cfg, wt.branch);
-      adopted = Boolean(pr);
-    }
-    if (!pr) return { ok: false, error: "GitHub did not create a pull request. It may already exist for this branch." };
-    record.prUrl = pr.url;
-    // Optimistically record the new PR so the badge lights up immediately; the
-    // refresh below reconciles titles and any other PRs on the branch.
-    record.prs = [{ url: pr.url, number: pr.number, state: "open" }, ...(record.prs ?? []).filter((p) => p.url !== pr.url)];
-    record.prSuggested = true;
-    persistSessionMetadata(record);
-    broadcast({ type: "session.pr_opened", sessionId: record.id, prUrl: pr.url, prs: record.prs });
-    scheduleAdvertise();
-    void refreshPullRequests(record).catch(() => {});
-    return { ok: true, prUrl: pr.url, text: `${adopted ? "Pull request already open" : "Opened pull request"}: ${pr.url}` };
-  } finally {
-    record.prOpening = false;
   }
 }
 
@@ -8205,17 +8119,6 @@ app.post("/api/commands/:runId/terminate", (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/session/pr", async (req, res, next) => {
-  try {
-    const session = await resolveOrResumeSession(req.body?.sessionId, req.body?.path);
-    if (!session) return res.status(404).json({ error: "Session not found" });
-    const result = await openPrForRepoSession(session);
-    if (!result.ok) return res.status(400).json(result);
-    res.json(result);
-  } catch (error) {
-    next(error);
-  }
-});
 
 // On-demand "update GitHub status" for one session: force `refreshPullRequests`
 // regardless of whether the session is live/attached, so a stale `open` badge

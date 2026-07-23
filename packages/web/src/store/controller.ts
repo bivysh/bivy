@@ -1701,14 +1701,9 @@ export class AppController {
     if (id) this.send({ kind: "session.resume", sessionId: id });
   }
 
-  openPr(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
-    if (id) this.send({ kind: "session.pr.open", sessionId: id });
-  }
-
   /** Force this session's PR status to re-sync with GitHub right now, instead
-   *  of waiting for its next turn (the "/github-status" command). Works even
-   *  when the session isn't live — the node resumes it just enough to check. */
+   *  of waiting for its next turn. Works even when the session isn't live — the
+   *  node resumes it just enough to check. */
   refreshPrStatus(sessionId?: string): void {
     const id = sessionId || this.store.getState().activeSessionId;
     if (id) this.send({ kind: "session.pr.refresh", sessionId: id });
