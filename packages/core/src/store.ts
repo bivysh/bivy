@@ -401,6 +401,17 @@ export interface NodeSettings {
    *  issue's own number/title/body/link. Editable; the node fills in a strong
    *  default when this hasn't been customized. */
   githubIssuePrompt: string;
+  /** Warm-replicate each session's transcript to a standby node so it can be
+   *  picked up elsewhere if this node goes offline (docs/session-replication.md).
+   *  Off by default — replication streams data node-to-node over the E2E relay. */
+  sessionSync: boolean;
+  /** Also replicate the workspace: each turn's git checkpoint is shipped to the
+   *  standby so the promoted session can keep *working*, not just show history.
+   *  Requires sessionSync; ignored when the workspace is not a git repo. */
+  worktreeSync: boolean;
+  /** The account node this node replicates its sessions TO (the standby). Empty
+   *  = sync configured but no standby chosen yet (nothing is replicated). */
+  syncStandbyNodeId?: string;
 }
 
 export interface AppState {

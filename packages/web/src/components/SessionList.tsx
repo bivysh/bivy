@@ -157,6 +157,15 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
     if (prBusyTimer.current) clearTimeout(prBusyTimer.current);
     prBusyTimer.current = setTimeout(() => { setPrBusy(false); setOpen(false); }, PR_BUSY_TIMEOUT_MS);
   };
+  // Continue a warm-replicated session on THIS node when its owner is offline
+  // (docs/session-replication.md). The node runs the control-plane epoch CAS and
+  // materializes the replica; on failure the reply rejects and the toast surfaces.
+  const promote = () => {
+    setPrBusy(true);
+    controller.promoteSession(sessionId, controller.local.cur)
+      .catch(() => {})
+      .finally(() => { setPrBusy(false); setOpen(false); });
+  };
 
   return (
     <div className="row-menu">
@@ -221,6 +230,9 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
                 {prBusy ? "Checking GitHub status…" : "Update GitHub status"}
               </button>
             )}
+            <button className="action-sheet-item" onClick={promote} disabled={prBusy}>
+              Continue here (promote replica)
+            </button>
             <button className="action-sheet-item danger" onClick={del} disabled={prBusy}>
               Delete
             </button>

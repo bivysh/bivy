@@ -1383,7 +1383,7 @@ async function cmdExec(args = []) {
 function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
-    "run", "sessions", "ls", "resume", "nodes", "agents", "shim", "takeover", "token", "exec",
+    "run", "sessions", "ls", "resume", "promote", "nodes", "agents", "shim", "takeover", "token", "exec",
     "setup", "start", "stop", "restart", "status", "doctor", "logs", "login",
     "update", "open", "service", "secrets", "relay:setup", "github:app-create", "prune", "uninstall", "help",
   ];
@@ -1687,6 +1687,34 @@ async function cmdKill(args = []) {
   if (del) {
     const res = await post("/api/sessions/delete", { id });
     console.log(res.ok ? c.green(`Deleted session ${id}.`) : c.yellow(`Abort done; delete returned ${res.status}.`));
+  }
+}
+
+// `bivy promote <id>` — continue a warm-replicated session on THIS node when its
+// owner went offline (docs/session-replication.md). Runs against the local node,
+// which does the control-plane epoch compare-and-set and materializes the replica
+// worktree. Run it on the standby node that holds the replica.
+async function cmdPromote(args = []) {
+  if (!(await ensureDeps())) process.exit(1);
+  const id = args.find((a) => !a.startsWith("-"));
+  if (!id) { console.error(c.red("Usage: bivy promote <session-id>")); process.exit(1); return; }
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not start the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  let token;
+  try { token = await localDeviceToken(config); }
+  catch (error) { console.error(c.red(error?.message || String(error))); process.exit(1); return; }
+  const res = await fetch(`${url(config)}/api/session/promote`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ sessionId: id }),
+  });
+  if (res.ok) {
+    const data = await res.json().catch(() => ({}));
+    console.log(c.green(`Promoted ${id} to this node (epoch ${data.epoch ?? "?"}). Resume it with: bivy resume ${id}`));
+  } else {
+    const data = await res.json().catch(() => ({}));
+    console.error(c.red(`Promotion failed (${res.status}): ${data.error || "unknown error"}`));
+    process.exit(1);
   }
 }
 
@@ -3566,6 +3594,9 @@ async function main() {
       break;
     case "resume":
       await cmdSessions(args, { autoResume: true });
+      break;
+    case "promote":
+      await cmdPromote(args);
       break;
     case "nodes":
       await cmdNodes(args);

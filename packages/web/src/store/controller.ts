@@ -247,6 +247,12 @@ export class AppController {
           this.resolveFork(event);
           return;
         }
+        // Promotion reply (continue a replicated session on the standby) reuses
+        // the same keyed request/reply correlation as fork.
+        if (type === "session.promote.result") {
+          this.resolveFork(event);
+          return;
+        }
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
         this.maybeFlushPendingPrompt(appliedEvent);
@@ -578,6 +584,23 @@ export class AppController {
     const error = (event as { error?: unknown }).error;
     if (error) pending.reject(new Error(String(error)));
     else pending.resolve(event);
+  }
+
+  /**
+   * Continue a replicated session on `standbyNodeId` (the warm standby) when its
+   * owner is offline: switch to the standby, ask it to promote (control-plane
+   * epoch compare-and-set + materialize the replica), and refresh the list.
+   * Throws on failure so the caller can surface it.
+   */
+  async promoteSession(sessionId: string, standbyNodeId: string): Promise<{ epoch: number }> {
+    if (standbyNodeId && standbyNodeId !== this.local.cur) {
+      this.switchNode(standbyNodeId);
+      await this.waitForOnline();
+    }
+    const reply = await this.forkRequest({ kind: "session.promote", sessionId }, 30000);
+    const epoch = Number((reply as { epoch?: unknown }).epoch ?? 0);
+    this.refreshAccountSessions();
+    return { epoch };
   }
 
   /** Send a fork command on the current transport and await its keyed reply. */
