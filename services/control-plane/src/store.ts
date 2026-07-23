@@ -395,6 +395,19 @@ export function entitlementsForPlan(plan: Plan): Entitlements {
   return { plan, ...PLAN_ENTITLEMENTS[plan] };
 }
 
+// Aggregate counts for the operational/business dashboard. Pure metadata — row
+// counts and group-bys over existing tables, never any row contents. Refreshed
+// on an interval by the metrics collector (metrics.ts) and exposed as Prometheus
+// gauges. See docs/ops/monitoring.md in bivysh/bivy-cloud.
+export interface UsageMetrics {
+  accountsTotal: number;
+  accountsByPlan: Record<string, number>;
+  nodesTotal: number;
+  nodesOnline: number;
+  workItemsByStatus: Record<string, number>;
+  sessionsByStatus: Record<string, number>;
+}
+
 export interface MeshStore {
   init(): Promise<void>;
   // Lightweight liveness check for the backing store. Resolves when the store is
@@ -402,6 +415,10 @@ export interface MeshStore {
   // /readyz readiness probe so an unreachable database surfaces as an unhealthy
   // container instead of a green light over an outage.
   ping(): Promise<void>;
+
+  // Aggregate counts for the monitoring dashboard (metadata only). See
+  // UsageMetrics above.
+  usageMetrics(): Promise<UsageMetrics>;
 
   // Accounts & auth
   findOrCreateAccount(email: string): Promise<Account>;

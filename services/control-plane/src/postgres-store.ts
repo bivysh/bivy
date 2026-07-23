@@ -25,6 +25,7 @@ import {
   type ModelAuthKeyRequest,
   type SubscriptionState,
   type InboundHook,
+  type UsageMetrics,
   type WorkItem,
   type WorkItemInput,
   entitlementsForPlan,
@@ -355,6 +356,34 @@ export class PostgresStore implements MeshStore {
   // (surfacing the connection error) when the database is unreachable.
   async ping() {
     await this.pool.query("SELECT 1");
+  }
+
+  // Aggregate row counts for the monitoring dashboard. Six cheap COUNT/GROUP BY
+  // queries over already-indexed columns, run in parallel; returns metadata
+  // only, never row contents. Called on an interval by the metrics collector,
+  // not per request.
+  async usageMetrics(): Promise<UsageMetrics> {
+    const [accounts, plans, nodes, online, work, sess] = await Promise.all([
+      this.query(`SELECT count(*)::int AS n FROM accounts`),
+      this.query(`SELECT plan, count(*)::int AS n FROM accounts GROUP BY plan`),
+      this.query(`SELECT count(*)::int AS n FROM nodes`),
+      this.query(`SELECT count(*)::int AS n FROM nodes WHERE online = true`),
+      this.query(`SELECT status, count(*)::int AS n FROM work_items GROUP BY status`),
+      this.query(`SELECT status, count(*)::int AS n FROM session_index GROUP BY status`),
+    ]);
+    const toMap = (rows: Array<Record<string, unknown>>, key: string): Record<string, number> => {
+      const out: Record<string, number> = {};
+      for (const row of rows) out[String(row[key] ?? "unknown")] = Number(row.n) || 0;
+      return out;
+    };
+    return {
+      accountsTotal: Number(accounts.rows[0]?.n) || 0,
+      accountsByPlan: toMap(plans.rows, "plan"),
+      nodesTotal: Number(nodes.rows[0]?.n) || 0,
+      nodesOnline: Number(online.rows[0]?.n) || 0,
+      workItemsByStatus: toMap(work.rows, "status"),
+      sessionsByStatus: toMap(sess.rows, "status"),
+    };
   }
 
   // --- Accounts & auth --------------------------------------------------
