@@ -422,7 +422,7 @@ unauthenticated dev login enabled.
 | `RELAY_SHARD_URLS` | comma-separated URLs | falls back to `RELAY_PUBLIC_URL`, then `ws://localhost:4500` | Node→shard mapping is by hash of the node id |
 | `DATABASE_POOL_MAX` | integer ≥ 1 | `10` | |
 | `LINK_GRANT_TTL_MS` | integer ms | `2592000000` (30 days) | TTL of the device-linking grant minted from a pairing QR |
-| `ENFORCE_ENTITLEMENTS` | `1` | **off** | When off, Web Push is available to every signed-in account regardless of plan |
+| `ENFORCE_ENTITLEMENTS` | `1` | **off** | When off, plan gates don't apply: Web Push is available to every signed-in account, and the GitHub work queue runs unlimited (no free-tier monthly run cap). When on, free accounts get `FREE_WORK_QUEUE_MONTHLY_RUNS` (5) queue runs per calendar month; paid plans are unlimited |
 
 ## Authentication
 

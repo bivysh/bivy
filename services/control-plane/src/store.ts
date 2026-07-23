@@ -37,8 +37,15 @@ export interface Entitlements {
   // `maxDevices`/`maxSessions` fields are gone with them.
   pushEnabled: boolean;
   relayEnabled: boolean;
-  // Hosted GitHub/Slack work queue (label an issue → PR on your node). Paid only.
+  // Hosted GitHub/Slack work queue (label an issue → PR on your node). Available
+  // on every plan; free is metered by `workQueueMonthlyLimit` below.
   workQueueEnabled: boolean;
+  // Runs the plan may START per calendar month (UTC) on the hosted work queue —
+  // one CLAIMED item = one run. Optional: `undefined` means UNLIMITED (paid plans
+  // omit it, mirroring `maxNodes`). Free pins this to a small trial allowance.
+  // Enforced at claim time and only when `ENFORCE_ENTITLEMENTS=1` (Bivy Cloud);
+  // self-host stacks run unlimited regardless. See FREE_WORK_QUEUE_MONTHLY_RUNS.
+  workQueueMonthlyLimit?: number;
   // Quick ephemeral cloud servers brokered from a phone (Fly/Hetzner/AWS/… with
   // the user's own token, proxied through the control-plane cold-start relay).
   // Paid only — the persistent installer stays free for everyone.
@@ -399,12 +406,18 @@ export interface PairedDeviceInfo {
   updatedAt: string;
 }
 
+// Free trial allowance for the hosted work queue: how many runs a free account
+// may START per calendar month. A taste of "label an issue → PR on your node"
+// without a paywall; heavy users upgrade. Paid plans omit the limit (unlimited).
+export const FREE_WORK_QUEUE_MONTHLY_RUNS = 5;
+
 export const PLAN_ENTITLEMENTS: Record<Plan, Omit<Entitlements, "plan">> = {
   // Launch policy: every signed-in user gets one hosted-relay node for free so
   // onboarding can go straight from installer → remote PWA without a paywall.
-  // Push notifications and the hosted work queue remain paid. Paid plans omit
-  // `maxNodes` entirely, which the enforcement paths read as "unlimited".
-  free: { maxNodes: 1, pushEnabled: false, relayEnabled: true, workQueueEnabled: false, ephemeralEnabled: false },
+  // The work queue is now on every plan; free is capped at FREE_WORK_QUEUE_MONTHLY_RUNS
+  // runs/month (paid plans omit the limit ⇒ unlimited). Push notifications and
+  // ephemeral servers remain paid. Paid plans omit `maxNodes` too ("unlimited").
+  free: { maxNodes: 1, pushEnabled: false, relayEnabled: true, workQueueEnabled: true, workQueueMonthlyLimit: FREE_WORK_QUEUE_MONTHLY_RUNS, ephemeralEnabled: false },
   pro: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
   team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
 };
@@ -597,6 +610,11 @@ export interface MeshStore {
   // Recent work items for the account (any status) — powers the incoming-queue UI.
   listWorkItems(accountId: string, limit?: number): Promise<WorkItem[]>;
   claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
+  // How many runs the account has STARTED (items claimed) at/after `sinceIso`.
+  // Powers the free-tier monthly quota — one claimed item = one run. Counts every
+  // claimed/done item whose `claimedAt` is in range (deleting a done item after it
+  // ran does not refund the run).
+  countWorkRunsSince(accountId: string, sinceIso: string): Promise<number>;
   completeWorkItem(accountId: string, id: string): Promise<void>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node

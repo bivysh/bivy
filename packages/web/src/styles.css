@@ -1268,6 +1268,7 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .banner { display: flex; align-items: center; gap: 10px; padding: 10px 18px; font-size: 13px; }
 .banner.error { background: var(--danger-soft); color: var(--danger); }
 .banner.info { background: var(--surface-2); color: var(--muted); }
+.banner.warn { background: color-mix(in srgb, var(--warn, #d9a441) 16%, transparent); color: var(--warn, #d9a441); }
 .banner-text { flex: 1; }
 .banner-dismiss { margin-left: auto; border: 0; background: transparent; color: inherit; font-size: 18px; line-height: 1; }
 .reconnect-spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; flex: none; }

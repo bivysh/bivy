@@ -196,9 +196,13 @@ export interface AccountMe {
     relayEnabled?: boolean;
     pushEnabled?: boolean;
     workQueueEnabled?: boolean;
+    // Hosted work-queue runs allowed per calendar month. Undefined = unlimited
+    // (paid plans); free pins it to a small trial allowance. Pairs with
+    // counts.workQueueRunsThisMonth to render "used / limit".
+    workQueueMonthlyLimit?: number;
     ephemeralEnabled?: boolean;
   };
-  counts?: { nodes?: number; sessions?: number; devices?: number };
+  counts?: { nodes?: number; sessions?: number; devices?: number; workQueueRunsThisMonth?: number };
   [k: string]: unknown;
 }
 
