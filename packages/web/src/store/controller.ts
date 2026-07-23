@@ -526,6 +526,22 @@ export class AppController {
     void this.refreshAccountSessions();
   }
 
+  /**
+   * Switch to `nodeId` (a no-op if already the current, online node) and wait
+   * for the new transport to come online, then refresh `state.providers` for
+   * it — `providers.list` is never sent automatically on (re)connect. Used by
+   * flows that need a specific node's live state before proceeding (e.g.
+   * reconnecting that node's provider OAuth from NodeSwitcher). Throws if the
+   * node doesn't come online within `timeoutMs` (see `waitForOnline`).
+   */
+  async connectToNode(nodeId: string, timeoutMs?: number): Promise<void> {
+    if (nodeId !== this.local.cur || this.store.getState().status !== "online") {
+      this.switchNode(nodeId);
+      await this.waitForOnline(timeoutMs);
+    }
+    this.listProviders();
+  }
+
   /** Sign out: revoke the session server-side (and free this device's slot),
    *  then clear local state and return to the sign-in screen. */
   async signOut(): Promise<void> {
