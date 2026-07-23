@@ -3249,6 +3249,12 @@ async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; pub
 
 async function pushModelAuthToControlPlane() {
   if (!sessionAdvertiseTarget) return;
+  // Piggyback the (plaintext, non-secret) provider status summary on every
+  // trigger that already pushes the encrypted model-auth vault — one "creds
+  // changed" fan-out point instead of duplicating call sites. Independent
+  // try/catch: a summary push failure must not block the vault push or vice
+  // versa.
+  await pushProviderSummaryToControlPlane();
   try {
     const providers = await exportProviderAuth(credsDir);
     const localModels = exportLocalModels(localModelsDir);
@@ -3263,6 +3269,37 @@ async function pushModelAuthToControlPlane() {
     lastPushedModelAuthCiphertext = ciphertext;
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
+  }
+}
+
+// Plaintext (non-secret) summary of which OAuth-capable providers this node has
+// configured, and whether the stored token has expired — pushed alongside the
+// encrypted model-auth vault (see pushModelAuthToControlPlane above) so the web
+// client can show a per-node connection/expiry chip in NodeSwitcher without
+// connecting to every node. Deliberately excludes any credential material or
+// account identity — just {id, name, configured, expiresAt} per oauth-capable
+// provider, the same trust tier as the node's existing plaintext online/lastSeenAt
+// fields.
+let lastPushedProviderSummary = "";
+async function pushProviderSummaryToControlPlane() {
+  if (!sessionAdvertiseTarget) return;
+  try {
+    const providers = await listProviders(credsDir, piDir);
+    // Only providers the node has actually connected at some point — an
+    // expired OAuth credential still reports configured:true (the token is
+    // just past `expiresAt`), so this keeps "expired" entries while dropping
+    // the rest of the oauth-capable catalog the user never touched (which
+    // would otherwise show a "not connected" chip for every such provider on
+    // every node in NodeSwitcher).
+    const summary = providers
+      .filter((p) => p.oauth && p.configured)
+      .map((p) => ({ id: p.id, name: p.name, configured: p.configured, expiresAt: p.expiresAt }));
+    const serialized = JSON.stringify(summary);
+    if (serialized === lastPushedProviderSummary) return;
+    await modelAuthFetch("/node/provider-summary", { method: "PUT", body: JSON.stringify({ providers: summary }) });
+    lastPushedProviderSummary = serialized;
+  } catch (error) {
+    console.warn("[auth-sync] could not push provider summary:", (error as Error).message);
   }
 }
 

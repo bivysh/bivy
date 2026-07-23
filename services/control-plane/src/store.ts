@@ -70,6 +70,19 @@ export interface SubscriptionState {
   subscriptionStatus?: string | null;
 }
 
+// Plaintext (non-secret) per-provider connection status a node pushes alongside
+// its encrypted model-auth vault (src/server.ts's pushProviderSummaryToControlPlane).
+// Deliberately excludes any credential material or account identity — just enough
+// for the web client to render a "Connected"/"Expired"/"Not connected" chip per
+// node without opening a connection to it. Same trust tier as the `online` /
+// `lastSeenAt` fields below.
+export interface NodeProviderSummary {
+  id: string;
+  name?: string;
+  configured: boolean;
+  expiresAt?: number;
+}
+
 export interface NodeRecord {
   id: string; // the node's self-generated nodeId
   accountId: string;
@@ -78,6 +91,7 @@ export interface NodeRecord {
   online: boolean;
   lastSeenAt: string | null;
   createdAt: string;
+  providers?: NodeProviderSummary[];
 }
 
 export interface ResolvedClient {
@@ -493,6 +507,9 @@ export interface MeshStore {
   setNodeOnline(nodeId: string, online: boolean): Promise<void>;
   setNodeName(nodeId: string, name: string): Promise<NodeRecord | undefined>;
   removeNode(accountId: string, nodeId: string): Promise<boolean>;
+  // Plaintext per-node provider status summary (see NodeProviderSummary) —
+  // overwritten wholesale by the owning node on every credential change.
+  setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void>;
 
   // Session index (cross-node unified view). A node replaces its full current
   // session list; clients read the merged list for the account.

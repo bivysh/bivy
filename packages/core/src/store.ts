@@ -225,6 +225,8 @@ export interface ProviderInfo {
   kind?: string;
   source?: string;
   oauth?: boolean;
+  /** Epoch ms the stored OAuth access token expires, when `kind === "oauth"`. */
+  expiresAt?: number;
   [k: string]: unknown;
 }
 

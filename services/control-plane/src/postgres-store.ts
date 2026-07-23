@@ -8,6 +8,7 @@ import {
   type Entitlements,
   type MeshStore,
   type NodeRecord,
+  type NodeProviderSummary,
   type PairedDeviceInfo,
   type Plan,
   type RelayRole,
@@ -194,6 +195,10 @@ export class PostgresStore implements MeshStore {
         last_seen_at           TIMESTAMPTZ,
         created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      -- Plaintext (non-secret) per-node provider connection summary — pushed by
+      -- the owning node alongside its encrypted model-auth vault. Same trust
+      -- tier as online/last_seen_at above: never credential material.
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS providers JSONB;
 
       CREATE TABLE IF NOT EXISTS session_index (
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -685,6 +690,13 @@ export class PostgresStore implements MeshStore {
     await this.query(
       `UPDATE nodes SET online = $2, last_seen_at = now() WHERE id = $1`,
       [nodeId, online],
+    );
+  }
+
+  async setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void> {
+    await this.query(
+      `UPDATE nodes SET providers = $2 WHERE id = $1`,
+      [nodeId, JSON.stringify(providers)],
     );
   }
 
@@ -1312,6 +1324,7 @@ function mapNode(row: any): NodeRecord {
     online: row.online,
     lastSeenAt: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
+    providers: row.providers ?? undefined,
   };
 }
 

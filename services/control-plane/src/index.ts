@@ -1163,6 +1163,33 @@ app.put("/node/model-auth-key/wrapped", requireNode, asyncHandler(async (req, re
   res.json({ ok: true, wrappedKey: rec });
 }));
 
+// Plaintext (non-secret) per-node provider connection summary — pushed by the
+// node alongside its encrypted model-auth vault (see pushProviderSummaryToControlPlane
+// in src/server.ts) so /nodes can show every enrolled node's OAuth connect/expiry
+// status without the client connecting to each one. Only {id, name, configured,
+// expiresAt} per provider; never credential material or account identity.
+app.put("/node/provider-summary", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const rawProviders = Array.isArray(req.body?.providers) ? req.body.providers : [];
+  const providers = rawProviders
+    .map((p: unknown) => {
+      if (!p || typeof p !== "object") return null;
+      const rec = p as Record<string, unknown>;
+      const id = String(rec.id ?? "").trim();
+      if (!id) return null;
+      const out: { id: string; name?: string; configured: boolean; expiresAt?: number } = {
+        id,
+        configured: Boolean(rec.configured),
+      };
+      if (typeof rec.name === "string" && rec.name.trim()) out.name = rec.name.trim();
+      if (typeof rec.expiresAt === "number" && Number.isFinite(rec.expiresAt)) out.expiresAt = rec.expiresAt;
+      return out;
+    })
+    .filter((p: unknown): p is { id: string; name?: string; configured: boolean; expiresAt?: number } => p !== null);
+  await store.setNodeProviders(node.id, providers);
+  res.json({ ok: true });
+}));
+
 // --- Work queue (E2 GitHub webhook sink, E4 Slack) ----------------------
 // Inbound front doors enqueue WorkItems; the node (outbound-only) pulls them.
 // The control plane only routes metadata — the node runs the work with its own
