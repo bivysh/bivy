@@ -1207,6 +1207,18 @@ export class PostgresStore implements MeshStore {
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
 
+  async countWorkRunsSince(accountId: string, sinceIso: string): Promise<number> {
+    // One claimed item = one run. `claimed_at` is stamped once (the claim UPDATE
+    // only flips a still-pending row), so a claimed OR done item counts exactly
+    // once; still-pending items (never claimed) don't count.
+    const { rows } = await this.query(
+      `SELECT count(*)::int AS n FROM work_items
+       WHERE account_id = $1 AND claimed_at IS NOT NULL AND claimed_at >= $2`,
+      [accountId, sinceIso],
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
+
   async completeWorkItem(accountId: string, id: string): Promise<void> {
     await this.query(
       `UPDATE work_items SET status = 'done', completed_at = now() WHERE id = $2 AND account_id = $1`,

@@ -39,6 +39,7 @@ await test("billing lifecycle updates plan and subscription metadata", async () 
   const upgradedEnt = await store.entitlements(account.id);
   assert.equal(upgradedEnt.maxNodes, undefined, "paid: unlimited nodes");
   assert.equal(upgradedEnt.workQueueEnabled, true, "paid: hosted work queue");
+  assert.equal(upgradedEnt.workQueueMonthlyLimit, undefined, "paid: unlimited work-queue runs");
 
   await store.setSubscriptionState(account.id, {
     plan: "free",
@@ -52,7 +53,10 @@ await test("billing lifecycle updates plan and subscription metadata", async () 
   const ent = await store.entitlements(account.id);
   assert.equal(ent.maxNodes, 1);
   assert.equal(ent.relayEnabled, true);
-  assert.equal(ent.workQueueEnabled, false, "downgrade drops the hosted work queue");
+  // The queue itself stays on free — a downgrade drops the UNLIMITED allowance,
+  // re-imposing the free monthly run cap rather than turning the feature off.
+  assert.equal(ent.workQueueEnabled, true, "downgrade keeps the queue, metered");
+  assert.equal(ent.workQueueMonthlyLimit, 5, "downgrade re-imposes the free run cap");
 });
 
 console.log(`\nbilling-lifecycle: ${passed} tests passed`);

@@ -151,6 +151,28 @@ async function accountPushAllowed(accountId: string): Promise<boolean> {
   if (!enforceEntitlements) return true;
   return (await store.entitlements(accountId)).pushEnabled;
 }
+
+// Start of the current calendar month in UTC, as an ISO timestamp — the reset
+// boundary for the free-tier work-queue quota. Computed rather than stored, so
+// there is no counter to reset and no cron: the count is just claimed items with
+// `claimedAt >= this`.
+function startOfMonthUtcIso(): string {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+}
+
+// The account's hosted work-queue run allowance for the current UTC month.
+// `limit` is the plan cap (undefined ⇒ unlimited — paid plans), `used` the runs
+// already started this month, `exhausted` whether a new run must be refused.
+// Quota is only ENFORCED under `ENFORCE_ENTITLEMENTS=1` (Bivy Cloud); on a
+// self-host stack `exhausted` is always false so runners go unlimited, but `used`
+// is still reported for display. One claimed item = one run.
+async function workQueueAllowance(accountId: string): Promise<{ limit?: number; used: number; exhausted: boolean }> {
+  const limit = (await store.entitlements(accountId)).workQueueMonthlyLimit;
+  if (typeof limit !== "number") return { limit: undefined, used: 0, exhausted: false };
+  const used = await store.countWorkRunsSince(accountId, startOfMonthUtcIso());
+  return { limit, used, exhausted: enforceEntitlements && used >= limit };
+}
 const stripePrices: Partial<Record<Plan, string>> = {
   pro: process.env.STRIPE_PRICE_PRO,
   team: process.env.STRIPE_PRICE_TEAM,
@@ -750,6 +772,10 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
         await store.listAccountSessions(account.id),
         await store.listNodes(account.id),
       ),
+      // Hosted work-queue runs started this UTC month (one claimed item = one
+      // run). Paired with entitlements.workQueueMonthlyLimit so the queue UI can
+      // show "used / limit" and prompt an upgrade when a free account runs out.
+      workQueueRunsThisMonth: (await workQueueAllowance(account.id)).used,
     },
   });
 }));
@@ -1467,9 +1493,10 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   }
   const event = String(req.headers["x-github-event"] ?? "");
   if (event === "ping") return res.json({ ok: true, pong: true });
-  // Plan gate: the hosted work queue (label/@-mention → PR on your node) is a
-  // paid feature. Ack with 200 so GitHub marks the delivery successful (a non-2xx
-  // would make GitHub retry forever) but enqueue nothing for free accounts.
+  // Plan gate: the hosted work queue is on every plan (free is metered per run at
+  // claim time, see workQueueAllowance), so this only refuses a plan that has the
+  // feature fully off. Ack with 200 so GitHub marks the delivery successful (a
+  // non-2xx would make GitHub retry forever) but enqueue nothing in that case.
   if (!(await store.entitlements(hook.accountId)).workQueueEnabled) {
     return res.json({ ok: true, enqueued: false, reason: "plan" });
   }
@@ -1580,12 +1607,24 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
     .map((l) => l.trim())
     .filter(Boolean);
   const items = await store.listPendingWorkItems(node.accountId, labels.length ? labels : ["bivy"]);
+  // Free-tier monthly quota: once this month's run allowance is spent, hide
+  // pending items so the node stops trying to claim them. They stay queued and
+  // become visible again when the month rolls over (no data lost, no churn). The
+  // claim endpoint below is the authoritative backstop for a direct/racing claim.
+  if ((await workQueueAllowance(node.accountId)).exhausted) return res.json({ items: [] });
   res.json({ items });
 }));
 
 // Claim one item (atomic; only one node wins). Returns the item or 409 if taken.
 app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
+  // Authoritative free-tier quota gate: one claimed item = one run. 402 (not 409)
+  // so the node can tell "you're out of runs this month" from "someone else won
+  // this item". Only bites under ENFORCE_ENTITLEMENTS; self-host is unlimited.
+  const allowance = await workQueueAllowance(node.accountId);
+  if (allowance.exhausted) {
+    return res.status(402).json({ error: "Monthly work-queue run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
+  }
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
   res.json({ ok: true, item });
