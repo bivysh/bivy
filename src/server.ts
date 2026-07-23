@@ -3765,6 +3765,11 @@ async function reportIssueOutcome(
       : "Bivy ran on this issue but produced no file changes.";
     emit(record, "no_changes", message);
     await commentIssue(cfg, issue.number, message).catch(() => {});
+    // The run is finished with nothing in progress — drop the claim label so it
+    // doesn't linger on the issue. A stale `bivy/<node>:in-progress` label was
+    // also mis-routing follow-up mentions before pickRoutingLabel was hardened;
+    // clearing it keeps issue label state consistent across the pickup lifecycle.
+    await removeLabel(cfg, issue.number, cfg.claimLabel).catch(() => {});
     return;
   }
 
