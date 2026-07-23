@@ -1417,6 +1417,7 @@ function NodesPanel({ state }: { state: AppState }) {
       githubIssuePrompt: form.githubIssuePrompt,
       sessionSync: form.sessionSync,
       worktreeSync: form.worktreeSync,
+      syncStandbyNodeId: form.syncStandbyNodeId ?? "",
     });
     setSavedMsg("Saved");
     setTimeout(() => setSavedMsg(null), 1500);
@@ -1595,6 +1596,33 @@ function NodesPanel({ state }: { state: AppState }) {
               label="Enable worktree sync"
             />
           </div>
+          {form.sessionSync && (
+            <>
+              <label className="field-label">Standby node</label>
+              <select
+                className="picker-search"
+                value={form.syncStandbyNodeId ?? ""}
+                onChange={(e) => setForm({ ...form, syncStandbyNodeId: e.target.value || undefined })}
+              >
+                <option value="">Choose a node to replicate to…</option>
+                {nodes
+                  .filter((n) => n.id !== currentNodeId)
+                  .map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {(n.name || n.id) + (n.online ? "" : " (offline)")}
+                    </option>
+                  ))}
+                {form.syncStandbyNodeId && !nodes.some((n) => n.id === form.syncStandbyNodeId) && (
+                  <option value={form.syncStandbyNodeId}>{form.syncStandbyNodeId}</option>
+                )}
+              </select>
+              <p className="muted small">
+                Sessions on this node warm-replicate to the standby over the encrypted relay. If this
+                node goes offline, open the session on the standby and choose “Continue here”.
+                {nodes.filter((n) => n.id !== currentNodeId).length === 0 && " Add a second node to enable this."}
+              </p>
+            </>
+          )}
 
           <div className="row-actions">
             <button className="btn primary" onClick={save}>Save</button>

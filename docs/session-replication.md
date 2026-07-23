@@ -1,8 +1,25 @@
 # Session replication (warm standby)
 
-> Status: **design + Phase 1 core.** The transport-free replicator/applier core
-> and the node/React settings land first (behind the `sessionSync` toggle, off by
-> default). Transport, control-plane epoch, and promotion are staged after.
+> Status: **implemented, behind the `sessionSync` toggle (off by default).** All
+> layers are built and unit-tested in-process; the live node↔node path (an owner
+> daemon streaming to a standby over a real relay) is exercised by the multi-node
+> validation plan at the end, not by CI (it needs a relay + control plane + two
+> nodes). When `sessionSync` is off the whole system is inert and the daemon
+> behaves exactly as before.
+
+## Transport decision: the owner node as a headless client of its standby
+
+Bivy has no node↔node link and deliberately bridges nodes *through a connected
+client* (that is what the existing `session.fork.export/import` move-a-session
+feature does). Continuous warm replication can't depend on a browser being open,
+so the **owner daemon itself acts as a relay client of its standby** — the exact
+mechanism `bivy run --node <account-node>` uses for a CLI to reach a node. Data
+stays strictly node-to-node and E2E-encrypted; the control plane only coordinates
+metadata (ownership, epoch, node liveness) and never sees transcripts or files.
+
+This required one new control-plane primitive (an enrolled node minting a
+client-scoped grant for a sibling it co-owns) and a node-side port of the browser
+relay client.
 
 Bivy pins a session to the node that owns its workspace and credentials. That's
 correct for privacy, but it means a node going offline strands its live sessions.
@@ -128,17 +145,49 @@ replicator (owner) and applier (standby) around it; `standbyNodeId` + `ownerEpoc
 columns with compare-and-set; the promotion command/state-machine; the "continue on
 standby" UI; the two settings toggles (this PR).
 
-## Phasing
+## Implementation map
 
-1. **Core + settings** (this PR) — transport-free `buildReplFrame`/`applyReplFrame`
-   + fencing + tests; node/React toggles. Nothing streams yet.
-2. **Replicator/applier wiring** — tail the `EventLog` at checkpoint boundaries on the
-   owner; apply on the standby into a replica `EventLog` + worktree. Behind the flag.
-3. **Epoch CAS + fencing** in the control-plane store — the split-brain guard, with
-   contract tests.
-4. **Manual promotion** — UI affordance + `bivy resume --from`.
-5. *(Later, optional)* lease-TTL auto-promotion; finer dirty-working-tree sync for
-   sub-turn freshness.
+| Concern | File |
+|---|---|
+| Pure decision core (`buildReplFrame`/`applyReplFrame`, fencing, resync) | `src/session/replication.ts` |
+| Owner + standby orchestration (per-turn frame, cursor, both-or-neither) | `src/session/replicator.ts` |
+| Git checkpoint bundle (full/thin/needFull, materialize) | `src/session/checkpoint-pack.ts` |
+| Node-as-client relay transport to the standby | `src/session/sibling-client.ts` |
+| Daemon integration (adapters, onTurnComplete / handleReplicaFrame / promote) | `src/session/replication-service.ts` |
+| Daemon hooks (agent_end ship, `session.replica.frame` receive, `/api/session/promote`, `session.promote`) | `src/server.ts` |
+| Ownership table + epoch CAS | `services/control-plane/src/{store,postgres-store}.ts` |
+| Sibling-grant + standby/ownership/promote endpoints | `services/control-plane/src/index.ts` |
+| Settings (`sessionSync`, `worktreeSync`, `syncStandbyNodeId`) | `packages/core/src/store.ts`, `src/server.ts`, `packages/web/src/components/Settings.tsx` |
+| Promotion UI + CLI | `packages/web/src/components/SessionList.tsx`, `packages/web/src/store/controller.ts`, `bin/bivy.mjs` (`bivy promote <id>`) |
+
+Unit-tested in-process: `test/replication.test.ts` (core, 9), `test/replicator.test.ts`
+(orchestration round-trip, 4), `test/checkpoint-pack.test.ts` (real-git bundle, 4),
+`services/control-plane/test/store-contract.ts` (ownership CAS). The frame crypto is
+covered by the existing `relay-cli-crypto` tests.
+
+## Live multi-node validation plan
+
+The node↔node streaming can't run in CI. To validate end-to-end:
+
+1. Bring up a control plane + relay (`services/*`) and enroll **two** nodes (A, B) on
+   one account.
+2. On A: Settings → Nodes → enable **Session sync** (+ Worktree sync), pick **B** as the
+   standby. Start a session on A and run a few turns.
+3. Confirm B receives frames: `appDir/replicas/<id>` holds the checkpoint commits and
+   the replica transcript replays (`event-log/<id>.jsonl`); `GET /node/sessions/:id/ownership`
+   shows owner A, standby B.
+4. Kill A. On B, open the replicated session and choose **Continue here** (or
+   `bivy promote <id>` on B). Expect the epoch to bump and the worktree to materialize
+   from the last replicated turn.
+5. Bring A back; confirm its late writes are fenced out (stale epoch).
+
+## Remaining polish (follow-ups)
+
+- **Resume-after-promote**: promotion runs the CAS + materializes the worktree; wiring the
+  promoted session straight into a live runtime (vs. `bivy resume <id>` as a second step)
+  is a small follow-up on `resolveOrResumeSession`.
+- **Reconnect/backoff** for the sibling client (connects lazily and drops on error today).
+- *(Optional)* lease-TTL **auto-promotion**; finer **dirty-working-tree** sync.
 
 ## Out of scope (v1)
 

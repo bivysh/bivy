@@ -2735,6 +2735,18 @@ const RELAY_COMMANDS: Record<string, Command> = {
     const ack = await replication.handleReplicaFrame(frame, typeof msg.ownerNodeId === "string" ? msg.ownerNodeId : undefined);
     ctx.reply({ type: "session.replica.ack", requestId, ack });
   },
+  // Promote a replicated session onto THIS node (relay counterpart of
+  // POST /api/session/promote): a client switched to the standby and asked it to
+  // take over an offline owner. Epoch CAS + materialize the replica worktree.
+  async "session.promote"(msg, ctx) {
+    const requestId = String(msg.requestId ?? "");
+    const sessionId = String(msg.sessionId ?? "").trim();
+    if (!sessionId) return ctx.reply({ type: "session.promote.result", requestId, ok: false, error: "Missing sessionId" });
+    const epoch = await replication.promote(sessionId, identity.nodeId);
+    if (epoch === undefined) return ctx.reply({ type: "session.promote.result", requestId, ok: false, error: "Promotion lost the epoch race" });
+    scheduleAdvertise();
+    ctx.reply({ type: "session.promote.result", requestId, ok: true, sessionId, epoch });
+  },
   // Ephemeral provisioning transport (node-broker path). A remote device that
   // holds the user's cloud credentials asks this node to make ONE allowlisted
   // HTTPS request to a provider (Fly/Hetzner/AWS/...) on its behalf. The
