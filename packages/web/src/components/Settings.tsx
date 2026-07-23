@@ -1415,6 +1415,8 @@ function NodesPanel({ state }: { state: AppState }) {
       defaultSandbox: form.defaultSandbox,
       githubMaxConcurrent: form.githubMaxConcurrent,
       githubIssuePrompt: form.githubIssuePrompt,
+      sessionSync: form.sessionSync,
+      worktreeSync: form.worktreeSync,
     });
     setSavedMsg("Saved");
     setTimeout(() => setSavedMsg(null), 1500);
@@ -1560,6 +1562,38 @@ function NodesPanel({ state }: { state: AppState }) {
           </p>
           <div className="row-actions">
             <button className="btn" onClick={resetIssuePrompt}>Reset to default</button>
+          </div>
+
+          <label className="field-label">Session sync</label>
+          <div className="settings-toggle-row">
+            <div className="settings-toggle-text">
+              <span className="settings-toggle-title">Keep sessions synced to a standby node</span>
+              <span className="muted small">
+                Warm-replicate each session's transcript to another of your nodes over the encrypted
+                relay, so a session can be picked up elsewhere if this node goes offline. Data stays
+                node-to-node; the control plane never sees it.
+              </span>
+            </div>
+            <Toggle
+              checked={form.sessionSync}
+              onChange={(v) => setForm({ ...form, sessionSync: v, worktreeSync: v ? form.worktreeSync : false })}
+              label="Enable session sync"
+            />
+          </div>
+          <div className={`settings-toggle-row${form.sessionSync ? "" : " disabled"}`}>
+            <div className="settings-toggle-text">
+              <span className="settings-toggle-title">Also sync the workspace (git checkpoints)</span>
+              <span className="muted small">
+                Ship each turn's git checkpoint too, so the promoted session keeps its working tree and
+                can continue coding — not just show history. Needs session sync; ignored for non-git workspaces.
+              </span>
+            </div>
+            <Toggle
+              checked={form.worktreeSync}
+              disabled={!form.sessionSync}
+              onChange={(v) => setForm({ ...form, worktreeSync: v })}
+              label="Enable worktree sync"
+            />
           </div>
 
           <div className="row-actions">

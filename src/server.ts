@@ -1061,6 +1061,8 @@ type NodeSettings = {
   defaultSandbox: SandboxTier;
   githubMaxConcurrent: number;
   githubIssuePrompt: string;
+  sessionSync: boolean;
+  worktreeSync: boolean;
 };
 
 /** The node's default model for new sessions, or null (= use the runtime default). */
@@ -1094,6 +1096,9 @@ function nodeSettingsSnapshot(): NodeSettings {
     defaultSandbox: normalizeSandboxTier(s.defaultSandbox) ?? sandboxTier(),
     githubMaxConcurrent: nodeGithubMaxConcurrent(),
     githubIssuePrompt: nodeGithubIssuePrompt(),
+    sessionSync: readSettings().sessionSync === true,
+    // Worktree sync only has meaning when session sync is on.
+    worktreeSync: readSettings().sessionSync === true && readSettings().worktreeSync === true,
   };
 }
 
@@ -1131,6 +1136,14 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
     // Blank (or exactly the shipped default) clears the override, so a future
     // change to the built-in default is picked up automatically.
     settings.githubIssuePrompt = text && text !== DEFAULT_ISSUE_INSTRUCTIONS ? text : undefined;
+  }
+  if ("sessionSync" in patch) {
+    settings.sessionSync = patch.sessionSync === true;
+    // Worktree sync is meaningless without session sync — clear it when sync is off.
+    if (!settings.sessionSync) settings.worktreeSync = false;
+  }
+  if ("worktreeSync" in patch) {
+    settings.worktreeSync = patch.worktreeSync === true && settings.sessionSync === true;
   }
   writeSettings(settings);
   const snapshot = nodeSettingsSnapshot();
