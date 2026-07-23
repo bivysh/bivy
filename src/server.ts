@@ -96,6 +96,7 @@ import { buildForkBundle, materializeFork, type ForkBundle, type ForkRecord, typ
 import { captureDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { EventLog } from "./session/event-log.js";
+import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereqInput, type ForkPrereq } from "./session/fork-prereqs.js";
 import { SecretVault } from "./secrets.js";
 import { InstallationTokenCache, createAppJwt, resolveInstallationId, type GitHubAppConfig } from "./github-app-auth.js";
@@ -2085,6 +2086,13 @@ interface CommandCtx {
 }
 type Command = (msg: ClientMessage, ctx: CommandCtx) => void | Promise<void>;
 
+// Idempotency for `session.new` keyed by requestId: a client's post-reconnect
+// retry adopts the session the first request created instead of spawning a
+// duplicate. See ./session/session-new-dedupe for the full rationale.
+const sessionNewDedupe = createSessionNewDedupe<SessionRecord>();
+const dedupeSessionNew = (requestId: string | undefined, create: () => Promise<SessionRecord>) =>
+  sessionNewDedupe.run(requestId, create);
+
 const RELAY_COMMANDS: Record<string, Command> = {
   ping(msg, ctx) {
     ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
@@ -2902,31 +2910,34 @@ const RELAY_COMMANDS: Record<string, Command> = {
     const repoInput = typeof msg.repo === "string" ? msg.repo.trim() : "";
     const workspaceInput = typeof msg.workspace === "string" ? msg.workspace.trim() : "";
     const title = typeof msg.title === "string" ? msg.title : undefined;
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
     let record: SessionRecord;
     try {
-      if (repoInput) {
-        const parsed = parseRepo(repoInput);
-        if (!parsed) {
-          relay?.sendEvent({ type: "session.error", error: `Invalid repository "${repoInput}" — use owner/repo.` });
-          return;
+      // Deduped by requestId so a client's post-reconnect retry adopts the
+      // session this request already created rather than spawning a duplicate.
+      record = await dedupeSessionNew(requestId, async () => {
+        if (repoInput) {
+          const parsed = parseRepo(repoInput);
+          if (!parsed) throw new Error(`Invalid repository "${repoInput}" — use owner/repo.`);
+          relay?.sendEvent({ type: "session.cloning", repo: parsed.slug });
+          const rec = await createRepoSession(parsed, { title, runtimeId: agentFrom(msg), sandbox: sandboxFrom(msg), branch: branchFrom(msg), makeActive: false });
+          // Bind the composer's chosen model before the first turn; fall back to
+          // the node default when the client didn't pick one.
+          await applyRequestedModel(rec, modelFrom(msg) ?? nodeDefaultModel() ?? undefined);
+          return rec;
         }
-        relay?.sendEvent({ type: "session.cloning", repo: parsed.slug });
-        record = await createRepoSession(parsed, { title, runtimeId: agentFrom(msg), sandbox: sandboxFrom(msg), branch: branchFrom(msg), makeActive: false });
-      } else {
         // Remote/PWA focus is client-owned. Creating a new remote session must
         // not steal or depend on the node-global `active` session; otherwise a
         // running chat can change what “new” means for another click/device.
         const workspace = workspaceInput ? validateWorkspace(workspaceInput) : defaultWorkspace;
-        record = await createWorkspaceSession(workspace, { title, runtimeId: agentFrom(msg), sandbox: sandboxFrom(msg), branch: branchFrom(msg), makeActive: false });
-      }
+        const rec = await createWorkspaceSession(workspace, { title, runtimeId: agentFrom(msg), sandbox: sandboxFrom(msg), branch: branchFrom(msg), makeActive: false });
+        await applyRequestedModel(rec, modelFrom(msg) ?? nodeDefaultModel() ?? undefined);
+        return rec;
+      });
     } catch (error) {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
       return;
     }
-    // Bind the composer's chosen model to the new session before its first
-    // turn. Fall back to the node's configured default model when the client
-    // didn't pick one.
-    await applyRequestedModel(record, modelFrom(msg) ?? nodeDefaultModel() ?? undefined);
     relay?.sendEvent({
       ...buildHistoryEvent({
         sessionId: record.id,
@@ -2936,7 +2947,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
         isStreaming: sessionBusy(record),
         messages: conversationMessages(record),
       }),
-      requestId: typeof msg.requestId === "string" ? msg.requestId : undefined,
+      requestId,
     });
   },
 };
@@ -7501,28 +7512,38 @@ app.post("/api/session", async (req, res, next) => {
     // relay `session.new` repo path. Takes precedence over a manual workspace path.
     const repoInput = typeof req.body?.repo === "string" ? req.body.repo.trim() : "";
     const title = typeof req.body?.title === "string" ? req.body.title : undefined;
-    let session: SessionRecord;
-    if (repoInput) {
-      const parsed = parseRepo(repoInput);
-      if (!parsed) return res.status(400).json({ error: `Invalid repository "${repoInput}" — use owner/repo.` });
+    const requestId = typeof req.body?.requestId === "string" ? req.body.requestId : undefined;
+    // Validate the workspace before entering the dedupe path so a bad path still
+    // returns a 400 (rather than being cached as a rejected creation).
+    let workspace = defaultWorkspace;
+    if (!repoInput && req.body?.workspace !== undefined && String(req.body.workspace).trim()) {
       try {
-        session = await createRepoSession(parsed, { title, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) });
+        workspace = validateWorkspace(req.body.workspace);
       } catch (error) {
-        return res.status(502).json({ error: `Could not clone ${parsed.slug}: ${error instanceof Error ? error.message : String(error)}` });
+        return res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
       }
-    } else {
-      let workspace = defaultWorkspace;
-      if (req.body?.workspace !== undefined && String(req.body.workspace).trim()) {
-        try {
-          workspace = validateWorkspace(req.body.workspace);
-        } catch (error) {
-          return res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-      session = await createWorkspaceSession(workspace, { title, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) });
     }
-    // Bind the composer's chosen model to the new session before its first turn.
-    await applyRequestedModel(session, modelFrom(req.body ?? {}));
+    let parsed: ParsedRepo | undefined;
+    if (repoInput) {
+      parsed = parseRepo(repoInput);
+      if (!parsed) return res.status(400).json({ error: `Invalid repository "${repoInput}" — use owner/repo.` });
+    }
+    let session: SessionRecord;
+    try {
+      // Deduped by requestId so a direct client's post-reconnect retry adopts the
+      // session this request already created rather than spawning a duplicate.
+      session = await dedupeSessionNew(requestId, async () => {
+        const rec = parsed
+          ? await createRepoSession(parsed, { title, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) })
+          : await createWorkspaceSession(workspace, { title, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) });
+        // Bind the composer's chosen model to the new session before its first turn.
+        await applyRequestedModel(rec, modelFrom(req.body ?? {}));
+        return rec;
+      });
+    } catch (error) {
+      if (parsed) return res.status(502).json({ error: `Could not clone ${parsed.slug}: ${error instanceof Error ? error.message : String(error)}` });
+      throw error;
+    }
     res.json({ id: session.id, workspace: session.workspace, source: session.source, branch: session.worktree?.branch, prUrl: session.prUrl, sessionFile: session.sessionFile, name: session.session.getName(), runtimeId: session.runtimeId, agentName: getRuntime(session.runtimeId).displayName, model: publicModel(session.session.getCurrentModel(), session.session.getCurrentModel()) });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });

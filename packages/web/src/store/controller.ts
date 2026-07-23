@@ -105,8 +105,12 @@ export class AppController {
   readonly local = createLocalStore(localStorage);
   readonly direct: boolean;
   private transport: Transport;
-  /** A first prompt queued while a brand-new session is being created. */
-  private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[] } | null = null;
+  /** A first prompt queued while a brand-new session is being created. `frame` is
+   *  the exact `session.new` command we sent; it's re-fired verbatim after a
+   *  reconnect (mobile Safari can drop the reply while backgrounded) — the node
+   *  dedupes by requestId, so the retry adopts the same session rather than
+   *  creating a duplicate. See retryPendingSessionNew / maybeFlushPendingPrompt. */
+  private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[]; frame: Command } | null = null;
   /** Further prompts sent by the user *while* that session is still being
    *  created — queued instead of firing their own `session.new`, then drained
    *  into the one real session by maybeFlushPendingPrompt. See sendPrompt. */
@@ -426,6 +430,10 @@ export class AppController {
       this.refreshSessions();
       const sid = this.store.getState().activeSessionId;
       if (sid) this.requestHistory(sid);
+      // A session.new whose reply was lost while backgrounded leaves activeSessionId
+      // null (no sid above to refresh) and pendingPrompt outstanding. Re-fire it so
+      // the wedged "creating" view recovers even when the socket stayed live.
+      else this.retryPendingSessionNew();
       this.listModels();
       // The refresh above just went out over a socket we only *believe* is live.
       this.verifyLiveness();
@@ -879,6 +887,10 @@ export class AppController {
     if (!openedAfterNodeSwitch) this.applyInitialRoute();
     const sid = this.store.getState().activeSessionId;
     if (sid && !openedAfterNodeSwitch) this.requestHistory(sid);
+    // No active session but a session.new is still pending → its session.history
+    // was lost to the drop. Re-fire it (idempotent on the node by requestId) so the
+    // draft that wedged on the opening spinner finally binds and flushes its prompt.
+    else if (!sid) this.retryPendingSessionNew();
     // A GitHub App redirect reloads the whole SPA, so finish the flow as soon as
     // we're reconnected to the node (which alone can exchange the code).
     if (this.pendingGithubAppCode) {
@@ -1066,11 +1078,13 @@ export class AppController {
     // No session yet: optimistically show the bubble, create a session, and
     // flush this prompt once session.history arrives for our requestId.
     const rid = requestId();
-    this.pendingPrompt = { text: trimmed, requestId: rid, clientMessageId: cmid, attachments: files };
-    this.store.addUserMessage(trimmed, cmid, files);
     // The node names the session (and a repo session's worktree branch) from
     // `title`; send the first message so the sidebar row and branch aren't blank.
-    this.send({ kind: "session.new", requestId: rid, title: trimmed || undefined, ...this.draftSessionFields() });
+    // Keep the exact frame so a post-reconnect retry re-sends it byte-identically.
+    const frame: Command = { kind: "session.new", requestId: rid, title: trimmed || undefined, ...this.draftSessionFields() };
+    this.pendingPrompt = { text: trimmed, requestId: rid, clientMessageId: cmid, attachments: files, frame };
+    this.store.addUserMessage(trimmed, cmid, files);
+    this.send(frame);
   }
 
   /**
@@ -1627,6 +1641,21 @@ export class AppController {
    */
   private maybeRefreshModelsForRuntime(event: { type?: string }): void {
     if (event.type === "runtime.updated") this.listModels();
+  }
+
+  /**
+   * Re-send the in-flight `session.new` after a reconnect/foreground when its
+   * reply never arrived (mobile Safari silently drops a backgrounded PWA's
+   * WebSocket events). Fires the exact same frame — same requestId — so the node,
+   * which dedupes `session.new` by requestId, re-emits the existing session's
+   * `session.history` instead of creating a duplicate. That reply is matched by
+   * maybeFlushPendingPrompt, which binds the session and flushes the queued
+   * prompt. No-op once the session has bound (pendingPrompt cleared).
+   */
+  private retryPendingSessionNew(): void {
+    if (!this.pendingPrompt) return;
+    if (this.store.getState().activeSessionId) return;
+    this.send(this.pendingPrompt.frame);
   }
 
   private maybeFlushPendingPrompt(event: { type?: string; requestId?: string; sessionId?: string }): void {
