@@ -46,6 +46,8 @@ export type StoredCredential = ApiKeyCredential | OAuthCredential;
 export interface StoredCredentialInfo {
   providerId: string;
   type: StoredCredential["type"];
+  /** Epoch ms the OAuth access token expires, when `type === "oauth"`. */
+  expiresAt?: number;
 }
 
 const LOCK_STALE_MS = 30_000;
@@ -108,7 +110,11 @@ export class BivyCredentialStore {
   }
 
   async list(): Promise<readonly StoredCredentialInfo[]> {
-    return Object.entries(this.readBlob()).map(([id, cred]) => ({ providerId: id, type: cred.type }));
+    return Object.entries(this.readBlob()).map(([id, cred]) => ({
+      providerId: id,
+      type: cred.type,
+      ...(cred.type === "oauth" ? { expiresAt: (cred as OAuthCredential).expires } : {}),
+    }));
   }
 
   /**

@@ -3,6 +3,12 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { forwardOrEvict } from "./backpressure.js";
+import { renderRelayMetrics, PROMETHEUS_CONTENT_TYPE } from "./metrics.js";
+import { initSentry } from "./instrument.js";
+
+// Optional error reporting. Resolves to a no-op unless SENTRY_DSN is set, and
+// only then is @sentry/node loaded (see instrument.ts).
+const Sentry = await initSentry();
 
 /**
  * Bivy — Relay.
@@ -169,6 +175,16 @@ const httpServer = createServer((req, res) => {
     return;
   }
   if (req.url === "/metrics") {
+    // Prometheus text exposition for Alloy/Prometheus scrapers. Scraped over the
+    // internal docker network only — Caddy blocks /metrics publicly. See
+    // docs/ops/monitoring.md in bivysh/bivy-cloud.
+    res.writeHead(200, { "content-type": PROMETHEUS_CONTENT_TYPE });
+    res.end(renderRelayMetrics(metrics, rooms.size, shardId));
+    return;
+  }
+  if (req.url === "/metrics.json") {
+    // Backcompat: the pre-Prometheus JSON counters, kept for any tooling that
+    // still reads them.
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size, ...metrics }));
     return;
@@ -199,7 +215,8 @@ const httpServer = createServer((req, res) => {
       metrics.workNotifications += delivered;
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, delivered }));
-    })().catch(() => {
+    })().catch((error) => {
+      Sentry.captureException(error);
       res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "Internal error" }));
     });
@@ -256,6 +273,7 @@ function registerConnection(ws: WebSocket, ip: string) {
       return;
     }
     console.warn("[relay] websocket error:", error instanceof Error ? error.message : String(error));
+    Sentry.captureException(error);
   });
   ws.once("close", () => {
     metrics.openConnections -= 1;

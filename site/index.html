@@ -29,7 +29,11 @@
       --faint:   #999da4;
       --line:    #e3e0da;
       --line-2:  #efece7;
-      --accent:  #9a4d10;
+      /* A warmer, richer orange than the old muddy brown. Dark enough on the
+         light background to double as link text (~4.9:1) and to carry white
+         button labels. */
+      --accent:  #c2410c;
+      --accent-ink: #ffffff;
       --ok:      #2f6b40;
       --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
       --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -48,7 +52,11 @@
         --faint:   #737373;
         --line:    #2e2e32;
         --line-2:  #252528;
-        --accent:  #d99155;
+        /* A vivid orange that pops on the dark background. It's light, so button
+           labels switch to near-black ink (--accent-ink) — the old washed-out
+           tan with white text was nearly invisible (see the "Go Pro" pill). */
+        --accent:  #f97316;
+        --accent-ink: #1c1206;
         --ok:      #7bb98c;
       }
     }
@@ -293,7 +301,7 @@
       padding: 10px 18px; border-radius: 7px; cursor: pointer;
       text-decoration: none; border: 1px solid transparent; white-space: nowrap;
     }
-    .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
     .btn-primary:hover { filter: brightness(1.06); }
     .btn-ghost { background: var(--panel); color: var(--ink); border-color: var(--line); }
     .btn-ghost:hover { border-color: var(--muted); }
@@ -396,8 +404,8 @@
       <p class="sub" style="margin:22px 0 0">
         Your code never leaves your machine. Agents run in real terminals on hardware you
         control, and Bivy adds the session layer, approvals, and remote access around them.
-        It's free on one machine. Go Pro to reach every machine, get push notifications, and
-        let agents turn GitHub issues into pull requests while you're away.
+        It's free on one machine — including 5 GitHub issue-to-PR runs a month. Go Pro to
+        reach every machine, get push notifications, and run the queue without limits.
       </p>
 
       <p class="runs-on">
@@ -554,6 +562,7 @@
             <li>Durable sessions and worktrees</li>
             <li>Approvals and sandbox tiers</li>
             <li>1 relay-connected node</li>
+            <li>GitHub work queue — 5 runs / month</li>
             <li>Phone and browser access</li>
             <li>Community support</li>
           </ul>
@@ -570,7 +579,7 @@
             <li>Everything in Free</li>
             <li>Unlimited nodes</li>
             <li>Push notifications</li>
-            <li>GitHub work queue</li>
+            <li>Unlimited GitHub work queue</li>
             <li>Cross-node session index</li>
             <li>Email support</li>
           </ul>
@@ -601,7 +610,7 @@
   <section>
     <div class="wrap">
       <p class="kicker">GitHub work queue</p>
-      <h2>Label an issue. Get a pull request back. <span class="tag-pro">Pro</span></h2>
+      <h2>Label an issue. Get a pull request back.</h2>
       <p class="prose">
         Work happens on a machine you own, with your local toolchain and your
         credentials. Bivy's control plane sees the issue title, body, and routing
@@ -633,8 +642,8 @@
       </ol>
 
       <p class="upgrade-line">
-        The GitHub work queue and push notifications are part of
-        <a href="#pricing">Pro — $15/mo</a>. Log in at app.bivy.sh to turn it on.
+        The GitHub work queue is free — 5 runs a month on any account. Go
+        <a href="#pricing">Pro — $15/mo</a> for unlimited runs and push notifications.
       </p>
     </div>
   </section>

@@ -8,6 +8,7 @@ import {
   type Entitlements,
   type MeshStore,
   type NodeRecord,
+  type NodeProviderSummary,
   type PairedDeviceInfo,
   type Plan,
   type RelayRole,
@@ -15,6 +16,7 @@ import {
   type ResolvedClient,
   type SessionAdvert,
   type SessionIndexEntry,
+  type SessionOwnership,
   type PushSubscriptionRecord,
   type NotificationPreferences,
   normalizeNotificationPreferences,
@@ -25,6 +27,7 @@ import {
   type ModelAuthKeyRequest,
   type SubscriptionState,
   type InboundHook,
+  type UsageMetrics,
   type WorkItem,
   type WorkItemInput,
   entitlementsForPlan,
@@ -193,6 +196,10 @@ export class PostgresStore implements MeshStore {
         last_seen_at           TIMESTAMPTZ,
         created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      -- Plaintext (non-secret) per-node provider connection summary — pushed by
+      -- the owning node alongside its encrypted model-auth vault. Same trust
+      -- tier as online/last_seen_at above: never credential material.
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS providers JSONB;
 
       CREATE TABLE IF NOT EXISTS session_index (
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -211,6 +218,19 @@ export class PostgresStore implements MeshStore {
       -- up. Routing metadata like node_id, not E2E payload. ADD COLUMN IF NOT
       -- EXISTS keeps this a safe, idempotent migration on existing databases.
       ALTER TABLE session_index ADD COLUMN IF NOT EXISTS agent_service_address TEXT;
+
+      -- Session replication ownership (docs/session-replication.md). Keyed by
+      -- session, NOT node, so it survives the wholesale rewrite of session_index
+      -- on every advertise. owner_epoch is the promotion fence (compare-and-set).
+      CREATE TABLE IF NOT EXISTS session_ownership (
+        account_id      TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id      TEXT NOT NULL,
+        owner_node_id   TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        standby_node_id TEXT REFERENCES nodes(id) ON DELETE SET NULL,
+        owner_epoch     INTEGER NOT NULL DEFAULT 0,
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, session_id)
+      );
 
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -355,6 +375,34 @@ export class PostgresStore implements MeshStore {
   // (surfacing the connection error) when the database is unreachable.
   async ping() {
     await this.pool.query("SELECT 1");
+  }
+
+  // Aggregate row counts for the monitoring dashboard. Six cheap COUNT/GROUP BY
+  // queries over already-indexed columns, run in parallel; returns metadata
+  // only, never row contents. Called on an interval by the metrics collector,
+  // not per request.
+  async usageMetrics(): Promise<UsageMetrics> {
+    const [accounts, plans, nodes, online, work, sess] = await Promise.all([
+      this.query(`SELECT count(*)::int AS n FROM accounts`),
+      this.query(`SELECT plan, count(*)::int AS n FROM accounts GROUP BY plan`),
+      this.query(`SELECT count(*)::int AS n FROM nodes`),
+      this.query(`SELECT count(*)::int AS n FROM nodes WHERE online = true`),
+      this.query(`SELECT status, count(*)::int AS n FROM work_items GROUP BY status`),
+      this.query(`SELECT status, count(*)::int AS n FROM session_index GROUP BY status`),
+    ]);
+    const toMap = (rows: Array<Record<string, unknown>>, key: string): Record<string, number> => {
+      const out: Record<string, number> = {};
+      for (const row of rows) out[String(row[key] ?? "unknown")] = Number(row.n) || 0;
+      return out;
+    };
+    return {
+      accountsTotal: Number(accounts.rows[0]?.n) || 0,
+      accountsByPlan: toMap(plans.rows, "plan"),
+      nodesTotal: Number(nodes.rows[0]?.n) || 0,
+      nodesOnline: Number(online.rows[0]?.n) || 0,
+      workItemsByStatus: toMap(work.rows, "status"),
+      sessionsByStatus: toMap(sess.rows, "status"),
+    };
   }
 
   // --- Accounts & auth --------------------------------------------------
@@ -674,6 +722,13 @@ export class PostgresStore implements MeshStore {
     );
   }
 
+  async setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void> {
+    await this.query(
+      `UPDATE nodes SET providers = $2 WHERE id = $1`,
+      [nodeId, JSON.stringify(providers)],
+    );
+  }
+
   async setNodeName(nodeId: string, name: string): Promise<NodeRecord | undefined> {
     const clean = cleanNodeName(name);
     const client = await this.pool.connect();
@@ -792,6 +847,54 @@ export class PostgresStore implements MeshStore {
       agentServiceAddress: row.agent_service_address ?? undefined,
       updatedAt: new Date(row.updated_at).toISOString(),
     }));
+  }
+
+  async getSessionOwnership(accountId: string, sessionId: string): Promise<SessionOwnership | undefined> {
+    const { rows } = await this.query(
+      `SELECT * FROM session_ownership WHERE account_id = $1 AND session_id = $2`,
+      [accountId, sessionId],
+    );
+    return rows[0] ? mapOwnership(rows[0]) : undefined;
+  }
+
+  async setSessionStandby(
+    accountId: string,
+    sessionId: string,
+    ownerNodeId: string,
+    standbyNodeId: string | undefined,
+  ): Promise<SessionOwnership> {
+    // Upsert without disturbing owner_epoch: a re-declare (new standby, owner
+    // reconnect) must not reset the fence. ON CONFLICT keeps the existing epoch.
+    const { rows } = await this.query(
+      `INSERT INTO session_ownership (account_id, session_id, owner_node_id, standby_node_id, updated_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (account_id, session_id)
+       DO UPDATE SET owner_node_id = EXCLUDED.owner_node_id,
+                     standby_node_id = EXCLUDED.standby_node_id,
+                     updated_at = now()
+       RETURNING *`,
+      [accountId, sessionId, ownerNodeId, standbyNodeId ?? null],
+    );
+    return mapOwnership(rows[0]);
+  }
+
+  async promoteSession(
+    accountId: string,
+    sessionId: string,
+    toNodeId: string,
+    expectedEpoch: number,
+  ): Promise<SessionOwnership | undefined> {
+    // Compare-and-set on owner_epoch: only the caller holding the current epoch
+    // wins. The row moves to the new owner, the fence advances, and the standby
+    // is cleared (the new owner re-declares one). A mismatch returns no rows.
+    const { rows } = await this.query(
+      `UPDATE session_ownership
+          SET owner_node_id = $3, owner_epoch = owner_epoch + 1, standby_node_id = NULL, updated_at = now()
+        WHERE account_id = $1 AND session_id = $2 AND owner_epoch = $4
+      RETURNING *`,
+      [accountId, sessionId, toNodeId, expectedEpoch],
+    );
+    return rows[0] ? mapOwnership(rows[0]) : undefined;
   }
 
   async upsertPushSubscription(accountId: string, endpoint: string, subscription: unknown): Promise<void> {
@@ -1145,6 +1248,18 @@ export class PostgresStore implements MeshStore {
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
 
+  async countWorkRunsSince(accountId: string, sinceIso: string): Promise<number> {
+    // One claimed item = one run. `claimed_at` is stamped once (the claim UPDATE
+    // only flips a still-pending row), so a claimed OR done item counts exactly
+    // once; still-pending items (never claimed) don't count.
+    const { rows } = await this.query(
+      `SELECT count(*)::int AS n FROM work_items
+       WHERE account_id = $1 AND claimed_at IS NOT NULL AND claimed_at >= $2`,
+      [accountId, sinceIso],
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
+
   async completeWorkItem(accountId: string, id: string): Promise<void> {
     await this.query(
       `UPDATE work_items SET status = 'done', completed_at = now() WHERE id = $2 AND account_id = $1`,
@@ -1238,5 +1353,17 @@ function mapNode(row: any): NodeRecord {
     online: row.online,
     lastSeenAt: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
+    providers: row.providers ?? undefined,
+  };
+}
+
+function mapOwnership(row: any): SessionOwnership {
+  return {
+    sessionId: row.session_id,
+    accountId: row.account_id,
+    ownerNodeId: row.owner_node_id,
+    standbyNodeId: row.standby_node_id ?? undefined,
+    ownerEpoch: Number(row.owner_epoch),
+    updatedAt: new Date(row.updated_at).toISOString(),
   };
 }

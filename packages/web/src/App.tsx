@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { slashHelpText, type GithubQueueItem, type SlashCommand } from "@bivy/core";
+import { type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -17,7 +17,6 @@ import { GithubPill } from "./components/GithubPill.js";
 import { UsageBar } from "./components/UsageBar.js";
 import { ChangesCard } from "./components/ChangesCard.js";
 import { ErrorToast } from "./components/ErrorToast.js";
-import { PrToast } from "./components/PrToast.js";
 import { Settings } from "./components/Settings.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { NodePicker } from "./components/Pickers.js";
@@ -120,33 +119,13 @@ export function App() {
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
   useEdgeSwipe({ isOpen: drawerOpen, onOpen: () => setDrawerOpen(true), onClose: () => setDrawerOpen(false) });
 
-  // Open-PR result is surfaced as a tappable toast (PrToast) rather than an
-  // auto-opened tab, which mobile popup blockers silently swallow.
-
-  // Dispatch a Bivy control slash command (from the composer or an inline notice
-  // action button). Model/agent pickers are handled inside the Composer; this
-  // covers the commands that map to app/session actions. Kept in one place so
-  // the composer, the command menu, and the notice buttons all run the same
-  // code path. Declared before any early return so hook order stays stable
-  // across renders (stable identity too — controller is a singleton — so
-  // ChatView's memoized entries aren't forced to re-render on every update).
+  // Run an inline notice action button (e.g. a node-emitted "/new"). Declared
+  // before any early return so hook order stays stable across renders (stable
+  // identity too — controller is a singleton — so ChatView's memoized entries
+  // aren't forced to re-render on every update).
   const runCommand = useCallback((name: string, _args?: string) => {
     switch (name) {
-      case "/pr": controller.openPr(); break;
-      case "/github-status": controller.refreshPrStatus(); break;
       case "/new": controller.newSession(); break;
-      case "/abort": controller.abort(); break;
-      case "/help": {
-        // Include the active session's advertised agent commands (per session —
-        // see commandsBySession), falling back to the selected runtime's static
-        // catalog for a pre-session draft. Read live off the store so the help
-        // block reflects whatever the current session actually offers.
-        const st = controller.store.getState();
-        const runtimeCommands = (st.runtimes.find((r) => r.id === st.selectedAgentId)?.capabilities as { commands?: SlashCommand[] } | undefined)?.commands ?? [];
-        const agentCommands = st.activeSessionId ? (st.commandsBySession[st.activeSessionId] ?? []) : runtimeCommands;
-        controller.store.pushSystemMessage(slashHelpText(agentCommands));
-        break;
-      }
     }
   }, []);
 
@@ -362,7 +341,7 @@ export function App() {
                   <pre className="code-snippet"><code>curl -fsSL https://bivy.sh/install.sh | bash</code></pre>
                 </li>
                 <li>
-                  <strong>No machine handy?</strong> Launch an ephemeral server below — it spins up in the cloud and self-destructs after its TTL.
+                  <strong>No machine handy?</strong> Launch an ephemeral server below (<strong>Pro</strong>) — it spins up in the cloud and self-destructs after its TTL.
                 </li>
               </ul>
             </div>
@@ -408,7 +387,6 @@ export function App() {
           disabledHint={state.status === "offline" ? "Not connected" : "Connecting…"}
           working={state.working}
           onSend={(text, attachments) => controller.sendPrompt(text, attachments)}
-          onCommand={runCommand}
           onAbort={() => controller.abort()}
           onError={(message) => controller.store.setError(message)}
         />
@@ -455,15 +433,13 @@ export function App() {
         </Suspense>
       )}
 
-      {/* Shared fixed-position stack: ErrorToast, PrToast, and UpdatePrompt
-          can legitimately all be showing at once (e.g. a PR just opened while
-          an app update is also pending) — each used to independently be
+      {/* Shared fixed-position stack: ErrorToast and UpdatePrompt can
+          legitimately both be showing at once — each used to independently be
           `position: fixed` at the same spot, so more than one showing at a
           time meant overlapping, illegible toasts. This wrapper stacks them
           instead. */}
       <div className="toast-stack">
         <ErrorToast />
-        <PrToast />
         <UpdatePrompt />
       </div>
     </div>

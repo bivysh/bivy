@@ -96,6 +96,8 @@ import { buildForkBundle, materializeFork, type ForkBundle, type ForkRecord, typ
 import { captureDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { EventLog } from "./session/event-log.js";
+import { ReplicationService } from "./session/replication-service.js";
+import type { ReplWireFrame } from "./session/replicator.js";
 import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereqInput, type ForkPrereq } from "./session/fork-prereqs.js";
 import { SecretVault } from "./secrets.js";
@@ -1062,6 +1064,9 @@ type NodeSettings = {
   defaultSandbox: SandboxTier;
   githubMaxConcurrent: number;
   githubIssuePrompt: string;
+  sessionSync: boolean;
+  worktreeSync: boolean;
+  syncStandbyNodeId?: string;
 };
 
 /** The node's default model for new sessions, or null (= use the runtime default). */
@@ -1095,6 +1100,13 @@ function nodeSettingsSnapshot(): NodeSettings {
     defaultSandbox: normalizeSandboxTier(s.defaultSandbox) ?? sandboxTier(),
     githubMaxConcurrent: nodeGithubMaxConcurrent(),
     githubIssuePrompt: nodeGithubIssuePrompt(),
+    sessionSync: readSettings().sessionSync === true,
+    // Worktree sync only has meaning when session sync is on.
+    worktreeSync: readSettings().sessionSync === true && readSettings().worktreeSync === true,
+    syncStandbyNodeId: (() => {
+      const v = readSettings().syncStandbyNodeId;
+      return typeof v === "string" && v.trim() ? v.trim() : undefined;
+    })(),
   };
 }
 
@@ -1133,6 +1145,18 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
     // change to the built-in default is picked up automatically.
     settings.githubIssuePrompt = text && text !== DEFAULT_ISSUE_INSTRUCTIONS ? text : undefined;
   }
+  if ("sessionSync" in patch) {
+    settings.sessionSync = patch.sessionSync === true;
+    // Worktree sync is meaningless without session sync — clear it when sync is off.
+    if (!settings.sessionSync) settings.worktreeSync = false;
+  }
+  if ("worktreeSync" in patch) {
+    settings.worktreeSync = patch.worktreeSync === true && settings.sessionSync === true;
+  }
+  if ("syncStandbyNodeId" in patch) {
+    const v = typeof patch.syncStandbyNodeId === "string" ? patch.syncStandbyNodeId.trim() : "";
+    settings.syncStandbyNodeId = v || undefined;
+  }
   writeSettings(settings);
   const snapshot = nodeSettingsSnapshot();
   broadcast({ type: "node.settings", settings: snapshot });
@@ -1154,10 +1178,6 @@ const commands: MeshCommand[] = [
   { name: "/clear", description: "Clear the local chat.", kind: "server" },
   { name: "/sessions", description: "Refresh and show saved sessions.", kind: "server" },
   { name: "/issue", description: "Pick up a configured GitHub issue on this computer.", kind: "server" },
-  { name: "/pr", description: "Commit, push, and open a pull request for this GitHub repo session.", kind: "server", run: async () => {
-    if (!active) return { ok: false, error: "No active session" };
-    return openPrForRepoSession(active);
-  } },
   { name: "/github-status", description: "Force a fresh GitHub PR status check for this session.", kind: "server", run: async () => {
     if (!active) return { ok: false, error: "No active session" };
     const changed = await refreshPullRequests(active);
@@ -1861,6 +1881,54 @@ function eventLogPath(sessionId: string): string {
 // choke point before anything lands on the synced-to-PWA disk.
 const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets);
 
+// --- Warm session replication (docs/session-replication.md) -----------------
+// A standby's replica repo lives under appDir/replicas/<id>: a self-contained git
+// repo that receives checkpoint bundles and is checked out on promotion. Created
+// lazily on the first frame that carries a bundle.
+const replicasDir = path.join(appDir, "replicas");
+async function ensureReplicaRepo(sessionId: string): Promise<string> {
+  const dir = path.join(replicasDir, encodeURIComponent(sessionId));
+  await fs.promises.mkdir(dir, { recursive: true });
+  if (!fs.existsSync(path.join(dir, ".git"))) {
+    spawnSync("git", ["-C", dir, "init", "-q"], { timeout: 5000 });
+  }
+  return dir;
+}
+// Assembled from daemon accessors; entirely inert unless sessionSync + a standby
+// are configured (both default off), so it cannot affect the default daemon path.
+const replication = new ReplicationService({
+  controlPlaneUrl: () => sessionAdvertiseTarget?.controlPlaneUrl,
+  enrollmentToken: () => sessionAdvertiseTarget?.enrollmentToken,
+  relayUrl: () => undefined, // the control plane returns the sharded relay URL
+  settings: () => {
+    const snap = nodeSettingsSnapshot();
+    return { sessionSync: snap.sessionSync, worktreeSync: snap.worktreeSync, standbyNodeId: snap.syncStandbyNodeId };
+  },
+  readRecords: (id) => eventLog.entries(id),
+  checkpointHead: async (id) => {
+    try {
+      return (await harness.checkpoints(id))[0]?.id;
+    } catch {
+      return undefined;
+    }
+  },
+  repoDirFor: (id) => {
+    const rec = openSessions.get(id);
+    return rec ? harnessDirFor(rec) : undefined;
+  },
+  runtimeSessionRef: (id) => openSessions.get(id)?.sessionFile,
+  replicaRepoDir: (id) => ensureReplicaRepo(id),
+  persistReplicaRecords: (id, records) => eventLog.rewrite(id, records),
+  upsertReplicaMeta: (id, info) => {
+    try {
+      metadata.upsertSession({ id, source: `replica${info.ownerNodeId ? `:${info.ownerNodeId}` : ""}`, status: "saved" });
+    } catch {
+      /* best-effort replica listing */
+    }
+  },
+  log: (m) => console.error(`[replication] ${m}`),
+});
+
 // Retire the legacy overlay sidecars. The append-only log is the sole overlay
 // store now and every session was migrated into it by the prior release's boot
 // migration (.migrated-overlays-v1), verified complete on-disk before this landed.
@@ -2139,23 +2207,10 @@ const RELAY_COMMANDS: Record<string, Command> = {
       ctx.reply({ type: "session.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "session.pr.open"(msg, ctx) {
-    // Resume the session if the node has dropped it from memory so a PR can still
-    // be opened after a restart, not just while it's live.
-    let rec: SessionRecord | undefined;
-    try {
-      rec = await resolveOrResumeSession(msg.sessionId, msg.path);
-    } catch (error) {
-      ctx.reply({ type: "session.pr_result", sessionId: msg.sessionId, ok: false, error: error instanceof Error ? error.message : String(error) });
-      return;
-    }
-    const result = rec ? await openPrForRepoSession(rec) : { ok: false, error: "Session not found" };
-    ctx.reply({ type: "session.pr_result", sessionId: rec?.id ?? msg.sessionId, ...result });
-  },
   async "session.pr.refresh"(msg, ctx) {
     // Force a refresh regardless of live/attached state — resume the session if
-    // the node dropped it from memory, same as session.pr.open above, so a
-    // finished/detached session can still be reconciled on demand.
+    // the node dropped it from memory, so a finished/detached session can still
+    // be reconciled on demand.
     let rec: SessionRecord | undefined;
     try {
       rec = await resolveOrResumeSession(msg.sessionId, msg.path);
@@ -2658,6 +2713,30 @@ const RELAY_COMMANDS: Record<string, Command> = {
     } catch (error) {
       relay?.sendEvent({ type: "transcription", requestId, error: error instanceof Error ? error.message : String(error) });
     }
+  },
+  // Session replication (docs/session-replication.md): the STANDBY receives a
+  // replication frame from the owner (which is connected as a relay CLIENT in
+  // this node's room) and applies it into the replica transcript + worktree,
+  // replying with the cursor so the owner can advance. Inert unless the owner
+  // opted in — a frame only arrives when a sibling chose this node as its standby.
+  async "session.replica.frame"(msg, ctx) {
+    const requestId = String(msg.requestId ?? "");
+    const frame = msg.frame as ReplWireFrame | undefined;
+    if (!frame) return;
+    const ack = await replication.handleReplicaFrame(frame, typeof msg.ownerNodeId === "string" ? msg.ownerNodeId : undefined);
+    ctx.reply({ type: "session.replica.ack", requestId, ack });
+  },
+  // Promote a replicated session onto THIS node (relay counterpart of
+  // POST /api/session/promote): a client switched to the standby and asked it to
+  // take over an offline owner. Epoch CAS + materialize the replica worktree.
+  async "session.promote"(msg, ctx) {
+    const requestId = String(msg.requestId ?? "");
+    const sessionId = String(msg.sessionId ?? "").trim();
+    if (!sessionId) return ctx.reply({ type: "session.promote.result", requestId, ok: false, error: "Missing sessionId" });
+    const epoch = await replication.promote(sessionId, identity.nodeId);
+    if (epoch === undefined) return ctx.reply({ type: "session.promote.result", requestId, ok: false, error: "Promotion lost the epoch race" });
+    scheduleAdvertise();
+    ctx.reply({ type: "session.promote.result", requestId, ok: true, sessionId, epoch });
   },
   // Ephemeral provisioning transport (node-broker path). A remote device that
   // holds the user's cloud credentials asks this node to make ONE allowlisted
@@ -3170,6 +3249,12 @@ async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; pub
 
 async function pushModelAuthToControlPlane() {
   if (!sessionAdvertiseTarget) return;
+  // Piggyback the (plaintext, non-secret) provider status summary on every
+  // trigger that already pushes the encrypted model-auth vault — one "creds
+  // changed" fan-out point instead of duplicating call sites. Independent
+  // try/catch: a summary push failure must not block the vault push or vice
+  // versa.
+  await pushProviderSummaryToControlPlane();
   try {
     const providers = await exportProviderAuth(credsDir);
     const localModels = exportLocalModels(localModelsDir);
@@ -3184,6 +3269,37 @@ async function pushModelAuthToControlPlane() {
     lastPushedModelAuthCiphertext = ciphertext;
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
+  }
+}
+
+// Plaintext (non-secret) summary of which OAuth-capable providers this node has
+// configured, and whether the stored token has expired — pushed alongside the
+// encrypted model-auth vault (see pushModelAuthToControlPlane above) so the web
+// client can show a per-node connection/expiry chip in NodeSwitcher without
+// connecting to every node. Deliberately excludes any credential material or
+// account identity — just {id, name, configured, expiresAt} per oauth-capable
+// provider, the same trust tier as the node's existing plaintext online/lastSeenAt
+// fields.
+let lastPushedProviderSummary = "";
+async function pushProviderSummaryToControlPlane() {
+  if (!sessionAdvertiseTarget) return;
+  try {
+    const providers = await listProviders(credsDir, piDir);
+    // Only providers the node has actually connected at some point — an
+    // expired OAuth credential still reports configured:true (the token is
+    // just past `expiresAt`), so this keeps "expired" entries while dropping
+    // the rest of the oauth-capable catalog the user never touched (which
+    // would otherwise show a "not connected" chip for every such provider on
+    // every node in NodeSwitcher).
+    const summary = providers
+      .filter((p) => p.oauth && p.configured)
+      .map((p) => ({ id: p.id, name: p.name, configured: p.configured, expiresAt: p.expiresAt }));
+    const serialized = JSON.stringify(summary);
+    if (serialized === lastPushedProviderSummary) return;
+    await modelAuthFetch("/node/provider-summary", { method: "PUT", body: JSON.stringify({ providers: summary }) });
+    lastPushedProviderSummary = serialized;
+  } catch (error) {
+    console.warn("[auth-sync] could not push provider summary:", (error as Error).message);
   }
 }
 
@@ -3686,6 +3802,11 @@ async function reportIssueOutcome(
       : "Bivy ran on this issue but produced no file changes.";
     emit(record, "no_changes", message);
     await commentIssue(cfg, issue.number, message).catch(() => {});
+    // The run is finished with nothing in progress — drop the claim label so it
+    // doesn't linger on the issue. A stale `bivy/<node>:in-progress` label was
+    // also mis-routing follow-up mentions before pickRoutingLabel was hardened;
+    // clearing it keeps issue label state consistent across the pickup lifecycle.
+    await removeLabel(cfg, issue.number, cfg.claimLabel).catch(() => {});
     return;
   }
 
@@ -5424,7 +5545,12 @@ function attachSessionListeners(record: SessionRecord) {
       void refreshSessionUsage(record);
       // Snapshot the worktree and broadcast the structured diff this turn made —
       // universal edit review + rewind target, for every runtime.
-      void harnessEndTurn(record);
+      // Warm-replicate this turn to the standby AFTER the checkpoint is committed
+      // (so the shipped frame carries this turn's transcript AND its checkpoint).
+      // Gated on session sync — inert by default.
+      void harnessEndTurn(record).finally(() => {
+        void replication.onTurnComplete(record.id);
+      });
       // A turn that ended in a terminal model/provider error (e.g. an expired
       // credential or a 4xx from the API) otherwise vanished: working cleared,
       // no reply, no signal. Surface it as a session-scoped error so the client
@@ -5450,12 +5576,10 @@ function attachSessionListeners(record: SessionRecord) {
       }
       // First real commit on a repo-backed worktree → publish the branch to the
       // remote (sets upstream), so the work is visible on GitHub. No-op until
-      // there's a commit, and only pushes once. Then either adopt a PR the agent
-      // opened itself (gh/API/web) so the badge lights up, or — if there's none —
-      // ask the user whether Bivy should open one.
+      // there's a commit, and only pushes once. Then adopt a PR the agent opened
+      // itself (gh/API/web) so the badge lights up.
       void maybePushWorktreeBranch(record)
-        .then(() => maybeDetectPullRequest(record))
-        .then(() => maybeSuggestPullRequest(record));
+        .then(() => maybeDetectPullRequest(record));
     }
     const sessionEventPayload = { type: "session.event", sessionId: record.id, event };
     if (event.type === "message_update") {
@@ -6224,10 +6348,9 @@ async function createGitWorkspaceSession(repoDir: string, parsed: ParsedRepo, op
  * kinds of GitHub-connected sessions: a regular repo-backed session
  * (`repo:owner/repo`) and a GitHub-issue pickup (`issue:owner/repo#N` — the
  * trailing issue number is stripped before parsing). Sharing this lookup is
- * what lets `maybePushWorktreeBranch`/`maybeDetectPullRequest`/
- * `maybeSuggestPullRequest` below — and the manual `/pr` chat command — work
- * the same way for both: publish the branch, adopt/track a PR the agent opens
- * itself, and offer a fallback if it doesn't, with no issue-specific code.
+ * what lets `maybePushWorktreeBranch`/`maybeDetectPullRequest` below work the
+ * same way for both: publish the branch and adopt/track a PR the agent opens
+ * itself, with no issue-specific code.
  */
 /** Parse a `record.source`/`MetadataSession.source` tag ("repo:owner/repo" or
  *  "issue:owner/repo#N") into its repo — shared by `repoSessionParts` (live
@@ -6281,21 +6404,6 @@ async function maybePushWorktreeBranch(record: SessionRecord) {
   } finally {
     record.branchPushing = false;
   }
-}
-
-async function maybeSuggestPullRequest(record: SessionRecord) {
-  const parts = repoSessionParts(record);
-  if (!parts || record.prUrl || record.prSuggested || record.prOpening) return;
-  const base = await resolveDefaultBaseRef(parts.wt.repoRoot);
-  const dirty = (runGit(["status", "--porcelain"], parts.wt.path) ?? "").trim();
-  if (!dirty && gitAheadCount(base, parts.wt.path) <= 0) return;
-  record.prSuggested = true;
-  broadcast({
-    type: "session.notice",
-    sessionId: record.id,
-    message: `Ready to create a pull request for ${parts.parsed.slug}. Run /pr when you want Bivy to commit changes, push ${parts.wt.branch}, and open the PR.`,
-    action: "/pr",
-  });
 }
 
 /** The single "primary" PR to surface on a one-badge row: an open PR if there
@@ -6488,57 +6596,6 @@ async function maybeDetectPullRequest(record: SessionRecord) {
     await refreshPullRequests(record);
   } finally {
     record.prDetecting = false;
-  }
-}
-
-async function openPrForRepoSession(record: SessionRecord) {
-  const parts = repoSessionParts(record);
-  if (!parts) return { ok: false, error: "This session is not connected to a GitHub repo worktree." };
-  if (record.prUrl) return { ok: true, prUrl: record.prUrl, text: `Pull request already exists: ${record.prUrl}` };
-  if (record.prOpening) return { ok: false, error: "A pull request is already being opened for this session." };
-
-  const { wt, parsed } = parts;
-  record.prOpening = true;
-  try {
-    const token = await resolveTokenForRepo(parsed.owner, parsed.repo);
-    if (!token) return { ok: false, error: "No GitHub token is available on this node. Run bivy github:connect or paste/connect GitHub credentials first." };
-
-    const title = record.session.getName() || `Bivy session ${record.id.slice(0, 8)}`;
-    const committed = await commitAll(wt.path, title);
-    const base = await resolveDefaultBaseRef(wt.repoRoot);
-    if (!committed && gitAheadCount(base, wt.path) <= 0) return { ok: false, error: "No file changes or unpushed commits to turn into a pull request." };
-
-    const cfg: GitHubTaskConfig = { token, owner: parsed.owner, repo: parsed.repo, repoDir: wt.repoRoot, label: "bivy", claimLabel: "bivy:in-progress", pollMs: 60_000 };
-    await pushBranch(cfg, wt.path, wt.branch);
-    record.branchPushed = true;
-    let pr = await openPullRequest(cfg, {
-      head: wt.branch,
-      base: base.replace(/^origin\//, ""),
-      title,
-      body: `_Opened by Bivy from a regular GitHub-connected session._\n\nSession: ${record.id}`,
-    });
-    // Creation fails with 422 when a PR already exists for this branch (e.g. the
-    // agent opened one itself, or a node restart lost the in-memory prUrl). Adopt
-    // the existing PR instead of erroring, so /pr is idempotent and the badge
-    // lights up either way.
-    let adopted = false;
-    if (!pr) {
-      pr = await findOpenPullRequestForBranch(cfg, wt.branch);
-      adopted = Boolean(pr);
-    }
-    if (!pr) return { ok: false, error: "GitHub did not create a pull request. It may already exist for this branch." };
-    record.prUrl = pr.url;
-    // Optimistically record the new PR so the badge lights up immediately; the
-    // refresh below reconciles titles and any other PRs on the branch.
-    record.prs = [{ url: pr.url, number: pr.number, state: "open" }, ...(record.prs ?? []).filter((p) => p.url !== pr.url)];
-    record.prSuggested = true;
-    persistSessionMetadata(record);
-    broadcast({ type: "session.pr_opened", sessionId: record.id, prUrl: pr.url, prs: record.prs });
-    scheduleAdvertise();
-    void refreshPullRequests(record).catch(() => {});
-    return { ok: true, prUrl: pr.url, text: `${adopted ? "Pull request already open" : "Opened pull request"}: ${pr.url}` };
-  } finally {
-    record.prOpening = false;
   }
 }
 
@@ -8226,17 +8283,6 @@ app.post("/api/commands/:runId/terminate", (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/session/pr", async (req, res, next) => {
-  try {
-    const session = await resolveOrResumeSession(req.body?.sessionId, req.body?.path);
-    if (!session) return res.status(404).json({ error: "Session not found" });
-    const result = await openPrForRepoSession(session);
-    if (!result.ok) return res.status(400).json(result);
-    res.json(result);
-  } catch (error) {
-    next(error);
-  }
-});
 
 // On-demand "update GitHub status" for one session: force `refreshPullRequests`
 // regardless of whether the session is live/attached, so a stale `open` badge
@@ -8270,6 +8316,23 @@ app.post("/api/session/abort", async (req, res, next) => {
     if (!record) return res.status(404).json({ error: "No active session" });
     await record.session.abort();
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Promote a replicated session onto THIS node (the standby taking over an offline
+// owner). Runs the control-plane compare-and-set on the ownership epoch, then
+// materializes the replicated worktree so the session can be resumed locally.
+// Manual — triggered from the app or `bivy sessions promote` (docs/session-replication.md).
+app.post("/api/session/promote", async (req, res, next) => {
+  try {
+    const sessionId = String(req.body?.sessionId ?? "").trim();
+    if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
+    const epoch = await replication.promote(sessionId, identity.nodeId);
+    if (epoch === undefined) return res.status(409).json({ error: "Promotion lost the epoch race (another node owns it, or it isn't replicated)" });
+    scheduleAdvertise();
+    res.json({ ok: true, epoch });
   } catch (error) {
     next(error);
   }

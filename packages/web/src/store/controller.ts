@@ -247,6 +247,12 @@ export class AppController {
           this.resolveFork(event);
           return;
         }
+        // Promotion reply (continue a replicated session on the standby) reuses
+        // the same keyed request/reply correlation as fork.
+        if (type === "session.promote.result") {
+          this.resolveFork(event);
+          return;
+        }
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
         this.maybeFlushPendingPrompt(appliedEvent);
@@ -520,6 +526,22 @@ export class AppController {
     void this.refreshAccountSessions();
   }
 
+  /**
+   * Switch to `nodeId` (a no-op if already the current, online node) and wait
+   * for the new transport to come online, then refresh `state.providers` for
+   * it — `providers.list` is never sent automatically on (re)connect. Used by
+   * flows that need a specific node's live state before proceeding (e.g.
+   * reconnecting that node's provider OAuth from NodeSwitcher). Throws if the
+   * node doesn't come online within `timeoutMs` (see `waitForOnline`).
+   */
+  async connectToNode(nodeId: string, timeoutMs?: number): Promise<void> {
+    if (nodeId !== this.local.cur || this.store.getState().status !== "online") {
+      this.switchNode(nodeId);
+      await this.waitForOnline(timeoutMs);
+    }
+    this.listProviders();
+  }
+
   /** Sign out: revoke the session server-side (and free this device's slot),
    *  then clear local state and return to the sign-in screen. */
   async signOut(): Promise<void> {
@@ -578,6 +600,23 @@ export class AppController {
     const error = (event as { error?: unknown }).error;
     if (error) pending.reject(new Error(String(error)));
     else pending.resolve(event);
+  }
+
+  /**
+   * Continue a replicated session on `standbyNodeId` (the warm standby) when its
+   * owner is offline: switch to the standby, ask it to promote (control-plane
+   * epoch compare-and-set + materialize the replica), and refresh the list.
+   * Throws on failure so the caller can surface it.
+   */
+  async promoteSession(sessionId: string, standbyNodeId: string): Promise<{ epoch: number }> {
+    if (standbyNodeId && standbyNodeId !== this.local.cur) {
+      this.switchNode(standbyNodeId);
+      await this.waitForOnline();
+    }
+    const reply = await this.forkRequest({ kind: "session.promote", sessionId }, 30000);
+    const epoch = Number((reply as { epoch?: unknown }).epoch ?? 0);
+    this.refreshAccountSessions();
+    return { epoch };
   }
 
   /** Send a fork command on the current transport and await its keyed reply. */
@@ -1730,14 +1769,9 @@ export class AppController {
     if (id) this.send({ kind: "session.resume", sessionId: id });
   }
 
-  openPr(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
-    if (id) this.send({ kind: "session.pr.open", sessionId: id });
-  }
-
   /** Force this session's PR status to re-sync with GitHub right now, instead
-   *  of waiting for its next turn (the "/github-status" command). Works even
-   *  when the session isn't live — the node resumes it just enough to check. */
+   *  of waiting for its next turn. Works even when the session isn't live — the
+   *  node resumes it just enough to check. */
   refreshPrStatus(sessionId?: string): void {
     const id = sessionId || this.store.getState().activeSessionId;
     if (id) this.send({ kind: "session.pr.refresh", sessionId: id });

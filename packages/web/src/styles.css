@@ -597,7 +597,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .github-pill.pr.merged { border-color: var(--merged); color: var(--merged); }
 .github-pill.pr.closed { border-color: var(--muted); color: var(--muted); }
 .github-pill.issue { border-color: var(--accent); color: var(--accent); }
-.github-pill .gh-text { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.github-pill .gh-text { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Compact PR badge on a sidebar row (open/merged/closed), colour-matched to the
    header pill. Non-interactive — it sits inside the row's <button>. */
@@ -926,6 +926,10 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .chip { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 8px; border: 1px solid var(--line); color: var(--muted); }
 .chip.ok { color: var(--ok); border-color: var(--ok); }
 .chip.err { color: var(--danger); border-color: var(--danger); }
+/* Expired-but-recoverable (e.g. a node's provider OAuth token past its expiry) —
+   distinct from .chip.err's harder failure red; reuses --accent, already an
+   amber/orange tone in this palette. */
+.chip.warn { color: var(--accent); border-color: var(--accent); }
 /* GitHub Queue waiting list (GithubQueue.tsx): a card per item with the title on
    the left and inline actions (Run… + remove) on the right, and the "Run…" node/
    agent form expanding below. */
@@ -1237,7 +1241,11 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 }
 
 /* ---- Buttons ---- */
-.btn { padding: 7px 14px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); }
+/* `.btn` styles both <button> and <a> (e.g. the onboarding "Download installer").
+   Force inline-flex centering, a pointer cursor and no underline so an anchor
+   reads as a real button rather than an underlined link inside a filled pill. */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 14px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font: inherit; text-decoration: none; cursor: pointer; }
+.btn:disabled { cursor: default; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
 .btn.ghost { background: transparent; }
 .btn.danger-ghost { background: transparent; color: var(--danger); border-color: var(--danger); }
@@ -1264,6 +1272,7 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .banner { display: flex; align-items: center; gap: 10px; padding: 10px 18px; font-size: 13px; }
 .banner.error { background: var(--danger-soft); color: var(--danger); }
 .banner.info { background: var(--surface-2); color: var(--muted); }
+.banner.warn { background: color-mix(in srgb, var(--warn, #d9a441) 16%, transparent); color: var(--warn, #d9a441); }
 .banner-text { flex: 1; }
 .banner-dismiss { margin-left: auto; border: 0; background: transparent; color: inherit; font-size: 18px; line-height: 1; }
 .reconnect-spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; flex: none; }
@@ -1287,11 +1296,23 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .node-menu-status .reconnect-spinner { width: 12px; height: 12px; }
 .node-menu-head { padding: 10px 14px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .node-menu-empty { padding: 6px 14px 12px; color: var(--muted); font-size: 13px; }
+/* A node row: the switch-to-node button plus zero or more provider status
+   chips as siblings (not nested — a <button> chip inside the node-menu-item
+   <button> would be invalid HTML, same reasoning as PickerItem's row/right
+   split in Sheet.tsx). */
+.node-menu-row { display: flex; align-items: center; }
+.node-menu-row .node-menu-item { flex: 1; min-width: 0; }
 .node-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent; color: var(--ink); padding: 10px 14px; font-size: 14px; }
 .node-menu-item:hover { background: var(--surface-2); }
 .node-menu-item.active { font-weight: 600; }
 .node-menu-item.danger { color: var(--danger); }
 .node-menu-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Per-provider connect status, shown to the right of a node row — clicking
+   any of them (connected or expired) opens NodeReconnectSheet scoped to that
+   node+provider. font/cursor reset since these are .chip rendered as real
+   <button>s (need to be focusable/clickable), not inert status spans. */
+.node-provider-chip { flex: none; margin-right: 8px; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+.node-provider-chip:hover { filter: brightness(1.2); }
 .node-menu-check { color: var(--accent); }
 .node-menu-glyph { color: var(--accent); flex: none; }
 .eph-steps { margin: 4px 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 4px; }

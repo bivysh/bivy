@@ -1415,6 +1415,9 @@ function NodesPanel({ state }: { state: AppState }) {
       defaultSandbox: form.defaultSandbox,
       githubMaxConcurrent: form.githubMaxConcurrent,
       githubIssuePrompt: form.githubIssuePrompt,
+      sessionSync: form.sessionSync,
+      worktreeSync: form.worktreeSync,
+      syncStandbyNodeId: form.syncStandbyNodeId ?? "",
     });
     setSavedMsg("Saved");
     setTimeout(() => setSavedMsg(null), 1500);
@@ -1561,6 +1564,65 @@ function NodesPanel({ state }: { state: AppState }) {
           <div className="row-actions">
             <button className="btn" onClick={resetIssuePrompt}>Reset to default</button>
           </div>
+
+          <label className="field-label">Session sync</label>
+          <div className="settings-toggle-row">
+            <div className="settings-toggle-text">
+              <span className="settings-toggle-title">Keep sessions synced to a standby node</span>
+              <span className="muted small">
+                Warm-replicate each session's transcript to another of your nodes over the encrypted
+                relay, so a session can be picked up elsewhere if this node goes offline. Data stays
+                node-to-node; the control plane never sees it.
+              </span>
+            </div>
+            <Toggle
+              checked={form.sessionSync}
+              onChange={(v) => setForm({ ...form, sessionSync: v, worktreeSync: v ? form.worktreeSync : false })}
+              label="Enable session sync"
+            />
+          </div>
+          <div className={`settings-toggle-row${form.sessionSync ? "" : " disabled"}`}>
+            <div className="settings-toggle-text">
+              <span className="settings-toggle-title">Also sync the workspace (git checkpoints)</span>
+              <span className="muted small">
+                Ship each turn's git checkpoint too, so the promoted session keeps its working tree and
+                can continue coding — not just show history. Needs session sync; ignored for non-git workspaces.
+              </span>
+            </div>
+            <Toggle
+              checked={form.worktreeSync}
+              disabled={!form.sessionSync}
+              onChange={(v) => setForm({ ...form, worktreeSync: v })}
+              label="Enable worktree sync"
+            />
+          </div>
+          {form.sessionSync && (
+            <>
+              <label className="field-label">Standby node</label>
+              <select
+                className="picker-search"
+                value={form.syncStandbyNodeId ?? ""}
+                onChange={(e) => setForm({ ...form, syncStandbyNodeId: e.target.value || undefined })}
+              >
+                <option value="">Choose a node to replicate to…</option>
+                {nodes
+                  .filter((n) => n.id !== currentNodeId)
+                  .map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {(n.name || n.id) + (n.online ? "" : " (offline)")}
+                    </option>
+                  ))}
+                {form.syncStandbyNodeId && !nodes.some((n) => n.id === form.syncStandbyNodeId) && (
+                  <option value={form.syncStandbyNodeId}>{form.syncStandbyNodeId}</option>
+                )}
+              </select>
+              <p className="muted small">
+                Sessions on this node warm-replicate to the standby over the encrypted relay. If this
+                node goes offline, open the session on the standby and choose “Continue here”.
+                {nodes.filter((n) => n.id !== currentNodeId).length === 0 && " Add a second node to enable this."}
+              </p>
+            </>
+          )}
 
           <div className="row-actions">
             <button className="btn primary" onClick={save}>Save</button>

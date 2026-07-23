@@ -144,10 +144,26 @@ export async function pollDeviceLogin(store: LocalStore, deviceId: string, devic
   return data;
 }
 
+/**
+ * Plaintext (non-secret) per-provider connection status the node pushes
+ * alongside its encrypted model-auth vault (see docs/credential-sync.md).
+ * Never credential material or account identity — just enough for
+ * `NodeSwitcher` to show a Connected/Expired/Not-connected chip per node
+ * without connecting to it.
+ */
+export interface NodeProviderSummary {
+  id: string;
+  name?: string;
+  configured: boolean;
+  /** Epoch ms the stored OAuth access token expires, when applicable. */
+  expiresAt?: number;
+}
+
 export interface AccountNode {
   id: string;
   name?: string;
   online?: boolean;
+  providers?: NodeProviderSummary[];
   [k: string]: unknown;
 }
 
@@ -196,8 +212,13 @@ export interface AccountMe {
     relayEnabled?: boolean;
     pushEnabled?: boolean;
     workQueueEnabled?: boolean;
+    // Hosted work-queue runs allowed per calendar month. Undefined = unlimited
+    // (paid plans); free pins it to a small trial allowance. Pairs with
+    // counts.workQueueRunsThisMonth to render "used / limit".
+    workQueueMonthlyLimit?: number;
+    ephemeralEnabled?: boolean;
   };
-  counts?: { nodes?: number; sessions?: number; devices?: number };
+  counts?: { nodes?: number; sessions?: number; devices?: number; workQueueRunsThisMonth?: number };
   [k: string]: unknown;
 }
 

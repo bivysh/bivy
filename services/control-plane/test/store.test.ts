@@ -127,17 +127,22 @@ await test("free vs pro entitlements match the published pricing table", () => {
   // Device and session caps were removed for every plan (fields no longer exist).
   assert.equal(free.pushEnabled, false, "free: no push notifications");
   assert.equal(free.relayEnabled, true, "free: one hosted relay node");
-  assert.equal(free.workQueueEnabled, false, "free: no hosted work queue");
+  assert.equal(free.workQueueEnabled, true, "free: hosted work queue included");
+  assert.equal(free.workQueueMonthlyLimit, 5, "free: metered at 5 runs/month");
+  assert.equal(free.ephemeralEnabled, false, "free: no quick ephemeral servers");
 
   const pro = entitlementsForPlan("pro");
   assert.equal(pro.maxNodes, undefined, "pro: unlimited nodes (no cap)");
   assert.equal(pro.pushEnabled, true, "pro: push notifications");
   assert.equal(pro.relayEnabled, true, "pro: remote relay");
   assert.equal(pro.workQueueEnabled, true, "pro: hosted work queue");
+  assert.equal(pro.workQueueMonthlyLimit, undefined, "pro: unlimited runs (no cap)");
+  assert.equal(pro.ephemeralEnabled, true, "pro: quick ephemeral servers");
 
   const team = entitlementsForPlan("team");
   assert.equal(team.maxNodes, undefined, "team: unlimited nodes (no cap)");
   assert.equal(team.workQueueEnabled, true, "team: hosted work queue");
+  assert.equal(team.ephemeralEnabled, true, "team: quick ephemeral servers");
 });
 
 await test("setSubscriptionState records full billing metadata and updates entitlements", async () => {
@@ -213,6 +218,38 @@ await test("work queue: items are account-scoped; cross-account claim is denied"
   // acct2's node can neither see nor claim acct1's item.
   assert.equal((await store.listPendingWorkItems(acct2.id, ["bivy"])).length, 0);
   assert.equal(await store.claimWorkItem(acct2.id, node2.id, item.id), undefined);
+});
+
+await test("countWorkRunsSince counts claimed items in range (free-tier run meter)", async () => {
+  const store = await makeStore();
+  const account = await store.findOrCreateAccount("meter@example.com");
+  const { node } = await store.enrollNode(account.id, "node-m", "Meter");
+
+  const before = new Date(Date.now() - 60_000).toISOString();
+  const future = new Date(Date.now() + 60_000).toISOString();
+
+  const a = await store.enqueueWorkItem(account.id, { source: "slack", title: "A" });
+  const b = await store.enqueueWorkItem(account.id, { source: "slack", title: "B" });
+  await store.enqueueWorkItem(account.id, { source: "slack", title: "C" });
+
+  // Nothing claimed yet ⇒ no runs counted (pending items don't burn quota).
+  assert.equal(await store.countWorkRunsSince(account.id, before), 0);
+
+  // Two claims = two runs; the still-pending item is not counted.
+  await store.claimWorkItem(account.id, node.id, a.id);
+  await store.claimWorkItem(account.id, node.id, b.id);
+  assert.equal(await store.countWorkRunsSince(account.id, before), 2, "two claimed items = two runs");
+
+  // Completing a run doesn't refund it — it still counts for the month.
+  await store.completeWorkItem(account.id, a.id);
+  assert.equal(await store.countWorkRunsSince(account.id, before), 2, "completing keeps the run counted");
+
+  // The window boundary excludes claims older than `since`.
+  assert.equal(await store.countWorkRunsSince(account.id, future), 0, "since in the future ⇒ nothing in range");
+
+  // Scoped per account: another account's claims don't count here.
+  const other = await store.findOrCreateAccount("meter2@example.com");
+  assert.equal(await store.countWorkRunsSince(other.id, before), 0);
 });
 
 await test("inbound hooks: create + resolve by id with a per-account secret", async () => {
