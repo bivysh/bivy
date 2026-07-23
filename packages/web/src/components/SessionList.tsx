@@ -7,11 +7,11 @@ import { controller } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
 import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
 
-// How long "Create pull request" stays in its busy state before giving up and
-// re-enabling the button — `controller.openPr` is fire-and-forget (there's no
-// direct response, only the async `session.pr_result` event PrToast already
-// listens for), so without a cap a node that never replies would leave the
-// button disabled forever.
+// How long "Update GitHub status" stays in its busy state before giving up and
+// re-enabling the button — `controller.refreshPrStatus` is fire-and-forget
+// (there's no direct response, only the async `session.pr_result` event), so
+// without a cap a node that never replies would leave the button disabled
+// forever.
 const PR_BUSY_TIMEOUT_MS = 20000;
 
 // Exported for reuse by GithubQueue.tsx, which renders the same row anatomy
@@ -115,10 +115,10 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [prBusy, setPrBusy] = useState(false);
-  // `controller.openPr` is fire-and-forget — the only signal it worked (or
-  // didn't) is the shared `prResult`/`error` state PrToast/ErrorToast already
-  // render as a toast. Watch both so tapping "Create pull request" doesn't
-  // just look like nothing happened while the node is thinking.
+  // `controller.refreshPrStatus` is fire-and-forget — the only signal it
+  // finished (or errored) is the shared `prResult`/`error` state. Watch both so
+  // tapping "Update GitHub status" doesn't just look like nothing happened
+  // while the node is thinking.
   const { prResult, error } = useAppState();
   const prBusyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -133,8 +133,8 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
 
   useEffect(() => {
     if (!prBusy) return;
-    // Either outcome — a fresh prResult (PrToast will show it) or a fresh
-    // error (ErrorToast will show it) — means the round trip finished.
+    // Either outcome — a fresh prResult or a fresh error (ErrorToast will show
+    // it) — means the status round trip finished.
     setPrBusy(false);
     setOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- react to either changing, not to prBusy itself
@@ -150,12 +150,6 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
   const del = () => {
     close();
     setDeleting(true);
-  };
-  const createPr = () => {
-    setPrBusy(true);
-    controller.openPr(sessionId);
-    if (prBusyTimer.current) clearTimeout(prBusyTimer.current);
-    prBusyTimer.current = setTimeout(() => { setPrBusy(false); setOpen(false); }, PR_BUSY_TIMEOUT_MS);
   };
   const refreshPrStatus = () => {
     setPrBusy(true);
@@ -234,14 +228,6 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
             {isRepo && (
               <button className="action-sheet-item" onClick={refreshPrStatus} disabled={prBusy}>
                 {prBusy ? "Checking GitHub status…" : "Update GitHub status"}
-              </button>
-            )}
-            {/* Offer to create one only when there's no live open PR to link to.
-                Stays open (rather than closing immediately, the old behavior)
-                so "Creating…" is actually visible while the node works. */}
-            {isRepo && !(prs ?? []).some((p) => p.state === "open") && (
-              <button className="action-sheet-item" onClick={createPr} disabled={prBusy}>
-                {prBusy ? "Creating pull request…" : "Create pull request"}
               </button>
             )}
             <button className="action-sheet-item" onClick={promote} disabled={prBusy}>

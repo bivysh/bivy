@@ -5,17 +5,14 @@ import {
   isSlashInput,
   parseSlash,
   matchSlashCommands,
-  findSlashCommand,
   slashHelpText,
   resolveSlash,
   isValidAgentCommand,
-  agentScopedName,
-  SLASH_COMMANDS,
 } from "../src/slash.js";
 
 describe("isSlashInput", () => {
   it("recognises a slash command line", () => {
-    expect(isSlashInput("/pr")).toBe(true);
+    expect(isSlashInput("/compact")).toBe(true);
     expect(isSlashInput("  /model sonnet")).toBe(true);
   });
   it("rejects prose and bare slashes", () => {
@@ -28,57 +25,37 @@ describe("isSlashInput", () => {
 
 describe("parseSlash", () => {
   it("splits the command word from the args", () => {
-    expect(parseSlash("/pr")).toEqual({ name: "/pr", args: "" });
+    expect(parseSlash("/compact")).toEqual({ name: "/compact", args: "" });
     expect(parseSlash("/model claude sonnet")).toEqual({ name: "/model", args: "claude sonnet" });
   });
   it("lower-cases and trims the command word", () => {
-    expect(parseSlash("  /PR  ")).toEqual({ name: "/pr", args: "" });
-  });
-  it("resolves aliases to the canonical name", () => {
-    expect(parseSlash("/stop")).toEqual({ name: "/abort", args: "" });
+    expect(parseSlash("  /Compact  ")).toEqual({ name: "/compact", args: "" });
   });
   it("returns an unknown command as typed (so the caller can warn, not run it)", () => {
     expect(parseSlash("/nope now")).toEqual({ name: "/nope", args: "now" });
-    expect(findSlashCommand("/nope")).toBeUndefined();
   });
   it("returns null for non-slash input", () => {
     expect(parseSlash("just a prompt")).toBeNull();
   });
-  it("recognises the /agent:<name> escape hatch (scoped, no alias resolution)", () => {
-    expect(parseSlash("/agent:model sonnet")).toEqual({ name: "/model", args: "sonnet", agentScoped: true });
-    // The scoped name is taken literally — "/agent:stop" targets the agent's own
-    // "/stop", not Bivy's "/abort" alias.
-    expect(parseSlash("/agent:stop")).toEqual({ name: "/stop", args: "", agentScoped: true });
-  });
-  it("leaves the bare /agent Bivy command unscoped (no colon)", () => {
-    expect(parseSlash("/agent")).toEqual({ name: "/agent", args: "" });
-    expect(parseSlash("/agent claude")).toEqual({ name: "/agent", args: "claude" });
-  });
 });
 
 describe("matchSlashCommands", () => {
-  it("returns all commands for a bare slash", () => {
-    expect(matchSlashCommands("/")).toHaveLength(SLASH_COMMANDS.length);
-  });
-  it("filters by prefix on names and aliases", () => {
-    expect(matchSlashCommands("/pr").map((c) => c.name)).toEqual(["/pr"]);
-    // "/st" matches "/abort" via its "/stop" alias.
-    expect(matchSlashCommands("/st").map((c) => c.name)).toEqual(["/abort"]);
+  it("returns nothing without advertised commands", () => {
+    expect(matchSlashCommands("/")).toEqual([]);
   });
   it("stops autocompleting once a space is typed", () => {
-    expect(matchSlashCommands("/model ")).toEqual([]);
+    expect(matchSlashCommands("/model ", [{ name: "/model" }])).toEqual([]);
   });
   it("returns nothing for non-slash prefixes", () => {
-    expect(matchSlashCommands("hello")).toEqual([]);
+    expect(matchSlashCommands("hello", [{ name: "/compact" }])).toEqual([]);
   });
 
-  it("appends the agent's advertised commands after the Bivy commands", () => {
+  it("returns the agent's advertised commands for a bare slash", () => {
     const extra = [{ name: "/compact", description: "Compact" }];
-    const names = matchSlashCommands("/", extra).map((c) => c.name);
-    expect(names).toEqual([...SLASH_COMMANDS.map((c) => c.name), "/compact"]);
+    expect(matchSlashCommands("/", extra).map((c) => c.name)).toEqual(["/compact"]);
   });
 
-  it("filters agent commands by prefix too", () => {
+  it("filters agent commands by prefix", () => {
     const extra = [
       { name: "/compact", description: "Compact" },
       { name: "/status", description: "Status" },
@@ -86,26 +63,9 @@ describe("matchSlashCommands", () => {
     expect(matchSlashCommands("/comp", extra).map((c) => c.name)).toEqual(["/compact"]);
   });
 
-  it("keeps Bivy winning a collision but re-surfaces the agent command under /agent:<name>", () => {
-    const extra = [{ name: "/model", description: "agent's own model command" }];
-    // Typing "/model" only offers Bivy's own — the agent's colliding command is
-    // NOT shown under the bare name.
-    const models = matchSlashCommands("/model", extra);
-    expect(models).toHaveLength(1);
-    expect(models[0]?.description).not.toContain("agent's own");
-    // …but it's discoverable through the escape-hatch spelling under "/".
-    const all = matchSlashCommands("/", extra).map((c) => c.name);
-    expect(all).toContain("/agent:model");
-  });
-
-  it("filters escape-hatch entries by the /agent: prefix", () => {
-    const extra = [
-      { name: "/model", description: "agent model" },
-      { name: "/compact", description: "compact" },
-    ];
-    // "/agent:mo" narrows to the scoped colliding command; the non-colliding
-    // "/compact" stays under its own name and isn't scoped.
-    expect(matchSlashCommands("/agent:mo", extra).map((c) => c.name)).toEqual(["/agent:model"]);
+  it("filters by alias too", () => {
+    const extra = [{ name: "/compact", aliases: ["/squash"] }];
+    expect(matchSlashCommands("/squ", extra).map((c) => c.name)).toEqual(["/compact"]);
   });
 
   it("drops malformed agent commands from the menu (robust to bad handshake data)", () => {
@@ -116,7 +76,7 @@ describe("matchSlashCommands", () => {
       null as any,
       { description: "no name" } as any,
     ];
-    expect(matchSlashCommands("/", extra).map((c) => c.name)).toEqual([...SLASH_COMMANDS.map((c) => c.name), "/ok"]);
+    expect(matchSlashCommands("/", extra).map((c) => c.name)).toEqual(["/ok"]);
   });
 });
 
@@ -138,12 +98,7 @@ describe("resolveSlash", () => {
     { name: "/deploy", description: "Deploy", mode: "protocol" as const },
   ];
 
-  it("routes a Bivy control command to the bivy action (wins a collision)", () => {
-    const res = resolveSlash(parseSlash("/model sonnet")!, agent);
-    expect(res).toEqual({ kind: "bivy", name: "/model", args: "sonnet" });
-  });
-
-  it("routes a non-colliding agent command to the agent (prompt mode)", () => {
+  it("routes an advertised agent command to the agent (prompt mode)", () => {
     const res = resolveSlash(parseSlash("/compact")!, agent);
     expect(res.kind).toBe("agent");
     if (res.kind === "agent") {
@@ -161,12 +116,12 @@ describe("resolveSlash", () => {
     }
   });
 
-  it("reaches a colliding agent command via the /agent:<name> escape hatch", () => {
-    const res = resolveSlash(parseSlash("/agent:model gpt-5")!, agent);
+  it("routes a command that would once have collided straight to the agent now", () => {
+    const res = resolveSlash(parseSlash("/model sonnet")!, agent);
     expect(res.kind).toBe("agent");
     if (res.kind === "agent") {
       expect(res.command.description).toBe("agent's own model");
-      expect(res.args).toBe("gpt-5");
+      expect(res.args).toBe("sonnet");
     }
   });
 
@@ -180,47 +135,23 @@ describe("resolveSlash", () => {
     expect(res).toEqual({ kind: "unknown", name: "/whatever", hasCatalog: false });
   });
 
-  it("scoped miss is unknown, spelled with the /agent: prefix", () => {
-    const res = resolveSlash(parseSlash("/agent:nope")!, agent);
-    expect(res).toEqual({ kind: "unknown", name: "/agent:nope", hasCatalog: true });
-  });
-
   it("ignores malformed advertised commands (no catalog if all are junk)", () => {
     const junk = [{ name: "bad" } as any, null as any];
     expect(resolveSlash(parseSlash("/x")!, junk)).toEqual({ kind: "unknown", name: "/x", hasCatalog: false });
   });
 });
 
-describe("agentScopedName", () => {
-  it("spells the escape-hatch form", () => {
-    expect(agentScopedName("/model")).toBe("/agent:model");
-    expect(agentScopedName("model")).toBe("/agent:model");
-  });
-});
-
-describe("findSlashCommand", () => {
-  it("looks up by canonical name and alias", () => {
-    expect(findSlashCommand("/abort")?.name).toBe("/abort");
-    expect(findSlashCommand("/stop")?.name).toBe("/abort");
-    expect(findSlashCommand("/unknown")).toBeUndefined();
-  });
-});
-
 describe("slashHelpText", () => {
-  it("lists every Bivy command", () => {
-    const help = slashHelpText();
-    for (const c of SLASH_COMMANDS) expect(help).toContain(c.name);
-    expect(help).toContain("/stop"); // alias surfaced too
+  it("reports when the agent advertised no commands", () => {
+    expect(slashHelpText()).toContain("No commands available");
   });
 
-  it("includes the active agent's commands under a heading", () => {
+  it("lists the active agent's advertised commands", () => {
     const help = slashHelpText([
       { name: "/compact", description: "Compact the conversation." },
-      { name: "/model", description: "agent's own model" }, // collides with Bivy
+      { name: "/status", description: "Show status." },
     ]);
-    expect(help).toContain("Agent commands:");
     expect(help).toContain("/compact — Compact the conversation.");
-    // The colliding one is listed under its escape-hatch spelling.
-    expect(help).toContain("/agent:model — agent's own model");
+    expect(help).toContain("/status — Show status.");
   });
 });

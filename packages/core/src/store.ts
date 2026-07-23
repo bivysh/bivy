@@ -137,7 +137,7 @@ export interface TranscriptEntry {
    *  attachmentsByText below), so this is populated from the client's own
    *  send-time cache, not from history data. */
   attachments?: PromptAttachment[];
-  /** A slash command the node suggested for this notice (e.g. "/pr"), rendered
+  /** A slash command the node suggested for this notice (e.g. "/new"), rendered
    *  as an inline action button on a system entry so the suggestion is tappable
    *  instead of just describing a command the user would have to type. */
   action?: string;
@@ -1565,9 +1565,9 @@ export class SessionStore {
         const e = event as any;
         const sid = String(e.sessionId || "");
         if ((!sid || sid === this.state.activeSessionId) && e.message) {
-          // Carry an optional `action` (a slash command like "/pr") onto the
-          // entry so the view can render it as a tappable button — e.g. the
-          // node's "ready to open a pull request" suggestion after a repo turn.
+          // Carry an optional `action` (a slash command like "/new") onto the
+          // entry so the view can render it as a tappable button — e.g. a node
+          // suggestion the user can act on with one tap.
           const action = typeof e.action === "string" ? e.action : undefined;
           this.pushEntry({ id: nextId(), role: "system", text: String(e.message), action });
         }
