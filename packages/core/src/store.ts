@@ -67,6 +67,11 @@ export interface RunTerminalSummary {
   lastActivityAt?: number;
   sessionId?: string;
   pid?: number;
+  /** Relay/account mode: node that owns this terminal. Tagged by the
+   *  controller's eventWithNodeScope, mirroring SessionSummary.nodeId, so the
+   *  sidebar can show (and merge) run terminals from every node, not just the
+   *  currently connected one. */
+  nodeId?: string;
 }
 
 export interface SessionSummary {
@@ -1129,14 +1134,17 @@ export class SessionStore {
     this.set({ currentNodeId: nodeId });
   }
 
-  /** Clear per-node/session state when switching nodes so transcripts never blend. */
+  /** Clear per-node/session state when switching nodes so transcripts never blend.
+   *  Deliberately leaves `sessions` and `runTerminals` untouched — both are
+   *  unified, all-node sidebar lists (see controller.switchNode's
+   *  eventWithNodeScope merge), not the previous node's local state, so wiping
+   *  them here would make the sidebar flash/narrow to whichever node answers
+   *  first instead of always showing every node's sessions (issue #99). */
   resetSession(): void {
     this.draft = freshDraft();
     this.pending.clear();
     this.usersBeforePending = 0;
     this.set({
-      sessions: [],
-      runTerminals: [],
       activeSessionId: null,
       activeTitle: "New session",
       github: { issueUrl: null, prUrl: null, branch: null, repo: null, prs: [] },

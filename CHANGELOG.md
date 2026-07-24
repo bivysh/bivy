@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The sidebar no longer drops another node's `bivy run` terminals when you
+  switch nodes — e.g. from the "New session" header switcher. Run terminals
+  are now tagged and merged by node the same way chat sessions already were,
+  so the sidebar keeps showing every node's sessions regardless of which node
+  is currently selected. (#99)
 - `install.sh` now persists a PATH fix into `~/.bashrc`/`~/.zshrc` when the
   npm (or fallback `~/.local`) bin directory isn't already on `PATH`, instead
   of only printing an `export PATH=...` line — which fixed nothing beyond the
