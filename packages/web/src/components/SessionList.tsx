@@ -249,7 +249,7 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
 // what's mounted and let the user page through the tail.
 const PAGE = 10;
 
-export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string) => void }) {
+export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void }) {
   const { sessions, runTerminals, activeSessionId, nodes, currentNodeId } = useAppState();
   const [query, setQuery] = useState("");
   const [repoFilter, setRepoFilter] = useState("");
@@ -299,14 +299,16 @@ export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: st
   }, [sessions]);
 
   const filteredRuns = useMemo(() => {
-    // Run terminals belong to the currently connected node and don't carry a
-    // canonical GitHub repo, so respect node/repo filters without pretending a
-    // workspace basename is a repo identity.
-    if ((nodeFilter && nodeFilter !== currentNodeId) || repoFilter) return [];
+    // Run terminals don't carry a canonical GitHub repo, so a repo filter hides
+    // them entirely rather than pretending a workspace basename is a repo
+    // identity. A node filter narrows to that terminal's own owning node —
+    // like sessions, every node's terminals belong in this unified sidebar,
+    // not just the currently connected node's (issue #99).
+    if (repoFilter) return [];
+    let matched = runTerminals;
+    if (nodeFilter) matched = matched.filter((t) => (t.nodeId || currentNodeId) === nodeFilter);
     const q = query.trim().toLowerCase();
-    const matched = q
-      ? runTerminals.filter((t) => `${t.name ?? ""} ${t.label ?? ""} ${t.agent ?? ""} ${t.workspace ?? ""}`.toLowerCase().includes(q))
-      : runTerminals;
+    if (q) matched = matched.filter((t) => `${t.name ?? ""} ${t.label ?? ""} ${t.agent ?? ""} ${t.workspace ?? ""}`.toLowerCase().includes(q));
     return [...matched].sort((a, b) => toMs(b.lastActivityAt ?? b.createdAt) - toMs(a.lastActivityAt ?? a.createdAt));
   }, [runTerminals, query, repoFilter, nodeFilter, currentNodeId]);
 
@@ -348,7 +350,7 @@ export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: st
 
   const runMeta = (t: RunTerminalSummary): string => {
     const workspace = String(t.workspace || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop();
-    return [t.label || t.agent, nodeName(currentNodeId || undefined), workspace].filter(Boolean).join(" · ");
+    return [t.label || t.agent, nodeName(t.nodeId || currentNodeId || undefined), workspace].filter(Boolean).join(" · ");
   };
 
   return (
@@ -463,7 +465,7 @@ export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: st
           const meta = runMeta(t);
           return (
             <li key={t.termId} className="session-row">
-              <button className="session-item" onClick={() => onPickTerminal(t.termId)}>
+              <button className="session-item" onClick={() => onPickTerminal(t.termId, t.nodeId)}>
                 <span className="session-dot working" title="Running in terminal" aria-hidden />
                 <span className="sr-only">Running in terminal</span>
                 <span className="session-body">

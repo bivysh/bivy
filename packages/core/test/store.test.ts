@@ -843,8 +843,26 @@ describe("SessionStore", () => {
 
     store.apply({ type: "terminal.closed", termId: "term-1" });
     expect(store.getState().runTerminals.map((t) => t.termId)).toEqual(["term-2"]);
+  });
+
+  it("keeps sessions and run terminals across a node switch — they're unified all-node sidebar lists, not per-node state (issue #99)", () => {
+    const store = new SessionStore();
+    store.apply({ type: "sessions.list", sessions: [{ sessionId: "s1", name: "One", nodeId: "node-a" }] });
+    store.apply({
+      type: "terminal.list",
+      terminals: [{ termId: "term-1", name: "Pi · mesh", agent: "pi", nodeId: "node-a" }],
+    });
+    expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+    expect(store.getState().runTerminals.map((t) => t.termId)).toEqual(["term-1"]);
+    // resetSession() is what controller.switchNode() calls when the user picks
+    // a different node (e.g. from the "new session" node switcher) — it must
+    // still blank the active session pane, but the sidebar's session/terminal
+    // lists (spanning every node on the account) must not change just because
+    // the client's own connected transport did.
     store.resetSession();
-    expect(store.getState().runTerminals).toEqual([]);
+    expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+    expect(store.getState().runTerminals.map((t) => t.termId)).toEqual(["term-1"]);
+    expect(store.getState().activeSessionId).toBeNull();
   });
 
   // ---- seen/unseen + live/not-live state (issue #387) ----

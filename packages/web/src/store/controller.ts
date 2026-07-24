@@ -229,9 +229,13 @@ export class AppController {
         // to the terminal view instead of churning the session reducer. The few
         // lifecycle/list events also update the shared store so live `bivy run`
         // sessions appear in the main sidebar even when the overlay is closed.
+        // Those five go through eventWithNodeScope first (tag/merge by node,
+        // same as sessions.list) so switching nodes doesn't drop another node's
+        // terminals from the sidebar (issue #99); terminalListeners still get
+        // the raw event — they key off termId, not node.
         if (type.startsWith("terminal.") || type.startsWith("multiplexer.")) {
           if (["terminal.list", "terminal.created", "terminal.activity", "terminal.closed", "terminal.exit"].includes(type)) {
-            this.store.apply(event);
+            this.store.apply(this.eventWithNodeScope(event));
           }
           for (const fn of this.terminalListeners) fn(event);
           return;
@@ -540,7 +544,6 @@ export class AppController {
   /** Switch to another node without a full reload. */
   switchNode(nodeId: string): void {
     if (nodeId === this.local.cur && this.store.getState().status === "online") return;
-    const allNodeSessions = this.store.getState().sessions;
     try {
       this.transport.close();
     } catch {
@@ -550,12 +553,14 @@ export class AppController {
     this.store.resetSession();
     this.store.setCurrentNode(nodeId);
     // Node selection changes which transport owns the session pane, not which
-    // sessions exist in the sidebar. Keep the unified account list visible
-    // while the target node connects; refreshAccountSessions reconciles it.
+    // sessions/terminals exist in the sidebar — resetSession() deliberately
+    // leaves both alone (issue #99), so there's nothing to restore here.
+    // seedSessionsFromCache is a no-op unless the list is genuinely still
+    // empty (e.g. switching before the very first load ever completed), in
+    // which case it paints instantly from the last cached list while the new
+    // node connects and refreshAccountSessions below fetches the
+    // authoritative one.
     this.seedSessionsFromCache();
-    if (!this.direct && allNodeSessions.length > 0) {
-      this.store.setSessions(allNodeSessions);
-    }
     this.transport = this.buildTransport();
     this.store.setStatus("connecting");
     void this.transport.connect();
@@ -831,17 +836,43 @@ export class AppController {
     }
   }
 
+  /**
+   * Tag/merge a node-scoped event against the unified all-node lists the
+   * sidebar renders, so a connected node's own (necessarily node-local)
+   * answer never clobbers what we already know about other nodes:
+   *  - `sessions.list` / `terminal.list`: merge the incoming, freshly-tagged
+   *    rows with whatever other-node rows are already in the store.
+   *  - `session.created` / `terminal.created`: tag the new row with the
+   *    connected node so it sorts/filters correctly once merged.
+   * Untouched otherwise (e.g. terminal.activity/closed/exit key off termId
+   * alone and need no node tag to apply correctly across nodes).
+   */
   private eventWithNodeScope(event: ServerEvent): ServerEvent {
     if (this.direct || !this.local.cur) return event;
-    if (event.type !== "sessions.list") {
-      return event.type === "session.created" ? ({ ...event, nodeId: this.local.cur } as ServerEvent) : event;
-    }
-    const payload = event as unknown as { sessions?: unknown };
-    const incoming = Array.isArray(payload.sessions) ? payload.sessions as Array<Record<string, unknown>> : [];
     const currentNode = this.local.cur;
-    const currentIds = new Set(incoming.map((s) => String(s?.sessionId || s?.id || "")).filter(Boolean));
-    const others = this.store.getState().sessions.filter((s) => s.nodeId && s.nodeId !== currentNode && !currentIds.has(s.sessionId));
-    return { ...event, sessions: [...incoming.map((s) => ({ ...s, nodeId: s.nodeId || currentNode })), ...others] } as ServerEvent;
+    if (event.type === "sessions.list") {
+      const payload = event as unknown as { sessions?: unknown };
+      const incoming = Array.isArray(payload.sessions) ? payload.sessions as Array<Record<string, unknown>> : [];
+      const currentIds = new Set(incoming.map((s) => String(s?.sessionId || s?.id || "")).filter(Boolean));
+      const others = this.store.getState().sessions.filter((s) => s.nodeId && s.nodeId !== currentNode && !currentIds.has(s.sessionId));
+      return { ...event, sessions: [...incoming.map((s) => ({ ...s, nodeId: s.nodeId || currentNode })), ...others] } as ServerEvent;
+    }
+    if (event.type === "session.created") {
+      return { ...event, nodeId: currentNode } as ServerEvent;
+    }
+    if (event.type === "terminal.list") {
+      const payload = event as unknown as { terminals?: unknown };
+      const incoming = Array.isArray(payload.terminals) ? payload.terminals as Array<Record<string, unknown>> : [];
+      const currentIds = new Set(incoming.map((t) => String(t?.termId || "")).filter(Boolean));
+      const others = this.store.getState().runTerminals.filter((t) => t.nodeId && t.nodeId !== currentNode && !currentIds.has(t.termId));
+      return { ...event, terminals: [...incoming.map((t) => ({ ...t, nodeId: t.nodeId || currentNode })), ...others] } as ServerEvent;
+    }
+    if (event.type === "terminal.created") {
+      const payload = event as unknown as { terminal?: Record<string, unknown> };
+      if (!payload.terminal) return event;
+      return { ...event, terminal: { ...payload.terminal, nodeId: payload.terminal.nodeId || currentNode } } as ServerEvent;
+    }
+    return event;
   }
 
   // --- Session-list cache (instant sidebar paint) ------------------------
