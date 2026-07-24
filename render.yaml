@@ -9,14 +9,24 @@
 # the publish directory, so bivy.sh/install.sh is byte-identical to the tested
 # file by construction rather than by anyone remembering to sync it.
 #
-# No other build step: Bivy is distributed on npm, so the site hosts no release
-# tarball or manifest and needs no secrets.
+# The build also produces the node release tarball + manifest into
+# site/downloads/, so bivy.sh/downloads/bivy-latest.{tar.gz,json} refreshes on
+# every deploy (Render redeploys the site on every push to main). npm is still
+# the primary channel, but install.sh falls back to this self-hosted tarball
+# whenever the registry 404s, and `bivy update` on existing packaged nodes pulls
+# it — so keeping it current on every merge is what actually ships fixes to them.
+# The artifacts are build output (git-ignored), never committed; still no secrets.
+# If the pack step ever fails, Render keeps the last good deploy — the site stays
+# up and downloads simply don't advance.
 
 services:
   - type: web
     name: bivy-site
     runtime: static
-    buildCommand: "cp install.sh site/install.sh"
+    # tsc + stage the node package, emit site/downloads/bivy-latest.{tar.gz,json},
+    # then copy the canonical installer. --ignore-scripts: the build only needs
+    # tsc to compile src/, not any dependency's native/postinstall step.
+    buildCommand: "npm ci --ignore-scripts --no-audit --no-fund && node scripts/build-release.mjs --pack site/downloads && cp install.sh site/install.sh"
     staticPublishPath: ./site
     # PR previews are disabled: each preview spins up its own build and burns
     # pipeline minutes, and this setting is managed by the Blueprint, so a

@@ -12,3 +12,5 @@ packages/*/node_modules
 .bivy-test-*
 .bivy-attachments/
 site/install.sh
+# Built by the Render deploy (render.yaml buildCommand), never committed.
+site/downloads/
