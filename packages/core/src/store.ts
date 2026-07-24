@@ -137,7 +137,7 @@ export interface TranscriptEntry {
    *  attachmentsByText below), so this is populated from the client's own
    *  send-time cache, not from history data. */
   attachments?: PromptAttachment[];
-  /** A slash command the node suggested for this notice (e.g. "/pr"), rendered
+  /** A slash command the node suggested for this notice (e.g. "/new"), rendered
    *  as an inline action button on a system entry so the suggestion is tappable
    *  instead of just describing a command the user would have to type. */
   action?: string;
@@ -225,6 +225,8 @@ export interface ProviderInfo {
   kind?: string;
   source?: string;
   oauth?: boolean;
+  /** Epoch ms the stored OAuth access token expires, when `kind === "oauth"`. */
+  expiresAt?: number;
   [k: string]: unknown;
 }
 
@@ -401,6 +403,17 @@ export interface NodeSettings {
    *  issue's own number/title/body/link. Editable; the node fills in a strong
    *  default when this hasn't been customized. */
   githubIssuePrompt: string;
+  /** Warm-replicate each session's transcript to a standby node so it can be
+   *  picked up elsewhere if this node goes offline (docs/session-replication.md).
+   *  Off by default — replication streams data node-to-node over the E2E relay. */
+  sessionSync: boolean;
+  /** Also replicate the workspace: each turn's git checkpoint is shipped to the
+   *  standby so the promoted session can keep *working*, not just show history.
+   *  Requires sessionSync; ignored when the workspace is not a git repo. */
+  worktreeSync: boolean;
+  /** The account node this node replicates its sessions TO (the standby). Empty
+   *  = sync configured but no standby chosen yet (nothing is replicated). */
+  syncStandbyNodeId?: string;
 }
 
 export interface AppState {
@@ -1554,9 +1567,9 @@ export class SessionStore {
         const e = event as any;
         const sid = String(e.sessionId || "");
         if ((!sid || sid === this.state.activeSessionId) && e.message) {
-          // Carry an optional `action` (a slash command like "/pr") onto the
-          // entry so the view can render it as a tappable button — e.g. the
-          // node's "ready to open a pull request" suggestion after a repo turn.
+          // Carry an optional `action` (a slash command like "/new") onto the
+          // entry so the view can render it as a tappable button — e.g. a node
+          // suggestion the user can act on with one tap.
           const action = typeof e.action === "string" ? e.action : undefined;
           this.pushEntry({ id: nextId(), role: "system", text: String(e.message), action });
         }
