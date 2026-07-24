@@ -217,8 +217,17 @@ export interface AccountMe {
     // counts.workQueueRunsThisMonth to render "used / limit".
     workQueueMonthlyLimit?: number;
     ephemeralEnabled?: boolean;
+    // Ephemeral runners allowed alive at once. Undefined = unlimited (paid plans);
+    // free pins it to 1. Pairs with counts.ephemeralRunning to render "n / limit".
+    ephemeralConcurrent?: number;
   };
-  counts?: { nodes?: number; sessions?: number; devices?: number; workQueueRunsThisMonth?: number };
+  counts?: {
+    nodes?: number;
+    sessions?: number;
+    devices?: number;
+    workQueueRunsThisMonth?: number;
+    ephemeralRunning?: number;
+  };
   [k: string]: unknown;
 }
 

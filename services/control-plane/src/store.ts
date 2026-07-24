@@ -48,8 +48,35 @@ export interface Entitlements {
   workQueueMonthlyLimit?: number;
   // Quick ephemeral cloud servers brokered from a phone (Fly/Hetzner/AWS/… with
   // the user's own token, proxied through the control-plane cold-start relay).
-  // Paid only — the persistent installer stays free for everyone.
+  // Available on every plan; free is metered by `ephemeralConcurrent` below.
   ephemeralEnabled: boolean;
+  // How many ephemeral runners may be ALIVE AT ONCE. Optional: `undefined` means
+  // UNLIMITED (paid plans omit it, mirroring `maxNodes`). Free pins this to 1.
+  //
+  // This caps concurrency, not configuration: a free account may set up as many
+  // machines/providers as it likes (those live on the device, not here) and is
+  // only refused when a second one tries to come up while the first is still
+  // running. Counted from live ephemeral nodes rather than a stored counter —
+  // see countLiveEphemeralNodes — so a machine that dies frees its slot on its
+  // own and there is no counter to reset and no cron.
+  //
+  // Enforced at enroll and at relay connect, and only when `ENFORCE_ENTITLEMENTS=1`
+  // (Bivy Cloud); self-host stacks run unlimited regardless.
+  ephemeralConcurrent?: number;
+}
+
+// Whether paid-plan entitlements are enforced (Bivy Cloud). Off is the self-host /
+// no-billing default, where every signed-in account reads as `free` — so numeric
+// caps must be skipped there or a self-hoster is held to the free tier's 1 node and
+// 1 runner on a stack they own outright. Defined here rather than in each call site
+// so the store and the routes cannot drift apart.
+//
+// A function, not a const, because the store applies caps inside the enroll
+// transaction and the tests need to exercise both a metered (Bivy Cloud) and an
+// unmetered (self-host) stack in one process. Route-level callers read it once at
+// module load, as before.
+export function entitlementsEnforced(): boolean {
+  return process.env.ENFORCE_ENTITLEMENTS === "1";
 }
 
 export interface Account {
@@ -92,6 +119,12 @@ export interface NodeRecord {
   lastSeenAt: string | null;
   createdAt: string;
   providers?: NodeProviderSummary[];
+  // Set once, at enroll, when the caller declares this node a short-lived cloud
+  // runner (packages/core's launchEphemeralMachine). Recorded server-side rather
+  // than inferred from the `eph-` id prefix, which the client picks and could
+  // simply not use. Ephemeral nodes are counted against `ephemeralConcurrent`
+  // instead of `maxNodes`, so this flag decides which cap a node faces.
+  ephemeral: boolean;
 }
 
 export interface ResolvedClient {
@@ -432,13 +465,24 @@ export interface PairedDeviceInfo {
 // without a paywall; heavy users upgrade. Paid plans omit the limit (unlimited).
 export const FREE_WORK_QUEUE_MONTHLY_RUNS = 5;
 
+// Free allowance for ephemeral cloud runners: how many may be alive at once.
+// Ephemeral is the answer to "I have no spare machine", which is the objection
+// that blocks onboarding hardest, so gating it outright put a paywall exactly
+// where a new user is deciding whether Bivy is for them. It also costs us
+// nothing — the machine runs on the user's own cloud account, on their own
+// token. Concurrency is the axis that stays paid: running a fleet in parallel
+// is the Pro-shaped need.
+export const FREE_CONCURRENT_EPHEMERAL = 1;
+
 export const PLAN_ENTITLEMENTS: Record<Plan, Omit<Entitlements, "plan">> = {
   // Launch policy: every signed-in user gets one hosted-relay node for free so
   // onboarding can go straight from installer → remote PWA without a paywall.
   // The work queue is now on every plan; free is capped at FREE_WORK_QUEUE_MONTHLY_RUNS
-  // runs/month (paid plans omit the limit ⇒ unlimited). Push notifications and
-  // ephemeral servers remain paid. Paid plans omit `maxNodes` too ("unlimited").
-  free: { maxNodes: 1, pushEnabled: false, relayEnabled: true, workQueueEnabled: true, workQueueMonthlyLimit: FREE_WORK_QUEUE_MONTHLY_RUNS, ephemeralEnabled: false },
+  // runs/month (paid plans omit the limit ⇒ unlimited). Ephemeral runners are on
+  // every plan too, free metered by FREE_CONCURRENT_EPHEMERAL live at a time.
+  // Push notifications remain paid. Paid plans omit `maxNodes` and
+  // `ephemeralConcurrent` ("unlimited").
+  free: { maxNodes: 1, pushEnabled: false, relayEnabled: true, workQueueEnabled: true, workQueueMonthlyLimit: FREE_WORK_QUEUE_MONTHLY_RUNS, ephemeralEnabled: true, ephemeralConcurrent: FREE_CONCURRENT_EPHEMERAL },
   pro: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
   team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
 };
@@ -526,7 +570,18 @@ export interface MeshStore {
     accountId: string,
     nodeId: string,
     name: string,
+    opts?: { ephemeral?: boolean },
   ): Promise<{ node: Omit<NodeRecord, "enrollmentTokenHash">; enrollmentToken: string }>;
+  // Ephemeral runners currently ALIVE for the account — the live half of the
+  // `ephemeralConcurrent` cap. "Alive" means still connected to the relay
+  // (`online`), deliberately: nothing reliably tells the control plane that a
+  // cloud machine died. The TTL backstop runs `shutdown -h now` on the box, an
+  // explicit destroy unenrolls fire-and-forget, and a browser that closes
+  // mid-run reaps nothing at all — so counting *enrolled* rows would let one
+  // orphan permanently consume a free account's only slot. Counting online rows
+  // makes the slot free itself: the machine stops heartbeating, the relay marks
+  // it offline, the slot returns.
+  countLiveEphemeralNodes(accountId: string): Promise<number>;
   nodeFromEnrollmentToken(token: string | null): Promise<NodeRecord | undefined>;
   setNodeOnline(nodeId: string, online: boolean): Promise<void>;
   setNodeName(nodeId: string, name: string): Promise<NodeRecord | undefined>;

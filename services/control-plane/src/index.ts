@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
-import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS, entitlementsEnforced } from "./store.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
@@ -163,7 +163,12 @@ if (webPushEnabled) webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidP
 // `pushEnabled` would make Web Push impossible to use on a self-hosted stack even
 // with VAPID keys configured. Off ⇒ push is available to any account (still
 // requires VAPID keys / webPushEnabled); on ⇒ push stays gated to paid plans.
-const enforceEntitlements = process.env.ENFORCE_ENTITLEMENTS === "1";
+//
+// Read once here (routes) and lazily in the store (entitlementsEnforced()); both
+// come from store.ts so the node and runner caps applied inside the enroll
+// transaction cannot disagree with the route-level gates about whether billing is
+// enforced.
+const enforceEntitlements = entitlementsEnforced();
 async function accountPushAllowed(accountId: string): Promise<boolean> {
   if (!enforceEntitlements) return true;
   return (await store.entitlements(accountId)).pushEnabled;
@@ -814,6 +819,9 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
       // run). Paired with entitlements.workQueueMonthlyLimit so the queue UI can
       // show "used / limit" and prompt an upgrade when a free account runs out.
       workQueueRunsThisMonth: (await workQueueAllowance(account.id)).used,
+      // Live runners, so the app can render "1 of 1 running" and explain a refusal
+      // before the user pays for a machine that will be turned away at enroll.
+      ephemeralRunning: await store.countLiveEphemeralNodes(account.id),
     },
   });
 }));
@@ -827,7 +835,14 @@ app.post("/nodes/enroll", requireUser, asyncHandler(async (req, res) => {
   const account = await syncStripeBillingForAccount((req as Request & { account: Account }).account);
   const nodeId = String(req.body?.nodeId ?? "").trim();
   if (!nodeId) return res.status(400).json({ error: "Missing nodeId" });
-  const result = await store.enrollNode(account.id, nodeId, String(req.body?.name ?? "Node"));
+  // `ephemeral` is declared by the caller (packages/core's launchEphemeralMachine
+  // sets it) and recorded as given. It is authoritative-on-write and never
+  // re-derived from the `eph-` id prefix, which the client also chooses and could
+  // simply omit. Claiming it is not a way to escape a cap — it moves the node
+  // from the persistent bucket into the runner bucket, both of which are capped
+  // on free — so there is nothing to gain by lying either way.
+  const ephemeral = Boolean(req.body?.ephemeral);
+  const result = await store.enrollNode(account.id, nodeId, String(req.body?.name ?? "Node"), { ephemeral });
   res.json({ ok: true, ...result });
 }));
 
@@ -1120,13 +1135,16 @@ const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "ssm.ap-northeast-1.amazonaws.com",
 ]);
 app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
-  // Quick ephemeral servers are a paid feature. The persistent installer stays
-  // free; this cold-start relay (spin a cloud box up from just a phone) is gated
-  // to Pro/Team when entitlements are enforced (Bivy Cloud). Mirrors the client
-  // gate in EphemeralSheet — this is the authoritative check.
+  // Ephemeral servers are on every plan; free is metered by how many may run at
+  // once, which is enforced at enroll (postgres-store's enrollNode) because that
+  // is the one call every launch makes whichever transport provisions it. This
+  // proxy stays a dumb forwarder: it carries destroy and status calls as well as
+  // create, so refusing here would strand a user at their cap with no way to
+  // release it. The plan flag is still honoured for any plan that disables the
+  // feature outright.
   const account = (req as Request & { account: Account }).account;
   if (enforceEntitlements && !(await store.entitlements(account.id)).ephemeralEnabled) {
-    return res.status(403).json({ error: "Quick ephemeral servers are a Pro feature. Upgrade to launch cloud runners." });
+    return res.status(403).json({ error: "Ephemeral cloud servers are not available on your plan." });
   }
   const url = String(req.body?.url ?? "");
   let host: string;
@@ -2016,17 +2034,35 @@ app.post("/internal/introspect/node", requireRelay, asyncHandler(async (req, res
   const ticket = await store.consumeRelayTicket(String(req.body?.token ?? ""));
   if (!ticket || ticket.role !== "node" || !ticket.nodeId) return res.status(404).json({ error: "Invalid node ticket" });
   const entitlements = await store.entitlements(ticket.accountId);
-  // Enforce the node cap at connect too, not just at enroll — otherwise an
-  // account that downgrades (e.g. Individual → Free) keeps every already-enrolled
-  // node reachable forever. The oldest `maxNodes` nodes stay allowed; the rest are
-  // rejected but remain enrolled, so re-upgrading restores them with no re-enroll.
-  if (entitlements.maxNodes !== undefined) {
-    const allowed = (await store.listNodes(ticket.accountId))
-      .slice()
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-      .slice(0, entitlements.maxNodes)
-      .some((n) => n.id === ticket.nodeId);
-    if (!allowed) return res.status(403).json({ error: "Node over plan limit" });
+  // Enforce the caps at connect too, not just at enroll — otherwise an account
+  // that downgrades (e.g. Pro → Free) keeps every already-enrolled node reachable
+  // forever. Skipped entirely unless entitlements are enforced, so a self-host
+  // stack (where every account reads as `free`) is not held to the free tier.
+  if (enforceEntitlements) {
+    const nodes = await store.listNodes(ticket.accountId);
+    const self = nodes.find((n) => n.id === ticket.nodeId);
+    if (self?.ephemeral) {
+      // Runners are capped on concurrency, so "oldest wins" is the wrong rule —
+      // it would pin the slot to whichever runner enrolled first and lock out
+      // every later one for the life of the account. Admit this one if the
+      // account is under its live-runner budget, counting other runners only.
+      const limit = entitlements.ephemeralConcurrent;
+      if (limit !== undefined) {
+        const liveOthers = nodes.filter((n) => n.ephemeral && n.online && n.id !== ticket.nodeId).length;
+        if (liveOthers >= limit) return res.status(403).json({ error: "Ephemeral machine over plan limit" });
+      }
+    } else if (entitlements.maxNodes !== undefined) {
+      // The oldest `maxNodes` persistent nodes stay allowed; the rest are rejected
+      // but remain enrolled, so re-upgrading restores them with no re-enroll.
+      // Runners are excluded from the ranking so a cloud machine can never
+      // displace the laptop the user actually installed on.
+      const allowed = nodes
+        .filter((n) => !n.ephemeral)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .slice(0, entitlements.maxNodes)
+        .some((n) => n.id === ticket.nodeId);
+      if (!allowed) return res.status(403).json({ error: "Node over plan limit" });
+    }
   }
   res.json({ nodeId: ticket.nodeId, accountId: ticket.accountId, entitlements });
 }));

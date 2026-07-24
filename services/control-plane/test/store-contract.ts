@@ -284,14 +284,22 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
 
   // --- Entitlements & node limits -------------------------------------------
   await test("free plan caps nodes at 1; upgrading lifts the cap", async (store) => {
-    const acct = await store.findOrCreateAccount("contract-limit@example.com");
-    await store.enrollNode(acct.id, "n1", "First");
-    await assert.rejects(
-      () => store.enrollNode(acct.id, "n2", "Second"),
-      (err: unknown) => (err as { status?: number }).status === 402,
-    );
-    await store.setPlan(acct.id, "pro");
-    assert.equal((await store.enrollNode(acct.id, "n2", "Second")).node.id, "n2");
+    // The cap only bites when entitlements are enforced (Bivy Cloud); a self-host
+    // stack, where every account reads as free, must not be held to it.
+    const prev = process.env.ENFORCE_ENTITLEMENTS;
+    process.env.ENFORCE_ENTITLEMENTS = "1";
+    try {
+      const acct = await store.findOrCreateAccount("contract-limit@example.com");
+      await store.enrollNode(acct.id, "n1", "First");
+      await assert.rejects(
+        () => store.enrollNode(acct.id, "n2", "Second"),
+        (err: unknown) => (err as { status?: number }).status === 402,
+      );
+      await store.setPlan(acct.id, "pro");
+      assert.equal((await store.enrollNode(acct.id, "n2", "Second")).node.id, "n2");
+    } finally {
+      process.env.ENFORCE_ENTITLEMENTS = prev;
+    }
   });
 
   return passed;
