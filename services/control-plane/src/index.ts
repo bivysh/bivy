@@ -58,6 +58,14 @@ function assertProductionConfig() {
   if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_WEBHOOK_SECRET) {
     problems.push("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set (webhooks would be unverifiable)");
   }
+  if (!process.env.PUBLIC_CONTROL_PLANE_URL) {
+    // Without a fixed public URL, baseUrl() falls back to the request's
+    // Host/X-Forwarded-Host header — which an attacker controls. That header is
+    // what builds the magic-link / OAuth sign-in URL emailed to the user, so a
+    // spoofed Host would send a genuine email pointing at the attacker's host
+    // and leak the single-use login token. Require it in production.
+    problems.push("PUBLIC_CONTROL_PLANE_URL must be set in production (sign-in link URLs must not be derived from request headers)");
+  }
   if (problems.length > 0) {
     console.error("Refusing to start: insecure production configuration:\n  - " + problems.join("\n  - "));
     process.exit(1);
@@ -352,6 +360,39 @@ function validEmail(email: string): boolean {
   return /^[^@\s]+@[^@\s]+$/.test(email);
 }
 
+// Lightweight in-memory fixed-window rate limiter for the unauthenticated,
+// side-effecting auth endpoints — they send email (Resend) and provision an
+// account for any supplied address, so without a cap one source can flood third-
+// party inboxes and create unbounded rows. Per single control-plane instance;
+// good enough to blunt abuse from one origin. (Per-account quotas across the
+// fleet remain a documented 0.1 limitation — see docs/security-model.md.)
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+function rateLimited(bucket: string, key: string, limit: number, windowMs: number): boolean {
+  const now = Date.now();
+  if (rateBuckets.size > 10_000) {
+    for (const [k, v] of rateBuckets) if (now >= v.resetAt) rateBuckets.delete(k);
+  }
+  const id = `${bucket}:${key}`;
+  const entry = rateBuckets.get(id);
+  if (!entry || now >= entry.resetAt) {
+    rateBuckets.set(id, { count: 1, resetAt: now + windowMs });
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > limit;
+}
+function clientIp(req: Request): string {
+  return String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket.remoteAddress || "unknown";
+}
+/** True (and responds 429) if this IP or email has exceeded the auth-email budget. */
+function authEmailRateLimited(req: Request, res: Response, email: string): boolean {
+  if (rateLimited("auth-email-ip", clientIp(req), 20, 60_000) || rateLimited("auth-email-addr", email, 5, 60_000)) {
+    res.status(429).json({ error: "Too many requests. Please wait a minute and try again." });
+    return true;
+  }
+  return false;
+}
+
 function b64urlJson(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
@@ -590,6 +631,7 @@ const requireNode = asyncHandler(async (req, res, next) => {
 app.post("/auth/magic-link/start", asyncHandler(async (req, res) => {
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   if (!validEmail(email)) return res.status(400).json({ error: "Invalid email" });
+  if (authEmailRateLimited(req, res, email)) return;
 
   const loginToken = await store.createLoginToken(email);
   const loginUrl = `${baseUrl(req)}/auth/magic-link/consume?token=${encodeURIComponent(loginToken)}`;
@@ -628,6 +670,7 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
 app.post("/auth/device/start", asyncHandler(async (req, res) => {
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   if (!validEmail(email)) return res.status(400).json({ error: "Invalid email" });
+  if (authEmailRateLimited(req, res, email)) return;
 
   const loginToken = await store.createLoginToken(email);
   const { deviceId, deviceSecret } = await store.createDeviceLogin();
@@ -1131,7 +1174,13 @@ app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
-    const upstream = await fetch(url, { method, headers, body: payload, signal: controller.signal });
+    // Do NOT auto-follow redirects: the host allowlist is enforced once, above,
+    // so a 3xx from an allowlisted provider (open redirect) could otherwise
+    // bounce this request to an internal target like 169.254.169.254 (SSRF).
+    const upstream = await fetch(url, { method, headers, body: payload, signal: controller.signal, redirect: "manual" });
+    if (upstream.status >= 300 && upstream.status < 400) {
+      return res.status(502).json({ error: "Refusing to follow a redirect from the provider host (SSRF guard)." });
+    }
     const text = await upstream.text();
     let body: unknown = text;
     try { body = text ? JSON.parse(text) : null; } catch { /* non-JSON */ }

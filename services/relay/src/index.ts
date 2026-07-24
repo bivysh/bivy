@@ -28,10 +28,15 @@ const port = Number(process.env.PORT ?? 4500);
 const controlPlaneUrl = process.env.CONTROL_PLANE_URL ?? "http://localhost:4400";
 const relaySecret = process.env.RELAY_SECRET ?? "dev-relay-secret";
 
-// Fail fast rather than route production traffic with the shared dev secret,
-// which would let anyone introspect tokens against the control plane.
-if (process.env.NODE_ENV === "production" && (!process.env.RELAY_SECRET || relaySecret === "dev-relay-secret")) {
-  console.error("Refusing to start: RELAY_SECRET must be set to a strong, non-default value in production (openssl rand -hex 32).");
+// Fail fast rather than route traffic with the shared dev secret, which would
+// let anyone introspect tokens against the control plane. Refuse it not just in
+// NODE_ENV=production but whenever this relay points at a NON-local control
+// plane — a `staging` (or unset-NODE_ENV) deploy reaching a real control plane
+// over the network with the well-known default is exactly as exploitable as a
+// production one. Local dev against a localhost control plane still works.
+const isLocalControlPlane = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(controlPlaneUrl);
+if ((process.env.NODE_ENV === "production" || !isLocalControlPlane) && (!process.env.RELAY_SECRET || relaySecret === "dev-relay-secret")) {
+  console.error("Refusing to start: RELAY_SECRET must be set to a strong, non-default value when reaching a non-local control plane (openssl rand -hex 32).");
   process.exit(1);
 }
 

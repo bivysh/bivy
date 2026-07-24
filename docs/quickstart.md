@@ -26,9 +26,11 @@ On Debian/Ubuntu the installer can install Node.js 22 for you if it is missing.
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
-This downloads the release tarball, checks it against the release manifest's
-`sha256`, installs into `~/.bivy/app`, installs production dependencies,
-symlinks `bivy` into `~/.local/bin`, and launches the setup wizard.
+This ensures a supported Node.js is present (installing it for you on
+Debian/Ubuntu if needed), runs `npm install -g bivy`, then launches the
+`bivy setup` wizard. Node state lives at `~/.bivy`. (If the package isn't yet
+on the registry, the installer falls back to a checksum-verified release
+tarball — but npm is the primary path.)
 
 If `~/.local/bin` is not on your `PATH` the installer warns you; add
 `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.

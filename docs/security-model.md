@@ -276,8 +276,11 @@ cleartext in a synced log.
 Redaction runs at the single persistence choke point (`EventLog.flush`) and is
 structure-preserving: it only shortens string values, so JSON stays valid
 (`src/redact.ts`). It masks GitHub tokens in every current shape (`ghp_`,
-`gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`) and the password half of any URL
-userinfo (`scheme://user:SECRET@host`).
+`gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), the password half of any URL
+userinfo (`scheme://user:SECRET@host`), and common model/provider and SaaS API
+keys with distinctive prefixes (OpenAI/Anthropic `sk-…`, Stripe `sk_live_`/
+`sk_test_`/`rk_…`, Groq `gsk_…`, xAI `xai-…`, Google `AIza…`, AWS `AKIA…`,
+Slack `xox[baprs]-…`).
 
 This is pattern-based. It does not catch a secret shape Bivy has no pattern for.
 
@@ -320,8 +323,11 @@ security-conscious user to know before trusting it with anything sensitive.
     See [`self-host.md`](self-host.md).
 11. **Metadata leaks to the relay.** Which node, which client, when, how much,
     and how often. E2E encryption hides content, not traffic patterns.
-12. **Redaction is pattern-based** and covers GitHub tokens and URL userinfo
-    only. Other credential shapes an agent prints will be persisted verbatim.
+12. **Redaction is pattern-based.** It covers GitHub tokens, URL userinfo, and
+    common provider/SaaS key shapes with distinctive prefixes (OpenAI/Anthropic,
+    Stripe, Groq, xAI, Google, AWS access-key ids, Slack). A credential shape
+    Bivy has no pattern for — including generic high-entropy secrets — will be
+    persisted verbatim.
 13. **No third-party security audit.** Bivy 0.1 has not been externally audited.
 14. **Approvals expire denied after 5 minutes.** A long-running unattended
     session that hits an approval will stall and then fail rather than proceed.

@@ -16,9 +16,9 @@ is not reachable.
 
 Useful paths:
 
-- App install: `~/.bivy/app`
-- Node state (config, keys, sessions, logs): `~/.bivy/app/.bivy/`
-  (in a git checkout it is `<checkout>/.bivy/`)
+- Node state (config, keys, sessions, logs): `~/.bivy`
+  (in a git checkout it is `<checkout>/.bivy/`; older tarball installs kept it
+  at `~/.bivy/app/.bivy/`)
 - CLI config: `.bivy/cli.json` — workspace, port, env
 - Relay enrollment: `.bivy/relay.json`
 - Background log fallback: `.bivy/node.log`
@@ -150,7 +150,7 @@ Where the logs live, by platform:
 ```bash
 journalctl --user -u bivy.service -n 100 --no-pager   # Linux (systemd)
 tail -n 100 /tmp/bivy.log /tmp/bivy.err.log           # macOS (launchd)
-tail -n 100 ~/.bivy/app/.bivy/node.log                # fallback
+tail -n 100 ~/.bivy/node.log                          # fallback
 ```
 
 `bivy logs [-f] [-n N]` picks the right one for you.
@@ -312,8 +312,8 @@ but it does not survive a `bivy uninstall` without `--keep-sessions`, and it doe
 not follow you if the data directory moves.
 
 ```bash
-ls ~/.bivy/app/.bivy/metadata.json      # the durable session index
-ls ~/.bivy/app/.bivy/pi/sessions        # Pi transcripts
+ls ~/.bivy/metadata.json      # the durable session index
+ls ~/.bivy/pi/sessions        # Pi transcripts
 bivy sessions --json
 ```
 
@@ -377,8 +377,8 @@ Bivy writes secrets with mode `600` (`cli.json`, `relay.json`, the credential
 vault). If you copied state between machines, re-tighten it:
 
 ```bash
-chmod 700 ~/.bivy/app/.bivy
-chmod 600 ~/.bivy/app/.bivy/cli.json ~/.bivy/app/.bivy/relay.json
+chmod 700 ~/.bivy
+chmod 600 ~/.bivy/cli.json ~/.bivy/relay.json
 ```
 
 ---

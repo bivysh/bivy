@@ -23,9 +23,20 @@
 # still wants dev-login, set NODE_ENV= (empty) and DISABLE_DEV_LOGIN=0 in .env.
 # Configure real Stripe keys + webhook secret before taking live payments.
 
+# Cap container log growth so the json-file driver can't fill the disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
+    logging: *default-logging
+    # Keep one runaway service from OOMing the whole box.
+    mem_limit: 1g
+    cpus: 1.0
     environment:
       # NOTE: POSTGRES_USER/POSTGRES_DB only take effect when postgres runs
       # initdb on a FIRST, empty data dir. If you change them on a box whose
@@ -50,6 +61,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.control-plane
+    logging: *default-logging
+    mem_limit: 512m
+    cpus: 1.0
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "4400"
@@ -105,6 +119,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.relay
+    logging: *default-logging
+    mem_limit: 512m
+    cpus: 1.0
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "4500"
@@ -139,6 +156,9 @@ services:
 
   caddy:
     image: caddy:2
+    logging: *default-logging
+    mem_limit: 256m
+    cpus: 1.0
     ports:
       - "80:80"
       - "443:443"

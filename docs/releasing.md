@@ -4,7 +4,9 @@ Bivy is distributed on npm as the [`bivy`](https://www.npmjs.com/package/bivy)
 package. `install.sh` is a thin bootstrapper: it ensures a supported Node.js is
 present, runs `npm install -g bivy`, and then runs `bivy setup`.
 
-There is no self-hosted release tarball and no release manifest.
+npm is the distribution channel. `install.sh` retains a checksum-verified
+tarball fallback (`TARBALL_URL`/`MANIFEST_URL`/`install_from_tarball`) used only
+during the cutover — when the `bivy` package isn't yet on the registry.
 
 ## Why npm rather than a signed tarball
 
@@ -90,7 +92,9 @@ token involved.
 ## Cutting a release
 
 1. Land everything on `main` and make sure CI is green.
-2. Bump the version (all workspaces must agree; see `scripts/sync-version.mjs`).
+2. Bump the version manually in the root `package.json` and in every workspace
+   `package.json` (`packages/*`, `services/*`) so they all agree — there is no
+   sync script.
 3. Update `CHANGELOG.md` — move `[Unreleased]` into a dated section.
 4. Tag: `git tag -a v0.1.0 -m "Bivy 0.1.0" && git push origin v0.1.0`.
 5. The tag-triggered release workflow (`.github/workflows/release.yml`) checks
