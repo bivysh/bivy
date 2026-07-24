@@ -3,12 +3,30 @@
 # wss:// (WebSocket over TLS).
 
 app.bivy.sh {
-	reverse_proxy control-plane:4400
+	# Keep internal metrics/readiness endpoints off the public internet.
+	# /healthz (liveness) stays reachable for uptime checks. `handle` blocks are
+	# evaluated in source order and are mutually exclusive, so this reliably wins
+	# over the proxy (a bare `respond` + `reverse_proxy` would not — Caddy orders
+	# reverse_proxy ahead of respond).
+	@internal path /metrics* /readyz
+	handle @internal {
+		respond 403
+	}
+	handle {
+		reverse_proxy control-plane:4400
+	}
 }
 
 relay.bivy.sh {
-	# WebSocket upgrades are proxied transparently by Caddy.
-	reverse_proxy relay:4500
+	# Keep internal metrics/readiness endpoints off the public internet.
+	@internal path /metrics* /readyz
+	handle @internal {
+		respond 403
+	}
+	handle {
+		# WebSocket upgrades are proxied transparently by Caddy.
+		reverse_proxy relay:4500
+	}
 }
 
 # Optional: serve the static marketing/install site (../site) on your apex/www
