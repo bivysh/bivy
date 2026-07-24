@@ -709,6 +709,27 @@ function resolveWorkspaceDir({ clone, workspace }) {
   return dest;
 }
 
+// Where a `bivy run` with neither --workspace nor --clone should start.
+//
+// The PTY is spawned by the daemon, not by this process, so it has no idea where
+// you typed the command. Without this, running an agent from your checkout would
+// silently root it in the node's configured workspace: a relative command
+// (`bivy run -- ./my-agent`) fails to resolve, and — worse — a relative argument
+// (`--repo .`) resolves to the wrong repo and the agent happily does the wrong
+// work. Adopting the cwd makes the common case ("run an agent on the repo I'm
+// standing in") correct by default.
+//
+// Only when the cwd is inside a git work tree: a bare `bivy` from $HOME or /tmp
+// should still land in the configured workspace rather than turning an agent
+// loose on the home directory. Uses the cwd itself, not the repo root, to match
+// `--workspace .` and to respect an intentional `cd` into a monorepo package.
+function defaultRunWorkspace(config) {
+  const fallback = config.workspace || repoRoot;
+  const cwd = process.cwd();
+  const res = runQuiet("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree"]);
+  return res.code === 0 && res.stdout.trim() === "true" ? cwd : fallback;
+}
+
 // --- nodes registry ---------------------------------------------------------
 // Other Bivy nodes this machine can reach directly (LAN, Tailscale, SSH tunnel,
 // VPN). name → { url, token }. `bivy run --node <name>` starts the session on
@@ -1362,7 +1383,7 @@ async function cmdExec(args = []) {
 function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
-    "run", "sessions", "ls", "resume", "nodes", "agents", "shim", "takeover", "token", "exec",
+    "run", "sessions", "ls", "resume", "promote", "nodes", "agents", "shim", "takeover", "token", "exec",
     "setup", "start", "stop", "restart", "status", "doctor", "logs", "login",
     "update", "open", "service", "secrets", "relay:setup", "github:app-create", "prune", "uninstall", "help",
   ];
@@ -1484,7 +1505,14 @@ async function cmdRun(args = []) {
     process.exit(1);
     return;
   }
-  const spec = { ...resolved.spec, name, model, workspace: clonedWorkspace || config.workspace || repoRoot };
+  // No --clone/--workspace: start in the repo the user is standing in (see
+  // defaultRunWorkspace). Announce it when it isn't the configured workspace, so
+  // where the agent is rooted is never a silent surprise.
+  const workspaceDir = clonedWorkspace || defaultRunWorkspace(config);
+  if (!clonedWorkspace && workspaceDir !== (config.workspace || repoRoot)) {
+    console.log(c.dim(`workspace ${workspaceDir}`));
+  }
+  const spec = { ...resolved.spec, name, model, workspace: workspaceDir };
 
   let token;
   try { token = await localDeviceToken(config); }
@@ -1662,6 +1690,34 @@ async function cmdKill(args = []) {
   }
 }
 
+// `bivy promote <id>` — continue a warm-replicated session on THIS node when its
+// owner went offline (docs/session-replication.md). Runs against the local node,
+// which does the control-plane epoch compare-and-set and materializes the replica
+// worktree. Run it on the standby node that holds the replica.
+async function cmdPromote(args = []) {
+  if (!(await ensureDeps())) process.exit(1);
+  const id = args.find((a) => !a.startsWith("-"));
+  if (!id) { console.error(c.red("Usage: bivy promote <session-id>")); process.exit(1); return; }
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not start the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  let token;
+  try { token = await localDeviceToken(config); }
+  catch (error) { console.error(c.red(error?.message || String(error))); process.exit(1); return; }
+  const res = await fetch(`${url(config)}/api/session/promote`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ sessionId: id }),
+  });
+  if (res.ok) {
+    const data = await res.json().catch(() => ({}));
+    console.log(c.green(`Promoted ${id} to this node (epoch ${data.epoch ?? "?"}). Resume it with: bivy resume ${id}`));
+  } else {
+    const data = await res.json().catch(() => ({}));
+    console.error(c.red(`Promotion failed (${res.status}): ${data.error || "unknown error"}`));
+    process.exit(1);
+  }
+}
+
 // `bivy send <id> "<message>"` — send a prompt to an existing session and stream
 // the reply. Thin wrapper over the headless exec client with --session.
 async function cmdSend(args = []) {
@@ -1728,8 +1784,8 @@ async function resumeSessionItem(item, config, token) {
 // removed only when it is BOTH beyond the newest N AND older than the age — the
 // safe intersection. Paths default to the installed node's data dir (appDir)
 // and the configured workspace; the primary workspace itself, Docker, and named
-// volumes are never touched. Mirrors deploy/prune.sh (age) and
-// deploy/prune-node-keep.sh (count) but resolves paths from the real install.
+// volumes are never touched. This is the node-side session/worktree cleanup;
+// deploy/prune.sh only reclaims Docker cruft on the host.
 
 // Parse an age spec like "7d", "12h", "30m", "45s", "2w", or a plain number
 // (interpreted as days). Returns milliseconds, or null when the spec is invalid.
@@ -2997,7 +3053,7 @@ async function cmdStatus(args = []) {
   if (relay?.controlPlaneUrl && relay?.enrollmentToken) {
     try {
       const acct = await controlPlaneNodeApi(relay, "/node/account");
-      const planName = { free: "Free", individual: "Pro", team: "Team" }[acct?.plan] || acct?.plan || "Free";
+      const planName = { free: "Free", pro: "Pro", individual: "Pro", team: "Team" }[acct?.plan] || acct?.plan || "Free";
       const cap = acct?.entitlements?.maxNodes ?? "∞";
       const nodeLine = `${acct?.counts?.nodes ?? "?"} / ${cap} nodes`;
       const extras = acct?.entitlements?.workQueueEnabled ? "" : c.dim("  (Pro: unlimited nodes, push, GitHub queue)");
@@ -3472,7 +3528,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy run <agent> --model <model>")}  Run with a specific model (passed to the agent, shown in the cockpit)
   ${c.cyan("bivy run <agent> --node <name>")}  Start the session on another registered node
   ${c.cyan("bivy run <agent> --clone [remote]")}  Start in a fresh clone (current repo, or a given remote)
-  ${c.cyan("bivy run <agent> --workspace <dir>")}  Start in an existing directory
+  ${c.cyan("bivy run <agent> --workspace <dir>")}  Start in an existing directory (default: current repo, else the configured workspace)
   ${c.cyan("bivy nodes")}       List/add/remove other nodes (add <name> <url> --token <t>)
   ${c.cyan("bivy agents")}      List the supported agents and which are installed (--json)
   ${c.cyan("bivy shim install <agent>")}  Make interactive '<agent>' launch its native TUI in a Bivy PTY (remote-visible)
@@ -3538,6 +3594,9 @@ async function main() {
       break;
     case "resume":
       await cmdSessions(args, { autoResume: true });
+      break;
+    case "promote":
+      await cmdPromote(args);
       break;
     case "nodes":
       await cmdNodes(args);

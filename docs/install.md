@@ -2,7 +2,9 @@
 
 The recommended path is:
 
-- Mac/local: run the daemon locally and use the browser UI.
+- Mac/local: run the daemon locally, then reach the browser UI with `bivy open`
+  (it's served by the control plane, not the node — see
+  [remote-access.md](remote-access.md)).
 - Server: run the same daemon as a long-running service.
 - Phone/tablet/remote desktop: install or open the hosted remote PWA from Safari/Chrome.
 
@@ -70,13 +72,16 @@ Override the location with `BIVY_DATA_DIR`.
 ## The setup wizard
 
 `bivy setup` (run by the installer, or `npm run setup` in an existing checkout)
-asks a few questions and leaves you with a running node:
+picks sensible defaults for everything and only asks two questions:
 
-- default workspace folder and UI port,
-- default agent: Pi, Claude Code, Codex, OpenCode, Gemini CLI, or Aider,
-- model/provider credentials only when the chosen default agent needs Bivy-managed auth (Pi/Aider); Claude Code/Codex/Gemini can use their own CLI login,
-- secure remote web/PWA access by default (one-click GitHub/email sign-in; free accounts include one hosted relay node),
-- optional auto-start background service (launchd/systemd).
+- **Remote sync** — hosted (recommended; one node is free) or self-hosted,
+  pointing this node at your own control plane + relay,
+- **Remote login** — GitHub sign-in (default) or an email magic link.
+
+Everything else is automatic and changeable later in Settings: a dedicated
+`~/bivy-workspace` folder and local port, Pi as the default agent (other
+agents sign into their own CLI), and a background service (launchd/systemd)
+so the node keeps running after you close the terminal.
 
 It writes CLI config to `.bivy/cli.json` (chmod 600) so `bivy start` and
 the background service reuse the same workspace/port/credentials.
@@ -106,11 +111,15 @@ bivy relay:setup            # one-click sign-in, then enroll this node
 ```
 
 The hosted endpoints are baked in. To point at your own deployment, set
-`BIVY_HOSTED_DOMAIN=bivy.sh` (the node derives `app.` and `relay.`
+`BIVY_HOSTED_DOMAIN=example.com` (the node derives `app.` and `relay.`
 subdomains), or override individually with `BIVY_CONTROL_PLANE_URL` /
 `BIVY_RELAY_URL`.
 
-To pair a remote browser/PWA, open the local UI sidebar → **Link remote device** → scan the QR or open the link. To revoke a linked device, remove it under Settings → **Signed-in devices** (the room key rotates for the remaining devices); remove them all to revoke everyone.
+To pair a remote browser/PWA, run `bivy link` and scan the QR or open the
+link — or use the **Link remote device** button in the app (`bivy open`).
+To revoke a linked device, remove it under Settings → **Signed-in devices**
+(the room key rotates for the remaining devices); remove them all to revoke
+everyone.
 
 ## Mac development install
 
@@ -121,11 +130,10 @@ npm install
 npm run setup     # or: npm start
 ```
 
-Open:
-
-```txt
-http://localhost:4317
-```
+The node has no local UI — `http://localhost:4317` is the data plane (API +
+WebSocket) and returns one line of plain text confirming it's up. Use
+`bivy open` to reach the browser/PWA UI, served by the control plane just
+like any other install (see [remote-access.md](remote-access.md)).
 
 Optional workspace:
 
@@ -255,7 +263,7 @@ sudo journalctl -u bivy -f
 ## Remote PWA
 
 1. Enable hosted relay access with `bivy relay:setup`.
-2. Open the local UI with `bivy open`.
+2. Open the app (served by the control plane, not the node) with `bivy open`.
 3. Choose **Link remote device** and scan/open the hosted sign-in link.
 4. On iOS Safari, tap Share → Add to Home Screen.
 

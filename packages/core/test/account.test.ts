@@ -181,6 +181,25 @@ describe("disconnectGithubApp", () => {
       "https://app.bivy.sh/account/github-app",
     ]);
   });
+
+  it("scopes a stale app (no App ID) to its hookId, not the whole account", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const seen: string[] = [];
+    const fakeFetch = (async (url: string) => {
+      seen.push(String(url));
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    }) as unknown as typeof fetch;
+    // appId wins when present; otherwise fall back to hookId; neither = wipe all.
+    await disconnectGithubApp(store, { appId: "42", hookId: "hk_1" }, fakeFetch);
+    await disconnectGithubApp(store, { hookId: "hk_9" }, fakeFetch);
+    await disconnectGithubApp(store, {}, fakeFetch);
+    expect(seen).toEqual([
+      "https://app.bivy.sh/account/github-app?appId=42",
+      "https://app.bivy.sh/account/github-app?hookId=hk_9",
+      "https://app.bivy.sh/account/github-app",
+    ]);
+  });
 });
 
 describe("assignWorkItem", () => {

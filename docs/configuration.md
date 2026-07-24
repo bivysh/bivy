@@ -422,7 +422,8 @@ unauthenticated dev login enabled.
 | `RELAY_SHARD_URLS` | comma-separated URLs | falls back to `RELAY_PUBLIC_URL`, then `ws://localhost:4500` | Node→shard mapping is by hash of the node id |
 | `DATABASE_POOL_MAX` | integer ≥ 1 | `10` | |
 | `LINK_GRANT_TTL_MS` | integer ms | `2592000000` (30 days) | TTL of the device-linking grant minted from a pairing QR |
-| `ENFORCE_ENTITLEMENTS` | `1` | **off** | When off, Web Push is available to every signed-in account regardless of plan |
+| `ENFORCE_ENTITLEMENTS` | `1` | **off** | When off, plan gates don't apply: every signed-in account runs unlimited (no free-tier run cap). When on, free accounts get `FREE_WEEKLY_RUNS` (10) runs per rolling 7-day window counted across every source (manual, app, work queue, ephemeral), as a soft cap (one grace run past the limit before a hard refusal); paid plans are unlimited |
+| `RUN_LIMIT_OBSERVE_ONLY` | `1` | **off** | Observe-only mode for the free run cap (only meaningful with `ENFORCE_ENTITLEMENTS=1`). Runs are still counted and reported (the UI shows "used / limit"), but never blocked — so you can watch the real runs-per-window distribution and tune `FREE_WEEKLY_RUNS` before turning enforcement on, without walling anyone during the observation window |
 
 ## Authentication
 
@@ -434,12 +435,22 @@ unauthenticated dev login enabled.
 | `DISABLE_DEV_LOGIN` | `1` | **unset — dev login is enabled outside production** | Hard kill switch for `POST /auth/dev-login`, which mints a full account session for any email with no verification. **Set this to `1`** |
 | `ALLOW_DEV_LOGIN` | `1` | unset | Re-enables dev login under `NODE_ENV=production`. Setting it in production makes the service exit 1 |
 
-## Billing (Stripe)
+## Billing (hosted only)
+
+Everything in this section exists to run Bivy as a paid hosted service. **If you
+are self-hosting, skip it.** Leave these unset along with `ENFORCE_ENTITLEMENTS`
+and every account on your stack gets every feature — there is no paywall to
+unlock and nothing to configure. `deploy/.env.example` and `deploy/self-host.sh`
+deliberately omit these variables for that reason.
+
+The paid single-user plan has the internal id `pro` and is sold as "Pro". It was
+`individual` before; the control plane migrates stored accounts on boot and still
+accepts the old id from clients released before the rename.
 
 | Variable | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `STRIPE_SECRET_KEY` | `sk_…` | unset | With no Stripe client, billing endpoints return stub URLs **and the webhook applies plan changes without verifying a signature** |
-| `STRIPE_PRICE_INDIVIDUAL` | `price_…` | unset | Checkout returns 500 without it |
+| `STRIPE_PRICE_PRO` | `price_…` | unset | Checkout returns 500 without it |
 | `STRIPE_PRICE_TEAM` | `price_…` | unset | Also gates whether the `team` plan is accepted at all |
 | `BILLING_SUCCESS_URL` | URL | `<base>/?checkout=success` | |
 | `BILLING_CANCEL_URL` | URL | `<base>/?checkout=cancel` | |
@@ -539,14 +550,8 @@ For operators running the self-hosted stack on a box.
 
 | Variable | Script | Type | Default |
 | --- | --- | --- | --- |
-| `BIVY_PRUNE_RETENTION_DAYS` | `prune.sh` | integer days | `7` |
 | `BIVY_PRUNE_DOCKER` | `prune.sh` | `0` disables | `1` |
 | `BIVY_PRUNE_DOCKER_ALL` | `prune.sh` | `1` runs `docker system prune -af` | `0` |
-| `BIVY_PRUNE_SESSIONS` | `prune.sh` | `0` disables | `1` |
-| `BIVY_DATA_DIR` | `prune.sh` | path | probes `$HOME/.bivy`, `/opt/bivy/.bivy`, `$PWD/.bivy` |
-| `BIVY_DATA_DIR` | `prune-node-keep.sh` | path | required; without it the script only reports candidates |
-| `BIVY_KEEP` | `prune-node-keep.sh` | integer ≥ 0 | `5` |
-| `DRY_RUN` | `prune-node-keep.sh` | `1` previews | `0` — **it deletes by default** |
 | `BIVY_PRUNE` | `self-host.sh` | `0` \| `1` \| unset | unset = prune only when a stack already exists |
 | `APP_DIR` | `staging-deploy.sh` | path | `/opt/bivy` |
 | `CP_DOMAIN`, `RELAY_DOMAIN` | `self-host.sh` | hostname | prompted |

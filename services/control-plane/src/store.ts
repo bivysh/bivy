@@ -17,21 +17,44 @@ import { createHash } from "node:crypto";
  * nodes can share API keys/OAuth logins across the user's runners.
  */
 
-export type Plan = "free" | "individual" | "team";
+export type Plan = "free" | "pro" | "team";
+
+// The paid single-user plan was originally called `individual` internally while
+// being sold as "Pro". The id is now `pro` everywhere; this alias exists only to
+// translate requests from clients released before the rename (the published CLI
+// sends a plan id over the wire — see normalizePlan in index.ts). Accounts stored
+// under the old id are migrated at boot by postgres-store's schema init.
+export const LEGACY_PLAN_IDS: Record<string, Plan> = { individual: "pro" };
 
 export interface Entitlements {
   plan: Plan;
-  // Node cap. Optional: when undefined there is NO cap (unlimited nodes) — paid
-  // plans omit it. Enforcement paths treat `undefined` as "no cap" so unlimited
-  // needs no sentinel number. Free pins this to 1.
+  // Node cap. Optional: when undefined there is NO cap (unlimited nodes) — every
+  // plan now omits it, so there is no node cap on any tier. Enforcement paths treat
+  // `undefined` as "no cap" so unlimited needs no sentinel number. Kept on the type
+  // (not deleted) so a future plan can reintroduce a cap without a schema change.
   maxNodes?: number;
   // Note: per-plan device and session caps were removed entirely (no limit on how
   // many devices an account pairs or sessions it runs); the vestigial always-undefined
   // `maxDevices`/`maxSessions` fields are gone with them.
   pushEnabled: boolean;
   relayEnabled: boolean;
-  // Hosted GitHub/Slack work queue (label an issue → PR on your node). Paid only.
+  // Hosted GitHub/Slack work queue (label an issue → PR on your node). Available
+  // on every plan; free's usage is bounded by the shared `weeklyRunLimit` below.
   workQueueEnabled: boolean;
+  // Runs the plan may START per ROLLING 7-DAY WINDOW ACROSS EVERY SOURCE — manual,
+  // app, GitHub/Slack work queue, and ephemeral servers all count against this one
+  // cap (one distinct session = one run; reconnecting to a live session does not
+  // count). A rolling window (not a calendar week) so capacity frees up gradually
+  // as individual runs age past 7 days — this fits bursty dev work far better than a
+  // hard daily/weekly reset. Optional: `undefined` means UNLIMITED (paid plans omit
+  // it, mirroring `maxNodes`). Free pins this to FREE_WEEKLY_RUNS. Enforced at the
+  // server-observed admission points (work-queue claim, ephemeral launch) and only
+  // when `ENFORCE_ENTITLEMENTS=1` (Bivy Cloud); self-host stacks run unlimited regardless.
+  weeklyRunLimit?: number;
+  // Quick ephemeral cloud servers brokered from a phone (Fly/Hetzner/AWS/… with the
+  // user's own token, proxied through the control-plane cold-start relay). Available
+  // on every plan; a launched runner counts as a run against `weeklyRunLimit`.
+  ephemeralEnabled: boolean;
 }
 
 export interface Account {
@@ -52,6 +75,19 @@ export interface SubscriptionState {
   subscriptionStatus?: string | null;
 }
 
+// Plaintext (non-secret) per-provider connection status a node pushes alongside
+// its encrypted model-auth vault (src/server.ts's pushProviderSummaryToControlPlane).
+// Deliberately excludes any credential material or account identity — just enough
+// for the web client to render a "Connected"/"Expired"/"Not connected" chip per
+// node without opening a connection to it. Same trust tier as the `online` /
+// `lastSeenAt` fields below.
+export interface NodeProviderSummary {
+  id: string;
+  name?: string;
+  configured: boolean;
+  expiresAt?: number;
+}
+
 export interface NodeRecord {
   id: string; // the node's self-generated nodeId
   accountId: string;
@@ -60,6 +96,7 @@ export interface NodeRecord {
   online: boolean;
   lastSeenAt: string | null;
   createdAt: string;
+  providers?: NodeProviderSummary[];
 }
 
 export interface ResolvedClient {
@@ -87,6 +124,27 @@ export interface SessionIndexEntry {
   updatedAt: string;
 }
 export type SessionAdvert = Omit<SessionIndexEntry, "nodeId" | "updatedAt">;
+
+/**
+ * Ownership + warm-standby routing for a replicated session
+ * (docs/session-replication.md). Kept in its OWN table, keyed by session (not
+ * node), because `session_index` is rewritten wholesale on every advertise — a
+ * poor home for a monotonic epoch. This row is the authority for "who owns this
+ * session and who is its standby", and `ownerEpoch` is the fence that promotion
+ * advances via compare-and-set so a superseded owner can't keep writing.
+ *
+ * All fields are ROUTING metadata (node ids), never E2E payload — the control
+ * plane still never sees transcripts or workspace data.
+ */
+export interface SessionOwnership {
+  sessionId: string;
+  accountId: string;
+  ownerNodeId: string;
+  standbyNodeId?: string;
+  /** Monotonic ownership fence; +1 on each successful promotion. */
+  ownerEpoch: number;
+  updatedAt: string;
+}
 
 export interface PushSubscriptionRecord {
   accountId: string;
@@ -367,14 +425,21 @@ export interface PairedDeviceInfo {
   updatedAt: string;
 }
 
+// Free allowance: how many runs a free account may START within any rolling 7-day
+// window across EVERY source combined — manual, app, work queue, ephemeral. The one
+// cap that bounds a free account; everything else (nodes, push, ephemeral) is
+// uncapped. A rolling window fits bursty usage (a busy day doesn't wall you, and an
+// idle stretch quietly refills capacity). Paid plans omit the limit (unlimited).
+export const FREE_WEEKLY_RUNS = 10;
+
 export const PLAN_ENTITLEMENTS: Record<Plan, Omit<Entitlements, "plan">> = {
-  // Launch policy: every signed-in user gets one hosted-relay node for free so
-  // onboarding can go straight from installer → remote PWA without a paywall.
-  // Push notifications and the hosted work queue remain paid. Paid plans omit
-  // `maxNodes` entirely, which the enforcement paths read as "unlimited".
-  free: { maxNodes: 1, pushEnabled: false, relayEnabled: true, workQueueEnabled: false },
-  individual: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true },
-  team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true },
+  // Free is now feature-complete: unlimited nodes, push notifications, and
+  // ephemeral cloud runners are all included. The ONLY cap is FREE_WEEKLY_RUNS runs
+  // per rolling 7-day window, counted across every source; paid plans omit the limit
+  // ⇒ unlimited. Every plan omits `maxNodes` ("unlimited nodes" across the board).
+  free: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, weeklyRunLimit: FREE_WEEKLY_RUNS, ephemeralEnabled: true },
+  pro: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
+  team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
 };
 
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000; // 30 days
@@ -388,6 +453,19 @@ export function entitlementsForPlan(plan: Plan): Entitlements {
   return { plan, ...PLAN_ENTITLEMENTS[plan] };
 }
 
+// Aggregate counts for the operational/business dashboard. Pure metadata — row
+// counts and group-bys over existing tables, never any row contents. Refreshed
+// on an interval by the metrics collector (metrics.ts) and exposed as Prometheus
+// gauges. See docs/ops/monitoring.md in bivysh/bivy-cloud.
+export interface UsageMetrics {
+  accountsTotal: number;
+  accountsByPlan: Record<string, number>;
+  nodesTotal: number;
+  nodesOnline: number;
+  workItemsByStatus: Record<string, number>;
+  sessionsByStatus: Record<string, number>;
+}
+
 export interface MeshStore {
   init(): Promise<void>;
   // Lightweight liveness check for the backing store. Resolves when the store is
@@ -395,6 +473,10 @@ export interface MeshStore {
   // /readyz readiness probe so an unreachable database surfaces as an unhealthy
   // container instead of a green light over an outage.
   ping(): Promise<void>;
+
+  // Aggregate counts for the monitoring dashboard (metadata only). See
+  // UsageMetrics above.
+  usageMetrics(): Promise<UsageMetrics>;
 
   // Accounts & auth
   findOrCreateAccount(email: string): Promise<Account>;
@@ -448,6 +530,9 @@ export interface MeshStore {
   setNodeOnline(nodeId: string, online: boolean): Promise<void>;
   setNodeName(nodeId: string, name: string): Promise<NodeRecord | undefined>;
   removeNode(accountId: string, nodeId: string): Promise<boolean>;
+  // Plaintext per-node provider status summary (see NodeProviderSummary) —
+  // overwritten wholesale by the owning node on every credential change.
+  setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void>;
 
   // Session index (cross-node unified view). A node replaces its full current
   // session list; clients read the merged list for the account.
@@ -458,6 +543,35 @@ export interface MeshStore {
   // its still-live sessions by looking their host address up here). Account-scoped
   // to `accountId` so a node can only ever see rows it owns.
   listNodeSessions(accountId: string, nodeId: string): Promise<SessionIndexEntry[]>;
+
+  // Session replication ownership (docs/session-replication.md). Separate from
+  // the session_index churn so the epoch is stable.
+  /** Read a session's ownership/standby row, or undefined if not replicated. */
+  getSessionOwnership(accountId: string, sessionId: string): Promise<SessionOwnership | undefined>;
+  /**
+   * The current owner declares (or clears, with `standbyNodeId: undefined`) the
+   * standby for a session it owns. Upserts the row without touching `ownerEpoch`.
+   * Returns the effective ownership row.
+   */
+  setSessionStandby(
+    accountId: string,
+    sessionId: string,
+    ownerNodeId: string,
+    standbyNodeId: string | undefined,
+  ): Promise<SessionOwnership>;
+  /**
+   * Promote `toNodeId` to owner via compare-and-set on `ownerEpoch`: succeeds
+   * only when `expectedEpoch` matches the stored epoch, bumping it by one, moving
+   * ownership, and clearing the standby. Returns the updated row, or `undefined`
+   * on an epoch mismatch (a lost race / stale caller) — the fence that prevents
+   * two nodes from both believing they own the session.
+   */
+  promoteSession(
+    accountId: string,
+    sessionId: string,
+    toNodeId: string,
+    expectedEpoch: number,
+  ): Promise<SessionOwnership | undefined>;
 
   // Web Push subscriptions for hosted PWA notifications.
   upsertPushSubscription(accountId: string, endpoint: string, subscription: unknown): Promise<void>;
@@ -536,6 +650,19 @@ export interface MeshStore {
   // Recent work items for the account (any status) — powers the incoming-queue UI.
   listWorkItems(accountId: string, limit?: number): Promise<WorkItem[]>;
   claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
+  // Record that a run STARTED, keyed by its session id (idempotent: recording the
+  // same `(accountId, sessionId)` twice is a no-op, so reconnects and repeated
+  // session advertises never double-count). `runKey` is the distinct-run identifier
+  // — normally the session id; every source (manual/app/work-queue/ephemeral) funnels
+  // through here once the run surfaces as a session. Powers the free-tier run cap.
+  recordRunStart(accountId: string, runKey: string): Promise<void>;
+  // How many DISTINCT runs the account has STARTED at/after `sinceIso` (recorded via
+  // recordRunStart). Powers the free-tier rolling run quota — one distinct run key = one run.
+  countRunStartsSince(accountId: string, sinceIso: string): Promise<number>;
+  // Delete run-start rows older than `beforeIso`. Runs older than the rolling window
+  // can never be counted again, so this is pure housekeeping to keep the table lean;
+  // called on an interval by the control plane. Returns how many rows were removed.
+  pruneRunStartsBefore(beforeIso: string): Promise<number>;
   completeWorkItem(accountId: string, id: string): Promise<void>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node

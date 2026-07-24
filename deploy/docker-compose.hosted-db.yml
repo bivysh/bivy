@@ -1,0 +1,46 @@
+# Overlay for running against a MANAGED/HOSTED Postgres (DigitalOcean, Render,
+# Neon, Supabase, Amazon RDS, ...) instead of the bundled `postgres` container.
+#
+# Layer this file ON TOP of docker-compose.yml — it does two things:
+#   1. removes the bundled `postgres` service (your managed instance is the
+#      source of truth, so there's no local DB to run or back up), and
+#   2. points the control plane at your provider's connection string from
+#      deploy/.env instead of the derived postgres://...@postgres:5432/... URL.
+#
+# Requires Docker Compose v2.24.0+ (for the `!reset` YAML tag). Check with
+# `docker compose version`.
+#
+# Setup:
+#   1. Create a Postgres database in your provider's console and copy its
+#      connection string. Hosted providers require TLS, so keep the sslmode
+#      parameter they give you (usually `?sslmode=require`).
+#   2. In deploy/.env set DATABASE_URL (the POSTGRES_* lines become unused; leave
+#      them as-is to avoid a harmless "variable is not set" warning):
+#        DATABASE_URL=postgres://USER:PASSWORD@HOST:PORT/DBNAME?sslmode=require
+#   3. Start the stack with BOTH compose files:
+#        docker compose \
+#          -f deploy/docker-compose.yml \
+#          -f deploy/docker-compose.hosted-db.yml \
+#          --env-file deploy/.env up -d --build
+#
+# The control plane creates its own tables on first boot (idempotent
+# CREATE TABLE IF NOT EXISTS), so there is no separate migration step — an empty
+# managed database is all you need.
+#
+# Connection pooling: managed tiers often cap `max_connections` low. Keep
+# (control-plane replicas x DATABASE_POOL_MAX) under that cap, or front the
+# database with the provider's connection pooler (e.g. PgBouncer, Neon's pooled
+# endpoint). See docs/scaling.md.
+
+services:
+  # Drop the bundled database entirely.
+  postgres: !reset null
+
+  control-plane:
+    environment:
+      # Use the managed connection string from deploy/.env. The `:?` makes
+      # `docker compose up` fail fast with a clear message if it's unset, rather
+      # than silently falling back to the (now non-existent) local postgres.
+      DATABASE_URL: "${DATABASE_URL:?set DATABASE_URL in deploy/.env to your managed Postgres connection string}"
+    # The local postgres no longer exists, so remove the wait-for-postgres gate.
+    depends_on: !reset null
