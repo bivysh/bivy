@@ -27,6 +27,8 @@
 #   BIVY_NPM_PREFIX=~/.local      install into a user-owned npm prefix (no sudo)
 #   BIVY_INSTALL_ALL_AGENTS=1     preinstall every bundled agent runtime
 #   BIVY_NO_TARBALL_FALLBACK=1    fail instead of falling back to the tarball
+#   BIVY_NO_RC_UPDATE=1           don't add BIN_DIR to ~/.bashrc or ~/.zshrc;
+#                                 just print the manual `export PATH=...` line
 #
 set -euo pipefail
 
@@ -320,10 +322,76 @@ if [ "$INSTALL_MODE" = "npm" ] && [ -L "$STALE_LINK" ]; then
   esac
 fi
 
+# --------------------------------------------------------------- PATH on rerun
+#
+# A child process (this script) cannot change its parent shell's PATH, so if
+# BIN_DIR isn't already on PATH, the *current* terminal will never see 'bivy'
+# no matter what we do here. Printing an `export PATH=...` line for the user to
+# copy-paste used to be the whole fix — but nobody re-runs that in every new
+# terminal either, so 'bivy' silently stayed missing forever after install,
+# which is exactly the bug this section exists to close (#69). Persist the fix
+# into the interactive shell's rc file (idempotently, in a marked block) so
+# every *future* shell has it, and only fall back to the manual instruction
+# when we don't recognize the shell or can't write its rc file.
+
+PATH_BLOCK_START="# >>> bivy path >>>"
+PATH_BLOCK_END="# <<< bivy path <<<"
+
+# Resolve which rc file an interactive shell for $SHELL would source. Returns
+# nothing (caller falls back to manual instructions) for shells we don't know.
+rc_file_for_shell() {
+  case "$(basename "${SHELL:-}")" in
+    zsh) printf '%s' "$HOME/.zshrc" ;;
+    bash) printf '%s' "$HOME/.bashrc" ;;
+  esac
+}
+
+# Strip any previously-written block from $1, in place. Safe to call when no
+# block (or no file) exists.
+remove_path_block() {
+  [ -f "$1" ] || return 0
+  awk -v s="$PATH_BLOCK_START" -v e="$PATH_BLOCK_END" '
+    $0 == s { inblock=1; next }
+    inblock && $0 == e { inblock=0; next }
+    inblock { next }
+    { print }
+  ' "$1" > "$1.bivy-tmp" && mv "$1.bivy-tmp" "$1"
+}
+
+# Append a block to $1 that puts BIN_DIR on PATH, guarded so re-sourcing it
+# never adds a duplicate entry.
+add_path_block() {
+  {
+    printf '\n%s\n' "$PATH_BLOCK_START"
+    printf '# Added by the Bivy installer so the '\''bivy'\'' command is on PATH.\n'
+    printf '# Safe to remove if you manage PATH yourself; regenerated on reinstall.\n'
+    printf 'case ":$PATH:" in\n'
+    printf '  *":%s:"*) ;;\n' "$BIN_DIR"
+    printf '  *) export PATH="%s:$PATH" ;;\n' "$BIN_DIR"
+    printf 'esac\n'
+    printf '%s\n' "$PATH_BLOCK_END"
+  } >> "$1"
+}
+
+warn_path_manually() {
+  warn "Add $BIN_DIR to your PATH to use the 'bivy' command:"
+  printf '     export PATH="%s:$PATH"\n' "$BIN_DIR"
+}
+
 case ":$PATH:" in
   *":$BIN_DIR:"*) : ;;
-  *) warn "Add $BIN_DIR to your PATH to use the 'bivy' command:"
-     printf '     export PATH="%s:$PATH"\n' "$BIN_DIR" ;;
+  *)
+    RC_FILE="$(rc_file_for_shell)"
+    if [ -n "$RC_FILE" ] && [ "${BIVY_NO_RC_UPDATE:-}" != "1" ] \
+       && { mkdir -p "$(dirname "$RC_FILE")" && touch "$RC_FILE"; } 2>/dev/null && [ -w "$RC_FILE" ]; then
+      remove_path_block "$RC_FILE"
+      add_path_block "$RC_FILE"
+      info "Added $BIN_DIR to PATH in $RC_FILE."
+      echo "     Open a new terminal (or run: source $RC_FILE) to use the 'bivy' command."
+    else
+      warn_path_manually
+    fi
+    ;;
 esac
 
 # ------------------------------------------------------------------- finish
