@@ -59,6 +59,17 @@ await test("routing label: prefers bivy/<node>, ignores claim label and non-bivy
   assert.equal(pickRoutingLabel(["bivy", "bivy/laptop"]), "bivy/laptop");
   assert.equal(pickRoutingLabel(["bivy:in-progress"]), undefined);
   assert.equal(pickRoutingLabel(["enhancement"]), undefined);
+  // A node-scoped claim label (`bivy/<node>:in-progress`) must NOT be treated as
+  // a routing label. It once stamped an issue that a node picked up on `hetzner`;
+  // a later @-mention would otherwise route to `bivy/hetzner:in-progress` — a
+  // label no node serves — and sit pending forever. It must fall back to the
+  // real routing label on the issue.
+  assert.equal(pickRoutingLabel(["bivy/hetzner:in-progress"]), undefined);
+  assert.equal(pickRoutingLabel(["bivy", "bivy/hetzner:in-progress"]), "bivy");
+  assert.equal(
+    pickRoutingLabel(["bivy", "bivy/hetzner", "bivy/hetzner:in-progress", "security"]),
+    "bivy/hetzner",
+  );
 });
 
 await test("mention extraction: logins only, ignores emails and code paths", () => {
@@ -97,6 +108,13 @@ await test("comment routing: '@bot on <node>' directive, else issue label, else 
   // Prose 'on' does not route — only the directive right after the mention does.
   assert.equal(pickCommentRoutingLabel("@bivy work on the login bug", ["bivy/desktop"]), "bivy/desktop");
   assert.equal(pickCommentRoutingLabel("@bivy do the thing", []), "bivy");
+  // Regression (issue #15): a follow-up mention on an issue that a node already
+  // picked up (so it wears `bivy/hetzner:in-progress`) with no `on <node>`
+  // directive must route to the served label, not the stale claim label.
+  assert.equal(
+    pickCommentRoutingLabel("@bivy-app status on this?", ["bivy", "bivy/hetzner:in-progress", "security"], "bivy-app"),
+    "bivy",
+  );
 });
 
 await test("issue routing: label OR body @mention triggers, honours 'on <node>' directive", () => {

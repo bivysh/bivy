@@ -43,6 +43,15 @@ GitHub branch + pull request
    - The agent commits, pushes its branch, and opens the pull request itself (referencing/closing the issue) — there's no separate hard-coded PR-creation step. The node still publishes the branch if the agent didn't push it, and picks up (comments with) any PR the agent opens so the issue reflects what happened.
    - Once a PR exists, the node removes `bivy:in-progress` — the linked PR is now the live "in progress" signal, and GitHub closes the issue automatically when a PR with `Closes #<n>` merges.
 
+## Availability and limits
+
+The GitHub work queue is available on every plan.
+
+- **Free** — **10 runs per rolling 7-day window**, shared across every source: manual, app, GitHub/Slack work queue, and ephemeral servers all draw from the same allowance. One run = one distinct session that starts work; reconnecting to a live session doesn't count. The window is **rolling** (not a calendar reset), so capacity frees up gradually as your older runs pass 7 days — a busy day doesn't wall you and idle stretches quietly refill. The cap is **soft**: the first run past the allowance still goes through (with a heads-up), and only further runs wait for capacity to age back in — queue items stay queued, nothing is lost. The queue view shows how many runs remain.
+- **Pro / Team** — unlimited runs.
+
+The daily cap is only enforced on Bivy Cloud (`ENFORCE_ENTITLEMENTS=1`). Self-hosted stacks run unlimited regardless of plan (see [configuration.md](./configuration.md)).
+
 ## Why push instead of repo polling?
 
 The old/local mode polls one configured repository from the node. That works for simple self-hosted setups, but it has bad product ergonomics:

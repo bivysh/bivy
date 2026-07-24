@@ -271,13 +271,6 @@ export class DirectTransport implements Transport {
             body: JSON.stringify({ sessionId: obj.sessionId, name: obj.name }),
           });
           break;
-        case "session.pr.open":
-          this.emitMerged(
-            "session.pr_result",
-            await this.directApi("/api/session/pr", { method: "POST", body: JSON.stringify({ sessionId: obj.sessionId }) }),
-            { sessionId: String(obj.sessionId ?? "") },
-          );
-          break;
         case "session.pr.refresh":
           this.emitMerged(
             "session.pr_result",
