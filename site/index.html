@@ -503,19 +503,20 @@
           Any other command works via <code>bivy run -- ./your-agent</code>.</p>
         </div>
         <div class="pillar">
-          <p class="eyebrow">Durability</p>
-          <h3>Sessions that survive</h3>
-          <p>Every session has a durable append-only event log and its own git worktree.
-          Detach from your terminal, restart the daemon, reconnect from a phone — the same
-          session is still there, transcript and diffs intact.</p>
+          <p class="eyebrow">Durable, movable sessions</p>
+          <h3>Sessions that survive — and fork to any node</h3>
+          <p>Every session has a durable append-only event log and its own git worktree, so
+          detaching your terminal or restarting the daemon never loses it. Fork a running
+          session onto a different agent, a different model, or a different machine,
+          carrying the transcript and any uncommitted work with it.</p>
         </div>
         <div class="pillar">
-          <p class="eyebrow">Control</p>
-          <h3>Approvals wherever you are</h3>
-          <p>Agents run unattended by default. Catastrophic commands and writes outside
-          the workspace are blocked in every mode, and force-push, publish, deploy and
-          sudo always pause. Switch to <code>risky</code> or <code>always</code> to be
-          asked about more, and approve from terminal, browser, or phone.</p>
+          <p class="eyebrow">Keys, synced</p>
+          <h3>Credentials synced across every node, end to end</h3>
+          <p>An encrypted local vault, plus <code>env://</code> and <code>op://</code>
+          (1Password) references resolved at start. Bivy-managed provider credentials sync
+          end-to-end across every node you own — add a key once. Agent-native CLI logins
+          (Claude Code, Codex, Gemini CLI) may need a one-time sign-in per node.</p>
         </div>
       </div>
 
@@ -533,9 +534,11 @@
           can kick something off and walk away instead of babysitting the terminal.</p>
         </div>
         <div class="feature">
-          <h3>Switch agent or model mid-session</h3>
-          <p>Fork a running session onto a different agent, a different model, or a
-          different machine, carrying the transcript and any uncommitted work with it.</p>
+          <h3>Approvals wherever you are</h3>
+          <p>Agents run unattended by default. Catastrophic commands and writes outside
+          the workspace are blocked in every mode, and force-push, publish, deploy and
+          sudo always pause. Switch to <code>risky</code> or <code>always</code> to be
+          asked about more, and approve from terminal, browser, or phone.</p>
         </div>
         <div class="feature">
           <h3>GitHub issue to pull request</h3>
@@ -548,13 +551,6 @@
           <p><code>bivy shim install claude</code> makes typing <code>claude</code> start
           the real TUI inside a Bivy PTY — so an ordinary terminal session becomes one you
           can pick up from your phone.</p>
-        </div>
-        <div class="feature">
-          <h3>Your credentials, synced and vaulted</h3>
-          <p>An encrypted local vault, plus <code>env://</code> and <code>op://</code>
-          (1Password) references resolved at start. Bivy-managed provider credentials sync
-          end-to-end across every node you own; agent-native CLI logins (Claude Code,
-          Codex, Gemini CLI) may need a one-time sign-in per node.</p>
         </div>
         <div class="feature">
           <h3>Any model endpoint</h3>
