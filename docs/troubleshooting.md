@@ -16,9 +16,9 @@ is not reachable.
 
 Useful paths:
 
-- App install: `~/.bivy/app`
-- Node state (config, keys, sessions, logs): `~/.bivy/app/.bivy/`
-  (in a git checkout it is `<checkout>/.bivy/`)
+- Node state (config, keys, sessions, logs): `~/.bivy`
+  (in a git checkout it is `<checkout>/.bivy/`; older tarball installs kept it
+  at `~/.bivy/app/.bivy/`)
 - CLI config: `.bivy/cli.json` — workspace, port, env
 - Relay enrollment: `.bivy/relay.json`
 - Background log fallback: `.bivy/node.log`
@@ -150,7 +150,7 @@ Where the logs live, by platform:
 ```bash
 journalctl --user -u bivy.service -n 100 --no-pager   # Linux (systemd)
 tail -n 100 /tmp/bivy.log /tmp/bivy.err.log           # macOS (launchd)
-tail -n 100 ~/.bivy/app/.bivy/node.log                # fallback
+tail -n 100 ~/.bivy/node.log                          # fallback
 ```
 
 `bivy logs [-f] [-n N]` picks the right one for you.
@@ -260,8 +260,12 @@ bivy logs -f    # look for lines tagged [relay]
 - Self-hosted: confirm the control-plane URL answers and the relay URL is
   `wss://`. `bivy relay:setup` health-checks the control plane before it does
   anything else and tells you if it is unreachable.
-- Enrollment refused with a node-limit error: your plan's node cap is reached.
-  Remove a node you no longer use, or raise the cap.
+- Work stops being picked up / a run is refused with a quota error: on the free
+  plan you get 10 runs per rolling 7-day window, shared across every source (manual,
+  app, GitHub work queue, ephemeral). The cap is soft — one run past the limit still
+  goes through — but beyond that, wait for capacity to age back in (your oldest runs
+  passing 7 days) or upgrade for unlimited runs. (Self-hosted stacks with
+  `ENFORCE_ENTITLEMENTS` off are unlimited.)
 
 ## Phone can't reach the node
 
@@ -312,8 +316,8 @@ but it does not survive a `bivy uninstall` without `--keep-sessions`, and it doe
 not follow you if the data directory moves.
 
 ```bash
-ls ~/.bivy/app/.bivy/metadata.json      # the durable session index
-ls ~/.bivy/app/.bivy/pi/sessions        # Pi transcripts
+ls ~/.bivy/metadata.json      # the durable session index
+ls ~/.bivy/pi/sessions        # Pi transcripts
 bivy sessions --json
 ```
 
@@ -377,8 +381,8 @@ Bivy writes secrets with mode `600` (`cli.json`, `relay.json`, the credential
 vault). If you copied state between machines, re-tighten it:
 
 ```bash
-chmod 700 ~/.bivy/app/.bivy
-chmod 600 ~/.bivy/app/.bivy/cli.json ~/.bivy/app/.bivy/relay.json
+chmod 700 ~/.bivy
+chmod 600 ~/.bivy/cli.json ~/.bivy/relay.json
 ```
 
 ---

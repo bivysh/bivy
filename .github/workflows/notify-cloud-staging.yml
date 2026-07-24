@@ -1,0 +1,39 @@
+name: Notify cloud staging
+
+# bivy-cloud deploys staging from this repo's main, but GitHub cannot trigger a
+# workflow in another repository on its own. So every push to main sends a
+# repository_dispatch to bivysh/bivy-cloud, which runs its "Deploy staging"
+# workflow against the exact commit named in the payload.
+#
+# Requires the repository secret CLOUD_DISPATCH_TOKEN: a fine-grained PAT scoped
+# to bivysh/bivy-cloud only, with "Contents: Read and write" (classic
+# equivalent: `repo`). It grants no access to this repo, and nothing else here
+# uses it. If it expires, deploys stop silently on the cloud side but loudly
+# here — this job fails.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  dispatch:
+    name: Trigger staging deploy in bivy-cloud
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send repository_dispatch
+        env:
+          GH_TOKEN: ${{ secrets.CLOUD_DISPATCH_TOKEN }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::CLOUD_DISPATCH_TOKEN is not set, so staging will not deploy this commit. Add it under Settings -> Secrets and variables -> Actions." >&2
+            exit 1
+          fi
+          # Build the payload with jq: nothing from the commit metadata gets
+          # spliced into a shell word or a hand-written JSON string.
+          jq -n --arg sha "$SHA" --arg actor "$ACTOR" \
+            '{event_type: "core-main-push", client_payload: {sha: $sha, actor: $actor}}' \
+            | gh api --method POST repos/bivysh/bivy-cloud/dispatches --input -
+          echo "Asked bivy-cloud to deploy ${SHA} to staging."
