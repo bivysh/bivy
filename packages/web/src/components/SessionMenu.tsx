@@ -23,11 +23,10 @@ const PR_BUSY_TIMEOUT_MS = 20000;
 /**
  * Header dot-menu for the active session: rename, its pull request(s) (repo
  * sessions), delete. Mirrors SessionList's row action sheet — including the
- * PR affordance (every PR as a direct link, "Create pull request" only when
- * there's no open one) and the pull request round-trip visibly resolving
- * instead of the menu just closing on tap — as an inline popover anchored to
- * the header — the header isn't a scroll container, so it doesn't need the
- * bottom-sheet escape hatch that the list row does.
+ * PR affordance (every PR as a direct link, plus "Update GitHub status" to
+ * re-check on demand) — as an inline popover anchored to the header — the
+ * header isn't a scroll container, so it doesn't need the bottom-sheet escape
+ * hatch that the list row does.
  */
 export function SessionMenu({
   sessionId,
@@ -93,12 +92,6 @@ export function SessionMenu({
   const stats = () => {
     close();
     setStatsOpen(true);
-  };
-  const createPr = () => {
-    setPrBusy(true);
-    controller.openPr(sessionId);
-    if (prBusyTimer.current) clearTimeout(prBusyTimer.current);
-    prBusyTimer.current = setTimeout(() => { setPrBusy(false); setOpen(false); }, PR_BUSY_TIMEOUT_MS);
   };
   const refreshPrStatus = () => {
     setPrBusy(true);
@@ -179,11 +172,6 @@ export function SessionMenu({
           {isRepo && (
             <button className="session-actions-item" role="menuitem" onClick={refreshPrStatus} disabled={prBusy}>
               {prBusy ? "Checking GitHub status…" : "Update GitHub status"}
-            </button>
-          )}
-          {isRepo && !(prs ?? []).some((p) => p.state === "open") && (
-            <button className="session-actions-item" role="menuitem" onClick={createPr} disabled={prBusy}>
-              {prBusy ? "Creating pull request…" : "Create pull request"}
             </button>
           )}
           <button className="session-actions-item danger" role="menuitem" onClick={del} disabled={prBusy}>

@@ -99,7 +99,7 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
   // is scoped both to the account and to the single node (never other nodes').
   await test("listNodeSessions is node-scoped and retains the agent-service address", async (store) => {
     const acct = await store.findOrCreateAccount("contract-nodesessions@example.com");
-    await store.setPlan(acct.id, "individual"); // lift the free plan's 1-node cap
+    // No node cap on any plan, so a free account enrolls both nodes directly.
     const { node: a } = await store.enrollNode(acct.id, "node-adopt-a", "Laptop A");
     const { node: b } = await store.enrollNode(acct.id, "node-adopt-b", "Laptop B");
     await store.replaceNodeSessions(acct.id, a.id, [
@@ -115,6 +115,45 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     // Scoped by account too: a foreign account passing node A's id sees nothing.
     const outsider = await store.findOrCreateAccount("contract-nodesessions2@example.com");
     assert.equal((await store.listNodeSessions(outsider.id, a.id)).length, 0);
+  });
+
+  // --- Session replication ownership (docs/session-replication.md) -----------
+  await test("session ownership: standby round-trips and promotion is a compare-and-set on the epoch", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-ownership@example.com");
+    // No node cap on any plan, so a free account enrolls both nodes directly.
+    const { node: a } = await store.enrollNode(acct.id, "own-a", "Laptop A");
+    const { node: b } = await store.enrollNode(acct.id, "own-b", "Laptop B");
+
+    // Not replicated yet.
+    assert.equal(await store.getSessionOwnership(acct.id, "s1"), undefined);
+
+    // Owner A declares B as the standby; epoch starts at 0.
+    const declared = await store.setSessionStandby(acct.id, "s1", a.id, b.id);
+    assert.equal(declared.ownerNodeId, a.id);
+    assert.equal(declared.standbyNodeId, b.id);
+    assert.equal(declared.ownerEpoch, 0);
+
+    // Re-declaring (e.g. owner reconnect) must NOT reset the epoch.
+    const redeclared = await store.setSessionStandby(acct.id, "s1", a.id, b.id);
+    assert.equal(redeclared.ownerEpoch, 0, "epoch is stable across re-declare");
+
+    // A stale promotion (wrong expected epoch) is rejected — the fence holds.
+    assert.equal(await store.promoteSession(acct.id, "s1", b.id, 7), undefined);
+    assert.equal((await store.getSessionOwnership(acct.id, "s1"))?.ownerNodeId, a.id, "owner unchanged after a lost race");
+
+    // A correct promotion moves ownership to B, bumps the epoch, clears standby.
+    const promoted = await store.promoteSession(acct.id, "s1", b.id, 0);
+    assert.equal(promoted?.ownerNodeId, b.id);
+    assert.equal(promoted?.ownerEpoch, 1);
+    assert.equal(promoted?.standbyNodeId, undefined, "standby cleared on promotion");
+
+    // The old epoch no longer works (can't double-promote) — idempotent under retry.
+    assert.equal(await store.promoteSession(acct.id, "s1", a.id, 0), undefined);
+    assert.equal((await store.getSessionOwnership(acct.id, "s1"))?.ownerNodeId, b.id);
+
+    // Foreign accounts see nothing.
+    const other = await store.findOrCreateAccount("contract-ownership2@example.com");
+    assert.equal(await store.getSessionOwnership(other.id, "s1"), undefined);
   });
 
   // --- Inbound hooks ---------------------------------------------------------
@@ -243,16 +282,26 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(clamped.ttlMinutes, 5);
   });
 
-  // --- Entitlements & node limits -------------------------------------------
-  await test("free plan caps nodes at 1; upgrading lifts the cap", async (store) => {
+  // --- Entitlements & run metering ------------------------------------------
+  await test("no node cap on any plan; a free account enrolls many nodes", async (store) => {
     const acct = await store.findOrCreateAccount("contract-limit@example.com");
-    await store.enrollNode(acct.id, "n1", "First");
-    await assert.rejects(
-      () => store.enrollNode(acct.id, "n2", "Second"),
-      (err: unknown) => (err as { status?: number }).status === 402,
-    );
-    await store.setPlan(acct.id, "individual");
+    assert.equal((await store.enrollNode(acct.id, "n1", "First")).node.id, "n1");
     assert.equal((await store.enrollNode(acct.id, "n2", "Second")).node.id, "n2");
+    assert.equal((await store.enrollNode(acct.id, "n3", "Third")).node.id, "n3");
+  });
+
+  await test("recordRunStart is idempotent and countRunStartsSince meters the daily cap", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-runs@example.com");
+    const before = new Date(Date.now() - 60_000).toISOString();
+    assert.equal(await store.countRunStartsSince(acct.id, before), 0);
+    await store.recordRunStart(acct.id, "s1");
+    await store.recordRunStart(acct.id, "s2");
+    await store.recordRunStart(acct.id, "s1"); // duplicate — no double count
+    assert.equal(await store.countRunStartsSince(acct.id, before), 2);
+    // A session advertise also records a run start (the all-sources funnel).
+    const { node } = await store.enrollNode(acct.id, "run-node", "Runner");
+    await store.replaceNodeSessions(acct.id, node.id, [{ sessionId: "s3", status: "idle" }]);
+    assert.equal(await store.countRunStartsSince(acct.id, before), 3, "advertised session counts once");
   });
 
   return passed;

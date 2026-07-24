@@ -23,4 +23,4 @@ Core promises:
 - sensitive workspace data stays on the node unless the user explicitly opts into a feature that moves it;
 - Bivy Cloud endpoints are defaults, not lock-in — equivalent self-host URLs can be configured.
 
-See `CLOUD.md`, `docs/open-core-hosted-live-plan.md`, and `docs/repo-split-plan.md` for the paid hosted service and repository boundary.
+See `CLOUD.md` for the paid hosted service and repository boundary.

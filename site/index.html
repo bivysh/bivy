@@ -1,0 +1,1089 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bivy — Run coding agents on machines you own</title>
+  <meta name="description" content="Bivy runs Claude Code, Codex, Gemini CLI, Aider and other coding agents on your own hardware, with your own keys — then puts every session in an app on your phone: full transcript, diffs, a real terminal, and one-tap approvals. Free, 10 runs a week. Source-available and self-hostable.">
+  <meta name="theme-color" content="#fbfaf8">
+  <meta property="og:title" content="Bivy — Run coding agents on machines you own">
+  <meta property="og:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free, 10 runs a week, no repo upload.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://bivy.sh">
+  <meta property="og:image" content="https://bivy.sh/screenshots/app-session.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Bivy — Run coding agents on machines you own">
+  <meta name="twitter:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free, 10 runs a week, no repo upload.">
+  <meta name="twitter:image" content="https://bivy.sh/screenshots/app-session.png">
+  <link rel="icon" href="./tent.svg">
+  <link rel="icon" type="image/png" href="./tent.png">
+  <link rel="apple-touch-icon" href="./tent.png">
+  <style>
+    :root {
+      --bg:      #fbfaf8;
+      --panel:   #ffffff;
+      --sunken:  #f4f2ee;
+      --ink:     #17181a;
+      --ink-2:   #3d4045;
+      --muted:   #6b6f76;
+      --faint:   #999da4;
+      --line:    #e3e0da;
+      --line-2:  #efece7;
+      /* A warmer, richer orange than the old muddy brown. Dark enough on the
+         light background to double as link text (~4.9:1) and to carry white
+         button labels. */
+      --accent:  #c2410c;
+      --accent-ink: #ffffff;
+      --ok:      #2f6b40;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+      --max: 1000px;
+      --prose: 680px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:      #131315;
+        --panel:   #1a1a1d;
+        --sunken:  #202024;
+        --ink:     #ececea;
+        --ink-2:   #c9c8c5;
+        --muted:   #9a9a98;
+        --faint:   #737373;
+        --line:    #2e2e32;
+        --line-2:  #252528;
+        /* A vivid orange that pops on the dark background. It's light, so button
+           labels switch to near-black ink (--accent-ink) — the old washed-out
+           tan with white text was nearly invisible (see the "Go Pro" pill). */
+        --accent:  #f97316;
+        --accent-ink: #1c1206;
+        --ok:      #7bb98c;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 16.5px;
+      line-height: 1.62;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: inherit; }
+    .wrap { width: min(var(--max), calc(100% - 44px)); margin: 0 auto; }
+    .prose { max-width: var(--prose); }
+
+    h1, h2, h3 { letter-spacing: -0.021em; line-height: 1.2; font-weight: 600; }
+    code, kbd, pre { font-family: var(--mono); }
+
+    /* ---------- header ---------- */
+    header.site {
+      border-bottom: 1px solid var(--line-2);
+      background: var(--bg);
+    }
+    header.site .inner {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 24px; padding: 16px 0;
+    }
+    .brand {
+      display: inline-flex; align-items: center; gap: 9px;
+      font-weight: 600; font-size: 16px; text-decoration: none;
+      letter-spacing: -0.015em;
+    }
+    .brand img { width: 22px; height: 22px; border-radius: 4px; display: block; }
+    nav.top { display: flex; align-items: center; gap: 22px; font-size: 14.5px; }
+    nav.top a { color: var(--muted); text-decoration: none; }
+    nav.top a:hover { color: var(--ink); }
+    nav.top a.btn-primary,
+    nav.top a.btn-primary:hover { color: #fff; }
+    @media (max-width: 700px) { nav.top a.hide-sm { display: none; } }
+
+    /* ---------- hero ---------- */
+    .hero { padding: 76px 0 20px; }
+    .hero h1 {
+      font-size: clamp(32px, 4.6vw, 46px);
+      margin: 0 0 20px;
+      max-width: 15ch;
+      font-weight: 600;
+    }
+    .hero .lede {
+      font-size: 18.5px;
+      color: var(--ink-2);
+      max-width: 60ch;
+      margin: 0 0 14px;
+    }
+    .hero .sub {
+      font-size: 15.5px;
+      color: var(--muted);
+      max-width: 62ch;
+      margin: 0 0 32px;
+    }
+
+    /* install command */
+    .install {
+      display: flex; align-items: stretch;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      max-width: 520px;
+      overflow: hidden;
+    }
+    .install code {
+      flex: 1; min-width: 0;
+      padding: 13px 15px;
+      font-size: 14px;
+      color: var(--ink);
+      overflow-x: auto;
+      white-space: nowrap;
+      display: block;
+    }
+    .install code .p { color: var(--faint); user-select: none; }
+    .install button {
+      flex: none;
+      border: 0; border-left: 1px solid var(--line);
+      background: var(--sunken);
+      color: var(--muted);
+      font: inherit; font-size: 13px;
+      padding: 0 15px; cursor: pointer;
+    }
+    .install button:hover { color: var(--ink); }
+    .install-note { font-size: 14px; color: var(--muted); margin: 12px 0 0; }
+    .install-note a { color: var(--accent); }
+
+    .runs-on { margin: 30px 0 0; font-size: 14.5px; color: var(--muted); }
+    .runs-on strong { color: var(--ink-2); font-weight: 500; }
+
+    /* ---------- sections ---------- */
+    section { padding: 60px 0; border-top: 1px solid var(--line-2); }
+    section:first-of-type { border-top: 0; }
+    .kicker {
+      font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.09em;
+      color: var(--faint); margin: 0 0 14px; font-weight: 500;
+    }
+    section h2 {
+      font-size: clamp(22px, 2.6vw, 27px);
+      margin: 0 0 16px;
+      max-width: 22ch;
+    }
+    section > .wrap > p, .prose p { color: var(--ink-2); }
+
+    /* ---------- feature list ---------- */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+      gap: 2px;
+      background: var(--line-2);
+      border: 1px solid var(--line-2);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-top: 34px;
+    }
+    .feature { background: var(--bg); padding: 24px 24px 26px; }
+    .feature h3 { font-size: 16px; margin: 0 0 8px; font-weight: 600; }
+    .feature p { margin: 0; font-size: 14.8px; color: var(--muted); line-height: 1.58; }
+    .feature code { font-size: 0.88em; background: var(--sunken); padding: 1px 5px; border-radius: 3px; }
+
+    /* ---------- steps ---------- */
+    ol.steps { counter-reset: s; list-style: none; padding: 0; margin: 30px 0 0; max-width: var(--prose); }
+    ol.steps li {
+      counter-increment: s;
+      position: relative;
+      padding: 0 0 22px 40px;
+      border-left: 1px solid var(--line);
+      margin-left: 11px;
+    }
+    ol.steps li:last-child { border-left-color: transparent; padding-bottom: 0; }
+    ol.steps li::before {
+      content: counter(s);
+      position: absolute; left: -11px; top: 0;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--bg); border: 1px solid var(--line);
+      font-size: 11.5px; color: var(--muted);
+      display: grid; place-items: center;
+      font-variant-numeric: tabular-nums;
+    }
+    ol.steps b { display: block; font-weight: 600; font-size: 15.5px; margin-bottom: 3px; }
+    ol.steps span { font-size: 14.8px; color: var(--muted); }
+    ol.steps code { font-size: 0.88em; background: var(--sunken); padding: 1px 5px; border-radius: 3px; }
+
+    /* ---------- code block ---------- */
+    pre.block {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px 20px;
+      font-size: 13.6px;
+      line-height: 1.75;
+      overflow-x: auto;
+      margin: 26px 0 0;
+      color: var(--ink-2);
+    }
+    pre.block .c { color: var(--faint); }
+    pre.block .p { color: var(--faint); user-select: none; }
+
+    /* ---------- table ---------- */
+    .table-scroll { overflow-x: auto; margin-top: 30px; }
+    table.matrix { border-collapse: collapse; width: 100%; font-size: 14.7px; min-width: 560px; }
+    table.matrix th, table.matrix td {
+      text-align: left; padding: 11px 14px;
+      border-bottom: 1px solid var(--line-2);
+      vertical-align: top;
+    }
+    table.matrix thead th {
+      font-weight: 500; color: var(--faint); font-size: 13px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--line);
+    }
+    table.matrix td:first-child { color: var(--ink); }
+    table.matrix .y { color: var(--ok); }
+    table.matrix .n { color: var(--faint); }
+
+    /* ---------- notice ---------- */
+    .notice {
+      border: 1px solid var(--line);
+      border-left: 2px solid var(--accent);
+      background: var(--panel);
+      border-radius: 0 7px 7px 0;
+      padding: 18px 22px;
+      margin: 32px 0 0;
+      max-width: var(--prose);
+      font-size: 14.8px;
+      color: var(--ink-2);
+    }
+    .notice b { color: var(--ink); }
+    .notice p { margin: 0 0 9px; }
+    .notice p:last-child { margin: 0; }
+    .notice code { font-size: 0.88em; background: var(--sunken); padding: 1px 5px; border-radius: 3px; }
+
+    /* ---------- docs grid ---------- */
+    .docs { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 28px 34px; margin-top: 34px; }
+    .docs h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--faint); margin: 0 0 12px; font-weight: 500; }
+    .docs ul { list-style: none; margin: 0; padding: 0; }
+    .docs li { margin: 0 0 8px; font-size: 14.8px; }
+    .docs a { color: var(--ink-2); text-decoration: none; border-bottom: 1px solid var(--line); padding-bottom: 1px; }
+    .docs a:hover { color: var(--ink); border-color: var(--muted); }
+
+    /* ---------- pricing ---------- */
+    .plans {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 2px; background: var(--line-2);
+      border: 1px solid var(--line-2); border-radius: 8px;
+      overflow: hidden; margin-top: 34px;
+    }
+    .plan { background: var(--bg); padding: 26px 24px 28px; }
+    .plan h3 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
+    .plan .price { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; margin: 10px 0 4px; }
+    .plan .price span { font-size: 14px; font-weight: 400; color: var(--muted); letter-spacing: 0; }
+    .plan .who { font-size: 14px; color: var(--muted); margin: 0 0 18px; min-height: 42px; }
+    .plan ul { list-style: none; margin: 0; padding: 0; font-size: 14.5px; color: var(--ink-2); }
+    .plan li { padding: 5px 0 5px 17px; position: relative; }
+    .plan li::before { content: "—"; position: absolute; left: 0; color: var(--faint); }
+    .plan li.soon { padding-left: 0; color: var(--muted); font-style: italic; }
+    .plan li.soon::before { content: none; }
+    .plan.featured { background: var(--panel); box-shadow: inset 0 0 0 1.5px var(--accent); }
+    .plan .badge {
+      display: inline-block; font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--accent); margin: 0 0 6px;
+    }
+    .plan .cta-row { margin: 20px 0 0; }
+
+    /* ---------- buttons ---------- */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 8px; font: inherit; font-size: 14.5px; font-weight: 500;
+      padding: 10px 18px; border-radius: 7px; cursor: pointer;
+      text-decoration: none; border: 1px solid transparent; white-space: nowrap;
+    }
+    .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+    .btn-primary:hover { filter: brightness(1.06); }
+    .btn-ghost { background: var(--panel); color: var(--ink); border-color: var(--line); }
+    .btn-ghost:hover { border-color: var(--muted); }
+    .btn-block { width: 100%; }
+    .btn-sm { padding: 8px 15px; font-size: 14px; }
+
+    /* inline "Pro" tag */
+    .tag-pro {
+      display: inline-block; font-size: 11.5px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--accent); border: 1px solid var(--accent);
+      border-radius: 999px; padding: 1px 9px; vertical-align: middle;
+      margin-left: 8px;
+    }
+    .upgrade-line { margin-top: 22px; font-size: 14.5px; color: var(--muted); }
+    .upgrade-line a { color: var(--accent); font-weight: 500; text-decoration: none; }
+    .upgrade-line a:hover { text-decoration: underline; }
+
+    /* hero CTA row */
+    .hero-cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 22px 0 0; }
+
+    /* ---------- faq ---------- */
+    .faq { margin-top: 26px; max-width: var(--prose); }
+    .faq details { border-bottom: 1px solid var(--line-2); }
+    .faq summary {
+      cursor: pointer; padding: 15px 0; font-size: 15.8px;
+      font-weight: 500; list-style: none; display: flex;
+      justify-content: space-between; align-items: center; gap: 16px;
+    }
+    .faq summary::-webkit-details-marker { display: none; }
+    .faq summary::after { content: "+"; color: var(--faint); font-size: 17px; flex: none; }
+    .faq details[open] summary::after { content: "–"; }
+    .faq details p { margin: 0 0 17px; font-size: 15px; color: var(--muted); max-width: 66ch; }
+    .faq code { font-size: 0.9em; background: var(--sunken); padding: 1px 5px; border-radius: 3px; }
+    .faq a { color: var(--accent); }
+
+    /* ---------- cta ---------- */
+    .cta { padding: 66px 0 72px; border-top: 1px solid var(--line-2); }
+    .cta h2 { margin: 0 0 14px; }
+    .cta p { color: var(--ink-2); max-width: 56ch; margin: 0 0 26px; }
+
+    /* ---------- footer ---------- */
+    footer.site { border-top: 1px solid var(--line-2); padding: 34px 0 44px; }
+    .foot { display: flex; flex-wrap: wrap; gap: 20px 44px; justify-content: space-between; align-items: flex-start; }
+    .foot nav { display: flex; flex-wrap: wrap; gap: 18px; font-size: 14.5px; }
+    .foot nav a { color: var(--muted); text-decoration: none; }
+    .foot nav a:hover { color: var(--ink); }
+    .foot .legal { font-size: 13.5px; color: var(--faint); }
+
+    .screenshot {
+      margin-top: 40px; border: 1px solid var(--line); border-radius: 8px;
+      overflow: hidden; background: var(--panel); max-width: 880px;
+    }
+    .screenshot img { display: block; width: 100%; height: auto; }
+
+    /* ---------- app section ---------- */
+    .app-split {
+      display: grid;
+      grid-template-columns: minmax(0, 290px) minmax(0, 1fr);
+      gap: 46px;
+      align-items: start;
+      margin-top: 36px;
+    }
+    @media (max-width: 820px) {
+      .app-split { grid-template-columns: 1fr; gap: 34px; }
+    }
+    .app-shot {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      background: var(--panel);
+      max-width: 290px;
+      margin: 0 auto;
+    }
+    .app-shot img { display: block; width: 100%; height: auto; }
+    .app-list { list-style: none; margin: 0; padding: 0; }
+    .app-list li { padding: 0 0 19px; font-size: 14.9px; color: var(--muted); line-height: 1.58; }
+    .app-list li:last-child { padding-bottom: 0; }
+    .app-list b {
+      display: block; color: var(--ink); font-weight: 600;
+      font-size: 15.4px; margin-bottom: 3px;
+    }
+    .app-list code, .app-list kbd { font-size: 0.88em; background: var(--sunken); padding: 1px 5px; border-radius: 3px; }
+    .app-list kbd { border: 1px solid var(--line); }
+  </style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap inner">
+    <a class="brand" href="./index.html"><img src="./tent.png" alt="" width="22" height="22"> Bivy</a>
+    <nav class="top">
+      <a href="#app">The app</a>
+      <a href="#how" class="hide-sm">How it works</a>
+      <a href="#trust" class="hide-sm">Security</a>
+      <a href="#docs">Docs</a>
+      <a href="#pricing" class="hide-sm">Pricing</a>
+      <a href="https://github.com/bivysh/bivy" class="hide-sm">GitHub</a>
+      <a href="https://app.bivy.sh" class="hide-sm">Log in</a>
+      <a href="https://app.bivy.sh" class="btn btn-primary btn-sm">Start free</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap">
+      <h1>Run coding agents on machines you own.</h1>
+      <p class="lede">
+        Bivy runs Claude Code, Codex, Gemini CLI, Aider and other agent CLIs on your
+        own laptop or server — with your keys, your repo, and your toolchain — then puts
+        every session in an app on your phone: the full transcript, the diffs, a real
+        terminal, and the approval it's waiting on.
+      </p>
+
+      <div class="install">
+        <code id="cmd"><span class="p">$ </span>curl -fsSL https://bivy.sh/install.sh | bash</code>
+        <button id="copy" type="button" aria-label="Copy install command">Copy</button>
+      </div>
+      <p class="install-note">
+        macOS and Linux. Needs Node 22.19 or newer, and the installer sets that up for you
+        if it's missing. Want to read it first? <a href="https://bivy.sh/install.sh">View the script</a>.
+      </p>
+
+      <div class="hero-cta">
+        <a href="https://app.bivy.sh" class="btn btn-primary">Start free</a>
+        <a href="#app" class="btn btn-ghost">See the app</a>
+      </div>
+
+      <p class="sub" style="margin:22px 0 0">
+        Your code never leaves your machine — agents run in real terminals on hardware you
+        control, and Bivy adds the session layer, approvals, and remote access around them.
+        Free, 10 runs a week, forever: no credit card, no trial clock. Setup is one command
+        and a guided wizard, and uninstall is one command too.
+      </p>
+
+      <p class="runs-on">
+        Runs <strong>Pi</strong>, <strong>Claude Code</strong>, <strong>Codex</strong>,
+        <strong>OpenCode</strong>, <strong>Gemini CLI</strong>, <strong>Qwen Code</strong>,
+        <strong>Goose</strong>, <strong>Aider</strong>, <strong>Cline</strong>,
+        <strong>Crush</strong> — or any CLI you point it at.
+      </p>
+
+      <div class="screenshot">
+        <img src="./screenshots/cli-session.png"
+             alt="A Bivy CLI session running an agent in an isolated worktree, with tests passing."
+             loading="lazy">
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section>
+    <div class="wrap">
+      <p class="kicker">What's in 0.1</p>
+      <h2>The session layer around agents you already use.</h2>
+      <p class="prose">Bivy does not replace agent CLIs. It runs them in real PTYs and adds
+      what they individually lack: durability, remote access, approvals, and a consistent
+      way to move between them.</p>
+
+      <div class="features">
+        <div class="feature">
+          <h3>Ten agents, one interface</h3>
+          <p>Pi, Claude Code, Codex, OpenCode, Gemini CLI, Qwen Code, Goose, Aider, Cline
+          and Crush, each driven through its native CLI. Bivy installs the ones you pick.
+          Any other command works via <code>bivy run -- ./your-agent</code>.</p>
+        </div>
+        <div class="feature">
+          <h3>Sessions that survive</h3>
+          <p>Every session has a durable append-only event log and its own git worktree.
+          Detach from your terminal, restart the daemon, reconnect from a phone — the same
+          session is still there, transcript and diffs intact.</p>
+        </div>
+        <div class="feature">
+          <h3>No ports, no tunnel, no VPN</h3>
+          <p>Your node dials out to the relay, so nothing listens for inbound connections
+          and there's no firewall rule to add. It works behind NAT, hotel Wi-Fi and
+          corporate networks the same way. <a href="#app" style="color:var(--accent);text-decoration:none">See what the app gives you →</a></p>
+        </div>
+        <div class="feature">
+          <h3>Push notifications</h3>
+          <p>Get pinged when an agent finishes, needs an approval, or hits an error, so you
+          can kick something off and walk away instead of babysitting the terminal.</p>
+        </div>
+        <div class="feature">
+          <h3>Approvals wherever you are</h3>
+          <p>Agents run unattended by default. Catastrophic commands and writes outside
+          the workspace are blocked in every mode, and force-push, publish, deploy and
+          sudo always pause. Switch to <code>risky</code> or <code>always</code> to be
+          asked about more, and approve from terminal, browser, or phone.</p>
+        </div>
+        <div class="feature">
+          <h3>Switch agent or model mid-session</h3>
+          <p>Fork a running session onto a different agent, a different model, or a
+          different machine, carrying the transcript and any uncommitted work with it.</p>
+        </div>
+        <div class="feature">
+          <h3>GitHub issue to pull request</h3>
+          <p>Label an issue <code>bivy</code>, or mention the Bivy GitHub App in a comment.
+          A machine you own clones the repo, works in an isolated worktree, and opens the
+          pull request itself.</p>
+        </div>
+        <div class="feature">
+          <h3>Terminal takeover</h3>
+          <p><code>bivy shim install claude</code> makes typing <code>claude</code> start
+          the real TUI inside a Bivy PTY — so an ordinary terminal session becomes one you
+          can pick up from your phone.</p>
+        </div>
+        <div class="feature">
+          <h3>Your credentials, your vault</h3>
+          <p>An encrypted local vault, plus <code>env://</code> and <code>op://</code>
+          (1Password) references resolved at start. Model keys and GitHub tokens stay on
+          the node.</p>
+        </div>
+        <div class="feature">
+          <h3>Any model endpoint</h3>
+          <p>Thirteen providers by API key or OAuth, plus your own OpenAI-compatible,
+          Azure, Ollama, LM Studio, vLLM or SGLang endpoints.</p>
+        </div>
+        <div class="feature">
+          <h3>Runs on any machine you own</h3>
+          <p>A laptop, a home server, a Raspberry Pi, or a VPS, droplet or EC2 instance you
+          already pay for — if you can install it there, Bivy runs there. Connect as many
+          machines as you like, on every plan.</p>
+        </div>
+        <div class="feature">
+          <h3>Ephemeral cloud machines</h3>
+          <p>No spare machine? Have Bivy start a short-lived runner on Fly.io, Hetzner or
+          AWS EC2, work there, then destroy it — using your own provider token, which stays
+          on your device and is never sent to us. Set up and run as many as you like on
+          any plan — each launch counts as one of your runs for the day.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- THE APP -->
+  <section id="app">
+    <div class="wrap">
+      <p class="kicker">The app</p>
+      <h2>A real client for your agents, not just a window onto them.</h2>
+      <p class="prose">
+        Install Bivy on your phone and the session you started on your laptop is right
+        there — the whole transcript, the diffs, the terminal, and the approval it's
+        waiting on. Start a run at your desk, review it on the train, and answer the one
+        question it has without opening a laptop.
+      </p>
+
+      <div class="app-split">
+        <div class="app-shot">
+          <img src="./screenshots/app-session.png"
+               alt="The Bivy app on a phone: an agent fixing a double-charge bug, showing the prompt, what it read and ran, the resulting diff, and a composer with agent, model and voice controls."
+               loading="lazy">
+        </div>
+
+        <ul class="app-list">
+          <li>
+            <b>Pick up any session, on any machine</b>
+            One list across every node you own. A session you started with
+            <code>bivy run</code> in a terminal is the same session here — open it and keep going.
+          </li>
+          <li>
+            <b>See the work, not a summary</b>
+            Every tool call, command, and file edit, with the diff attached. Expand
+            <em>"read 5 files, ran 10 commands"</em> to check exactly what it touched
+            before you trust it.
+          </li>
+          <li>
+            <b>Undo a turn you don't like</b>
+            Bivy takes a git checkpoint around every turn, for every agent. Undo the last
+            one from your phone, or scrub back through the timeline and rewind to any
+            earlier point — so letting an agent run isn't a one-way door.
+          </li>
+          <li>
+            <b>Approve from wherever you are</b>
+            Force-push, publish, deploy and sudo always pause for a human, and you can ask
+            to be consulted on far more. When an agent stops — or just asks you a question
+            — it shows up in the app with the command, the risk, and the raw tool input, and
+            one tap unblocks it instead of a run sitting idle until you're back at your desk.
+          </li>
+          <li>
+            <b>Drop into a real terminal</b>
+            A full PTY on the machine, in your pocket — run the tests yourself, check
+            <code>git status</code>, or take over when the agent gets stuck. With a touch
+            key bar for <kbd>esc</kbd>, <kbd>tab</kbd>, ctrl and arrows, so a phone
+            keyboard stops being the reason you wait until you're home. It can attach to
+            an existing tmux, zellij or screen session too.
+          </li>
+          <li>
+            <b>Type it, paste it, or say it</b>
+            Dictate a prompt instead of thumb-typing it, attach a screenshot straight from
+            your camera roll, and use the agent's own slash commands with autocomplete. A
+            half-written message survives a reload or a jump to another session.
+          </li>
+          <li>
+            <b>Change agent, model, or machine mid-run</b>
+            Swap Claude Code for Codex, move to a bigger model, or fork the whole session
+            onto another node — transcript and uncommitted work included.
+          </li>
+          <li>
+            <b>Know what it's costing</b>
+            A live token and dollar counter on every session, so a long autonomous run
+            never surprises you.
+          </li>
+          <li>
+            <b>Installs like an app</b>
+            Add it to your home screen from the browser — no app store, no download, no
+            review queue. It launches full-screen, paints your recent sessions from cache
+            before the network answers, and never force-reloads you mid-session.
+            <a href="#pricing" style="color:var(--accent);text-decoration:none">Pro</a>
+            adds push, so a run that finishes or stalls comes and finds you.
+          </li>
+        </ul>
+      </div>
+
+      <div class="notice">
+        <p><b>Nothing to set up separately.</b> The app is part of the free plan. There's
+        no download — <code>bivy setup</code> walks you through remote access and prints a
+        QR code, and scanning it pairs your phone; <code>bivy link</code> prints a fresh
+        one any time. Pairing is an encrypted handshake with your own node, so the app
+        streams your session without the relay or our servers being able to read it.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHAT IT IS -->
+  <section id="how">
+    <div class="wrap">
+      <p class="kicker">How it works</p>
+      <h2>Three parts, and only one of them holds your data.</h2>
+      <div class="prose">
+        <p>
+          The <b>node</b> is a small daemon on your machine. It owns the workspace,
+          the credentials, and the agent processes, and it serves an API on
+          <code>localhost:4317</code>. It holds no account and hosts no web page.
+        </p>
+        <p>
+          The <b>relay</b> forwards encrypted frames between your node and your devices.
+          Your node dials out to it, so you never open an inbound port. The relay routes
+          ciphertext it cannot read.
+        </p>
+        <p>
+          The <b>control plane</b> holds your account, the list of your nodes, and serves
+          the web app. It coordinates metadata and routing. Use ours, or run your own.
+        </p>
+      </div>
+
+      <pre class="block"><span class="c">#  your machine                     hosted or self-hosted</span>
+<span class="c">#</span>
+<span class="c">#  ┌──────────────┐               ┌─────────┐        ┌───────────────┐</span>
+<span class="c">#  │ node daemon  │  ──dials──▶   │  relay  │ ◀────▶ │ control plane │</span>
+<span class="c">#  │ agents, keys │    outbound   │ opaque  │        │ accounts, web │</span>
+<span class="c">#  │ repo, tools  │               │ frames  │        │ app, metadata │</span>
+<span class="c">#  └──────────────┘               └─────────┘        └───────────────┘</span>
+<span class="c">#         ▲                                                  ▲</span>
+<span class="c">#         └────────── end-to-end encrypted session ───────────┘</span>
+<span class="c">#                     phone · browser · another terminal</span></pre>
+
+      <div class="notice">
+        <p><b>What this buys you.</b> No repository upload, no vendor sandbox, no token
+        markup, and no inbound firewall rule. What it costs you: you operate the machine
+        the agent runs on.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRICING -->
+  <section id="pricing">
+    <div class="wrap">
+      <p class="kicker">Pricing</p>
+      <h2>We charge for the remote layer, never for your tokens.</h2>
+      <p class="prose">
+        You bring your own providers, keys, and machines, and you pay those bills directly
+        with no markup from us. What we sell is the hosted relay, the app, and push. Running
+        Bivy locally — and self-hosting the whole thing — stays free.
+      </p>
+
+      <div class="plans">
+        <div class="plan">
+          <h3>Free</h3>
+          <div class="price">$0</div>
+          <p class="who">The whole product, capped at 10 runs a week. Not a trial.</p>
+          <ul>
+            <li>All ten agents, plus your own</li>
+            <li>Durable sessions and worktrees</li>
+            <li>Approvals and sandbox tiers</li>
+            <li>Unlimited relay-connected nodes</li>
+            <li>Ephemeral cloud runners</li>
+            <li>Push notifications</li>
+            <li>10 runs / week — any source (manual, app, GitHub, ephemeral)</li>
+            <li>The full phone and browser app</li>
+            <li>Community support</li>
+          </ul>
+          <div class="cta-row">
+            <a href="https://app.bivy.sh" class="btn btn-ghost btn-block">Start free</a>
+          </div>
+        </div>
+        <div class="plan featured">
+          <span class="badge">Most popular</span>
+          <h3>Pro</h3>
+          <div class="price">$15 <span>/ month</span></div>
+          <p class="who">No run cap, and a unified view across every machine.</p>
+          <ul>
+            <li>Everything in Free</li>
+            <li>Unlimited runs — no weekly cap</li>
+            <li>Cross-node session index</li>
+            <li>Email support</li>
+          </ul>
+          <div class="cta-row">
+            <a href="https://app.bivy.sh" class="btn btn-primary btn-block">Go Pro — $15/mo</a>
+          </div>
+        </div>
+        <div class="plan">
+          <h3>Team</h3>
+          <div class="price">Soon</div>
+          <p class="who">Shared nodes, roles, and audit for a whole team.</p>
+          <ul>
+            <li class="soon">Coming soon…</li>
+          </ul>
+          <div class="cta-row">
+            <a href="./contact.html" class="btn btn-ghost btn-block">Get early access</a>
+          </div>
+        </div>
+      </div>
+      <p class="install-note" style="margin-top:18px;max-width:var(--prose)">
+        Community support means public GitHub issues, with no guaranteed response.
+        Self-hosting is unsupported on every plan.
+      </p>
+    </div>
+  </section>
+
+  <!-- GITHUB QUEUE -->
+  <section>
+    <div class="wrap">
+      <p class="kicker">GitHub work queue</p>
+      <h2>Label an issue. Get a pull request back.</h2>
+      <p class="prose">
+        Work happens on a machine you own, with your local toolchain and your
+        credentials. Bivy's control plane sees the issue title, body, and routing
+        label — never your repository contents.
+      </p>
+
+      <ol class="steps">
+        <li>
+          <b>Trigger it in GitHub</b>
+          <span>Add the <code>bivy</code> label to route to your default node, or
+          <code>bivy/mac-mini</code> to target one. Or mention the Bivy GitHub App in
+          a comment.</span>
+        </li>
+        <li>
+          <b>Bivy queues the work</b>
+          <span>A signed webhook reaches the control plane, which verifies it and records
+          a work item. Redeliveries are de-duplicated.</span>
+        </li>
+        <li>
+          <b>Your node claims it</b>
+          <span>Claiming is atomic, so only one machine runs a given issue. The node
+          comments on the issue naming itself, so you can see work has started.</span>
+        </li>
+        <li>
+          <b>The agent opens the PR</b>
+          <span>It works in a <code>bivy/issue-&lt;n&gt;</code> worktree, runs your tests,
+          pushes a branch, and opens the pull request. Review it from your phone.</span>
+        </li>
+      </ol>
+
+      <p class="upgrade-line">
+        The GitHub work queue is free — it draws from your 10 runs a week, shared with
+        every other source. Go
+        <a href="#pricing">Pro — $15/mo</a> for unlimited runs.
+      </p>
+    </div>
+  </section>
+
+  <!-- TRUST -->
+  <section id="trust">
+    <div class="wrap">
+      <p class="kicker">Security</p>
+      <h2>What each part can see.</h2>
+      <p class="prose">"Is it secure?" is the wrong question. The one that matters is what
+      each part can actually read. Here's the whole table, nothing hidden.</p>
+
+      <div class="table-scroll">
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Your node</th>
+              <th>Relay</th>
+              <th>Control plane</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Repository contents</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td></tr>
+            <tr><td>Prompts and transcripts</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td></tr>
+            <tr><td>Model API keys</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td></tr>
+            <tr><td>GitHub repository tokens</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td></tr>
+            <tr><td>Cloud provider tokens</td><td class="n">No</td><td class="n">No</td><td class="n">No — device-local</td></tr>
+            <tr><td>Session frames in transit</td><td class="y">Plaintext</td><td class="n">Ciphertext only</td><td class="n">Ciphertext only</td></tr>
+            <tr><td>Account, node list, session index</td><td class="y">Yes</td><td class="n">No</td><td class="y">Yes</td></tr>
+            <tr><td>GitHub issue title and body</td><td class="y">Yes</td><td class="n">No</td><td class="y">Until claimed</td></tr>
+            <tr><td>Push notification text</td><td class="y">Yes</td><td class="n">No</td><td class="y">Yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="notice">
+        <p><b>Known limits.</b></p>
+        <p>Sandbox tiers — <code>read-only</code>, <code>workspace-write</code>,
+        <code>danger-full-access</code> — are enforced natively by the agents that
+        support them (Codex, Claude Code, Gemini CLI, Qwen Code). Agents without a native
+        sandbox are governed at the filesystem, MCP, and network layer, not by an OS jail.
+        Bivy does not ship its own OS-level jail in 0.1.</p>
+        <p>Queued GitHub issue titles and bodies are stored in plaintext by the control
+        plane until a node claims them.</p>
+        <p>Push notification titles and bodies pass through the control plane in
+        plaintext, and can contain session and terminal names. Everything else in a
+        session stays encrypted end to end.</p>
+        <p>Credential sync between your own nodes covers Bivy-managed provider keys.
+        Agent-native logins — Claude Code, Codex, Gemini CLI — remain per-machine.</p>
+        <p>The default approval mode is <code>autonomous</code>: agents act without
+        per-action prompts. The hard floor still applies in every mode — catastrophic
+        commands and writes outside the workspace are refused, and force-push, publish,
+        deploy and sudo pause for a human. Set
+        <code>BIVY_APPROVAL_MODE=risky</code> if you want to be asked about every
+        shell command and file edit.</p>
+        <p>Bivy is 0.x software. Interfaces and behaviour can change between releases.</p>
+      </div>
+
+      <p class="prose" style="margin-top:24px;font-size:15px;">
+        Read the full <a href="https://github.com/bivysh/bivy/blob/main/docs/security-model.md" style="color:var(--accent)">security model</a>,
+        including device pairing, key handling, and revocation.
+      </p>
+    </div>
+  </section>
+
+  <!-- SELF HOST -->
+  <section>
+    <div class="wrap">
+      <p class="kicker">Source available</p>
+      <h2>Yours to read, fork, and self-host.</h2>
+      <div class="prose">
+        <p>
+          Bivy Core — the node daemon, CLI, runtime adapters, web client, relay, and the
+          baseline control plane — is published under the Functional Source License
+          (FSL-1.1-ALv2). You may use, modify, and self-host it for any purpose except
+          offering a competing service. Each release becomes Apache-2.0 two years after
+          it ships.
+        </p>
+        <p>
+          Remote access is not locked to us. Point the node at your own relay and control
+          plane and nothing about the product changes.
+        </p>
+      </div>
+
+      <pre class="block"><span class="c"># install and run the guided setup</span>
+<span class="p">$ </span>curl -fsSL https://bivy.sh/install.sh | bash
+
+<span class="c"># run any agent as a durable, reachable session</span>
+<span class="p">$ </span>bivy run codex
+<span class="p">$ </span>bivy run aider
+<span class="p">$ </span>bivy run -- ./my-agent
+
+<span class="c"># pick a sandbox tier</span>
+<span class="p">$ </span>BIVY_SANDBOX=read-only bivy restart
+
+<span class="c"># list and resume from anywhere</span>
+<span class="p">$ </span>bivy sessions
+<span class="p">$ </span>bivy resume
+
+<span class="c"># point at your own infrastructure</span>
+<span class="p">$ </span>bivy relay:setup --relay wss://relay.example.com \
+      --control-plane https://bivy.example.com</pre>
+
+      <div class="notice">
+        <p><b>Self-hosting is unsupported.</b> No SLA, community best-effort through
+        GitHub issues. The node and CLI run locally with no server stack. Self-hosting the
+        relay and control plane means you operate that stack — TLS, backups, upgrades,
+        hardening — yourself.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- DOCS -->
+  <section id="docs">
+    <div class="wrap">
+      <p class="kicker">Documentation</p>
+      <h2>Start here.</h2>
+      <div class="docs">
+        <div>
+          <h3>Getting started</h3>
+          <ul>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/quickstart.md">Quickstart</a></li>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/install.md">Install &amp; service setup</a></li>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/troubleshooting.md">Troubleshooting</a></li>
+          </ul>
+        </div>
+        <div>
+          <h3>Reference</h3>
+          <ul>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/cli-reference.md">CLI reference</a></li>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/configuration.md">Configuration</a></li>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/runtime-support-matrix.md">Agent support matrix</a></li>
+          </ul>
+        </div>
+        <div>
+          <h3>Remote &amp; integrations</h3>
+          <ul>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/remote-access.md">Remote access &amp; PWA</a></li>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/github-work-queue.md">GitHub work queue</a></li>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/ephemeral-sessions.md">Ephemeral machines</a></li>
+          </ul>
+        </div>
+        <div>
+          <h3>Operating it</h3>
+          <ul>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/security-model.md">Security model</a></li>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/key-management.md">Key management</a></li>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/self-host.md">Self-hosting</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section>
+    <div class="wrap">
+      <p class="kicker">Questions</p>
+      <h2>Answered directly.</h2>
+      <div class="faq">
+        <details open>
+          <summary>Does my code ever leave my machine?</summary>
+          <p>No. Agents run in real terminals on the node you control. The relay forwards
+          encrypted frames it cannot read. The control plane holds your account, your node
+          list, and a session index — not your files, prompts, transcripts, or keys. The
+          one exception is stated above: a queued GitHub issue's title and body sit in the
+          control plane until a node claims it.</p>
+        </details>
+        <details>
+          <summary>What do I actually need to get started?</summary>
+          <p>A Mac or Linux machine you can leave running, and a login for whichever model
+          you want to use. Node 22.19+ is required and the installer sets it up if it's
+          missing. <code>bivy setup</code> then walks you through the rest — workspace,
+          model sign-in, remote access, and a background service so it comes back after a
+          reboot. It's free, 10 runs a week, there's no credit card, and
+          <code>bivy uninstall</code> removes the service and config if you decide against
+          it.</p>
+        </details>
+        <details>
+          <summary>Is the phone app in the App Store?</summary>
+          <p>No, and it doesn't need to be. It's an installable web app: open your control
+          plane URL and add it to your home screen — on iPhone that's Safari's Share → Add
+          to Home Screen, and on Android or desktop it's the browser's own install button.
+          After that it launches full-screen like any other app. Nothing to download, and
+          updates arrive without a store review.</p>
+        </details>
+        <details>
+          <summary>Do I need to open a port or run a tunnel?</summary>
+          <p>No. Your node makes an outbound connection to the relay, and your devices
+          attach through it. This works behind NAT and corporate firewalls without any
+          inbound rule.</p>
+        </details>
+        <details>
+          <summary>Why doesn't the node serve a web page?</summary>
+          <p>Deliberate separation. The node is a data plane: it exposes an API and a
+          WebSocket on <code>localhost:4317</code> and nothing else. The browser and phone
+          app are served by a control plane — ours, or one you run. This keeps the attack
+          surface on your machine small and the trust boundary explicit.</p>
+        </details>
+        <details>
+          <summary>Which agents are supported, and how well?</summary>
+          <p>Ten are in the picker. Pi and Claude Code are the most complete. Codex,
+          OpenCode, Gemini CLI and Qwen Code are solid. Aider, Cline and Crush work but
+          have gaps inherited from upstream — Aider and Crush cannot resume a session, for
+          instance. The <a href="https://github.com/bivysh/bivy/blob/main/docs/runtime-support-matrix.md">support
+          matrix</a> lists exactly what each one can do.</p>
+        </details>
+        <details>
+          <summary>Do you mark up model tokens?</summary>
+          <p>No, and we do not resell inference. You bring your own provider keys or
+          subscription logins and they stay on your node. Paid plans cover hosted relay,
+          remote access, push notifications, and the GitHub queue.</p>
+        </details>
+        <details>
+          <summary>Can I self-host all of it?</summary>
+          <p>Yes — node, relay, and control plane are all in the repository, and the CLI
+          takes flags to point at them. It is unsupported: no SLA, community best-effort.
+          You own TLS, backups, upgrades, and hardening.</p>
+        </details>
+        <details>
+          <summary>What does "source available" mean here?</summary>
+          <p>The Functional Source License lets you use, modify, and self-host the code
+          for any purpose except offering a competing commercial service. Two years after
+          each release, that version converts to Apache-2.0. It is not an OSI-approved
+          open source licence, and we do not describe it as one.</p>
+        </details>
+        <details>
+          <summary>How stable is 0.1?</summary>
+          <p>It is the first public release of 0.x software. The core loop — run an agent,
+          keep the session, reach it remotely, approve actions — is solid and used daily.
+          Newer surfaces such as ephemeral cloud machines and credential sync between nodes
+          are rougher. Interfaces can change between releases.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta">
+    <div class="wrap">
+      <h2>Real agents, on a real machine you own.</h2>
+      <p>One command to install, and free, 10 runs a week with your phone included.
+      Nothing to configure on your network, no credit card, and no repository to hand
+      over. Go Pro later if you want every machine reachable and push notifications.</p>
+      <div class="install">
+        <code id="cmd2"><span class="p">$ </span>curl -fsSL https://bivy.sh/install.sh | bash</code>
+        <button id="copy2" type="button" aria-label="Copy install command">Copy</button>
+      </div>
+      <div class="hero-cta">
+        <a href="https://app.bivy.sh" class="btn btn-primary">Start free</a>
+        <a href="#pricing" class="btn btn-ghost">Compare plans</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap foot">
+    <div>
+      <a class="brand" href="./index.html" style="margin-bottom:8px"><img src="./tent.png" alt="" width="22" height="22"> Bivy</a>
+      <div class="legal">© 2026 Bivy · Core under FSL-1.1-ALv2</div>
+    </div>
+    <nav>
+      <a href="#docs">Docs</a>
+      <a href="https://github.com/bivysh/bivy">GitHub</a>
+      <a href="#pricing">Pricing</a>
+      <a href="./contact.html">Contact</a>
+      <a href="./privacy.html">Privacy</a>
+      <a href="./terms.html">Terms</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var CMD = "curl -fsSL https://bivy.sh/install.sh | bash";
+    function wire(btnId) {
+      var btn = document.getElementById(btnId);
+      if (!btn) return;
+      btn.addEventListener("click", function () {
+        function done() {
+          var prev = btn.textContent;
+          btn.textContent = "Copied";
+          setTimeout(function () { btn.textContent = prev; }, 1600);
+        }
+        function fallback() {
+          var ta = document.createElement("textarea");
+          ta.value = CMD;
+          ta.setAttribute("readonly", "");
+          ta.style.position = "absolute";
+          ta.style.left = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand("copy"); } catch (e) {}
+          document.body.removeChild(ta);
+          done();
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(CMD).then(done).catch(fallback);
+        } else {
+          fallback();
+        }
+      });
+    }
+    wire("copy");
+    wire("copy2");
+  })();
+</script>
+
+</body>
+</html>

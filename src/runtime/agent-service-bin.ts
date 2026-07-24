@@ -140,6 +140,16 @@ async function main(): Promise<void> {
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
+
+  // Crash net: this service process hosts detached agent sessions, so a stray
+  // unhandled rejection/exception must not tear all of them down. Log and keep
+  // running; a real supervisor restart remains the fallback.
+  process.on("unhandledRejection", (reason) => {
+    console.error("[bivy agent-service] unhandledRejection (kept running):", reason);
+  });
+  process.on("uncaughtException", (error) => {
+    console.error("[bivy agent-service] uncaughtException (kept running):", error);
+  });
 }
 
 // Run only when executed directly (not when imported by a test).

@@ -66,11 +66,22 @@ export function parseGithubIssueEvent(payload: unknown): ParsedIssueWork | undef
 
 /**
  * Choose the routing label from an issue's labels: a `bivy` or `bivy/<node>`
- * label (never the claim label). Prefers the most specific (`bivy/<node>`) so a
+ * label (never a claim label). Prefers the most specific (`bivy/<node>`) so a
  * targeted issue routes to that node. Returns undefined if none qualifies.
+ *
+ * Claim labels are `<routingLabel>:in-progress` — e.g. a node serving
+ * `bivy/hetzner` stamps `bivy/hetzner:in-progress` on pickup (server.ts). Those
+ * must be excluded *structurally*, not by comparing against a single hardcoded
+ * `claimLabel`: a node-scoped claim label like `bivy/hetzner:in-progress` still
+ * matches `^bivy/...` and would otherwise win as the "most specific" candidate,
+ * routing follow-up work to a label no node serves (it sits pending forever).
+ * Routing labels never contain a colon, so any label with a `:` in the node
+ * segment is rejected — which covers every `:in-progress` claim label.
  */
 export function pickRoutingLabel(labels: string[], claimLabel = "bivy:in-progress"): string | undefined {
-  const candidates = labels.filter((l) => l !== claimLabel && /^bivy(\/.+)?$/.test(l));
+  const candidates = labels.filter(
+    (l) => l !== claimLabel && !l.endsWith(":in-progress") && /^bivy(\/[^:]+)?$/.test(l),
+  );
   if (candidates.length === 0) return undefined;
   // Most specific first: a "bivy/<node>" label wins over the bare "bivy".
   candidates.sort((a, b) => (b.includes("/") ? 1 : 0) - (a.includes("/") ? 1 : 0) || b.length - a.length);
