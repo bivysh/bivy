@@ -2325,6 +2325,22 @@ export class SessionStore {
     this.set({ working: true, workingLabel: label });
   }
 
+  private toolEventId(event: ServerEvent): string {
+    const explicit = toolCallId(event as any);
+    if (explicit) return explicit;
+    const name = toolName(event as any);
+    const input = toolInput(event as any) as Record<string, unknown>;
+    const target = String(input?.command || input?.cmd || input?.path || input?.file || input?.filePath || input?.query || input?.stream || "");
+    if (!target && name !== "agent_output" && name !== "stderr" && name !== "stdout") return nextId();
+    return `${name}:${target}`;
+  }
+
+  private workingLabelForTool(event: ServerEvent): string {
+    const name = toolName(event as any);
+    if (name === "agent_output" || name === "stderr" || name === "stdout") return "Reading agent output…";
+    return `Running ${name}…`;
+  }
+
   /** Streaming turn events (message_start/update/end, tool start/update/result, agent_start/end). */
   private applyStreamEvent(event: ServerEvent): void {
     const kind = eventKind(event as any);
@@ -2394,25 +2410,25 @@ export class SessionStore {
         this.commitPendingProse();
         this.finishDrafts();
         this.applyTool({
-          callId: toolCallId(event as any) || nextId(),
+          callId: this.toolEventId(event),
           name: toolName(event as any),
           input: toolInput(event as any),
           status: "running",
         });
-        this.setWorking(`Running ${toolName(event as any)}…`);
+        this.setWorking(this.workingLabelForTool(event));
         return;
       case "update":
         this.applyTool({
-          callId: toolCallId(event as any),
+          callId: this.toolEventId(event),
           name: toolName(event as any),
           input: toolInput(event as any),
           status: "running",
         });
-        this.setWorking("Working…");
+        this.setWorking(this.workingLabelForTool(event));
         return;
       case "result":
         this.applyTool({
-          callId: toolCallId(event as any),
+          callId: this.toolEventId(event),
           name: toolName(event as any),
           input: {},
           status: "done",

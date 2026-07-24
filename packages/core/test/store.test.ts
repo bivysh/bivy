@@ -504,6 +504,16 @@ describe("SessionStore", () => {
     expect(tools[0]!.tool!.result).toBe("file.txt");
   });
 
+  it("coalesces unnamed agent output updates into one live card", () => {
+    const store = new SessionStore();
+    store.apply({ type: "tool_execution_update", toolName: "agent_output", input: { stream: "stderr", output: "first" } });
+    store.apply({ type: "tool_execution_update", toolName: "agent_output", input: { stream: "stderr", output: "first\nsecond" } });
+    const tools = store.getState().transcript.filter((e) => e.tool);
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.tool!.input).toEqual({ stream: "stderr", output: "first\nsecond" });
+    expect(store.getState().workingLabel).toBe("Reading agent output…");
+  });
+
   it("force-closes a still-running tool card on agent_end (e.g. aborted mid-tool, no matching tool_result ever arrives)", () => {
     const store = new SessionStore();
     store.apply({ type: "tool_call", toolCallId: "t1", name: "bash", input: { cmd: "sleep 100" } });

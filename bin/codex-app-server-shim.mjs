@@ -65,6 +65,115 @@ let initialized = false;
 let sawError = null;
 let models = [];
 let selectedModel = null;
+const itemInputs = new Map();
+const itemOutputs = new Map();
+const agentMessageItems = new Set();
+const reasoningItems = new Set();
+
+function text(value) {
+  if (Array.isArray(value)) return value.map(text).filter(Boolean).join("\n");
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") return text(value.text ?? value.content ?? value.summary ?? value.message ?? "");
+  return String(value);
+}
+
+function commandText(command) {
+  return Array.isArray(command) ? command.join(" ") : text(command);
+}
+
+function paramsItemId(params, fallback) {
+  return String(params?.itemId || params?.callId || params?.item?.id || fallback || "");
+}
+
+function rememberItem(item) {
+  if (!item || typeof item !== "object") return;
+  const id = String(item.id || "");
+  if (!id) return;
+  if (item.type === "commandExecution") {
+    itemInputs.set(id, {
+      command: commandText(item.command),
+      cwd: item.cwd,
+      ...(item.source ? { source: item.source } : {}),
+    });
+    if (item.aggregatedOutput) itemOutputs.set(id, String(item.aggregatedOutput).slice(-4000));
+  } else if (item.type === "fileChange") {
+    itemInputs.set(id, { changes: item.changes ?? [], status: item.status });
+  } else if (item.type === "mcpToolCall") {
+    itemInputs.set(id, { server: item.server, tool: item.tool, arguments: item.arguments });
+  }
+}
+
+function updateInput(itemId, patch = {}) {
+  return { ...(itemInputs.get(itemId) || {}), ...patch };
+}
+
+function appendOutput(itemId, delta) {
+  const output = `${itemOutputs.get(itemId) || ""}${text(delta)}`.slice(-4000);
+  itemOutputs.set(itemId, output);
+  return output;
+}
+
+function emitToolUpdate(itemId, name, input) {
+  if (!itemId) return;
+  bivy({ type: "tool_execution_update", toolCallId: itemId, toolName: name, input });
+}
+
+function emitReasoning(itemId, delta) {
+  const body = text(delta);
+  if (!body) return;
+  if (itemId) reasoningItems.add(itemId);
+  bivy({ type: "message.reasoning", text: body });
+}
+
+function reasoningFromItem(item) {
+  return text(item?.summary).trim() || text(item?.content).trim();
+}
+
+function handleCompletedItem(params) {
+  const item = params?.item;
+  rememberItem(item);
+  const itemId = paramsItemId(params);
+  if (!item || typeof item !== "object" || !itemId) return;
+  switch (item.type) {
+    case "agentMessage":
+      if (!agentMessageItems.has(itemId) && item.text) {
+        agentMessageItems.add(itemId);
+        bivy({ type: "message.delta", text: String(item.text) });
+      }
+      return;
+    case "plan":
+      if (!reasoningItems.has(itemId) && item.text) emitReasoning(itemId, item.text);
+      return;
+    case "reasoning": {
+      const body = reasoningFromItem(item);
+      if (!reasoningItems.has(itemId) && body) emitReasoning(itemId, body);
+      return;
+    }
+    case "commandExecution": {
+      const output = text(item.aggregatedOutput ?? itemOutputs.get(itemId));
+      if (output) itemOutputs.set(itemId, output.slice(-4000));
+      emitToolUpdate(itemId, "shell", updateInput(itemId, { output }));
+      bivy({ type: "tool.result", toolCallId: itemId, name: "shell", result: output || text(item.status || "completed") });
+      return;
+    }
+    case "fileChange": {
+      const status = text(item.status || "completed");
+      itemInputs.set(itemId, updateInput(itemId, { changes: item.changes ?? [], status }));
+      emitToolUpdate(itemId, "apply_patch", updateInput(itemId));
+      bivy({ type: "tool.result", toolCallId: itemId, name: "apply_patch", result: status });
+      return;
+    }
+    case "mcpToolCall": {
+      const name = text(item.tool || "mcp");
+      const result = text(item.result ?? item.error ?? "");
+      bivy({ type: "tool.result", toolCallId: itemId, name, result });
+      return;
+    }
+    default:
+      return;
+  }
+}
 
 as.stderr.on("data", (d) => {
   const s = d.toString();
@@ -100,16 +209,28 @@ createInterface({ input: as.stdout }).on("line", (line) => {
 function onServerRequest(m) {
   const { method, id, params } = m;
   if (method === "item/commandExecution/requestApproval" || method === "execCommandApproval") {
-    const itemId = params.itemId || params.callId || String(id);
+    const itemId = paramsItemId(params, id);
     approvalRequests.set(itemId, id);
-    const command = Array.isArray(params.command) ? params.command.join(" ") : String(params.command ?? "");
-    bivy({ type: "tool.call", toolCallId: itemId, name: "shell", input: { command, cwd: params.cwd, reason: params.reason } });
+    const input = {
+      command: commandText(params.command),
+      cwd: params.cwd,
+      reason: params.reason,
+      ...(params.environmentId ? { environmentId: params.environmentId } : {}),
+    };
+    itemInputs.set(itemId, input);
+    bivy({ type: "tool.call", toolCallId: itemId, name: "shell", input });
     return;
   }
   if (method === "item/fileChange/requestApproval" || method === "applyPatchApproval") {
-    const itemId = params.itemId || String(id);
+    const itemId = paramsItemId(params, id);
     approvalRequests.set(itemId, id);
-    bivy({ type: "tool.call", toolCallId: itemId, name: "apply_patch", input: { reason: params.reason, changes: params.changes ?? params.fileChanges } });
+    const input = {
+      reason: params.reason,
+      changes: params.changes ?? params.fileChanges,
+      ...(params.grantRoot ? { grantRoot: params.grantRoot } : {}),
+    };
+    itemInputs.set(itemId, input);
+    bivy({ type: "tool.call", toolCallId: itemId, name: "apply_patch", input });
     return;
   }
   // Any other server→client request we don't model yet: accept so the turn isn't
@@ -122,7 +243,53 @@ function onNotification(m) {
   const { method, params } = m;
   switch (method) {
     case "item/agentMessage/delta":
-      if (typeof params.delta === "string" && params.delta) bivy({ type: "message.delta", text: params.delta });
+      if (typeof params.delta === "string" && params.delta) {
+        const itemId = paramsItemId(params);
+        if (itemId) agentMessageItems.add(itemId);
+        bivy({ type: "message.delta", text: params.delta });
+      }
+      return;
+    case "item/plan/delta":
+      emitReasoning(paramsItemId(params), params.delta);
+      return;
+    case "item/reasoning/summaryTextDelta":
+    case "item/reasoning/textDelta":
+      emitReasoning(paramsItemId(params), params.delta);
+      return;
+    case "item/commandExecution/outputDelta": {
+      const itemId = paramsItemId(params);
+      const output = appendOutput(itemId, params.delta);
+      emitToolUpdate(itemId, "shell", updateInput(itemId, { output }));
+      return;
+    }
+    case "item/fileChange/outputDelta": {
+      const itemId = paramsItemId(params);
+      const output = appendOutput(itemId, params.delta);
+      emitToolUpdate(itemId, "apply_patch", updateInput(itemId, { output }));
+      return;
+    }
+    case "item/fileChange/patchUpdated": {
+      const itemId = paramsItemId(params);
+      itemInputs.set(itemId, updateInput(itemId, { changes: params.changes ?? [] }));
+      emitToolUpdate(itemId, "apply_patch", updateInput(itemId));
+      return;
+    }
+    case "item/started": {
+      const item = params?.item;
+      rememberItem(item);
+      const itemId = paramsItemId(params);
+      if (item?.type === "commandExecution") emitToolUpdate(itemId, "shell", updateInput(itemId));
+      if (item?.type === "fileChange") emitToolUpdate(itemId, "apply_patch", updateInput(itemId));
+      return;
+    }
+    case "item/completed":
+      handleCompletedItem(params);
+      return;
+    case "thread/tokenUsage/updated":
+      if (params?.tokenUsage) bivy({ type: "usage", usage: params.tokenUsage.last ?? params.tokenUsage.total ?? params.tokenUsage });
+      return;
+    case "rawResponse/completed":
+      if (params?.usage) bivy({ type: "usage", usage: params.usage });
       return;
     case "turn/started":
       bivy({ type: "session.status", status: "working" });

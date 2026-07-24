@@ -447,7 +447,7 @@ class ProcessSession implements RuntimeSession {
     });
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
-      this.emit({ type: "tool_execution_update", toolName: "stderr", input: { output: stderr.slice(-4000) } });
+      this.emit({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: stderr.slice(-4000) } });
     });
     child.on("error", (error) => {
       stderr += error.message;
