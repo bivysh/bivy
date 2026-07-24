@@ -243,7 +243,7 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
   opencode: {
     displayName: "OpenCode",
     command: "opencode",
-    packageName: "opencode-ai/opencode",
+    packageName: "opencode-ai",
     // `opencode run "<prompt>"` runs one non-interactive turn and streams the
     // reply to stdout (the TUI needs a real TTY and would hang over a pipe).
     args: ["run"],
@@ -265,7 +265,7 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
       ],
     },
     installCommand: (npmPrefix: string) => ({
-      command: `npm install --global --prefix ${npmPrefix} opencode-ai/opencode`,
+      command: `npm install --global --prefix ${npmPrefix} opencode-ai`,
     }),
   },
   aider: {
@@ -305,12 +305,14 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
   hermes: {
     displayName: "Hermes",
     command: "hermes",
-    packageName: "hermes",
+    // The npm package is `hermes-agent` (ships the `hermes` bin); the bare
+    // `hermes` package is an unrelated abandoned segmentio lib.
+    packageName: "hermes-agent",
     promptMode: "argv",
     // No `resume`: dumb-pipe adapter with no validated JSON parser or documented
     // session/resume flag — see docs/agents-not-fully-supported.md.
     installCommand: (npmPrefix: string) => ({
-      command: `npm install --global --prefix ${npmPrefix} hermes`,
+      command: `npm install --global --prefix ${npmPrefix} hermes-agent`,
     }),
   },
   goose: {
@@ -329,7 +331,9 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     promptMode: "argv",
     supportTier: "beta",
     blurb: "Block's open-source agent with a structured stream-json protocol (Goose).",
-    installCommand: () => ({ command: "brew install block/tap/goose" }),
+    // Homebrew isn't present on stock Linux nodes (brew → ENOENT); the official
+    // download script installs the goose binary on both Linux and macOS.
+    installCommand: () => ({ command: "curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash" }),
   },
   gemini: {
     displayName: "Gemini CLI",
