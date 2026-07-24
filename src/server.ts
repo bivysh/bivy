@@ -666,16 +666,29 @@ function runtimeInstallSpec(requested?: string): RuntimeInstallSpec | undefined 
     return { id: "codex", command: "npm", args: npmGlobalArgs("@openai/codex"), cwd: repoRoot, displayCommand: npmGlobalDisplay("@openai/codex") };
   }
   if (id === "opencode" || id === "open-code") {
-    return { id: "opencode", command: "npm", args: npmGlobalArgs("opencode-ai/opencode"), cwd: repoRoot, displayCommand: npmGlobalDisplay("opencode-ai/opencode") };
+    return { id: "opencode", command: "npm", args: npmGlobalArgs("opencode-ai"), cwd: repoRoot, displayCommand: npmGlobalDisplay("opencode-ai") };
   }
   if (id === "hermes") {
-    return { id: "hermes", command: "npm", args: npmGlobalArgs("hermes"), cwd: repoRoot, displayCommand: npmGlobalDisplay("hermes") };
+    // The bare `hermes` npm package is segmentio/hermes ("Messenger of the gods"),
+    // an unrelated abandoned 2015 lib — not the agent. `hermes-agent` is the AI
+    // agent CLI and ships the `hermes` bin this runtime launches.
+    return { id: "hermes", command: "npm", args: npmGlobalArgs("hermes-agent"), cwd: repoRoot, displayCommand: npmGlobalDisplay("hermes-agent") };
   }
   if (id === "openclaw" || id === "open-claw") {
     return { id: "openclaw", command: "npm", args: npmGlobalArgs("openclaw"), cwd: repoRoot, displayCommand: npmGlobalDisplay("openclaw") };
   }
   if (id === "aider") {
-    return { id: "aider", command: "python3", args: ["-m", "pip", "install", "--user", "aider-chat"], cwd: repoRoot };
+    // Some node images ship a python3 without pip ("No module named pip"), so
+    // bootstrap it via the stdlib ensurepip module first (best-effort) before the
+    // install. Routed through sh so the two steps can chain; the displayed command
+    // stays the plain pip line users recognize.
+    return {
+      id: "aider",
+      command: "sh",
+      args: ["-c", "python3 -m ensurepip --user >/dev/null 2>&1 || true; python3 -m pip install --user aider-chat"],
+      cwd: repoRoot,
+      displayCommand: "python3 -m pip install --user aider-chat",
+    };
   }
   if (id === "gemini" || id === "gemini-cli") {
     return { id: "gemini", command: "npm", args: npmGlobalArgs("@google/gemini-cli"), cwd: repoRoot, displayCommand: npmGlobalDisplay("@google/gemini-cli") };
@@ -690,7 +703,20 @@ function runtimeInstallSpec(requested?: string): RuntimeInstallSpec | undefined 
     return { id: "crush", command: "npm", args: npmGlobalArgs("@charmland/crush"), cwd: repoRoot, displayCommand: npmGlobalDisplay("@charmland/crush") };
   }
   if (id === "goose") {
-    return { id: "goose", command: "brew", args: ["install", "block/tap/goose"], cwd: repoRoot };
+    // `brew install block/tap/goose` ENOENTs on any node without Homebrew (i.e.
+    // every stock Linux node). Use Goose's official download_cli.sh instead — it
+    // works on Linux and macOS alike and honors GOOSE_BIN_DIR, so we drop the
+    // binary into the same ~/.local/bin that's already on PATH (userLocalPrefix)
+    // where commandAvailable("goose") looks. CONFIGURE=false skips the script's
+    // interactive provider setup.
+    const gooseBin = path.join(userLocalPrefix, "bin");
+    return {
+      id: "goose",
+      command: "sh",
+      args: ["-c", `mkdir -p "${gooseBin}" && curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false GOOSE_BIN_DIR="${gooseBin}" bash`],
+      cwd: repoRoot,
+      displayCommand: "curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash",
+    };
   }
   return undefined;
 }
