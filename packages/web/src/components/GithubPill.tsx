@@ -48,6 +48,15 @@ export function GithubPill({ gh }: { gh: GithubContext }) {
   const pr = primaryPr(gh.prs);
   const kind = pr ? "pr" : gh.issueUrl ? "issue" : "branch";
   const state = pr?.state ?? "";
+  // For a branch pill on a repo-connected session, lead with the repo name so it
+  // reads "repo · branch" — the repo is the context you're orienting on, the
+  // branch the detail. `gh.repo` is "owner/name"; show just the short name.
+  const repoShort = gh.repo ? gh.repo.split("/").pop() || gh.repo : null;
+  const branchLabel = gh.branch
+    ? repoShort
+      ? `${repoShort} · ${gh.branch}`
+      : gh.branch
+    : "branch";
   const label = pr
     ? pr.state === "merged"
       ? "Merged"
@@ -56,7 +65,7 @@ export function GithubPill({ gh }: { gh: GithubContext }) {
         : "PR"
     : kind === "issue"
       ? "Issue"
-      : gh.branch || "branch";
+      : branchLabel;
 
   return (
     <>

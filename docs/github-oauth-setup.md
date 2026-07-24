@@ -3,17 +3,26 @@
 To enable "Sign in with GitHub" (mobile app, CLI, and the web client), register a
 **GitHub OAuth App** and give its credentials to the control plane. ~5 minutes.
 
+This doc uses `https://app.example.com` as a placeholder for **your** control
+plane's public URL throughout. If you're using Bivy Cloud, that's
+`https://app.bivy.sh`. If you're self-hosting, it's whatever domain you gave
+`deploy/self-host.sh` (see [self-host-quickstart.md](self-host-quickstart.md))
+— the same value as `PUBLIC_CONTROL_PLANE_URL` in `deploy/.env`. Substitute it
+everywhere below; the two must match exactly or GitHub sign-in fails (see
+Troubleshooting).
+
 ## 1. Create the OAuth App
 
 GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**
 (<https://github.com/settings/developers>). A personal OAuth App is fine; a GitHub
-*App* is **not** needed.
+*App* is **not** needed (that's a separate integration — see
+[github-setup.md](github-setup.md) — for the issue-driven work queue).
 
 | Field | Value |
 |---|---|
 | Application name | `Bivy` (anything) |
-| Homepage URL | `https://app.bivy.sh` |
-| Authorization callback URL | `https://app.bivy.sh/auth/github/callback` |
+| Homepage URL | `https://app.example.com` |
+| Authorization callback URL | `https://app.example.com/auth/github/callback` |
 
 The callback URL **must match exactly** — same scheme/host/path, no trailing
 slash. Then **Generate a new client secret** and copy both the **Client ID** and
@@ -26,13 +35,17 @@ slash. Then **Generate a new client secret** and copy both the **Client ID** and
 ## 2. Give the credentials to the control plane
 
 Set these env vars on the **control-plane** deployment (the service behind
-`app.bivy.sh`) and restart it:
+`app.example.com`) and restart it. If you're self-hosting with
+`deploy/self-host.sh`, that means adding them to `deploy/.env` and running
+`docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d
+control-plane` (see the environment checklist in
+[self-host-quickstart.md](self-host-quickstart.md)):
 
 ```bash
 GITHUB_OAUTH_CLIENT_ID=<client id>
 GITHUB_OAUTH_CLIENT_SECRET=<client secret>
 # Make the OAuth redirect_uri match the registered callback exactly:
-PUBLIC_CONTROL_PLANE_URL=https://app.bivy.sh
+PUBLIC_CONTROL_PLANE_URL=https://app.example.com
 ```
 
 `PUBLIC_CONTROL_PLANE_URL` matters: the server builds `redirect_uri` from it, and
@@ -40,13 +53,13 @@ GitHub rejects the login if it doesn't byte-match the registered callback. (If i
 unset, the server falls back to the `X-Forwarded-Proto/Host` headers — only
 reliable if your reverse proxy sets them correctly.)
 
-## 3. Deploy the control plane from `main`
+## 3. Deploy a build with the GitHub sign-in endpoints
 
-The `/auth/github/*` endpoints must be present in the running build, so deploy the
-control plane from `main` (after PR #21 merges). Verify:
+The `/auth/github/*` endpoints need to be present in the running build — any
+current `main` has them. Verify against your own domain:
 
 ```bash
-curl -i https://app.bivy.sh/auth/github/start   # 302 → github.com  (501 = not configured)
+curl -i https://app.example.com/auth/github/start   # 302 → github.com  (501 = not configured)
 ```
 
 A `302` to `github.com/login/oauth/authorize` means it's live and configured.

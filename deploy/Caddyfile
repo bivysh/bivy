@@ -2,10 +2,29 @@
 # automatically, giving you real https:// and wss:// (WebSocket over TLS).
 
 app.example.com {
-	reverse_proxy control-plane:4400
+	# Keep internal metrics/readiness endpoints off the public internet.
+	# /healthz (liveness) stays reachable for uptime checks. `handle` blocks are
+	# evaluated in source order and are mutually exclusive, so this reliably wins
+	# over the proxy for /metrics* and /readyz (a bare `respond` + `reverse_proxy`
+	# would NOT — Caddy orders reverse_proxy ahead of respond, so the proxy would
+	# serve those paths anyway).
+	@internal path /metrics* /readyz
+	handle @internal {
+		respond 403
+	}
+	handle {
+		reverse_proxy control-plane:4400
+	}
 }
 
 relay.example.com {
-	# WebSocket upgrades are proxied transparently by Caddy.
-	reverse_proxy relay:4500
+	# Keep internal metrics/readiness endpoints off the public internet.
+	@internal path /metrics* /readyz
+	handle @internal {
+		respond 403
+	}
+	handle {
+		# WebSocket upgrades are proxied transparently by Caddy.
+		reverse_proxy relay:4500
+	}
 }
