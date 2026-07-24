@@ -2,6 +2,8 @@
 
 Bivy Core runs the node + CLI locally without any hosted account (drive it from the terminal, or run agents headless). The browser UI (web/PWA) is served by a control plane — not by the node — so to get a browser UI, plus remote access, webhooks, push, and account/node registry, either use Bivy Cloud or self-host the same control-plane + relay stack described here.
 
+**Just want the fastest path to a running stack?** See [self-host-quickstart.md](self-host-quickstart.md) for the numbered walkthrough and the full environment variable checklist. This doc is the deeper operational reference — read it before you rely on a self-hosted deployment for anything that matters.
+
 ## Maturity & support
 
 **Bivy is beta software (v0.x).** Interfaces and behavior can change between releases, and it is not production-hardened yet.
@@ -87,11 +89,8 @@ AUTH_EMAIL_FROM=Bivy <login@app.example.com>
 GITHUB_OAUTH_CLIENT_ID=...
 GITHUB_OAUTH_CLIENT_SECRET=...
 
-# Stripe billing, if you are operating paid plans
-STRIPE_SECRET_KEY=...
-STRIPE_WEBHOOK_SECRET=...
-STRIPE_PRICE_INDIVIDUAL=...
-STRIPE_PRICE_TEAM=...
+# Billing is omitted on purpose — see "Billing (hosted only)" in configuration.md.
+# Self-hosted stacks leave entitlements unenforced, so there is nothing to unlock.
 
 # Web push (phone/PWA notifications). Push stays disabled until BOTH VAPID keys
 # are set; generate a pair with `npx web-push generate-vapid-keys`. With
@@ -102,7 +101,63 @@ WEB_PUSH_VAPID_PRIVATE_KEY=...
 WEB_PUSH_SUBJECT=mailto:admin@app.example.com
 ```
 
+## Using a managed/hosted Postgres
+
+By default the stack runs its own `postgres` container. If you'd rather use a
+managed database — DigitalOcean, Render, Neon, Supabase, Amazon RDS, etc. — you
+don't need any code changes: the control plane talks to whatever `DATABASE_URL`
+points at and creates its own tables on first boot (idempotent `CREATE TABLE IF
+NOT EXISTS`), so there's no separate migration step.
+
+**One-command path.** `deploy/self-host.sh` takes a managed database directly —
+set `DATABASE_URL` in the environment and it writes `deploy/.env`, skips the
+local Postgres password, and layers the overlay for you:
+
+```bash
+DATABASE_URL='postgres://USER:PASSWORD@HOST:PORT/DBNAME?sslmode=require' \
+  bash deploy/self-host.sh app.example.com relay.example.com
+```
+
+**Manual path.** Or layer the checked-in `deploy/docker-compose.hosted-db.yml`
+overlay over the base file yourself. It removes the bundled `postgres` service
+and points the control plane at your provider's connection string:
+
+1. Create a Postgres database in your provider's console and copy its connection
+   string. Hosted providers require TLS, so keep the `sslmode` parameter they
+   give you (usually `?sslmode=require`).
+2. In `deploy/.env`, set `DATABASE_URL` (the `POSTGRES_*` lines are unused in
+   this mode; leave them as-is — deleting them just prints a harmless "variable
+   is not set" warning from the base compose file):
+
+   ```env
+   DATABASE_URL=postgres://USER:PASSWORD@HOST:PORT/DBNAME?sslmode=require
+   ```
+
+3. Start the stack with **both** compose files:
+
+   ```bash
+   docker compose \
+     -f deploy/docker-compose.yml \
+     -f deploy/docker-compose.hosted-db.yml \
+     --env-file deploy/.env up -d --build
+   ```
+
+Notes:
+
+- The overlay uses the `!reset` YAML tag, which needs Docker Compose **v2.24.0+**
+  (`docker compose version`).
+- **Connection pooling:** managed tiers often cap `max_connections` low. Keep
+  `instances × DATABASE_POOL_MAX` (default 10) under that cap, or front the
+  database with the provider's pooler (PgBouncer, Neon's pooled endpoint).
+- **Backups** are now the provider's job — use its managed snapshots/PITR
+  instead of the `docker compose ... exec postgres pg_dump` recipe below (there
+  is no local `postgres` container to exec into). You can still run `pg_dump`
+  against the connection string from any host that can reach the database.
+
 ## Backups
+
+> Using a managed/hosted Postgres (above)? Use your provider's snapshots/PITR
+> instead — there is no local `postgres` container for these commands to reach.
 
 The stack stores hosted metadata in Postgres. Back it up with:
 
@@ -167,7 +222,6 @@ These are rotated in the provider's dashboard, then mirrored into `deploy/.env` 
 
 - `RESEND_API_KEY` — magic-link email.
 - `GITHUB_OAUTH_CLIENT_SECRET` — GitHub sign-in (rotate under the OAuth app's settings).
-- `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` — billing (roll the key, then re-point/roll the webhook signing secret).
 - `WEB_PUSH_VAPID_PRIVATE_KEY` (+ public) — rotating the VAPID pair invalidates existing push subscriptions; clients re-subscribe on next load. Regenerate with `npx web-push generate-vapid-keys`.
 
 After rotating anything, confirm the stack is healthy: `docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps` should show `control-plane` and `relay` as `healthy`.

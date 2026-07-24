@@ -17,6 +17,7 @@
   },
   "scripts": {
     "prepare": "node scripts/disable-git-hooks.mjs",
+    "prepublishOnly": "node -e \"console.error('\\nRefusing to publish from the repo root — this would ship the whole monorepo (src/, services/, tests, and any local .env).\\nUse: npm run publish:npm  (scripts/build-release.mjs publishes a curated staging dir). See docs/releasing.md.\\n'); process.exit(1)\"",
     "setup": "node bin/bivy.mjs setup",
     "bivy": "node bin/bivy.mjs",
     "dev": "tsx src/server.ts",
@@ -30,6 +31,7 @@
     "typecheck:web": "npm run typecheck -w @bivy/core && npm run typecheck -w @bivy/web",
     "check:licenses": "node scripts/check-licenses.mjs",
     "check:secrets": "node scripts/secret-scan.mjs",
+    "check:links": "node scripts/check-links.mjs",
     "build:release": "node scripts/build-release.mjs",
     "publish:npm": "node scripts/build-release.mjs --publish",
     "publish:npm:dry": "node scripts/build-release.mjs --publish --dry-run",

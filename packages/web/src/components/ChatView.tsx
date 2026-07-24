@@ -80,7 +80,6 @@ function AttachmentChip({ attachment }: { attachment: PromptAttachment }) {
 // command so a newer node advertising an action this client doesn't know still
 // renders something tappable.
 function actionLabel(action: string): string {
-  if (action === "/pr") return "Create pull request";
   if (action === "/new") return "New session";
   return `Run ${action}`;
 }
@@ -322,7 +321,7 @@ export function ChatView({
   /** Focus view: hide thinking, tool cards, and interim assistant messages —
    *  leaving user prompts, each turn's final answer, and system notices. */
   collapsed?: boolean;
-  /** Run a slash command from an inline notice action button (e.g. "/pr"). */
+  /** Run a slash command from an inline notice action button (e.g. "/new"). */
   onAction?: (action: string) => void;
   /** Rendered at the tail of the scroll area so approval/question cards flow
    *  inline with the transcript and scroll with it, rather than sitting in a

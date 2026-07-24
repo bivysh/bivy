@@ -144,10 +144,26 @@ export async function pollDeviceLogin(store: LocalStore, deviceId: string, devic
   return data;
 }
 
+/**
+ * Plaintext (non-secret) per-provider connection status the node pushes
+ * alongside its encrypted model-auth vault (see docs/credential-sync.md).
+ * Never credential material or account identity — just enough for
+ * `NodeSwitcher` to show a Connected/Expired/Not-connected chip per node
+ * without connecting to it.
+ */
+export interface NodeProviderSummary {
+  id: string;
+  name?: string;
+  configured: boolean;
+  /** Epoch ms the stored OAuth access token expires, when applicable. */
+  expiresAt?: number;
+}
+
 export interface AccountNode {
   id: string;
   name?: string;
   online?: boolean;
+  providers?: NodeProviderSummary[];
   [k: string]: unknown;
 }
 
@@ -191,13 +207,18 @@ export interface AccountMe {
   account?: { email?: string; plan?: string };
   entitlements?: {
     plan?: string;
-    // Undefined = unlimited (paid plans omit it); Free pins it to 1.
+    // Undefined = unlimited (no node cap on any plan). Kept for forward-compat.
     maxNodes?: number;
     relayEnabled?: boolean;
     pushEnabled?: boolean;
     workQueueEnabled?: boolean;
+    // Runs allowed per rolling 7-day window across every source
+    // (manual/app/work-queue/ephemeral). Undefined = unlimited (paid plans); free
+    // pins it to a small allowance. Pairs with counts.runsThisWeek to render "used / limit".
+    weeklyRunLimit?: number;
+    ephemeralEnabled?: boolean;
   };
-  counts?: { nodes?: number; sessions?: number; devices?: number };
+  counts?: { nodes?: number; sessions?: number; devices?: number; runsThisWeek?: number };
   [k: string]: unknown;
 }
 
@@ -290,10 +311,25 @@ export async function fetchGithubApp(store: LocalStore, fetchImpl: typeof fetch 
   return normalizeGithubAppInfo(await res.json());
 }
 
-/** Disconnect one GitHub App by its App ID (drops that app's control-plane
- *  hook), or every app on the account when `appId` is omitted. */
-export async function disconnectGithubApp(store: LocalStore, appId?: string, fetchImpl: typeof fetch = fetch): Promise<void> {
-  const query = appId ? `?appId=${encodeURIComponent(appId)}` : "";
+/**
+ * Disconnect a single GitHub App, or every app on the account.
+ *
+ * Scope precedence: by `appId` when known, else by the app's control-plane
+ * `hookId` — a stale app left by an abandoned create flow has a hook but no App
+ * ID, and MUST still be removable on its own without taking the healthy apps
+ * with it. Only when NEITHER id is given does the whole account's `github_app`
+ * hooks go (a deliberate "remove everything", orphans included).
+ *
+ * Accepts a bare appId string for backwards compatibility.
+ */
+export async function disconnectGithubApp(
+  store: LocalStore,
+  target?: string | { appId?: string; hookId?: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const appId = typeof target === "string" ? target : target?.appId;
+  const hookId = typeof target === "string" ? undefined : target?.hookId;
+  const query = appId ? `?appId=${encodeURIComponent(appId)}` : hookId ? `?hookId=${encodeURIComponent(hookId)}` : "";
   const res = await fetchImpl(`${cpBase(store)}/account/github-app${query}`, { method: "DELETE", headers: authHeaders(store) });
   if (!res.ok) throw new Error(`disconnect failed: ${res.status}`);
 }
@@ -471,7 +507,7 @@ export async function logout(store: LocalStore, devicePublicKeyB64?: string, fet
 }
 
 /** Start a Stripe checkout; returns the URL to redirect to. */
-export async function billingCheckout(store: LocalStore, plan = "individual", fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function billingCheckout(store: LocalStore, plan = "pro", fetchImpl: typeof fetch = fetch): Promise<string> {
   const res = await fetchImpl(`${cpBase(store)}/billing/checkout`, {
     method: "POST",
     headers: authHeaders(store),
