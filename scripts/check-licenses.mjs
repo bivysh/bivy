@@ -32,11 +32,17 @@ const allowed = new Set([
 
 const disallowedPattern = /\b(AGPL|GPL|LGPL|SSPL|BUSL|Commercial|Proprietary)\b/i;
 
-// First-party Anthropic SDK packages ship their license as a bundled file
-// ("SEE LICENSE IN LICENSE.md"), which SPDX tooling can't classify, so the
-// allowlist check below can't recognize them. They're a deliberate, trusted
-// dependency, so exempt the scope from the unknown-license check while still
-// enforcing the disallowed-license denylist above against them.
+// First-party Anthropic SDK packages declare their license as a free-form
+// "SEE LICENSE IN <file>" string rather than an SPDX id, so the allowlist check
+// below can't classify them. The actual terms live in the bundled LICENSE.md of
+// each package (the `license` field points there, or at README.md for the main
+// `@anthropic-ai/claude-agent-sdk` package), and they are proprietary — Anthropic
+// PBC, all rights reserved, use governed by Anthropic's commercial terms — not an
+// open-source license. That's acceptable here because these are a deliberate,
+// trusted runtime dependency resolved from npm at install time; Bivy does not
+// redistribute them inside its own published npm artifact. Exempt the scope from
+// the unknown-license check while still enforcing the disallowed-license denylist
+// above against them.
 const exemptScopes = ["@anthropic-ai/"];
 const isExemptPackage = (pkgPath) => exemptScopes.some((scope) => pkgPath.includes(`node_modules/${scope}`));
 

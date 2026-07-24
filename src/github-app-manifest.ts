@@ -81,7 +81,7 @@ export async function convertManifest(code: string, fetchImpl: typeof fetch = fe
  * manifest must be sent as a form field (it's too big/nested for a query
  * string), so we render a form and submit it on load.
  */
-export function renderManifestForm(manifest: Record<string, unknown>, opts: { org?: string; state: string }): string {
+export function renderManifestForm(manifest: Record<string, unknown>, opts: { org?: string; state: string; nonce?: string }): string {
   const action = opts.org
     ? `https://github.com/organizations/${encodeURIComponent(opts.org)}/settings/apps/new?state=${encodeURIComponent(opts.state)}`
     : `https://github.com/settings/apps/new?state=${encodeURIComponent(opts.state)}`;
@@ -96,6 +96,6 @@ export function renderManifestForm(manifest: Record<string, unknown>, opts: { or
 <input type="hidden" name="manifest" value="${manifestJson}">
 <noscript><button type="submit">Continue to GitHub</button></noscript>
 </form>
-<script>document.getElementById("f").submit()</script>
+<script${opts.nonce ? ` nonce="${opts.nonce}"` : ""}>document.getElementById("f").submit()</script>
 </body></html>`;
 }

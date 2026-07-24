@@ -1,3 +1,9 @@
-# Default owner for everything not covered by a more specific rule below.
-# See https://docs.github.com/articles/about-codeowners
+# Code owners for this repository.
+#
+# Inert while the repo is private on a free org plan: CODEOWNERS review is only
+# *enforced* by a branch ruleset, and rulesets require a public repo or a paid
+# plan. Committing it now means enforcement is a one-flag change at that point
+# (`require_code_owner_review` in scripts/protect-repo.sh) rather than a new
+# file to write under time pressure.
+
 * @pettersj
