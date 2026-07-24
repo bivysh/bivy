@@ -1784,8 +1784,8 @@ async function resumeSessionItem(item, config, token) {
 // removed only when it is BOTH beyond the newest N AND older than the age — the
 // safe intersection. Paths default to the installed node's data dir (appDir)
 // and the configured workspace; the primary workspace itself, Docker, and named
-// volumes are never touched. Mirrors deploy/prune.sh (age) and
-// deploy/prune-node-keep.sh (count) but resolves paths from the real install.
+// volumes are never touched. This is the node-side session/worktree cleanup;
+// deploy/prune.sh only reclaims Docker cruft on the host.
 
 // Parse an age spec like "7d", "12h", "30m", "45s", "2w", or a plain number
 // (interpreted as days). Returns milliseconds, or null when the spec is invalid.

@@ -96,8 +96,8 @@ else
   echo "Keeping existing deploy/Caddyfile"
 fi
 
-# Reclaim disk before the build writes new image layers: prune docker cruft and
-# stale co-located node sessions/worktrees. prune.sh runs a host-wide
+# Reclaim disk before the build writes new image layers: prune docker cruft.
+# prune.sh runs a host-wide
 # `docker system prune -f` (keeps the reusable build cache warm; set
 # BIVY_PRUNE_DOCKER_ALL=1 for the aggressive `-af` variant). That still removes
 # stopped containers and dangling images from UNRELATED workloads on a shared
