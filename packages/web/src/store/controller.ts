@@ -105,8 +105,12 @@ export class AppController {
   readonly local = createLocalStore(localStorage);
   readonly direct: boolean;
   private transport: Transport;
-  /** A first prompt queued while a brand-new session is being created. */
-  private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[] } | null = null;
+  /** A first prompt queued while a brand-new session is being created. `frame` is
+   *  the exact `session.new` command we sent; it's re-fired verbatim after a
+   *  reconnect (mobile Safari can drop the reply while backgrounded) — the node
+   *  dedupes by requestId, so the retry adopts the same session rather than
+   *  creating a duplicate. See retryPendingSessionNew / maybeFlushPendingPrompt. */
+  private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[]; frame: Command } | null = null;
   /** Further prompts sent by the user *while* that session is still being
    *  created — queued instead of firing their own `session.new`, then drained
    *  into the one real session by maybeFlushPendingPrompt. See sendPrompt. */
@@ -131,6 +135,8 @@ export class AppController {
   private pendingCrossNodeOpen: { sessionId: string; path?: string } | null = null;
   /** Subscribers that want the composer input focused (e.g. after "New"). */
   private composerFocusListeners = new Set<() => void>();
+  /** Subscribers that want the composer's slash-command menu opened (the "/" pill). */
+  private slashOpenListeners = new Set<() => void>();
 
   constructor() {
     // Persist each applied history snapshot + cursor, and re-request canonical
@@ -240,6 +246,12 @@ export class AppController {
         // awaiting forkSession() step; only the error variant is surfaced in the
         // reducer (as a toast) — the rest is orchestration, not session state.
         if (type === "session.fork.bundle" || type === "session.fork.done" || type === "session.fork.error") {
+          this.resolveFork(event);
+          return;
+        }
+        // Promotion reply (continue a replicated session on the standby) reuses
+        // the same keyed request/reply correlation as fork.
+        if (type === "session.promote.result") {
           this.resolveFork(event);
           return;
         }
@@ -375,6 +387,34 @@ export class AppController {
     for (const fn of this.composerFocusListeners) fn();
   }
 
+  /** Subscribe to slash-menu-open requests (the Composer wires its "/" popover
+   *  here). Returns an unsubscribe fn. */
+  onOpenSlash(fn: () => void): () => void {
+    this.slashOpenListeners.add(fn);
+    return () => this.slashOpenListeners.delete(fn);
+  }
+
+  /**
+   * The "/" pill: make the active session's slash commands available, then open
+   * the composer's command menu. Commands are advertised per session and only
+   * reach the store once the node has the session attached — so a closed
+   * ("saved") session, which the node holds no live record for, surfaces nothing
+   * until it's re-opened. Reattach it first (session.open re-emits the session's
+   * capabilities → commandsBySession) so the menu can populate. A draft (no
+   * session) keeps the selected runtime's static catalog; an idle session is
+   * already attached, so there's nothing to initialize. Either way, ask the
+   * composer to pop its menu — it reactively fills in as commands arrive.
+   */
+  openSlashCommands(): void {
+    const s = this.store.getState();
+    const sid = s.activeSessionId;
+    if (sid) {
+      const row = s.sessions.find((r) => r.sessionId === sid);
+      if (row?.status === "saved") this.openSession(sid);
+    }
+    for (const fn of this.slashOpenListeners) fn();
+  }
+
   /**
    * Drive the app to a Route. Used for the initial deep link and for
    * back/forward (popstate). `navigate` is false for those since the URL is
@@ -426,6 +466,10 @@ export class AppController {
       this.refreshSessions();
       const sid = this.store.getState().activeSessionId;
       if (sid) this.requestHistory(sid);
+      // A session.new whose reply was lost while backgrounded leaves activeSessionId
+      // null (no sid above to refresh) and pendingPrompt outstanding. Re-fire it so
+      // the wedged "creating" view recovers even when the socket stayed live.
+      else this.retryPendingSessionNew();
       this.listModels();
       // The refresh above just went out over a socket we only *believe* is live.
       this.verifyLiveness();
@@ -512,6 +556,22 @@ export class AppController {
     void this.refreshAccountSessions();
   }
 
+  /**
+   * Switch to `nodeId` (a no-op if already the current, online node) and wait
+   * for the new transport to come online, then refresh `state.providers` for
+   * it — `providers.list` is never sent automatically on (re)connect. Used by
+   * flows that need a specific node's live state before proceeding (e.g.
+   * reconnecting that node's provider OAuth from NodeSwitcher). Throws if the
+   * node doesn't come online within `timeoutMs` (see `waitForOnline`).
+   */
+  async connectToNode(nodeId: string, timeoutMs?: number): Promise<void> {
+    if (nodeId !== this.local.cur || this.store.getState().status !== "online") {
+      this.switchNode(nodeId);
+      await this.waitForOnline(timeoutMs);
+    }
+    this.listProviders();
+  }
+
   /** Sign out: revoke the session server-side (and free this device's slot),
    *  then clear local state and return to the sign-in screen. */
   async signOut(): Promise<void> {
@@ -570,6 +630,23 @@ export class AppController {
     const error = (event as { error?: unknown }).error;
     if (error) pending.reject(new Error(String(error)));
     else pending.resolve(event);
+  }
+
+  /**
+   * Continue a replicated session on `standbyNodeId` (the warm standby) when its
+   * owner is offline: switch to the standby, ask it to promote (control-plane
+   * epoch compare-and-set + materialize the replica), and refresh the list.
+   * Throws on failure so the caller can surface it.
+   */
+  async promoteSession(sessionId: string, standbyNodeId: string): Promise<{ epoch: number }> {
+    if (standbyNodeId && standbyNodeId !== this.local.cur) {
+      this.switchNode(standbyNodeId);
+      await this.waitForOnline();
+    }
+    const reply = await this.forkRequest({ kind: "session.promote", sessionId }, 30000);
+    const epoch = Number((reply as { epoch?: unknown }).epoch ?? 0);
+    this.refreshAccountSessions();
+    return { epoch };
   }
 
   /** Send a fork command on the current transport and await its keyed reply. */
@@ -879,6 +956,10 @@ export class AppController {
     if (!openedAfterNodeSwitch) this.applyInitialRoute();
     const sid = this.store.getState().activeSessionId;
     if (sid && !openedAfterNodeSwitch) this.requestHistory(sid);
+    // No active session but a session.new is still pending → its session.history
+    // was lost to the drop. Re-fire it (idempotent on the node by requestId) so the
+    // draft that wedged on the opening spinner finally binds and flushes its prompt.
+    else if (!sid) this.retryPendingSessionNew();
     // A GitHub App redirect reloads the whole SPA, so finish the flow as soon as
     // we're reconnected to the node (which alone can exchange the code).
     if (this.pendingGithubAppCode) {
@@ -1066,11 +1147,13 @@ export class AppController {
     // No session yet: optimistically show the bubble, create a session, and
     // flush this prompt once session.history arrives for our requestId.
     const rid = requestId();
-    this.pendingPrompt = { text: trimmed, requestId: rid, clientMessageId: cmid, attachments: files };
-    this.store.addUserMessage(trimmed, cmid, files);
     // The node names the session (and a repo session's worktree branch) from
     // `title`; send the first message so the sidebar row and branch aren't blank.
-    this.send({ kind: "session.new", requestId: rid, title: trimmed || undefined, ...this.draftSessionFields() });
+    // Keep the exact frame so a post-reconnect retry re-sends it byte-identically.
+    const frame: Command = { kind: "session.new", requestId: rid, title: trimmed || undefined, ...this.draftSessionFields() };
+    this.pendingPrompt = { text: trimmed, requestId: rid, clientMessageId: cmid, attachments: files, frame };
+    this.store.addUserMessage(trimmed, cmid, files);
+    this.send(frame);
   }
 
   /**
@@ -1405,12 +1488,13 @@ export class AppController {
    * `appId` scopes it to one of the account's apps; without one every app goes,
    * which is the only option for a hook old enough to have no App ID recorded.
    */
-  async githubAppDisconnect(appId?: string): Promise<void> {
+  async githubAppDisconnect(appId?: string, hookId?: string): Promise<void> {
     // Tell the node to clear its local key/config (over the active transport)…
-    this.send({ kind: "github.app.disconnect", requestId: requestId(), appId: appId || undefined });
+    this.send({ kind: "github.app.disconnect", requestId: requestId(), appId: appId || undefined, hookId: hookId || undefined });
     // …and drop the account's hooks on the control plane. Errors propagate so the
-    // UI can tell the user it didn't take (e.g. control plane mid-deploy).
-    await disconnectGithubApp(this.local, appId);
+    // UI can tell the user it didn't take (e.g. control plane mid-deploy). Passing
+    // hookId lets a stale app with no App ID be removed on its own.
+    await disconnectGithubApp(this.local, { appId, hookId });
   }
   async removeNode(nodeId: string): Promise<void> {
     await removeAccountNode(this.local, nodeId);
@@ -1629,6 +1713,21 @@ export class AppController {
     if (event.type === "runtime.updated") this.listModels();
   }
 
+  /**
+   * Re-send the in-flight `session.new` after a reconnect/foreground when its
+   * reply never arrived (mobile Safari silently drops a backgrounded PWA's
+   * WebSocket events). Fires the exact same frame — same requestId — so the node,
+   * which dedupes `session.new` by requestId, re-emits the existing session's
+   * `session.history` instead of creating a duplicate. That reply is matched by
+   * maybeFlushPendingPrompt, which binds the session and flushes the queued
+   * prompt. No-op once the session has bound (pendingPrompt cleared).
+   */
+  private retryPendingSessionNew(): void {
+    if (!this.pendingPrompt) return;
+    if (this.store.getState().activeSessionId) return;
+    this.send(this.pendingPrompt.frame);
+  }
+
   private maybeFlushPendingPrompt(event: { type?: string; requestId?: string; sessionId?: string }): void {
     if (!this.pendingPrompt) return;
     if (event.type !== "session.history") return;
@@ -1701,14 +1800,9 @@ export class AppController {
     if (id) this.send({ kind: "session.resume", sessionId: id });
   }
 
-  openPr(sessionId?: string): void {
-    const id = sessionId || this.store.getState().activeSessionId;
-    if (id) this.send({ kind: "session.pr.open", sessionId: id });
-  }
-
   /** Force this session's PR status to re-sync with GitHub right now, instead
-   *  of waiting for its next turn (the "/github-status" command). Works even
-   *  when the session isn't live — the node resumes it just enough to check. */
+   *  of waiting for its next turn. Works even when the session isn't live — the
+   *  node resumes it just enough to check. */
   refreshPrStatus(sessionId?: string): void {
     const id = sessionId || this.store.getState().activeSessionId;
     if (id) this.send({ kind: "session.pr.refresh", sessionId: id });

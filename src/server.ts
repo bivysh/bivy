@@ -96,6 +96,9 @@ import { buildForkBundle, materializeFork, type ForkBundle, type ForkRecord, typ
 import { captureDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { EventLog } from "./session/event-log.js";
+import { ReplicationService } from "./session/replication-service.js";
+import type { ReplWireFrame } from "./session/replicator.js";
+import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereqInput, type ForkPrereq } from "./session/fork-prereqs.js";
 import { SecretVault } from "./secrets.js";
 import { InstallationTokenCache, createAppJwt, resolveInstallationId, type GitHubAppConfig } from "./github-app-auth.js";
@@ -881,7 +884,7 @@ type StreamingBehavior = "steer" | "followUp";
 type PromptImage = { type: "image"; data: string; mimeType: string };
 type PromptAttachment =
   | { kind: "image"; name?: unknown; size?: unknown; mimeType?: unknown; data?: unknown }
-  | { kind: "file"; name?: unknown; size?: unknown; mimeType?: unknown; text?: unknown; truncated?: unknown; omitted?: unknown };
+  | { kind: "file"; name?: unknown; size?: unknown; mimeType?: unknown; data?: unknown; text?: unknown; truncated?: unknown; omitted?: unknown };
 
 function streamingBehaviorFrom(value: unknown): StreamingBehavior | undefined {
   return value === "steer" || value === "followUp" ? value : undefined;
@@ -905,29 +908,108 @@ function safeAttachmentName(value: unknown) {
   return String(value || "attachment").replace(/[\r\n]/g, " ").slice(0, 180);
 }
 
-function attachmentsFrom(value: unknown): { images: PromptImage[]; fileText: string } {
-  if (!Array.isArray(value)) return { images: [], fileText: "" };
+/** A decoded file attachment ready to be written into a session's workdir. */
+interface DecodedAttachment {
+  name: string;
+  mimeType: string;
+  size: number;
+  bytes?: Buffer;
+  text?: string;
+  truncated?: boolean;
+}
+
+/**
+ * Split composer attachments into three channels:
+ *   - `images`     — base64 blobs passed to the model as vision.
+ *   - `imageNotes` — one prose line per image for the persisted transcript.
+ *   - `files`      — decoded file attachments (bytes or text) to be written to
+ *                    disk by materializeAttachments so the agent can open them
+ *                    with its normal file tools. Any file type is supported;
+ *                    binary files arrive as base64 `data`.
+ */
+function attachmentsFrom(value: unknown): { images: PromptImage[]; imageNotes: string[]; files: DecodedAttachment[] } {
+  if (!Array.isArray(value)) return { images: [], imageNotes: [], files: [] };
   const images: PromptImage[] = [];
-  const fileSections: string[] = [];
+  const imageNotes: string[] = [];
+  const files: DecodedAttachment[] = [];
   for (const raw of value.slice(0, 12) as unknown[]) {
     if (!raw || typeof raw !== "object") continue;
     const attachment = raw as PromptAttachment;
     const name = safeAttachmentName(attachment.name);
     const size = Number(attachment.size || 0);
+    const mimeType = typeof attachment.mimeType === "string" && attachment.mimeType ? attachment.mimeType : undefined;
     if (attachment.kind === "image" && typeof attachment.data === "string") {
-      images.push({ type: "image", data: attachment.data, mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType : "image/png" });
-      fileSections.push(`[Image attachment: ${name}${size ? ` (${size} bytes)` : ""}]`);
+      images.push({ type: "image", data: attachment.data, mimeType: mimeType ?? "image/png" });
+      imageNotes.push(`[Image attachment: ${name}${size ? ` (${size} bytes)` : ""}]`);
     } else if (attachment.kind === "file") {
-      const mimeType = typeof attachment.mimeType === "string" ? attachment.mimeType : "application/octet-stream";
-      const header = `File attachment: ${name}${size ? ` (${size} bytes` : ""}${mimeType ? `, ${mimeType}` : ""}${attachment.truncated ? ", truncated" : ""}${size ? ")" : ""}`;
-      if (typeof attachment.text === "string" && attachment.text) {
-        fileSections.push(`\n--- ${header} ---\n${attachment.text}\n--- end ${name} ---`);
-      } else {
-        fileSections.push(`[${header}; content not included because it is binary or unreadable]`);
+      if (typeof attachment.data === "string" && attachment.data) {
+        files.push({ name, mimeType: mimeType ?? "application/octet-stream", size, bytes: Buffer.from(attachment.data, "base64"), truncated: !!attachment.truncated });
+      } else if (typeof attachment.text === "string" && attachment.text) {
+        files.push({ name, mimeType: mimeType ?? "text/plain", size, text: attachment.text, truncated: !!attachment.truncated });
       }
+      // A file with neither bytes nor text (e.g. omitted/unreadable) carries
+      // nothing to write, so there is nothing to hand the agent — skip it.
     }
   }
-  return { images, fileText: fileSections.join("\n\n") };
+  return { images, imageNotes, files };
+}
+
+/** Strip a user-supplied filename to a safe basename — no path traversal, no
+ * characters that would break the placeholder note or the filesystem. */
+function sanitizeAttachmentFilename(name: string): string {
+  const base = path
+    .basename(String(name || ""))
+    .replace(/[/\\\r\n\t[\]]/g, "_")
+    .replace(/^\.+/, "")
+    .trim()
+    .slice(0, 180);
+  return base || "attachment";
+}
+
+/**
+ * Write decoded file attachments into `<workdir>/.bivy-attachments/` and return
+ * one prose note per file (carrying the relative path) to append to the prompt.
+ * This is what makes an uploaded file of ANY type — binary included — readable
+ * by the agent's file tools. Filenames are sanitized and de-duplicated so two
+ * `report.pdf`s don't clobber. Best-effort: a failure degrades to a note rather
+ * than throwing, so a bad attachment never sinks the whole turn.
+ */
+function materializeAttachments(record: SessionRecord, files: DecodedAttachment[]): string {
+  if (!files.length) return "";
+  const workdir = harnessDirFor(record);
+  const dir = path.join(workdir, ".bivy-attachments");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    return files.map((f) => `[File attachment: ${sanitizeAttachmentFilename(f.name)} could not be saved: ${why}]`).join("\n");
+  }
+  const notes: string[] = [];
+  const used = new Set<string>();
+  for (const file of files) {
+    const safeBase = sanitizeAttachmentFilename(file.name);
+    const ext = path.extname(safeBase);
+    const stem = safeBase.slice(0, safeBase.length - ext.length) || safeBase;
+    let safe = safeBase;
+    let n = 1;
+    while (used.has(safe) || fs.existsSync(path.join(dir, safe))) {
+      safe = `${stem}-${n}${ext}`;
+      n += 1;
+    }
+    used.add(safe);
+    const dest = path.join(dir, safe);
+    const label = `${safe} (${file.size ? `${file.size} bytes, ` : ""}${file.mimeType}${file.truncated ? ", truncated" : ""})`;
+    try {
+      if (file.bytes) fs.writeFileSync(dest, file.bytes);
+      else if (typeof file.text === "string") fs.writeFileSync(dest, file.text, "utf8");
+      else continue;
+      const rel = path.relative(workdir, dest) || safe;
+      notes.push(`[File attachment: ${label} saved to ${rel} - read it with your file tools]`);
+    } catch (error) {
+      notes.push(`[File attachment: ${label} could not be saved: ${error instanceof Error ? error.message : String(error)}]`);
+    }
+  }
+  return notes.join("\n");
 }
 
 function approvalModeFrom(value: unknown): ApprovalMode | undefined {
@@ -1061,6 +1143,9 @@ type NodeSettings = {
   defaultSandbox: SandboxTier;
   githubMaxConcurrent: number;
   githubIssuePrompt: string;
+  sessionSync: boolean;
+  worktreeSync: boolean;
+  syncStandbyNodeId?: string;
 };
 
 /** The node's default model for new sessions, or null (= use the runtime default). */
@@ -1094,6 +1179,13 @@ function nodeSettingsSnapshot(): NodeSettings {
     defaultSandbox: normalizeSandboxTier(s.defaultSandbox) ?? sandboxTier(),
     githubMaxConcurrent: nodeGithubMaxConcurrent(),
     githubIssuePrompt: nodeGithubIssuePrompt(),
+    sessionSync: readSettings().sessionSync === true,
+    // Worktree sync only has meaning when session sync is on.
+    worktreeSync: readSettings().sessionSync === true && readSettings().worktreeSync === true,
+    syncStandbyNodeId: (() => {
+      const v = readSettings().syncStandbyNodeId;
+      return typeof v === "string" && v.trim() ? v.trim() : undefined;
+    })(),
   };
 }
 
@@ -1132,6 +1224,18 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
     // change to the built-in default is picked up automatically.
     settings.githubIssuePrompt = text && text !== DEFAULT_ISSUE_INSTRUCTIONS ? text : undefined;
   }
+  if ("sessionSync" in patch) {
+    settings.sessionSync = patch.sessionSync === true;
+    // Worktree sync is meaningless without session sync — clear it when sync is off.
+    if (!settings.sessionSync) settings.worktreeSync = false;
+  }
+  if ("worktreeSync" in patch) {
+    settings.worktreeSync = patch.worktreeSync === true && settings.sessionSync === true;
+  }
+  if ("syncStandbyNodeId" in patch) {
+    const v = typeof patch.syncStandbyNodeId === "string" ? patch.syncStandbyNodeId.trim() : "";
+    settings.syncStandbyNodeId = v || undefined;
+  }
   writeSettings(settings);
   const snapshot = nodeSettingsSnapshot();
   broadcast({ type: "node.settings", settings: snapshot });
@@ -1153,10 +1257,6 @@ const commands: MeshCommand[] = [
   { name: "/clear", description: "Clear the local chat.", kind: "server" },
   { name: "/sessions", description: "Refresh and show saved sessions.", kind: "server" },
   { name: "/issue", description: "Pick up a configured GitHub issue on this computer.", kind: "server" },
-  { name: "/pr", description: "Commit, push, and open a pull request for this GitHub repo session.", kind: "server", run: async () => {
-    if (!active) return { ok: false, error: "No active session" };
-    return openPrForRepoSession(active);
-  } },
   { name: "/github-status", description: "Force a fresh GitHub PR status check for this session.", kind: "server", run: async () => {
     if (!active) return { ok: false, error: "No active session" };
     const changed = await refreshPullRequests(active);
@@ -1179,21 +1279,34 @@ const commands: MeshCommand[] = [
   { name: "/update", description: "Update agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "update"] } },
 ];
 
+// A local client whose send buffer has grown past this is behind on reads (slow
+// network, background tab); used by both broadcast paths below.
+const CLIENT_BACKPRESSURE_BYTES = 8 * 1024 * 1024;
+
 function broadcast(payload: unknown) {
   const data = JSON.stringify(payload);
   for (const client of clients) {
-    if (client.readyState === WebSocket.OPEN) client.send(data);
+    if (client.readyState !== WebSocket.OPEN) continue;
+    // These events are not self-superseding, so unlike broadcastCoalesced we
+    // can't silently skip a backed-up client. But a socket this far behind is
+    // wedged (dead TCP behind NAT, a frozen background tab) and would otherwise
+    // make `ws` buffer unbounded memory on the daemon's heap over a multi-day
+    // run. Terminate it — it reconnects and re-syncs from the event log — rather
+    // than leak. A healthy client never approaches this high-water mark.
+    if (client.bufferedAmount > CLIENT_BACKPRESSURE_BYTES) {
+      try { client.terminate(); } catch {}
+      continue;
+    }
+    client.send(data);
   }
   // Mirror events to remote clients through the relay (encrypted), if enabled.
   relay?.sendEvent(payload);
 }
 
-// A local client whose send buffer has grown past this is behind on reads (slow
-// network, background tab). For *superseding* updates it is safe to skip such a
-// client — the next full-content update (or the turn's message_end) makes it
-// whole — rather than letting `ws` queue unbounded memory on its behalf.
-const CLIENT_BACKPRESSURE_BYTES = 8 * 1024 * 1024;
-
+// For *superseding* updates it is safe to skip a backed-up client — the next
+// full-content update (or the turn's message_end) makes it whole — rather than
+// letting `ws` queue unbounded memory on its behalf.
+//
 // Broadcast a coalesced, self-superseding (full-content) session event. Same fan
 // out as broadcast(), but skips any local client that is backed up: dropping a
 // superseded update is lossless because a newer one always follows.
@@ -1860,6 +1973,54 @@ function eventLogPath(sessionId: string): string {
 // choke point before anything lands on the synced-to-PWA disk.
 const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets);
 
+// --- Warm session replication (docs/session-replication.md) -----------------
+// A standby's replica repo lives under appDir/replicas/<id>: a self-contained git
+// repo that receives checkpoint bundles and is checked out on promotion. Created
+// lazily on the first frame that carries a bundle.
+const replicasDir = path.join(appDir, "replicas");
+async function ensureReplicaRepo(sessionId: string): Promise<string> {
+  const dir = path.join(replicasDir, encodeURIComponent(sessionId));
+  await fs.promises.mkdir(dir, { recursive: true });
+  if (!fs.existsSync(path.join(dir, ".git"))) {
+    spawnSync("git", ["-C", dir, "init", "-q"], { timeout: 5000 });
+  }
+  return dir;
+}
+// Assembled from daemon accessors; entirely inert unless sessionSync + a standby
+// are configured (both default off), so it cannot affect the default daemon path.
+const replication = new ReplicationService({
+  controlPlaneUrl: () => sessionAdvertiseTarget?.controlPlaneUrl,
+  enrollmentToken: () => sessionAdvertiseTarget?.enrollmentToken,
+  relayUrl: () => undefined, // the control plane returns the sharded relay URL
+  settings: () => {
+    const snap = nodeSettingsSnapshot();
+    return { sessionSync: snap.sessionSync, worktreeSync: snap.worktreeSync, standbyNodeId: snap.syncStandbyNodeId };
+  },
+  readRecords: (id) => eventLog.entries(id),
+  checkpointHead: async (id) => {
+    try {
+      return (await harness.checkpoints(id))[0]?.id;
+    } catch {
+      return undefined;
+    }
+  },
+  repoDirFor: (id) => {
+    const rec = openSessions.get(id);
+    return rec ? harnessDirFor(rec) : undefined;
+  },
+  runtimeSessionRef: (id) => openSessions.get(id)?.sessionFile,
+  replicaRepoDir: (id) => ensureReplicaRepo(id),
+  persistReplicaRecords: (id, records) => eventLog.rewrite(id, records),
+  upsertReplicaMeta: (id, info) => {
+    try {
+      metadata.upsertSession({ id, source: `replica${info.ownerNodeId ? `:${info.ownerNodeId}` : ""}`, status: "saved" });
+    } catch {
+      /* best-effort replica listing */
+    }
+  },
+  log: (m) => console.error(`[replication] ${m}`),
+});
+
 // Retire the legacy overlay sidecars. The append-only log is the sole overlay
 // store now and every session was migrated into it by the prior release's boot
 // migration (.migrated-overlays-v1), verified complete on-disk before this landed.
@@ -2089,6 +2250,13 @@ interface CommandCtx {
 }
 type Command = (msg: ClientMessage, ctx: CommandCtx) => void | Promise<void>;
 
+// Idempotency for `session.new` keyed by requestId: a client's post-reconnect
+// retry adopts the session the first request created instead of spawning a
+// duplicate. See ./session/session-new-dedupe for the full rationale.
+const sessionNewDedupe = createSessionNewDedupe<SessionRecord>();
+const dedupeSessionNew = (requestId: string | undefined, create: () => Promise<SessionRecord>) =>
+  sessionNewDedupe.run(requestId, create);
+
 const RELAY_COMMANDS: Record<string, Command> = {
   ping(msg, ctx) {
     ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
@@ -2131,23 +2299,10 @@ const RELAY_COMMANDS: Record<string, Command> = {
       ctx.reply({ type: "session.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "session.pr.open"(msg, ctx) {
-    // Resume the session if the node has dropped it from memory so a PR can still
-    // be opened after a restart, not just while it's live.
-    let rec: SessionRecord | undefined;
-    try {
-      rec = await resolveOrResumeSession(msg.sessionId, msg.path);
-    } catch (error) {
-      ctx.reply({ type: "session.pr_result", sessionId: msg.sessionId, ok: false, error: error instanceof Error ? error.message : String(error) });
-      return;
-    }
-    const result = rec ? await openPrForRepoSession(rec) : { ok: false, error: "Session not found" };
-    ctx.reply({ type: "session.pr_result", sessionId: rec?.id ?? msg.sessionId, ...result });
-  },
   async "session.pr.refresh"(msg, ctx) {
     // Force a refresh regardless of live/attached state — resume the session if
-    // the node dropped it from memory, same as session.pr.open above, so a
-    // finished/detached session can still be reconciled on demand.
+    // the node dropped it from memory, so a finished/detached session can still
+    // be reconciled on demand.
     let rec: SessionRecord | undefined;
     try {
       rec = await resolveOrResumeSession(msg.sessionId, msg.path);
@@ -2275,10 +2430,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
   },
   "github.app.disconnect"(msg) {
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
-    // appId scopes the disconnect to one app; omitted = disconnect them all.
+    // appId (or hookId, for a stale app with no App ID) scopes the disconnect to
+    // one app; both omitted = disconnect them all.
     const appId = typeof msg.appId === "string" && msg.appId.trim() ? msg.appId.trim() : undefined;
-    disconnectGithubApp(appId);
-    relay?.sendEvent({ type: "github.app.disconnected", requestId, ok: true, appId });
+    const hookId = typeof msg.hookId === "string" && msg.hookId.trim() ? msg.hookId.trim() : undefined;
+    disconnectGithubApp({ appId, hookId });
+    relay?.sendEvent({ type: "github.app.disconnected", requestId, ok: true, appId, hookId });
   },
   "workspaces.list"() {
     relay?.sendEvent({
@@ -2651,6 +2808,30 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "transcription", requestId, error: error instanceof Error ? error.message : String(error) });
     }
   },
+  // Session replication (docs/session-replication.md): the STANDBY receives a
+  // replication frame from the owner (which is connected as a relay CLIENT in
+  // this node's room) and applies it into the replica transcript + worktree,
+  // replying with the cursor so the owner can advance. Inert unless the owner
+  // opted in — a frame only arrives when a sibling chose this node as its standby.
+  async "session.replica.frame"(msg, ctx) {
+    const requestId = String(msg.requestId ?? "");
+    const frame = msg.frame as ReplWireFrame | undefined;
+    if (!frame) return;
+    const ack = await replication.handleReplicaFrame(frame, typeof msg.ownerNodeId === "string" ? msg.ownerNodeId : undefined);
+    ctx.reply({ type: "session.replica.ack", requestId, ack });
+  },
+  // Promote a replicated session onto THIS node (relay counterpart of
+  // POST /api/session/promote): a client switched to the standby and asked it to
+  // take over an offline owner. Epoch CAS + materialize the replica worktree.
+  async "session.promote"(msg, ctx) {
+    const requestId = String(msg.requestId ?? "");
+    const sessionId = String(msg.sessionId ?? "").trim();
+    if (!sessionId) return ctx.reply({ type: "session.promote.result", requestId, ok: false, error: "Missing sessionId" });
+    const epoch = await replication.promote(sessionId, identity.nodeId);
+    if (epoch === undefined) return ctx.reply({ type: "session.promote.result", requestId, ok: false, error: "Promotion lost the epoch race" });
+    scheduleAdvertise();
+    ctx.reply({ type: "session.promote.result", requestId, ok: true, sessionId, epoch });
+  },
   // Ephemeral provisioning transport (node-broker path). A remote device that
   // holds the user's cloud credentials asks this node to make ONE allowlisted
   // HTTPS request to a provider (Fly/Hetzner/AWS/...) on its behalf. The
@@ -2731,11 +2912,11 @@ const RELAY_COMMANDS: Record<string, Command> = {
   },
   async prompt(msg) {
     const text = String(msg.text ?? "").trim();
-    const { images, fileText } = attachmentsFrom(msg.attachments);
-    const promptText =
-      [text, fileText].filter(Boolean).join("\n\n") ||
-      (images.length ? "Please review the attached image(s)." : "");
-    if (!promptText && !images.length) return;
+    const { images, imageNotes, files } = attachmentsFrom(msg.attachments);
+    if (!text && !images.length && !files.length) return;
+    // Title/naming can only see what we have before the session exists; the file
+    // notes (with on-disk paths) are added once the workdir is known, below.
+    const titleText = [text, imageNotes.join("\n")].filter(Boolean).join("\n\n") || (images.length ? "Please review the attached image(s)." : "attachment");
     const requestedSessionId = typeof msg.sessionId === "string" && msg.sessionId ? msg.sessionId : undefined;
     let record: SessionRecord | null | undefined;
     try {
@@ -2749,7 +2930,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       return;
     }
     try {
-      record ??= await createWorkspaceSession(defaultWorkspace, { title: promptText, runtimeId: agentFrom(msg) });
+      record ??= await createWorkspaceSession(defaultWorkspace, { title: titleText, runtimeId: agentFrom(msg) });
     } catch (error) {
       // Session/worktree creation (e.g. `git worktree add` in createWorktree)
       // can throw. Without this the only handler is the console.warn-only outer
@@ -2764,6 +2945,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
       return;
     }
     touchSession(record);
+    // Now that the session (and its workdir) exists, write file attachments to
+    // disk and fold their path notes into the prompt the agent actually sees.
+    const fileNote = materializeAttachments(record, files);
+    const promptText =
+      [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
+      (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
     const agentPrompt = promptForAgent(record, promptText);
     broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: msg.clientMessageId });
     void maybeNameSession(record, promptText);
@@ -2919,31 +3106,34 @@ const RELAY_COMMANDS: Record<string, Command> = {
     const repoInput = typeof msg.repo === "string" ? msg.repo.trim() : "";
     const workspaceInput = typeof msg.workspace === "string" ? msg.workspace.trim() : "";
     const title = typeof msg.title === "string" ? msg.title : undefined;
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
     let record: SessionRecord;
     try {
-      if (repoInput) {
-        const parsed = parseRepo(repoInput);
-        if (!parsed) {
-          relay?.sendEvent({ type: "session.error", error: `Invalid repository "${repoInput}" — use owner/repo.` });
-          return;
+      // Deduped by requestId so a client's post-reconnect retry adopts the
+      // session this request already created rather than spawning a duplicate.
+      record = await dedupeSessionNew(requestId, async () => {
+        if (repoInput) {
+          const parsed = parseRepo(repoInput);
+          if (!parsed) throw new Error(`Invalid repository "${repoInput}" — use owner/repo.`);
+          relay?.sendEvent({ type: "session.cloning", repo: parsed.slug });
+          const rec = await createRepoSession(parsed, { title, runtimeId: agentFrom(msg), sandbox: sandboxFrom(msg), branch: branchFrom(msg), makeActive: false });
+          // Bind the composer's chosen model before the first turn; fall back to
+          // the node default when the client didn't pick one.
+          await applyRequestedModel(rec, modelFrom(msg) ?? nodeDefaultModel() ?? undefined);
+          return rec;
         }
-        relay?.sendEvent({ type: "session.cloning", repo: parsed.slug });
-        record = await createRepoSession(parsed, { title, runtimeId: agentFrom(msg), sandbox: sandboxFrom(msg), branch: branchFrom(msg), makeActive: false });
-      } else {
         // Remote/PWA focus is client-owned. Creating a new remote session must
         // not steal or depend on the node-global `active` session; otherwise a
         // running chat can change what “new” means for another click/device.
         const workspace = workspaceInput ? validateWorkspace(workspaceInput) : defaultWorkspace;
-        record = await createWorkspaceSession(workspace, { title, runtimeId: agentFrom(msg), sandbox: sandboxFrom(msg), branch: branchFrom(msg), makeActive: false });
-      }
+        const rec = await createWorkspaceSession(workspace, { title, runtimeId: agentFrom(msg), sandbox: sandboxFrom(msg), branch: branchFrom(msg), makeActive: false });
+        await applyRequestedModel(rec, modelFrom(msg) ?? nodeDefaultModel() ?? undefined);
+        return rec;
+      });
     } catch (error) {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
       return;
     }
-    // Bind the composer's chosen model to the new session before its first
-    // turn. Fall back to the node's configured default model when the client
-    // didn't pick one.
-    await applyRequestedModel(record, modelFrom(msg) ?? nodeDefaultModel() ?? undefined);
     relay?.sendEvent({
       ...buildHistoryEvent({
         sessionId: record.id,
@@ -2953,7 +3143,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
         isStreaming: sessionBusy(record),
         messages: conversationMessages(record),
       }),
-      requestId: typeof msg.requestId === "string" ? msg.requestId : undefined,
+      requestId,
     });
   },
 };
@@ -3159,6 +3349,12 @@ async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; pub
 
 async function pushModelAuthToControlPlane() {
   if (!sessionAdvertiseTarget) return;
+  // Piggyback the (plaintext, non-secret) provider status summary on every
+  // trigger that already pushes the encrypted model-auth vault — one "creds
+  // changed" fan-out point instead of duplicating call sites. Independent
+  // try/catch: a summary push failure must not block the vault push or vice
+  // versa.
+  await pushProviderSummaryToControlPlane();
   try {
     const providers = await exportProviderAuth(credsDir);
     const localModels = exportLocalModels(localModelsDir);
@@ -3173,6 +3369,37 @@ async function pushModelAuthToControlPlane() {
     lastPushedModelAuthCiphertext = ciphertext;
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
+  }
+}
+
+// Plaintext (non-secret) summary of which OAuth-capable providers this node has
+// configured, and whether the stored token has expired — pushed alongside the
+// encrypted model-auth vault (see pushModelAuthToControlPlane above) so the web
+// client can show a per-node connection/expiry chip in NodeSwitcher without
+// connecting to every node. Deliberately excludes any credential material or
+// account identity — just {id, name, configured, expiresAt} per oauth-capable
+// provider, the same trust tier as the node's existing plaintext online/lastSeenAt
+// fields.
+let lastPushedProviderSummary = "";
+async function pushProviderSummaryToControlPlane() {
+  if (!sessionAdvertiseTarget) return;
+  try {
+    const providers = await listProviders(credsDir, piDir);
+    // Only providers the node has actually connected at some point — an
+    // expired OAuth credential still reports configured:true (the token is
+    // just past `expiresAt`), so this keeps "expired" entries while dropping
+    // the rest of the oauth-capable catalog the user never touched (which
+    // would otherwise show a "not connected" chip for every such provider on
+    // every node in NodeSwitcher).
+    const summary = providers
+      .filter((p) => p.oauth && p.configured)
+      .map((p) => ({ id: p.id, name: p.name, configured: p.configured, expiresAt: p.expiresAt }));
+    const serialized = JSON.stringify(summary);
+    if (serialized === lastPushedProviderSummary) return;
+    await modelAuthFetch("/node/provider-summary", { method: "PUT", body: JSON.stringify({ providers: summary }) });
+    lastPushedProviderSummary = serialized;
+  } catch (error) {
+    console.warn("[auth-sync] could not push provider summary:", (error as Error).message);
   }
 }
 
@@ -3675,6 +3902,11 @@ async function reportIssueOutcome(
       : "Bivy ran on this issue but produced no file changes.";
     emit(record, "no_changes", message);
     await commentIssue(cfg, issue.number, message).catch(() => {});
+    // The run is finished with nothing in progress — drop the claim label so it
+    // doesn't linger on the issue. A stale `bivy/<node>:in-progress` label was
+    // also mis-routing follow-up mentions before pickRoutingLabel was hardened;
+    // clearing it keeps issue label state consistent across the pickup lifecycle.
+    await removeLabel(cfg, issue.number, cfg.claimLabel).catch(() => {});
     return;
   }
 
@@ -5413,7 +5645,12 @@ function attachSessionListeners(record: SessionRecord) {
       void refreshSessionUsage(record);
       // Snapshot the worktree and broadcast the structured diff this turn made —
       // universal edit review + rewind target, for every runtime.
-      void harnessEndTurn(record);
+      // Warm-replicate this turn to the standby AFTER the checkpoint is committed
+      // (so the shipped frame carries this turn's transcript AND its checkpoint).
+      // Gated on session sync — inert by default.
+      void harnessEndTurn(record).finally(() => {
+        void replication.onTurnComplete(record.id);
+      });
       // A turn that ended in a terminal model/provider error (e.g. an expired
       // credential or a 4xx from the API) otherwise vanished: working cleared,
       // no reply, no signal. Surface it as a session-scoped error so the client
@@ -5439,12 +5676,10 @@ function attachSessionListeners(record: SessionRecord) {
       }
       // First real commit on a repo-backed worktree → publish the branch to the
       // remote (sets upstream), so the work is visible on GitHub. No-op until
-      // there's a commit, and only pushes once. Then either adopt a PR the agent
-      // opened itself (gh/API/web) so the badge lights up, or — if there's none —
-      // ask the user whether Bivy should open one.
+      // there's a commit, and only pushes once. Then adopt a PR the agent opened
+      // itself (gh/API/web) so the badge lights up.
       void maybePushWorktreeBranch(record)
-        .then(() => maybeDetectPullRequest(record))
-        .then(() => maybeSuggestPullRequest(record));
+        .then(() => maybeDetectPullRequest(record));
     }
     const sessionEventPayload = { type: "session.event", sessionId: record.id, event };
     if (event.type === "message_update") {
@@ -6213,10 +6448,9 @@ async function createGitWorkspaceSession(repoDir: string, parsed: ParsedRepo, op
  * kinds of GitHub-connected sessions: a regular repo-backed session
  * (`repo:owner/repo`) and a GitHub-issue pickup (`issue:owner/repo#N` — the
  * trailing issue number is stripped before parsing). Sharing this lookup is
- * what lets `maybePushWorktreeBranch`/`maybeDetectPullRequest`/
- * `maybeSuggestPullRequest` below — and the manual `/pr` chat command — work
- * the same way for both: publish the branch, adopt/track a PR the agent opens
- * itself, and offer a fallback if it doesn't, with no issue-specific code.
+ * what lets `maybePushWorktreeBranch`/`maybeDetectPullRequest` below work the
+ * same way for both: publish the branch and adopt/track a PR the agent opens
+ * itself, with no issue-specific code.
  */
 /** Parse a `record.source`/`MetadataSession.source` tag ("repo:owner/repo" or
  *  "issue:owner/repo#N") into its repo — shared by `repoSessionParts` (live
@@ -6272,21 +6506,6 @@ async function maybePushWorktreeBranch(record: SessionRecord) {
   }
 }
 
-async function maybeSuggestPullRequest(record: SessionRecord) {
-  const parts = repoSessionParts(record);
-  if (!parts || record.prUrl || record.prSuggested || record.prOpening) return;
-  const base = await resolveDefaultBaseRef(parts.wt.repoRoot);
-  const dirty = (runGit(["status", "--porcelain"], parts.wt.path) ?? "").trim();
-  if (!dirty && gitAheadCount(base, parts.wt.path) <= 0) return;
-  record.prSuggested = true;
-  broadcast({
-    type: "session.notice",
-    sessionId: record.id,
-    message: `Ready to create a pull request for ${parts.parsed.slug}. Run /pr when you want Bivy to commit changes, push ${parts.wt.branch}, and open the PR.`,
-    action: "/pr",
-  });
-}
-
 /** The single "primary" PR to surface on a one-badge row: an open PR if there
  *  is one, else the most-relevant recent one (the list is ordered open-first). */
 function primaryPr(prs?: PrRef[]): PrRef | undefined {
@@ -6295,6 +6514,17 @@ function primaryPr(prs?: PrRef[]): PrRef | undefined {
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// HTML-escape for the few browser pages the node serves itself (OAuth callback,
+// GitHub App manifest). These pages interpolate values the caller can influence
+// (`?error=`, provider/error strings), so every interpolation must be escaped to
+// keep an attacker from injecting markup/script onto the node's own loopback
+// origin — which, with loopback trusted by default, would be able to drive /api.
+function escapeHtml(s: string): string {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;",
+  );
 }
 
 /** Order a merged PR set for a one-badge row: open first (the actionable one),
@@ -6480,57 +6710,6 @@ async function maybeDetectPullRequest(record: SessionRecord) {
   }
 }
 
-async function openPrForRepoSession(record: SessionRecord) {
-  const parts = repoSessionParts(record);
-  if (!parts) return { ok: false, error: "This session is not connected to a GitHub repo worktree." };
-  if (record.prUrl) return { ok: true, prUrl: record.prUrl, text: `Pull request already exists: ${record.prUrl}` };
-  if (record.prOpening) return { ok: false, error: "A pull request is already being opened for this session." };
-
-  const { wt, parsed } = parts;
-  record.prOpening = true;
-  try {
-    const token = await resolveTokenForRepo(parsed.owner, parsed.repo);
-    if (!token) return { ok: false, error: "No GitHub token is available on this node. Run bivy github:connect or paste/connect GitHub credentials first." };
-
-    const title = record.session.getName() || `Bivy session ${record.id.slice(0, 8)}`;
-    const committed = await commitAll(wt.path, title);
-    const base = await resolveDefaultBaseRef(wt.repoRoot);
-    if (!committed && gitAheadCount(base, wt.path) <= 0) return { ok: false, error: "No file changes or unpushed commits to turn into a pull request." };
-
-    const cfg: GitHubTaskConfig = { token, owner: parsed.owner, repo: parsed.repo, repoDir: wt.repoRoot, label: "bivy", claimLabel: "bivy:in-progress", pollMs: 60_000 };
-    await pushBranch(cfg, wt.path, wt.branch);
-    record.branchPushed = true;
-    let pr = await openPullRequest(cfg, {
-      head: wt.branch,
-      base: base.replace(/^origin\//, ""),
-      title,
-      body: `_Opened by Bivy from a regular GitHub-connected session._\n\nSession: ${record.id}`,
-    });
-    // Creation fails with 422 when a PR already exists for this branch (e.g. the
-    // agent opened one itself, or a node restart lost the in-memory prUrl). Adopt
-    // the existing PR instead of erroring, so /pr is idempotent and the badge
-    // lights up either way.
-    let adopted = false;
-    if (!pr) {
-      pr = await findOpenPullRequestForBranch(cfg, wt.branch);
-      adopted = Boolean(pr);
-    }
-    if (!pr) return { ok: false, error: "GitHub did not create a pull request. It may already exist for this branch." };
-    record.prUrl = pr.url;
-    // Optimistically record the new PR so the badge lights up immediately; the
-    // refresh below reconciles titles and any other PRs on the branch.
-    record.prs = [{ url: pr.url, number: pr.number, state: "open" }, ...(record.prs ?? []).filter((p) => p.url !== pr.url)];
-    record.prSuggested = true;
-    persistSessionMetadata(record);
-    broadcast({ type: "session.pr_opened", sessionId: record.id, prUrl: pr.url, prs: record.prs });
-    scheduleAdvertise();
-    void refreshPullRequests(record).catch(() => {});
-    return { ok: true, prUrl: pr.url, text: `${adopted ? "Pull request already open" : "Opened pull request"}: ${pr.url}` };
-  } finally {
-    record.prOpening = false;
-  }
-}
-
 approvals.onRequest((request: ApprovalRequest) => {
   persistApprovalRequest(request);
   scheduleAdvertise();
@@ -6554,6 +6733,22 @@ approvals.onRequest((request: ApprovalRequest) => {
 
 const app = express();
 app.use(express.json({ limit: "25mb" }));
+// Defense-in-depth Content-Security-Policy for every node response. The node
+// hosts no web UI — only the JSON API and a couple of minimal, self-owned
+// browser pages (OAuth callback, GitHub App manifest) — so a strict default of
+// `script-src 'none'` is safe and blocks injected inline script even if some
+// future interpolation is missed. The GitHub-App manifest form legitimately
+// needs one inline script to auto-submit to github.com; that single route
+// overrides this header with a per-request nonce (see `/github/app/manifest/new`).
+// `nosniff` stops a JSON response from being reinterpreted as HTML.
+app.use((_req, res, next) => {
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; img-src 'self' data:; style-src 'unsafe-inline'; form-action 'none'; script-src 'none'",
+  );
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  next();
+});
 // The node is a pure DATA PLANE: it serves the JSON API (/api), the WebSocket
 // (/ws), a liveness probe (/healthz), and a few non-UI browser flows it owns
 // (OAuth callback, GitHub App manifest). It does NOT host the web UI — the
@@ -6582,8 +6777,10 @@ app.get("/api/integrations/oauth/callback", async (req, res) => {
   const state = String(req.query.state ?? "");
   const code = String(req.query.code ?? "");
   const oauthError = String(req.query.error ?? "");
-  const page = (title: string, body: string) =>
-    `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:16px system-ui;margin:3rem;max-width:32rem"><h2>${title}</h2><p>${body}</p><p>You can close this tab and return to Bivy.</p></body>`;
+  const page = (title: string, body: string) => {
+    const t = escapeHtml(title);
+    return `<!doctype html><meta charset="utf-8"><title>${t}</title><body style="font:16px system-ui;margin:3rem;max-width:32rem"><h2>${t}</h2><p>${escapeHtml(body)}</p><p>You can close this tab and return to Bivy.</p></body>`;
+  };
   if (oauthError) return res.status(400).send(page("Connection failed", `The provider returned: ${oauthError}`));
   if (!state || !code) return res.status(400).send(page("Connection failed", "Missing authorization code."));
   try {
@@ -7185,7 +7382,11 @@ app.post("/api/auth/native-login", async (_req, res, next) => {
   try {
     const command = nativeLoginCommand();
     if (process.platform === "darwin") {
-      spawn("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(command)}`], { detached: true, stdio: "ignore" }).unref();
+      const child = spawn("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(command)}`], { detached: true, stdio: "ignore" });
+      // A failed spawn reports asynchronously via 'error'; without a listener it
+      // would crash the server. Best effort — the command is returned regardless.
+      child.on("error", () => {});
+      child.unref();
       return res.json({ ok: true, opened: true, command, instructions: "Type /login in the Terminal window, then select a provider." });
     }
     res.json({ ok: true, opened: false, command, instructions: "Run this command, then type /login and select a provider." });
@@ -7587,28 +7788,38 @@ app.post("/api/session", async (req, res, next) => {
     // relay `session.new` repo path. Takes precedence over a manual workspace path.
     const repoInput = typeof req.body?.repo === "string" ? req.body.repo.trim() : "";
     const title = typeof req.body?.title === "string" ? req.body.title : undefined;
-    let session: SessionRecord;
-    if (repoInput) {
-      const parsed = parseRepo(repoInput);
-      if (!parsed) return res.status(400).json({ error: `Invalid repository "${repoInput}" — use owner/repo.` });
+    const requestId = typeof req.body?.requestId === "string" ? req.body.requestId : undefined;
+    // Validate the workspace before entering the dedupe path so a bad path still
+    // returns a 400 (rather than being cached as a rejected creation).
+    let workspace = defaultWorkspace;
+    if (!repoInput && req.body?.workspace !== undefined && String(req.body.workspace).trim()) {
       try {
-        session = await createRepoSession(parsed, { title, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) });
+        workspace = validateWorkspace(req.body.workspace);
       } catch (error) {
-        return res.status(502).json({ error: `Could not clone ${parsed.slug}: ${error instanceof Error ? error.message : String(error)}` });
+        return res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
       }
-    } else {
-      let workspace = defaultWorkspace;
-      if (req.body?.workspace !== undefined && String(req.body.workspace).trim()) {
-        try {
-          workspace = validateWorkspace(req.body.workspace);
-        } catch (error) {
-          return res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-      session = await createWorkspaceSession(workspace, { title, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) });
     }
-    // Bind the composer's chosen model to the new session before its first turn.
-    await applyRequestedModel(session, modelFrom(req.body ?? {}));
+    let parsed: ParsedRepo | undefined;
+    if (repoInput) {
+      parsed = parseRepo(repoInput);
+      if (!parsed) return res.status(400).json({ error: `Invalid repository "${repoInput}" — use owner/repo.` });
+    }
+    let session: SessionRecord;
+    try {
+      // Deduped by requestId so a direct client's post-reconnect retry adopts the
+      // session this request already created rather than spawning a duplicate.
+      session = await dedupeSessionNew(requestId, async () => {
+        const rec = parsed
+          ? await createRepoSession(parsed, { title, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) })
+          : await createWorkspaceSession(workspace, { title, runtimeId: agentFrom(req.body ?? {}), branch: branchFrom(req.body ?? {}) });
+        // Bind the composer's chosen model to the new session before its first turn.
+        await applyRequestedModel(rec, modelFrom(req.body ?? {}));
+        return rec;
+      });
+    } catch (error) {
+      if (parsed) return res.status(502).json({ error: `Could not clone ${parsed.slug}: ${error instanceof Error ? error.message : String(error)}` });
+      throw error;
+    }
     res.json({ id: session.id, workspace: session.workspace, source: session.source, branch: session.worktree?.branch, prUrl: session.prUrl, sessionFile: session.sessionFile, name: session.session.getName(), runtimeId: session.runtimeId, agentName: getRuntime(session.runtimeId).displayName, model: publicModel(session.session.getCurrentModel(), session.session.getCurrentModel()) });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
@@ -8007,10 +8218,15 @@ async function connectExistingApp(input: { appId: string; privateKeyPem: string;
  * Disconnect the GitHub App on this node: wipe the private key from the vault and
  * clear the app env, so the node stops minting tokens for it. The control plane
  * drops the hook separately. Local, idempotent; leaves other config untouched.
+ *
+ * Scope precedence: by `appId`, else by `hookId` (a stale app with no App ID);
+ * only when BOTH are omitted is EVERY app disconnected. Passing an unmatched
+ * appId/hookId is a no-op — a single-app disconnect must never nuke the others.
  */
-function disconnectGithubApp(appId?: string): void {
+function disconnectGithubApp({ appId, hookId }: { appId?: string; hookId?: string } = {}): void {
   const vault = new SecretVault(appDir);
-  const targets = appId ? listGitHubApps(appDir).filter((a) => a.appId === appId) : listGitHubApps(appDir);
+  const all = listGitHubApps(appDir);
+  const targets = appId ? all.filter((a) => a.appId === appId) : hookId ? all.filter((a) => a.hookId === hookId) : all;
   for (const app of targets) {
     try {
       // Only drop a key we own. An `op://` or `env://` reference points at
@@ -8023,8 +8239,9 @@ function disconnectGithubApp(appId?: string): void {
     removeGitHubApp(appDir, app.appId);
   }
   // The env-configured single app (containers, ephemeral runners) has no
-  // registry entry to remove, so clear it explicitly when disconnecting it.
-  if (!appId || process.env.BIVY_GITHUB_APP_ID === appId) {
+  // registry entry to remove, so clear it explicitly — but only on a full wipe
+  // or when the disconnect specifically targets that env app's id.
+  if ((!appId && !hookId) || process.env.BIVY_GITHUB_APP_ID === appId) {
     try {
       vault.delete("github.app-private-key");
     } catch {
@@ -8057,7 +8274,15 @@ app.get("/github/app/manifest/new", async (req, res, next) => {
       hookUrl: hook.url,
       redirectUrl: `${base}/github/app/manifest/callback`,
     });
-    res.type("html").send(renderManifestForm(manifest, { org, state: hook.id }));
+    // This page auto-submits a form to github.com via one inline script, so it
+    // overrides the global `script-src 'none'; form-action 'none'` CSP with a
+    // per-request nonce and a github.com form-action allowance — nothing else.
+    const nonce = randomBytes(16).toString("base64");
+    res.setHeader(
+      "Content-Security-Policy",
+      `default-src 'none'; base-uri 'none'; frame-ancestors 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; form-action https://github.com`,
+    );
+    res.type("html").send(renderManifestForm(manifest, { org, state: hook.id, nonce }));
   } catch (error) {
     next(error);
   }
@@ -8117,7 +8342,8 @@ app.get("/api/github/apps", async (_req, res) => {
 
 app.post("/api/github/app/disconnect", async (req, res) => {
   const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
-  disconnectGithubApp(appId || undefined);
+  const hookId = typeof req.body?.hookId === "string" ? req.body.hookId.trim() : "";
+  disconnectGithubApp({ appId: appId || undefined, hookId: hookId || undefined });
   res.json({ ok: true });
 });
 
@@ -8128,11 +8354,15 @@ app.get("/github/app/manifest/callback", async (req, res, next) => {
     if (!code || !hookId) return res.status(400).type("html").send("<p>Missing code/state from GitHub.</p>");
     const { installUrl } = await completeAppManifest({ code, state: hookId });
     const label = process.env.BIVY_GITHUB_LABEL?.trim() || "bivy";
+    // installUrl comes from GitHub's manifest-conversion response; only render it
+    // as a link if it is a real http(s) URL (never a `javascript:`/`data:` URI),
+    // and escape it for the attribute context regardless.
+    const safeInstallUrl = /^https?:\/\//i.test(installUrl) ? installUrl : "https://github.com/settings/installations";
     res.type("html").send(`<!doctype html><html><body style="font-family:system-ui;padding:2rem">
 <h2>✓ Bivy GitHub App created</h2>
 <p>The app's private key is stored on this node. One webhook now covers every repo you install it on.</p>
-<p><a href="${installUrl}">Install it on your repositories →</a></p>
-<p>Then label an issue <code>${label}</code> or comment <code>@bivy …</code>.</p>
+<p><a href="${escapeHtml(safeInstallUrl)}">Install it on your repositories →</a></p>
+<p>Then label an issue <code>${escapeHtml(label)}</code> or comment <code>@bivy …</code>.</p>
 </body></html>`);
   } catch (error) {
     next(error);
@@ -8153,9 +8383,11 @@ app.post("/api/session/prompt", async (req, res, next) => {
     if (text === "/login" || text.startsWith("/login ")) {
       return res.status(400).json({ error: "Use the Login / API tokens dialog from the phone UI. If it is not visible, refresh this page after updating Bivy." });
     }
-    const { images, fileText } = attachmentsFrom(req.body?.attachments);
-    const promptText = [text, fileText].filter(Boolean).join("\n\n") || (images.length ? "Please review the attached image(s)." : "");
-    if (!promptText && !images.length) return res.status(400).json({ error: "Missing text" });
+    const { images, imageNotes, files } = attachmentsFrom(req.body?.attachments);
+    if (!text && !images.length && !files.length) return res.status(400).json({ error: "Missing text" });
+    // File notes (with on-disk paths) are folded in once the workdir exists; the
+    // session title can only reflect what's known before then.
+    const titleText = [text, imageNotes.join("\n")].filter(Boolean).join("\n\n") || (images.length ? "Please review the attached image(s)." : "attachment");
 
     const requestedSessionId = typeof req.body?.sessionId === "string" && req.body.sessionId ? req.body.sessionId : undefined;
     const requestedWorkspace = req.body?.workspace !== undefined && String(req.body.workspace).trim() ? validateWorkspace(req.body.workspace) : undefined;
@@ -8167,12 +8399,16 @@ app.post("/api/session/prompt", async (req, res, next) => {
     // rather than silently spawning a new chat under the caller's old id.
     if (requestedSessionId && !record) return res.status(404).json({ error: "Session not found" });
     if (!record) {
-      record = await createWorkspaceSession(requestedWorkspace ?? defaultWorkspace, { title: promptText, runtimeId: agentFrom(req.body ?? {}) });
+      record = await createWorkspaceSession(requestedWorkspace ?? defaultWorkspace, { title: titleText, runtimeId: agentFrom(req.body ?? {}) });
     }
     if (record.tuiTermId || record.tuiRefreshing) {
       return res.status(409).json({ error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
     }
     const session = record.session;
+    const fileNote = materializeAttachments(record, files);
+    const promptText =
+      [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
+      (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
     const agentPrompt = promptForAgent(record, promptText);
     broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
     markSessionWorking(record, { type: "agent_start" });
@@ -8205,17 +8441,6 @@ app.post("/api/commands/:runId/terminate", (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/session/pr", async (req, res, next) => {
-  try {
-    const session = await resolveOrResumeSession(req.body?.sessionId, req.body?.path);
-    if (!session) return res.status(404).json({ error: "Session not found" });
-    const result = await openPrForRepoSession(session);
-    if (!result.ok) return res.status(400).json(result);
-    res.json(result);
-  } catch (error) {
-    next(error);
-  }
-});
 
 // On-demand "update GitHub status" for one session: force `refreshPullRequests`
 // regardless of whether the session is live/attached, so a stale `open` badge
@@ -8249,6 +8474,23 @@ app.post("/api/session/abort", async (req, res, next) => {
     if (!record) return res.status(404).json({ error: "No active session" });
     await record.session.abort();
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Promote a replicated session onto THIS node (the standby taking over an offline
+// owner). Runs the control-plane compare-and-set on the ownership epoch, then
+// materializes the replicated worktree so the session can be resumed locally.
+// Manual — triggered from the app or `bivy sessions promote` (docs/session-replication.md).
+app.post("/api/session/promote", async (req, res, next) => {
+  try {
+    const sessionId = String(req.body?.sessionId ?? "").trim();
+    if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
+    const epoch = await replication.promote(sessionId, identity.nodeId);
+    if (epoch === undefined) return res.status(409).json({ error: "Promotion lost the epoch race (another node owns it, or it isn't replicated)" });
+    scheduleAdvertise();
+    res.json({ ok: true, epoch });
   } catch (error) {
     next(error);
   }
@@ -8479,3 +8721,19 @@ function shutdown(signal: string) {
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   process.on(signal, () => shutdown(signal));
 }
+
+// Last-resort crash net. The daemon hosts many sessions in one process, so an
+// unhandled rejection (which terminates the process on Node 22+) or a stray
+// throw from a stream/event callback would take down EVERY live session at
+// once, not just the one that faulted. Log it and keep serving rather than
+// letting one bad session kill the whole daemon; the supervisor's restart is
+// the fallback for a genuinely wedged process, not the first line of defence.
+// A rejected promise never corrupts global state, so continuing is safe there;
+// for an uncaught exception, continuing is the lesser evil versus dropping
+// every other session's in-flight turn.
+process.on("unhandledRejection", (reason) => {
+  console.error(`[bivy] unhandledRejection (daemon kept running):`, reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error(`[bivy] uncaughtException (daemon kept running):`, error);
+});

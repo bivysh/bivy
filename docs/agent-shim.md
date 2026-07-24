@@ -111,7 +111,7 @@ bivy shim install aider --headless "--message --yes-always"
 ```
 
 What differs per agent is how *rich the remote surface* is, which tracks the
-agent's Bivy runtime (see `docs/agent-runtimes.md`):
+agent's Bivy runtime (see [runtime-support-matrix.md](runtime-support-matrix.md)):
 
 - **Remote terminal ("continue on CLI")** — works for any agent, since it's just
   the daemon-owned PTY.
@@ -160,8 +160,8 @@ GET /api/codex/sessions/<id>/messages
 ```
 
 A *fully governed* (in-chat approval) takeover for Codex is still gated on the
-Codex runtime gaining tool interception (Tier 2 in `docs/agent-adoption-plan.md`)
-or Codex speaking the bivy-agent-protocol. The rollout reader
+Codex runtime gaining tool interception or Codex speaking the
+bivy-agent-protocol. The rollout reader
 (`src/runtime/codex-sessions.ts`, unit-tested in `test/codex-sessions.test.ts`)
 and the resumable ProcessRuntime (`test/process-resume.test.ts`) are best-effort
 and validated against the documented format / via a stub, not yet against a live
@@ -179,8 +179,7 @@ Codex.
   resume` with rollout history; native `--sandbox` governance).
 - **Next:** validate the Codex resume flags/format on a live Codex; in-chat
   approvals for Codex (Tier 2); a discovery fallback for truly-unshimmed bare
-  sessions. See **`docs/agent-adoption-plan.md`** for the Codex tiers and the
-  recipe for adding any agent.
+  sessions.
 
 ## Files
 

@@ -57,7 +57,10 @@ await check("read/list/delete behave", async () => {
 
   const list = [...(await store.list())].sort((a, b) => a.providerId.localeCompare(b.providerId));
   assert.deepEqual(list, [
-    { providerId: "anthropic", type: "oauth" },
+    // expiresAt rides along for oauth entries (the stored credential's `expires`)
+    // so callers (e.g. the cross-node provider-summary push) can tell an expired
+    // login from a live one without touching the token itself.
+    { providerId: "anthropic", type: "oauth", expiresAt: 123 },
     { providerId: "openai", type: "api_key" },
   ]);
 

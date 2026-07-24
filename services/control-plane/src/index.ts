@@ -7,11 +7,13 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
-import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
+import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector } from "./metrics.js";
+import { initSentry } from "./instrument.js";
 import {
   verifyGithubSignature,
   parseGithubIssueEvent,
@@ -56,6 +58,14 @@ function assertProductionConfig() {
   if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_WEBHOOK_SECRET) {
     problems.push("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set (webhooks would be unverifiable)");
   }
+  if (!process.env.PUBLIC_CONTROL_PLANE_URL) {
+    // Without a fixed public URL, baseUrl() falls back to the request's
+    // Host/X-Forwarded-Host header — which an attacker controls. That header is
+    // what builds the magic-link / OAuth sign-in URL emailed to the user, so a
+    // spoofed Host would send a genuine email pointing at the attacker's host
+    // and leak the single-use login token. Require it in production.
+    problems.push("PUBLIC_CONTROL_PLANE_URL must be set in production (sign-in link URLs must not be derived from request headers)");
+  }
   if (problems.length > 0) {
     console.error("Refusing to start: insecure production configuration:\n  - " + problems.join("\n  - "));
     process.exit(1);
@@ -91,6 +101,10 @@ try {
   );
   process.exit(1);
 }
+
+// Optional error reporting. Resolves to no-ops unless SENTRY_DSN is set, and only
+// then is @sentry/node loaded (see instrument.ts).
+const Sentry = await initSentry();
 
 const port = Number(process.env.PORT ?? 4400);
 const relayPublicUrl = process.env.RELAY_PUBLIC_URL ?? "ws://localhost:4500";
@@ -147,14 +161,68 @@ if (webPushEnabled) webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidP
 // with VAPID keys configured. Off ⇒ push is available to any account (still
 // requires VAPID keys / webPushEnabled); on ⇒ push stays gated to paid plans.
 const enforceEntitlements = process.env.ENFORCE_ENTITLEMENTS === "1";
+// Observe-only mode for the free run cap: keep COUNTING and reporting runs (so the
+// UI still shows "used / limit" and ops can watch the real runs-per-window
+// distribution), but never actually block a run. Lets Bivy Cloud gather data and
+// tune the number/window before flipping enforcement on, without walling anyone
+// during the observation window. Only meaningful when entitlements are enforced;
+// self-host is unlimited either way.
+const observeRunLimitOnly = process.env.RUN_LIMIT_OBSERVE_ONLY === "1";
+const enforceRunLimit = enforceEntitlements && !observeRunLimitOnly;
 async function accountPushAllowed(accountId: string): Promise<boolean> {
   if (!enforceEntitlements) return true;
   return (await store.entitlements(accountId)).pushEnabled;
 }
+
+// How many days back the free-tier run window looks. A ROLLING window (not a
+// calendar week) — capacity frees up gradually as individual runs age out the far
+// edge, which fits bursty dev work far better than a hard periodic reset.
+const RUN_WINDOW_DAYS = 7;
+
+// Start of the current rolling run window, as an ISO timestamp — `now` minus the
+// window length. Computed rather than stored, so there is no counter to reset and
+// no cron: the count is just run_starts with `started_at >= this`.
+function runWindowStartIso(): string {
+  return new Date(Date.now() - RUN_WINDOW_DAYS * 24 * 60 * 60_000).toISOString();
+}
+
+// Soft-cap grace: how many runs PAST the plan's window limit still go through
+// (warned, not blocked) before a hard refusal. The cap converts by nudging, not by
+// slapping someone mid-task the instant they cross — so the first over-limit run is
+// a courtesy ("you're over your free runs — this one's on us"), and only further
+// runs are refused until capacity ages back in. Applied against the rolling window,
+// so the courtesy naturally recurs as the window slides.
+const RUN_GRACE = 1;
+
+// The account's run allowance for the current rolling window, counted across EVERY
+// source (manual, app, work queue, ephemeral). `limit` is the plan cap
+// (undefined ⇒ unlimited — paid plans), `used` the runs started in the window,
+// `warn` whether this run is in the grace band (over the limit but still allowed),
+// `exhausted` whether a new run must be refused (over limit + grace). Blocking is
+// only in effect under `ENFORCE_ENTITLEMENTS=1` AND not `RUN_LIMIT_OBSERVE_ONLY=1`
+// (see enforceRunLimit); otherwise both flags stay false so runners go unlimited,
+// but `used` is ALWAYS reported for display. One distinct run (session) = one run.
+async function runAllowance(accountId: string): Promise<{ limit?: number; used: number; warn: boolean; exhausted: boolean }> {
+  const limit = (await store.entitlements(accountId)).weeklyRunLimit;
+  if (typeof limit !== "number") return { limit: undefined, used: 0, warn: false, exhausted: false };
+  const used = await store.countRunStartsSince(accountId, runWindowStartIso());
+  if (!enforceRunLimit) return { limit, used, warn: false, exhausted: false };
+  return { limit, used, warn: used >= limit && used < limit + RUN_GRACE, exhausted: used >= limit + RUN_GRACE };
+}
 const stripePrices: Partial<Record<Plan, string>> = {
-  individual: process.env.STRIPE_PRICE_INDIVIDUAL,
+  pro: process.env.STRIPE_PRICE_PRO,
   team: process.env.STRIPE_PRICE_TEAM,
 };
+
+// Plan ids arrive from two places whose version we do not control: the published
+// CLI (packages/core's billingCheckout) and the dev-mode billing webhook used by
+// tests and local stacks. Both sent `individual` before the plan was renamed to
+// `pro`, so translate rather than 400 a client that is merely older than this
+// deploy. Unrecognised ids pass through unchanged and fail the caller's own
+// validation. Accounts already stored under the old id are migrated at boot.
+function normalizePlan(plan: string): string {
+  return LEGACY_PLAN_IDS[plan] ?? plan;
+}
 const app = express();
 
 // Operational counters for the relay ticket mint path. These are intentionally
@@ -166,6 +234,25 @@ const relayTicketMetrics = {
   clientMinted: 0,
   clientFailed: 0,
 };
+// Mirror the ticket counters into the Prometheus registry, and start refreshing
+// the business/usage gauges from the store on an interval.
+bindRelayTicketMetrics(() => relayTicketMetrics);
+startUsageCollector(store);
+
+// Housekeeping: periodically drop run-start rows older than the rolling window
+// (plus a day of slack) so the table can't grow without bound. Rows past the
+// window are never counted again, so this is safe. `.unref()` keeps the timer from
+// holding the process open (e.g. in tests); also swept once at boot.
+const RUN_STARTS_RETENTION_MS = (RUN_WINDOW_DAYS + 1) * 24 * 60 * 60_000;
+async function pruneOldRunStarts() {
+  try {
+    await store.pruneRunStartsBefore(new Date(Date.now() - RUN_STARTS_RETENTION_MS).toISOString());
+  } catch (error) {
+    console.error("[run-starts] prune failed:", error);
+  }
+}
+void pruneOldRunStarts();
+setInterval(pruneOldRunStarts, 6 * 60 * 60_000).unref();
 
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -205,6 +292,9 @@ app.use("/billing/webhook", express.raw({ type: "application/json", limit: "1mb"
 // urlencoded — match any content-type).
 app.use("/webhooks", express.raw({ type: () => true, limit: "1mb" }));
 app.use(express.json({ limit: "1mb" }));
+// Time every request under its matched route pattern for the /metrics
+// histogram. Cheap; records on response finish. Must run before the routes.
+app.use(httpMetricsMiddleware);
 // Liveness: the process is up and serving. Deliberately does NOT touch the
 // database — restarting the app can't fix an unreachable DB, so tying liveness
 // to the DB would just kill a healthy process during a transient blip and drop
@@ -213,7 +303,21 @@ app.get("/healthz", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/metrics", (_req, res) => {
+// Prometheus exposition for Alloy/Prometheus scrapers. Scraped over the internal
+// docker network only — Caddy blocks /metrics publicly. register.metrics() is
+// async (gauge collect callbacks), so resolve then send. See
+// docs/ops/monitoring.md in bivysh/bivy-cloud.
+app.get("/metrics", (_req, res, next) => {
+  register
+    .metrics()
+    .then((body) => {
+      res.setHeader("Content-Type", register.contentType);
+      res.end(body);
+    })
+    .catch(next);
+});
+// Backcompat: the pre-Prometheus JSON counters.
+app.get("/metrics.json", (_req, res) => {
   res.json({ ok: true, relayTickets: relayTicketMetrics });
 });
 
@@ -293,6 +397,39 @@ function validEmail(email: string): boolean {
   return /^[^@\s]+@[^@\s]+$/.test(email);
 }
 
+// Lightweight in-memory fixed-window rate limiter for the unauthenticated,
+// side-effecting auth endpoints — they send email (Resend) and provision an
+// account for any supplied address, so without a cap one source can flood third-
+// party inboxes and create unbounded rows. Per single control-plane instance;
+// good enough to blunt abuse from one origin. (Per-account quotas across the
+// fleet remain a documented 0.1 limitation — see docs/security-model.md.)
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+function rateLimited(bucket: string, key: string, limit: number, windowMs: number): boolean {
+  const now = Date.now();
+  if (rateBuckets.size > 10_000) {
+    for (const [k, v] of rateBuckets) if (now >= v.resetAt) rateBuckets.delete(k);
+  }
+  const id = `${bucket}:${key}`;
+  const entry = rateBuckets.get(id);
+  if (!entry || now >= entry.resetAt) {
+    rateBuckets.set(id, { count: 1, resetAt: now + windowMs });
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > limit;
+}
+function clientIp(req: Request): string {
+  return String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket.remoteAddress || "unknown";
+}
+/** True (and responds 429) if this IP or email has exceeded the auth-email budget. */
+function authEmailRateLimited(req: Request, res: Response, email: string): boolean {
+  if (rateLimited("auth-email-ip", clientIp(req), 20, 60_000) || rateLimited("auth-email-addr", email, 5, 60_000)) {
+    res.status(429).json({ error: "Too many requests. Please wait a minute and try again." });
+    return true;
+  }
+  return false;
+}
+
 function b64urlJson(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
@@ -344,14 +481,20 @@ function sendDeviceSignedIn(res: Response, email: string): void {
 }
 
 function stripePriceToPlan(priceId: string | null | undefined): Plan | undefined {
-  if (priceId && stripePrices.individual && priceId === stripePrices.individual) return "individual";
+  if (priceId && stripePrices.pro && priceId === stripePrices.pro) return "pro";
   if (priceId && stripePrices.team && priceId === stripePrices.team) return "team";
   return undefined;
 }
 
 function planFromSubscription(subscription: Stripe.Subscription): Plan {
   const priceId = subscription.items.data[0]?.price.id;
-  return stripePriceToPlan(priceId) ?? (subscription.metadata.plan as Plan | undefined) ?? "free";
+  // The metadata fallback reads a value Stripe has been holding since the
+  // subscription was created, so subscriptions opened before the rename still say
+  // `individual` there. Normalize it — this is live data we cannot backfill.
+  const fromMetadata = subscription.metadata.plan
+    ? (normalizePlan(subscription.metadata.plan) as Plan)
+    : undefined;
+  return stripePriceToPlan(priceId) ?? fromMetadata ?? "free";
 }
 
 function subscriptionIsPaid(subscription: Stripe.Subscription): boolean {
@@ -525,6 +668,7 @@ const requireNode = asyncHandler(async (req, res, next) => {
 app.post("/auth/magic-link/start", asyncHandler(async (req, res) => {
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   if (!validEmail(email)) return res.status(400).json({ error: "Invalid email" });
+  if (authEmailRateLimited(req, res, email)) return;
 
   const loginToken = await store.createLoginToken(email);
   const loginUrl = `${baseUrl(req)}/auth/magic-link/consume?token=${encodeURIComponent(loginToken)}`;
@@ -563,6 +707,7 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
 app.post("/auth/device/start", asyncHandler(async (req, res) => {
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   if (!validEmail(email)) return res.status(400).json({ error: "Invalid email" });
+  if (authEmailRateLimited(req, res, email)) return;
 
   const loginToken = await store.createLoginToken(email);
   const { deviceId, deviceSecret } = await store.createDeviceLogin();
@@ -734,6 +879,10 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
         await store.listAccountSessions(account.id),
         await store.listNodes(account.id),
       ),
+      // Runs started in the current rolling window across every source (manual,
+      // app, work queue, ephemeral). Paired with entitlements.weeklyRunLimit so the
+      // UI can show "used / limit" and prompt an upgrade when a free account runs out.
+      runsThisWeek: (await runAllowance(account.id)).used,
     },
   });
 }));
@@ -1040,6 +1189,20 @@ const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "ssm.ap-northeast-1.amazonaws.com",
 ]);
 app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
+  // Quick ephemeral servers are available on every plan (the persistent installer
+  // is also free). A launched runner is a run, so a free account that has spent its
+  // rolling run allowance can't cold-start another one. Only bites under
+  // ENFORCE_ENTITLEMENTS (Bivy Cloud); self-host is unlimited. Mirrors the client
+  // gate in EphemeralSheet — this is the authoritative check.
+  const account = (req as Request & { account: Account }).account;
+  const ent = await store.entitlements(account.id);
+  if (enforceEntitlements && !ent.ephemeralEnabled) {
+    return res.status(403).json({ error: "Ephemeral servers aren't available on your plan." });
+  }
+  const allowance = await runAllowance(account.id);
+  if (allowance.exhausted) {
+    return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
+  }
   const url = String(req.body?.url ?? "");
   let host: string;
   try { host = new URL(url).host; } catch { return res.status(400).json({ error: `Bad provider URL` }); }
@@ -1054,7 +1217,13 @@ app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
-    const upstream = await fetch(url, { method, headers, body: payload, signal: controller.signal });
+    // Do NOT auto-follow redirects: the host allowlist is enforced once, above,
+    // so a 3xx from an allowlisted provider (open redirect) could otherwise
+    // bounce this request to an internal target like 169.254.169.254 (SSRF).
+    const upstream = await fetch(url, { method, headers, body: payload, signal: controller.signal, redirect: "manual" });
+    if (upstream.status >= 300 && upstream.status < 400) {
+      return res.status(502).json({ error: "Refusing to follow a redirect from the provider host (SSRF guard)." });
+    }
     const text = await upstream.text();
     let body: unknown = text;
     try { body = text ? JSON.parse(text) : null; } catch { /* non-JSON */ }
@@ -1111,6 +1280,33 @@ app.put("/node/model-auth-key/wrapped", requireNode, asyncHandler(async (req, re
   if (!targetNodeId || !wrappedKey || !wrappedByPublicKey) return res.status(400).json({ error: "Missing targetNodeId, wrappedByPublicKey, or wrappedKey" });
   const rec = await store.setModelAuthWrappedKey(node.accountId, targetNodeId, node.id, wrappedByPublicKey, wrappedKey);
   res.json({ ok: true, wrappedKey: rec });
+}));
+
+// Plaintext (non-secret) per-node provider connection summary — pushed by the
+// node alongside its encrypted model-auth vault (see pushProviderSummaryToControlPlane
+// in src/server.ts) so /nodes can show every enrolled node's OAuth connect/expiry
+// status without the client connecting to each one. Only {id, name, configured,
+// expiresAt} per provider; never credential material or account identity.
+app.put("/node/provider-summary", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const rawProviders = Array.isArray(req.body?.providers) ? req.body.providers : [];
+  const providers = rawProviders
+    .map((p: unknown) => {
+      if (!p || typeof p !== "object") return null;
+      const rec = p as Record<string, unknown>;
+      const id = String(rec.id ?? "").trim();
+      if (!id) return null;
+      const out: { id: string; name?: string; configured: boolean; expiresAt?: number } = {
+        id,
+        configured: Boolean(rec.configured),
+      };
+      if (typeof rec.name === "string" && rec.name.trim()) out.name = rec.name.trim();
+      if (typeof rec.expiresAt === "number" && Number.isFinite(rec.expiresAt)) out.expiresAt = rec.expiresAt;
+      return out;
+    })
+    .filter((p: unknown): p is { id: string; name?: string; configured: boolean; expiresAt?: number } => p !== null);
+  await store.setNodeProviders(node.id, providers);
+  res.json({ ok: true });
 }));
 
 // --- Work queue (E2 GitHub webhook sink, E4 Slack) ----------------------
@@ -1312,14 +1508,18 @@ app.post("/account/github-app/default-node", asyncHandler(async (req, res) => {
 app.delete("/account/github-app", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  // With an app id, disconnect just that app and leave the account's others
-  // alone. Without one, remove ALL github_app hooks — abandoned create flows
-  // leave orphans, and deleting only the newest would let one resurface as
-  // "connected".
+  // Scope precedence: by app id, else by a single hook id (a stale app from an
+  // abandoned create flow has a hook but no App ID — it must be removable on its
+  // own without taking the account's healthy apps with it). Only with NEITHER do
+  // ALL github_app hooks go — orphans included — since deleting just the newest
+  // would let one resurface as "connected".
   const appId = typeof req.query.appId === "string" ? req.query.appId.trim() : "";
+  const hookId = typeof req.query.hookId === "string" ? req.query.hookId.trim() : "";
   const removed = appId
     ? await store.deleteGithubAppHooksForApp(client.accountId, appId)
-    : await store.deleteGithubAppHooks(client.accountId);
+    : hookId
+      ? (await store.deleteInboundHook(client.accountId, hookId)) ? 1 : 0
+      : await store.deleteGithubAppHooks(client.accountId);
   res.json({ ok: true, removed });
 }));
 
@@ -1443,9 +1643,10 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   }
   const event = String(req.headers["x-github-event"] ?? "");
   if (event === "ping") return res.json({ ok: true, pong: true });
-  // Plan gate: the hosted work queue (label/@-mention → PR on your node) is a
-  // paid feature. Ack with 200 so GitHub marks the delivery successful (a non-2xx
-  // would make GitHub retry forever) but enqueue nothing for free accounts.
+  // Plan gate: the hosted work queue is on every plan (free is metered per run at
+  // claim time against the rolling cap, see runAllowance), so this only refuses a
+  // plan that has the feature fully off. Ack with 200 so GitHub marks the delivery
+  // successful (a non-2xx would make GitHub retry forever) but enqueue nothing.
   if (!(await store.entitlements(hook.accountId)).workQueueEnabled) {
     return res.json({ ok: true, enqueued: false, reason: "plan" });
   }
@@ -1556,12 +1757,25 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
     .map((l) => l.trim())
     .filter(Boolean);
   const items = await store.listPendingWorkItems(node.accountId, labels.length ? labels : ["bivy"]);
+  // Free-tier rolling quota: once the window's run allowance (across every source)
+  // is spent, hide pending items so the node stops trying to claim them. They stay
+  // queued and become visible again as capacity ages back in (no data lost, no
+  // churn). The claim endpoint below is the authoritative backstop for a direct/racing claim.
+  if ((await runAllowance(node.accountId)).exhausted) return res.json({ items: [] });
   res.json({ items });
 }));
 
 // Claim one item (atomic; only one node wins). Returns the item or 409 if taken.
 app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
+  // Authoritative free-tier quota gate: the rolling run cap spans every source, so a
+  // work-queue claim is refused once the window's runs (from any source) are spent.
+  // 402 (not 409) so the node can tell "you're out of runs" from "someone else won
+  // this item". Only bites under ENFORCE_ENTITLEMENTS; self-host is unlimited.
+  const allowance = await runAllowance(node.accountId);
+  if (allowance.exhausted) {
+    return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
+  }
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
   res.json({ ok: true, item });
@@ -1583,6 +1797,72 @@ app.post("/node/link-grant", requireNode, asyncHandler(async (req, res) => {
   // cannot reach the account's other nodes, and stops working after the TTL.
   const sessionToken = await store.createLinkGrant(node.accountId, node.id, LINK_GRANT_TTL_MS);
   res.json({ ok: true, sessionToken, nodeId: node.id, nodeName: node.name, relayUrl: relayUrlForNode(node.id) });
+}));
+
+// Session replication (docs/session-replication.md) --------------------------
+//
+// A node mints a client-scoped grant for a SIBLING node it co-owns, so an owner
+// daemon can connect to its standby as a relay client (the only way to reach a
+// node over the relay). This closes the "credential gap": an enrollment token
+// can enumerate siblings but couldn't otherwise mint a client credential. The
+// grant is node-scoped to the sibling and expiring — least privilege.
+app.post("/node/sibling-link-grant", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const siblingId = String(req.body?.nodeId ?? "").trim();
+  if (!siblingId) return res.status(400).json({ error: "Missing nodeId" });
+  if (siblingId === node.id) return res.status(400).json({ error: "A node cannot replicate to itself" });
+  const owns = (await store.listNodes(node.accountId)).some((n) => n.id === siblingId);
+  if (!owns) return res.status(404).json({ error: "Unknown sibling node" });
+  const grant = await store.createLinkGrant(node.accountId, siblingId, LINK_GRANT_TTL_MS);
+  res.json({ ok: true, grant, nodeId: siblingId, relayUrl: relayUrlForNode(siblingId) });
+}));
+
+// The current owner declares (or clears) the standby for a session it owns.
+app.post("/node/sessions/:sessionId/standby", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
+  const standbyNodeId = req.body?.standbyNodeId ? String(req.body.standbyNodeId).trim() : undefined;
+  if (standbyNodeId) {
+    const owns = (await store.listNodes(node.accountId)).some((n) => n.id === standbyNodeId);
+    if (!owns) return res.status(404).json({ error: "Unknown standby node" });
+    if (standbyNodeId === node.id) return res.status(400).json({ error: "A node cannot be its own standby" });
+  }
+  const ownership = await store.setSessionStandby(node.accountId, sessionId, node.id, standbyNodeId);
+  res.json({ ok: true, ownership });
+}));
+
+// Read a session's ownership/epoch (owner needs its epoch to stamp frames; the
+// standby reads it to promote with the right expectedEpoch).
+app.get("/node/sessions/:sessionId/ownership", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  const ownership = await store.getSessionOwnership(node.accountId, sessionId);
+  res.json({ ok: true, ownership: ownership ?? null });
+}));
+
+// Promote a node to owner via compare-and-set on the epoch. Authorized to the
+// designated standby taking over (toNodeId === caller) or the current owner
+// handing off. A stale expectedEpoch loses the race → 409 (the fence).
+app.post("/node/sessions/:sessionId/promote", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  const toNodeId = String(req.body?.toNodeId ?? "").trim();
+  const expectedEpoch = Number(req.body?.expectedEpoch);
+  if (!sessionId || !toNodeId || !Number.isInteger(expectedEpoch)) {
+    return res.status(400).json({ error: "Missing sessionId, toNodeId, or expectedEpoch" });
+  }
+  const current = await store.getSessionOwnership(node.accountId, sessionId);
+  if (!current) return res.status(404).json({ error: "Session is not replicated" });
+  // Only the current owner (handoff) or the node being promoted may promote.
+  if (node.id !== current.ownerNodeId && node.id !== toNodeId) {
+    return res.status(403).json({ error: "Not authorized to promote this session" });
+  }
+  const owns = (await store.listNodes(node.accountId)).some((n) => n.id === toNodeId);
+  if (!owns) return res.status(404).json({ error: "Unknown target node" });
+  const promoted = await store.promoteSession(node.accountId, sessionId, toNodeId, expectedEpoch);
+  if (!promoted) return res.status(409).json({ error: "Epoch mismatch — promotion lost the race", current });
+  res.json({ ok: true, ownership: promoted });
 }));
 
 // A node or client exchanges its long-lived bearer (over TLS, directly to the
@@ -1684,8 +1964,8 @@ app.post("/client/relay-ticket", asyncHandler(async (req, res) => {
 
 app.post("/billing/checkout", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
-  const plan = String(req.body?.plan ?? "individual") as Plan;
-  if (plan !== "individual" && !(plan === "team" && stripePrices.team)) return res.status(400).json({ error: "Invalid plan" });
+  const plan = normalizePlan(String(req.body?.plan ?? "pro")) as Plan;
+  if (plan !== "pro" && !(plan === "team" && stripePrices.team)) return res.status(400).json({ error: "Invalid plan" });
 
   if (!stripe) {
     if (process.env.NODE_ENV === "production") throw new Error("STRIPE_SECRET_KEY is required for production checkout");
@@ -1747,8 +2027,8 @@ app.post("/billing/webhook", asyncHandler(async (req, res) => {
     if (process.env.NODE_ENV === "production") throw new Error("STRIPE_SECRET_KEY is required for production webhooks");
     const body = Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString("utf8")) : req.body;
     const accountId = String(body?.accountId ?? "");
-    const plan = String(body?.plan ?? "") as Plan;
-    if (accountId && ["free", "individual", "team"].includes(plan)) await store.setPlan(accountId, plan, body?.stripeCustomerId);
+    const plan = normalizePlan(String(body?.plan ?? "")) as Plan;
+    if (accountId && ["free", "pro", "team"].includes(plan)) await store.setPlan(accountId, plan, body?.stripeCustomerId);
     return res.json({ received: true, dev: true });
   }
 
@@ -1857,6 +2137,7 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   // Postgres hostnames or stack internals.
   if (status >= 500) {
     console.error(`Unhandled ${status} on ${req.method} ${req.path}:`, error);
+    Sentry.captureException(error);
     return res.status(status).json({ error: "Something went wrong on our end. Please try again." });
   }
   res.status(status).json({ error: message });
