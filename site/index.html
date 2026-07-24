@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bivy — Run coding agents on machines you own</title>
-  <meta name="description" content="Bivy runs Claude Code, Codex, Gemini CLI, Aider and other coding agents on your own hardware, with your own keys, and makes those sessions reachable from your phone or browser. Source-available and self-hostable.">
+  <meta name="description" content="Bivy runs Claude Code, Codex, Gemini CLI, Aider and other coding agents on your own hardware, with your own keys — then puts every session in an app on your phone: full transcript, diffs, a real terminal, and one-tap approvals. Free on one machine. Source-available and self-hostable.">
   <meta name="theme-color" content="#fbfaf8">
   <meta property="og:title" content="Bivy — Run coding agents on machines you own">
-  <meta property="og:description" content="Coding agents on your hardware, with your keys, reachable from anywhere. Source-available, self-hostable, no repo upload.">
+  <meta property="og:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free on one machine, no repo upload.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://bivy.sh">
   <meta property="og:image" content="https://bivy.sh/screenshots/app-session.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Bivy — Run coding agents on machines you own">
-  <meta name="twitter:description" content="Coding agents on your hardware, with your keys, reachable from anywhere. Source-available, self-hostable, no repo upload.">
+  <meta name="twitter:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free on one machine, no repo upload.">
   <meta name="twitter:image" content="https://bivy.sh/screenshots/app-session.png">
   <link rel="icon" href="./tent.svg">
   <link rel="icon" type="image/png" href="./tent.png">
@@ -356,6 +356,36 @@
       overflow: hidden; background: var(--panel); max-width: 880px;
     }
     .screenshot img { display: block; width: 100%; height: auto; }
+
+    /* ---------- app section ---------- */
+    .app-split {
+      display: grid;
+      grid-template-columns: minmax(0, 290px) minmax(0, 1fr);
+      gap: 46px;
+      align-items: start;
+      margin-top: 36px;
+    }
+    @media (max-width: 820px) {
+      .app-split { grid-template-columns: 1fr; gap: 34px; }
+    }
+    .app-shot {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      background: var(--panel);
+      max-width: 290px;
+      margin: 0 auto;
+    }
+    .app-shot img { display: block; width: 100%; height: auto; }
+    .app-list { list-style: none; margin: 0; padding: 0; }
+    .app-list li { padding: 0 0 19px; font-size: 14.9px; color: var(--muted); line-height: 1.58; }
+    .app-list li:last-child { padding-bottom: 0; }
+    .app-list b {
+      display: block; color: var(--ink); font-weight: 600;
+      font-size: 15.4px; margin-bottom: 3px;
+    }
+    .app-list code, .app-list kbd { font-size: 0.88em; background: var(--sunken); padding: 1px 5px; border-radius: 3px; }
+    .app-list kbd { border: 1px solid var(--line); }
   </style>
 </head>
 <body>
@@ -364,13 +394,14 @@
   <div class="wrap inner">
     <a class="brand" href="./index.html"><img src="./tent.png" alt="" width="22" height="22"> Bivy</a>
     <nav class="top">
-      <a href="#how">How it works</a>
+      <a href="#app">The app</a>
+      <a href="#how" class="hide-sm">How it works</a>
       <a href="#trust" class="hide-sm">Security</a>
       <a href="#docs">Docs</a>
       <a href="#pricing" class="hide-sm">Pricing</a>
       <a href="https://github.com/bivysh/bivy" class="hide-sm">GitHub</a>
       <a href="https://app.bivy.sh" class="hide-sm">Log in</a>
-      <a href="https://app.bivy.sh" class="btn btn-primary btn-sm">Try for free</a>
+      <a href="https://app.bivy.sh" class="btn btn-primary btn-sm">Start free</a>
     </nav>
   </div>
 </header>
@@ -383,8 +414,9 @@
       <h1>Run coding agents on machines you own.</h1>
       <p class="lede">
         Bivy runs Claude Code, Codex, Gemini CLI, Aider and other agent CLIs on your
-        own laptop or server — with your keys, your repo, and your toolchain — then
-        makes those sessions reachable from your phone, browser, or another terminal.
+        own laptop or server — with your keys, your repo, and your toolchain — then puts
+        every session in an app on your phone: the full transcript, the diffs, a real
+        terminal, and the approval it's waiting on.
       </p>
 
       <div class="install">
@@ -397,15 +429,15 @@
       </p>
 
       <div class="hero-cta">
-        <a href="https://app.bivy.sh" class="btn btn-primary">Try for free</a>
-        <a href="#pricing" class="btn btn-ghost">See pricing</a>
+        <a href="https://app.bivy.sh" class="btn btn-primary">Start free</a>
+        <a href="#app" class="btn btn-ghost">See the app</a>
       </div>
 
       <p class="sub" style="margin:22px 0 0">
-        Your code never leaves your machine. Agents run in real terminals on hardware you
+        Your code never leaves your machine — agents run in real terminals on hardware you
         control, and Bivy adds the session layer, approvals, and remote access around them.
-        It's free on one machine — including 5 GitHub issue-to-PR runs a month. Go Pro to
-        reach every machine, get push notifications, and run the queue without limits.
+        Free on one machine, forever: no credit card, no trial clock. Setup is one command
+        and a guided wizard, and uninstall is one command too.
       </p>
 
       <p class="runs-on">
@@ -419,6 +451,180 @@
         <img src="./screenshots/cli-session.png"
              alt="A Bivy CLI session running an agent in an isolated worktree, with tests passing."
              loading="lazy">
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section>
+    <div class="wrap">
+      <p class="kicker">What's in 0.1</p>
+      <h2>The session layer around agents you already use.</h2>
+      <p class="prose">Bivy does not replace agent CLIs. It runs them in real PTYs and adds
+      what they individually lack: durability, remote access, approvals, and a consistent
+      way to move between them.</p>
+
+      <div class="features">
+        <div class="feature">
+          <h3>Ten agents, one interface</h3>
+          <p>Pi, Claude Code, Codex, OpenCode, Gemini CLI, Qwen Code, Goose, Aider, Cline
+          and Crush, each driven through its native CLI. Bivy installs the ones you pick.
+          Any other command works via <code>bivy run -- ./your-agent</code>.</p>
+        </div>
+        <div class="feature">
+          <h3>Sessions that survive</h3>
+          <p>Every session has a durable append-only event log and its own git worktree.
+          Detach from your terminal, restart the daemon, reconnect from a phone — the same
+          session is still there, transcript and diffs intact.</p>
+        </div>
+        <div class="feature">
+          <h3>No ports, no tunnel, no VPN</h3>
+          <p>Your node dials out to the relay, so nothing listens for inbound connections
+          and there's no firewall rule to add. It works behind NAT, hotel Wi-Fi and
+          corporate networks the same way. <a href="#app" style="color:var(--accent);text-decoration:none">See what the app gives you →</a></p>
+        </div>
+        <div class="feature">
+          <h3>Push notifications <span class="tag-pro">Pro</span></h3>
+          <p>Get pinged when an agent finishes, needs an approval, or hits an error, so you
+          can kick something off and walk away instead of babysitting the terminal.</p>
+        </div>
+        <div class="feature">
+          <h3>Approvals wherever you are</h3>
+          <p>Agents run unattended by default. Catastrophic commands and writes outside
+          the workspace are blocked in every mode, and force-push, publish, deploy and
+          sudo always pause. Switch to <code>risky</code> or <code>always</code> to be
+          asked about more, and approve from terminal, browser, or phone.</p>
+        </div>
+        <div class="feature">
+          <h3>Switch agent or model mid-session</h3>
+          <p>Fork a running session onto a different agent, a different model, or a
+          different machine, carrying the transcript and any uncommitted work with it.</p>
+        </div>
+        <div class="feature">
+          <h3>GitHub issue to pull request</h3>
+          <p>Label an issue <code>bivy</code>, or mention the Bivy GitHub App in a comment.
+          A machine you own clones the repo, works in an isolated worktree, and opens the
+          pull request itself.</p>
+        </div>
+        <div class="feature">
+          <h3>Terminal takeover</h3>
+          <p><code>bivy shim install claude</code> makes typing <code>claude</code> start
+          the real TUI inside a Bivy PTY — so an ordinary terminal session becomes one you
+          can pick up from your phone.</p>
+        </div>
+        <div class="feature">
+          <h3>Your credentials, your vault</h3>
+          <p>An encrypted local vault, plus <code>env://</code> and <code>op://</code>
+          (1Password) references resolved at start. Model keys and GitHub tokens stay on
+          the node.</p>
+        </div>
+        <div class="feature">
+          <h3>Any model endpoint</h3>
+          <p>Thirteen providers by API key or OAuth, plus your own OpenAI-compatible,
+          Azure, Ollama, LM Studio, vLLM or SGLang endpoints.</p>
+        </div>
+        <div class="feature">
+          <h3>Runs on any machine you own</h3>
+          <p>A laptop, a home server, a Raspberry Pi, or a VPS, droplet or EC2 instance you
+          already pay for — if you can install it there, Bivy runs there. The free plan
+          covers one such machine, wherever it lives.</p>
+        </div>
+        <div class="feature">
+          <h3>Ephemeral cloud machines</h3>
+          <p>No spare machine? Have Bivy start a short-lived runner on Fly.io, Hetzner or
+          AWS EC2, work there, then destroy it — using your own provider token, which stays
+          on your device and is never sent to us. Set up as many as you like; free runs one
+          at a time, Pro runs them in parallel.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- THE APP -->
+  <section id="app">
+    <div class="wrap">
+      <p class="kicker">The app</p>
+      <h2>A real client for your agents, not just a window onto them.</h2>
+      <p class="prose">
+        Install Bivy on your phone and the session you started on your laptop is right
+        there — the whole transcript, the diffs, the terminal, and the approval it's
+        waiting on. Start a run at your desk, review it on the train, and answer the one
+        question it has without opening a laptop.
+      </p>
+
+      <div class="app-split">
+        <div class="app-shot">
+          <img src="./screenshots/app-session.png"
+               alt="The Bivy app on a phone: an agent fixing a double-charge bug, showing the prompt, what it read and ran, the resulting diff, and a composer with agent, model and voice controls."
+               loading="lazy">
+        </div>
+
+        <ul class="app-list">
+          <li>
+            <b>Pick up any session, on any machine</b>
+            One list across every node you own. A session you started with
+            <code>bivy run</code> in a terminal is the same session here — open it and keep going.
+          </li>
+          <li>
+            <b>See the work, not a summary</b>
+            Every tool call, command, and file edit, with the diff attached. Expand
+            <em>"read 5 files, ran 10 commands"</em> to check exactly what it touched
+            before you trust it.
+          </li>
+          <li>
+            <b>Undo a turn you don't like</b>
+            Bivy takes a git checkpoint around every turn, for every agent. Undo the last
+            one from your phone, or scrub back through the timeline and rewind to any
+            earlier point — so letting an agent run isn't a one-way door.
+          </li>
+          <li>
+            <b>Approve from wherever you are</b>
+            Force-push, publish, deploy and sudo always pause for a human, and you can ask
+            to be consulted on far more. When an agent stops — or just asks you a question
+            — it shows up in the app with the command, the risk, and the raw tool input, and
+            one tap unblocks it instead of a run sitting idle until you're back at your desk.
+          </li>
+          <li>
+            <b>Drop into a real terminal</b>
+            A full PTY on the machine, in your pocket — run the tests yourself, check
+            <code>git status</code>, or take over when the agent gets stuck. With a touch
+            key bar for <kbd>esc</kbd>, <kbd>tab</kbd>, ctrl and arrows, so a phone
+            keyboard stops being the reason you wait until you're home. It can attach to
+            an existing tmux, zellij or screen session too.
+          </li>
+          <li>
+            <b>Type it, paste it, or say it</b>
+            Dictate a prompt instead of thumb-typing it, attach a screenshot straight from
+            your camera roll, and use the agent's own slash commands with autocomplete. A
+            half-written message survives a reload or a jump to another session.
+          </li>
+          <li>
+            <b>Change agent, model, or machine mid-run</b>
+            Swap Claude Code for Codex, move to a bigger model, or fork the whole session
+            onto another node — transcript and uncommitted work included.
+          </li>
+          <li>
+            <b>Know what it's costing</b>
+            A live token and dollar counter on every session, so a long autonomous run
+            never surprises you.
+          </li>
+          <li>
+            <b>Installs like an app</b>
+            Add it to your home screen from the browser — no app store, no download, no
+            review queue. It launches full-screen, paints your recent sessions from cache
+            before the network answers, and never force-reloads you mid-session.
+            <a href="#pricing" style="color:var(--accent);text-decoration:none">Pro</a>
+            adds push, so a run that finishes or stalls comes and finds you.
+          </li>
+        </ul>
+      </div>
+
+      <div class="notice">
+        <p><b>Nothing to set up separately.</b> The app is part of the free plan. There's
+        no download — <code>bivy setup</code> walks you through remote access and prints a
+        QR code, and scanning it pairs your phone; <code>bivy link</code> prints a fresh
+        one any time. Pairing is an encrypted handshake with your own node, so the app
+        streams your session without the relay or our servers being able to read it.</p>
       </div>
     </div>
   </section>
@@ -464,120 +670,45 @@
     </div>
   </section>
 
-  <!-- FEATURES -->
-  <section>
-    <div class="wrap">
-      <p class="kicker">What's in 0.1</p>
-      <h2>The session layer around agents you already use.</h2>
-      <p class="prose">Bivy does not replace agent CLIs. It runs them in real PTYs and adds
-      what they individually lack: durability, remote access, approvals, and a consistent
-      way to move between them.</p>
-
-      <div class="features">
-        <div class="feature">
-          <h3>Ten agents, one interface</h3>
-          <p>Pi, Claude Code, Codex, OpenCode, Gemini CLI, Qwen Code, Goose, Aider, Cline
-          and Crush, each driven through its native CLI. Bivy installs the ones you pick.
-          Any other command works via <code>bivy run -- ./your-agent</code>.</p>
-        </div>
-        <div class="feature">
-          <h3>Sessions that survive</h3>
-          <p>Every session has a durable append-only event log and its own git worktree.
-          Detach from your terminal, restart the daemon, reconnect from a phone — the same
-          session is still there, transcript and diffs intact.</p>
-        </div>
-        <div class="feature">
-          <h3>Reach it from anywhere</h3>
-          <p>Your node dials out to the relay, so there's no port to open and no tunnel to
-          run. Attach from the web app, the installable PWA on your phone, or another
-          terminal — behind NAT and corporate firewalls all the same.</p>
-        </div>
-        <div class="feature">
-          <h3>Push notifications <span class="tag-pro">Pro</span></h3>
-          <p>Get pinged when an agent finishes, needs an approval, or hits an error, so you
-          can kick something off and walk away instead of babysitting the terminal.</p>
-        </div>
-        <div class="feature">
-          <h3>Approvals wherever you are</h3>
-          <p>Agents run unattended by default. Catastrophic commands and writes outside
-          the workspace are blocked in every mode, and force-push, publish, deploy and
-          sudo always pause. Switch to <code>risky</code> or <code>always</code> to be
-          asked about more, and approve from terminal, browser, or phone.</p>
-        </div>
-        <div class="feature">
-          <h3>Switch agent or model mid-session</h3>
-          <p>Fork a running session onto a different agent, a different model, or a
-          different machine, carrying the transcript and any uncommitted work with it.</p>
-        </div>
-        <div class="feature">
-          <h3>GitHub issue to pull request</h3>
-          <p>Label an issue <code>bivy</code>, or mention the Bivy GitHub App in a comment.
-          A machine you own clones the repo, works in an isolated worktree, and opens the
-          pull request itself.</p>
-        </div>
-        <div class="feature">
-          <h3>Terminal takeover</h3>
-          <p><code>bivy shim install claude</code> makes typing <code>claude</code> start
-          the real TUI inside a Bivy PTY — so an ordinary terminal session becomes one you
-          can pick up from your phone.</p>
-        </div>
-        <div class="feature">
-          <h3>Your credentials, your vault</h3>
-          <p>An encrypted local vault, plus <code>env://</code> and <code>op://</code>
-          (1Password) references resolved at start. Model keys and GitHub tokens stay on
-          the node.</p>
-        </div>
-        <div class="feature">
-          <h3>Any model endpoint</h3>
-          <p>Thirteen providers by API key or OAuth, plus your own OpenAI-compatible,
-          Azure, Ollama, LM Studio, vLLM or SGLang endpoints.</p>
-        </div>
-        <div class="feature">
-          <h3>Bring your own cloud</h3>
-          <p>Start a short-lived runner on Fly.io, Hetzner or AWS EC2 using your own
-          provider token — which stays on your device and is never sent to Bivy.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
   <!-- PRICING -->
   <section id="pricing">
     <div class="wrap">
       <p class="kicker">Pricing</p>
-      <h2>We charge for reachability, never for tokens.</h2>
+      <h2>We charge for the remote layer, never for your tokens.</h2>
       <p class="prose">
-        You bring your own providers, keys, and machines. What we sell is hosted relay
-        uptime and remote access. Running Bivy locally — and self-hosting the whole thing —
-        stays free.
+        You bring your own providers, keys, and machines, and you pay those bills directly
+        with no markup from us. What we sell is the hosted relay, the app, and push. Running
+        Bivy locally — and self-hosting the whole thing — stays free.
       </p>
 
       <div class="plans">
         <div class="plan">
           <h3>Free</h3>
           <div class="price">$0</div>
-          <p class="who">All the agents, on one machine, reachable from your phone.</p>
+          <p class="who">Every agent on one machine, with the full phone app. Not a trial.</p>
           <ul>
             <li>All ten agents, plus your own</li>
             <li>Durable sessions and worktrees</li>
             <li>Approvals and sandbox tiers</li>
             <li>1 relay-connected node</li>
+            <li>Ephemeral cloud runners — 1 at a time</li>
             <li>GitHub work queue — 5 runs / month</li>
-            <li>Phone and browser access</li>
+            <li>The full phone and browser app</li>
             <li>Community support</li>
           </ul>
           <div class="cta-row">
-            <a href="https://app.bivy.sh" class="btn btn-ghost btn-block">Log in</a>
+            <a href="https://app.bivy.sh" class="btn btn-ghost btn-block">Start free</a>
           </div>
         </div>
         <div class="plan featured">
           <span class="badge">Most popular</span>
           <h3>Pro</h3>
           <div class="price">$15 <span>/ month</span></div>
-          <p class="who">Every machine reachable, and agents working while you're away.</p>
+          <p class="who">Every machine in the app, and agents that reach you when they need you.</p>
           <ul>
             <li>Everything in Free</li>
             <li>Unlimited nodes</li>
+            <li>Ephemeral runners in parallel</li>
             <li>Push notifications</li>
             <li>Unlimited GitHub work queue</li>
             <li>Cross-node session index</li>
@@ -814,6 +945,24 @@
           control plane until a node claims it.</p>
         </details>
         <details>
+          <summary>What do I actually need to get started?</summary>
+          <p>A Mac or Linux machine you can leave running, and a login for whichever model
+          you want to use. Node 22.19+ is required and the installer sets it up if it's
+          missing. <code>bivy setup</code> then walks you through the rest — workspace,
+          model sign-in, remote access, and a background service so it comes back after a
+          reboot. It's free on one machine, there's no credit card, and
+          <code>bivy uninstall</code> removes the service and config if you decide against
+          it.</p>
+        </details>
+        <details>
+          <summary>Is the phone app in the App Store?</summary>
+          <p>No, and it doesn't need to be. It's an installable web app: open your control
+          plane URL and add it to your home screen — on iPhone that's Safari's Share → Add
+          to Home Screen, and on Android or desktop it's the browser's own install button.
+          After that it launches full-screen like any other app. Nothing to download, and
+          updates arrive without a store review.</p>
+        </details>
+        <details>
           <summary>Do I need to open a port or run a tunnel?</summary>
           <p>No. Your node makes an outbound connection to the relay, and your devices
           attach through it. This works behind NAT and corporate firewalls without any
@@ -868,15 +1017,15 @@
   <section class="cta">
     <div class="wrap">
       <h2>Real agents, on a real machine you own.</h2>
-      <p>It's one command to get started, and it's free for one node with your phone
-      included. Go Pro when you want to reach every machine and have agents ship PRs
-      while you're away.</p>
+      <p>One command to install, and free on one machine with your phone included.
+      Nothing to configure on your network, no credit card, and no repository to hand
+      over. Go Pro later if you want every machine reachable and push notifications.</p>
       <div class="install">
         <code id="cmd2"><span class="p">$ </span>curl -fsSL https://bivy.sh/install.sh | bash</code>
         <button id="copy2" type="button" aria-label="Copy install command">Copy</button>
       </div>
       <div class="hero-cta">
-        <a href="https://app.bivy.sh" class="btn btn-primary">Go Pro — $15/mo</a>
+        <a href="https://app.bivy.sh" class="btn btn-primary">Start free</a>
         <a href="#pricing" class="btn btn-ghost">Compare plans</a>
       </div>
     </div>
