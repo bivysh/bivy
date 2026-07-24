@@ -73,6 +73,14 @@ async function main() {
   assert.equal(inputSeen, input, "local UTF-8 input is forwarded unchanged");
   assert.ok(stdout.includes(replay), "scrollback UTF-8 output is written unchanged");
   assert.ok(stdout.includes(echo), "live UTF-8 output is written unchanged");
+  // The TUI mode reset (leave alt screen, mouse/paste/focus reporting off) must
+  // be emitted when the daemon-side terminal ends, and before the exit message
+  // so the message lands on the primary screen. Guards against a takeover or
+  // kill leaving the user's terminal spewing escape garbage.
+  const resetAt = stdout.indexOf("\x1b[?1049l");
+  assert.ok(resetAt >= 0, "TUI terminal modes are reset on session end");
+  assert.ok(resetAt > stdout.indexOf(echo), "mode reset comes after live output");
+  assert.ok(resetAt < stdout.indexOf("[session ended]"), "mode reset precedes the exit message");
   console.log("attach: ok (UTF-8 input/output bridge)");
 }
 

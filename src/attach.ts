@@ -26,6 +26,31 @@ const c = {
   cyan: (s: string) => `\x1b[36m${s}\x1b[39m`,
 };
 
+/**
+ * Undo the terminal modes a full-screen TUI (Claude Code, Codex, vim) turns on:
+ * leave the alternate screen, re-show the cursor, and switch off bracketed
+ * paste, focus reporting, mouse tracking, application cursor/keypad keys and
+ * any kitty keyboard-protocol flags.
+ *
+ * Needed because the daemon-side PTY can die without the TUI restoring the
+ * terminal itself: a "continue as chat" takeover kills the agent's PTY, and
+ * TerminalManager.close() deliberately drops its final output — the very chunk
+ * that would have carried the TUI's own restore sequences. The same applies to
+ * a Ctrl-\ detach, where the TUI keeps running remotely and never resets the
+ * local terminal. Without this, the user's original terminal is left in those
+ * modes and every mouse move, focus change or paste smears escape garbage over
+ * the shell prompt. Each sequence is a no-op when its mode was never enabled.
+ */
+const TTY_MODE_RESET =
+  "\x1b[?1049l" + // leave the alternate screen
+  "\x1b[?2004l" + // bracketed paste off
+  "\x1b[?1004l" + // focus reporting off
+  "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" + // mouse tracking off
+  "\x1b[<u" + // pop kitty keyboard-protocol flags (no-op if never pushed)
+  "\x1b[?1l\x1b>" + // cursor keys + keypad back to normal mode
+  "\x1b[?25h" + // cursor visible
+  "\x1b[0m"; // reset colors/attributes
+
 type RunSpec = { agent?: string; label?: string; name?: string; model?: string; command: string; args?: string[]; workspace?: string; sessionId?: string };
 
 type Args = {
@@ -83,7 +108,20 @@ function bridge(args: Args, open: (ws: WebSocket) => void): Promise<number> {
     const stdin = process.stdin;
     const wasRaw = stdin.isTTY ? stdin.isRaw : false;
 
+    let modesReset = false;
+    // Reset TUI terminal modes exactly once, and only if a terminal was ever
+    // bound (before that, no TUI output has touched this terminal). Callers on
+    // the message paths invoke this BEFORE printing their exit message so the
+    // message lands on the primary screen, not the alternate screen the reset
+    // just left (where it would vanish).
+    const resetModes = () => {
+      if (modesReset || !bound) return;
+      modesReset = true;
+      process.stdout.write(TTY_MODE_RESET);
+    };
+
     const restore = () => {
+      resetModes();
       try { if (stdin.isTTY) stdin.setRawMode(wasRaw); } catch {}
       stdin.pause();
       stdin.removeListener("data", onInput);
@@ -107,6 +145,7 @@ function bridge(args: Args, open: (ws: WebSocket) => void): Promise<number> {
       if (data.length === 1 && data[0] === 0x1c) {
         const now = Date.now();
         if (now - detachArmed < 1500) {
+          resetModes();
           process.stdout.write(c.dim("\r\n[detached — session still running; `bivy resume` to return]\r\n"));
           finish(0);
           return;
@@ -153,12 +192,14 @@ function bridge(args: Args, open: (ws: WebSocket) => void): Promise<number> {
         beginTty();
         onResize();
       } else if (type === "terminal.gone" && msg.termId === termId) {
+        resetModes();
         process.stderr.write(c.red(`\r\nTerminal ${termId} is no longer running.\r\n`));
         finish(1);
       } else if (type === "terminal.output" && msg.termId === termId) {
         if (typeof msg.data === "string") process.stdout.write(msg.data);
       } else if ((type === "terminal.exit" || type === "terminal.closed") && msg.termId === termId) {
         const code = typeof msg.code === "number" ? msg.code : 0;
+        resetModes();
         process.stdout.write(c.dim(`\r\n[session ended]\r\n`));
         finish(code);
       } else if (type === "terminal.error") {
