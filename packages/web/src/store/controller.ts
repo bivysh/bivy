@@ -135,6 +135,8 @@ export class AppController {
   private pendingCrossNodeOpen: { sessionId: string; path?: string } | null = null;
   /** Subscribers that want the composer input focused (e.g. after "New"). */
   private composerFocusListeners = new Set<() => void>();
+  /** Subscribers that want the composer's slash-command menu opened (the "/" pill). */
+  private slashOpenListeners = new Set<() => void>();
 
   constructor() {
     // Persist each applied history snapshot + cursor, and re-request canonical
@@ -383,6 +385,34 @@ export class AppController {
    *  so the user can type immediately. */
   focusComposer(): void {
     for (const fn of this.composerFocusListeners) fn();
+  }
+
+  /** Subscribe to slash-menu-open requests (the Composer wires its "/" popover
+   *  here). Returns an unsubscribe fn. */
+  onOpenSlash(fn: () => void): () => void {
+    this.slashOpenListeners.add(fn);
+    return () => this.slashOpenListeners.delete(fn);
+  }
+
+  /**
+   * The "/" pill: make the active session's slash commands available, then open
+   * the composer's command menu. Commands are advertised per session and only
+   * reach the store once the node has the session attached — so a closed
+   * ("saved") session, which the node holds no live record for, surfaces nothing
+   * until it's re-opened. Reattach it first (session.open re-emits the session's
+   * capabilities → commandsBySession) so the menu can populate. A draft (no
+   * session) keeps the selected runtime's static catalog; an idle session is
+   * already attached, so there's nothing to initialize. Either way, ask the
+   * composer to pop its menu — it reactively fills in as commands arrive.
+   */
+  openSlashCommands(): void {
+    const s = this.store.getState();
+    const sid = s.activeSessionId;
+    if (sid) {
+      const row = s.sessions.find((r) => r.sessionId === sid);
+      if (row?.status === "saved") this.openSession(sid);
+    }
+    for (const fn of this.slashOpenListeners) fn();
   }
 
   /**

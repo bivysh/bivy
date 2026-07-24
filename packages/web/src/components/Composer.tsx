@@ -255,6 +255,24 @@ export function Composer({
     });
   }, []);
 
+  // The "/" pill (top-right, above the composer) asks us to open the slash-command
+  // menu. Seed a lone "/" so matchSlashCommands lists every advertised command,
+  // clear any prior dismissal, and focus the input — the menu renders reactively,
+  // so a session whose commands are still arriving (a just-reopened one) fills in
+  // as soon as they land. Preserve a command the user was already mid-typing.
+  useEffect(() => {
+    return controller.onOpenSlash(() => {
+      setText((prev) => (prev.trimStart().startsWith("/") ? prev : "/"));
+      setMenuDismissed(false);
+      setMenuIndex(0);
+      wantsFocusRef.current = true;
+      requestAnimationFrame(() => {
+        autosize();
+        if (canGrabFocus(taRef.current)) taRef.current?.focus();
+      });
+    });
+  }, []);
+
   // Escape closes the image viewer.
   useEffect(() => {
     if (!viewing) return;
