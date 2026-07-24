@@ -23,6 +23,8 @@ export interface ProviderAuthInfo {
   kind?: "api_key" | "oauth";
   /** Where the credential came from (stored / environment / …). */
   source?: string;
+  /** Epoch ms the stored OAuth access token expires, when `kind === "oauth"`. */
+  expiresAt?: number;
 }
 
 /**
@@ -32,14 +34,15 @@ export interface ProviderAuthInfo {
  */
 export async function listProviders(credsDir: string, piDir: string): Promise<ProviderAuthInfo[]> {
   const [catalog, stored] = await Promise.all([listPiProviders(credsDir, piDir), createCredentialVault(credsDir).list()]);
-  const kindById = new Map(stored.map((info) => [info.providerId, info.type]));
+  const infoById = new Map(stored.map((info) => [info.providerId, info]));
   return catalog.map((provider) => ({
     id: provider.id,
     name: provider.name,
     oauth: provider.oauth,
     configured: provider.configured,
-    kind: kindById.get(provider.id),
+    kind: infoById.get(provider.id)?.type,
     source: provider.source,
+    expiresAt: infoById.get(provider.id)?.expiresAt,
   }));
 }
 
