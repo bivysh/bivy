@@ -549,14 +549,8 @@ For operators running the self-hosted stack on a box.
 
 | Variable | Script | Type | Default |
 | --- | --- | --- | --- |
-| `BIVY_PRUNE_RETENTION_DAYS` | `prune.sh` | integer days | `7` |
 | `BIVY_PRUNE_DOCKER` | `prune.sh` | `0` disables | `1` |
 | `BIVY_PRUNE_DOCKER_ALL` | `prune.sh` | `1` runs `docker system prune -af` | `0` |
-| `BIVY_PRUNE_SESSIONS` | `prune.sh` | `0` disables | `1` |
-| `BIVY_DATA_DIR` | `prune.sh` | path | probes `$HOME/.bivy`, `/opt/bivy/.bivy`, `$PWD/.bivy` |
-| `BIVY_DATA_DIR` | `prune-node-keep.sh` | path | required; without it the script only reports candidates |
-| `BIVY_KEEP` | `prune-node-keep.sh` | integer ≥ 0 | `5` |
-| `DRY_RUN` | `prune-node-keep.sh` | `1` previews | `0` — **it deletes by default** |
 | `BIVY_PRUNE` | `self-host.sh` | `0` \| `1` \| unset | unset = prune only when a stack already exists |
 | `APP_DIR` | `staging-deploy.sh` | path | `/opt/bivy` |
 | `CP_DOMAIN`, `RELAY_DOMAIN` | `self-host.sh` | hostname | prompted |
