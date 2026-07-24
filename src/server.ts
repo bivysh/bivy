@@ -884,7 +884,7 @@ type StreamingBehavior = "steer" | "followUp";
 type PromptImage = { type: "image"; data: string; mimeType: string };
 type PromptAttachment =
   | { kind: "image"; name?: unknown; size?: unknown; mimeType?: unknown; data?: unknown }
-  | { kind: "file"; name?: unknown; size?: unknown; mimeType?: unknown; text?: unknown; truncated?: unknown; omitted?: unknown };
+  | { kind: "file"; name?: unknown; size?: unknown; mimeType?: unknown; data?: unknown; text?: unknown; truncated?: unknown; omitted?: unknown };
 
 function streamingBehaviorFrom(value: unknown): StreamingBehavior | undefined {
   return value === "steer" || value === "followUp" ? value : undefined;
@@ -908,29 +908,108 @@ function safeAttachmentName(value: unknown) {
   return String(value || "attachment").replace(/[\r\n]/g, " ").slice(0, 180);
 }
 
-function attachmentsFrom(value: unknown): { images: PromptImage[]; fileText: string } {
-  if (!Array.isArray(value)) return { images: [], fileText: "" };
+/** A decoded file attachment ready to be written into a session's workdir. */
+interface DecodedAttachment {
+  name: string;
+  mimeType: string;
+  size: number;
+  bytes?: Buffer;
+  text?: string;
+  truncated?: boolean;
+}
+
+/**
+ * Split composer attachments into three channels:
+ *   - `images`     — base64 blobs passed to the model as vision.
+ *   - `imageNotes` — one prose line per image for the persisted transcript.
+ *   - `files`      — decoded file attachments (bytes or text) to be written to
+ *                    disk by materializeAttachments so the agent can open them
+ *                    with its normal file tools. Any file type is supported;
+ *                    binary files arrive as base64 `data`.
+ */
+function attachmentsFrom(value: unknown): { images: PromptImage[]; imageNotes: string[]; files: DecodedAttachment[] } {
+  if (!Array.isArray(value)) return { images: [], imageNotes: [], files: [] };
   const images: PromptImage[] = [];
-  const fileSections: string[] = [];
+  const imageNotes: string[] = [];
+  const files: DecodedAttachment[] = [];
   for (const raw of value.slice(0, 12) as unknown[]) {
     if (!raw || typeof raw !== "object") continue;
     const attachment = raw as PromptAttachment;
     const name = safeAttachmentName(attachment.name);
     const size = Number(attachment.size || 0);
+    const mimeType = typeof attachment.mimeType === "string" && attachment.mimeType ? attachment.mimeType : undefined;
     if (attachment.kind === "image" && typeof attachment.data === "string") {
-      images.push({ type: "image", data: attachment.data, mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType : "image/png" });
-      fileSections.push(`[Image attachment: ${name}${size ? ` (${size} bytes)` : ""}]`);
+      images.push({ type: "image", data: attachment.data, mimeType: mimeType ?? "image/png" });
+      imageNotes.push(`[Image attachment: ${name}${size ? ` (${size} bytes)` : ""}]`);
     } else if (attachment.kind === "file") {
-      const mimeType = typeof attachment.mimeType === "string" ? attachment.mimeType : "application/octet-stream";
-      const header = `File attachment: ${name}${size ? ` (${size} bytes` : ""}${mimeType ? `, ${mimeType}` : ""}${attachment.truncated ? ", truncated" : ""}${size ? ")" : ""}`;
-      if (typeof attachment.text === "string" && attachment.text) {
-        fileSections.push(`\n--- ${header} ---\n${attachment.text}\n--- end ${name} ---`);
-      } else {
-        fileSections.push(`[${header}; content not included because it is binary or unreadable]`);
+      if (typeof attachment.data === "string" && attachment.data) {
+        files.push({ name, mimeType: mimeType ?? "application/octet-stream", size, bytes: Buffer.from(attachment.data, "base64"), truncated: !!attachment.truncated });
+      } else if (typeof attachment.text === "string" && attachment.text) {
+        files.push({ name, mimeType: mimeType ?? "text/plain", size, text: attachment.text, truncated: !!attachment.truncated });
       }
+      // A file with neither bytes nor text (e.g. omitted/unreadable) carries
+      // nothing to write, so there is nothing to hand the agent — skip it.
     }
   }
-  return { images, fileText: fileSections.join("\n\n") };
+  return { images, imageNotes, files };
+}
+
+/** Strip a user-supplied filename to a safe basename — no path traversal, no
+ * characters that would break the placeholder note or the filesystem. */
+function sanitizeAttachmentFilename(name: string): string {
+  const base = path
+    .basename(String(name || ""))
+    .replace(/[/\\\r\n\t[\]]/g, "_")
+    .replace(/^\.+/, "")
+    .trim()
+    .slice(0, 180);
+  return base || "attachment";
+}
+
+/**
+ * Write decoded file attachments into `<workdir>/.bivy-attachments/` and return
+ * one prose note per file (carrying the relative path) to append to the prompt.
+ * This is what makes an uploaded file of ANY type — binary included — readable
+ * by the agent's file tools. Filenames are sanitized and de-duplicated so two
+ * `report.pdf`s don't clobber. Best-effort: a failure degrades to a note rather
+ * than throwing, so a bad attachment never sinks the whole turn.
+ */
+function materializeAttachments(record: SessionRecord, files: DecodedAttachment[]): string {
+  if (!files.length) return "";
+  const workdir = harnessDirFor(record);
+  const dir = path.join(workdir, ".bivy-attachments");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    return files.map((f) => `[File attachment: ${sanitizeAttachmentFilename(f.name)} could not be saved: ${why}]`).join("\n");
+  }
+  const notes: string[] = [];
+  const used = new Set<string>();
+  for (const file of files) {
+    const safeBase = sanitizeAttachmentFilename(file.name);
+    const ext = path.extname(safeBase);
+    const stem = safeBase.slice(0, safeBase.length - ext.length) || safeBase;
+    let safe = safeBase;
+    let n = 1;
+    while (used.has(safe) || fs.existsSync(path.join(dir, safe))) {
+      safe = `${stem}-${n}${ext}`;
+      n += 1;
+    }
+    used.add(safe);
+    const dest = path.join(dir, safe);
+    const label = `${safe} (${file.size ? `${file.size} bytes, ` : ""}${file.mimeType}${file.truncated ? ", truncated" : ""})`;
+    try {
+      if (file.bytes) fs.writeFileSync(dest, file.bytes);
+      else if (typeof file.text === "string") fs.writeFileSync(dest, file.text, "utf8");
+      else continue;
+      const rel = path.relative(workdir, dest) || safe;
+      notes.push(`[File attachment: ${label} saved to ${rel} - read it with your file tools]`);
+    } catch (error) {
+      notes.push(`[File attachment: ${label} could not be saved: ${error instanceof Error ? error.message : String(error)}]`);
+    }
+  }
+  return notes.join("\n");
 }
 
 function approvalModeFrom(value: unknown): ApprovalMode | undefined {
@@ -2351,10 +2430,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
   },
   "github.app.disconnect"(msg) {
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
-    // appId scopes the disconnect to one app; omitted = disconnect them all.
+    // appId (or hookId, for a stale app with no App ID) scopes the disconnect to
+    // one app; both omitted = disconnect them all.
     const appId = typeof msg.appId === "string" && msg.appId.trim() ? msg.appId.trim() : undefined;
-    disconnectGithubApp(appId);
-    relay?.sendEvent({ type: "github.app.disconnected", requestId, ok: true, appId });
+    const hookId = typeof msg.hookId === "string" && msg.hookId.trim() ? msg.hookId.trim() : undefined;
+    disconnectGithubApp({ appId, hookId });
+    relay?.sendEvent({ type: "github.app.disconnected", requestId, ok: true, appId, hookId });
   },
   "workspaces.list"() {
     relay?.sendEvent({
@@ -2831,11 +2912,11 @@ const RELAY_COMMANDS: Record<string, Command> = {
   },
   async prompt(msg) {
     const text = String(msg.text ?? "").trim();
-    const { images, fileText } = attachmentsFrom(msg.attachments);
-    const promptText =
-      [text, fileText].filter(Boolean).join("\n\n") ||
-      (images.length ? "Please review the attached image(s)." : "");
-    if (!promptText && !images.length) return;
+    const { images, imageNotes, files } = attachmentsFrom(msg.attachments);
+    if (!text && !images.length && !files.length) return;
+    // Title/naming can only see what we have before the session exists; the file
+    // notes (with on-disk paths) are added once the workdir is known, below.
+    const titleText = [text, imageNotes.join("\n")].filter(Boolean).join("\n\n") || (images.length ? "Please review the attached image(s)." : "attachment");
     const requestedSessionId = typeof msg.sessionId === "string" && msg.sessionId ? msg.sessionId : undefined;
     let record: SessionRecord | null | undefined;
     try {
@@ -2849,7 +2930,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       return;
     }
     try {
-      record ??= await createWorkspaceSession(defaultWorkspace, { title: promptText, runtimeId: agentFrom(msg) });
+      record ??= await createWorkspaceSession(defaultWorkspace, { title: titleText, runtimeId: agentFrom(msg) });
     } catch (error) {
       // Session/worktree creation (e.g. `git worktree add` in createWorktree)
       // can throw. Without this the only handler is the console.warn-only outer
@@ -2864,6 +2945,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
       return;
     }
     touchSession(record);
+    // Now that the session (and its workdir) exists, write file attachments to
+    // disk and fold their path notes into the prompt the agent actually sees.
+    const fileNote = materializeAttachments(record, files);
+    const promptText =
+      [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
+      (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
     const agentPrompt = promptForAgent(record, promptText);
     broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: msg.clientMessageId });
     void maybeNameSession(record, promptText);
@@ -8131,10 +8218,15 @@ async function connectExistingApp(input: { appId: string; privateKeyPem: string;
  * Disconnect the GitHub App on this node: wipe the private key from the vault and
  * clear the app env, so the node stops minting tokens for it. The control plane
  * drops the hook separately. Local, idempotent; leaves other config untouched.
+ *
+ * Scope precedence: by `appId`, else by `hookId` (a stale app with no App ID);
+ * only when BOTH are omitted is EVERY app disconnected. Passing an unmatched
+ * appId/hookId is a no-op — a single-app disconnect must never nuke the others.
  */
-function disconnectGithubApp(appId?: string): void {
+function disconnectGithubApp({ appId, hookId }: { appId?: string; hookId?: string } = {}): void {
   const vault = new SecretVault(appDir);
-  const targets = appId ? listGitHubApps(appDir).filter((a) => a.appId === appId) : listGitHubApps(appDir);
+  const all = listGitHubApps(appDir);
+  const targets = appId ? all.filter((a) => a.appId === appId) : hookId ? all.filter((a) => a.hookId === hookId) : all;
   for (const app of targets) {
     try {
       // Only drop a key we own. An `op://` or `env://` reference points at
@@ -8147,8 +8239,9 @@ function disconnectGithubApp(appId?: string): void {
     removeGitHubApp(appDir, app.appId);
   }
   // The env-configured single app (containers, ephemeral runners) has no
-  // registry entry to remove, so clear it explicitly when disconnecting it.
-  if (!appId || process.env.BIVY_GITHUB_APP_ID === appId) {
+  // registry entry to remove, so clear it explicitly — but only on a full wipe
+  // or when the disconnect specifically targets that env app's id.
+  if ((!appId && !hookId) || process.env.BIVY_GITHUB_APP_ID === appId) {
     try {
       vault.delete("github.app-private-key");
     } catch {
@@ -8249,7 +8342,8 @@ app.get("/api/github/apps", async (_req, res) => {
 
 app.post("/api/github/app/disconnect", async (req, res) => {
   const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
-  disconnectGithubApp(appId || undefined);
+  const hookId = typeof req.body?.hookId === "string" ? req.body.hookId.trim() : "";
+  disconnectGithubApp({ appId: appId || undefined, hookId: hookId || undefined });
   res.json({ ok: true });
 });
 
@@ -8289,9 +8383,11 @@ app.post("/api/session/prompt", async (req, res, next) => {
     if (text === "/login" || text.startsWith("/login ")) {
       return res.status(400).json({ error: "Use the Login / API tokens dialog from the phone UI. If it is not visible, refresh this page after updating Bivy." });
     }
-    const { images, fileText } = attachmentsFrom(req.body?.attachments);
-    const promptText = [text, fileText].filter(Boolean).join("\n\n") || (images.length ? "Please review the attached image(s)." : "");
-    if (!promptText && !images.length) return res.status(400).json({ error: "Missing text" });
+    const { images, imageNotes, files } = attachmentsFrom(req.body?.attachments);
+    if (!text && !images.length && !files.length) return res.status(400).json({ error: "Missing text" });
+    // File notes (with on-disk paths) are folded in once the workdir exists; the
+    // session title can only reflect what's known before then.
+    const titleText = [text, imageNotes.join("\n")].filter(Boolean).join("\n\n") || (images.length ? "Please review the attached image(s)." : "attachment");
 
     const requestedSessionId = typeof req.body?.sessionId === "string" && req.body.sessionId ? req.body.sessionId : undefined;
     const requestedWorkspace = req.body?.workspace !== undefined && String(req.body.workspace).trim() ? validateWorkspace(req.body.workspace) : undefined;
@@ -8303,12 +8399,16 @@ app.post("/api/session/prompt", async (req, res, next) => {
     // rather than silently spawning a new chat under the caller's old id.
     if (requestedSessionId && !record) return res.status(404).json({ error: "Session not found" });
     if (!record) {
-      record = await createWorkspaceSession(requestedWorkspace ?? defaultWorkspace, { title: promptText, runtimeId: agentFrom(req.body ?? {}) });
+      record = await createWorkspaceSession(requestedWorkspace ?? defaultWorkspace, { title: titleText, runtimeId: agentFrom(req.body ?? {}) });
     }
     if (record.tuiTermId || record.tuiRefreshing) {
       return res.status(409).json({ error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
     }
     const session = record.session;
+    const fileNote = materializeAttachments(record, files);
+    const promptText =
+      [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
+      (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
     const agentPrompt = promptForAgent(record, promptText);
     broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
     markSessionWorking(record, { type: "agent_start" });

@@ -1488,12 +1488,13 @@ export class AppController {
    * `appId` scopes it to one of the account's apps; without one every app goes,
    * which is the only option for a hook old enough to have no App ID recorded.
    */
-  async githubAppDisconnect(appId?: string): Promise<void> {
+  async githubAppDisconnect(appId?: string, hookId?: string): Promise<void> {
     // Tell the node to clear its local key/config (over the active transport)…
-    this.send({ kind: "github.app.disconnect", requestId: requestId(), appId: appId || undefined });
+    this.send({ kind: "github.app.disconnect", requestId: requestId(), appId: appId || undefined, hookId: hookId || undefined });
     // …and drop the account's hooks on the control plane. Errors propagate so the
-    // UI can tell the user it didn't take (e.g. control plane mid-deploy).
-    await disconnectGithubApp(this.local, appId);
+    // UI can tell the user it didn't take (e.g. control plane mid-deploy). Passing
+    // hookId lets a stale app with no App ID be removed on its own.
+    await disconnectGithubApp(this.local, { appId, hookId });
   }
   async removeNode(nodeId: string): Promise<void> {
     await removeAccountNode(this.local, nodeId);

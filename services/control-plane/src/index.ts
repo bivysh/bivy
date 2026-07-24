@@ -1508,14 +1508,18 @@ app.post("/account/github-app/default-node", asyncHandler(async (req, res) => {
 app.delete("/account/github-app", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  // With an app id, disconnect just that app and leave the account's others
-  // alone. Without one, remove ALL github_app hooks — abandoned create flows
-  // leave orphans, and deleting only the newest would let one resurface as
-  // "connected".
+  // Scope precedence: by app id, else by a single hook id (a stale app from an
+  // abandoned create flow has a hook but no App ID — it must be removable on its
+  // own without taking the account's healthy apps with it). Only with NEITHER do
+  // ALL github_app hooks go — orphans included — since deleting just the newest
+  // would let one resurface as "connected".
   const appId = typeof req.query.appId === "string" ? req.query.appId.trim() : "";
+  const hookId = typeof req.query.hookId === "string" ? req.query.hookId.trim() : "";
   const removed = appId
     ? await store.deleteGithubAppHooksForApp(client.accountId, appId)
-    : await store.deleteGithubAppHooks(client.accountId);
+    : hookId
+      ? (await store.deleteInboundHook(client.accountId, hookId)) ? 1 : 0
+      : await store.deleteGithubAppHooks(client.accountId);
   res.json({ ok: true, removed });
 }));
 

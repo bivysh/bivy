@@ -343,7 +343,12 @@ export function Composer({
           }
           const isText = file.type.startsWith("text/") || TEXT_EXT.test(file.name);
           if (!isText) {
-            next.push({ kind: "file", name: file.name, size: file.size, mimeType: file.type || "application/octet-stream", text: "", omitted: true });
+            // Any non-text file (binary, PDF, .pem, …): send the raw bytes as
+            // base64 so the node can materialize it on disk for the agent to
+            // read. Previously these were dropped with `omitted: true`.
+            const url = await readDataUrl(file);
+            const data = url.includes(",") ? url.split(",").pop() || "" : url;
+            next.push({ kind: "file", name: file.name, size: file.size, mimeType: file.type || "application/octet-stream", data });
             continue;
           }
           const body = await readText(file);
@@ -533,7 +538,7 @@ export function Composer({
               {attachments.map((a, i) => {
                 const thumb = imageDataUrl(a);
                 return (
-                  <span key={`${a.name}-${i}`} className={`attach-chip${a.omitted ? " omitted" : ""}${thumb ? " has-thumb" : ""}`} title={a.omitted ? "Binary file — content not sent" : a.name}>
+                  <span key={`${a.name}-${i}`} className={`attach-chip${a.omitted ? " omitted" : ""}${thumb ? " has-thumb" : ""}`} title={a.omitted ? "File could not be read — not attached" : a.name}>
                     {thumb ? (
                       <button type="button" className="attach-thumb-btn" onClick={() => setViewing(thumb)} aria-label={`View ${a.name}`} title={`View ${a.name}`}>
                         <img className="attach-thumb" src={thumb} alt={a.name} />
