@@ -1422,6 +1422,7 @@ function NodesPanel({ state }: { state: AppState }) {
   const [form, setForm] = useState<NodeSettings | null>(null);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
+  const currentNodeId = controller.local.cur;
 
   const reload = () => {
     controller.getNodeSettings();
@@ -1429,14 +1430,23 @@ function NodesPanel({ state }: { state: AppState }) {
   };
   useEffect(reload, [hosted]);
 
+  // The node whose settings we're editing is only ever the one the transport
+  // is actually connected to (`state.status === "online"`) — never a guess
+  // based on a fixed timeout. While it's offline/connecting, don't trust
+  // whatever is left in `state.nodeSettings` (a prior node's data, or none).
+  const nodeOnline = state.status === "online";
+  useEffect(() => {
+    if (hosted && nodeOnline) controller.getNodeSettings();
+  }, [hosted, nodeOnline, currentNodeId]);
+
   // Re-seed the editable form whenever fresh settings arrive from the node
   // (initial load, or after switching to a different node). Keyed on the node
   // name so an in-progress edit isn't clobbered by an unrelated re-render.
-  const settings = state.nodeSettings;
+  const settings = nodeOnline ? state.nodeSettings : null;
   // Includes githubIssuePrompt so `resetIssuePrompt` (which doesn't touch the
   // rest of the form) re-seeds once the node echoes back the restored default.
   const sig = settings ? `${settings.name}|${settings.defaultAgent}|${settings.githubIssuePrompt}` : "";
-  useEffect(() => { if (settings) setForm(settings); }, [sig]);
+  useEffect(() => { setForm(settings); }, [sig]);
 
   const runtimes = state.runtimes.filter((r) => String((r as { status?: string }).status ?? "available") === "available");
   const agentCaps = state.runtimes.find((r) => r.id === form?.defaultAgent)?.capabilities as { modelSelection?: boolean } | undefined;
@@ -1467,8 +1477,6 @@ function NodesPanel({ state }: { state: AppState }) {
     setTimeout(reload, 300);
   };
 
-  const currentNodeId = controller.local.cur;
-
   return (
     <div className="settings-form">
       <p className="muted settings-intro">
@@ -1498,10 +1506,12 @@ function NodesPanel({ state }: { state: AppState }) {
                 onClick={() => {
                   if (n.id === currentNodeId) return;
                   controller.switchNode(n.id);
-                  // The transport reconnects to the picked node; pull its settings
-                  // once it's back so the form reflects that node.
+                  // Don't show the outgoing node's settings a moment longer than
+                  // necessary. The effect above pulls the new node's settings
+                  // once the transport actually confirms it's online — no fixed
+                  // timeout guess, and no window where a picked *offline* node
+                  // would keep displaying whatever was left over from before.
                   setForm(null);
-                  setTimeout(reload, 900);
                 }}
               />
             ))}
@@ -1509,7 +1519,13 @@ function NodesPanel({ state }: { state: AppState }) {
         </>
       )}
 
-      {!form ? (
+      {!nodeOnline ? (
+        <p className="muted">
+          {state.status === "offline"
+            ? "This node is offline — its settings aren't reachable until it reconnects."
+            : "Connecting to this node…"}
+        </p>
+      ) : !form ? (
         <p className="muted">Loading node settings…</p>
       ) : (
         <>

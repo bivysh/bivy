@@ -1154,6 +1154,12 @@ export class SessionStore {
       // them across a node switch.
       commandsBySession: {},
       error: null,
+      // Per-node settings (name, default agent/model, GitHub prompt, sync
+      // config, …) must never survive a switch — otherwise a still-editable
+      // form can keep showing the *previous* node's settings under the
+      // newly-selected node, e.g. while the new one is offline and never
+      // answers `node.settings.get` to overwrite it.
+      nodeSettings: null,
     });
   }
 
