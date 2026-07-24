@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bivy — Run coding agents on machines you own</title>
-  <meta name="description" content="Bivy runs Claude Code, Codex, Gemini CLI, Aider and other coding agents on your own hardware, with your own keys — then puts every session in an app on your phone: full transcript, diffs, a real terminal, and one-tap approvals. Free, 10 runs a week. Source-available and self-hostable.">
+  <meta name="description" content="Bivy runs Claude Code, Codex, Gemini CLI, Aider and other coding agents on your own hardware, with your own keys — then gives you a real chat app for every session, reachable from anywhere: transcript, diffs, approvals, and a terminal when you need one. Free, 10 runs a week. Source-available and self-hostable.">
   <meta name="theme-color" content="#fbfaf8">
   <meta property="og:title" content="Bivy — Run coding agents on machines you own">
-  <meta property="og:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free, 10 runs a week, no repo upload.">
+  <meta property="og:description" content="Coding agents on your hardware, with your keys — a real chat app for every session, reachable anywhere: diffs, approvals, a terminal when you need it. Free, 10 runs a week, no repo upload.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://bivy.sh">
   <meta property="og:image" content="https://bivy.sh/screenshots/app-session.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Bivy — Run coding agents on machines you own">
-  <meta name="twitter:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free, 10 runs a week, no repo upload.">
+  <meta name="twitter:description" content="Coding agents on your hardware, with your keys — a real chat app for every session, reachable anywhere: diffs, approvals, a terminal when you need it. Free, 10 runs a week, no repo upload.">
   <meta name="twitter:image" content="https://bivy.sh/screenshots/app-session.png">
   <link rel="icon" href="./tent.svg">
   <link rel="icon" type="image/png" href="./tent.png">
@@ -173,7 +173,32 @@
     }
     section > .wrap > p, .prose p { color: var(--ink-2); }
 
-    /* ---------- feature list ---------- */
+    /* ---------- feature pillars (the 3 headline features) ---------- */
+    .pillars {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 22px;
+      margin-top: 34px;
+    }
+    .pillar {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 28px 26px 30px;
+    }
+    .pillar .eyebrow {
+      font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--accent); margin: 0 0 12px;
+    }
+    .pillar h3 { font-size: 19px; margin: 0 0 10px; font-weight: 600; }
+    .pillar p { margin: 0; font-size: 15px; color: var(--ink-2); line-height: 1.6; }
+    .pillar code { font-size: 0.88em; background: var(--sunken); padding: 1px 5px; border-radius: 3px; }
+
+    /* ---------- feature list (the rest, kept compact so they don't compete) ---------- */
+    .features-label {
+      font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--faint); font-weight: 500; margin: 46px 0 18px;
+    }
     .features {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
@@ -182,7 +207,6 @@
       border: 1px solid var(--line-2);
       border-radius: 8px;
       overflow: hidden;
-      margin-top: 34px;
     }
     .feature { background: var(--bg); padding: 24px 24px 26px; }
     .feature h3 { font-size: 16px; margin: 0 0 8px; font-weight: 600; }
@@ -278,14 +302,11 @@
     }
     .plan { background: var(--bg); padding: 26px 24px 28px; }
     .plan h3 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
-    .plan .price { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; margin: 10px 0 4px; }
+    .plan .price { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; margin: 10px 0 18px; }
     .plan .price span { font-size: 14px; font-weight: 400; color: var(--muted); letter-spacing: 0; }
-    .plan .who { font-size: 14px; color: var(--muted); margin: 0 0 18px; min-height: 42px; }
     .plan ul { list-style: none; margin: 0; padding: 0; font-size: 14.5px; color: var(--ink-2); }
     .plan li { padding: 5px 0 5px 17px; position: relative; }
     .plan li::before { content: "—"; position: absolute; left: 0; color: var(--faint); }
-    .plan li.soon { padding-left: 0; color: var(--muted); font-style: italic; }
-    .plan li.soon::before { content: none; }
     .plan.featured { background: var(--panel); box-shadow: inset 0 0 0 1.5px var(--accent); }
     .plan .badge {
       display: inline-block; font-size: 11px; font-weight: 600;
@@ -386,6 +407,15 @@
     }
     .app-list code, .app-list kbd { font-size: 0.88em; background: var(--sunken); padding: 1px 5px; border-radius: 3px; }
     .app-list kbd { border: 1px solid var(--line); }
+    .app-list li.promo {
+      border-left: 2px solid var(--accent);
+      padding-left: 15px;
+    }
+    .app-list li.promo .eyebrow {
+      display: block; font-size: 11.5px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--accent); margin: 0 0 4px;
+    }
   </style>
 </head>
 <body>
@@ -464,19 +494,34 @@
       what they individually lack: durability, remote access, approvals, and a consistent
       way to move between them.</p>
 
-      <div class="features">
-        <div class="feature">
-          <h3>Ten agents, one interface</h3>
+      <div class="pillars">
+        <div class="pillar">
+          <p class="eyebrow">Any local agent</p>
+          <h3>Ten agents supported today — and anything else you point it at</h3>
           <p>Pi, Claude Code, Codex, OpenCode, Gemini CLI, Qwen Code, Goose, Aider, Cline
           and Crush, each driven through its native CLI. Bivy installs the ones you pick.
           Any other command works via <code>bivy run -- ./your-agent</code>.</p>
         </div>
-        <div class="feature">
-          <h3>Sessions that survive</h3>
-          <p>Every session has a durable append-only event log and its own git worktree.
-          Detach from your terminal, restart the daemon, reconnect from a phone — the same
-          session is still there, transcript and diffs intact.</p>
+        <div class="pillar">
+          <p class="eyebrow">Durable, movable sessions</p>
+          <h3>Sessions that survive — and fork to any node</h3>
+          <p>Every session has a durable append-only event log and its own git worktree, so
+          detaching your terminal or restarting the daemon never loses it. Fork a running
+          session onto a different agent, a different model, or a different machine,
+          carrying the transcript and any uncommitted work with it.</p>
         </div>
+        <div class="pillar">
+          <p class="eyebrow">Keys, synced</p>
+          <h3>Credentials synced across every node, end to end</h3>
+          <p>An encrypted local vault, plus <code>env://</code> and <code>op://</code>
+          (1Password) references resolved at start. Bivy-managed provider credentials sync
+          end-to-end across every node you own — add a key once. Agent-native CLI logins
+          (Claude Code, Codex, Gemini CLI) may need a one-time sign-in per node.</p>
+        </div>
+      </div>
+
+      <p class="features-label">Also included</p>
+      <div class="features">
         <div class="feature">
           <h3>No ports, no tunnel, no VPN</h3>
           <p>Your node dials out to the relay, so nothing listens for inbound connections
@@ -496,11 +541,6 @@
           asked about more, and approve from terminal, browser, or phone.</p>
         </div>
         <div class="feature">
-          <h3>Switch agent or model mid-session</h3>
-          <p>Fork a running session onto a different agent, a different model, or a
-          different machine, carrying the transcript and any uncommitted work with it.</p>
-        </div>
-        <div class="feature">
           <h3>GitHub issue to pull request</h3>
           <p>Label an issue <code>bivy</code>, or mention the Bivy GitHub App in a comment.
           A machine you own clones the repo, works in an isolated worktree, and opens the
@@ -511,12 +551,6 @@
           <p><code>bivy shim install claude</code> makes typing <code>claude</code> start
           the real TUI inside a Bivy PTY — so an ordinary terminal session becomes one you
           can pick up from your phone.</p>
-        </div>
-        <div class="feature">
-          <h3>Your credentials, your vault</h3>
-          <p>An encrypted local vault, plus <code>env://</code> and <code>op://</code>
-          (1Password) references resolved at start. Model keys and GitHub tokens stay on
-          the node.</p>
         </div>
         <div class="feature">
           <h3>Any model endpoint</h3>
@@ -544,12 +578,14 @@
   <section id="app">
     <div class="wrap">
       <p class="kicker">The app</p>
-      <h2>A real client for your agents, not just a window onto them.</h2>
+      <h2>Any agent, any model — a real chat client, not a terminal crammed onto a phone.</h2>
       <p class="prose">
-        Install Bivy on your phone and the session you started on your laptop is right
-        there — the whole transcript, the diffs, the terminal, and the approval it's
-        waiting on. Start a run at your desk, review it on the train, and answer the one
-        question it has without opening a laptop.
+        This is the mobile companion most agent CLIs don't ship on their own: whichever
+        agent and model you're running — Claude Code, Codex, or nine others — on machines
+        you own, with your own keys, reachable from anywhere. A composer built for chatting
+        with an agent, with dictation and attachments, not a PTY squeezed onto a small
+        screen — plus the same label-an-issue, get-a-pull-request-back workflow other
+        agents lock to their own hosted compute. See <a href="#github" style="color:var(--accent);text-decoration:none">the GitHub work queue</a> below.
       </p>
 
       <div class="app-split">
@@ -564,6 +600,19 @@
             <b>Pick up any session, on any machine</b>
             One list across every node you own. A session you started with
             <code>bivy run</code> in a terminal is the same session here — open it and keep going.
+          </li>
+          <li>
+            <b>Type it, paste it, or say it</b>
+            A real composer, not a terminal squeezed onto a small screen. Dictate a prompt
+            instead of thumb-typing it, attach a screenshot straight from your camera roll,
+            and use the agent's own slash commands with autocomplete. A half-written
+            message survives a reload or a jump to another session.
+          </li>
+          <li class="promo">
+            <span class="eyebrow">Only in Bivy</span>
+            <b>Change agent, model, or machine mid-run</b>
+            Swap Claude Code for Codex, move to a bigger model, or fork the whole session
+            onto another node — transcript and uncommitted work included.
           </li>
           <li>
             <b>See the work, not a summary</b>
@@ -585,23 +634,12 @@
             one tap unblocks it instead of a run sitting idle until you're back at your desk.
           </li>
           <li>
-            <b>Drop into a real terminal</b>
+            <b>Drop into a real terminal, when you need one</b>
             A full PTY on the machine, in your pocket — run the tests yourself, check
             <code>git status</code>, or take over when the agent gets stuck. With a touch
             key bar for <kbd>esc</kbd>, <kbd>tab</kbd>, ctrl and arrows, so a phone
             keyboard stops being the reason you wait until you're home. It can attach to
             an existing tmux, zellij or screen session too.
-          </li>
-          <li>
-            <b>Type it, paste it, or say it</b>
-            Dictate a prompt instead of thumb-typing it, attach a screenshot straight from
-            your camera roll, and use the agent's own slash commands with autocomplete. A
-            half-written message survives a reload or a jump to another session.
-          </li>
-          <li>
-            <b>Change agent, model, or machine mid-run</b>
-            Swap Claude Code for Codex, move to a bigger model, or fork the whole session
-            onto another node — transcript and uncommitted work included.
           </li>
           <li>
             <b>Know what it's costing</b>
@@ -675,19 +713,13 @@
     <div class="wrap">
       <p class="kicker">Pricing</p>
       <h2>We charge for the remote layer, never for your tokens.</h2>
-      <p class="prose">
-        You bring your own providers, keys, and machines, and you pay those bills directly
-        with no markup from us. What we sell is the hosted relay, the app, and push. Running
-        Bivy locally — and self-hosting the whole thing — stays free.
-      </p>
 
       <div class="plans">
         <div class="plan">
           <h3>Free</h3>
           <div class="price">$0</div>
-          <p class="who">The whole product, capped at 10 runs a week. Not a trial.</p>
           <ul>
-            <li>All ten agents, plus your own</li>
+            <li>Any local agent — 10 supported, plus your own</li>
             <li>Durable sessions and worktrees</li>
             <li>Approvals and sandbox tiers</li>
             <li>Unlimited relay-connected nodes</li>
@@ -705,7 +737,6 @@
           <span class="badge">Most popular</span>
           <h3>Pro</h3>
           <div class="price">$15 <span>/ month</span></div>
-          <p class="who">No run cap, and a unified view across every machine.</p>
           <ul>
             <li>Everything in Free</li>
             <li>Unlimited runs — no weekly cap</li>
@@ -718,11 +749,7 @@
         </div>
         <div class="plan">
           <h3>Team</h3>
-          <div class="price">Soon</div>
-          <p class="who">Shared nodes, roles, and audit for a whole team.</p>
-          <ul>
-            <li class="soon">Coming soon…</li>
-          </ul>
+          <div class="price">Coming later</div>
           <div class="cta-row">
             <a href="./contact.html" class="btn btn-ghost btn-block">Get early access</a>
           </div>
@@ -736,7 +763,7 @@
   </section>
 
   <!-- GITHUB QUEUE -->
-  <section>
+  <section id="github">
     <div class="wrap">
       <p class="kicker">GitHub work queue</p>
       <h2>Label an issue. Get a pull request back.</h2>
@@ -932,8 +959,7 @@
   <!-- FAQ -->
   <section>
     <div class="wrap">
-      <p class="kicker">Questions</p>
-      <h2>Answered directly.</h2>
+      <h2>FAQ</h2>
       <div class="faq">
         <details open>
           <summary>Does my code ever leave my machine?</summary>
