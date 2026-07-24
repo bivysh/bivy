@@ -421,10 +421,16 @@ export class AppController {
    * already where it should be — openSession/newSession would otherwise no-op on
    * the URL anyway (navigate() guards identical paths), but skipping it keeps
    * intent explicit. Root and the draft route both land on a fresh draft.
+   *
+   * A `settings` route is deliberately a no-op here: Settings is an overlay
+   * rendered on top of whatever session is already open (see settingsRoute.ts),
+   * not a route that replaces it — landing on `/settings/:view` (a deep link,
+   * reload, or Back/Forward past it) must never reset the active session to a
+   * new draft.
    */
   private applyRoute(route: Route, opts: { navigate?: boolean } = {}): void {
     if (route.kind === "session") this.openSession(route.id, undefined, opts);
-    else this.newSession(opts);
+    else if (route.kind !== "settings") this.newSession(opts);
   }
 
   /** Replay the boot route once we're first online (session.open et al. need a

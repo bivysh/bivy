@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
@@ -11,7 +11,7 @@ import { QuestionStack } from "./components/QuestionCard.js";
 import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import { SetupNotice } from "./components/SetupNotice.js";
 import { NodeSwitcher } from "./components/NodeSwitcher.js";
-import { parseRoute } from "./router.js";
+import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { SessionMenu } from "./components/SessionMenu.js";
 import { GithubPill } from "./components/GithubPill.js";
 import { UsageBar } from "./components/UsageBar.js";
@@ -33,15 +33,15 @@ import { isUnseen, statusClass, statusLabel } from "./sessionStatus.js";
 export function App() {
   const state = useAppState();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Settings is URL-backed (#78) — `settingsRoute` mirrors the `/settings` /
+  // `/settings/:view` route the same way useAppState mirrors the session
+  // store, and is null whenever the URL is on anything else (Settings closed).
+  const settingsRoute = useSyncExternalStore(subscribeSettingsRoute, getSettingsRoute);
   // Returning from a GitHub App redirect reloads the SPA — re-open Settings on
-  // the GitHub view so the user sees the flow finish. Also set (and cleared)
-  // by the GitHub Queue screen's "Connect one in Settings" CTA, so that jump
-  // also lands directly on the GitHub panel instead of the Settings root menu.
-  const [wantsGithubSettings, setWantsGithubSettings] = useState(false);
+  // the GitHub view so the user sees the flow finish.
   const githubAppReturning = state.githubApp?.returning;
   useEffect(() => {
-    if (githubAppReturning) setSettingsOpen(true);
+    if (githubAppReturning) openSettings("github");
   }, [githubAppReturning]);
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -249,7 +249,7 @@ export function App() {
           <button
             className="settings-gear"
             onClick={() => {
-              setSettingsOpen(true);
+              openSettings();
               closeDrawer();
             }}
             title="Settings"
@@ -359,7 +359,11 @@ export function App() {
           entries={state.transcript}
           working={state.working}
           workingLabel={state.workingLabel}
-          draftRoute={parseRoute().kind !== "session"}
+          // Whether there's no real session behind the current view — driven by
+          // the session store rather than the URL, since the URL now moves to
+          // `/settings/*` while Settings is open without changing (or clearing)
+          // whatever session is open behind it.
+          draftRoute={!state.activeSessionId}
           sessionKey={state.activeSessionId}
           collapsed={collapsed}
           onAction={runCommand}
@@ -411,21 +415,25 @@ export function App() {
         />
       </main>
 
-      {settingsOpen && (
+      {settingsRoute && (
         <Settings
           state={state}
-          initialView={githubAppReturning || wantsGithubSettings ? "github" : undefined}
+          view={settingsRoute.view}
+          onViewChange={setSettingsView}
           githubQueue={githubQueue}
           onRefreshGithubQueue={refreshGithubQueue}
           onPickSession={(id, path, nodeId) => {
             controller.openSessionOnNode(id, path, nodeId);
-            setSettingsOpen(false);
+            // openSessionOnNode already navigates to `/sessions/:id` itself;
+            // this just resolves Settings back to that same route.
+            closeSettings({ kind: "session", id });
             closeDrawer();
           }}
-          onClose={() => {
-            setSettingsOpen(false);
-            setWantsGithubSettings(false);
-          }}
+          onClose={() =>
+            closeSettings(
+              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+            )
+          }
         />
       )}
       {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} />}

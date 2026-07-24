@@ -1086,9 +1086,15 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .settings-content { padding-top: max(0px, env(safe-area-inset-top)); }
   .settings-back { display: inline-flex; }
   .settings-head-title { text-align: center; font-size: 17px; }
-  .settings-x-content { display: none; }
   .settings-panel[data-mode="menu"] .settings-content { display: none; }
   .settings-panel[data-mode="panel"] .settings-nav { display: none; }
+  /* NOTE: `.settings-x-content` (the content header's own × ) used to be
+     hidden here. In "panel" mode (drilled into a sub-setting) that left no
+     close control at all: `.settings-nav` — home of the *other* × — is hidden
+     by the rule above, and the back button only goes up to the root menu, not
+     out of Settings. See #78: closeable from any sub-setting. In "menu" mode
+     `.settings-content` (this ×'s own ancestor) is already hidden above, so
+     leaving this visible doesn't introduce a second × there. */
 }
 
 .onboarding-card { margin: 10px 12px 0; border: 1px solid var(--line); border-radius: 18px; background: var(--surface-2); padding: 16px; display: flex; gap: 14px; justify-content: space-between; align-items: flex-start; }

@@ -11,8 +11,12 @@ import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { StatsPanel } from "./StatsPanel.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
+import type { SettingsView } from "../router.js";
 
-type View = "appearance" | "notifications" | "providers" | "models" | "voice" | "github" | "queue" | "nodes" | "ephemeral" | "account" | "link";
+// The view enumeration lives in router.ts (as `SettingsView`) so the router can
+// validate a `/settings/:view` path without importing this component module;
+// aliased back to `View` here since it's used throughout as local vocabulary.
+type View = SettingsView;
 
 /** Sandbox tiers (Codex's vocabulary), shared by the node default + per-session picker. */
 export const SANDBOX_TIERS: Array<{ id: SandboxTier; label: string; hint: string }> = [
@@ -143,14 +147,18 @@ const TITLES: Record<View, string> = {
 export function Settings({
   state,
   onClose,
-  initialView,
+  view,
+  onViewChange,
   githubQueue,
   onRefreshGithubQueue,
   onPickSession,
 }: {
   state: AppState;
   onClose: () => void;
-  initialView?: View;
+  /** The active section, driven by the URL (`/settings/:view`) — null is the
+   *  mobile root menu (`/settings`). See settingsRoute.ts (#78). */
+  view: View | null;
+  onViewChange: (view: View | null) => void;
   /** GitHub Queue data + handlers — the queue is now a Settings panel (#388),
    *  not a separate modal. */
   githubQueue?: GithubQueueItem[] | null;
@@ -163,11 +171,16 @@ export function Settings({
   // the desktop two-pane — nav always visible, a panel always selected.
   const isDesktop = useMediaQuery("(min-width: 721px)");
   const DEFAULT: View = "appearance";
-  // null === the mobile root menu. On desktop we always resolve to a panel.
-  const [view, setView] = useState<View | null>(initialView ?? null);
   const [query, setQuery] = useState("");
 
+  // null === the mobile root menu. On desktop we always resolve to a panel —
+  // reflect that resolution back into the URL so `/settings` never lingers
+  // without a section once there's room to show one.
   const activeView: View | null = view ?? (isDesktop ? DEFAULT : null);
+  useEffect(() => {
+    if (isDesktop && view === null) onViewChange(DEFAULT);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDesktop, view]);
 
   // Escape closes; focus starts inside the panel and restores to the opener on
   // close (parity with the Sheet primitive this replaced).
@@ -256,7 +269,7 @@ export function Settings({
                     <button
                       key={it.id}
                       className={`settings-nav-item${activeView === it.id ? " active" : ""}`}
-                      onClick={() => setView(it.id)}
+                      onClick={() => onViewChange(it.id)}
                     >
                       <span className="settings-nav-icon">{it.icon}</span>
                       <span className="settings-nav-label">{it.label}</span>
@@ -272,7 +285,7 @@ export function Settings({
         <section className="settings-content">
           <header className="settings-head">
             {activeView && (
-              <button className="settings-back" onClick={() => setView(null)} aria-label="Back to settings">
+              <button className="settings-back" onClick={() => onViewChange(null)} aria-label="Back to settings">
                 <span aria-hidden>‹</span> Settings
               </button>
             )}
@@ -285,13 +298,13 @@ export function Settings({
             {activeView === "providers" && <ProvidersPanel state={state} />}
             {activeView === "models" && <LocalModelsPanel state={state} />}
             {activeView === "voice" && <VoicePanel state={state} />}
-            {activeView === "github" && <GithubPanel state={state} onOpenGithubQueue={() => setView("queue")} />}
+            {activeView === "github" && <GithubPanel state={state} onOpenGithubQueue={() => onViewChange("queue")} />}
             {activeView === "queue" && (
               <GithubQueuePanel
                 queue={githubQueue ?? null}
                 onRefresh={() => onRefreshGithubQueue?.()}
                 onPick={(id, path, nodeId) => onPickSession?.(id, path, nodeId)}
-                onOpenGithubSettings={() => setView("github")}
+                onOpenGithubSettings={() => onViewChange("github")}
               />
             )}
             {activeView === "nodes" && <NodesPanel state={state} />}
