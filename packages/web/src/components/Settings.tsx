@@ -956,6 +956,10 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   const [ceAppId, setCeAppId] = useState("");
   const [cePem, setCePem] = useState("");
   const [ceNodeLabel, setCeNodeLabel] = useState("");
+  // Once at least one app is connected, "add another" is a secondary action —
+  // collapse it behind a button instead of always showing the full form, so
+  // the common case (you already have an app) isn't buried under it.
+  const [addAppOpen, setAddAppOpen] = useState(false);
   // Ephemeral-runner default: auto-provision a short-lived server to pick up
   // queued work when nothing persistent is online. Moved here from the GitHub
   // Queue panel — it's account-level GitHub-App config, not per-queue state.
@@ -1122,6 +1126,46 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
       setDisconnectingId(null);
     }
   };
+  const renderEphemeral = () => (
+    <>
+      <div className="settings-toggle-row">
+        <div className="settings-toggle-text">
+          <span className="settings-toggle-title">Auto-provision when nothing's online</span>
+          <span className="muted small">
+            Spin up a short-lived server from your saved provider token to pick up queued work when nothing
+            persistent is online, then tear it down.
+          </span>
+        </div>
+        <Toggle
+          checked={Boolean(ephemeralDefault?.enabled)}
+          disabled={ephemeralBusy || configuredProviders.length === 0}
+          onChange={(v) => saveEphemeralDefault({ enabled: v, provider: ephemeralDefault?.provider || configuredProviders[0]?.id })}
+          label="Auto-provision an ephemeral server when nothing's online"
+        />
+      </div>
+      {configuredProviders.length === 0 ? (
+        <p className="muted">Add a Fly.io or Hetzner token in Ephemeral settings to enable this.</p>
+      ) : (
+        ephemeralDefault?.enabled && (
+          <>
+            <select
+              className="picker-search"
+              value={ephemeralDefault.provider ?? ""}
+              onChange={(e) => saveEphemeralDefault({ provider: e.target.value })}
+            >
+              {configuredProviders.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            {!defaultProviderConfigured && (
+              <p className="muted">This device has no saved token for {ephemeralDefault.provider} — add one in Ephemeral settings to actually help out.</p>
+            )}
+            {ephemeralErr && <span className="chip err">{ephemeralErr}</span>}
+          </>
+        )
+      )}
+    </>
+  );
   const renderApp = (entry: GithubAppEntry) => (
     <div className="gh-connected" key={appKey(entry)}>
       <div className="gh-connected-head">
@@ -1247,6 +1291,7 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
       {showConnectExisting && !ceApp && renderConnectExisting()}
     </>
   );
+  const hasApps = apps.length > 0;
   return (
     <div className="settings-form">
       {confirmDisconnect && (
@@ -1263,108 +1308,87 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
           onConfirm={() => { const entry = confirmDisconnect; setConfirmDisconnect(null); disconnect(entry); }}
         />
       )}
-      {apps.length > 0 ? (
-        <>
-          {apps.map(renderApp)}
 
-          <h4 className="settings-subhead">Add an app</h4>
-          <p className="muted">
-            A GitHub App can only be installed on the account that owns it, so add one per personal account or
-            organization you want Bivy to work in. Each gets its own webhook, and its key is created and kept on this
-            node.
-          </p>
-          {renderAddApp()}
+      {hasApps && <section className="settings-section">{apps.map(renderApp)}</section>}
 
-          <h4 className="settings-subhead">Default node</h4>
-          <p className="muted">
-            Untagged issues and <code>@{primaryMention || "mention"}</code> comments route to the shared <code>bivy</code> queue,
-            where any online node may claim them. Pick a default node so that work lands on one machine instead — it must
-            match the label that node serves (its name below, or whatever it was started with via <code>--node-label</code>).
-            One setting for the whole account: it applies to every app above.
-          </p>
-          {nodes.length > 0 ? (
-            <select className="picker-search" value={defaultNode} onChange={(e) => setDefaultNode(e.target.value)}>
-              <option value="">Shared queue (any online node)</option>
-              {nodes.map((n) => (
-                <option key={n.id} value={n.name || n.id}>{n.name || n.id}</option>
-              ))}
-              {defaultNode && !nodes.some((n) => (n.name || n.id) === defaultNode) && (
-                <option value={defaultNode}>{defaultNode}</option>
-              )}
-            </select>
-          ) : (
-            <input
-              className="picker-search"
-              value={defaultNode}
-              placeholder="node label, e.g. macbook"
-              onChange={(e) => setDefaultNode(e.target.value)}
-            />
-          )}
+      <section className="settings-section">
+        <h4 className="settings-subhead">{hasApps ? "Add another app" : "Add an app"}</h4>
+        <p className="muted">
+          {hasApps
+            ? "A GitHub App can only be installed on the account that owns it, so add one per personal account or organization you want Bivy to work in. Each gets its own webhook, and its key is created and kept on this node."
+            : "Bivy reaches GitHub through an app you own: one webhook covering every repo you install it on, with replies posting as the app. The private key is created and kept on this node; the control plane only ever sees the webhook signing secret. An app can only be installed on the account that owns it, so add one per personal account or organization."}
+        </p>
+        {hasApps && !addAppOpen ? (
           <div className="row-actions">
-            <button className="btn primary" disabled={savingDefaultNode} onClick={saveDefaultNode}>
-              {savingDefaultNode ? "Saving…" : "Save"}
-            </button>
-            {defaultNodeMsg && <span className="chip ok">{defaultNodeMsg}</span>}
+            <button className="btn" onClick={() => setAddAppOpen(true)}>+ Add another GitHub App</button>
           </div>
+        ) : (
+          <>
+            {renderAddApp()}
+            {hasApps && (
+              <div className="row-actions">
+                <button className="link-btn" onClick={() => setAddAppOpen(false)}>Cancel</button>
+              </div>
+            )}
+          </>
+        )}
+      </section>
 
-          <h4 className="settings-subhead">Routing labels</h4>
-          <p className="muted">Label a GitHub issue (or use the directive in a comment/description) to route it:</p>
-          <ul className="settings-list">
-            <li><code>bivy</code> — shared queue: the default node above, or any online node if none is set.</li>
-            <li><code>bivy/&lt;node&gt;</code> — a specific node's label, e.g. <code>bivy/macbook</code>.</li>
-            <li><code>@{primaryMention || "bivy"} on &lt;node&gt;</code> — in a comment or the issue body, same effect as the label.</li>
-          </ul>
-
-          <h4 className="settings-subhead">Ephemeral runner</h4>
-          <p className="muted">
-            When queued work has nowhere to run — nothing persistent is online — Bivy can spin up a short-lived
-            ephemeral server from your saved provider token to pick it up, then tear it down.
-          </p>
-          <label className="gh-ephemeral-toggle">
-            <input
-              type="checkbox"
-              checked={Boolean(ephemeralDefault?.enabled)}
-              disabled={ephemeralBusy || configuredProviders.length === 0}
-              onChange={(e) => saveEphemeralDefault({ enabled: e.target.checked, provider: ephemeralDefault?.provider || configuredProviders[0]?.id })}
-            />
-            <span>Auto-provision an ephemeral server when nothing's online</span>
-          </label>
-          {configuredProviders.length === 0 ? (
-            <p className="muted">Add a Fly.io or Hetzner token in Ephemeral settings to enable this.</p>
-          ) : (
-            ephemeralDefault?.enabled && (
-              <>
-                <select
-                  className="picker-search"
-                  value={ephemeralDefault.provider ?? ""}
-                  onChange={(e) => saveEphemeralDefault({ provider: e.target.value })}
-                >
-                  {configuredProviders.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-                {!defaultProviderConfigured && (
-                  <p className="muted">This device has no saved token for {ephemeralDefault.provider} — add one in Ephemeral settings to actually help out.</p>
-                )}
-                {ephemeralErr && <span className="chip err">{ephemeralErr}</span>}
-              </>
-            )
-          )}
-        </>
-      ) : (
+      {hasApps && (
         <>
-          <p className="muted">
-            Bivy reaches GitHub through an app you own: one webhook covering every repo you install it on, with replies
-            posting as the app. The private key is created and kept on this node; the control plane only ever sees the
-            webhook signing secret. An app can only be installed on the account that owns it, so add one per personal
-            account or organization.
-          </p>
-          {renderAddApp()}
+          <section className="settings-section">
+            <h4 className="settings-subhead">Default node</h4>
+            <p className="muted">
+              Untagged issues and <code>@{primaryMention || "mention"}</code> comments route to the shared <code>bivy</code> queue,
+              where any online node may claim them. Pick a default node so that work lands on one machine instead — it must
+              match the label that node serves (its name below, or whatever it was started with via <code>--node-label</code>).
+              One setting for the whole account: it applies to every app above.
+            </p>
+            {nodes.length > 0 ? (
+              <select className="picker-search" value={defaultNode} onChange={(e) => setDefaultNode(e.target.value)}>
+                <option value="">Shared queue (any online node)</option>
+                {nodes.map((n) => (
+                  <option key={n.id} value={n.name || n.id}>{n.name || n.id}</option>
+                ))}
+                {defaultNode && !nodes.some((n) => (n.name || n.id) === defaultNode) && (
+                  <option value={defaultNode}>{defaultNode}</option>
+                )}
+              </select>
+            ) : (
+              <input
+                className="picker-search"
+                value={defaultNode}
+                placeholder="node label, e.g. macbook"
+                onChange={(e) => setDefaultNode(e.target.value)}
+              />
+            )}
+            <div className="row-actions">
+              <button className="btn primary" disabled={savingDefaultNode} onClick={saveDefaultNode}>
+                {savingDefaultNode ? "Saving…" : "Save"}
+              </button>
+              {defaultNodeMsg && <span className="chip ok">{defaultNodeMsg}</span>}
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h4 className="settings-subhead">Routing labels</h4>
+            <p className="muted">Label a GitHub issue (or use the directive in a comment/description) to route it:</p>
+            <ul className="settings-list">
+              <li><code>bivy</code> — shared queue: the default node above, or any online node if none is set.</li>
+              <li><code>bivy/&lt;node&gt;</code> — a specific node's label, e.g. <code>bivy/macbook</code>.</li>
+              <li><code>@{primaryMention || "bivy"} on &lt;node&gt;</code> — in a comment or the issue body, same effect as the label.</li>
+            </ul>
+          </section>
+
+          <section className="settings-section">
+            <h4 className="settings-subhead">Ephemeral runner</h4>
+            {renderEphemeral()}
+          </section>
         </>
       )}
 
       {canQuery && onOpenGithubQueue && (
-        <>
+        <section className="settings-section">
           <h4 className="settings-subhead">Incoming queue</h4>
           <p className="muted">
             Pending, picked-up, and finished GitHub work now has its own screen instead of a list here.
@@ -1372,7 +1396,7 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
           <button className="btn" onClick={onOpenGithubQueue}>
             Open GitHub Queue →
           </button>
-        </>
+        </section>
       )}
     </div>
   );
