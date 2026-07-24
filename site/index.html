@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bivy — Run coding agents on machines you own</title>
-  <meta name="description" content="Bivy runs Claude Code, Codex, Gemini CLI, Aider and other coding agents on your own hardware, with your own keys — then puts every session in an app on your phone: full transcript, diffs, a real terminal, and one-tap approvals. Free, 10 runs a week. Source-available and self-hostable.">
+  <meta name="description" content="Bivy runs Claude Code, Codex, Gemini CLI, Aider and other coding agents on your own hardware, with your own keys — then gives you a real chat app for every session, reachable from anywhere: transcript, diffs, approvals, and a terminal when you need one. Free, 10 runs a week. Source-available and self-hostable.">
   <meta name="theme-color" content="#fbfaf8">
   <meta property="og:title" content="Bivy — Run coding agents on machines you own">
-  <meta property="og:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free, 10 runs a week, no repo upload.">
+  <meta property="og:description" content="Coding agents on your hardware, with your keys — a real chat app for every session, reachable anywhere: diffs, approvals, a terminal when you need it. Free, 10 runs a week, no repo upload.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://bivy.sh">
   <meta property="og:image" content="https://bivy.sh/screenshots/app-session.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Bivy — Run coding agents on machines you own">
-  <meta name="twitter:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free, 10 runs a week, no repo upload.">
+  <meta name="twitter:description" content="Coding agents on your hardware, with your keys — a real chat app for every session, reachable anywhere: diffs, approvals, a terminal when you need it. Free, 10 runs a week, no repo upload.">
   <meta name="twitter:image" content="https://bivy.sh/screenshots/app-session.png">
   <link rel="icon" href="./tent.svg">
   <link rel="icon" type="image/png" href="./tent.png">
@@ -578,12 +578,14 @@
   <section id="app">
     <div class="wrap">
       <p class="kicker">The app</p>
-      <h2>A real client for your agents, not just a window onto them.</h2>
+      <h2>Any agent, any model — a real chat client, not a terminal crammed onto a phone.</h2>
       <p class="prose">
-        Install Bivy on your phone and the session you started on your laptop is right
-        there — the whole transcript, the diffs, the terminal, and the approval it's
-        waiting on. Start a run at your desk, review it on the train, and answer the one
-        question it has without opening a laptop.
+        This is the mobile companion most agent CLIs don't ship on their own: whichever
+        agent and model you're running — Claude Code, Codex, or nine others — on machines
+        you own, with your own keys, reachable from anywhere. A composer built for chatting
+        with an agent, with dictation and attachments, not a PTY squeezed onto a small
+        screen — plus the same label-an-issue, get-a-pull-request-back workflow other
+        agents lock to their own hosted compute. See <a href="#github" style="color:var(--accent);text-decoration:none">the GitHub work queue</a> below.
       </p>
 
       <div class="app-split">
@@ -598,6 +600,13 @@
             <b>Pick up any session, on any machine</b>
             One list across every node you own. A session you started with
             <code>bivy run</code> in a terminal is the same session here — open it and keep going.
+          </li>
+          <li>
+            <b>Type it, paste it, or say it</b>
+            A real composer, not a terminal squeezed onto a small screen. Dictate a prompt
+            instead of thumb-typing it, attach a screenshot straight from your camera roll,
+            and use the agent's own slash commands with autocomplete. A half-written
+            message survives a reload or a jump to another session.
           </li>
           <li class="promo">
             <span class="eyebrow">Only in Bivy</span>
@@ -625,18 +634,12 @@
             one tap unblocks it instead of a run sitting idle until you're back at your desk.
           </li>
           <li>
-            <b>Drop into a real terminal</b>
+            <b>Drop into a real terminal, when you need one</b>
             A full PTY on the machine, in your pocket — run the tests yourself, check
             <code>git status</code>, or take over when the agent gets stuck. With a touch
             key bar for <kbd>esc</kbd>, <kbd>tab</kbd>, ctrl and arrows, so a phone
             keyboard stops being the reason you wait until you're home. It can attach to
             an existing tmux, zellij or screen session too.
-          </li>
-          <li>
-            <b>Type it, paste it, or say it</b>
-            Dictate a prompt instead of thumb-typing it, attach a screenshot straight from
-            your camera roll, and use the agent's own slash commands with autocomplete. A
-            half-written message survives a reload or a jump to another session.
           </li>
           <li>
             <b>Know what it's costing</b>
@@ -760,7 +763,7 @@
   </section>
 
   <!-- GITHUB QUEUE -->
-  <section>
+  <section id="github">
     <div class="wrap">
       <p class="kicker">GitHub work queue</p>
       <h2>Label an issue. Get a pull request back.</h2>
