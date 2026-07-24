@@ -1,7 +1,12 @@
 FROM node:22-slim
 WORKDIR /app
-COPY services/relay/package.json ./
-RUN npm install
+# Copy the lockfile too and use `npm ci` so builds are reproducible and pinned
+# to the resolved versions in package-lock.json. `npm install` re-resolves
+# caret ranges to the newest published version on every build, which breaks
+# deploys when a brand-new release (e.g. @sentry/node) hasn't fully propagated
+# to the registry CDN yet and its tarball 404s.
+COPY services/relay/package.json services/relay/package-lock.json ./
+RUN npm ci
 COPY services/relay/ ./
 EXPOSE 4500
 CMD ["npm", "start"]
