@@ -84,6 +84,10 @@ pkg.scripts.dev = "node dist/server.js";
 // install. npm runs `prepare` automatically on `npm install`, so leaving it in
 // aborts the installer with MODULE_NOT_FOUND. Drop it from the artifact.
 delete pkg.scripts.prepare;
+// The staging dir IS the sanctioned publish path, so drop the root's
+// `prepublishOnly` guard here — it exists only to hard-fail a stray
+// `npm publish` from the repo root (which would ship the whole monorepo).
+delete pkg.scripts.prepublishOnly;
 // The artifact ships no `packages/` workspaces (the web PWA is built/served by
 // the control plane, not the node). Drop the monorepo `workspaces` field and the
 // workspace-scoped scripts so they don't dangle in the installed package.

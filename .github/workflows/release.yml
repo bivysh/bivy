@@ -73,7 +73,7 @@ jobs:
       # forgotten version bump (or a wrong tag) here, with a clear message,
       # rather than publishing a package whose version doesn't match its own
       # git tag.
-      - name: Verify tag matches package.json version
+      - name: Verify tag matches package.json version (and all workspaces agree)
         run: |
           tag="${GITHUB_REF_NAME#v}"
           pkg="$(node -p "require('./package.json').version")"
@@ -81,6 +81,18 @@ jobs:
             echo "::error::Tag v$tag does not match package.json version $pkg. Bump the version (all workspaces must agree) and re-tag -- see docs/releasing.md." >&2
             exit 1
           fi
+          # The error text has always PROMISED workspace agreement; enforce it so
+          # a forgotten bump in packages/* or services/* can't ship an internally
+          # inconsistent monorepo. The npm artifact drops these workspaces, so
+          # this is a consistency guard, not a correctness one for the tarball.
+          for wpkg in packages/*/package.json services/*/package.json; do
+            [ -f "$wpkg" ] || continue
+            wver="$(node -p "require('./$wpkg').version")"
+            if [ "$wver" != "$tag" ]; then
+              echo "::error::$wpkg is at version $wver but the tag is v$tag. All workspace versions must match the tag -- see docs/releasing.md." >&2
+              exit 1
+            fi
+          done
 
       # No token: npm authenticates this publish via the job's OIDC identity
       # against the trusted publisher configured for the `bivy` package, and

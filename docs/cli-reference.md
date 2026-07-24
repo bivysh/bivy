@@ -260,6 +260,19 @@ bivy kill 7c1f2a
 bivy kill 3f1c9a02-… --delete
 ```
 
+### `bivy promote <session-id>`
+
+Advanced / failover. Promotes a warm-replicated session so it continues on
+**this** node — run it on the standby node that holds the replica after the
+original owner goes offline. It runs against the local node, which performs the
+control-plane epoch compare-and-set and materializes the replica worktree. On
+success it prints the new epoch and the `bivy resume` command to continue. See
+[session-replication.md](session-replication.md).
+
+```bash
+bivy promote 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
+```
+
 ## Nodes and remote access
 
 ### `bivy relay:setup [flags]`

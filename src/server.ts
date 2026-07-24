@@ -1200,21 +1200,34 @@ const commands: MeshCommand[] = [
   { name: "/update", description: "Update agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "update"] } },
 ];
 
+// A local client whose send buffer has grown past this is behind on reads (slow
+// network, background tab); used by both broadcast paths below.
+const CLIENT_BACKPRESSURE_BYTES = 8 * 1024 * 1024;
+
 function broadcast(payload: unknown) {
   const data = JSON.stringify(payload);
   for (const client of clients) {
-    if (client.readyState === WebSocket.OPEN) client.send(data);
+    if (client.readyState !== WebSocket.OPEN) continue;
+    // These events are not self-superseding, so unlike broadcastCoalesced we
+    // can't silently skip a backed-up client. But a socket this far behind is
+    // wedged (dead TCP behind NAT, a frozen background tab) and would otherwise
+    // make `ws` buffer unbounded memory on the daemon's heap over a multi-day
+    // run. Terminate it — it reconnects and re-syncs from the event log — rather
+    // than leak. A healthy client never approaches this high-water mark.
+    if (client.bufferedAmount > CLIENT_BACKPRESSURE_BYTES) {
+      try { client.terminate(); } catch {}
+      continue;
+    }
+    client.send(data);
   }
   // Mirror events to remote clients through the relay (encrypted), if enabled.
   relay?.sendEvent(payload);
 }
 
-// A local client whose send buffer has grown past this is behind on reads (slow
-// network, background tab). For *superseding* updates it is safe to skip such a
-// client — the next full-content update (or the turn's message_end) makes it
-// whole — rather than letting `ws` queue unbounded memory on its behalf.
-const CLIENT_BACKPRESSURE_BYTES = 8 * 1024 * 1024;
-
+// For *superseding* updates it is safe to skip a backed-up client — the next
+// full-content update (or the turn's message_end) makes it whole — rather than
+// letting `ws` queue unbounded memory on its behalf.
+//
 // Broadcast a coalesced, self-superseding (full-content) session event. Same fan
 // out as broadcast(), but skips any local client that is backed up: dropping a
 // superseded update is lossless because a newer one always follows.
@@ -6416,6 +6429,17 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// HTML-escape for the few browser pages the node serves itself (OAuth callback,
+// GitHub App manifest). These pages interpolate values the caller can influence
+// (`?error=`, provider/error strings), so every interpolation must be escaped to
+// keep an attacker from injecting markup/script onto the node's own loopback
+// origin — which, with loopback trusted by default, would be able to drive /api.
+function escapeHtml(s: string): string {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;",
+  );
+}
+
 /** Order a merged PR set for a one-badge row: open first (the actionable one),
  *  then by PR number descending (newest first) within each state group. */
 function sortPrs(prs: PrRef[]): PrRef[] {
@@ -6622,6 +6646,22 @@ approvals.onRequest((request: ApprovalRequest) => {
 
 const app = express();
 app.use(express.json({ limit: "25mb" }));
+// Defense-in-depth Content-Security-Policy for every node response. The node
+// hosts no web UI — only the JSON API and a couple of minimal, self-owned
+// browser pages (OAuth callback, GitHub App manifest) — so a strict default of
+// `script-src 'none'` is safe and blocks injected inline script even if some
+// future interpolation is missed. The GitHub-App manifest form legitimately
+// needs one inline script to auto-submit to github.com; that single route
+// overrides this header with a per-request nonce (see `/github/app/manifest/new`).
+// `nosniff` stops a JSON response from being reinterpreted as HTML.
+app.use((_req, res, next) => {
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; img-src 'self' data:; style-src 'unsafe-inline'; form-action 'none'; script-src 'none'",
+  );
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  next();
+});
 // The node is a pure DATA PLANE: it serves the JSON API (/api), the WebSocket
 // (/ws), a liveness probe (/healthz), and a few non-UI browser flows it owns
 // (OAuth callback, GitHub App manifest). It does NOT host the web UI — the
@@ -6650,8 +6690,10 @@ app.get("/api/integrations/oauth/callback", async (req, res) => {
   const state = String(req.query.state ?? "");
   const code = String(req.query.code ?? "");
   const oauthError = String(req.query.error ?? "");
-  const page = (title: string, body: string) =>
-    `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:16px system-ui;margin:3rem;max-width:32rem"><h2>${title}</h2><p>${body}</p><p>You can close this tab and return to Bivy.</p></body>`;
+  const page = (title: string, body: string) => {
+    const t = escapeHtml(title);
+    return `<!doctype html><meta charset="utf-8"><title>${t}</title><body style="font:16px system-ui;margin:3rem;max-width:32rem"><h2>${t}</h2><p>${escapeHtml(body)}</p><p>You can close this tab and return to Bivy.</p></body>`;
+  };
   if (oauthError) return res.status(400).send(page("Connection failed", `The provider returned: ${oauthError}`));
   if (!state || !code) return res.status(400).send(page("Connection failed", "Missing authorization code."));
   try {
@@ -8139,7 +8181,15 @@ app.get("/github/app/manifest/new", async (req, res, next) => {
       hookUrl: hook.url,
       redirectUrl: `${base}/github/app/manifest/callback`,
     });
-    res.type("html").send(renderManifestForm(manifest, { org, state: hook.id }));
+    // This page auto-submits a form to github.com via one inline script, so it
+    // overrides the global `script-src 'none'; form-action 'none'` CSP with a
+    // per-request nonce and a github.com form-action allowance — nothing else.
+    const nonce = randomBytes(16).toString("base64");
+    res.setHeader(
+      "Content-Security-Policy",
+      `default-src 'none'; base-uri 'none'; frame-ancestors 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; form-action https://github.com`,
+    );
+    res.type("html").send(renderManifestForm(manifest, { org, state: hook.id, nonce }));
   } catch (error) {
     next(error);
   }
@@ -8210,11 +8260,15 @@ app.get("/github/app/manifest/callback", async (req, res, next) => {
     if (!code || !hookId) return res.status(400).type("html").send("<p>Missing code/state from GitHub.</p>");
     const { installUrl } = await completeAppManifest({ code, state: hookId });
     const label = process.env.BIVY_GITHUB_LABEL?.trim() || "bivy";
+    // installUrl comes from GitHub's manifest-conversion response; only render it
+    // as a link if it is a real http(s) URL (never a `javascript:`/`data:` URI),
+    // and escape it for the attribute context regardless.
+    const safeInstallUrl = /^https?:\/\//i.test(installUrl) ? installUrl : "https://github.com/settings/installations";
     res.type("html").send(`<!doctype html><html><body style="font-family:system-ui;padding:2rem">
 <h2>✓ Bivy GitHub App created</h2>
 <p>The app's private key is stored on this node. One webhook now covers every repo you install it on.</p>
-<p><a href="${installUrl}">Install it on your repositories →</a></p>
-<p>Then label an issue <code>${label}</code> or comment <code>@bivy …</code>.</p>
+<p><a href="${escapeHtml(safeInstallUrl)}">Install it on your repositories →</a></p>
+<p>Then label an issue <code>${escapeHtml(label)}</code> or comment <code>@bivy …</code>.</p>
 </body></html>`);
   } catch (error) {
     next(error);
@@ -8567,3 +8621,19 @@ function shutdown(signal: string) {
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   process.on(signal, () => shutdown(signal));
 }
+
+// Last-resort crash net. The daemon hosts many sessions in one process, so an
+// unhandled rejection (which terminates the process on Node 22+) or a stray
+// throw from a stream/event callback would take down EVERY live session at
+// once, not just the one that faulted. Log it and keep serving rather than
+// letting one bad session kill the whole daemon; the supervisor's restart is
+// the fallback for a genuinely wedged process, not the first line of defence.
+// A rejected promise never corrupts global state, so continuing is safe there;
+// for an uncaught exception, continuing is the lesser evil versus dropping
+// every other session's in-flight turn.
+process.on("unhandledRejection", (reason) => {
+  console.error(`[bivy] unhandledRejection (daemon kept running):`, reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error(`[bivy] uncaughtException (daemon kept running):`, error);
+});

@@ -10,7 +10,7 @@ npm run typecheck
 npm run test:unit
 ```
 
-UI/UX work for the hosted/mobile PWA should target the React client in `packages/web/` (`@bivy/web`), which is served at the root on both the control plane and the node daemon.
+UI/UX work for the hosted/mobile PWA should target the React client in `packages/web/` (`@bivy/web`), which is served by the control plane. The node daemon hosts no web UI.
 
 ## CI checks
 

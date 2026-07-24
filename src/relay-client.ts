@@ -252,6 +252,10 @@ export class RelayConnector {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${this.config.enrollmentToken}` },
         body: JSON.stringify({ sessionToken, devicePublicKeyB64, label }),
+        // Node's fetch has no default timeout. Without this, a control plane that
+        // accepts the TCP connection but never responds would hang pairing (and,
+        // on the mintTicket path, the whole relay reconnect) indefinitely.
+        signal: AbortSignal.timeout(10_000),
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (res.ok && data.ok === true) return { ok: true };
@@ -275,6 +279,9 @@ export class RelayConnector {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.config.enrollmentToken}` },
       body: "{}",
+      // connect() awaits this on every (re)connect; a hung control plane must
+      // fail fast into scheduleReconnect() rather than wedge remote access.
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(`ticket request failed: ${res.status}`);
     const data = (await res.json()) as { ticket?: string; relayUrl?: string };
