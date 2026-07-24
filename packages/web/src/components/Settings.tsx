@@ -1878,9 +1878,11 @@ function AccountPanel() {
   const ent = me?.entitlements;
   const counts = me?.counts;
   const free = (ent?.plan || me?.account?.plan) === "free";
-  // Undefined maxNodes = unlimited (paid). Show a placeholder until `me` loads so
-  // it never briefly reads "∞" for a free account mid-fetch.
+  // Undefined maxNodes = unlimited (no node cap on any plan). Show a placeholder
+  // until `me` loads so it never briefly reads "∞" mid-fetch.
   const nodeCap = ent ? (ent.maxNodes ?? "∞") : "—";
+  // Free's one cap: runs per rolling 7-day window across every source. Undefined = unlimited (paid).
+  const runCap = ent ? (ent.weeklyRunLimit ?? "∞") : "—";
   return (
     <div className="settings-form">
       {confirm && (
@@ -1896,6 +1898,7 @@ function AccountPanel() {
       {err && <div className="banner error inline">{err}</div>}
       <div className="stat-grid">
         <Stat label="Plan" value={planLabel(ent?.plan || me?.account?.plan)} />
+        <Stat label="Runs / week" value={`${counts?.runsThisWeek ?? "—"} / ${runCap}`} />
         <Stat label="Nodes" value={`${counts?.nodes ?? "—"} / ${nodeCap}`} />
         <Stat label="Sessions" value={`${counts?.sessions ?? "—"}`} />
         <Stat label="Devices" value={`${counts?.devices ?? "—"}`} />

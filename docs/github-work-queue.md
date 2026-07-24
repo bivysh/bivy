@@ -47,10 +47,10 @@ GitHub branch + pull request
 
 The GitHub work queue is available on every plan.
 
-- **Free** — up to **5 runs per calendar month** (UTC). One run = one queued item a node claims and starts; still-pending items that never run don't count, and deleting a finished item doesn't refund its run. Once the allowance is spent, new items stay queued but aren't handed to nodes until the month rolls over — nothing is lost. The queue view shows how many runs remain.
+- **Free** — **10 runs per rolling 7-day window**, shared across every source: manual, app, GitHub/Slack work queue, and ephemeral servers all draw from the same allowance. One run = one distinct session that starts work; reconnecting to a live session doesn't count. The window is **rolling** (not a calendar reset), so capacity frees up gradually as your older runs pass 7 days — a busy day doesn't wall you and idle stretches quietly refill. The cap is **soft**: the first run past the allowance still goes through (with a heads-up), and only further runs wait for capacity to age back in — queue items stay queued, nothing is lost. The queue view shows how many runs remain.
 - **Pro / Team** — unlimited runs.
 
-The monthly cap is only enforced on Bivy Cloud (`ENFORCE_ENTITLEMENTS=1`). Self-hosted stacks run the queue unlimited regardless of plan (see [configuration.md](./configuration.md)).
+The daily cap is only enforced on Bivy Cloud (`ENFORCE_ENTITLEMENTS=1`). Self-hosted stacks run unlimited regardless of plan (see [configuration.md](./configuration.md)).
 
 ## Why push instead of repo polling?
 

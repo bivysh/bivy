@@ -11,11 +11,13 @@ async function test(name: string, fn: () => Promise<void> | void) {
   console.log(`✓ ${name}`);
 }
 
-await test("free plan includes one hosted relay node", () => {
+await test("free plan is feature-complete, capped only by rolling weekly runs", () => {
   const ent = entitlementsForPlan("free");
-  assert.equal(ent.maxNodes, 1);
+  assert.equal(ent.maxNodes, undefined, "free: unlimited nodes");
   assert.equal(ent.relayEnabled, true);
-  assert.equal(ent.pushEnabled, false);
+  assert.equal(ent.pushEnabled, true, "free: push included");
+  assert.equal(ent.ephemeralEnabled, true, "free: ephemeral included");
+  assert.equal(ent.weeklyRunLimit, 10, "free: 10 runs / rolling 7 days is the only cap");
 });
 
 await test("billing lifecycle updates plan and subscription metadata", async () => {
@@ -39,7 +41,7 @@ await test("billing lifecycle updates plan and subscription metadata", async () 
   const upgradedEnt = await store.entitlements(account.id);
   assert.equal(upgradedEnt.maxNodes, undefined, "paid: unlimited nodes");
   assert.equal(upgradedEnt.workQueueEnabled, true, "paid: hosted work queue");
-  assert.equal(upgradedEnt.workQueueMonthlyLimit, undefined, "paid: unlimited work-queue runs");
+  assert.equal(upgradedEnt.weeklyRunLimit, undefined, "paid: unlimited runs (no cap)");
 
   await store.setSubscriptionState(account.id, {
     plan: "free",
@@ -51,12 +53,12 @@ await test("billing lifecycle updates plan and subscription metadata", async () 
   assert.equal(downgraded?.plan, "free");
   assert.equal(downgraded?.subscriptionStatus, "canceled");
   const ent = await store.entitlements(account.id);
-  assert.equal(ent.maxNodes, 1);
+  assert.equal(ent.maxNodes, undefined, "downgrade keeps unlimited nodes");
   assert.equal(ent.relayEnabled, true);
   // The queue itself stays on free — a downgrade drops the UNLIMITED allowance,
-  // re-imposing the free monthly run cap rather than turning the feature off.
+  // re-imposing the free rolling run cap rather than turning the feature off.
   assert.equal(ent.workQueueEnabled, true, "downgrade keeps the queue, metered");
-  assert.equal(ent.workQueueMonthlyLimit, 5, "downgrade re-imposes the free run cap");
+  assert.equal(ent.weeklyRunLimit, 10, "downgrade re-imposes the free rolling run cap");
 });
 
 console.log(`\nbilling-lifecycle: ${passed} tests passed`);

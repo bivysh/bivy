@@ -6,16 +6,15 @@ import path from "node:path";
 import net from "node:net";
 
 /**
- * Push entitlement gating has two regimes, both exercised here against the real
- * HTTP routes (the enforcement lives in the route handlers in src/index.ts):
+ * Push is now included on every plan (`pushEnabled: true` across the board), so
+ * push subscription must succeed regardless of regime. Exercised here against the
+ * real HTTP routes (the gate lives in the route handlers in src/index.ts):
  *
- *  - ENFORCE_ENTITLEMENTS=1 (Bivy Cloud): free accounts must be refused push
- *    (`pushEnabled: false`) — the exact boundary asserted in the pricing table —
- *    and a paid plan may subscribe.
- *  - ENFORCE_ENTITLEMENTS unset/0 (self-host / no billing): there is no paid tier
- *    to gate against, so a fresh free account MUST be able to subscribe to push.
- *    Regression guard for "push notifications don't work on self-hosted stacks"
- *    even with VAPID keys configured.
+ *  - ENFORCE_ENTITLEMENTS=1 (Bivy Cloud): a fresh free account may subscribe to
+ *    push — the free plan includes it — and a paid plan may too.
+ *  - ENFORCE_ENTITLEMENTS unset/0 (self-host / no billing): a fresh free account
+ *    MUST be able to subscribe. Regression guard for "push notifications don't work
+ *    on self-hosted stacks" even with VAPID keys configured.
  */
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -95,8 +94,8 @@ async function main() {
   const accountId = login.json.account.id;
   const token = login.json.token;
 
-  const rejected = await http(enforcedPort, "/api/push/subscribe", { subscription: { endpoint: "https://push.example/abc" } }, token);
-  expect(rejected.status === 402, `enforced: free plan is refused push subscription (got ${rejected.status})`);
+  const freeAccepted = await http(enforcedPort, "/api/push/subscribe", { subscription: { endpoint: "https://push.example/abc" } }, token);
+  expect(freeAccepted.status === 200, `enforced: free plan can subscribe to push — it's included (got ${freeAccepted.status})`);
 
   await http(enforcedPort, "/billing/webhook", { accountId, plan: "pro" });
 

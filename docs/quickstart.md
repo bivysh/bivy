@@ -53,7 +53,7 @@ remote access. Chosen for you, no prompt:
 
 Asked, once, only if remote access is not configured yet:
 
-1. **Remote sync** — `hosted` (default; one node is free) or `self-hosted`.
+1. **Remote sync** — `hosted` (default; free, with unlimited nodes) or `self-hosted`.
    Choosing self-hosted then asks for your **control plane URL** and your
    **relay `ws(s)://` URL**.
 2. **Remote login** — `GitHub` (default) or an `email sign-in link`. Choosing

@@ -88,8 +88,9 @@ export function GithubQueuePanel({
   // The hosted work queue is a paid feature. `null` = still loading (don't flash a
   // paywall); `false` = free account (show the upgrade prompt, hide the queue).
   const [workQueueEnabled, setWorkQueueEnabled] = useState<boolean | null>(null);
-  // Free-tier monthly run quota. `limit` undefined = unlimited (paid plans);
-  // `used` is runs started this UTC month. Drives the "N of M runs used" banner.
+  // Free-tier rolling run quota (spans every source, not just the queue). `limit`
+  // undefined = unlimited (paid plans); `used` is runs started in the last 7 days.
+  // Drives the "N of M runs left this week" banner.
   const [runLimit, setRunLimit] = useState<number | undefined>(undefined);
   const [runsUsed, setRunsUsed] = useState<number>(0);
   const [nodes, setNodes] = useState<AccountNode[]>([]);
@@ -170,8 +171,8 @@ export function GithubQueuePanel({
       .fetchMe()
       .then((m) => {
         setWorkQueueEnabled(Boolean(m?.entitlements?.workQueueEnabled));
-        setRunLimit(m?.entitlements?.workQueueMonthlyLimit);
-        setRunsUsed(Number(m?.counts?.workQueueRunsThisMonth ?? 0));
+        setRunLimit(m?.entitlements?.weeklyRunLimit);
+        setRunsUsed(Number(m?.counts?.runsThisWeek ?? 0));
       })
       .catch(() => setWorkQueueEnabled(null));
     controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
@@ -364,20 +365,22 @@ export function GithubQueuePanel({
           </div>
         )}
 
-        {/* Free tier includes the queue, metered per run. Show remaining runs, and
-            prompt an upgrade once the month's allowance is spent. */}
+        {/* Free tier is metered by a shared rolling 7-day run cap that spans every
+            source (manual, app, queue, ephemeral). Show remaining runs, and prompt an
+            upgrade once the window's allowance is spent. */}
         {canQuery && workQueueEnabled !== false && typeof runLimit === "number" && (
           <div className={`banner ${runsUsed >= runLimit ? "warn" : "info"} inline`}>
             {runsUsed >= runLimit ? (
               <>
-                Free plan — you've used all {runLimit} work-queue runs this month. New runs resume next month.{" "}
+                Free plan — you've used your {runLimit} free runs this week. Extra runs still
+                work for now; capacity returns as your older runs pass 7 days.{" "}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
                   Upgrade for unlimited →
                 </button>
               </>
             ) : (
               <>
-                Free plan — {Math.max(0, runLimit - runsUsed)} of {runLimit} work-queue runs left this month.{" "}
+                Free plan — {Math.max(0, runLimit - runsUsed)} of {runLimit} runs left this week.{" "}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
                   Upgrade for unlimited →
                 </button>
