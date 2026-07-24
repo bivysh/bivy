@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are now tagged and merged by node the same way chat sessions already were,
   so the sidebar keeps showing every node's sessions regardless of which node
   is currently selected. (#99)
+- `bivy sessions` / `bivy ls` now lists every saved session by default instead
+  of only the 15 most recent, so older sessions are visible and resumable
+  again. Use `--limit`/`--n` to cap the list. (#71)
 - `install.sh` now persists a PATH fix into `~/.bashrc`/`~/.zshrc` when the
   npm (or fallback `~/.local`) bin directory isn't already on `PATH`, instead
   of only printing an `export PATH=...` line — which fixed nothing beyond the

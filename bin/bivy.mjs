@@ -33,6 +33,7 @@ import { randomBytes, createCipheriv, createDecipheriv, randomUUID } from "node:
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { selectStaleSessions, sessionActivityMs } from "./prune-sessions.mjs";
+import { resolveSessionsLimit, truncateSavedSessions } from "./sessions-list.mjs";
 import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForShell } from "./shim-path.mjs";
 import { removeExcept } from "./uninstall-paths.mjs";
 
@@ -1556,19 +1557,24 @@ async function fetchJson(baseUrl, pathName, token) {
   return res.json();
 }
 
-// `bivy sessions` / `bivy ls` — list recent sessions (durable, resumable) and
-// live `bivy run` terminals, then resume the one you pick. Live terminals bind to
-// their running PTY; durable sessions relaunch through `bivy run` using the
-// agent's own native resume. `bivy resume` is the same list but jumps straight to
-// a chosen (default: most recent) entry.
+// `bivy sessions` / `bivy ls` — list ALL durable, resumable sessions (not just
+// the ones currently live/active) plus live `bivy run` terminals, then resume
+// the one you pick. Live terminals bind to their running PTY; durable sessions
+// relaunch through `bivy run` using the agent's own native resume. `bivy resume`
+// is the same list but jumps straight to a chosen (default: most recent) entry.
 //   --json          machine-readable list, no prompt
-//   --limit/-n N    how many durable sessions to show (default 15)
+//   --limit/-n N    cap how many saved sessions to show (default: unlimited — all of them)
 //   <n> | <id>      select non-interactively (index in the list, or a session id)
 async function cmdSessions(args = [], opts = {}) {
   if (!(await ensureDeps())) process.exit(1);
   const json = args.includes("--json");
   const nArg = argValue(args, "limit") || argValue(args, "n");
-  const limit = Number(nArg) > 0 ? Math.floor(Number(nArg)) : 15;
+  // No explicit --limit/-n: show every saved session, not just the most recent
+  // 15. Sessions are never "active" vs "inactive" in storage (see listAllSessions
+  // in src/server.ts) — they persist until deleted or pruned — so capping the
+  // default view made older, perfectly resumable sessions invisible and
+  // unresumable by index. (#71)
+  const limit = resolveSessionsLimit(nArg);
   const selector = args.find((a) => !a.startsWith("-"));
 
   const config = loadConfig();
@@ -1598,8 +1604,7 @@ async function cmdSessions(args = [], opts = {}) {
     workspace: t.workspace || "",
     status: "working",
   }));
-  const savedItems = (Array.isArray(sessions) ? sessions : [])
-    .slice(0, limit)
+  const savedItems = truncateSavedSessions(Array.isArray(sessions) ? sessions : [], limit)
     .map((s) => ({
       kind: "saved",
       ref: s.path || s.id,
@@ -1641,7 +1646,7 @@ async function cmdSessions(args = [], opts = {}) {
   }
 
   if (!chosen) {
-    console.log(c.bold("\n  Sessions") + c.dim("  (live agents + recent saved)\n"));
+    console.log(c.bold("\n  Sessions") + c.dim("  (live agents + all saved)\n"));
     items.forEach((item, i) => console.log(renderRow(item, i)));
     const prompter = createPrompter();
     const answer = await prompter.ask("Resume which? (number, or Enter to cancel)", "");
