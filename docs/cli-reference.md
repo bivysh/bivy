@@ -210,12 +210,13 @@ bivy takeover 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
 
 Alias: `bivy ls`.
 
-Lists live run-terminals first, then recent saved sessions. With no selector and
-no `--json`, prompts you to pick one to resume.
+Lists live run-terminals first, then every saved session (most recently active
+first) — not just the currently active ones, so any of them can be resumed.
+With no selector and no `--json`, prompts you to pick one to resume.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--limit <n>` / `--n <n>` | 15 | How many saved sessions to list |
+| `--limit <n>` / `--n <n>` | unlimited | Cap how many saved sessions to list |
 | `--json` | off | Print the list as JSON and exit without resuming |
 
 `selector` is either a 1-based index into the printed list, or a session

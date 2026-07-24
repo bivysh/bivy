@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- `bivy sessions` / `bivy ls` now lists every saved session by default instead
+  of only the 15 most recent, so older sessions are visible and resumable
+  again. Use `--limit`/`--n` to cap the list. (#71)
 
 ## [0.1.0] - 2026-07-24
 
