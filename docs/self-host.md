@@ -148,8 +148,7 @@ Notes:
   (`docker compose version`).
 - **Connection pooling:** managed tiers often cap `max_connections` low. Keep
   `instances × DATABASE_POOL_MAX` (default 10) under that cap, or front the
-  database with the provider's pooler (PgBouncer, Neon's pooled endpoint). See
-  [scaling.md](scaling.md).
+  database with the provider's pooler (PgBouncer, Neon's pooled endpoint).
 - **Backups** are now the provider's job — use its managed snapshots/PITR
   instead of the `docker compose ... exec postgres pg_dump` recipe below (there
   is no local `postgres` container to exec into). You can still run `pg_dump`
