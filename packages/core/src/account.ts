@@ -311,10 +311,25 @@ export async function fetchGithubApp(store: LocalStore, fetchImpl: typeof fetch 
   return normalizeGithubAppInfo(await res.json());
 }
 
-/** Disconnect one GitHub App by its App ID (drops that app's control-plane
- *  hook), or every app on the account when `appId` is omitted. */
-export async function disconnectGithubApp(store: LocalStore, appId?: string, fetchImpl: typeof fetch = fetch): Promise<void> {
-  const query = appId ? `?appId=${encodeURIComponent(appId)}` : "";
+/**
+ * Disconnect a single GitHub App, or every app on the account.
+ *
+ * Scope precedence: by `appId` when known, else by the app's control-plane
+ * `hookId` — a stale app left by an abandoned create flow has a hook but no App
+ * ID, and MUST still be removable on its own without taking the healthy apps
+ * with it. Only when NEITHER id is given does the whole account's `github_app`
+ * hooks go (a deliberate "remove everything", orphans included).
+ *
+ * Accepts a bare appId string for backwards compatibility.
+ */
+export async function disconnectGithubApp(
+  store: LocalStore,
+  target?: string | { appId?: string; hookId?: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const appId = typeof target === "string" ? target : target?.appId;
+  const hookId = typeof target === "string" ? undefined : target?.hookId;
+  const query = appId ? `?appId=${encodeURIComponent(appId)}` : hookId ? `?hookId=${encodeURIComponent(hookId)}` : "";
   const res = await fetchImpl(`${cpBase(store)}/account/github-app${query}`, { method: "DELETE", headers: authHeaders(store) });
   if (!res.ok) throw new Error(`disconnect failed: ${res.status}`);
 }

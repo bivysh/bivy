@@ -10,4 +10,5 @@ test-results/
 packages/*/dist
 packages/*/node_modules
 .bivy-test-*
+.bivy-attachments/
 site/install.sh

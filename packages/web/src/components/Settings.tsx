@@ -1101,7 +1101,7 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
     setDisconnectErr(null);
     setDisconnectingId(id);
     try {
-      await controller.githubAppDisconnect(entry.appId);
+      await controller.githubAppDisconnect(entry.appId, entry.hookId);
       // Re-read the truth rather than optimistically dropping the row: if the hook
       // is really gone the app leaves the list; if not, say so.
       const next = await controller.fetchGithubApp();

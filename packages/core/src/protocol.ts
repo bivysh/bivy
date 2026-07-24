@@ -85,17 +85,20 @@ export interface ServerEvent {
 
 /**
  * A composer attachment. Matches the node's `attachmentsFrom` shape exactly:
- * images carry base64 `data`, text files carry extracted `text` (possibly
- * truncated), and unreadable/binary files are sent with `omitted: true`.
+ * images carry base64 `data` (passed to the model as vision); files carry
+ * either base64 `data` (any type, binary included) or, for text files,
+ * extracted `text` (possibly truncated). The node materializes file
+ * attachments into the session working directory so the agent can open them
+ * with its file tools. `omitted` marks a file the browser could not read.
  */
 export interface PromptAttachment {
   kind: "image" | "file";
   name: string;
   size: number;
   mimeType: string;
-  /** base64 (no data-URL prefix) for images. */
+  /** base64 (no data-URL prefix): the image bytes, or a file's raw bytes. */
   data?: string;
-  /** extracted text for text files. */
+  /** extracted text for text files (an alternative to `data`). */
   text?: string;
   truncated?: boolean;
   omitted?: boolean;
