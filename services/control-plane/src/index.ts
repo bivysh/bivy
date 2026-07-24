@@ -379,6 +379,15 @@ if (hasReactApp) {
     noStorePwaShell(res);
     res.sendFile(reactIndexFile);
   });
+  // Settings is also URL-routed (`/settings`, `/settings/:view` — see #78 and
+  // packages/web/src/router.ts), so a cold load / reload / copied link on
+  // either needs the same app-shell fallback. No existing JSON API lives at
+  // these paths (only `github.com/settings/...` strings appear elsewhere in
+  // this file), so nothing here is shadowed.
+  app.get(/^\/settings(?:\/.+)?$/, (_req, res) => {
+    noStorePwaShell(res);
+    res.sendFile(reactIndexFile);
+  });
 }
 
 function bearer(req: Request): string | null {
