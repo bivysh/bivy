@@ -232,6 +232,21 @@ describe("SessionStore", () => {
     expect(store.getState().commandsBySession).toEqual({});
   });
 
+  it("clears nodeSettings on node switch so a new node's panel never shows the previous node's settings (issue #75)", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "node.settings",
+      settings: { name: "node-a", defaultAgent: "claude", githubIssuePrompt: "a-prompt" },
+    });
+    expect(store.getState().nodeSettings?.name).toBe("node-a");
+    // Switching nodes must drop the stale settings immediately — if the newly
+    // selected node is offline it may never answer node.settings.get, and
+    // without this reset the UI would go on showing node-a's settings as if
+    // they belonged to the new node.
+    store.resetSession();
+    expect(store.getState().nodeSettings).toBeNull();
+  });
+
   it("leaves state identity stable when session.created adds no new capabilities or commands", () => {
     const store = new SessionStore();
     store.apply({
