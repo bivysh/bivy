@@ -7253,7 +7253,11 @@ app.post("/api/auth/native-login", async (_req, res, next) => {
   try {
     const command = nativeLoginCommand();
     if (process.platform === "darwin") {
-      spawn("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(command)}`], { detached: true, stdio: "ignore" }).unref();
+      const child = spawn("osascript", ["-e", `tell application "Terminal" to do script ${JSON.stringify(command)}`], { detached: true, stdio: "ignore" });
+      // A failed spawn reports asynchronously via 'error'; without a listener it
+      // would crash the server. Best effort — the command is returned regardless.
+      child.on("error", () => {});
+      child.unref();
       return res.json({ ok: true, opened: true, command, instructions: "Type /login in the Terminal window, then select a provider." });
     }
     res.json({ ok: true, opened: false, command, instructions: "Run this command, then type /login and select a provider." });
