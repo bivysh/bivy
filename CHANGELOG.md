@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `bivy relay:setup` now honors `BIVY_DATA_DIR` like every other entry point
+  instead of hardcoding `<repoRoot>/.bivy`. On a global/packaged install
+  (where the CLI resolves the data dir to `~/.bivy`) it used to write
+  `relay.json` and the node identity into the install directory, which is
+  wiped on update, silently breaking remote access after `bivy update`. (#2)
 - The sidebar no longer drops another node's `bivy run` terminals when you
   switch nodes — e.g. from the "New session" header switcher. Run terminals
   are now tagged and merged by node the same way chat sessions already were,
