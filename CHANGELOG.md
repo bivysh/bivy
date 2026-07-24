@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- `install.sh` now persists a PATH fix into `~/.bashrc`/`~/.zshrc` when the
+  npm (or fallback `~/.local`) bin directory isn't already on `PATH`, instead
+  of only printing an `export PATH=...` line — which fixed nothing beyond the
+  terminal that ran the installer, leaving `bivy` unrecognized in every new
+  shell afterwards. Opt out with `BIVY_NO_RC_UPDATE=1`. (#69)
 
 ## [0.1.0] - 2026-07-24
 

@@ -46,11 +46,22 @@ BIVY_NPM_PREFIX=~/.local bash install.sh
 
 # Preinstall every bundled agent runtime rather than just your default.
 BIVY_INSTALL_ALL_AGENTS=1 bash install.sh
+
+# Don't touch ~/.bashrc or ~/.zshrc; just print the PATH line to add yourself.
+BIVY_NO_RC_UPDATE=1 bash install.sh
 ```
 
 If npm's global prefix isn't writable, the installer falls back to `~/.local`
 automatically rather than escalating with sudo — installing as root leaves files
 you can't update later without sudo.
+
+If that install location isn't already on `PATH`, the installer appends a
+small, clearly-marked block to `~/.bashrc` or `~/.zshrc` (whichever your
+`$SHELL` uses) that puts it there — re-running the installer never duplicates
+the block. A script can't change the PATH of the shell that invoked it, so
+open a new terminal (or `source` the rc file) afterwards to pick it up. Set
+`BIVY_NO_RC_UPDATE=1` to skip this and just get the `export PATH=...` line
+printed for you to run manually.
 
 ## Where your data lives
 
