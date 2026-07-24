@@ -1431,10 +1431,15 @@ export async function launchEphemeralMachine(
   if (!token) throw new Error(`Add a ${adapter.name} token first.`);
 
   const nodeId = "eph-" + randHex(8);
+  // `ephemeral: true` is what the control plane records and counts against the
+  // plan's concurrent-runner allowance. The `eph-` prefix above is only a display
+  // convention (ephemeralNodeLabel strips it) — the server does not infer from it.
+  // Enrollment happens before the machine is provisioned, so an account already at
+  // its cap is refused here and no cloud resource is ever created.
   const enrollRes = await fetchImpl(`${cpBase(deps.store)}/nodes/enroll`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${deps.store.s}` },
-    body: JSON.stringify({ nodeId, name: opts.name || `Ephemeral ${adapter.name}` }),
+    body: JSON.stringify({ nodeId, name: opts.name || `Ephemeral ${adapter.name}`, ephemeral: true }),
   });
   const enroll: any = await enrollRes.json().catch(() => ({}));
   if (!enrollRes.ok || !enroll?.enrollmentToken) throw new Error(enroll?.error || "Could not enroll the machine");

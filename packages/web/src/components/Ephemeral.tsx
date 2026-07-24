@@ -36,6 +36,14 @@ export function EphemeralSheet({ onClose }: { onClose: () => void }) {
   // too (POST /api/ephemeral/exec) — this is UX so free users see the upsell
   // instead of a failed launch.
   const ephemeralAllowed = me?.entitlements?.ephemeralEnabled !== false;
+  // Concurrency, not access: the plan allows launching, but only so many at once.
+  // Configuring providers and machines stays unrestricted — we only block the
+  // launch itself, and only while the account is already at its limit. Enroll is
+  // the authoritative check (it runs before any cloud resource is created); this
+  // just explains the ceiling before the user spends money finding it.
+  const concurrentLimit = me?.entitlements?.ephemeralConcurrent;
+  const running = me?.counts?.ephemeralRunning ?? 0;
+  const atConcurrencyLimit = concurrentLimit !== undefined && running >= concurrentLimit;
 
   return (
     <Sheet
@@ -67,6 +75,15 @@ export function EphemeralSheet({ onClose }: { onClose: () => void }) {
       ) : !provider ? (
         <div className="picker-list">
           <p className="muted settings-intro">Bring your own cloud token to spin up a temporary node that self-destructs at its TTL.</p>
+          {atConcurrencyLimit ? (
+            <p className="muted settings-intro">
+              Your plan runs {concurrentLimit} ephemeral machine{concurrentLimit === 1 ? "" : "s"} at a time, and
+              you have {running} running. Destroy it to start another, or upgrade to run them in parallel.{" "}
+              <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
+                Upgrade to Pro
+              </button>
+            </p>
+          ) : null}
           {EPHEMERAL_PROVIDERS.map((p) => {
             const k = keys.find((x) => x.id === p.id);
             return (

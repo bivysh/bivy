@@ -31,6 +31,7 @@ import {
   type WorkItem,
   type WorkItemInput,
   entitlementsForPlan,
+  entitlementsEnforced,
   hashToken,
   disambiguateNodeName,
   cleanNodeName,
@@ -200,6 +201,14 @@ export class PostgresStore implements MeshStore {
       -- the owning node alongside its encrypted model-auth vault. Same trust
       -- tier as online/last_seen_at above: never credential material.
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS providers JSONB;
+      -- Short-lived cloud runner (packages/core's launchEphemeralMachine) rather
+      -- than a machine the user installed on. Declared by the caller at enroll
+      -- and never updated afterwards, so a node cannot be reclassified to dodge
+      -- a cap. Decides which entitlement a node is counted against:
+      -- ephemeralConcurrent (live runners) instead of maxNodes (persistent).
+      -- Existing rows default to false, which is correct — every node enrolled
+      -- before this column existed was a persistent one.
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN NOT NULL DEFAULT false;
 
       CREATE TABLE IF NOT EXISTS session_index (
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -657,9 +666,10 @@ export class PostgresStore implements MeshStore {
     return rows.map(mapNode);
   }
 
-  async enrollNode(accountId: string, nodeId: string, name: string) {
+  async enrollNode(accountId: string, nodeId: string, name: string, opts?: { ephemeral?: boolean }) {
     const enrollmentToken = `enr_${randomBytes(32).toString("base64url")}`;
     const tokenHash = hashToken(enrollmentToken);
+    const ephemeral = Boolean(opts?.ephemeral);
 
     const client = await this.pool.connect();
     try {
@@ -673,27 +683,65 @@ export class PostgresStore implements MeshStore {
       const safeName = disambiguateNodeName(name, takenNames);
 
       if (!current) {
-        const limit = entitlementsForPlan(
+        // Two separate buckets, so a cloud runner never eats the persistent-node
+        // slot the user's own laptop needs (free is 1 node AND 1 live runner, not
+        // 1 of either). Both are skipped unless entitlements are enforced —
+        // otherwise a self-hoster, whose accounts all read as `free`, is held to
+        // the free tier on infrastructure they own.
+        const entitlements = entitlementsForPlan(
           (await client.query(`SELECT plan FROM accounts WHERE id = $1`, [accountId])).rows[0]?.plan ?? "free",
-        ).maxNodes;
-        const count = Number(
-          (await client.query(`SELECT count(*)::int AS n FROM nodes WHERE account_id = $1`, [accountId])).rows[0].n,
         );
-        if (limit !== undefined && count >= limit) {
-          throw Object.assign(new Error(`Node limit reached (${limit})`), { status: 402 });
+        if (entitlementsEnforced() && ephemeral) {
+          const limit = entitlements.ephemeralConcurrent;
+          if (limit !== undefined) {
+            // Only nodes that are still online hold a slot — see the interface
+            // comment on countLiveEphemeralNodes for why enrolled-but-dead rows
+            // must not count. Message deliberately avoids the words "node limit":
+            // relay-setup.ts regex-matches /node limit/i to offer "remove a node
+            // to free a slot", which is the wrong remedy for a runner cap.
+            const live = Number(
+              (
+                await client.query(
+                  `SELECT count(*)::int AS n FROM nodes WHERE account_id = $1 AND ephemeral AND online`,
+                  [accountId],
+                )
+              ).rows[0].n,
+            );
+            if (live >= limit) {
+              throw Object.assign(
+                new Error(
+                  `Your plan runs ${limit} ephemeral machine${limit === 1 ? "" : "s"} at a time. Destroy the running one, or upgrade to run them in parallel.`,
+                ),
+                { status: 402, reason: "ephemeral_concurrency" },
+              );
+            }
+          }
+        } else if (entitlementsEnforced()) {
+          const limit = entitlements.maxNodes;
+          const count = Number(
+            (
+              await client.query(
+                `SELECT count(*)::int AS n FROM nodes WHERE account_id = $1 AND NOT ephemeral`,
+                [accountId],
+              )
+            ).rows[0].n,
+          );
+          if (limit !== undefined && count >= limit) {
+            throw Object.assign(new Error(`Node limit reached (${limit})`), { status: 402 });
+          }
         }
       } else if (current.accountId !== accountId) {
         throw Object.assign(new Error("Node belongs to another account"), { status: 409 });
       }
 
       const { rows } = await client.query(
-        `INSERT INTO nodes (id, account_id, name, enrollment_token_hash)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO nodes (id, account_id, name, enrollment_token_hash, ephemeral)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (id) DO UPDATE
            SET name = EXCLUDED.name,
                enrollment_token_hash = EXCLUDED.enrollment_token_hash
          RETURNING *`,
-        [nodeId, accountId, safeName, tokenHash],
+        [nodeId, accountId, safeName, tokenHash, ephemeral],
       );
       await client.query("COMMIT");
       const { enrollmentTokenHash: _h, ...node } = mapNode(rows[0]);
@@ -1260,6 +1308,19 @@ export class PostgresStore implements MeshStore {
     return Number(rows[0]?.n ?? 0);
   }
 
+  async countLiveEphemeralNodes(accountId: string): Promise<number> {
+    // Derived from the nodes table rather than a stored counter, mirroring
+    // countWorkRunsSince: nothing to reset, no cron, and no way for the count to
+    // drift from reality. `online` is maintained by the relay via
+    // /internal/node-status, so a machine that halts at its TTL, is destroyed, or
+    // simply vanishes stops counting on its own.
+    const { rows } = await this.query(
+      `SELECT count(*)::int AS n FROM nodes WHERE account_id = $1 AND ephemeral AND online`,
+      [accountId],
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
+
   async completeWorkItem(accountId: string, id: string): Promise<void> {
     await this.query(
       `UPDATE work_items SET status = 'done', completed_at = now() WHERE id = $2 AND account_id = $1`,
@@ -1354,6 +1415,7 @@ function mapNode(row: any): NodeRecord {
     lastSeenAt: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
     providers: row.providers ?? undefined,
+    ephemeral: Boolean(row.ephemeral),
   };
 }
 

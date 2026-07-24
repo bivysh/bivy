@@ -55,22 +55,97 @@ await test("magic-link login tokens are single-use", async () => {
   assert.equal(await store.consumeLoginToken(token), undefined);
 });
 
-await test("enrollNode enforces the plan's maxNodes limit", async () => {
-  const store = await makeStore();
-  const account = await store.findOrCreateAccount("d@example.com");
-  assert.equal(entitlementsForPlan("free").maxNodes, 1);
-  await store.enrollNode(account.id, "node-1", "First");
-  await assert.rejects(
-    () => store.enrollNode(account.id, "node-2", "Second"),
-    (err: unknown) => (err as { status?: number }).status === 402,
-  );
-  // Upgrading the plan lifts the limit — paid plans are unlimited (no cap).
-  await store.setPlan(account.id, "pro");
-  const result = await store.enrollNode(account.id, "node-2", "Second");
-  assert.equal(result.node.id, "node-2");
-  // A third (and beyond) also enrolls — unlimited means unlimited.
-  const third = await store.enrollNode(account.id, "node-3", "Third");
-  assert.equal(third.node.id, "node-3");
+await test("enrollNode enforces the plan's maxNodes limit (when entitlements enforced)", async () => {
+  const prev = process.env.ENFORCE_ENTITLEMENTS;
+  process.env.ENFORCE_ENTITLEMENTS = "1";
+  try {
+    const store = await makeStore();
+    const account = await store.findOrCreateAccount("d@example.com");
+    assert.equal(entitlementsForPlan("free").maxNodes, 1);
+    await store.enrollNode(account.id, "node-1", "First");
+    await assert.rejects(
+      () => store.enrollNode(account.id, "node-2", "Second"),
+      (err: unknown) => (err as { status?: number }).status === 402,
+    );
+    // Upgrading the plan lifts the limit — paid plans are unlimited (no cap).
+    await store.setPlan(account.id, "pro");
+    const result = await store.enrollNode(account.id, "node-2", "Second");
+    assert.equal(result.node.id, "node-2");
+    // A third (and beyond) also enrolls — unlimited means unlimited.
+    const third = await store.enrollNode(account.id, "node-3", "Third");
+    assert.equal(third.node.id, "node-3");
+  } finally {
+    process.env.ENFORCE_ENTITLEMENTS = prev;
+  }
+});
+
+await test("self-host (entitlements not enforced) ignores the node cap", async () => {
+  const prev = process.env.ENFORCE_ENTITLEMENTS;
+  delete process.env.ENFORCE_ENTITLEMENTS;
+  try {
+    const store = await makeStore();
+    const account = await store.findOrCreateAccount("selfhost@example.com");
+    // Free plan, cap of 1, but no enforcement: a second node still enrolls.
+    await store.enrollNode(account.id, "node-1", "First");
+    const second = await store.enrollNode(account.id, "node-2", "Second");
+    assert.equal(second.node.id, "node-2");
+  } finally {
+    process.env.ENFORCE_ENTITLEMENTS = prev;
+  }
+});
+
+await test("ephemeral runners are capped by concurrency, not counted against maxNodes", async () => {
+  const prev = process.env.ENFORCE_ENTITLEMENTS;
+  process.env.ENFORCE_ENTITLEMENTS = "1";
+  try {
+    const store = await makeStore();
+    const account = await store.findOrCreateAccount("eph@example.com");
+
+    // A persistent node takes the single free maxNodes slot.
+    await store.enrollNode(account.id, "laptop", "Laptop");
+
+    // An ephemeral runner still enrolls — it's a separate bucket, and there are
+    // zero live runners so far (a freshly enrolled node is offline until it dials
+    // the relay). It does NOT consume the persistent node slot.
+    const runner = await store.enrollNode(account.id, "eph-1", "Runner one", { ephemeral: true });
+    assert.equal(runner.node.id, "eph-1");
+    assert.equal(runner.node.ephemeral, true, "flag recorded as given");
+
+    // Nothing is live yet, so the concurrency count is zero.
+    assert.equal(await store.countLiveEphemeralNodes(account.id), 0);
+
+    // Once it's online it occupies the one free concurrency slot.
+    await store.setNodeOnline("eph-1", true);
+    assert.equal(await store.countLiveEphemeralNodes(account.id), 1);
+
+    // A second runner cannot come up while the first is live.
+    await assert.rejects(
+      () => store.enrollNode(account.id, "eph-2", "Runner two", { ephemeral: true }),
+      (err: unknown) => (err as { status?: number }).status === 402,
+    );
+
+    // The persistent node cap is unaffected: a second laptop is still refused for
+    // the persistent reason, proving the runner never took its slot.
+    await assert.rejects(
+      () => store.enrollNode(account.id, "laptop-2", "Laptop two"),
+      (err: unknown) => (err as { status?: number }).status === 402,
+    );
+
+    // When the running machine dies (relay marks it offline), the slot frees and
+    // a new runner enrolls.
+    await store.setNodeOnline("eph-1", false);
+    assert.equal(await store.countLiveEphemeralNodes(account.id), 0);
+    const runner2 = await store.enrollNode(account.id, "eph-2", "Runner two", { ephemeral: true });
+    assert.equal(runner2.node.id, "eph-2");
+
+    // Pro lifts the concurrency cap entirely.
+    await store.setPlan(account.id, "pro");
+    await store.setNodeOnline("eph-2", true);
+    const runner3 = await store.enrollNode(account.id, "eph-3", "Runner three", { ephemeral: true });
+    assert.equal(runner3.node.id, "eph-3");
+  } finally {
+    process.env.ENFORCE_ENTITLEMENTS = prev;
+  }
 });
 
 await test("registerPairedDevice has no device cap (limits removed)", async () => {
@@ -129,7 +204,8 @@ await test("free vs pro entitlements match the published pricing table", () => {
   assert.equal(free.relayEnabled, true, "free: one hosted relay node");
   assert.equal(free.workQueueEnabled, true, "free: hosted work queue included");
   assert.equal(free.workQueueMonthlyLimit, 5, "free: metered at 5 runs/month");
-  assert.equal(free.ephemeralEnabled, false, "free: no quick ephemeral servers");
+  assert.equal(free.ephemeralEnabled, true, "free: ephemeral servers included");
+  assert.equal(free.ephemeralConcurrent, 1, "free: one runner at a time");
 
   const pro = entitlementsForPlan("pro");
   assert.equal(pro.maxNodes, undefined, "pro: unlimited nodes (no cap)");
@@ -138,11 +214,13 @@ await test("free vs pro entitlements match the published pricing table", () => {
   assert.equal(pro.workQueueEnabled, true, "pro: hosted work queue");
   assert.equal(pro.workQueueMonthlyLimit, undefined, "pro: unlimited runs (no cap)");
   assert.equal(pro.ephemeralEnabled, true, "pro: quick ephemeral servers");
+  assert.equal(pro.ephemeralConcurrent, undefined, "pro: unlimited concurrent runners (no cap)");
 
   const team = entitlementsForPlan("team");
   assert.equal(team.maxNodes, undefined, "team: unlimited nodes (no cap)");
   assert.equal(team.workQueueEnabled, true, "team: hosted work queue");
   assert.equal(team.ephemeralEnabled, true, "team: quick ephemeral servers");
+  assert.equal(team.ephemeralConcurrent, undefined, "team: unlimited concurrent runners (no cap)");
 });
 
 await test("setSubscriptionState records full billing metadata and updates entitlements", async () => {
