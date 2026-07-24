@@ -26,9 +26,11 @@ On Debian/Ubuntu the installer can install Node.js 22 for you if it is missing.
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
-This downloads the release tarball, checks it against the release manifest's
-`sha256`, installs into `~/.bivy/app`, installs production dependencies,
-symlinks `bivy` into `~/.local/bin`, and launches the setup wizard.
+This ensures a supported Node.js is present (installing it for you on
+Debian/Ubuntu if needed), runs `npm install -g bivy`, then launches the
+`bivy setup` wizard. Node state lives at `~/.bivy`. (If the package isn't yet
+on the registry, the installer falls back to a checksum-verified release
+tarball — but npm is the primary path.)
 
 If `~/.local/bin` is not on your `PATH` the installer warns you; add
 `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
@@ -53,7 +55,7 @@ remote access. Chosen for you, no prompt:
 
 Asked, once, only if remote access is not configured yet:
 
-1. **Remote sync** — `hosted` (default; one node is free) or `self-hosted`.
+1. **Remote sync** — `hosted` (default; free, with unlimited nodes) or `self-hosted`.
    Choosing self-hosted then asks for your **control plane URL** and your
    **relay `ws(s)://` URL**.
 2. **Remote login** — `GitHub` (default) or an `email sign-in link`. Choosing
@@ -126,4 +128,5 @@ bivy logs -f   # tail the node logs
 ```
 
 Something broken? [troubleshooting.md](troubleshooting.md). Want to run your own
-control plane and relay? [self-host.md](self-host.md).
+control plane and relay? [self-host-quickstart.md](self-host-quickstart.md).
+Curious what Bivy explicitly does *not* do yet? [faq.md](faq.md).
