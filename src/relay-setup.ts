@@ -84,7 +84,12 @@ function openBrowser(target: string): void {
   const opener =
     process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   try {
-    spawn(opener, [target], { stdio: "ignore", detached: true }).unref();
+    const child = spawn(opener, [target], { stdio: "ignore", detached: true });
+    // spawn reports a missing opener (e.g. no xdg-open on a headless server)
+    // asynchronously via an 'error' event, not a throw. Without a listener that
+    // becomes an unhandled error that crashes the process. The URL is printed too.
+    child.on("error", () => {});
+    child.unref();
   } catch {
     // best effort — the URL is also printed
   }
