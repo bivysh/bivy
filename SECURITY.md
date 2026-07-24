@@ -27,7 +27,8 @@ https://github.com/bivysh/bivy/security/advisories/new
 This is preferred. It gives us a private thread with you, a CVE if one is
 warranted, and a clean path to a coordinated advisory.
 
-**Backup channel:** `security@bivy.sh`
+**Backup channel:** `support@bivy.sh` (mark the subject "SECURITY" and we will
+move it to a private thread)
 
 Please include:
 
