@@ -127,6 +127,7 @@ set_secret BIVY_GITHUB_OAUTH_CLIENT_SECRET "$(get GITHUB_OAUTH_CLIENT_SECRET)"
 # Keep booleans as GitHub Environment variables, not secrets.
 set_var DISABLE_DEV_LOGIN "$(get DISABLE_DEV_LOGIN)" 0
 set_var ENFORCE_ENTITLEMENTS "$(get ENFORCE_ENTITLEMENTS)" 0
+set_var RUN_LIMIT_OBSERVE_ONLY "$(get RUN_LIMIT_OBSERVE_ONLY)" 0
 
 echo "Done. Verify with:"
 echo "  gh secret list --env $GH_ENV"

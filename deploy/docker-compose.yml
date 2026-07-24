@@ -56,6 +56,14 @@ services:
       RELAY_SECRET: "${RELAY_SECRET}"
       RELAY_PUBLIC_URL: "${RELAY_PUBLIC_URL}"
       PUBLIC_CONTROL_PLANE_URL: "${PUBLIC_CONTROL_PLANE_URL}"
+      # Entitlement enforcement is a control-plane concern too — push gating and the
+      # free-tier run cap are enforced HERE, not just by the relay's relayEnabled
+      # check — so the control plane must receive this or those gates silently no-op.
+      ENFORCE_ENTITLEMENTS: "${ENFORCE_ENTITLEMENTS:-0}"
+      # Observe-only mode for the free run cap: keep counting/reporting runs but never
+      # block. Lets a hosted deploy watch the real runs-per-window distribution before
+      # turning enforcement on. No-op unless ENFORCE_ENTITLEMENTS=1. See docs/configuration.md.
+      RUN_LIMIT_OBSERVE_ONLY: "${RUN_LIMIT_OBSERVE_ONLY:-0}"
       DISABLE_DEV_LOGIN: "${DISABLE_DEV_LOGIN:-0}"
       RESEND_API_KEY: "${RESEND_API_KEY:-}"
       AUTH_EMAIL_FROM: "${AUTH_EMAIL_FROM:-Bivy <login@localhost>}"
