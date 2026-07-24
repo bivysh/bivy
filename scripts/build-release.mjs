@@ -2,29 +2,43 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 /**
- * Build the `bivy` npm package.
+ * Build the `bivy` release artifact.
  *
  * Compiles src/ to dist/, then stages a curated package directory containing
  * only what a packaged install needs: dist/, bin/, public/qr.js, package
  * metadata, README and LICENSE. It intentionally excludes src/, deploy/, the
  * hosted services, tests, and internal docs.
  *
- * Distribution is npm. There is no self-hosted tarball or release manifest:
- * npm serves content-addressed tarballs, verifies integrity on install, and
- * (when published from CI with --provenance) records where the build came from.
+ * npm is the primary distribution channel (content-addressed tarballs, integrity
+ * verified on install, --provenance attestation from CI). BUT install.sh still
+ * falls back to a self-hosted tarball + manifest at bivy.sh/downloads whenever
+ * the npm registry 404s (e.g. before an npm release exists), so `--pack` also
+ * emits that tarball. Keeping the download channel current is what lets the
+ * every-merge staging build reach existing packaged nodes via `bivy update`.
  *
  *   npm run build:release          stage the package, don't publish
- *   npm run publish:npm            stage and publish
+ *   npm run publish:npm            stage and publish to npm
  *   npm run publish:npm:dry        stage and dry-run publish
+ *   node scripts/build-release.mjs --pack <dir>
+ *                                  stage and write <dir>/bivy-latest.tar.gz +
+ *                                  bivy-latest.json (self-hosted download channel)
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 
 const argv = process.argv.slice(2);
 const doPublish = argv.includes("--publish");
 const dryRunPublish = argv.includes("--dry-run");
+/** Read the value that follows a `--flag` on the command line (or undefined). */
+function argValue(flag) {
+  const i = argv.indexOf(flag);
+  return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined;
+}
+// Where to emit the self-hosted tarball + manifest. Empty = don't (npm-only run).
+const packDir = argValue("--pack");
 
 const root = path.resolve(new URL("..", import.meta.url).pathname);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-release-"));
@@ -84,6 +98,10 @@ pkg.scripts.dev = "node dist/server.js";
 // install. npm runs `prepare` automatically on `npm install`, so leaving it in
 // aborts the installer with MODULE_NOT_FOUND. Drop it from the artifact.
 delete pkg.scripts.prepare;
+// The staging dir IS the sanctioned publish path, so drop the root's
+// `prepublishOnly` guard here — it exists only to hard-fail a stray
+// `npm publish` from the repo root (which would ship the whole monorepo).
+delete pkg.scripts.prepublishOnly;
 // The artifact ships no `packages/` workspaces (the web PWA is built/served by
 // the control plane, not the node). Drop the monorepo `workspaces` field and the
 // workspace-scoped scripts so they don't dangle in the installed package.
@@ -121,8 +139,39 @@ if (doPublish) {
   console.log(dryRunPublish ? "npm publish --dry-run complete" : "Published to npm");
 }
 
+// Self-hosted download channel: tar the staged `bivy/` dir and write a manifest
+// with a sha256 install.sh verifies. The archive MUST have a top-level `bivy/`
+// entry — install.sh extracts and then requires `<stage>/bivy` (see install.sh
+// "did not contain a bivy/ directory"). `-C tmp bivy` produces exactly that.
+if (packDir) {
+  fs.mkdirSync(packDir, { recursive: true });
+  const tarball = path.join(packDir, "bivy-latest.tar.gz");
+  const manifestPath = path.join(packDir, "bivy-latest.json");
+  run("tar", ["-czf", tarball, "-C", tmp, "bivy"]);
+  const sha256 = crypto.createHash("sha256").update(fs.readFileSync(tarball)).digest("hex");
+  // Commit: the CI SHA when present, else the working tree's HEAD. builtAt is
+  // stamped at pack time. The artifact URL is where install.sh will fetch it;
+  // override via BIVY_ARTIFACT_URL for a staging/preview download host.
+  const commit =
+    process.env.GITHUB_SHA ||
+    process.env.RENDER_GIT_COMMIT ||
+    spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout.trim() ||
+    "";
+  const manifest = {
+    name: releasePkg.name,
+    version: releasePkg.version,
+    commit,
+    builtAt: new Date().toISOString(),
+    artifact: process.env.BIVY_ARTIFACT_URL || "https://bivy.sh/downloads/bivy-latest.tar.gz",
+    sha256,
+  };
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  console.log(`Packed ${tarball} (sha256 ${sha256})`);
+  console.log(`Wrote  ${manifestPath}`);
+}
+
 console.log(`Built ${releasePkg.name}@${releasePkg.version}`);
-if (!doPublish) {
+if (!doPublish && !packDir) {
   console.log("Not published. Use `npm run publish:npm` (or --dry-run) to publish.");
 }
 

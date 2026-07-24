@@ -173,6 +173,10 @@ Label an issue `bivy` (or `bivy/<node>` to target a machine), or mention the Biv
 GitHub App in a comment. A node you own claims the work, runs the agent in an
 isolated worktree, and the agent opens the pull request itself.
 
+Available on every plan: free accounts get 10 runs per rolling 7-day window
+(shared across every source — manual, app, work queue, ephemeral), paid plans are
+unlimited. Self-hosted stacks run unlimited.
+
 A private GitHub App only installs on the account that owns it, so connect one
 app per GitHub account — one for your personal repos, one per organization
 (`bivy github:app-create --org <org>`). A node can serve several at once, each

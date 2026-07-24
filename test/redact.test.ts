@@ -31,8 +31,28 @@ function run() {
   const reparsed = JSON.parse(redactSecrets(json));
   assert.ok(!JSON.stringify(reparsed).includes("gho_EXAMPLE"), "no token survives in serialized JSON");
 
+  // Model/provider and common SaaS API keys (the `cat .env` / `env` leak path).
+  for (const key of [
+    "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    "sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    "sk_live_ABCDEF0123456789ABCDEF01",
+    "rk_test_ABCDEF0123456789ABCDEF01",
+    "gsk_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+    "xai-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+    "AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ0123456",
+    "AKIAABCDEFGHIJKLMNOP",
+    "xoxb-1234567890-ABCDEFGHIJKLMNOP",
+  ]) {
+    const out = redactSecrets(`export KEY=${key}`);
+    assert.ok(!out.includes(key), `masks provider key ${key.slice(0, 6)}…`);
+    assert.ok(out.includes("***REDACTED***"), "inserts marker for provider key");
+  }
+
   // Non-secret text is untouched.
   assert.equal(redactSecrets("just a normal https://github.com/bivysh/bivy line"), "just a normal https://github.com/bivysh/bivy line", "leaves credential-free URLs alone");
+  // A short `sk-` fragment is not a key and must not be over-redacted.
+  assert.equal(redactSecrets("use the sk-foo flag"), "use the sk-foo flag", "leaves short sk- fragments alone");
   assert.equal(redactSecrets(""), "", "empty passthrough");
 
   console.log("redact: all tests passed");
