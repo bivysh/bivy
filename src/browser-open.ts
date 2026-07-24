@@ -16,7 +16,7 @@ export function canOpenBrowser(env: NodeJS.ProcessEnv = process.env): boolean {
   if (process.platform === "darwin" || process.platform === "win32") return true;
   const hasDisplay = Boolean(env.DISPLAY || env.WAYLAND_DISPLAY);
   if (!hasDisplay) return false;
-  const check = spawnSync("sh", ["-lc", 'command -v -- xdg-open >/dev/null 2>&1']);
+  const check = spawnSync("sh", ["-lc", 'command -v -- xdg-open >/dev/null 2>&1'], { env });
   return check.status === 0;
 }
 
