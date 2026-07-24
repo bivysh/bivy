@@ -22,17 +22,49 @@ export interface ToModelInfoOptions {
 }
 
 /**
+ * Pull a usable string model id out of a loose record.
+ *
+ * A runtime (e.g. the Claude Agent SDK's `supportedModels()`) can hand us a
+ * record whose id lives under a field other than `id`/`model`, or whose `model`
+ * is itself a nested object (`{ model: { id, displayName } }`). The old
+ * `id ?? model ?? String(model)` chain coerced those objects with `String()`,
+ * yielding the literal string "[object Object]" — which then flowed all the way
+ * to the agent CLI as a model id and was rejected ("Model '[object Object]' is
+ * not a recognized model id"). Resolve defensively and never stringify an
+ * object into an id: try the known id-bearing fields, recurse into a nested
+ * `model` object, and only fall back to `String()` for a primitive.
+ */
+function resolveModelId(model: any): string {
+  if (model == null) return "";
+  if (typeof model === "string") return model;
+  if (typeof model === "number") return String(model);
+  if (typeof model === "object") {
+    for (const key of ["id", "model", "value", "slug", "name"]) {
+      const candidate = (model as Record<string, unknown>)[key];
+      if (typeof candidate === "string" && candidate) return candidate;
+      // `model.model` (and friends) can be a nested record — dig in.
+      if (candidate && typeof candidate === "object") {
+        const nested = resolveModelId(candidate);
+        if (nested) return nested;
+      }
+    }
+    return "";
+  }
+  return String(model);
+}
+
+/**
  * Map a runtime's loose model record into the neutral `ModelInfo`.
  *
  * Field resolution is the lenient superset of what the per-runtime versions did:
- *   - id:            `id` → `model` → String(model)
+ *   - id:            `id` → `model` → nested `model.*` id → `value`/`slug`/`name`
  *   - name:          `displayName` → `name` → id
  *   - reasoning:     `reasoning` || `supportsThinking`
  *   - maxTokens:     `maxTokens` → `maxOutputTokens`
  *   - input/configured: passed through only when present (key stays absent otherwise)
  */
 export function toModelInfo(model: any, opts: ToModelInfoOptions = {}): ModelInfo {
-  const id = model?.id ?? model?.model ?? String(model);
+  const id = resolveModelId(model);
   const info: ModelInfo = {
     provider: model?.provider ?? opts.defaultProvider ?? "",
     id,
