@@ -63,7 +63,7 @@ await test("foreign / unknown nodes are ignored", async () => {
 
 await test("merges across multiple nodes; removeNode clears the index", async () => {
   const { store, accountId, nodeId } = await setup();
-  await store.setPlan(accountId, "individual"); // free plan caps at 1 node
+  await store.setPlan(accountId, "pro"); // free plan caps at 1 node
   const { node: nodeB } = await store.enrollNode(accountId, "node-b", "Server");
   await store.replaceNodeSessions(accountId, nodeId, [{ sessionId: "s1", status: "idle" }]);
   await store.replaceNodeSessions(accountId, nodeB.id, [{ sessionId: "s2", status: "idle" }]);
