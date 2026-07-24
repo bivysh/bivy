@@ -3,6 +3,12 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { forwardOrEvict } from "./backpressure.js";
+import { renderRelayMetrics, PROMETHEUS_CONTENT_TYPE } from "./metrics.js";
+import { initSentry } from "./instrument.js";
+
+// Optional error reporting. Resolves to a no-op unless SENTRY_DSN is set, and
+// only then is @sentry/node loaded (see instrument.ts).
+const Sentry = await initSentry();
 
 /**
  * Bivy — Relay.
@@ -22,10 +28,15 @@ const port = Number(process.env.PORT ?? 4500);
 const controlPlaneUrl = process.env.CONTROL_PLANE_URL ?? "http://localhost:4400";
 const relaySecret = process.env.RELAY_SECRET ?? "dev-relay-secret";
 
-// Fail fast rather than route production traffic with the shared dev secret,
-// which would let anyone introspect tokens against the control plane.
-if (process.env.NODE_ENV === "production" && (!process.env.RELAY_SECRET || relaySecret === "dev-relay-secret")) {
-  console.error("Refusing to start: RELAY_SECRET must be set to a strong, non-default value in production (openssl rand -hex 32).");
+// Fail fast rather than route traffic with the shared dev secret, which would
+// let anyone introspect tokens against the control plane. Refuse it not just in
+// NODE_ENV=production but whenever this relay points at a NON-local control
+// plane — a `staging` (or unset-NODE_ENV) deploy reaching a real control plane
+// over the network with the well-known default is exactly as exploitable as a
+// production one. Local dev against a localhost control plane still works.
+const isLocalControlPlane = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(controlPlaneUrl);
+if ((process.env.NODE_ENV === "production" || !isLocalControlPlane) && (!process.env.RELAY_SECRET || relaySecret === "dev-relay-secret")) {
+  console.error("Refusing to start: RELAY_SECRET must be set to a strong, non-default value when reaching a non-local control plane (openssl rand -hex 32).");
   process.exit(1);
 }
 
@@ -169,6 +180,16 @@ const httpServer = createServer((req, res) => {
     return;
   }
   if (req.url === "/metrics") {
+    // Prometheus text exposition for Alloy/Prometheus scrapers. Scraped over the
+    // internal docker network only — Caddy blocks /metrics publicly. See
+    // docs/ops/monitoring.md in bivysh/bivy-cloud.
+    res.writeHead(200, { "content-type": PROMETHEUS_CONTENT_TYPE });
+    res.end(renderRelayMetrics(metrics, rooms.size, shardId));
+    return;
+  }
+  if (req.url === "/metrics.json") {
+    // Backcompat: the pre-Prometheus JSON counters, kept for any tooling that
+    // still reads them.
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size, ...metrics }));
     return;
@@ -199,7 +220,8 @@ const httpServer = createServer((req, res) => {
       metrics.workNotifications += delivered;
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, delivered }));
-    })().catch(() => {
+    })().catch((error) => {
+      Sentry.captureException(error);
       res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "Internal error" }));
     });
@@ -256,6 +278,7 @@ function registerConnection(ws: WebSocket, ip: string) {
       return;
     }
     console.warn("[relay] websocket error:", error instanceof Error ? error.message : String(error));
+    Sentry.captureException(error);
   });
   ws.once("close", () => {
     metrics.openConnections -= 1;

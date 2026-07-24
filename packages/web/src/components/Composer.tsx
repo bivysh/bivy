@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
-import { isSlashInput, parseSlash, matchSlashCommands, findSlashCommand, resolveSlash } from "@bivy/core";
+import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
 import { SANDBOX_TIERS } from "./Settings.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
@@ -111,7 +111,6 @@ export function Composer({
   disabledHint,
   working,
   onSend,
-  onCommand,
   onAbort,
   onError,
 }: {
@@ -120,9 +119,6 @@ export function Composer({
   disabledHint?: string;
   working: boolean;
   onSend: (text: string, attachments?: PromptAttachment[]) => void;
-  /** Run a Bivy control slash command (e.g. "/pr", "/new"). Model/agent pickers
-   *  are handled locally; everything else is delegated here to the app. */
-  onCommand?: (name: string, args: string) => void;
   onAbort: () => void;
   onError?: (message: string) => void;
 }) {
@@ -259,6 +255,24 @@ export function Composer({
     });
   }, []);
 
+  // The "/" pill (top-right, above the composer) asks us to open the slash-command
+  // menu. Seed a lone "/" so matchSlashCommands lists every advertised command,
+  // clear any prior dismissal, and focus the input — the menu renders reactively,
+  // so a session whose commands are still arriving (a just-reopened one) fills in
+  // as soon as they land. Preserve a command the user was already mid-typing.
+  useEffect(() => {
+    return controller.onOpenSlash(() => {
+      setText((prev) => (prev.trimStart().startsWith("/") ? prev : "/"));
+      setMenuDismissed(false);
+      setMenuIndex(0);
+      wantsFocusRef.current = true;
+      requestAnimationFrame(() => {
+        autosize();
+        if (canGrabFocus(taRef.current)) taRef.current?.focus();
+      });
+    });
+  }, []);
+
   // Escape closes the image viewer.
   useEffect(() => {
     if (!viewing) return;
@@ -329,7 +343,12 @@ export function Composer({
           }
           const isText = file.type.startsWith("text/") || TEXT_EXT.test(file.name);
           if (!isText) {
-            next.push({ kind: "file", name: file.name, size: file.size, mimeType: file.type || "application/octet-stream", text: "", omitted: true });
+            // Any non-text file (binary, PDF, .pem, …): send the raw bytes as
+            // base64 so the node can materialize it on disk for the agent to
+            // read. Previously these were dropped with `omitted: true`.
+            const url = await readDataUrl(file);
+            const data = url.includes(",") ? url.split(",").pop() || "" : url;
+            next.push({ kind: "file", name: file.name, size: file.size, mimeType: file.type || "application/octet-stream", data });
             continue;
           }
           const body = await readText(file);
@@ -365,17 +384,6 @@ export function Composer({
     requestAnimationFrame(autosize);
   }
 
-  // Execute a Bivy control command. Model/agent open a picker (owned by the
-  // composer); every other command is delegated to `onCommand`. Returns false
-  // for an unrecognised command so the caller can warn instead of running it.
-  function runSlash(name: string, args: string): boolean {
-    if (name === "/model") { if (modelSelectable) setPicker("model"); return true; }
-    if (name === "/agent") { setPicker("agent"); return true; }
-    if (!findSlashCommand(name)) return false;
-    onCommand?.(name, args);
-    return true;
-  }
-
   // Invoke an advertised agent-native command. A "protocol"-mode command routes
   // through the dedicated command.invoke channel; a "prompt"-mode command (the
   // default, used by Pi/Claude) is forwarded as an ordinary prompt so the agent's
@@ -386,14 +394,9 @@ export function Composer({
   }
 
   function chooseFromMenu(cmd: SlashCommand) {
-    // A Bivy control command runs immediately (open a picker / PR / etc.). An
-    // agent-native command may take arguments (e.g. "/model sonnet"), so we drop
-    // "/name " into the composer and keep focus rather than firing it blind.
-    if (findSlashCommand(cmd.name)) {
-      runSlash(cmd.name, "");
-      clearComposer();
-      return;
-    }
+    // Every menu entry is an agent-native command; it may take arguments (e.g.
+    // "/model sonnet"), so we drop "/name " into the composer and keep focus
+    // rather than firing it blind.
     setText(`${cmd.name} `);
     setMenuDismissed(true);
     setMenuIndex(0);
@@ -406,18 +409,14 @@ export function Composer({
   function submit() {
     const value = text.trim();
     if ((!value && !attachments.length) || disabled) return;
-    // Dispatch a slash line by precedence (see resolveSlash): a Bivy control
-    // command runs as a client action (the fix that stopped "/pr" etc. leaking to
-    // the agent as literal text), an advertised agent command is invoked, and the
-    // "/agent:<name>" escape hatch reaches an agent command that collides with a
-    // Bivy one. An unknown slash is rejected with feedback WHEN the active session
+    // Dispatch a slash line (see resolveSlash): an advertised agent command is
+    // invoked. An unknown slash is rejected with feedback WHEN the active session
     // advertised a command catalog — otherwise we stay permissive and forward the
     // raw line (older runtimes that parse slashes themselves rely on this).
     if (isSlashInput(value)) {
       const parsed = parseSlash(value);
       if (parsed) {
         const res = resolveSlash(parsed, agentCommands);
-        if (res.kind === "bivy") { runSlash(res.name, res.args); clearComposer(); return; }
         if (res.kind === "agent") { invokeAgentCommand(res.command, res.args); clearComposer(); return; }
         if (res.hasCatalog) {
           onError?.(`Unknown command ${res.name}. Type / to see this agent's commands.`);
@@ -451,9 +450,14 @@ export function Composer({
   // default (shown by name when known). Chosen up front on the draft; a running
   // session shows it read-only in Session settings.
   const draftTier = SANDBOX_TIERS.find((t) => t.id === state.draftSandbox);
+  const nodeDefaultTier = SANDBOX_TIERS.find((t) => t.id === state.nodeSettings?.defaultSandbox);
+  // The ◈ glyph already reads as "sandbox", so we drop the redundant "Sandbox"
+  // word: show the chosen tier, else the node default's name, else glyph only.
   const sandboxLabel = draftTier
     ? draftTier.label
-    : `Sandbox${state.nodeSettings?.defaultSandbox ? `: ${state.nodeSettings.defaultSandbox}` : ""}`;
+    : nodeDefaultTier
+      ? nodeDefaultTier.label
+      : state.nodeSettings?.defaultSandbox ?? "";
   const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (node default)";
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
 
@@ -465,9 +469,9 @@ export function Composer({
             <GhGlyph />
             <span className="pill-label">{repoLabel}</span>
           </button>
-          <button type="button" className="pill sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle}>
+          <button type="button" className="pill sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle} aria-label="Sandbox mode">
             <span className="pill-glyph">◈</span>
-            <span className="pill-label">{sandboxLabel}</span>
+            {sandboxLabel && <span className="pill-label">{sandboxLabel}</span>}
           </button>
         </div>
       )}
@@ -539,7 +543,7 @@ export function Composer({
               {attachments.map((a, i) => {
                 const thumb = imageDataUrl(a);
                 return (
-                  <span key={`${a.name}-${i}`} className={`attach-chip${a.omitted ? " omitted" : ""}${thumb ? " has-thumb" : ""}`} title={a.omitted ? "Binary file — content not sent" : a.name}>
+                  <span key={`${a.name}-${i}`} className={`attach-chip${a.omitted ? " omitted" : ""}${thumb ? " has-thumb" : ""}`} title={a.omitted ? "File could not be read — not attached" : a.name}>
                     {thumb ? (
                       <button type="button" className="attach-thumb-btn" onClick={() => setViewing(thumb)} aria-label={`View ${a.name}`} title={`View ${a.name}`}>
                         <img className="attach-thumb" src={thumb} alt={a.name} />
