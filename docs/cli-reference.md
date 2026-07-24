@@ -494,6 +494,28 @@ vault; only a `secret://` reference is written to `cli.json`.
 bivy github:app-connect --app-id 123456 --key ~/Downloads/bivy.private-key.pem
 ```
 
+### `bivy github:app-sync [on|off]`
+
+Opts this node into (or out of) cross-node GitHub App private-key sync
+(issue #88): apps connected on one opted-in node are pushed, E2E-encrypted,
+to the account's other opted-in nodes, and this node pulls apps connected
+elsewhere. The control plane only ever stores ciphertext and per-node wrapped
+vault keys — never a plaintext key — the same guarantee `github:app-connect`
+already gives a single node. Off by default: a GitHub App key is a repo-write
+credential, so which nodes hold it is a deliberate per-node opt-in, not
+automatic like model/provider auth sync. See
+[credential-sync.md](credential-sync.md#3-github-app-private-keys).
+
+No argument prints the current on/off status and which apps this node holds.
+
+```bash
+bivy github:app-sync         # status
+bivy github:app-sync on
+bivy github:app-sync off
+```
+
+Restart the node (`bivy restart`) to apply a change.
+
 ### `bivy github:connect [owner/repo]`
 
 Alias: `bivy connect-repo`.
