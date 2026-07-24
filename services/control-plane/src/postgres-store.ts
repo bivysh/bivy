@@ -351,6 +351,18 @@ export class PostgresStore implements MeshStore {
       -- node (issue #532). Display only; routing is entirely by the label column.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN;
 
+      -- One row per distinct run the account has started, keyed by run key (the
+      -- session id). Powers the free-tier daily cap: runs today = rows whose
+      -- started_at >= start-of-UTC-day. PRIMARY KEY(account_id, run_key) makes
+      -- recordRunStart idempotent so reconnects / repeated session advertises never
+      -- double-count. Metadata only — no session content ever lands here.
+      CREATE TABLE IF NOT EXISTS run_starts (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        run_key     TEXT NOT NULL,
+        started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, run_key)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_nodes_account ON nodes(account_id);
       CREATE INDEX IF NOT EXISTS idx_nodes_token ON nodes(enrollment_token_hash);
       CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id);
@@ -364,6 +376,7 @@ export class PostgresStore implements MeshStore {
       -- status='pending' frees the key once the item is claimed/done, so a later
       -- re-label starts a fresh run rather than colliding forever.
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_collapse ON work_items(account_id, collapse_key) WHERE collapse_key IS NOT NULL AND status = 'pending';
+      CREATE INDEX IF NOT EXISTS idx_run_starts_account_time ON run_starts(account_id, started_at);
     `);
   }
 
@@ -803,6 +816,17 @@ export class PostgresStore implements MeshStore {
             `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
             [nodeId, s.sessionId, accountId, s.status, s.source ?? null, s.titleEnc ?? null, s.branch ?? null, s.agentServiceAddress ?? null],
+          );
+          // Count this run the first time its session is advertised. The session
+          // index is rewritten wholesale on every advertise, but run_starts is
+          // keyed by (account, session) with DO NOTHING, so a session only ever
+          // counts once — the day it first appears. This is the single funnel
+          // through which EVERY source (manual, app, work queue, ephemeral) lands
+          // in the daily counter, since every run eventually advertises a session.
+          await client.query(
+            `INSERT INTO run_starts (account_id, run_key) VALUES ($1, $2)
+             ON CONFLICT (account_id, run_key) DO NOTHING`,
+            [accountId, s.sessionId],
           );
         }
       }
@@ -1248,16 +1272,35 @@ export class PostgresStore implements MeshStore {
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
 
-  async countWorkRunsSince(accountId: string, sinceIso: string): Promise<number> {
-    // One claimed item = one run. `claimed_at` is stamped once (the claim UPDATE
-    // only flips a still-pending row), so a claimed OR done item counts exactly
-    // once; still-pending items (never claimed) don't count.
+  async recordRunStart(accountId: string, runKey: string): Promise<void> {
+    // Idempotent: PRIMARY KEY(account_id, run_key) + DO NOTHING means recording the
+    // same run twice (reconnects, repeated advertises) leaves the original
+    // started_at intact and never inflates the daily count.
+    await this.query(
+      `INSERT INTO run_starts (account_id, run_key) VALUES ($1, $2)
+       ON CONFLICT (account_id, run_key) DO NOTHING`,
+      [accountId, runKey],
+    );
+  }
+
+  async countRunStartsSince(accountId: string, sinceIso: string): Promise<number> {
+    // One distinct run_key = one run. started_at is stamped once (first insert
+    // wins), so a run counts exactly once for the window it started in.
     const { rows } = await this.query(
-      `SELECT count(*)::int AS n FROM work_items
-       WHERE account_id = $1 AND claimed_at IS NOT NULL AND claimed_at >= $2`,
+      `SELECT count(*)::int AS n FROM run_starts
+       WHERE account_id = $1 AND started_at >= $2`,
       [accountId, sinceIso],
     );
     return Number(rows[0]?.n ?? 0);
+  }
+
+  async pruneRunStartsBefore(beforeIso: string): Promise<number> {
+    // Rows older than the rolling window can never be counted again, so drop them.
+    const { rowCount } = await this.query(
+      `DELETE FROM run_starts WHERE started_at < $1`,
+      [beforeIso],
+    );
+    return rowCount ?? 0;
   }
 
   async completeWorkItem(accountId: string, id: string): Promise<void> {

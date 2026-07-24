@@ -161,31 +161,53 @@ if (webPushEnabled) webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidP
 // with VAPID keys configured. Off ⇒ push is available to any account (still
 // requires VAPID keys / webPushEnabled); on ⇒ push stays gated to paid plans.
 const enforceEntitlements = process.env.ENFORCE_ENTITLEMENTS === "1";
+// Observe-only mode for the free run cap: keep COUNTING and reporting runs (so the
+// UI still shows "used / limit" and ops can watch the real runs-per-window
+// distribution), but never actually block a run. Lets Bivy Cloud gather data and
+// tune the number/window before flipping enforcement on, without walling anyone
+// during the observation window. Only meaningful when entitlements are enforced;
+// self-host is unlimited either way.
+const observeRunLimitOnly = process.env.RUN_LIMIT_OBSERVE_ONLY === "1";
+const enforceRunLimit = enforceEntitlements && !observeRunLimitOnly;
 async function accountPushAllowed(accountId: string): Promise<boolean> {
   if (!enforceEntitlements) return true;
   return (await store.entitlements(accountId)).pushEnabled;
 }
 
-// Start of the current calendar month in UTC, as an ISO timestamp — the reset
-// boundary for the free-tier work-queue quota. Computed rather than stored, so
-// there is no counter to reset and no cron: the count is just claimed items with
-// `claimedAt >= this`.
-function startOfMonthUtcIso(): string {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+// How many days back the free-tier run window looks. A ROLLING window (not a
+// calendar week) — capacity frees up gradually as individual runs age out the far
+// edge, which fits bursty dev work far better than a hard periodic reset.
+const RUN_WINDOW_DAYS = 7;
+
+// Start of the current rolling run window, as an ISO timestamp — `now` minus the
+// window length. Computed rather than stored, so there is no counter to reset and
+// no cron: the count is just run_starts with `started_at >= this`.
+function runWindowStartIso(): string {
+  return new Date(Date.now() - RUN_WINDOW_DAYS * 24 * 60 * 60_000).toISOString();
 }
 
-// The account's hosted work-queue run allowance for the current UTC month.
-// `limit` is the plan cap (undefined ⇒ unlimited — paid plans), `used` the runs
-// already started this month, `exhausted` whether a new run must be refused.
-// Quota is only ENFORCED under `ENFORCE_ENTITLEMENTS=1` (Bivy Cloud); on a
-// self-host stack `exhausted` is always false so runners go unlimited, but `used`
-// is still reported for display. One claimed item = one run.
-async function workQueueAllowance(accountId: string): Promise<{ limit?: number; used: number; exhausted: boolean }> {
-  const limit = (await store.entitlements(accountId)).workQueueMonthlyLimit;
-  if (typeof limit !== "number") return { limit: undefined, used: 0, exhausted: false };
-  const used = await store.countWorkRunsSince(accountId, startOfMonthUtcIso());
-  return { limit, used, exhausted: enforceEntitlements && used >= limit };
+// Soft-cap grace: how many runs PAST the plan's window limit still go through
+// (warned, not blocked) before a hard refusal. The cap converts by nudging, not by
+// slapping someone mid-task the instant they cross — so the first over-limit run is
+// a courtesy ("you're over your free runs — this one's on us"), and only further
+// runs are refused until capacity ages back in. Applied against the rolling window,
+// so the courtesy naturally recurs as the window slides.
+const RUN_GRACE = 1;
+
+// The account's run allowance for the current rolling window, counted across EVERY
+// source (manual, app, work queue, ephemeral). `limit` is the plan cap
+// (undefined ⇒ unlimited — paid plans), `used` the runs started in the window,
+// `warn` whether this run is in the grace band (over the limit but still allowed),
+// `exhausted` whether a new run must be refused (over limit + grace). Blocking is
+// only in effect under `ENFORCE_ENTITLEMENTS=1` AND not `RUN_LIMIT_OBSERVE_ONLY=1`
+// (see enforceRunLimit); otherwise both flags stay false so runners go unlimited,
+// but `used` is ALWAYS reported for display. One distinct run (session) = one run.
+async function runAllowance(accountId: string): Promise<{ limit?: number; used: number; warn: boolean; exhausted: boolean }> {
+  const limit = (await store.entitlements(accountId)).weeklyRunLimit;
+  if (typeof limit !== "number") return { limit: undefined, used: 0, warn: false, exhausted: false };
+  const used = await store.countRunStartsSince(accountId, runWindowStartIso());
+  if (!enforceRunLimit) return { limit, used, warn: false, exhausted: false };
+  return { limit, used, warn: used >= limit && used < limit + RUN_GRACE, exhausted: used >= limit + RUN_GRACE };
 }
 const stripePrices: Partial<Record<Plan, string>> = {
   pro: process.env.STRIPE_PRICE_PRO,
@@ -216,6 +238,21 @@ const relayTicketMetrics = {
 // the business/usage gauges from the store on an interval.
 bindRelayTicketMetrics(() => relayTicketMetrics);
 startUsageCollector(store);
+
+// Housekeeping: periodically drop run-start rows older than the rolling window
+// (plus a day of slack) so the table can't grow without bound. Rows past the
+// window are never counted again, so this is safe. `.unref()` keeps the timer from
+// holding the process open (e.g. in tests); also swept once at boot.
+const RUN_STARTS_RETENTION_MS = (RUN_WINDOW_DAYS + 1) * 24 * 60 * 60_000;
+async function pruneOldRunStarts() {
+  try {
+    await store.pruneRunStartsBefore(new Date(Date.now() - RUN_STARTS_RETENTION_MS).toISOString());
+  } catch (error) {
+    console.error("[run-starts] prune failed:", error);
+  }
+}
+void pruneOldRunStarts();
+setInterval(pruneOldRunStarts, 6 * 60 * 60_000).unref();
 
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -842,10 +879,10 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
         await store.listAccountSessions(account.id),
         await store.listNodes(account.id),
       ),
-      // Hosted work-queue runs started this UTC month (one claimed item = one
-      // run). Paired with entitlements.workQueueMonthlyLimit so the queue UI can
-      // show "used / limit" and prompt an upgrade when a free account runs out.
-      workQueueRunsThisMonth: (await workQueueAllowance(account.id)).used,
+      // Runs started in the current rolling window across every source (manual,
+      // app, work queue, ephemeral). Paired with entitlements.weeklyRunLimit so the
+      // UI can show "used / limit" and prompt an upgrade when a free account runs out.
+      runsThisWeek: (await runAllowance(account.id)).used,
     },
   });
 }));
@@ -1152,13 +1189,19 @@ const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "ssm.ap-northeast-1.amazonaws.com",
 ]);
 app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
-  // Quick ephemeral servers are a paid feature. The persistent installer stays
-  // free; this cold-start relay (spin a cloud box up from just a phone) is gated
-  // to Pro/Team when entitlements are enforced (Bivy Cloud). Mirrors the client
+  // Quick ephemeral servers are available on every plan (the persistent installer
+  // is also free). A launched runner is a run, so a free account that has spent its
+  // rolling run allowance can't cold-start another one. Only bites under
+  // ENFORCE_ENTITLEMENTS (Bivy Cloud); self-host is unlimited. Mirrors the client
   // gate in EphemeralSheet — this is the authoritative check.
   const account = (req as Request & { account: Account }).account;
-  if (enforceEntitlements && !(await store.entitlements(account.id)).ephemeralEnabled) {
-    return res.status(403).json({ error: "Quick ephemeral servers are a Pro feature. Upgrade to launch cloud runners." });
+  const ent = await store.entitlements(account.id);
+  if (enforceEntitlements && !ent.ephemeralEnabled) {
+    return res.status(403).json({ error: "Ephemeral servers aren't available on your plan." });
+  }
+  const allowance = await runAllowance(account.id);
+  if (allowance.exhausted) {
+    return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
   }
   const url = String(req.body?.url ?? "");
   let host: string;
@@ -1597,9 +1640,9 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   const event = String(req.headers["x-github-event"] ?? "");
   if (event === "ping") return res.json({ ok: true, pong: true });
   // Plan gate: the hosted work queue is on every plan (free is metered per run at
-  // claim time, see workQueueAllowance), so this only refuses a plan that has the
-  // feature fully off. Ack with 200 so GitHub marks the delivery successful (a
-  // non-2xx would make GitHub retry forever) but enqueue nothing in that case.
+  // claim time against the rolling cap, see runAllowance), so this only refuses a
+  // plan that has the feature fully off. Ack with 200 so GitHub marks the delivery
+  // successful (a non-2xx would make GitHub retry forever) but enqueue nothing.
   if (!(await store.entitlements(hook.accountId)).workQueueEnabled) {
     return res.json({ ok: true, enqueued: false, reason: "plan" });
   }
@@ -1710,23 +1753,24 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
     .map((l) => l.trim())
     .filter(Boolean);
   const items = await store.listPendingWorkItems(node.accountId, labels.length ? labels : ["bivy"]);
-  // Free-tier monthly quota: once this month's run allowance is spent, hide
-  // pending items so the node stops trying to claim them. They stay queued and
-  // become visible again when the month rolls over (no data lost, no churn). The
-  // claim endpoint below is the authoritative backstop for a direct/racing claim.
-  if ((await workQueueAllowance(node.accountId)).exhausted) return res.json({ items: [] });
+  // Free-tier rolling quota: once the window's run allowance (across every source)
+  // is spent, hide pending items so the node stops trying to claim them. They stay
+  // queued and become visible again as capacity ages back in (no data lost, no
+  // churn). The claim endpoint below is the authoritative backstop for a direct/racing claim.
+  if ((await runAllowance(node.accountId)).exhausted) return res.json({ items: [] });
   res.json({ items });
 }));
 
 // Claim one item (atomic; only one node wins). Returns the item or 409 if taken.
 app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  // Authoritative free-tier quota gate: one claimed item = one run. 402 (not 409)
-  // so the node can tell "you're out of runs this month" from "someone else won
+  // Authoritative free-tier quota gate: the rolling run cap spans every source, so a
+  // work-queue claim is refused once the window's runs (from any source) are spent.
+  // 402 (not 409) so the node can tell "you're out of runs" from "someone else won
   // this item". Only bites under ENFORCE_ENTITLEMENTS; self-host is unlimited.
-  const allowance = await workQueueAllowance(node.accountId);
+  const allowance = await runAllowance(node.accountId);
   if (allowance.exhausted) {
-    return res.status(402).json({ error: "Monthly work-queue run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
+    return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
   }
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });

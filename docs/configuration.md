@@ -422,7 +422,8 @@ unauthenticated dev login enabled.
 | `RELAY_SHARD_URLS` | comma-separated URLs | falls back to `RELAY_PUBLIC_URL`, then `ws://localhost:4500` | Node→shard mapping is by hash of the node id |
 | `DATABASE_POOL_MAX` | integer ≥ 1 | `10` | |
 | `LINK_GRANT_TTL_MS` | integer ms | `2592000000` (30 days) | TTL of the device-linking grant minted from a pairing QR |
-| `ENFORCE_ENTITLEMENTS` | `1` | **off** | When off, plan gates don't apply: Web Push is available to every signed-in account, and the GitHub work queue runs unlimited (no free-tier monthly run cap). When on, free accounts get `FREE_WORK_QUEUE_MONTHLY_RUNS` (5) queue runs per calendar month; paid plans are unlimited |
+| `ENFORCE_ENTITLEMENTS` | `1` | **off** | When off, plan gates don't apply: every signed-in account runs unlimited (no free-tier run cap). When on, free accounts get `FREE_WEEKLY_RUNS` (10) runs per rolling 7-day window counted across every source (manual, app, work queue, ephemeral), as a soft cap (one grace run past the limit before a hard refusal); paid plans are unlimited |
+| `RUN_LIMIT_OBSERVE_ONLY` | `1` | **off** | Observe-only mode for the free run cap (only meaningful with `ENFORCE_ENTITLEMENTS=1`). Runs are still counted and reported (the UI shows "used / limit"), but never blocked — so you can watch the real runs-per-window distribution and tune `FREE_WEEKLY_RUNS` before turning enforcement on, without walling anyone during the observation window |
 
 ## Authentication
 

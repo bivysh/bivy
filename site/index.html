@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bivy — Run coding agents on machines you own</title>
-  <meta name="description" content="Bivy runs Claude Code, Codex, Gemini CLI, Aider and other coding agents on your own hardware, with your own keys — then puts every session in an app on your phone: full transcript, diffs, a real terminal, and one-tap approvals. Free on one machine. Source-available and self-hostable.">
+  <meta name="description" content="Bivy runs Claude Code, Codex, Gemini CLI, Aider and other coding agents on your own hardware, with your own keys — then puts every session in an app on your phone: full transcript, diffs, a real terminal, and one-tap approvals. Free, 10 runs a week. Source-available and self-hostable.">
   <meta name="theme-color" content="#fbfaf8">
   <meta property="og:title" content="Bivy — Run coding agents on machines you own">
-  <meta property="og:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free on one machine, no repo upload.">
+  <meta property="og:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free, 10 runs a week, no repo upload.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://bivy.sh">
   <meta property="og:image" content="https://bivy.sh/screenshots/app-session.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Bivy — Run coding agents on machines you own">
-  <meta name="twitter:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free on one machine, no repo upload.">
+  <meta name="twitter:description" content="Coding agents on your hardware, with your keys — and an app that puts every session, diff, terminal and approval on your phone. Free, 10 runs a week, no repo upload.">
   <meta name="twitter:image" content="https://bivy.sh/screenshots/app-session.png">
   <link rel="icon" href="./tent.svg">
   <link rel="icon" type="image/png" href="./tent.png">
@@ -436,7 +436,7 @@
       <p class="sub" style="margin:22px 0 0">
         Your code never leaves your machine — agents run in real terminals on hardware you
         control, and Bivy adds the session layer, approvals, and remote access around them.
-        Free on one machine, forever: no credit card, no trial clock. Setup is one command
+        Free, 10 runs a week, forever: no credit card, no trial clock. Setup is one command
         and a guided wizard, and uninstall is one command too.
       </p>
 
@@ -484,7 +484,7 @@
           corporate networks the same way. <a href="#app" style="color:var(--accent);text-decoration:none">See what the app gives you →</a></p>
         </div>
         <div class="feature">
-          <h3>Push notifications <span class="tag-pro">Pro</span></h3>
+          <h3>Push notifications</h3>
           <p>Get pinged when an agent finishes, needs an approval, or hits an error, so you
           can kick something off and walk away instead of babysitting the terminal.</p>
         </div>
@@ -526,15 +526,15 @@
         <div class="feature">
           <h3>Runs on any machine you own</h3>
           <p>A laptop, a home server, a Raspberry Pi, or a VPS, droplet or EC2 instance you
-          already pay for — if you can install it there, Bivy runs there. The free plan
-          covers one such machine, wherever it lives.</p>
+          already pay for — if you can install it there, Bivy runs there. Connect as many
+          machines as you like, on every plan.</p>
         </div>
         <div class="feature">
           <h3>Ephemeral cloud machines</h3>
           <p>No spare machine? Have Bivy start a short-lived runner on Fly.io, Hetzner or
           AWS EC2, work there, then destroy it — using your own provider token, which stays
-          on your device and is never sent to us. Set up as many as you like; free runs one
-          at a time, Pro runs them in parallel.</p>
+          on your device and is never sent to us. Set up and run as many as you like on
+          any plan — each launch counts as one of your runs for the day.</p>
         </div>
       </div>
     </div>
@@ -685,14 +685,15 @@
         <div class="plan">
           <h3>Free</h3>
           <div class="price">$0</div>
-          <p class="who">Every agent on one machine, with the full phone app. Not a trial.</p>
+          <p class="who">The whole product, capped at 10 runs a week. Not a trial.</p>
           <ul>
             <li>All ten agents, plus your own</li>
             <li>Durable sessions and worktrees</li>
             <li>Approvals and sandbox tiers</li>
-            <li>1 relay-connected node</li>
-            <li>Ephemeral cloud runners — 1 at a time</li>
-            <li>GitHub work queue — 5 runs / month</li>
+            <li>Unlimited relay-connected nodes</li>
+            <li>Ephemeral cloud runners</li>
+            <li>Push notifications</li>
+            <li>10 runs / week — any source (manual, app, GitHub, ephemeral)</li>
             <li>The full phone and browser app</li>
             <li>Community support</li>
           </ul>
@@ -704,13 +705,10 @@
           <span class="badge">Most popular</span>
           <h3>Pro</h3>
           <div class="price">$15 <span>/ month</span></div>
-          <p class="who">Every machine in the app, and agents that reach you when they need you.</p>
+          <p class="who">No run cap, and a unified view across every machine.</p>
           <ul>
             <li>Everything in Free</li>
-            <li>Unlimited nodes</li>
-            <li>Ephemeral runners in parallel</li>
-            <li>Push notifications</li>
-            <li>Unlimited GitHub work queue</li>
+            <li>Unlimited runs — no weekly cap</li>
             <li>Cross-node session index</li>
             <li>Email support</li>
           </ul>
@@ -773,8 +771,9 @@
       </ol>
 
       <p class="upgrade-line">
-        The GitHub work queue is free — 5 runs a month on any account. Go
-        <a href="#pricing">Pro — $15/mo</a> for unlimited runs and push notifications.
+        The GitHub work queue is free — it draws from your 10 runs a week, shared with
+        every other source. Go
+        <a href="#pricing">Pro — $15/mo</a> for unlimited runs.
       </p>
     </div>
   </section>
@@ -950,7 +949,7 @@
           you want to use. Node 22.19+ is required and the installer sets it up if it's
           missing. <code>bivy setup</code> then walks you through the rest — workspace,
           model sign-in, remote access, and a background service so it comes back after a
-          reboot. It's free on one machine, there's no credit card, and
+          reboot. It's free, 10 runs a week, there's no credit card, and
           <code>bivy uninstall</code> removes the service and config if you decide against
           it.</p>
         </details>
@@ -1017,7 +1016,7 @@
   <section class="cta">
     <div class="wrap">
       <h2>Real agents, on a real machine you own.</h2>
-      <p>One command to install, and free on one machine with your phone included.
+      <p>One command to install, and free, 10 runs a week with your phone included.
       Nothing to configure on your network, no credit card, and no repository to hand
       over. Go Pro later if you want every machine reachable and push notifications.</p>
       <div class="install">

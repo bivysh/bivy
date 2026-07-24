@@ -260,8 +260,12 @@ bivy logs -f    # look for lines tagged [relay]
 - Self-hosted: confirm the control-plane URL answers and the relay URL is
   `wss://`. `bivy relay:setup` health-checks the control plane before it does
   anything else and tells you if it is unreachable.
-- Enrollment refused with a node-limit error: your plan's node cap is reached.
-  Remove a node you no longer use, or raise the cap.
+- Work stops being picked up / a run is refused with a quota error: on the free
+  plan you get 10 runs per rolling 7-day window, shared across every source (manual,
+  app, GitHub work queue, ephemeral). The cap is soft — one run past the limit still
+  goes through — but beyond that, wait for capacity to age back in (your oldest runs
+  passing 7 days) or upgrade for unlimited runs. (Self-hosted stacks with
+  `ENFORCE_ENTITLEMENTS` off are unlimited.)
 
 ## Phone can't reach the node
 

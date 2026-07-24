@@ -207,18 +207,18 @@ export interface AccountMe {
   account?: { email?: string; plan?: string };
   entitlements?: {
     plan?: string;
-    // Undefined = unlimited (paid plans omit it); Free pins it to 1.
+    // Undefined = unlimited (no node cap on any plan). Kept for forward-compat.
     maxNodes?: number;
     relayEnabled?: boolean;
     pushEnabled?: boolean;
     workQueueEnabled?: boolean;
-    // Hosted work-queue runs allowed per calendar month. Undefined = unlimited
-    // (paid plans); free pins it to a small trial allowance. Pairs with
-    // counts.workQueueRunsThisMonth to render "used / limit".
-    workQueueMonthlyLimit?: number;
+    // Runs allowed per rolling 7-day window across every source
+    // (manual/app/work-queue/ephemeral). Undefined = unlimited (paid plans); free
+    // pins it to a small allowance. Pairs with counts.runsThisWeek to render "used / limit".
+    weeklyRunLimit?: number;
     ephemeralEnabled?: boolean;
   };
-  counts?: { nodes?: number; sessions?: number; devices?: number; workQueueRunsThisMonth?: number };
+  counts?: { nodes?: number; sessions?: number; devices?: number; runsThisWeek?: number };
   [k: string]: unknown;
 }
 
