@@ -74,6 +74,13 @@ describe("formatTool", () => {
     expect(f.added).toBe(1);
     expect(f.removed).toBe(1);
   });
+
+  it("labels agent stderr streams as normal agent output", () => {
+    const f = formatTool("agent_output", { stream: "stderr", output: "working on it" });
+    expect(f.verb).toBe("Agent output");
+    expect(f.title).toBe("Agent output");
+    expect(f.output).toBe("working on it");
+  });
 });
 
 describe("toolGroupSummary", () => {

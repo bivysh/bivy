@@ -136,6 +136,7 @@ async function main() {
     assert.deepEqual(extractTokenUsage({ input_tokens: 3, output_tokens: 4 })?.tokens, { input: 3, output: 4, total: 7 });
     assert.deepEqual(extractTokenUsage({ prompt_tokens: 5, completion_tokens: 6, total_tokens: 11 })?.tokens, { input: 5, output: 6, total: 11 });
     assert.equal(extractTokenUsage({ promptTokenCount: 8, candidatesTokenCount: 2, totalTokenCount: 10 })?.tokens?.total, 10);
+    assert.deepEqual(extractTokenUsage({ inputTokens: 9, outputTokens: 3, totalTokens: 12 })?.tokens, { input: 9, output: 3, total: 12 });
     assert.equal(extractTokenUsage({ nothing: 1 }), undefined, "no recognizable counts → undefined");
     assert.equal(extractTokenUsage(null), undefined);
   });

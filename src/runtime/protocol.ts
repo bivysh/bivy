@@ -210,6 +210,7 @@ class ProtocolSession implements RuntimeSession {
   private started = false;
   private assistantText = "";
   private reasoningText = "";
+  private stderrOutput = "";
   private lastUsage?: UsageSnapshot;
   // Accumulate the current turn's tool calls/results so getMessages() keeps them
   // in history — re-opening a session then shows what the agent actually did, not
@@ -305,7 +306,10 @@ class ProtocolSession implements RuntimeSession {
     });
     this.child = child;
     child.stdout.on("data", (chunk: Buffer) => this.onData(chunk.toString("utf8")));
-    child.stderr.on("data", (chunk: Buffer) => this.emit({ type: "tool_execution_update", toolName: "stderr", input: { output: chunk.toString("utf8").slice(-4000) } }));
+    child.stderr.on("data", (chunk: Buffer) => {
+      this.stderrOutput += chunk.toString("utf8");
+      this.emit({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: this.stderrOutput.slice(-4000) } });
+    });
     // The agent's stdin pipe can break (EPIPE) when the shim exits mid-turn — for
     // example a dispose()/abort() racing an in-flight write (a tool.decision reply,
     // a chat.send). Node emits that as an 'error' on the stdin socket; with no
@@ -471,12 +475,13 @@ class ProtocolSession implements RuntimeSession {
       return;
     }
     if (type === "tool.result") {
+      const result = msg.result ?? msg.output ?? msg.content ?? msg.text ?? msg.summary ?? "";
       this.turnToolResults.push({
         type: "tool_result",
         tool_use_id: String(msg.toolCallId || msg.tool_use_id || msg.id || ""),
-        content: msg.result ?? msg.output ?? msg.content ?? msg.text ?? "",
+        content: result,
       });
-      this.emit({ type: "tool_result", toolName: String(msg.name || "tool"), result: msg });
+      this.emit({ type: "tool_result", toolName: String(msg.name || "tool"), toolCallId: String(msg.toolCallId || msg.tool_use_id || msg.id || ""), result });
       return;
     }
     this.emit({ type, ...msg });
@@ -532,6 +537,7 @@ class ProtocolSession implements RuntimeSession {
     this.streaming = true;
     this.assistantText = "";
     this.reasoningText = "";
+    this.stderrOutput = "";
     this.turnToolUses = [];
     this.turnToolResults = [];
     await this.command("chat.send", {

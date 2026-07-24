@@ -51,11 +51,11 @@ export function extractTokenUsage(raw: unknown): UsageSnapshot | undefined {
     }
     return undefined;
   };
-  const input = num("input_tokens", "prompt_tokens", "promptTokenCount", "input", "prompt");
-  const output = num("output_tokens", "completion_tokens", "candidatesTokenCount", "output", "completion");
-  const cacheRead = num("cache_read_input_tokens", "cached_input_tokens", "cachedContentTokenCount", "cache_read");
-  const cacheWrite = num("cache_creation_input_tokens", "cache_write");
-  const total = num("total_tokens", "totalTokenCount", "total") ?? ((input ?? 0) + (output ?? 0) || undefined);
+  const input = num("input_tokens", "prompt_tokens", "promptTokenCount", "inputTokens", "input", "prompt");
+  const output = num("output_tokens", "completion_tokens", "candidatesTokenCount", "outputTokens", "output", "completion");
+  const cacheRead = num("cache_read_input_tokens", "cached_input_tokens", "cachedContentTokenCount", "cachedInputTokens", "cache_read");
+  const cacheWrite = num("cache_creation_input_tokens", "cache_write_input_tokens", "cacheWriteInputTokens", "cache_write");
+  const total = num("total_tokens", "totalTokenCount", "totalTokens", "total") ?? ((input ?? 0) + (output ?? 0) || undefined);
   const costUsd = num("cost_usd", "total_cost", "costUsd");
   if (input === undefined && output === undefined && total === undefined && costUsd === undefined) return undefined;
   const tokens: NonNullable<UsageSnapshot["tokens"]> = {};
