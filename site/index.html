@@ -571,7 +571,7 @@
           <p>No spare machine? Have Bivy start a short-lived runner on Fly.io, Hetzner or
           AWS EC2, work there, then destroy it — using your own provider token, which stays
           on your device and is never sent to us. Set up and run as many as you like on
-          any plan — each launch counts as one of your runs for the day.</p>
+          any plan — each launch counts as one of your runs for the week.</p>
         </div>
       </div>
     </div>
@@ -654,8 +654,8 @@
             Add it to your home screen from the browser — no app store, no download, no
             review queue. It launches full-screen, paints your recent sessions from cache
             before the network answers, and never force-reloads you mid-session.
-            <a href="#pricing" style="color:var(--accent);text-decoration:none">Pro</a>
-            adds push, so a run that finishes or stalls comes and finds you.
+            Push notifications come find you when a run finishes or stalls, so you don't
+            have to keep the tab open.
           </li>
         </ul>
       </div>
@@ -742,7 +742,7 @@
           <span class="badge">Most popular</span>
           <h3>Pro</h3>
           <div class="price">$15 <span>/ month</span></div>
-          <p class="tagline">Everything in Free — uncapped, with support.</p>
+          <p class="tagline">For when bivy is part of your day — uncapped, plus a human to email.</p>
           <ul>
             <li>Any local agent — 10 supported, plus your own</li>
             <li>Durable sessions and worktrees</li>
@@ -759,17 +759,11 @@
             <a href="https://app.bivy.sh" class="btn btn-primary btn-block">Go Pro — $15/mo</a>
           </div>
         </div>
-        <div class="plan">
-          <h3>Team</h3>
-          <div class="price">Coming later</div>
-          <div class="cta-row">
-            <a href="./contact.html" class="btn btn-ghost btn-block">Get early access</a>
-          </div>
-        </div>
       </div>
       <p class="install-note" style="margin-top:18px;max-width:var(--prose)">
         Community support means public GitHub issues, with no guaranteed response.
-        Self-hosting is unsupported on every plan.
+        Self-hosting is unsupported — community best-effort only — but a control plane
+        you run yourself has no run limit at all.
       </p>
     </div>
   </section>
@@ -982,6 +976,14 @@
           control plane until a node claims it.</p>
         </details>
         <details>
+          <summary>What counts as a run?</summary>
+          <p>A run is one agent session you start — from the CLI, the phone or browser app,
+          a labeled GitHub issue, or an ephemeral cloud machine. All four sources draw from
+          the same count: 10 per rolling seven days on the free plan (a moving window, not a
+          fixed calendar week), and unlimited on Pro. Self-host the control plane and there's
+          no run limit at all.</p>
+        </details>
+        <details>
           <summary>What do I actually need to get started?</summary>
           <p>A Mac or Linux machine you can leave running, and a login for whichever model
           you want to use. Node 22.19+ is required and the installer sets it up if it's
@@ -1056,7 +1058,7 @@
       <h2>Real agents, on a real machine you own.</h2>
       <p>One command to install, and free, 10 runs a week with your phone included.
       Nothing to configure on your network, no credit card, and no repository to hand
-      over. Go Pro later if you want every machine reachable and push notifications.</p>
+      over. Go Pro later if you outgrow 10 runs a week.</p>
       <div class="install">
         <code id="cmd2"><span class="p">$ </span>curl -fsSL https://bivy.sh/install.sh | bash</code>
         <button id="copy2" type="button" aria-label="Copy install command">Copy</button>
