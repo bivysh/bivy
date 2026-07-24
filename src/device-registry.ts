@@ -111,13 +111,21 @@ export class PairingStore {
     return this.data.nodeKeypair.publicKeyB64;
   }
 
-  wrapForNodePublicKey(nodePublicKeyB64: string, plaintextB64: string): string {
-    const wrapKey = deriveWrapKey(this.data.nodeKeypair.privateKeyB64, nodePublicKeyB64, "model-auth-vault");
+  wrapForNodePublicKey(
+    nodePublicKeyB64: string,
+    plaintextB64: string,
+    purpose: "model-auth-vault" | "github-app-vault" = "model-auth-vault",
+  ): string {
+    const wrapKey = deriveWrapKey(this.data.nodeKeypair.privateKeyB64, nodePublicKeyB64, purpose);
     return seal(wrapKey, plaintextB64);
   }
 
-  unwrapFromNodePublicKey(nodePublicKeyB64: string, wrapped: string): string {
-    const wrapKey = deriveWrapKey(this.data.nodeKeypair.privateKeyB64, nodePublicKeyB64, "model-auth-vault");
+  unwrapFromNodePublicKey(
+    nodePublicKeyB64: string,
+    wrapped: string,
+    purpose: "model-auth-vault" | "github-app-vault" = "model-auth-vault",
+  ): string {
+    const wrapKey = deriveWrapKey(this.data.nodeKeypair.privateKeyB64, nodePublicKeyB64, purpose);
     return open(wrapKey, wrapped);
   }
 

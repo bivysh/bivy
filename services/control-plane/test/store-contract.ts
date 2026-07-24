@@ -179,6 +179,76 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(await store.setInboundHookSecret(other.id, hook.id, "nope"), undefined);
   });
 
+  // --- GitHub App private-key vault (issue #88) -------------------------------
+  await test("github app vault: push, request, and wrap round-trip per app", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-ghvault@example.com");
+    const { node: a } = await store.enrollNode(acct.id, "node-gh-a", "A");
+    const { node: b } = await store.enrollNode(acct.id, "node-gh-b", "B");
+
+    // Node A pushes app "1"; a fresh account has no vaults yet.
+    assert.deepEqual(await store.listGithubAppVaults(acct.id), []);
+    const vault = await store.setGithubAppVault(acct.id, "1", a.id, "ciphertext-1");
+    assert.equal(vault.appId, "1");
+    assert.equal(vault.needsRotation, false);
+    assert.deepEqual((await store.listGithubAppVaults(acct.id)).map((v) => v.appId), ["1"]);
+
+    // Node B, which doesn't hold app "1", requests a wrapped key for it.
+    await store.requestGithubAppWrappedKey(acct.id, "1", b.id, "b-pub-key");
+    const requestsForA = await store.listGithubAppKeyRequests(acct.id, a.id);
+    assert.equal(requestsForA.length, 1);
+    assert.equal(requestsForA[0].appId, "1");
+    assert.equal(requestsForA[0].nodeId, b.id);
+    // Node B does not see its own request.
+    assert.deepEqual(await store.listGithubAppKeyRequests(acct.id, b.id), []);
+
+    // Node A answers it; the request is consumed and B can read its wrapped key.
+    await store.setGithubAppWrappedKey(acct.id, "1", b.id, a.id, "a-pub-key", "wrapped-for-b");
+    assert.deepEqual(await store.listGithubAppKeyRequests(acct.id, a.id), []);
+    const wrappedForB = await store.listGithubAppWrappedKeysForNode(acct.id, b.id);
+    assert.equal(wrappedForB.length, 1);
+    assert.equal(wrappedForB[0].wrappedKey, "wrapped-for-b");
+    assert.equal(wrappedForB[0].wrappedByPublicKey, "a-pub-key");
+
+    // A second app syncs independently — B's view of app "1" is untouched.
+    await store.setGithubAppVault(acct.id, "2", a.id, "ciphertext-2");
+    assert.deepEqual(
+      (await store.listGithubAppVaults(acct.id)).map((v) => v.appId).sort(),
+      ["1", "2"],
+    );
+    assert.equal((await store.listGithubAppWrappedKeysForNode(acct.id, b.id)).length, 1);
+
+    // A node that already has a wrapped key does not get a duplicate request.
+    await store.requestGithubAppWrappedKey(acct.id, "1", b.id, "b-pub-key-2");
+    assert.deepEqual(await store.listGithubAppKeyRequests(acct.id, a.id), []);
+  });
+
+  await test("github app vault: removing a node that held a wrapped key flags rotation", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-ghrotate@example.com");
+    const { node: a } = await store.enrollNode(acct.id, "node-ghr-a", "A");
+    const { node: b } = await store.enrollNode(acct.id, "node-ghr-b", "B");
+    const { node: c } = await store.enrollNode(acct.id, "node-ghr-c", "C");
+
+    await store.setGithubAppVault(acct.id, "1", a.id, "ciphertext-1");
+    // App "2" never reached node B — removing B must not flag it for rotation.
+    await store.setGithubAppVault(acct.id, "2", a.id, "ciphertext-2");
+    await store.setGithubAppWrappedKey(acct.id, "1", b.id, a.id, "a-pub", "wrapped-for-b");
+    await store.setGithubAppWrappedKey(acct.id, "1", c.id, a.id, "a-pub", "wrapped-for-c");
+
+    assert.equal(await store.removeNode(acct.id, b.id), true);
+    const vaults = await store.listGithubAppVaults(acct.id);
+    assert.equal(vaults.find((v) => v.appId === "1")?.needsRotation, true, "app 1 reached the removed node");
+    assert.equal(vaults.find((v) => v.appId === "2")?.needsRotation, false, "app 2 never reached the removed node");
+
+    // The removed node's own wrapped-key row is gone (FK cascade); the survivor's remains.
+    assert.deepEqual(await store.listGithubAppWrappedKeysForNode(acct.id, b.id), []);
+    assert.equal((await store.listGithubAppWrappedKeysForNode(acct.id, c.id)).length, 1);
+
+    // The surviving node re-pushes (mints a fresh vault key node-side, out of
+    // this store's concern) — the push itself is what clears the flag.
+    const rotated = await store.setGithubAppVault(acct.id, "1", c.id, "ciphertext-1-rotated");
+    assert.equal(rotated.needsRotation, false);
+  });
+
   // --- Work queue ------------------------------------------------------------
   await test("work queue: enqueue, label routing, atomic claim, complete", async (store) => {
     const acct = await store.findOrCreateAccount("contract-wq@example.com");

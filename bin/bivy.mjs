@@ -93,6 +93,7 @@ const relaySetupEntry = path.join(repoRoot, packaged ? "dist/relay-setup.js" : "
 const hostedEndpointsEntry = path.join(repoRoot, packaged ? "dist/hosted-endpoints.mjs" : "src/hosted-endpoints.mjs");
 const githubConnectEntry = path.join(repoRoot, packaged ? "dist/github-connect-repo.js" : "src/github-connect-repo.ts");
 const githubAppConnectEntry = path.join(repoRoot, packaged ? "dist/github-app-connect.js" : "src/github-app-connect.ts");
+const githubAppSyncEntry = path.join(repoRoot, packaged ? "dist/github-app-sync-cli.js" : "src/github-app-sync-cli.ts");
 const secretsEntry = path.join(repoRoot, packaged ? "dist/secrets-cli.js" : "src/secrets-cli.ts");
 const sttEntry = path.join(repoRoot, packaged ? "dist/stt-cli.js" : "src/stt-cli.ts");
 const attachEntry = path.join(repoRoot, packaged ? "dist/attach.js" : "src/attach.ts");
@@ -1385,7 +1386,7 @@ function cmdCompletions(args = []) {
   const commands = [
     "run", "sessions", "ls", "resume", "promote", "nodes", "agents", "shim", "takeover", "token", "exec",
     "setup", "start", "stop", "restart", "status", "doctor", "logs", "login",
-    "update", "open", "service", "secrets", "relay:setup", "github:app-create", "prune", "uninstall", "help",
+    "update", "open", "service", "secrets", "relay:setup", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help",
   ];
   const agents = [...BUILTIN_TERMINAL_AGENTS.keys()];
 
@@ -3560,6 +3561,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy relay:setup")}  Enable secure remote web/PWA access (sign in once)
   ${c.cyan("bivy github:app-create")}            One-click: create + connect a GitHub App
   ${c.cyan("bivy github:app-connect")}           Connect an existing GitHub App (--app-id --key)
+  ${c.cyan("bivy github:app-sync")} [on|off]     Sync connected GitHub App keys to this account's other opted-in nodes
   ${c.cyan("bivy github:connect")} [owner/repo]  Authorize repo access for the repo picker (device flow)
   ${c.cyan("bivy secrets")}    list | set | ref | delete | doctor | resolve
   ${c.cyan("bivy voice")}      Configure speech-to-text: provider | key | remove | status
@@ -3699,6 +3701,10 @@ async function main() {
     case "github:app-connect":
       if (!(await ensureDeps())) process.exit(1);
       await run(nodeBin, [...nodeScriptArgs(githubAppConnectEntry), ...args], { cwd: repoRoot, env: process.env });
+      break;
+    case "github:app-sync":
+      if (!(await ensureDeps())) process.exit(1);
+      await run(nodeBin, [...nodeScriptArgs(githubAppSyncEntry), ...args], { cwd: repoRoot, env: process.env });
       break;
     case "github:app-create": {
       // One-click: open the node's manifest flow in the browser. The node
