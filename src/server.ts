@@ -4674,6 +4674,14 @@ async function startOAuthLogin(provider: string) {
       state.status = "done";
       settleInitial();
       broadcast({ type: "auth.oauth.done", id, provider });
+      // OAuth completion happens asynchronously after the start request, so
+      // there is no command response carrying the newly configured provider
+      // list. Push a fresh list to every connected client; otherwise Settings
+      // clears the login form but continues rendering its stale "Not connected"
+      // snapshot until a reload or a later manual refresh.
+      void listProvidersUnified()
+        .then((providers) => broadcast({ type: "providers.list", providers }))
+        .catch(() => {});
       void pushModelAuthToControlPlane();
       void refreshSessionAfterAuth();
     })
