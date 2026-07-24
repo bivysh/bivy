@@ -62,6 +62,12 @@ describe("stripAttachmentPlaceholders", () => {
     expect(stripAttachmentPlaceholders(textFile)).toBe("read this");
   });
 
+  it("removes the materialized-file placeholder note (saved to a path)", () => {
+    const saved =
+      "look at this\n\n[File attachment: key.pem (1675 bytes, application/x-x509-ca-cert) saved to .bivy-attachments/key.pem - read it with your file tools]";
+    expect(stripAttachmentPlaceholders(saved)).toBe("look at this");
+  });
+
   it("leaves ordinary text untouched", () => {
     expect(stripAttachmentPlaceholders("just a message")).toBe("just a message");
     expect(stripAttachmentPlaceholders("")).toBe("");

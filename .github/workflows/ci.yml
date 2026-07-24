@@ -5,6 +5,11 @@ on:
     branches: ['pr/**']
   pull_request:
     branches: [main]
+  # Lets other workflows call this one to run the exact same gate rather than
+  # re-implementing it. Used by release.yml so a tag push runs the full suite
+  # before publishing instead of a hand-rolled subset that can drift from what
+  # a PR actually has to pass.
+  workflow_call:
 
 # Cancel superseded runs: a new push to the same branch/PR aborts the previous,
 # still-running CI so we don't pay for jobs' worth of runner time on a commit
@@ -34,6 +39,7 @@ jobs:
       relay: ${{ steps.filter.outputs.relay }}
       control_plane: ${{ steps.filter.outputs.control_plane }}
       e2e: ${{ steps.filter.outputs.e2e }}
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,6 +78,11 @@ jobs:
               - 'services/relay/**'
               - 'services/control-plane/**'
               - 'test/**'
+            docs:
+              - *common
+              - 'docs/**'
+              - '*.md'
+              - 'scripts/check-links.mjs'
 
   core:
     needs: changes
@@ -105,6 +116,20 @@ jobs:
       # (which is exactly what happened for a day). Catch that class here, at PR
       # time, instead of only in the deploy pipeline.
       - run: npm run build:release
+
+  # Cheap, dependency-free check: no `npm ci` needed since scripts/check-links.mjs
+  # only uses node:fs/node:path. Gated on its own `docs` filter (not `root`) so a
+  # docs-only PR doesn't also pull in the full lint/typecheck/test `core` job.
+  docs-links:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - run: node scripts/check-links.mjs
 
   relay:
     needs: changes
@@ -177,7 +202,7 @@ jobs:
   # leaves a required check unreported and blocking the PR.
   ci-ok:
     if: ${{ always() }}
-    needs: [changes, core, relay, control-plane, remote-e2e]
+    needs: [changes, core, docs-links, relay, control-plane, remote-e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Verify no required job failed
