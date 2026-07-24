@@ -16,7 +16,13 @@ export function OauthStep() {
   const [code, setCode] = useState("");
   if (!oauth) return null;
   const url = oauth.authUrl || oauth.deviceCode?.verificationUri;
-  const needsPaste = !oauth.deviceCode && !oauth.usesCallbackServer;
+  // Authorization-code providers redirect the browser to localhost on the
+  // machine running the node. When this React app is on a phone or another
+  // computer that callback cannot reach the node, even though the node did
+  // successfully start its callback listener. Always keep manual paste
+  // available for those flows; it is the remote-browser fallback, not an
+  // alternative to starting the callback server.
+  const needsPaste = !oauth.deviceCode;
   return (
     <div className="settings-form">
       {oauth.error && <div className="banner error inline">{oauth.error}</div>}
@@ -32,7 +38,10 @@ export function OauthStep() {
       )}
       {needsPaste ? (
         <>
-          <label className="field-label">Paste the code from the sign-in page</label>
+          <p className="muted">
+            After signing in, the browser may stop on a localhost page. Copy that page&apos;s full URL and paste it here.
+          </p>
+          <label className="field-label">Redirect URL or authorization code</label>
           <input className="picker-search" value={code} onChange={(e) => setCode(e.target.value)} />
           <button className="btn primary" disabled={!code.trim()} onClick={() => controller.submitOauthCode(oauth.id, code.trim())}>
             Submit
