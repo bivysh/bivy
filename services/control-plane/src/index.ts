@@ -1291,6 +1291,55 @@ app.put("/node/model-auth-key/wrapped", requireNode, asyncHandler(async (req, re
   res.json({ ok: true, wrappedKey: rec });
 }));
 
+// E2E GitHub App private-key vault (issue #88) — opt-in, per-app sibling of the
+// model-auth vault above. Same guarantee: the control plane stores only
+// ciphertext and per-node wrapped vault keys, never a plaintext app key. A node
+// lists every app the account has a vault for in one call (it may not hold
+// them all yet) so a newly opted-in node discovers apps without an extra round
+// trip per app; wrapped keys and requests are likewise returned across apps and
+// the node filters to what it can use/answer.
+app.get("/node/github-app-vault", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  res.json({
+    ok: true,
+    vaults: await store.listGithubAppVaults(node.accountId),
+    wrappedKeys: await store.listGithubAppWrappedKeysForNode(node.accountId, node.id),
+    requests: await store.listGithubAppKeyRequests(node.accountId, node.id),
+  });
+}));
+
+app.put("/node/github-app-vault", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const appId = String(req.body?.appId ?? "").trim();
+  const ciphertext = String(req.body?.ciphertext ?? "").trim();
+  if (!appId) return res.status(400).json({ error: "Missing appId" });
+  if (!ciphertext) return res.status(400).json({ error: "Missing ciphertext" });
+  const vault = await store.setGithubAppVault(node.accountId, appId, node.id, ciphertext);
+  res.json({ ok: true, vault });
+}));
+
+app.post("/node/github-app-key/request", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const appId = String(req.body?.appId ?? "").trim();
+  const publicKey = String(req.body?.publicKey ?? "").trim();
+  if (!appId) return res.status(400).json({ error: "Missing appId" });
+  if (!publicKey) return res.status(400).json({ error: "Missing publicKey" });
+  await store.requestGithubAppWrappedKey(node.accountId, appId, node.id, publicKey);
+  res.json({ ok: true });
+}));
+
+app.put("/node/github-app-key/wrapped", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const appId = String(req.body?.appId ?? "").trim();
+  const targetNodeId = String(req.body?.targetNodeId ?? "").trim();
+  const wrappedKey = String(req.body?.wrappedKey ?? "").trim();
+  const wrappedByPublicKey = String(req.body?.wrappedByPublicKey ?? "").trim();
+  if (!appId) return res.status(400).json({ error: "Missing appId" });
+  if (!targetNodeId || !wrappedKey || !wrappedByPublicKey) return res.status(400).json({ error: "Missing targetNodeId, wrappedByPublicKey, or wrappedKey" });
+  const rec = await store.setGithubAppWrappedKey(node.accountId, appId, targetNodeId, node.id, wrappedByPublicKey, wrappedKey);
+  res.json({ ok: true, wrappedKey: rec });
+}));
+
 // Plaintext (non-secret) per-node provider connection summary — pushed by the
 // node alongside its encrypted model-auth vault (see pushProviderSummaryToControlPlane
 // in src/server.ts) so /nodes can show every enrolled node's OAuth connect/expiry

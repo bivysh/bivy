@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub App key sync across nodes** — `bivy github:app-sync on` opts a node
+  into pulling/pushing a connected GitHub App's private key E2E-encrypted
+  through the control plane, so connecting an app on one node makes it usable
+  on the account's other opted-in nodes without re-uploading the `.pem`. Off
+  by default and per node; the control plane never holds a plaintext key.
+  Removing a node from the account flags its apps for rotation, so a
+  surviving node mints a fresh vault key on its next sync. (#88)
+
 ### Fixed
 
+- The sidebar no longer drops another node's `bivy run` terminals when you
+  switch nodes — e.g. from the "New session" header switcher. Run terminals
+  are now tagged and merged by node the same way chat sessions already were,
+  so the sidebar keeps showing every node's sessions regardless of which node
+  is currently selected. (#99)
 - `install.sh` now persists a PATH fix into `~/.bashrc`/`~/.zshrc` when the
   npm (or fallback `~/.local`) bin directory isn't already on `PATH`, instead
   of only printing an `export PATH=...` line — which fixed nothing beyond the

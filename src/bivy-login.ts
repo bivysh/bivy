@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -8,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createCredentialVault } from "./runtime/credential-store.js";
 import { listPiProviders } from "./runtime/pi-oauth.js";
 import { loginModelOAuth, type AuthInteraction, type AuthPrompt, type AuthEvent } from "./runtime/oauth/model-oauth.js";
+import { openBrowser } from "./browser-open.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -18,14 +18,6 @@ const credsDir = path.join(dataDir, "credentials");
 const BEDROCK_PROVIDER_ID = "amazon-bedrock";
 
 type AuthProvider = { id: string; name: string; authType: "oauth" | "api_key" };
-
-function openUrl(url: string) {
-  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-  const child = spawn(command, args, { detached: true, stdio: "ignore" });
-  child.on("error", () => {});
-  child.unref();
-}
 
 async function makeProviders(): Promise<AuthProvider[]> {
   const catalog = await listPiProviders(credsDir, piDir);
@@ -116,7 +108,7 @@ function terminalInteraction(provider: AuthProvider, signal: AbortSignal): AuthI
         case "auth_url":
           console.log(`\nOpen this URL to login to ${provider.name}:\n${event.url}\n`);
           if (event.instructions) console.log(`${event.instructions}\n`);
-          openUrl(event.url);
+          openBrowser(event.url);
           break;
         case "device_code":
           console.log(`\nOpen: ${event.verificationUri}`);

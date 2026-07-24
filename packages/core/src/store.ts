@@ -67,6 +67,11 @@ export interface RunTerminalSummary {
   lastActivityAt?: number;
   sessionId?: string;
   pid?: number;
+  /** Relay/account mode: node that owns this terminal. Tagged by the
+   *  controller's eventWithNodeScope, mirroring SessionSummary.nodeId, so the
+   *  sidebar can show (and merge) run terminals from every node, not just the
+   *  currently connected one. */
+  nodeId?: string;
 }
 
 export interface SessionSummary {
@@ -1129,14 +1134,17 @@ export class SessionStore {
     this.set({ currentNodeId: nodeId });
   }
 
-  /** Clear per-node/session state when switching nodes so transcripts never blend. */
+  /** Clear per-node/session state when switching nodes so transcripts never blend.
+   *  Deliberately leaves `sessions` and `runTerminals` untouched — both are
+   *  unified, all-node sidebar lists (see controller.switchNode's
+   *  eventWithNodeScope merge), not the previous node's local state, so wiping
+   *  them here would make the sidebar flash/narrow to whichever node answers
+   *  first instead of always showing every node's sessions (issue #99). */
   resetSession(): void {
     this.draft = freshDraft();
     this.pending.clear();
     this.usersBeforePending = 0;
     this.set({
-      sessions: [],
-      runTerminals: [],
       activeSessionId: null,
       activeTitle: "New session",
       github: { issueUrl: null, prUrl: null, branch: null, repo: null, prs: [] },
@@ -1154,6 +1162,12 @@ export class SessionStore {
       // them across a node switch.
       commandsBySession: {},
       error: null,
+      // Per-node settings (name, default agent/model, GitHub prompt, sync
+      // config, …) must never survive a switch — otherwise a still-editable
+      // form can keep showing the *previous* node's settings under the
+      // newly-selected node, e.g. while the new one is offline and never
+      // answers `node.settings.get` to overwrite it.
+      nodeSettings: null,
     });
   }
 
@@ -2325,6 +2339,22 @@ export class SessionStore {
     this.set({ working: true, workingLabel: label });
   }
 
+  private toolEventId(event: ServerEvent): string {
+    const explicit = toolCallId(event as any);
+    if (explicit) return explicit;
+    const name = toolName(event as any);
+    const input = toolInput(event as any) as Record<string, unknown>;
+    const target = String(input?.command || input?.cmd || input?.path || input?.file || input?.filePath || input?.query || input?.stream || "");
+    if (!target && name !== "agent_output" && name !== "stderr" && name !== "stdout") return nextId();
+    return `${name}:${target}`;
+  }
+
+  private workingLabelForTool(event: ServerEvent): string {
+    const name = toolName(event as any);
+    if (name === "agent_output" || name === "stderr" || name === "stdout") return "Reading agent output…";
+    return `Running ${name}…`;
+  }
+
   /** Streaming turn events (message_start/update/end, tool start/update/result, agent_start/end). */
   private applyStreamEvent(event: ServerEvent): void {
     const kind = eventKind(event as any);
@@ -2394,25 +2424,25 @@ export class SessionStore {
         this.commitPendingProse();
         this.finishDrafts();
         this.applyTool({
-          callId: toolCallId(event as any) || nextId(),
+          callId: this.toolEventId(event),
           name: toolName(event as any),
           input: toolInput(event as any),
           status: "running",
         });
-        this.setWorking(`Running ${toolName(event as any)}…`);
+        this.setWorking(this.workingLabelForTool(event));
         return;
       case "update":
         this.applyTool({
-          callId: toolCallId(event as any),
+          callId: this.toolEventId(event),
           name: toolName(event as any),
           input: toolInput(event as any),
           status: "running",
         });
-        this.setWorking("Working…");
+        this.setWorking(this.workingLabelForTool(event));
         return;
       case "result":
         this.applyTool({
-          callId: toolCallId(event as any),
+          callId: this.toolEventId(event),
           name: toolName(event as any),
           input: {},
           status: "done",

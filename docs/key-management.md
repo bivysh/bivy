@@ -7,6 +7,7 @@ Bivy's security boundary is that provider credentials stay on the node or in a v
 | Secret | Default storage | Notes |
 |---|---|---|
 | GitHub repo/work-queue token | Bivy secret vault as `github.repo-token` | `cli.json` stores only `secret://github.repo-token`. |
+| GitHub App private key | Bivy secret vault as `github.app.<appId>` | `github-apps.json` stores only a `secret://` reference. Opt-in E2E sync to the account's other nodes via `bivy github:app-sync on` — see [credential-sync.md](credential-sync.md#3-github-app-private-keys). |
 | Integration API keys | Bivy secret vault as `integration.<id>.api-key` | `integrations.json` stores only a secret reference for new connections. |
 | Integration OAuth token sets | Bivy secret vault as `integration.<id>.oauth` | Access/refresh token JSON is encrypted locally for new connections. |
 | Model provider credentials | Pi auth store at `.bivy/pi/auth.json` | Shared with runtimes by Bivy's credential adapter. This is still Pi-owned. |
@@ -59,6 +60,7 @@ The `bivy` CLI resolves `secret://`, `op://`, and `env://` values before startin
 ## Rotation and revocation
 
 - Rotate GitHub tokens in GitHub, then update `github.repo-token`.
+- Rotate a GitHub App's private key from the app's GitHub settings page, then reconnect it (`bivy github:app-connect --app-id <id> --key <new.pem>`) on a node that already holds it. If sync is on (`bivy github:app-sync on`), removing a node from the account flags that app's sync vault for rotation; the next opted-in node to sync mints a fresh vault key automatically (the removed node's cached copy of the OLD vault key stops decrypting anything pushed after that point).
 - Rotate model API keys at the provider, then update the corresponding Pi login or environment/1Password reference.
 - Delete integration secrets with `bivy secrets delete integration.<id>.api-key` or disconnect the integration in the UI.
 - Revoke a linked PWA/browser device from the app (Settings → Signed-in devices → remove); this rotates the room key and re-wraps it for the remaining devices. To force every device to re-link, remove them all (or reset pairing entirely: delete `.bivy/pairing.json` on the node and restart).

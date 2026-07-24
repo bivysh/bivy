@@ -43,6 +43,20 @@ test("id fallback chain: id → model → String(model)", () => {
   assert.equal(toModelInfo("c").id, "c");
 });
 
+test("never coerces an object id into the string \"[object Object]\"", () => {
+  // Regression: a supportedModels() record whose id-bearing field is a nested
+  // object (or absent) used to fall through to String(model) → "[object Object]",
+  // which reached the agent CLI as a model id and was rejected. See the Fable
+  // model-selection bug.
+  assert.equal(toModelInfo({ displayName: "Fable" }).id, "");
+  assert.equal(toModelInfo({}).id, "");
+  // Nested model record: dig into it for the real id rather than stringifying.
+  assert.equal(toModelInfo({ displayName: "Fable", model: { id: "claude-fable-5" } }).id, "claude-fable-5");
+  // Alternate id-bearing fields.
+  assert.equal(toModelInfo({ value: "claude-fable-5" }).id, "claude-fable-5");
+  assert.equal(toModelInfo({ slug: "claude-fable-5" }).id, "claude-fable-5");
+});
+
 test("name falls back to id; provider falls back to empty string", () => {
   const info = toModelInfo({ id: "bare" });
   assert.equal(info.name, "bare");

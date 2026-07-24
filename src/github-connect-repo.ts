@@ -2,10 +2,10 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { connectRepoScope, deviceFlowClientId } from "./github-device-auth.js";
 import { SecretVault } from "./secrets.js";
+import { openBrowser } from "./browser-open.js";
 
 /**
  * `bivy github:connect` — staged repo-scope authorization (C3).
@@ -22,20 +22,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const appDir = process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy");
 const cliConfigPath = path.join(appDir, "cli.json");
-
-function openBrowser(target: string): void {
-  const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  try {
-    const child = spawn(opener, [target], { stdio: "ignore", detached: true });
-    // spawn reports a missing opener (e.g. no xdg-open on a headless server)
-    // asynchronously via an 'error' event, not a throw. Without a listener that
-    // becomes an unhandled error that crashes the process. The URL is printed too.
-    child.on("error", () => {});
-    child.unref();
-  } catch {
-    // best effort — the URL is also printed
-  }
-}
 
 function loadCliConfig(): Record<string, unknown> {
   try {

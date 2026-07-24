@@ -93,6 +93,28 @@ under your personal account:
 Repeat this once per organization you want Bivy working in. Each creates a
 distinct app, owned by that org, installable only on that org's repositories.
 
+## Using it from more than one node
+
+By default a connected app's private key lives only on the node that ran
+`github:app-connect`/`github:app-create` — a second node, or a fresh/ephemeral
+machine, has no key and can't serve that app's work until it's connected there
+too. To let an app connected on one node also serve your OTHER nodes without
+re-uploading the `.pem` anywhere, opt each of them in:
+
+```bash
+bivy github:app-sync on
+```
+
+This is off by default and per node, on purpose: a GitHub App key is a
+repo-write credential, so which nodes hold it should be a deliberate choice,
+not automatic. Once two or more nodes have it on, a `github:app-connect` done
+on any one of them reaches the others automatically — E2E-encrypted the same
+way model/provider auth already syncs between nodes; the control plane relays
+ciphertext it cannot read. See
+[credential-sync.md](credential-sync.md#3-github-app-private-keys) for the
+mechanics, and `bivy github:app-sync` (no argument) to check whether a node
+has it on and which apps it currently holds.
+
 ## Put it to work
 
 Once an app is installed on a repository:

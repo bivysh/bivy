@@ -232,6 +232,21 @@ describe("SessionStore", () => {
     expect(store.getState().commandsBySession).toEqual({});
   });
 
+  it("clears nodeSettings on node switch so a new node's panel never shows the previous node's settings (issue #75)", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "node.settings",
+      settings: { name: "node-a", defaultAgent: "claude", githubIssuePrompt: "a-prompt" },
+    });
+    expect(store.getState().nodeSettings?.name).toBe("node-a");
+    // Switching nodes must drop the stale settings immediately — if the newly
+    // selected node is offline it may never answer node.settings.get, and
+    // without this reset the UI would go on showing node-a's settings as if
+    // they belonged to the new node.
+    store.resetSession();
+    expect(store.getState().nodeSettings).toBeNull();
+  });
+
   it("leaves state identity stable when session.created adds no new capabilities or commands", () => {
     const store = new SessionStore();
     store.apply({
@@ -508,6 +523,16 @@ describe("SessionStore", () => {
     expect(tools).toHaveLength(1);
     expect(tools[0]!.tool!.status).toBe("done");
     expect(tools[0]!.tool!.result).toBe("file.txt");
+  });
+
+  it("coalesces unnamed agent output updates into one live card", () => {
+    const store = new SessionStore();
+    store.apply({ type: "tool_execution_update", toolName: "agent_output", input: { stream: "stderr", output: "first" } });
+    store.apply({ type: "tool_execution_update", toolName: "agent_output", input: { stream: "stderr", output: "first\nsecond" } });
+    const tools = store.getState().transcript.filter((e) => e.tool);
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.tool!.input).toEqual({ stream: "stderr", output: "first\nsecond" });
+    expect(store.getState().workingLabel).toBe("Reading agent output…");
   });
 
   it("force-closes a still-running tool card on agent_end (e.g. aborted mid-tool, no matching tool_result ever arrives)", () => {
@@ -818,8 +843,26 @@ describe("SessionStore", () => {
 
     store.apply({ type: "terminal.closed", termId: "term-1" });
     expect(store.getState().runTerminals.map((t) => t.termId)).toEqual(["term-2"]);
+  });
+
+  it("keeps sessions and run terminals across a node switch — they're unified all-node sidebar lists, not per-node state (issue #99)", () => {
+    const store = new SessionStore();
+    store.apply({ type: "sessions.list", sessions: [{ sessionId: "s1", name: "One", nodeId: "node-a" }] });
+    store.apply({
+      type: "terminal.list",
+      terminals: [{ termId: "term-1", name: "Pi · mesh", agent: "pi", nodeId: "node-a" }],
+    });
+    expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+    expect(store.getState().runTerminals.map((t) => t.termId)).toEqual(["term-1"]);
+    // resetSession() is what controller.switchNode() calls when the user picks
+    // a different node (e.g. from the "new session" node switcher) — it must
+    // still blank the active session pane, but the sidebar's session/terminal
+    // lists (spanning every node on the account) must not change just because
+    // the client's own connected transport did.
     store.resetSession();
-    expect(store.getState().runTerminals).toEqual([]);
+    expect(store.getState().sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+    expect(store.getState().runTerminals.map((t) => t.termId)).toEqual(["term-1"]);
+    expect(store.getState().activeSessionId).toBeNull();
   });
 
   // ---- seen/unseen + live/not-live state (issue #387) ----

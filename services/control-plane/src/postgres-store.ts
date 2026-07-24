@@ -25,6 +25,9 @@ import {
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
+  type GithubAppVault,
+  type GithubAppWrappedKey,
+  type GithubAppKeyRequest,
   type SubscriptionState,
   type InboundHook,
   type UsageMetrics,
@@ -276,6 +279,40 @@ export class PostgresStore implements MeshStore {
         public_key  TEXT NOT NULL,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, node_id)
+      );
+
+      -- GitHub App private-key vault (issue #88) — same E2E shape as the model-auth
+      -- vault above, but keyed per (account, app): an account can hold several apps
+      -- (personal + one per org), and they sync independently. See GithubAppVault
+      -- in store.ts for the field-level rationale.
+      CREATE TABLE IF NOT EXISTS github_app_vaults (
+        account_id          TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        app_id              TEXT NOT NULL,
+        ciphertext          TEXT NOT NULL,
+        updated_by_node_id  TEXT NOT NULL,
+        needs_rotation      BOOLEAN NOT NULL DEFAULT false,
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, app_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS github_app_wrapped_keys (
+        account_id             TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        app_id                 TEXT NOT NULL,
+        node_id                TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        wrapped_key            TEXT NOT NULL,
+        wrapped_by_node_id     TEXT NOT NULL,
+        wrapped_by_public_key  TEXT NOT NULL DEFAULT '',
+        updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, app_id, node_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS github_app_key_requests (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        app_id      TEXT NOT NULL,
+        node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        public_key  TEXT NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, app_id, node_id)
       );
 
       -- Inbound hooks (route a GitHub/Slack webhook to an account) + work queue
@@ -796,6 +833,19 @@ export class PostgresStore implements MeshStore {
        WHERE account_id = $1 AND serving_node_id = $2`,
       [accountId, nodeId],
     );
+    // A removed node keeps whatever it already cached locally — deleting its
+    // wrapped_keys row (via the FK cascade below) only stops it from resolving
+    // a key it doesn't have YET. Flag every GitHub App vault it already had a
+    // wrapped key for so a surviving node mints a fresh vault key on its next
+    // sync tick, which is what actually invalidates the removed node's cached
+    // copy (issue #88 acceptance criterion: revocation re-wraps/rotates).
+    await this.query(
+      `UPDATE github_app_vaults SET needs_rotation = true
+       WHERE account_id = $1 AND app_id IN (
+         SELECT app_id FROM github_app_wrapped_keys WHERE account_id = $1 AND node_id = $2
+       )`,
+      [accountId, nodeId],
+    );
     const { rowCount } = await this.query(
       `DELETE FROM nodes WHERE id = $1 AND account_id = $2`,
       [nodeId, accountId],
@@ -1035,6 +1085,92 @@ export class PostgresStore implements MeshStore {
     );
     await this.query(`DELETE FROM model_auth_key_requests WHERE account_id = $1 AND node_id = $2`, [accountId, targetNodeId]);
     return { nodeId: rows[0].node_id, wrappedKey: rows[0].wrapped_key, wrappedByNodeId: rows[0].wrapped_by_node_id, wrappedByPublicKey: rows[0].wrapped_by_public_key, updatedAt: new Date(rows[0].updated_at).toISOString() };
+  }
+
+  // --- GitHub App private-key vault (issue #88) -------------------------
+
+  async listGithubAppVaults(accountId: string): Promise<GithubAppVault[]> {
+    const { rows } = await this.query(`SELECT * FROM github_app_vaults WHERE account_id = $1`, [accountId]);
+    return rows.map((row: any) => ({
+      appId: row.app_id,
+      ciphertext: row.ciphertext,
+      updatedByNodeId: row.updated_by_node_id,
+      needsRotation: Boolean(row.needs_rotation),
+      updatedAt: new Date(row.updated_at).toISOString(),
+    }));
+  }
+
+  async setGithubAppVault(accountId: string, appId: string, nodeId: string, ciphertext: string): Promise<GithubAppVault> {
+    // A push always clears needs_rotation: whether this is the very first sync
+    // or a response to a rotation request, the caller is about to be encrypting
+    // under a vault key only nodes that pull AFTER this write will ever see.
+    const { rows } = await this.query(
+      `INSERT INTO github_app_vaults (account_id, app_id, ciphertext, updated_by_node_id, needs_rotation, updated_at)
+       VALUES ($1, $2, $3, $4, false, now())
+       ON CONFLICT (account_id, app_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_node_id = EXCLUDED.updated_by_node_id, needs_rotation = false, updated_at = now()
+       RETURNING *`,
+      [accountId, appId, ciphertext, nodeId],
+    );
+    const row = rows[0];
+    return { appId: row.app_id, ciphertext: row.ciphertext, updatedByNodeId: row.updated_by_node_id, needsRotation: false, updatedAt: new Date(row.updated_at).toISOString() };
+  }
+
+  async listGithubAppWrappedKeysForNode(accountId: string, nodeId: string): Promise<GithubAppWrappedKey[]> {
+    const { rows } = await this.query(`SELECT * FROM github_app_wrapped_keys WHERE account_id = $1 AND node_id = $2`, [accountId, nodeId]);
+    return rows.map((row: any) => ({
+      appId: row.app_id,
+      nodeId: row.node_id,
+      wrappedKey: row.wrapped_key,
+      wrappedByNodeId: row.wrapped_by_node_id,
+      wrappedByPublicKey: row.wrapped_by_public_key,
+      updatedAt: new Date(row.updated_at).toISOString(),
+    }));
+  }
+
+  async requestGithubAppWrappedKey(accountId: string, appId: string, nodeId: string, publicKey: string): Promise<void> {
+    const { rows } = await this.query(`SELECT 1 FROM github_app_wrapped_keys WHERE account_id = $1 AND app_id = $2 AND node_id = $3`, [accountId, appId, nodeId]);
+    if (rows[0]) return; // already have a wrapped key for this app — nothing to request
+    await this.query(
+      `INSERT INTO github_app_key_requests (account_id, app_id, node_id, public_key, created_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (account_id, app_id, node_id) DO UPDATE SET public_key = EXCLUDED.public_key, created_at = now()`,
+      [accountId, appId, nodeId, publicKey],
+    );
+  }
+
+  async listGithubAppKeyRequests(accountId: string, exceptNodeId: string): Promise<GithubAppKeyRequest[]> {
+    const { rows } = await this.query(
+      `SELECT app_id, node_id, public_key, created_at FROM github_app_key_requests WHERE account_id = $1 AND node_id <> $2 ORDER BY created_at ASC`,
+      [accountId, exceptNodeId],
+    );
+    return rows.map((row: any) => ({ appId: row.app_id, nodeId: row.node_id, publicKey: row.public_key, createdAt: new Date(row.created_at).toISOString() }));
+  }
+
+  async setGithubAppWrappedKey(
+    accountId: string,
+    appId: string,
+    targetNodeId: string,
+    wrappedByNodeId: string,
+    wrappedByPublicKey: string,
+    wrappedKey: string,
+  ): Promise<GithubAppWrappedKey> {
+    const { rows } = await this.query(
+      `INSERT INTO github_app_wrapped_keys (account_id, app_id, node_id, wrapped_key, wrapped_by_node_id, wrapped_by_public_key, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, now())
+       ON CONFLICT (account_id, app_id, node_id) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_node_id = EXCLUDED.wrapped_by_node_id, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, updated_at = now()
+       RETURNING *`,
+      [accountId, appId, targetNodeId, wrappedKey, wrappedByNodeId, wrappedByPublicKey],
+    );
+    await this.query(`DELETE FROM github_app_key_requests WHERE account_id = $1 AND app_id = $2 AND node_id = $3`, [accountId, appId, targetNodeId]);
+    const row = rows[0];
+    return {
+      appId: row.app_id,
+      nodeId: row.node_id,
+      wrappedKey: row.wrapped_key,
+      wrappedByNodeId: row.wrapped_by_node_id,
+      wrappedByPublicKey: row.wrapped_by_public_key,
+      updatedAt: new Date(row.updated_at).toISOString(),
+    };
   }
 
   // --- Inbound hooks + work queue (E2/E4) ------------------------------

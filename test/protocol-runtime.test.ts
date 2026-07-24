@@ -71,6 +71,11 @@ assert.equal(resultBlocks[0]?.type, "tool_result");
 assert.equal(resultBlocks[0]?.tool_use_id, "tc_fixture");
 
 assert.ok(events.some((event) => event.type === "tool_result"));
+assert.equal(
+  (events.find((event) => event.type === "tool_result") as { result?: unknown } | undefined)?.result,
+  "allow",
+  "protocol tool_result emits the displayable result text",
+);
 
 // --- Model selection over the protocol -------------------------------------
 // The shim advertised a model registry in its hello, so the host derives a real

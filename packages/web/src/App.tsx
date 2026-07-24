@@ -163,6 +163,32 @@ export function App() {
     [state.currentNodeId],
   );
 
+  // A `bivy run` terminal picked from the sidebar (SessionList's runTerminals
+  // rows) now carries the id of whichever node owns it — that row may not
+  // belong to the currently connected node at all, since the sidebar shows
+  // every node's terminals (issue #99). Attaching sends over the live
+  // transport, so a cross-node pick must switch (and wait for the new node to
+  // come online) before opening the overlay, the same way openSessionOnNode
+  // does for chat sessions.
+  const pickTerminal = useCallback(
+    (termId: string, nodeId?: string) => {
+      const open = () => {
+        setTerminalTarget(termId);
+        setTerminalStandalone(false);
+        setTerminalOpen(true);
+      };
+      setDrawerOpen(false);
+      if (!controller.direct && nodeId && nodeId !== state.currentNodeId) {
+        void controller.connectToNode(nodeId).then(open).catch((err) => {
+          controller.store.setError(err instanceof Error ? err.message : String(err));
+        });
+        return;
+      }
+      open();
+    },
+    [state.currentNodeId],
+  );
+
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
   // instant the token lands — no page reload needed. `direct` (local/loopback
@@ -236,12 +262,7 @@ export function App() {
             controller.openSessionOnNode(id, path, nodeId);
             closeDrawer();
           }}
-          onPickTerminal={(termId) => {
-            setTerminalTarget(termId);
-            setTerminalStandalone(false);
-            setTerminalOpen(true);
-            closeDrawer();
-          }}
+          onPickTerminal={pickTerminal}
         />
         {/* One entry point now — a ChatGPT-style gear. Theme, GitHub Queue, and
             everything else moved inside the Settings modal. */}

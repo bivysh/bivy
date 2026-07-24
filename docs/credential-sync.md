@@ -1,6 +1,6 @@
 # Credential and key sync model
 
-Bivy has three different credential classes. They should not be described as one generic "keys sync everywhere" feature.
+Bivy has four different credential classes. They should not be described as one generic "keys sync everywhere" feature.
 
 ## 1. Relay/session keys
 
@@ -29,7 +29,50 @@ Production requirement before marketing this broadly:
 - Add a user-visible explanation of which providers/runtimes use Bivy-managed auth.
 - Add a recovery story for losing all nodes/devices that can unwrap the vault.
 
-## 3. Agent-native credentials
+## 3. GitHub App private keys
+
+Purpose: let a GitHub App connected on one node (`bivy github:app-connect` /
+`github:app-create`) also serve the account's other nodes, without
+re-uploading the `.pem` on each machine (issue #88).
+
+Current model:
+
+- Off by default, per node: `bivy github:app-sync on`. A GitHub App key is a
+  repo-write credential, so widening which nodes hold it is a deliberate
+  decision, not automatic like model/provider auth sync (above) — turning
+  sync on bounds the blast radius to the nodes an operator explicitly opted
+  in, rather than every node on the account.
+- The node encrypts the app's private key (plus its non-secret slug/name/owner
+  display metadata) into a per-APP vault entry before uploading it to the
+  control plane — one vault per app, not one blob per account, because an
+  account can hold several apps (personal + one per org) and they sync
+  independently.
+- The control plane stores ciphertext plus per-node wrapped vault-key metadata
+  only, exactly like the model-auth vault — it never receives a plaintext app
+  key.
+- Another opted-in node requests a wrapped vault key for an app it doesn't
+  hold yet; any node that already holds that app's key answers, wrapping it to
+  the requester's public key.
+- Revocation: when a node that held a wrapped key for an app is removed from
+  the account, the control plane flags that app's vault for rotation. On its
+  next sync tick, any surviving node that holds the app's plaintext key mints
+  a BRAND NEW vault key and re-pushes — which is what actually invalidates the
+  removed node's cached copy (it cached the old key while it was still
+  trusted; the control plane can't reach into a device it no longer talks to
+  and make it forget that). The already-installed GitHub App key itself is
+  unchanged by this — only the transport-layer vault key that protects future
+  syncs rotates. If the app key material itself may have been exposed,
+  generate a fresh one on GitHub and reconnect (`github:app-connect --rotate-webhook`
+  covers the webhook secret; the app's private key is rotated from GitHub's
+  own app settings page).
+
+Production requirement before marketing this broadly: same three items listed
+under model/provider credentials above (tests proving ciphertext-only storage,
+user-visible copy, and a lost-all-nodes recovery story) — this feature adds a
+fourth: UI surfacing which nodes currently hold which app's key, not just
+whether sync is on.
+
+## 4. Agent-native credentials
 
 Purpose: credentials owned by a third-party CLI/runtime, e.g. Claude Code, Codex, Gemini CLI.
 

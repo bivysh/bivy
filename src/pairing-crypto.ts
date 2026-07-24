@@ -46,6 +46,7 @@ import { HKDF_INFO, ROOM_KEY_BYTES, WRAP_KEY_BYTES, PAIR_SECRET_BYTES } from "./
 const PAIR_INFO = Buffer.from(HKDF_INFO.pair);
 const ROTATE_INFO = Buffer.from(HKDF_INFO.rotate);
 const MODEL_AUTH_VAULT_INFO = Buffer.from(HKDF_INFO.modelAuthVault);
+const GITHUB_APP_VAULT_INFO = Buffer.from(HKDF_INFO.githubAppVault);
 const EMPTY_SALT = Buffer.alloc(0);
 
 export interface PairingKeypair {
@@ -88,13 +89,17 @@ function privateKeyFromB64(privB64: string): KeyObject {
 export function deriveWrapKey(
   ourPrivateKeyB64: string,
   theirPublicKeyB64: string,
-  purpose: "pair" | "rotate" | "model-auth-vault",
+  purpose: "pair" | "rotate" | "model-auth-vault" | "github-app-vault",
 ): Buffer {
   const shared = diffieHellman({
     privateKey: privateKeyFromB64(ourPrivateKeyB64),
     publicKey: publicKeyFromRaw(theirPublicKeyB64),
   });
-  const info = purpose === "pair" ? PAIR_INFO : purpose === "rotate" ? ROTATE_INFO : MODEL_AUTH_VAULT_INFO;
+  const info =
+    purpose === "pair" ? PAIR_INFO
+    : purpose === "rotate" ? ROTATE_INFO
+    : purpose === "github-app-vault" ? GITHUB_APP_VAULT_INFO
+    : MODEL_AUTH_VAULT_INFO;
   return Buffer.from(hkdfSync("sha256", shared, EMPTY_SALT, info, WRAP_KEY_BYTES));
 }
 

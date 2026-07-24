@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
@@ -100,7 +100,7 @@ import { ReplicationService } from "./session/replication-service.js";
 import type { ReplWireFrame } from "./session/replicator.js";
 import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereqInput, type ForkPrereq } from "./session/fork-prereqs.js";
-import { SecretVault } from "./secrets.js";
+import { SecretVault, resolveSecret } from "./secrets.js";
 import { InstallationTokenCache, createAppJwt, resolveInstallationId, type GitHubAppConfig } from "./github-app-auth.js";
 import {
   loadGitHubAppConfigs,
@@ -112,6 +112,14 @@ import {
   type GitHubAppRecord,
 } from "./github-apps.js";
 import { buildAppManifest, convertManifest, renderManifestForm } from "./github-app-manifest.js";
+import {
+  encryptGithubAppEnvelope,
+  decryptGithubAppEnvelope,
+  readLocalGithubAppVaultKey,
+  writeLocalGithubAppVaultKey,
+  forgetLocalGithubAppVaultKey,
+  mintLocalGithubAppVaultKey,
+} from "./github-app-vault.js";
 import { redactSecrets } from "./redact.js";
 import {
   getSttConfig,
@@ -3370,6 +3378,177 @@ async function pushModelAuthToControlPlane() {
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
   }
+}
+
+// --- GitHub App private-key vault sync (issue #88) --------------------------
+// Opt-in cross-node sync of connected GitHub Apps' private keys, riding the
+// same E2E wrap-key mechanism as the model-auth vault above (new HKDF purpose
+// "github-app-vault" — see src/pairing-crypto.ts), but keyed per APP rather
+// than one blob per account: an account can hold several apps (personal +
+// one per org, see src/github-apps.ts), each syncing independently.
+//
+// Deliberately opt-in (BIVY_GITHUB_APP_SYNC=1, set via `bivy github:app-sync
+// on`) rather than automatic like model auth: a GitHub App key is a repo-write
+// credential, so widening which nodes hold it is a real blast-radius decision
+// the issue asks to make deliberate, not a default (see issue #88's "Design
+// decisions" section). A node that hasn't opted in never calls any of this.
+//
+// The control plane only ever stores ciphertext + per-node wrapped vault keys,
+// exactly like model-auth-vault — see docs/credential-sync.md.
+function githubAppSyncEnabled(): boolean {
+  return (process.env.BIVY_GITHUB_APP_SYNC || "").trim() === "1";
+}
+
+type GithubAppVaultRow = { appId: string; ciphertext: string; updatedAt: string; updatedByNodeId: string; needsRotation: boolean };
+type GithubAppWrappedKeyRow = { appId: string; nodeId: string; wrappedKey: string; wrappedByNodeId: string; wrappedByPublicKey: string };
+type GithubAppKeyRequestRow = { appId: string; nodeId: string; publicKey: string };
+type GithubAppVaultResponse = { vaults?: GithubAppVaultRow[]; wrappedKeys?: GithubAppWrappedKeyRow[]; requests?: GithubAppKeyRequestRow[] };
+
+// Per-app fingerprint of the content (PEM + display metadata) this node last
+// pushed, so a steady-state poll tick doesn't re-PUT unchanged content just
+// because `seal()`'s random IV makes every ciphertext byte-different. Reset on
+// restart — one redundant push after a restart is the same tolerance the
+// model-auth vault above already accepts.
+const lastPushedGithubAppFingerprint = new Map<string, string>();
+
+function fingerprintGithubAppContent(record: GitHubAppRecord, privateKeyPem: string): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ privateKeyPem, slug: record.slug, name: record.name, owner: record.owner, ownerType: record.ownerType, hookId: record.hookId }))
+    .digest("hex");
+}
+
+/**
+ * One sync tick: pull apps this node doesn't hold yet (importing them once a
+ * usable vault key is in hand), answer other nodes' pending key requests for
+ * apps this node DOES hold, and push/rotate apps this node holds so the rest
+ * of the account's opted-in nodes can pick them up.
+ */
+async function syncGithubAppVaultFromControlPlane(): Promise<void> {
+  if (!sessionAdvertiseTarget || !githubAppSyncEnabled()) return;
+  try {
+    const res = await modelAuthFetch("/node/github-app-vault");
+    if (!res?.ok) return;
+    const data = (await res.json().catch(() => ({}))) as GithubAppVaultResponse;
+    const vaults = Array.isArray(data.vaults) ? data.vaults : [];
+    const wrappedKeys = Array.isArray(data.wrappedKeys) ? data.wrappedKeys : [];
+    const requests = Array.isArray(data.requests) ? data.requests : [];
+    const localAppIds = new Set(listGitHubApps(appDir).map((a) => a.appId));
+    let importedAny = false;
+
+    // 1) Pull every app we don't hold locally yet.
+    for (const vault of vaults) {
+      if (!vault.appId || !vault.ciphertext || localAppIds.has(vault.appId)) continue;
+      let vaultKeyB64 = readLocalGithubAppVaultKey(appDir, vault.appId);
+      if (!vaultKeyB64) {
+        const wrapped = wrappedKeys.find((w) => w.appId === vault.appId);
+        if (wrapped) {
+          try {
+            vaultKeyB64 = pairingStore.unwrapFromNodePublicKey(wrapped.wrappedByPublicKey, wrapped.wrappedKey, "github-app-vault");
+            writeLocalGithubAppVaultKey(appDir, vault.appId, vaultKeyB64);
+          } catch (error) {
+            console.warn(`[github-app-sync] could not unwrap vault key for app ${vault.appId}:`, (error as Error).message);
+          }
+        }
+      }
+      if (vaultKeyB64) {
+        try {
+          const envelope = decryptGithubAppEnvelope(vault.ciphertext, vaultKeyB64);
+          const keyId = privateKeyIdFor(envelope.appId);
+          new SecretVault(appDir).setLocal(keyId, envelope.privateKeyPem, `GitHub App private key (${envelope.appId}, synced)`);
+          upsertGitHubApp(appDir, {
+            appId: envelope.appId,
+            slug: envelope.slug,
+            name: envelope.name,
+            owner: envelope.owner,
+            ownerType: envelope.ownerType,
+            privateKeyRef: `secret://${keyId}`,
+            hookId: envelope.hookId,
+          });
+          localAppIds.add(envelope.appId);
+          importedAny = true;
+        } catch (error) {
+          // Stale/wrong local key (e.g. this app was just rotated by a
+          // surviving node after a revoke) — drop it so we cleanly re-request
+          // a fresh wrap instead of failing on every future poll.
+          forgetLocalGithubAppVaultKey(appDir, vault.appId);
+          console.warn(`[github-app-sync] could not decrypt vault for app ${vault.appId}, will re-request:`, (error as Error).message);
+        }
+      } else {
+        await modelAuthFetch("/node/github-app-key/request", {
+          method: "POST",
+          body: JSON.stringify({ appId: vault.appId, publicKey: pairingStore.nodePublicKeyB64() }),
+        }).catch(() => {});
+      }
+    }
+
+    if (importedAny) {
+      invalidateGitHubApps();
+      void registerGithubAppMeta();
+      void reportGithubAppInstallations();
+    }
+
+    // 2) Answer pending requests for apps we hold a resolved vault key for.
+    for (const request of requests) {
+      if (!request.appId || !localAppIds.has(request.appId)) continue;
+      const vaultKeyB64 = readLocalGithubAppVaultKey(appDir, request.appId);
+      if (!vaultKeyB64) continue;
+      const wrappedKey = pairingStore.wrapForNodePublicKey(request.publicKey, vaultKeyB64, "github-app-vault");
+      await modelAuthFetch("/node/github-app-key/wrapped", {
+        method: "PUT",
+        body: JSON.stringify({ appId: request.appId, targetNodeId: request.nodeId, wrappedByPublicKey: pairingStore.nodePublicKeyB64(), wrappedKey }),
+      }).catch(() => {});
+    }
+
+    // 3) Push every app we hold: first sync for apps the vault doesn't have
+    // yet, mint-a-fresh-key rotation when the control plane flags it (a node
+    // that had this app's wrapped key was removed from the account), or a
+    // content refresh when what we'd push differs from what we last pushed.
+    for (const record of listGitHubApps(appDir)) {
+      const remote = vaults.find((v) => v.appId === record.appId);
+      const needsRotation = Boolean(remote?.needsRotation);
+      const privateKeyPem = await resolveSecret(record.privateKeyRef, appDir);
+      if (!privateKeyPem) continue;
+      const fingerprint = fingerprintGithubAppContent(record, privateKeyPem);
+      if (remote && !needsRotation && lastPushedGithubAppFingerprint.get(record.appId) === fingerprint) continue;
+      const vaultKeyB64 = needsRotation || !readLocalGithubAppVaultKey(appDir, record.appId)
+        ? mintLocalGithubAppVaultKey(appDir, record.appId)
+        : (readLocalGithubAppVaultKey(appDir, record.appId) as string);
+      const ciphertext = encryptGithubAppEnvelope(
+        { appId: record.appId, privateKeyPem, slug: record.slug, name: record.name, owner: record.owner, ownerType: record.ownerType, hookId: record.hookId },
+        vaultKeyB64,
+      );
+      const pushRes = await modelAuthFetch("/node/github-app-vault", { method: "PUT", body: JSON.stringify({ appId: record.appId, ciphertext }) }).catch(() => null);
+      if (!pushRes?.ok) continue;
+      lastPushedGithubAppFingerprint.set(record.appId, fingerprint);
+      // Self-wrap: so this node's own row in `wrappedKeys` is populated too,
+      // matching the model-auth vault's push (a node that later loses its
+      // local github-app-vault.json cache but keeps its secret vault can
+      // recover the key without needing another node online).
+      await modelAuthFetch("/node/github-app-key/wrapped", {
+        method: "PUT",
+        body: JSON.stringify({
+          appId: record.appId,
+          targetNodeId: identity.nodeId,
+          wrappedByPublicKey: pairingStore.nodePublicKeyB64(),
+          wrappedKey: pairingStore.wrapForNodePublicKey(pairingStore.nodePublicKeyB64(), vaultKeyB64, "github-app-vault"),
+        }),
+      }).catch(() => {});
+    }
+  } catch (error) {
+    console.warn("[github-app-sync] sync failed:", (error as Error).message);
+  }
+}
+
+let githubAppSyncTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Start (or restart) the periodic GitHub App vault sync poll. A no-op — and
+ *  no network calls at all — unless this node opted in (BIVY_GITHUB_APP_SYNC). */
+function startGithubAppSyncWatcher(): void {
+  if (githubAppSyncTimer) clearInterval(githubAppSyncTimer);
+  if (!githubAppSyncEnabled()) return;
+  void syncGithubAppVaultFromControlPlane();
+  githubAppSyncTimer = setInterval(() => void syncGithubAppVaultFromControlPlane(), 30_000);
+  githubAppSyncTimer.unref?.();
 }
 
 // Plaintext (non-secret) summary of which OAuth-capable providers this node has
@@ -8630,6 +8809,7 @@ const server = app.listen(port, host, async () => {
   console.log(`Workspace: ${defaultWorkspace}`);
   startRelayIfConfigured();
   startModelAuthWatcher();
+  startGithubAppSyncWatcher();
   await startGitHubTasksIfConfigured();
   startControlPlaneTasksIfConfigured();
   // Best-effort, non-blocking: finish any issue automation an earlier crash/

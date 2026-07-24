@@ -77,7 +77,8 @@ function ToolListRow({ tool, f, onSelect }: { tool: ToolActivity; f: ToolFormat;
  *  navigates away from it now. Takes the ToolFormat computed once by the
  *  sheet rather than recomputing it (see ToolListRow's comment). */
 function ToolDetail({ tool, f }: { tool: ToolActivity; f: ToolFormat }) {
-  const showOutput = tool.result && (f.diffs.length === 0 || f.command);
+  const output = tool.result || f.output || "";
+  const showOutput = output && (f.diffs.length === 0 || f.command || f.verb === "Agent output");
   return (
     <div className="activity-detail">
       {f.path && (
@@ -111,15 +112,24 @@ function ToolDetail({ tool, f }: { tool: ToolActivity; f: ToolFormat }) {
       ) : null}
       {showOutput && (
         <div className="tool-detail-block">
-          <div className="tool-detail-label">Output</div>
-          <div className="tool-detail-value output" dangerouslySetInnerHTML={{ __html: toHtml(tool.result || "") }} />
+          <div className="tool-detail-label">{tool.status === "running" ? "Live output" : "Output"}</div>
+          <div className="tool-detail-value output" dangerouslySetInnerHTML={{ __html: toHtml(output) }} />
         </div>
       )}
       {!f.path && !f.command && !f.query && !f.diffs.length && !showOutput && (
-        <div className="tool-detail-value output">No further details.</div>
+        <div className="tool-detail-value output">{tool.status === "running" ? "Still working. Details will appear here when the agent streams them." : "No further details."}</div>
       )}
     </div>
   );
+}
+
+function runningSummary(tool: ToolActivity): string {
+  const f = formatTool(tool.name, tool.input);
+  if (f.verb === "Agent output") return "Reading agent output…";
+  const label = toolRowLabel(f);
+  if (f.command) return `Running ${label || "command"}…`;
+  if (label) return `${f.verb} ${label}…`;
+  return "Agent is working…";
 }
 
 /**
@@ -191,7 +201,7 @@ export const ToolGroup = memo(function ToolGroup({ tools }: { tools: ToolActivit
   // yanking focus back to the top of the sheet while a tool call streams.
   const close = useCallback(() => setOpen(false), []);
   const running = tools.some((t) => t.status === "running");
-  const summary = running && tools.every((t) => t.status === "running") && tools.length === 1 ? "Working…" : toolGroupSummary(tools);
+  const summary = running && tools.every((t) => t.status === "running") && tools.length === 1 ? runningSummary(tools[0]!) : toolGroupSummary(tools);
   return (
     <div className="tool-group">
       <button className={`tool-group-line${running ? " is-running" : ""}`} onClick={() => setOpen(true)}>

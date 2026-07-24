@@ -244,6 +244,41 @@ export interface ModelAuthKeyRequest {
   createdAt: string;
 }
 
+// GitHub App private-key vault (issue #88). Same shape/guarantee as the model-
+// auth vault above — the control plane stores ciphertext plus per-node wrapped
+// keys and never a plaintext key — but keyed per APP (`appId`), not one blob per
+// account: an account can hold several apps (personal + one per org, see
+// src/github-apps.ts), each with its own key and its own rotation lifecycle,
+// and a node opted into sync should be able to hold some without holding all.
+export interface GithubAppVault {
+  appId: string;
+  ciphertext: string;
+  updatedByNodeId: string;
+  // Set when a node that held this app's wrapped key was removed from the
+  // account. A surviving node that still holds the plaintext key (any node
+  // that already synced it) mints a FRESH vault key and re-pushes on its next
+  // sync tick, which is what actually invalidates the removed node's cached
+  // copy — clearing this flag is a side effect of that push, not of reading it.
+  needsRotation: boolean;
+  updatedAt: string;
+}
+
+export interface GithubAppWrappedKey {
+  appId: string;
+  nodeId: string;
+  wrappedKey: string;
+  wrappedByNodeId: string;
+  wrappedByPublicKey: string;
+  updatedAt: string;
+}
+
+export interface GithubAppKeyRequest {
+  appId: string;
+  nodeId: string;
+  publicKey: string;
+  createdAt: string;
+}
+
 // --- Work queue (E2/E4) -------------------------------------------------------
 // Inbound front doors (GitHub issue webhook, Slack command) enqueue WORK ITEMS
 // on the control plane. The node — which dials outbound only (invariant #4) —
@@ -599,6 +634,27 @@ export interface MeshStore {
   requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<void>;
   listModelAuthKeyRequests(accountId: string, exceptNodeId: string): Promise<ModelAuthKeyRequest[]>;
   setModelAuthWrappedKey(accountId: string, targetNodeId: string, wrappedByNodeId: string, wrappedByPublicKey: string, wrappedKey: string): Promise<ModelAuthWrappedKey>;
+
+  // GitHub App private-key vault (issue #88), per-app — see GithubAppVault above.
+  // A node lists every app the account has a vault for (it may not hold all of
+  // them locally yet) rather than asking per-app, so a newly opted-in node
+  // discovers apps it has never seen without an extra round trip per app.
+  listGithubAppVaults(accountId: string): Promise<GithubAppVault[]>;
+  setGithubAppVault(accountId: string, appId: string, nodeId: string, ciphertext: string): Promise<GithubAppVault>;
+  // Every wrapped key currently addressed to `nodeId`, across apps.
+  listGithubAppWrappedKeysForNode(accountId: string, nodeId: string): Promise<GithubAppWrappedKey[]>;
+  requestGithubAppWrappedKey(accountId: string, appId: string, nodeId: string, publicKey: string): Promise<void>;
+  // Every outstanding request across apps; the caller (a node that holds some
+  // subset of the account's apps) filters to the ones it can actually answer.
+  listGithubAppKeyRequests(accountId: string, exceptNodeId: string): Promise<GithubAppKeyRequest[]>;
+  setGithubAppWrappedKey(
+    accountId: string,
+    appId: string,
+    targetNodeId: string,
+    wrappedByNodeId: string,
+    wrappedByPublicKey: string,
+    wrappedKey: string,
+  ): Promise<GithubAppWrappedKey>;
 
   // Inbound hooks (route a third-party webhook to an account) + work queue.
   createInboundHook(accountId: string, kind: string): Promise<InboundHook>;

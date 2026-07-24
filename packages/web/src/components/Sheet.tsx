@@ -23,6 +23,8 @@ export function Sheet({
   autoFocusSearch?: boolean;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   // Modal focus management: move focus into the sheet on open, keep Tab inside
   // it, and restore focus to the opener on close so keyboard / screen-reader
@@ -42,7 +44,7 @@ export function Sheet({
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab") return;
@@ -67,7 +69,7 @@ export function Sheet({
       window.removeEventListener("keydown", onKey);
       opener?.focus?.();
     };
-  }, [onClose, autoFocusSearch]);
+  }, [autoFocusSearch]);
 
   // Portal to <body>. The sheet is `position: fixed`, but it's rendered from
   // deep inside the `.chat` scroll container (overflow-y:auto +

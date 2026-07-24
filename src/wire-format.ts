@@ -28,6 +28,8 @@ export const HKDF_INFO = {
   rotate: "bivy-rotate-v1",
   /** Model-auth vault delivery (node-only today). */
   modelAuthVault: "bivy-model-auth-vault-v1",
+  /** GitHub App private-key vault delivery (node-only, opt-in — issue #88). */
+  githubAppVault: "bivy-github-app-vault-v1",
 } as const;
 
 /** Version byte stamped into every sealed frame's authenticated plaintext. */

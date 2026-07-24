@@ -32,6 +32,8 @@ export interface ToolFormat {
   target?: string;
   command?: string;
   query?: string;
+  output?: string;
+  stream?: string;
   added: number;
   removed: number;
   diffs: DiffHunk[];
@@ -60,6 +62,7 @@ function basename(path: string): string {
 
 export function friendlyVerb(name: string): string {
   const n = String(name || "").toLowerCase();
+  if (n === "stderr" || n === "stdout" || n === "agent_output" || n === "agent-output" || n === "agentoutput") return "Agent output";
   if (n.includes("read")) return "Read";
   if (n.includes("write")) return "Created";
   if (n.includes("edit")) return "Edited";
@@ -72,6 +75,7 @@ export function friendlyVerb(name: string): string {
 
 function glyphFor(verb: string, hasCommand: boolean): ToolGlyph {
   if (hasCommand || verb === "Ran") return "terminal";
+  if (verb === "Agent output") return "terminal";
   if (verb === "Edited") return "pencil";
   if (verb === "Created") return "create";
   if (verb === "Searched") return "search";
@@ -208,7 +212,10 @@ export function formatTool(name: string, input: unknown): ToolFormat {
   const path = pick(inp, ["path", "file", "filePath", "file_path", "pathname"]);
   const command = pick(inp, ["command", "cmd", "shell"]);
   const query = clip(pick(inp, ["query", "q", "pattern", "search"]), 120);
-  const title = command || n.includes("bash") || n.includes("shell") ? "Bash" : verb === "Tool" ? String(name || "Tool") : friendlyVerb(n);
+  const output = pick(inp, ["output", "stdout", "stderr", "message", "delta"]);
+  const stream = pick(inp, ["stream"]);
+  const isAgentOutput = verb === "Agent output";
+  const title = isAgentOutput ? "Agent output" : command || n.includes("bash") || n.includes("shell") ? "Bash" : verb === "Tool" ? String(name || "Tool") : friendlyVerb(n);
 
   let diffs: DiffHunk[] = [];
   let edits: number | undefined;
@@ -234,6 +241,8 @@ export function formatTool(name: string, input: unknown): ToolFormat {
     target: path ? basename(path) : undefined,
     command,
     query: query || undefined,
+    output,
+    stream,
     added,
     removed,
     diffs,
@@ -243,7 +252,7 @@ export function formatTool(name: string, input: unknown): ToolFormat {
 
 /** One-line label for a tool row: command, else path/target, else query. */
 export function toolRowLabel(f: ToolFormat): string {
-  return f.command || f.path || f.target || f.query || "";
+  return f.command || f.path || f.target || f.query || clip(f.output, 120) || "";
 }
 
 /** Plain-language summary of a batch of tools, e.g. "Read 2 files, ran a command". */
@@ -251,9 +260,11 @@ export function toolGroupSummary(tools: Array<{ name: string; input: unknown }>)
   let edited = 0;
   let ran = 0;
   let read = 0;
+  let output = 0;
   for (const t of tools) {
     const f = formatTool(t.name, t.input);
-    if (f.command) ran++;
+    if (f.verb === "Agent output") output++;
+    else if (f.command) ran++;
     else if (f.verb === "Edited" || f.verb === "Created" || f.diffs.length) edited++;
     else read++;
   }
@@ -262,6 +273,7 @@ export function toolGroupSummary(tools: Array<{ name: string; input: unknown }>)
   if (read) parts.push(`Read ${plural(read, "file", "files")}`);
   if (ran) parts.push(`ran ${plural(ran, "command", "commands")}`);
   if (edited) parts.push(`edited ${plural(edited, "file", "files")}`);
+  if (output) parts.push(output === 1 ? "agent output" : `${output} agent output streams`);
   if (!parts.length) return tools.length === 1 ? "1 tool call" : `${tools.length} tool calls`;
   // Capitalize the first fragment; join with commas.
   const joined = parts.join(", ");
