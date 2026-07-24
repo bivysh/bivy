@@ -132,12 +132,12 @@ async function main() {
 
   // Upgrade the account (dev-mode billing webhook fallback, no live Stripe
   // needed) and confirm relay access still works.
-  const webhook = await http("/billing/webhook", { accountId, plan: "individual" });
+  const webhook = await http("/billing/webhook", { accountId, plan: "pro" });
   expect(webhook.json?.received === true, "dev billing webhook applied the plan upgrade");
 
   const nodeTicket2 = (await http("/node/relay-ticket", {}, enrollmentToken)).json.ticket;
   const readyAfterUpgrade = await connectAndWaitForReady(`ws://localhost:${RELAY_PORT}/node?ticket=${nodeTicket2}`);
-  expect(readyAfterUpgrade, "node on the individual plan is allowed onto the relay");
+  expect(readyAfterUpgrade, "node on the pro plan is allowed onto the relay");
 
   console.log("\nAll relay entitlement checks passed.");
   cleanup(0);

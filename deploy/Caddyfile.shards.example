@@ -7,13 +7,36 @@
 # proxies each hostname to the matching container.
 
 app.bivy.sh {
-	reverse_proxy control-plane:4400
+	# Keep internal metrics/readiness endpoints off the public internet.
+	# /healthz (liveness) stays reachable for uptime checks. `handle` blocks are
+	# mutually exclusive and evaluated in source order, so the 403 reliably wins
+	# over the proxy (a bare `respond` + `reverse_proxy` would not — Caddy orders
+	# reverse_proxy ahead of respond).
+	@internal path /metrics* /readyz
+	handle @internal {
+		respond 403
+	}
+	handle {
+		reverse_proxy control-plane:4400
+	}
 }
 
 relay-0.bivy.sh {
-	reverse_proxy relay:4500
+	@internal path /metrics* /readyz
+	handle @internal {
+		respond 403
+	}
+	handle {
+		reverse_proxy relay:4500
+	}
 }
 
 relay-1.bivy.sh {
-	reverse_proxy relay-1:4500
+	@internal path /metrics* /readyz
+	handle @internal {
+		respond 403
+	}
+	handle {
+		reverse_proxy relay-1:4500
+	}
 }
