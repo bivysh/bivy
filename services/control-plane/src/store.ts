@@ -284,6 +284,13 @@ export interface WorkItem {
   // `label` alone drives routing; an ephemeral machine serves a one-off
   // `bivy/<slug>` label no differently than a persistent node would.
   ephemeral?: boolean;
+  // How many times this item has been REQUEUED after a claim went stale (the
+  // claiming node died — a crash, or an ephemeral machine terminated at its TTL —
+  // before completing or renewing its lease). 0/undefined on first enqueue. The
+  // lease sweep bumps it on each requeue and dead-letters the item (→ done) once
+  // it exceeds the retry cap, so a poison item can't loop forever. See
+  // `requeueExpiredWorkItems`.
+  attempts?: number;
 }
 export type WorkItemInput = {
   label?: string;
@@ -650,6 +657,25 @@ export interface MeshStore {
   // ran does not refund the run).
   countWorkRunsSince(accountId: string, sinceIso: string): Promise<number>;
   completeWorkItem(accountId: string, id: string): Promise<void>;
+  // Renew the lease on an item this node currently holds (status='claimed' and
+  // claimed_by_node_id = nodeId), stamping a fresh `claimedAt`. The running node
+  // calls this on an interval so a long job isn't mistaken for an abandoned claim
+  // by `requeueExpiredWorkItems`. Returns false when the node no longer holds the
+  // claim (the item was requeued/completed/deleted, or another node re-claimed it)
+  // — a signal the node has lost the lease and should stop.
+  heartbeatWorkItem(accountId: string, nodeId: string, id: string): Promise<boolean>;
+  // Lease sweep (control-plane background job, all accounts). An item that has been
+  // `claimed` since before `cutoffIso` without a heartbeat is treated as abandoned:
+  // the claiming node died between claim and complete (a crash, or — the case that
+  // makes this non-optional for ephemeral runners — a machine terminated at its TTL
+  // mid-run). Such items are RETURNED to `pending` (clearing claim + bumping
+  // `attempts`) so another node or a fresh machine can pick them up, EXCEPT those
+  // whose `attempts` already reached `maxAttempts`, which are DEAD-LETTERED (→ done)
+  // so a poison item can't be retried forever. Returns both sets for logging/metrics.
+  requeueExpiredWorkItems(
+    cutoffIso: string,
+    maxAttempts: number,
+  ): Promise<{ requeued: WorkItem[]; deadLettered: WorkItem[] }>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node
   // changes so already-queued work follows the new default. Returns the updated items.

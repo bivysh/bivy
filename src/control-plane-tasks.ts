@@ -22,6 +22,11 @@ export interface ControlPlaneTaskConfig {
   enrollmentToken: string;
   labels: string[]; // the labels this node serves, e.g. ["bivy", "bivy/laptop"]
   pollMs: number;
+  // How often to renew the lease on items this node is actively running, so the
+  // control plane's lease sweep doesn't mistake a long job for an abandoned claim
+  // and requeue it. Must be comfortably shorter than the server's WORK_LEASE_MS
+  // (default 120s); 30s tolerates a few missed renewals.
+  heartbeatMs: number;
 }
 
 export interface WorkItem {
@@ -74,6 +79,7 @@ export function resolveControlPlaneTaskConfig(
     enrollmentToken: relay.enrollmentToken,
     labels: labels.length ? labels : ["bivy"],
     pollMs: Math.max(Number(env.BIVY_GITHUB_POLL_MS) || 60_000, 10_000),
+    heartbeatMs: Math.max(Number(env.BIVY_GITHUB_HEARTBEAT_MS) || 30_000, 5_000),
   };
 }
 
@@ -97,12 +103,26 @@ export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promis
   return res.ok;
 }
 
+/** Renew the lease on an item we're running. Returns false when we've lost the
+ *  lease (item requeued/completed elsewhere) or the request failed. */
+export async function heartbeatWork(cfg: ControlPlaneTaskConfig, id: string): Promise<boolean> {
+  try {
+    const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/heartbeat`);
+    if (!res.ok) return false;
+    const data = (await res.json().catch(() => ({}))) as { held?: boolean };
+    return data.held !== false;
+  } catch {
+    return false;
+  }
+}
+
 export async function completeWork(cfg: ControlPlaneTaskConfig, id: string): Promise<void> {
   await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/complete`).catch(() => {});
 }
 
 export class ControlPlaneTaskPoller {
   private timer?: NodeJS.Timeout;
+  private heartbeatTimer?: NodeJS.Timeout;
   private inFlight = new Set<string>();
 
   constructor(
@@ -117,6 +137,10 @@ export class ControlPlaneTaskPoller {
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.cfg.pollMs);
     this.timer.unref?.();
+    // Renew leases on everything we're running so a long job isn't requeued out
+    // from under us by the control plane's lease sweep.
+    this.heartbeatTimer = setInterval(() => void this.beat(), this.cfg.heartbeatMs);
+    this.heartbeatTimer.unref?.();
     console.log(`[control-plane-tasks] watching hosted queue for labels [${this.cfg.labels.join(", ")}] (relay push + ${Math.round(this.cfg.pollMs / 1000)}s fallback poll)`);
   }
 
@@ -127,6 +151,17 @@ export class ControlPlaneTaskPoller {
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+  }
+
+  /** Renew the lease on each in-flight item. Best-effort: a lost lease is logged
+   *  (the run continues; the sweep already handed the item to someone else, so
+   *  duplicate suppression is the issue/PR layer's job) rather than aborted here. */
+  private async beat(): Promise<void> {
+    for (const id of this.inFlight) {
+      const held = await heartbeatWork(this.cfg, id);
+      if (!held) console.warn(`[control-plane-tasks] lost lease on item ${id} (still running locally)`);
+    }
   }
 
   private async tick(): Promise<void> {

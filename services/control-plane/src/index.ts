@@ -134,6 +134,17 @@ if (relayShardUrls.length > 1) {
 // TTL for a device-linking grant minted from the QR. Node-scoped and expiring;
 // default 30 days so durable single-node reconnect still works.
 const LINK_GRANT_TTL_MS = Number(process.env.LINK_GRANT_TTL_MS ?? 30 * 24 * 60 * 60_000);
+
+// Work-item lease. A claimed item whose node hasn't renewed its lease within
+// WORK_LEASE_MS is treated as abandoned (the node crashed, or an ephemeral runner
+// hit its TTL mid-run) and requeued by the sweep. Running nodes heartbeat at
+// roughly WORK_LEASE_MS/4, so the default tolerates a few missed renewals before
+// reclaiming. WORK_MAX_ATTEMPTS caps requeues before an item is dead-lettered so a
+// crash-looping ("poison") item can't be retried forever. Sweep cadence is
+// WORK_LEASE_MS/2 (clamped ≥ 15s). Set WORK_LEASE_MS=0 to disable the sweep.
+const WORK_LEASE_MS = Number(process.env.WORK_LEASE_MS ?? 2 * 60_000);
+const WORK_MAX_ATTEMPTS = Math.max(1, Number(process.env.WORK_MAX_ATTEMPTS ?? 3));
+const WORK_SWEEP_MS = Math.max(15_000, Math.floor(WORK_LEASE_MS / 2));
 function normalizePublicUrl(value: string): string {
   return value.replace(/\/$/, "");
 }
@@ -1690,6 +1701,16 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
   res.json({ ok: true });
 }));
 
+// Renew the lease on an item this node is actively running (see the lease sweep
+// below). A running node calls this on an interval so a long job isn't mistaken
+// for an abandoned claim. `held: false` means the node lost the lease (the item
+// was requeued/completed elsewhere) and should stop running it.
+app.post("/node/work/:id/heartbeat", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const held = await store.heartbeatWorkItem(node.accountId, node.id, String(req.params.id));
+  res.json({ ok: true, held });
+}));
+
 // The node mints a short-lived, node-scoped client grant to link a remote
 // device. Returned to the node UI, which packages it into a linking QR.
 app.post("/node/link-grant", requireNode, asyncHandler(async (req, res) => {
@@ -2051,8 +2072,38 @@ const server = app.listen(port, () => {
   console.log(`Control plane (${storeName}) listening on http://localhost:${port}`);
 });
 
+// Lease sweep: requeue work items whose claiming node went away without
+// completing (crash, or an ephemeral machine terminated at its TTL mid-run) so
+// the work isn't stranded in 'claimed' forever. The control plane can't comment
+// on the source issue (it holds no GitHub write credential), so silently losing
+// the item is the failure mode this closes. Disabled when WORK_LEASE_MS=0.
+let workSweepTimer: NodeJS.Timeout | undefined;
+async function sweepExpiredClaims(): Promise<void> {
+  try {
+    const cutoffIso = new Date(Date.now() - WORK_LEASE_MS).toISOString();
+    const { requeued, deadLettered } = await store.requeueExpiredWorkItems(cutoffIso, WORK_MAX_ATTEMPTS);
+    if (requeued.length) {
+      console.warn(`[work-lease] requeued ${requeued.length} item(s) whose lease expired: ${requeued.map((w) => w.id).join(", ")}`);
+      // Nudge relays so an online node picks the requeued work up promptly rather
+      // than waiting for its next poll.
+      for (const item of requeued) void notifyRelaysWorkAvailable(item.accountId, item);
+    }
+    if (deadLettered.length) {
+      console.warn(`[work-lease] dead-lettered ${deadLettered.length} item(s) after ${WORK_MAX_ATTEMPTS} attempts: ${deadLettered.map((w) => w.id).join(", ")}`);
+    }
+  } catch (error) {
+    console.warn("[work-lease] sweep failed:", error instanceof Error ? error.message : String(error));
+  }
+}
+if (WORK_LEASE_MS > 0) {
+  workSweepTimer = setInterval(() => void sweepExpiredClaims(), WORK_SWEEP_MS);
+  workSweepTimer.unref?.();
+  console.log(`[work-lease] sweeping abandoned claims every ${Math.round(WORK_SWEEP_MS / 1000)}s (lease ${Math.round(WORK_LEASE_MS / 1000)}s, ${WORK_MAX_ATTEMPTS} attempts)`);
+}
+
 async function shutdown() {
   server.close();
+  if (workSweepTimer) clearInterval(workSweepTimer);
   if ("close" in store && typeof store.close === "function") await store.close();
 }
 

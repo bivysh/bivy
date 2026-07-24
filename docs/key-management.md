@@ -9,7 +9,7 @@ Bivy's security boundary is that provider credentials stay on the node or in a v
 | GitHub repo/work-queue token | Bivy secret vault as `github.repo-token` | `cli.json` stores only `secret://github.repo-token`. |
 | Integration API keys | Bivy secret vault as `integration.<id>.api-key` | `integrations.json` stores only a secret reference for new connections. |
 | Integration OAuth token sets | Bivy secret vault as `integration.<id>.oauth` | Access/refresh token JSON is encrypted locally for new connections. |
-| Model provider credentials | Pi auth store at `.bivy/pi/auth.json` | Shared with runtimes by Bivy's credential adapter. This is still Pi-owned. |
+| Model provider credentials | Bivy credential vault, sealed at `.bivy/credentials/auth.enc` (AES-256-GCM) | Shared with runtimes by env injection. `.bivy/pi/auth.json` is a plaintext-`0600` projection materialized only for Pi's native TUI, not the source of truth. |
 | Relay enrollment/node config | Local `.bivy/*.json` files, mode `0600` where supported | Used for outbound relay auth and device pairing. |
 | Browser/PWA device keys | Browser storage/session storage depending on key | Do not treat the browser as a durable password manager. |
 
@@ -65,6 +65,6 @@ The `bivy` CLI resolves `secret://`, `op://`, and `env://` values before startin
 
 ## Known limitations
 
-- Model-provider credentials are still primarily Pi-owned in `.bivy/pi/auth.json`; Bivy can inject `op://`/`env://` values through process env, but Pi's own auth file has not been replaced by the Bivy vault.
+- Model-provider credentials live in the Bivy credential vault (`.bivy/credentials/auth.enc`), delivered to runtimes by env injection; `.bivy/pi/auth.json` is only a `0600` plaintext projection for Pi's native TUI. Bivy can also inject `op://`/`env://` values through process env.
 - The encrypted local vault protects against accidental plaintext sprawl, not against a fully compromised user account: the local wrapping key lives on the same machine.
 - OS keychain backends are not yet implemented. Prefer 1Password references when you need synced/managed secrets.

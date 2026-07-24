@@ -350,6 +350,11 @@ export class PostgresStore implements MeshStore {
       -- freshly-provisioned ephemeral server rather than an already-running
       -- node (issue #532). Display only; routing is entirely by the label column.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN;
+      -- Requeue attempts. A claim whose node dies (crash, or an ephemeral machine
+      -- terminated at TTL mid-run) is returned to 'pending' by the lease sweep,
+      -- bumping this; the item is dead-lettered once it exceeds the retry cap so a
+      -- poison item can't loop forever. See requeueExpiredWorkItems.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
 
       CREATE INDEX IF NOT EXISTS idx_nodes_account ON nodes(account_id);
       CREATE INDEX IF NOT EXISTS idx_nodes_token ON nodes(enrollment_token_hash);
@@ -364,6 +369,8 @@ export class PostgresStore implements MeshStore {
       -- status='pending' frees the key once the item is claimed/done, so a later
       -- re-label starts a fresh run rather than colliding forever.
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_collapse ON work_items(account_id, collapse_key) WHERE collapse_key IS NOT NULL AND status = 'pending';
+      -- The lease sweep scans claimed items by claim age across all accounts.
+      CREATE INDEX IF NOT EXISTS idx_work_items_claimed ON work_items(status, claimed_at) WHERE status = 'claimed';
     `);
   }
 
@@ -1267,6 +1274,47 @@ export class PostgresStore implements MeshStore {
     );
   }
 
+  async heartbeatWorkItem(accountId: string, nodeId: string, id: string): Promise<boolean> {
+    // Renew only if THIS node still holds the claim. If another node re-claimed a
+    // requeued item (or it was completed/deleted) the WHERE fails and we report the
+    // lost lease, so the caller stops running work it no longer owns.
+    const { rows } = await this.query(
+      `UPDATE work_items SET claimed_at = now()
+       WHERE id = $2 AND account_id = $1 AND status = 'claimed' AND claimed_by_node_id = $3
+       RETURNING id`,
+      [accountId, id, nodeId],
+    );
+    return rows.length > 0;
+  }
+
+  async requeueExpiredWorkItems(
+    cutoffIso: string,
+    maxAttempts: number,
+  ): Promise<{ requeued: WorkItem[]; deadLettered: WorkItem[] }> {
+    // Dead-letter first: items already at the retry cap whose lease expired are
+    // terminal (→ done). Doing this before the requeue pass means the same sweep
+    // never both requeues and dead-letters the same row.
+    const dead = await this.query(
+      `UPDATE work_items
+       SET status = 'done', completed_at = now()
+       WHERE status = 'claimed' AND claimed_at < $1 AND attempts >= $2
+       RETURNING *`,
+      [cutoffIso, maxAttempts],
+    );
+    // Requeue the rest: clear the claim (so it drops out of the run meter until
+    // re-claimed) and bump attempts. `claimed_at < $1` is the lease-expiry test —
+    // a live node renews `claimed_at` via heartbeatWorkItem, so only abandoned
+    // claims fall past the cutoff.
+    const requeued = await this.query(
+      `UPDATE work_items
+       SET status = 'pending', claimed_by_node_id = NULL, claimed_at = NULL, attempts = attempts + 1
+       WHERE status = 'claimed' AND claimed_at < $1 AND attempts < $2
+       RETURNING *`,
+      [cutoffIso, maxAttempts],
+    );
+    return { requeued: requeued.rows.map(mapWorkItem), deadLettered: dead.rows.map(mapWorkItem) };
+  }
+
   async deleteWorkItem(accountId: string, id: string): Promise<boolean> {
     const { rowCount } = await this.query(
       `DELETE FROM work_items WHERE id = $2 AND account_id = $1`,
@@ -1328,6 +1376,7 @@ function mapWorkItem(row: any): WorkItem {
     installationId: row.installation_id ?? undefined,
     appId: row.app_id ?? undefined,
     ephemeral: row.ephemeral ?? undefined,
+    attempts: row.attempts ?? undefined,
   };
 }
 

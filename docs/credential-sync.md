@@ -17,8 +17,8 @@ Purpose: let Bivy-native runtimes (Pi and compatible runtimes) use model API key
 
 Current model:
 
-- The node stores provider credentials in its local vault/Pi auth store.
-- When hosted model-auth sync is enabled, the node encrypts a model-auth vault snapshot locally before uploading it to the control plane.
+- The node stores provider credentials in its local vault (`.bivy/credentials/auth.enc`).
+- Whenever the node is enrolled with a control plane, it encrypts a model-auth vault snapshot locally before uploading it to the control plane. (There is no separate on/off toggle today: sync runs whenever a control-plane target is configured. A user-facing switch is a tracked follow-up.)
 - The control plane stores ciphertext plus node public-key wrapping metadata.
 - Another enrolled node requests a wrapped vault key; an existing node wraps the key to the requesting node public key.
 - Bivy Cloud should never receive plaintext model credentials.

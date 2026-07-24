@@ -321,6 +321,11 @@ describe("aws ProviderAdapter", () => {
     expect(params.get("ImageId")).toBe(AMI_ID);
     expect(params.get("InstanceType")).toBe("t3.medium");
     expect(params.get("InstanceInitiatedShutdownBehavior")).toBe("terminate");
+    // IMDSv2 is required and the hop limit pinned to 1 — the bootstrap user-data
+    // holds the enrollment token + room key, so metadata access must be hardened.
+    expect(params.get("MetadataOptions.HttpTokens")).toBe("required");
+    expect(params.get("MetadataOptions.HttpEndpoint")).toBe("enabled");
+    expect(params.get("MetadataOptions.HttpPutResponseHopLimit")).toBe("1");
     expect(params.get("TagSpecification.1.Tag.1.Key")).toBe("Name");
     expect(params.get("TagSpecification.1.Tag.2.Value")).toBe("ephemeral");
     // UserData must be base64-encoded, not sent as raw cloud-config text.

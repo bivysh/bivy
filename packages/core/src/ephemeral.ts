@@ -1285,6 +1285,16 @@ const aws: ProviderAdapter = {
         MaxCount: "1",
         UserData: b64(utf8.encode(userData)),
         InstanceInitiatedShutdownBehavior: "terminate",
+        // Require IMDSv2 (session-token) and pin the hop limit to 1. The bootstrap
+        // user-data carries the relay enrollment token + room key, so this closes
+        // the classic SSRF path to the instance metadata endpoint (an agent coaxed
+        // into fetching http://169.254.169.254/… can't read it without a PUT-minted
+        // token, and hop-limit 1 keeps any container/proxied request from reaching
+        // IMDS at all). Cloud-init on the host itself still reads user-data over
+        // IMDSv2 at boot, so provisioning is unaffected.
+        "MetadataOptions.HttpTokens": "required",
+        "MetadataOptions.HttpEndpoint": "enabled",
+        "MetadataOptions.HttpPutResponseHopLimit": "1",
         "TagSpecification.1.ResourceType": "instance",
         "TagSpecification.1.Tag.1.Key": "Name",
         "TagSpecification.1.Tag.1.Value": name,

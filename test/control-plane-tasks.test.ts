@@ -33,6 +33,7 @@ test("config: off unless enrolled AND issue pickup opted in", () => {
   assert.ok(cfg);
   assert.equal(cfg!.controlPlaneUrl, "https://cp"); // trailing slash trimmed
   assert.deepEqual(cfg!.labels, ["bivy"]);
+  assert.equal(cfg!.heartbeatMs, 30_000, "default lease heartbeat cadence");
 });
 
 test("config: per-node label is added to the served set", () => {
@@ -73,6 +74,7 @@ test("poller: claims then runs then completes; skips items lost to another node"
     enrollmentToken: "tok",
     labels: ["bivy"],
     pollMs: 60_000,
+    heartbeatMs: 30_000,
   };
   const pending: WorkItem[] = [
     { id: "w1", label: "bivy", source: "slack", status: "pending", title: "do A" },
@@ -111,6 +113,37 @@ test("poller: claims then runs then completes; skips items lost to another node"
   assert.ok(calls.includes("POST https://cp/node/work/w1/complete"));
   assert.ok(calls.includes("POST https://cp/node/work/w2/claim"));
   assert.ok(!calls.includes("POST https://cp/node/work/w2/complete"));
+});
+
+test("poller: renews the lease on an in-flight item while it runs", async () => {
+  const cfg: ControlPlaneTaskConfig = {
+    controlPlaneUrl: "https://cp",
+    enrollmentToken: "tok",
+    labels: ["bivy"],
+    pollMs: 60_000,
+    heartbeatMs: 30_000,
+  };
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: { method?: string }) => {
+    calls.push(`${init?.method ?? "GET"} ${url}`);
+    return { ok: true, json: async () => ({ held: true }) } as Response;
+  }) as typeof fetch;
+
+  // Gate the run so we can beat() while the item is provably in-flight, then let
+  // it finish — no timers, no wall-clock waiting.
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const poller = new ControlPlaneTaskPoller(cfg, async () => { await gate; });
+  try {
+    const item: WorkItem = { id: "w1", label: "bivy", source: "slack", status: "pending", title: "A" };
+    (poller as unknown as { inFlight: Set<string> }).inFlight.add(item.id);
+    await (poller as unknown as { beat: () => Promise<void> }).beat();
+    release();
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.ok(calls.includes("POST https://cp/node/work/w1/heartbeat"), "heartbeats the in-flight item");
 });
 
 for (const { name, fn } of tests) {

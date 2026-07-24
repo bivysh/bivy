@@ -209,6 +209,77 @@ await test("work queue: enqueue, list by label, claim (atomic), complete", async
   await store.completeWorkItem(account.id, a.id);
 });
 
+await test("work queue: an expired lease requeues the item (node died mid-run)", async () => {
+  const store = await makeStore();
+  const account = await store.findOrCreateAccount("lease@example.com");
+  const { node } = await store.enrollNode(account.id, "node-l", "Laptop");
+
+  const a = await store.enqueueWorkItem(account.id, { source: "slack", title: "A" });
+  const claimed = await store.claimWorkItem(account.id, node.id, a.id);
+  assert.equal(claimed?.status, "claimed");
+  // No pending items while it's claimed.
+  assert.equal((await store.listPendingWorkItems(account.id, ["bivy"])).length, 0);
+
+  // A cutoff in the future treats the just-made claim as expired (the node never
+  // renewed its lease — it crashed / hit its TTL). The item returns to pending.
+  const future = new Date(Date.now() + 60_000).toISOString();
+  const { requeued, deadLettered } = await store.requeueExpiredWorkItems(future, 3);
+  assert.deepEqual(requeued.map((w) => w.id), [a.id]);
+  assert.equal(deadLettered.length, 0);
+  assert.equal(requeued[0].attempts, 1, "attempts bumped on requeue");
+
+  // Requeued → claimable again by any node.
+  const pending = await store.listPendingWorkItems(account.id, ["bivy"]);
+  assert.deepEqual(pending.map((w) => w.id), [a.id]);
+  assert.equal(pending[0].claimedByNodeId, undefined, "claim cleared on requeue");
+  assert.ok(await store.claimWorkItem(account.id, node.id, a.id), "re-claim succeeds");
+});
+
+await test("work queue: a renewed lease is NOT requeued (long job kept alive)", async () => {
+  const store = await makeStore();
+  const account = await store.findOrCreateAccount("hb@example.com");
+  const { node } = await store.enrollNode(account.id, "node-h", "Laptop");
+
+  const a = await store.enqueueWorkItem(account.id, { source: "slack", title: "A" });
+  await store.claimWorkItem(account.id, node.id, a.id);
+
+  // The holder renews; a different node id cannot (guards a requeued item that a
+  // second node re-claimed from being renewed by the original holder).
+  assert.equal(await store.heartbeatWorkItem(account.id, node.id, a.id), true, "holder renews");
+  assert.equal(await store.heartbeatWorkItem(account.id, "some-other-node", a.id), false, "non-holder cannot renew");
+
+  // Sweep with a cutoff in the PAST: the freshly-renewed claim is newer than the
+  // cutoff, so it survives.
+  const past = new Date(Date.now() - 1_000).toISOString();
+  const { requeued } = await store.requeueExpiredWorkItems(past, 3);
+  assert.equal(requeued.length, 0, "live lease is left alone");
+  assert.equal((await store.listPendingWorkItems(account.id, ["bivy"])).length, 0);
+});
+
+await test("work queue: a poison item is dead-lettered after the attempt cap", async () => {
+  const store = await makeStore();
+  const account = await store.findOrCreateAccount("poison@example.com");
+  const { node } = await store.enrollNode(account.id, "node-p", "Laptop");
+  const a = await store.enqueueWorkItem(account.id, { source: "slack", title: "loops forever" });
+  const future = () => new Date(Date.now() + 60_000).toISOString();
+
+  // Cap of 2: two requeues (attempts 1, then 2), then dead-letter.
+  await store.claimWorkItem(account.id, node.id, a.id);
+  assert.equal((await store.requeueExpiredWorkItems(future(), 2)).requeued[0].attempts, 1);
+  await store.claimWorkItem(account.id, node.id, a.id);
+  assert.equal((await store.requeueExpiredWorkItems(future(), 2)).requeued[0].attempts, 2);
+
+  await store.claimWorkItem(account.id, node.id, a.id);
+  const sweep = await store.requeueExpiredWorkItems(future(), 2);
+  assert.equal(sweep.requeued.length, 0, "no more requeues past the cap");
+  assert.deepEqual(sweep.deadLettered.map((w) => w.id), [a.id]);
+
+  // Terminal: gone from pending, marked done, never retried again.
+  assert.equal((await store.listPendingWorkItems(account.id, ["bivy"])).length, 0);
+  const done = (await store.listWorkItems(account.id)).find((w) => w.id === a.id);
+  assert.equal(done?.status, "done");
+});
+
 await test("work queue: items are account-scoped; cross-account claim is denied", async () => {
   const store = await makeStore();
   const acct1 = await store.findOrCreateAccount("one@example.com");
