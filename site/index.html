@@ -173,7 +173,32 @@
     }
     section > .wrap > p, .prose p { color: var(--ink-2); }
 
-    /* ---------- feature list ---------- */
+    /* ---------- feature pillars (the 3 headline features) ---------- */
+    .pillars {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 22px;
+      margin-top: 34px;
+    }
+    .pillar {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 28px 26px 30px;
+    }
+    .pillar .eyebrow {
+      font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--accent); margin: 0 0 12px;
+    }
+    .pillar h3 { font-size: 19px; margin: 0 0 10px; font-weight: 600; }
+    .pillar p { margin: 0; font-size: 15px; color: var(--ink-2); line-height: 1.6; }
+    .pillar code { font-size: 0.88em; background: var(--sunken); padding: 1px 5px; border-radius: 3px; }
+
+    /* ---------- feature list (the rest, kept compact so they don't compete) ---------- */
+    .features-label {
+      font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--faint); font-weight: 500; margin: 46px 0 18px;
+    }
     .features {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
@@ -182,7 +207,6 @@
       border: 1px solid var(--line-2);
       border-radius: 8px;
       overflow: hidden;
-      margin-top: 34px;
     }
     .feature { background: var(--bg); padding: 24px 24px 26px; }
     .feature h3 { font-size: 16px; margin: 0 0 8px; font-weight: 600; }
@@ -278,14 +302,11 @@
     }
     .plan { background: var(--bg); padding: 26px 24px 28px; }
     .plan h3 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
-    .plan .price { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; margin: 10px 0 4px; }
+    .plan .price { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; margin: 10px 0 18px; }
     .plan .price span { font-size: 14px; font-weight: 400; color: var(--muted); letter-spacing: 0; }
-    .plan .who { font-size: 14px; color: var(--muted); margin: 0 0 18px; min-height: 42px; }
     .plan ul { list-style: none; margin: 0; padding: 0; font-size: 14.5px; color: var(--ink-2); }
     .plan li { padding: 5px 0 5px 17px; position: relative; }
     .plan li::before { content: "—"; position: absolute; left: 0; color: var(--faint); }
-    .plan li.soon { padding-left: 0; color: var(--muted); font-style: italic; }
-    .plan li.soon::before { content: none; }
     .plan.featured { background: var(--panel); box-shadow: inset 0 0 0 1.5px var(--accent); }
     .plan .badge {
       display: inline-block; font-size: 11px; font-weight: 600;
@@ -386,6 +407,15 @@
     }
     .app-list code, .app-list kbd { font-size: 0.88em; background: var(--sunken); padding: 1px 5px; border-radius: 3px; }
     .app-list kbd { border: 1px solid var(--line); }
+    .app-list li.promo {
+      border-left: 2px solid var(--accent);
+      padding-left: 15px;
+    }
+    .app-list li.promo .eyebrow {
+      display: block; font-size: 11.5px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--accent); margin: 0 0 4px;
+    }
   </style>
 </head>
 <body>
@@ -464,19 +494,33 @@
       what they individually lack: durability, remote access, approvals, and a consistent
       way to move between them.</p>
 
-      <div class="features">
-        <div class="feature">
-          <h3>Ten agents, one interface</h3>
+      <div class="pillars">
+        <div class="pillar">
+          <p class="eyebrow">Any local agent</p>
+          <h3>Ten agents supported today — and anything else you point it at</h3>
           <p>Pi, Claude Code, Codex, OpenCode, Gemini CLI, Qwen Code, Goose, Aider, Cline
           and Crush, each driven through its native CLI. Bivy installs the ones you pick.
           Any other command works via <code>bivy run -- ./your-agent</code>.</p>
         </div>
-        <div class="feature">
+        <div class="pillar">
+          <p class="eyebrow">Durability</p>
           <h3>Sessions that survive</h3>
           <p>Every session has a durable append-only event log and its own git worktree.
           Detach from your terminal, restart the daemon, reconnect from a phone — the same
           session is still there, transcript and diffs intact.</p>
         </div>
+        <div class="pillar">
+          <p class="eyebrow">Control</p>
+          <h3>Approvals wherever you are</h3>
+          <p>Agents run unattended by default. Catastrophic commands and writes outside
+          the workspace are blocked in every mode, and force-push, publish, deploy and
+          sudo always pause. Switch to <code>risky</code> or <code>always</code> to be
+          asked about more, and approve from terminal, browser, or phone.</p>
+        </div>
+      </div>
+
+      <p class="features-label">Also included</p>
+      <div class="features">
         <div class="feature">
           <h3>No ports, no tunnel, no VPN</h3>
           <p>Your node dials out to the relay, so nothing listens for inbound connections
@@ -487,13 +531,6 @@
           <h3>Push notifications</h3>
           <p>Get pinged when an agent finishes, needs an approval, or hits an error, so you
           can kick something off and walk away instead of babysitting the terminal.</p>
-        </div>
-        <div class="feature">
-          <h3>Approvals wherever you are</h3>
-          <p>Agents run unattended by default. Catastrophic commands and writes outside
-          the workspace are blocked in every mode, and force-push, publish, deploy and
-          sudo always pause. Switch to <code>risky</code> or <code>always</code> to be
-          asked about more, and approve from terminal, browser, or phone.</p>
         </div>
         <div class="feature">
           <h3>Switch agent or model mid-session</h3>
@@ -513,10 +550,11 @@
           can pick up from your phone.</p>
         </div>
         <div class="feature">
-          <h3>Your credentials, your vault</h3>
+          <h3>Your credentials, synced and vaulted</h3>
           <p>An encrypted local vault, plus <code>env://</code> and <code>op://</code>
-          (1Password) references resolved at start. Model keys and GitHub tokens stay on
-          the node.</p>
+          (1Password) references resolved at start. Bivy-managed provider credentials sync
+          end-to-end across every node you own; agent-native CLI logins (Claude Code,
+          Codex, Gemini CLI) may need a one-time sign-in per node.</p>
         </div>
         <div class="feature">
           <h3>Any model endpoint</h3>
@@ -565,6 +603,12 @@
             One list across every node you own. A session you started with
             <code>bivy run</code> in a terminal is the same session here — open it and keep going.
           </li>
+          <li class="promo">
+            <span class="eyebrow">Only in Bivy</span>
+            <b>Change agent, model, or machine mid-run</b>
+            Swap Claude Code for Codex, move to a bigger model, or fork the whole session
+            onto another node — transcript and uncommitted work included.
+          </li>
           <li>
             <b>See the work, not a summary</b>
             Every tool call, command, and file edit, with the diff attached. Expand
@@ -597,11 +641,6 @@
             Dictate a prompt instead of thumb-typing it, attach a screenshot straight from
             your camera roll, and use the agent's own slash commands with autocomplete. A
             half-written message survives a reload or a jump to another session.
-          </li>
-          <li>
-            <b>Change agent, model, or machine mid-run</b>
-            Swap Claude Code for Codex, move to a bigger model, or fork the whole session
-            onto another node — transcript and uncommitted work included.
           </li>
           <li>
             <b>Know what it's costing</b>
@@ -675,19 +714,13 @@
     <div class="wrap">
       <p class="kicker">Pricing</p>
       <h2>We charge for the remote layer, never for your tokens.</h2>
-      <p class="prose">
-        You bring your own providers, keys, and machines, and you pay those bills directly
-        with no markup from us. What we sell is the hosted relay, the app, and push. Running
-        Bivy locally — and self-hosting the whole thing — stays free.
-      </p>
 
       <div class="plans">
         <div class="plan">
           <h3>Free</h3>
           <div class="price">$0</div>
-          <p class="who">The whole product, capped at 10 runs a week. Not a trial.</p>
           <ul>
-            <li>All ten agents, plus your own</li>
+            <li>Any local agent — 10 supported, plus your own</li>
             <li>Durable sessions and worktrees</li>
             <li>Approvals and sandbox tiers</li>
             <li>Unlimited relay-connected nodes</li>
@@ -705,7 +738,6 @@
           <span class="badge">Most popular</span>
           <h3>Pro</h3>
           <div class="price">$15 <span>/ month</span></div>
-          <p class="who">No run cap, and a unified view across every machine.</p>
           <ul>
             <li>Everything in Free</li>
             <li>Unlimited runs — no weekly cap</li>
@@ -718,11 +750,7 @@
         </div>
         <div class="plan">
           <h3>Team</h3>
-          <div class="price">Soon</div>
-          <p class="who">Shared nodes, roles, and audit for a whole team.</p>
-          <ul>
-            <li class="soon">Coming soon…</li>
-          </ul>
+          <div class="price">Coming later</div>
           <div class="cta-row">
             <a href="./contact.html" class="btn btn-ghost btn-block">Get early access</a>
           </div>
@@ -932,8 +960,7 @@
   <!-- FAQ -->
   <section>
     <div class="wrap">
-      <p class="kicker">Questions</p>
-      <h2>Answered directly.</h2>
+      <h2>FAQ</h2>
       <div class="faq">
         <details open>
           <summary>Does my code ever leave my machine?</summary>
