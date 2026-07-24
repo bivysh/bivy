@@ -634,11 +634,29 @@ button.action-sheet-item:last-child { border-bottom: 0; }
    draft (.composer-lead) and the issue/PR context pill on an active session
    (.composer-gh). .composer-gh collapses out of flow when there's no context. */
 .composer-gh, .composer-lead { display: flex; padding: 8px 10px 0; }
+/* The GitHub band also carries the "/" slash-command pill on its right edge, so
+   center the two vertically and keep a gap when both are present. */
+.composer-gh { align-items: center; gap: 6px; }
 /* The draft lead row carries more than one pick (repo + sandbox), so space them
    and let them wrap on a narrow phone instead of squashing. */
 .composer-lead { gap: 6px; flex-wrap: wrap; }
 .composer-gh:empty { display: none; }
 .pill-gh { flex: none; }
+
+/* "/" slash-command pill: opens the composer's command menu. `margin-left: auto`
+   parks it on the right edge of the band (top-right over the composer) whether or
+   not a GitHub pill shares the row. Sized/round like the GitHub pill for a matched
+   set; the glyph picks up the accent so it reads as an action. */
+.slash-pill {
+  margin-left: auto; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--accent);
+  border-radius: 999px;
+}
+.slash-pill:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-3); }
+.slash-pill:disabled { opacity: 0.5; cursor: default; }
+.slash-pill .slash-glyph { display: block; }
 
 /* ---- Composer ---- */
 .composer {

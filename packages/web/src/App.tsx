@@ -379,6 +379,22 @@ export function App() {
 
         <div className="composer-gh">
           <GithubPill gh={state.github} />
+          {/* Slash-command pill, pushed to the right so it sits top-right over
+              the composer on the same band as the GitHub context. Tapping it
+              (re)initializes a closed session so its commands can be fetched,
+              then opens the composer's "/" menu. */}
+          <button
+            type="button"
+            className="slash-pill"
+            onClick={() => controller.openSlashCommands()}
+            disabled={!canCompose}
+            title="Slash commands"
+            aria-label="Slash commands"
+          >
+            <svg className="slash-glyph" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+              <path d="M11 3 5 13" />
+            </svg>
+          </button>
         </div>
 
         <Composer
