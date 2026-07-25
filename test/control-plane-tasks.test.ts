@@ -17,6 +17,16 @@ function test(name: string, fn: () => Promise<void> | void) {
   tests.push({ name, fn });
 }
 
+/** Poll `cond` until it's true (or throw after a timeout) — used to await async
+ *  work that isn't tied to a single promise (e.g. a fire-and-forget task pool). */
+async function waitFor(cond: () => boolean, { tries = 200, intervalMs = 5 } = {}): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    if (cond()) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  if (!cond()) throw new Error("waitFor: condition never became true");
+}
+
 test("config: off unless enrolled AND issue pickup opted in", () => {
   // Not enrolled → off.
   assert.equal(resolveControlPlaneTaskConfig(undefined, {}), null);
@@ -111,6 +121,72 @@ test("poller: claims then runs then completes; skips items lost to another node"
   assert.ok(calls.includes("POST https://cp/node/work/w1/complete"));
   assert.ok(calls.includes("POST https://cp/node/work/w2/claim"));
   assert.ok(!calls.includes("POST https://cp/node/work/w2/complete"));
+});
+
+// ---------------------------------------------------------------------------
+// Items within a single tick must run CONCURRENTLY up to the cap (#116),
+// mirroring the same fix in github-tasks.ts's GitHubTaskPoller. A prior
+// version awaited each item's full run before even claiming the next one, so
+// the concurrency cap was never really exercised within a tick.
+// ---------------------------------------------------------------------------
+test("poller: runs up to the concurrency cap in parallel, not one at a time", async () => {
+  const cfg: ControlPlaneTaskConfig = {
+    controlPlaneUrl: "https://cp",
+    enrollmentToken: "tok",
+    labels: ["bivy"],
+    pollMs: 60_000,
+  };
+  const pending: WorkItem[] = [
+    { id: "w1", label: "bivy", source: "slack", status: "pending", title: "do A" },
+    { id: "w2", label: "bivy", source: "slack", status: "pending", title: "do B" },
+    { id: "w3", label: "bivy", source: "slack", status: "pending", title: "do C" },
+  ];
+  const claimed: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: { method?: string }) => {
+    const method = init?.method ?? "GET";
+    if (url.includes("/node/work?")) return { ok: true, json: async () => ({ items: pending }) } as Response;
+    if (url.includes("/claim")) {
+      const m = /\/node\/work\/([^/]+)\/claim$/.exec(url);
+      if (method === "POST" && m) claimed.push(m[1]);
+      return { ok: true, json: async () => ({}) } as Response;
+    }
+    return { ok: true, json: async () => ({}) } as Response; // complete
+  }) as typeof fetch;
+
+  let active = 0;
+  let maxActive = 0;
+  const started: string[] = [];
+  const release = new Map<string, () => void>();
+  const poller = new ControlPlaneTaskPoller(
+    cfg,
+    async (item) => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      started.push(item.id);
+      await new Promise<void>((resolve) => release.set(item.id, resolve));
+      active--;
+    },
+    () => 2, // cap of 2 — the 3rd item must wait for a later tick
+  );
+
+  try {
+    const tickPromise = (poller as unknown as { tick: () => Promise<void> }).tick();
+    // Wait for both capped-in tasks to reach their "await release" point
+    // before asserting — how many microtask hops that takes depends on the
+    // stubbed fetch chain, so poll rather than guessing a fixed flush count.
+    await waitFor(() => started.length >= 2);
+
+    assert.deepEqual([...started].sort(), ["w1", "w2"], "only the first 2 (the cap) are claimed/started this tick");
+    assert.equal(maxActive, 2, "both ran concurrently — not one fully finishing before the next starts");
+    assert.deepEqual(claimed.sort(), ["w1", "w2"], "item w3 is left unclaimed for a later tick");
+
+    release.get("w1")!();
+    release.get("w2")!();
+    await tickPromise;
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 for (const { name, fn } of tests) {

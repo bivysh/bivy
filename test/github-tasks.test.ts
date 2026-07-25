@@ -9,6 +9,7 @@ import {
   parseIssue,
   parseRepoSlug,
   selectActionableIssues,
+  GitHubTaskPoller,
   buildTaskPrompt,
   DEFAULT_ISSUE_INSTRUCTIONS,
   ensureLabel,
@@ -86,6 +87,16 @@ function stubFetch(status: number | ((url: string) => number)) {
   return { calls, restore: () => { globalThis.fetch = original; } };
 }
 
+/** Poll `cond` until it's true (or throw after a timeout) — used to await async
+ *  work that isn't tied to a single promise (e.g. a fire-and-forget task pool). */
+async function waitFor(cond: () => boolean, { tries = 200, intervalMs = 5 } = {}): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    if (cond()) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  if (!cond()) throw new Error("waitFor: condition never became true");
+}
+
 /** Like stubFetch but lets a test control the JSON body returned by fetch. */
 function stubFetchJson(status: number, body: unknown) {
   const calls: Array<{ url: string }> = [];
@@ -147,6 +158,66 @@ check("selectActionableIssues: drops claimed and invalid", () => {
   ];
   const out = selectActionableIssues(issues, "bivy:in-progress");
   assert.deepEqual(out.map((i) => i.number), [1]);
+});
+
+// ---------------------------------------------------------------------------
+// GitHubTaskPoller — issues within a single tick must run CONCURRENTLY up to
+// the cap (#116). A prior version awaited each issue's full run before even
+// claiming the next one, so the concurrency cap was never really exercised
+// within a tick — issues ran one at a time regardless of `max`.
+// ---------------------------------------------------------------------------
+checkAsync("GitHubTaskPoller.tick: runs up to the concurrency cap in parallel, not one at a time", async () => {
+  const issuesPayload = [
+    { number: 1, title: "A", body: "", html_url: "", labels: [{ name: "bivy/laptop" }] },
+    { number: 2, title: "B", body: "", html_url: "", labels: [{ name: "bivy/laptop" }] },
+    { number: 3, title: "C", body: "", html_url: "", labels: [{ name: "bivy/laptop" }] },
+  ];
+  const claimed: number[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: { method?: string; body?: string }) => {
+    const method = init?.method ?? "GET";
+    if (method === "GET" && url.includes("/issues?")) {
+      return { ok: true, json: async () => issuesPayload } as Response;
+    }
+    // addLabel: POST .../issues/<n>/labels
+    const m = /\/issues\/(\d+)\/labels$/.exec(url);
+    if (method === "POST" && m) claimed.push(Number(m[1]));
+    return { ok: true, json: async () => ({}) } as Response;
+  }) as typeof fetch;
+
+  let active = 0;
+  let maxActive = 0;
+  const started: number[] = [];
+  const release = new Map<number, () => void>();
+  const poller = new GitHubTaskPoller(
+    labelCfg,
+    async (issue) => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      started.push(issue.number);
+      await new Promise<void>((resolve) => release.set(issue.number, resolve));
+      active--;
+    },
+    () => 2, // cap of 2 — the 3rd actionable issue must wait for a later tick
+  );
+
+  try {
+    const tickPromise = (poller as unknown as { tick: () => Promise<void> }).tick();
+    // Wait for both capped-in tasks to reach their "await release" point
+    // before asserting — how many microtask hops that takes depends on the
+    // stubbed fetch chain, so poll rather than guessing a fixed flush count.
+    await waitFor(() => started.length >= 2);
+
+    assert.deepEqual([...started].sort(), [1, 2], "only the first 2 (the cap) are claimed/started this tick");
+    assert.equal(maxActive, 2, "both ran concurrently — not one fully finishing before the next starts");
+    assert.deepEqual(claimed.sort(), [1, 2], "issue #3 is left unclaimed for a later tick");
+
+    release.get(1)!();
+    release.get(2)!();
+    await tickPromise;
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 check("buildTaskPrompt: includes number, title, body, and instructs the agent to open its own PR", () => {
