@@ -473,6 +473,30 @@ function NotificationsPanel() {
 }
 
 // ---- Providers / OAuth ----
+
+/** Human label for a node, falling back to its id. */
+function nodeLabel(nodes: AccountNode[], nodeId: string | null): string {
+  if (!nodeId) return "this node";
+  return nodes.find((n) => n.id === nodeId)?.name || nodeId;
+}
+
+/**
+ * One-line summary of a node's OAuth sign-ins, derived from the plaintext
+ * per-node provider summary (`AccountNode.providers`) the control plane already
+ * holds — so we can describe every node's login state without connecting to it
+ * (see docs/credential-sync.md, pushProviderSummaryToControlPlane in
+ * src/server.ts). Only OAuth logins are summarized there; API keys still need a
+ * live connection to that node, which the switcher makes one tap away.
+ */
+function nodeProviderSummary(n: AccountNode): { text: string; expired: boolean } {
+  const provs = n.providers ?? [];
+  const expired = provs.filter((p) => typeof p.expiresAt === "number" && p.expiresAt < Date.now());
+  if (provs.length === 0) return { text: "No sign-ins reported", expired: false };
+  const parts = [`${provs.length} sign-in${provs.length === 1 ? "" : "s"}`];
+  if (expired.length) parts.push(`${expired.length} expired`);
+  return { text: parts.join(" · "), expired: expired.length > 0 };
+}
+
 function ProvidersPanel({ state }: { state: AppState }) {
   // Holds just the id, not a snapshot of the ProviderInfo object: `managing`
   // below is re-derived from live `state.providers` every render instead, so
@@ -481,13 +505,46 @@ function ProvidersPanel({ state }: { state: AppState }) {
   // "Connected" chip) instead of the view staying frozen on the object as it
   // looked when the user first tapped in, unrelated to whether the save
   // actually landed.
+  // In hosted (relay) mode the account can have several nodes, each with its
+  // own provider logins/keys. `state.providers` only ever reflects the node the
+  // app is currently connected to, so managing another node's keys used to mean
+  // switching nodes somewhere else first. The node switcher below lets the user
+  // pick which node's keys this panel shows and edits, without leaving Settings.
+  const hosted = !controller.direct;
+  const nodes = state.nodes;
+  const currentNodeId = state.currentNodeId;
+  const showNodePicker = hosted && nodes.length > 1;
   const [managingId, setManagingId] = useState<string | null>(null);
+  const [switchingTo, setSwitchingTo] = useState<string | null>(null);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   useEffect(() => {
     controller.listProviders();
-  }, []);
+    // Pull the node list (with each node's plaintext OAuth summary) so the
+    // switcher can describe every node's login state up front.
+    if (hosted) void controller.refreshNodes();
+  }, [hosted]);
+  // Switching node reconnects the transport to a different daemon, so the
+  // provider list open before the switch belongs to the old node — drop back to
+  // the list rather than leaving a stale provider's detail on screen.
+  useEffect(() => {
+    setManagingId(null);
+  }, [currentNodeId]);
+
+  const pickNode = (id: string) => {
+    if (id === currentNodeId || switchingTo) return;
+    setManagingId(null);
+    setSwitchingTo(id);
+    // connectToNode switches the transport, waits for the node to come online,
+    // then re-lists its providers — so `state.providers` ends up scoped to the
+    // picked node with no extra plumbing here.
+    controller
+      .connectToNode(id)
+      .catch(() => {})
+      .finally(() => setSwitchingTo(null));
+  };
+
   const managing = managingId ? state.providers.find((p) => p.id === managingId) ?? null : null;
   useEffect(() => {
     if (managing?.configured) controller.getProviderAuth(managing.id);
@@ -504,6 +561,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
           ‹ All providers
         </button>
         <h3>{managing.name || managing.id}</h3>
+        {showNodePicker && <p className="muted small">On node {nodeLabel(nodes, currentNodeId)}.</p>}
         {confirm && (
           <ConfirmDialog
             title={confirm.title}
@@ -590,17 +648,59 @@ function ProvidersPanel({ state }: { state: AppState }) {
   }
 
   return (
-    <div className="picker-list">
-      {state.providers.length === 0 && <div className="picker-empty">No providers reported.</div>}
-      {state.providers.map((p) => (
-        <PickerItem
-          key={p.id}
-          title={p.name || p.id}
-          meta={p.configured ? (p.kind === "oauth" ? "OAuth token" : `API key${p.source ? ` · ${p.source}` : ""}`) : "Not connected"}
-          right={p.configured ? <span className="chip ok">Connected</span> : undefined}
-          onClick={() => setManagingId(p.id)}
-        />
-      ))}
+    <div className="settings-form">
+      {showNodePicker && (
+        <>
+          <p className="muted settings-intro">
+            Keys &amp; OAuth are stored on each node. Pick a node to view and manage its sign-ins — you don't
+            need an open session on it.
+          </p>
+          <label className="field-label">Node</label>
+          <div className="picker-list">
+            {nodes.map((n) => {
+              const summary = nodeProviderSummary(n);
+              const active = n.id === currentNodeId;
+              const pending = n.id === switchingTo;
+              return (
+                <PickerItem
+                  key={n.id}
+                  active={active}
+                  disabled={Boolean(switchingTo)}
+                  title={n.name || n.id}
+                  meta={`${n.online ? "Online" : "Offline"} · ${summary.text}`}
+                  right={
+                    pending ? (
+                      <span className="chip">Connecting…</span>
+                    ) : active ? (
+                      <span className="chip ok">Managing</span>
+                    ) : summary.expired ? (
+                      <span className="chip warn">Expired</span>
+                    ) : undefined
+                  }
+                  onClick={() => pickNode(n.id)}
+                />
+              );
+            })}
+          </div>
+          <label className="field-label">Keys &amp; OAuth on {nodeLabel(nodes, currentNodeId)}</label>
+        </>
+      )}
+      {switchingTo ? (
+        <p className="muted">Connecting to {nodeLabel(nodes, switchingTo)}…</p>
+      ) : (
+        <div className="picker-list">
+          {state.providers.length === 0 && <div className="picker-empty">No providers reported.</div>}
+          {state.providers.map((p) => (
+            <PickerItem
+              key={p.id}
+              title={p.name || p.id}
+              meta={p.configured ? (p.kind === "oauth" ? "OAuth token" : `API key${p.source ? ` · ${p.source}` : ""}`) : "Not connected"}
+              right={p.configured ? <span className="chip ok">Connected</span> : undefined}
+              onClick={() => setManagingId(p.id)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
