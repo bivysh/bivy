@@ -5,17 +5,6 @@ import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { EphemeralSheet } from "./Ephemeral.js";
 import { AddNodeSheet } from "./AddNodeSheet.js";
-import { NodeReconnectSheet } from "./NodeReconnectSheet.js";
-
-/** A node's provider connection chip: green when the stored OAuth token is
- *  still valid, amber when the credential exists but has expired. Providers
- *  never configured on that node aren't in `n.providers` at all (see
- *  pushProviderSummaryToControlPlane in src/server.ts), so there's nothing to
- *  render for them — this only ever shows providers the node has actually
- *  connected at some point. */
-function providerChipState(expiresAt?: number): "ok" | "warn" {
-  return typeof expiresAt === "number" && expiresAt < Date.now() ? "warn" : "ok";
-}
 
 /**
  * Header control (relay mode): shows the current node and a menu to switch nodes,
@@ -27,7 +16,6 @@ export function NodeSwitcher() {
   const [open, setOpen] = useState(false);
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
-  const [reconnectTarget, setReconnectTarget] = useState<{ nodeId: string; providerId: string; nodeName: string } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   // A transient connection blip (reconnecting) or the very first connect used to
   // drop a full-width "Reconnecting…" banner into the layout, shoving the page
@@ -103,25 +91,6 @@ export function NodeSwitcher() {
                 <span className="node-menu-name">{n.name || n.id}</span>
                 {n.id === currentNodeId && <span className="node-menu-check">✓</span>}
               </button>
-              {(n.providers ?? []).map((p) => {
-                const chipState = providerChipState(p.expiresAt);
-                return (
-                  <button
-                    key={p.id}
-                    className={`chip node-provider-chip${chipState === "ok" ? " ok" : " warn"}`}
-                    title={chipState === "warn" ? `${p.name || p.id} login expired — reconnect` : `${p.name || p.id} connected`}
-                    aria-label={`Reconnect ${p.name || p.id} on ${n.name || n.id}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setOpen(false);
-                      setReconnectTarget({ nodeId: n.id, providerId: p.id, nodeName: n.name || n.id });
-                    }}
-                  >
-                    {p.name || p.id}
-                    {chipState === "warn" ? " · expired ↻" : ""}
-                  </button>
-                );
-              })}
             </div>
           ))}
           <div className="node-menu-sep" />
@@ -155,14 +124,6 @@ export function NodeSwitcher() {
       )}
       {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} />}
       {addNodeOpen && <AddNodeSheet onClose={() => setAddNodeOpen(false)} />}
-      {reconnectTarget && (
-        <NodeReconnectSheet
-          nodeId={reconnectTarget.nodeId}
-          providerId={reconnectTarget.providerId}
-          nodeName={reconnectTarget.nodeName}
-          onClose={() => setReconnectTarget(null)}
-        />
-      )}
     </div>
   );
 }
