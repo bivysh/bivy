@@ -35,6 +35,7 @@ export function SessionMenu({
   prs,
   collapsed,
   onToggleCollapsed,
+  onContinueInTerminal,
 }: {
   sessionId: string;
   name: string;
@@ -43,6 +44,10 @@ export function SessionMenu({
   /** Focus view: hide interim messages and tool use, leaving the conversation. */
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  /** "Continue in terminal": hand this session to the runtime's interactive TUI.
+   *  Undefined (item hidden) when the runtime lacks `interactiveTui` or the node
+   *  is offline — the reverse of the terminal's "continue in chat". */
+  onContinueInTerminal?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -164,6 +169,16 @@ export function SessionMenu({
           <button className="session-actions-item" role="menuitem" onClick={() => { close(); setForkOpen(true); }} disabled={prBusy}>
             Fork / move…
           </button>
+          {onContinueInTerminal && (
+            <button
+              className="session-actions-item"
+              role="menuitem"
+              onClick={() => { close(); onContinueInTerminal(); }}
+              title="Open this session in the agent's interactive terminal (resumes the same conversation)"
+            >
+              Continue in terminal
+            </button>
+          )}
           {(prs ?? []).map((pr) => (
             <a key={pr.url} className="session-actions-item" role="menuitem" href={pr.url} target="_blank" rel="noopener" onClick={close}>
               {prActionLabel(pr)}

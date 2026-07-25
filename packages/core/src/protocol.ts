@@ -72,6 +72,8 @@ export interface Command extends CommandBase {
     | "terminal.list"
     | "terminal.multiplexers"
     | "terminal.takeover"
+    | "terminal.open.tui"
+    | "terminal.close.tui"
     | "node.stats"
     | (string & {});
 }

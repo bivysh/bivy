@@ -309,6 +309,10 @@ export class AppController {
         if (type.startsWith("terminal.") || type.startsWith("multiplexer.")) {
           if (["terminal.list", "terminal.created", "terminal.activity", "terminal.closed", "terminal.exit"].includes(type)) {
             this.store.apply(this.eventWithNodeScope(event));
+          } else if (type === "terminal.tui") {
+            // Composer single-writer lock — keyed by (raw) session id, so no node
+            // scoping needed; the store folds it into `tuiSessions`.
+            this.store.apply(event);
           }
           for (const fn of this.terminalListeners) fn(event);
           return;
@@ -1770,6 +1774,14 @@ export class AppController {
   /** Send a terminal.* command (open/attach/input/resize/close, list, mux). */
   sendTerminal(cmd: Command): void {
     this.send(cmd);
+  }
+
+  /** "Take over in chat": stop the interactive TUI that currently owns a session
+   *  and return it to governed chat. The node closes the PTY, rebuilds the
+   *  session from disk, and broadcasts `terminal.tui {active:false}` to unlock
+   *  the composer everywhere. */
+  closeSessionTui(sessionId: string): void {
+    this.send({ kind: "terminal.close.tui", sessionId });
   }
 
   /** Apply a pasted device-link payload (QR text) and reconnect. */
