@@ -219,6 +219,36 @@ Selecting an agent should be enough. If the selected runtime is allowlisted and 
 
 Implemented now for regular managed sessions/select paths where an allowlisted runtime installer exists (currently Claude Code SDK). CLI-only agents still need explicit safe installer specs before daemon-side auto-install should run them.
 
+## Closing the cold-start gap (device-seeded model keys)
+
+A brand-new ephemeral machine has no model credentials of its own. For most sessions that's fine — Bivy's **model-auth vault** syncs provider keys/OAuth records end-to-end across your nodes (see [`credential-sync.md`](credential-sync.md) §2), so a freshly-enrolled node just pulls them. But that sync is **node → node**: a requesting node asks the account for the wrapped vault key and *another node that already holds it* wraps it back. In the **true cold-start case — the ephemeral machine is your only node** (e.g. launched from a phone that owns no computer) — there is no peer to wrap from, so the vault can't seed and the agent boots with no model key.
+
+The GitHub token already dodges this: it's held **on the device** and injected at launch (`BIVY_GITHUB_TOKEN`, see "Provisioning path"). We close the model-key gap the same way — **the device becomes the vault source** — but deliberately *not* through user-data.
+
+### Why not bake the key into user-data
+
+Cloud-init / user-data is **stored as instance metadata by the provider** (Fly/Hetzner/AWS) and must be readable by the VM in the clear at boot, so a secret placed there is exposed to your cloud account's metadata store (and, on the cold-start relay path, forwarded once through the control plane). Encrypting it doesn't help: the VM has to decrypt it, and any key shipped alongside in user-data is readable by the same host. For **BYO cloud** that exposure is arguably acceptable (it's your own account) — but it's avoidable, so we avoid it.
+
+### How it works: push over the paired E2E channel
+
+Keep user-data minimal (enrollment token + room key, as today). The machine boots and pairs to the relay, giving the device an **end-to-end-encrypted session channel** to it — the same one session traffic uses, which the relay and control plane cannot read. The device then pushes each held model key down that channel as an ordinary `provider.apiKey` write — **the exact frame Settings → Keys already uses** — and the node stores it in its vault. Properties:
+
+- The key **never touches user-data**, so it's never in provider instance-metadata, and never forwarded through the cold-start control-plane relay.
+- Trust model is identical to normal session traffic — no new boundary to reason about.
+- The node's `provider.apiKey` handler also **re-pushes the model-auth vault to the control plane**, so once the first machine is seeded, *subsequent* nodes can sync from it the normal node→node way. The device seeding only has to happen for the cold start.
+
+### Scope: API keys only
+
+This path carries **model API keys** — opaque bearer secrets an agent can use from anywhere. It deliberately does **not** try to ship **agent-native OAuth / subscription logins** (Claude Code, Codex, Gemini CLI). Those are per-machine native logins (see [`credential-sync.md`](credential-sync.md) §4) and replaying them onto disposable machines is fragile — device/IP binding, refresh-token rotation, and subscription terms-of-service all bite. Steer OAuth-subscription agents toward an API key where the provider offers one; otherwise they still need a per-machine login.
+
+### Implementation
+
+- **Device store** — `createEphemeralModelKeyStore()` (`packages/core/src/ephemeral.ts`): IndexedDB on the device (`bivy-ephemeral-model-keys`), one `{ provider, key }` record per model provider. Same privacy model as the cloud provider tokens next to it — never sent to the control plane, never in user-data.
+- **Seeding** — the web controller watches for coming **online on a node it launched** (a device-local `MachineStore` record) and, once the E2E transport is live, sends one `provider.apiKey` frame per held key. Guarded per session (so a reconnect doesn't re-push) and idempotent on the node regardless.
+- **Configuration UI** — Settings → Ephemeral machines lets the user save the model keys to seed with, right beside the per-provider cloud tokens.
+
+Still gated behind `EPHEMERAL_MACHINES_ENABLED` (`packages/web/src/flags.ts`) along with the rest of the ephemeral surface while the feature is built out.
+
 ## Resume after inactivity
 
 Claude Code mobile appears to preserve the logical session while recycling the backing machine after long inactivity. Bivy should do the same by separating **session state** from **compute state**:

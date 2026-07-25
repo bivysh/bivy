@@ -37,6 +37,7 @@ import {
   getNotificationPreferences,
   setNotificationPreferences,
   createEphemeralKeyStore,
+  createEphemeralModelKeyStore,
   createEphemeralPrefsStore,
   createMachineStore,
   createGithubTaskTokenStore,
@@ -48,6 +49,8 @@ import {
   ephemeralNodeLabel,
   type TranscriptCache,
   type EphemeralKeyStore,
+  type EphemeralModelKeyStore,
+  type EphemeralModelKeyInfo,
   type EphemeralPrefsStore,
   type EphemeralPrefs,
   type EphemeralMachine,
@@ -74,6 +77,7 @@ import {
   unb64url,
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
 function requestId(): string {
   return `r${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -987,6 +991,9 @@ export class AppController {
       openedAfterNodeSwitch = true;
     }
     void this.refreshAccountSessions();
+    // If this is a machine we just launched, seed its vault with the model API
+    // keys held on this device (closes the cold-start gap — see the method doc).
+    void this.seedEphemeralNodeIfNeeded();
     // Replay a `/sessions/:id` deep link now that a live transport exists — must
     // run before the requestHistory below so the session it opens is the one we
     // refresh. A cross-node selection was already opened just above.
@@ -1562,11 +1569,28 @@ export class AppController {
   // --- Ephemeral machines ------------------------------------------------
 
   private ephemeralKeys: EphemeralKeyStore = createEphemeralKeyStore();
+  private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
   private ephemeralMachines: MachineStore = createMachineStore();
+  /** Ephemeral node ids we've already seeded with device-held model keys this
+   *  session, so a reconnect doesn't re-push (the node write is idempotent
+   *  regardless). See `seedEphemeralNodeIfNeeded`. */
+  private seededEphemeralNodes = new Set<string>();
 
   listEphemeralKeys(): Promise<ProviderKeyInfo[]> {
     return this.ephemeralKeys.list();
+  }
+  /** Device-held model **API keys** used to seed a freshly-launched machine's
+   *  vault over the E2E channel (closes the cold-start gap — see
+   *  docs/ephemeral-sessions.md, "Closing the cold-start gap"). API keys only. */
+  listEphemeralModelKeys(): Promise<EphemeralModelKeyInfo[]> {
+    return this.ephemeralModelKeys.list();
+  }
+  setEphemeralModelKey(provider: string, key: string): Promise<void> {
+    return this.ephemeralModelKeys.set(provider, key);
+  }
+  removeEphemeralModelKey(provider: string): Promise<void> {
+    return this.ephemeralModelKeys.remove(provider);
   }
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralKeys.getToken(id);
@@ -1587,6 +1611,51 @@ export class AppController {
   }
   listEphemeralMachines(): Promise<EphemeralMachine[]> {
     return this.ephemeralMachines.list();
+  }
+  /**
+   * When we come online on a node WE launched (a device-local `MachineStore`
+   * record), push the model API keys held on THIS device into its vault so a
+   * brand-new machine has model credentials even when it's the account's only
+   * node and there's no peer to sync the model-auth vault from — the cold-start
+   * gap (docs/ephemeral-sessions.md, "Closing the cold-start gap").
+   *
+   * Uses the ordinary `provider.apiKey` frame over the already-paired E2E
+   * channel — the same path Settings → Keys uses — so the relay/control plane
+   * only ever see ciphertext and nothing lands in the machine's user-data. API
+   * keys only; agent-native OAuth logins are out of scope. Guarded per session
+   * (the node write is idempotent regardless).
+   */
+  private async seedEphemeralNodeIfNeeded(): Promise<void> {
+    if (!EPHEMERAL_MACHINES_ENABLED || this.direct) return;
+    const nodeId = this.local.cur;
+    if (!nodeId || this.seededEphemeralNodes.has(nodeId)) return;
+    let machines: EphemeralMachine[];
+    try {
+      machines = await this.ephemeralMachines.list();
+    } catch {
+      return;
+    }
+    // Only seed nodes this device provisioned — never a normal, persistent one.
+    if (!machines.some((m) => m.nodeId === nodeId)) return;
+    let entries: { provider: string; key: string }[];
+    try {
+      entries = await this.ephemeralModelKeys.entries();
+    } catch {
+      return;
+    }
+    // Mark seeded regardless of whether there were keys — an empty device just
+    // has nothing to contribute, and re-checking on every reconnect is wasteful.
+    this.seededEphemeralNodes.add(nodeId);
+    if (!entries.length) return;
+    // Push only while the transport is still live on this same node — an async
+    // hop above could have switched it out from under us.
+    if (this.store.getState().status !== "online" || this.local.cur !== nodeId) {
+      this.seededEphemeralNodes.delete(nodeId); // let a later online retry
+      return;
+    }
+    for (const { provider, key } of entries) {
+      this.send({ kind: "provider.apiKey", provider, key });
+    }
   }
   listEphemeralSizes(providerId: string, region?: string): Promise<ProviderSize[]> {
     return listEphemeralSizes(providerId, { exec: cloudExec(this.local), keys: this.ephemeralKeys }, region);
