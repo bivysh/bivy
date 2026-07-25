@@ -5,6 +5,7 @@ import {
   githubIssueRefFromSource,
   isGithubQueueSource,
   ephemeralAdapter,
+  PRO_PRICE_LABEL,
   type AccountNode,
   type EphemeralQueueDefault,
   type GithubAppInfo,
@@ -356,18 +357,10 @@ export function GithubQueuePanel({
 
   return (
       <div className="settings-form">
-        {canQuery && workQueueEnabled === false && (
-          <div className="banner info inline">
-            The GitHub work queue — label an issue and get a PR back from your own node — is a Pro feature.{" "}
-            <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
-              Upgrade to enable →
-            </button>
-          </div>
-        )}
-
-        {/* Free tier is metered by a shared rolling 7-day run cap that spans every
-            source (manual, app, queue, ephemeral). Show remaining runs, and prompt an
-            upgrade once the window's allowance is spent. */}
+        {/* The GitHub work queue is included on every plan. The only limit is the
+            shared rolling 7-day run cap that spans every source (manual, app,
+            queue, ephemeral) — show remaining runs, and prompt an upgrade once the
+            window's allowance is spent. */}
         {canQuery && workQueueEnabled !== false && typeof runLimit === "number" && (
           <div className={`banner ${runsUsed >= runLimit ? "warn" : "info"} inline`}>
             {runsUsed >= runLimit ? (
@@ -375,14 +368,14 @@ export function GithubQueuePanel({
                 Free plan — you've used your {runLimit} free runs this week. Extra runs still
                 work for now; capacity returns as your older runs pass 7 days.{" "}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
-                  Upgrade for unlimited →
+                  Upgrade to Pro ({PRO_PRICE_LABEL}) for unlimited →
                 </button>
               </>
             ) : (
               <>
                 Free plan — {Math.max(0, runLimit - runsUsed)} of {runLimit} runs left this week.{" "}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
-                  Upgrade for unlimited →
+                  Upgrade to Pro ({PRO_PRICE_LABEL}) for unlimited →
                 </button>
               </>
             )}

@@ -528,6 +528,10 @@ export interface AppState {
    */
   commandsBySession: Record<string, SlashCommand[]>;
   error: string | null;
+  /** A transient, non-error confirmation banner (e.g. "You're on Pro"). Shown as
+   *  a success toast and auto-dismissed by the UI. Distinct from `error` so the
+   *  two can coexist and are styled differently. */
+  notice: string | null;
 }
 
 /** A harness checkpoint (rewind target) for the active session. */
@@ -615,6 +619,7 @@ export function initialState(): AppState {
     checkpoints: [],
     commandsBySession: {},
     error: null,
+    notice: null,
   };
 }
 
@@ -1162,6 +1167,7 @@ export class SessionStore {
       // them across a node switch.
       commandsBySession: {},
       error: null,
+      notice: null,
       // Per-node settings (name, default agent/model, GitHub prompt, sync
       // config, …) must never survive a switch — otherwise a still-editable
       // form can keep showing the *previous* node's settings under the
@@ -1173,6 +1179,11 @@ export class SessionStore {
 
   setError(message: string): void {
     this.set({ error: message });
+  }
+
+  /** Show (or clear, with "") a transient success/confirmation banner. */
+  setNotice(message: string): void {
+    this.set({ notice: message });
   }
 
   /** Append a local system message to the active transcript (client-only, not

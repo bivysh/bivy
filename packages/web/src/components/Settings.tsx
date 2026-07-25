@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AccountNode, AppState, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -374,7 +374,6 @@ function Toggle({ checked, onChange, disabled, label }: { checked: boolean; onCh
 
 // ---- Notifications (push on/off + per-event choices) ----
 function NotificationsPanel() {
-  const [me, setMe] = useState<AccountMe | null>(null);
   const [status, setStatus] = useState<{ supported: boolean; subscribed: boolean; permission: string } | null>(null);
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -382,13 +381,11 @@ function NotificationsPanel() {
 
   const reloadStatus = () => controller.pushStatus().then(setStatus).catch(() => {});
   useEffect(() => {
-    controller.fetchMe().then(setMe).catch(() => {});
     reloadStatus();
     controller.getNotificationPreferences().then(setPrefs).catch(() => {});
   }, []);
 
-  const ent = me?.entitlements;
-  const pushAllowed = ent?.pushEnabled !== false; // undefined (self-host/loading) = allowed
+  // Push notifications are included on every plan, so there's no upgrade gate.
   const on = Boolean(status?.subscribed);
 
   const setMaster = async (next: boolean) => {
@@ -418,20 +415,6 @@ function NotificationsPanel() {
     return (
       <div className="settings-form">
         <p className="muted">Push notifications aren't supported on this device or browser.</p>
-      </div>
-    );
-  }
-
-  if (me && !pushAllowed) {
-    return (
-      <div className="settings-form">
-        <label className="field-label">Push notifications</label>
-        <p className="muted">Push notifications are a Pro feature.</p>
-        <div className="row-actions">
-          <button className="btn primary" onClick={() => controller.startCheckout().catch((e) => setMsg(String(e.message || e)))}>
-            Upgrade
-          </button>
-        </div>
       </div>
     );
   }
@@ -2088,10 +2071,16 @@ function AccountPanel() {
         <Stat label="Sessions" value={`${counts?.sessions ?? "—"}`} />
         <Stat label="Devices" value={`${counts?.devices ?? "—"}`} />
       </div>
+      {free && (
+        <p className="muted settings-intro">
+          You're on the free plan — everything's included, capped at {runCap} runs per rolling 7 days across
+          every source (manual, app, GitHub queue, ephemeral). Pro removes the cap for {PRO_PRICE_LABEL}.
+        </p>
+      )}
       <div className="row-actions">
         {free ? (
           <button className="btn primary" onClick={() => controller.startCheckout().catch((e) => setErr(String(e.message || e)))}>
-            Upgrade
+            Upgrade to Pro — {PRO_PRICE_LABEL}
           </button>
         ) : (
           <button className="btn" onClick={() => controller.openBillingPortal().catch((e) => setErr(String(e.message || e)))}>
