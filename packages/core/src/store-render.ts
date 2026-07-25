@@ -36,6 +36,18 @@ function isTextBlock(b: any): boolean {
   return t === "text" || t === "output_text" || (!t && typeof b?.text === "string");
 }
 
+/** Harness "meta" markers the Claude Code CLI writes into its transcript for the
+ *  model — task-notification / system-reminder wrappers and the synthetic
+ *  "[Request interrupted by user]" marker. The runtime layer already filters
+ *  these before persistence (src/runtime/claude-code.ts); this is a render-time
+ *  net for history that was persisted *before* that filter existed, or produced
+ *  by another path. Kept narrow (known tags + the interrupt marker) so a real
+ *  user message starting with "<div>" is never suppressed. */
+const META_TEXT = /^\s*(?:\[Request interrupted by user|<(?:task-notification|system-reminder)[\s>/])/;
+function isMetaText(text: string): boolean {
+  return META_TEXT.test(text);
+}
+
 export function contentToText(content: any): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -114,9 +126,9 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
           }
         }
       }
-      if (text) entries.push({ id: nextId(), role: "user", text });
+      if (text && !isMetaText(text)) entries.push({ id: nextId(), role: "user", text });
     } else if (role === "system") {
-      if (text) entries.push({ id: nextId(), role: "system", text });
+      if (text && !isMetaText(text)) entries.push({ id: nextId(), role: "system", text });
     } else if (role === "toolresult" || role === "tool_result") {
       const tool = toolEntryFromToolResultMessage(msg);
       if (tool) mergeToolInto(entries, tool);

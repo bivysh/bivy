@@ -207,6 +207,53 @@ function extractText(message: any): string {
     .join("");
 }
 
+/** Model-only "meta" turns the CLI injects for its *own* benefit — task-completion
+ *  notifications and injected `<system-reminder>` blocks. These are pure noise in
+ *  a human transcript and must never render as chat. Kept a deliberately narrow
+ *  known-tag allowlist (not "any leading <tag>") so a real user prompt that
+ *  happens to start with e.g. "<div>" is never dropped. Interrupt markers are
+ *  handled separately (see INTERRUPT_MARKER) because — unlike these — they carry
+ *  meaning a human wants to see. */
+const DROP_META_TEXT = /^\s*<(?:task-notification|system-reminder)[\s>/]/;
+
+/** The CLI writes this synthetic user-role marker whenever a turn is aborted —
+ *  by a real user Stop OR by any teardown of the streaming query (our shutdown,
+ *  a mid-flight credential reload, a TUI refresh). We don't drop it: we surface
+ *  it as a system notice, labeled by cause (see interruptNoticeText). */
+const INTERRUPT_MARKER = /^\s*\[Request interrupted by user/;
+
+function hasMetaFlag(entry: any): boolean {
+  return entry?.isMeta === true || entry?.isCompactSummary === true || entry?.isSynthetic === true;
+}
+
+/** True when a role:"user" turn is a model-only meta injection (see
+ *  DROP_META_TEXT) rather than a real human prompt. Callers must exclude
+ *  tool_result-bearing turns first — those carry real tool output, never meta. */
+function isDropMetaText(content: any): boolean {
+  return DROP_META_TEXT.test(extractText({ content }));
+}
+
+/** True when a turn's text is the CLI's "[Request interrupted by user]" marker. */
+function isInterruptText(content: any): boolean {
+  return INTERRUPT_MARKER.test(extractText({ content }));
+}
+
+/** Human-facing label for an interrupt marker, classified by cause so we never
+ *  blame a redeploy or a credential refresh on the user. The CLI tags any
+ *  interrupt caused by tearing the process/query down (our shutdown, a
+ *  credential-reload `query.close()`, a TUI refresh) with a top-level
+ *  `interruptedByShutdown: true` on the transcript entry; a cooperative user
+ *  Stop (`query.interrupt()`) is written without it. `forceUserStop` lets the
+ *  live path assert certainty when *we* just called abort() for a real Stop.
+ *  NOTE: the `interruptedByShutdown` semantics are inferred from on-disk
+ *  evidence, not the (unvendored) CLI source — worth a one-time empirical check. */
+function interruptNoticeText(entry: any, forceUserStop = false): string {
+  if (!forceUserStop && entry?.interruptedByShutdown === true) {
+    return "Interrupted — the session was restarted.";
+  }
+  return "Stopped by user.";
+}
+
 /** Plain text out of a `tool_result` content block's own `content` (a string or
  *  an array of text/image blocks) — mirrors `extractText`'s shape-handling. */
 function toolResultText(block: any): string {
@@ -330,22 +377,55 @@ function loadClaudeTranscript(sessionId: string): RuntimeMessage[] {
   const file = findClaudeTranscript(sessionId);
   if (!file) return [];
   const messages: RuntimeMessage[] = [];
+  // Indices of "the session was restarted" notices (interruptedByShutdown). A
+  // restart the session *continued past* was recovered (a credential-reload
+  // re-drive, or a session the user resumed), so it's noise — we keep only a
+  // trailing one, where the session actually ended interrupted. See below.
+  const restartNoticeIdx: number[] = [];
   try {
     for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
       if (!line.trim()) continue;
       const entry = JSON.parse(line);
-      const role = entry?.message?.role ?? entry?.role;
+      const rawRole = entry?.message?.role ?? entry?.role;
+      const rawContent = entry?.message?.content ?? entry?.content;
+      // Interrupt markers aren't dropped — surface them as a system notice,
+      // labeled by cause (a real Stop vs. a teardown/restart) so history shows
+      // *why* a turn ended instead of a bare, confusing user bubble. This is the
+      // one place that survives a redeploy: interruptedByShutdown rides the
+      // on-disk entry, so even a new process can label it correctly.
+      if (rawRole === "user" && isInterruptText(rawContent)) {
+        messages.push({ role: "system", content: interruptNoticeText(entry), timestamp: new Date(entry?.timestamp ?? entry?.createdAt ?? Date.now()).getTime() });
+        if (entry?.interruptedByShutdown === true) restartNoticeIdx.push(messages.length - 1);
+        continue;
+      }
+      // Drop model-only meta the CLI writes for itself (task-notifications,
+      // injected reminders, compaction summaries). Flags ride the entry; the
+      // text net catches the code paths that omit them. See DROP_META_TEXT.
+      if (hasMetaFlag(entry)) continue;
+      const role = rawRole;
       if (role !== "user" && role !== "assistant") continue;
-      const content = entry?.message?.content ?? entry?.content;
+      const content = rawContent;
       if (role === "user" && Array.isArray(content) && !content.some((block: any) => block?.type === "text" || block?.type === "tool_result")) continue;
+      if (role === "user" && !(Array.isArray(content) && content.some((block: any) => block?.type === "tool_result")) && isDropMetaText(content)) continue;
       if (role === "assistant" && Array.isArray(content) && !content.some((block: any) => block?.type === "text" || block?.type === "tool_use" || block?.type === "thinking")) continue;
       if (typeof content !== "string" && !Array.isArray(content)) continue;
       messages.push({ role, content, timestamp: new Date(entry?.timestamp ?? entry?.createdAt ?? Date.now()).getTime() });
     }
   } catch {
-    return messages;
+    return dropRecoveredRestartNotices(messages, restartNoticeIdx);
   }
-  return messages;
+  return dropRecoveredRestartNotices(messages, restartNoticeIdx);
+}
+
+/** Drop "session was restarted" notices the transcript continued past (they were
+ *  recovered — a credential-reload re-drive or a resumed session), keeping only a
+ *  trailing one where the session actually ended interrupted. Genuine user Stops
+ *  are never in `restartNoticeIdx`, so they're always kept. */
+function dropRecoveredRestartNotices(messages: RuntimeMessage[], restartNoticeIdx: number[]): RuntimeMessage[] {
+  if (!restartNoticeIdx.length) return messages;
+  const lastIdx = messages.length - 1;
+  const drop = new Set(restartNoticeIdx.filter((i) => i !== lastIdx));
+  return drop.size ? messages.filter((_, i) => !drop.has(i)) : messages;
 }
 
 class ClaudeSession implements RuntimeSession {
@@ -384,6 +464,17 @@ class ClaudeSession implements RuntimeSession {
   private reloadedThisTurn = false;
   /** Guards restartWithFreshCredential against re-entrancy. */
   private reloading = false;
+  /** Set when *we* call abort() for a genuine user Stop, so the resulting
+   *  "[Request interrupted by user]" marker is labeled "Stopped by user" with
+   *  certainty rather than relying on the CLI's interruptedByShutdown flag.
+   *  Cleared once the marker is consumed or the turn otherwise ends. */
+  private userAbortPending = false;
+  /** Set when we tear the query down for a *credential reload*, which the CLI
+   *  records as an interrupt even though the turn transparently re-drives and
+   *  completes. Suppresses the resulting marker so it never flashes an
+   *  "interrupted" notice. One-shot; cleared when consumed, on the next result,
+   *  and on a real abort() (a user Stop must never be silenced by a stale flag). */
+  private suppressNextInterrupt = false;
 
   /** The agent's own slash commands for this session, learned from the SDK's
    *  system/init message (slash_commands + skills). Empty until the first turn's
@@ -563,6 +654,11 @@ class ClaudeSession implements RuntimeSession {
       const nextToken = authTokenFromEnv(credEnv);
       if (!nextToken || nextToken === this.spawnedToken) return false;
       this.emit({ type: "session.notice", level: "info", message: "Refreshing credentials…" });
+      // This teardown makes the CLI write an interrupt marker, but the turn is
+      // re-driven and completes — so suppress that marker rather than blaming a
+      // phantom interrupt on the user (the "Refreshing credentials…" notice above
+      // already tells the human what happened).
+      this.suppressNextInterrupt = true;
       this.teardownQuery();
       await this.spawnQuery(this.resumeId ?? this.id);
       return true;
@@ -675,6 +771,9 @@ class ClaudeSession implements RuntimeSession {
       }
 
       case "assistant": {
+        // Compaction summaries and other meta assistant turns are for the model,
+        // not the human — never persist or surface them as chat.
+        if (hasMetaFlag(message)) break;
         const model = message.message?.model;
         if (model) this.currentModel = toModelInfo({ id: model });
         const content = Array.isArray(message.message?.content) ? message.message.content : [];
@@ -724,7 +823,32 @@ class ClaudeSession implements RuntimeSession {
             this.runningTools.delete(String(block.tool_use_id));
             this.emit({ type: "tool_result", toolUseId: block.tool_use_id, result: toolResultText(block), isError: Boolean(block.is_error) });
           }
+          this.emit({ type: "user", raw: message });
+          break;
         }
+        // Interrupt marker: surface a system notice (never a user bubble),
+        // labeled by cause. If *we* just called abort() for a real user Stop
+        // (userAbortPending), that's authoritative; otherwise fall back to the
+        // CLI's interruptedByShutdown flag to tell a teardown/restart apart from
+        // a genuine Stop. Persist it (role:"system") so it survives reopen, and
+        // emit a live notice so it shows immediately.
+        if (isInterruptText(userContent)) {
+          // A credential-reload teardown produced this marker; the turn re-drives
+          // and completes transparently, so a notice would just be noise.
+          if (this.suppressNextInterrupt) {
+            this.suppressNextInterrupt = false;
+            break;
+          }
+          const notice = interruptNoticeText(message, this.userAbortPending);
+          this.userAbortPending = false;
+          this.messages.push({ role: "system", content: notice, timestamp: Date.now() });
+          this.emit({ type: "session.notice", level: "info", message: notice });
+          break;
+        }
+        // Otherwise: the human's own prompt echo, or a model-only meta turn
+        // (injected reminder / task-notification). Drop meta so it never renders
+        // as a chat bubble; forward a real prompt echo unchanged.
+        if (hasMetaFlag(message) || isDropMetaText(userContent)) break;
         this.emit({ type: "user", raw: message });
         break;
       }
@@ -748,6 +872,10 @@ class ClaudeSession implements RuntimeSession {
         this.streaming = false;
         this.startedMessage = false;
         this.currentText = "";
+        // The turn ended; clear both interrupt flags so a stale one can't
+        // mislabel or wrongly suppress a later interrupt.
+        this.userAbortPending = false;
+        this.suppressNextInterrupt = false;
         // Turn completed — the prompt is on disk now, so drop the copy kept for a
         // mid-flight reload re-drive (see inFlightPrompt / consume's catch).
         this.inFlightPrompt = undefined;
@@ -775,6 +903,10 @@ class ClaudeSession implements RuntimeSession {
             this.emit({ type: "runtime.commands", commands: next });
           }
         }
+        // Task-completion notifications and compaction boundaries are injected
+        // for the model, not the human — don't forward them as chat. (init still
+        // falls through so its capabilities/commands reach the client.)
+        if (message?.subtype === "task_notification" || message?.subtype === "compact_boundary") break;
         this.emit({ type: String(message?.type ?? "unknown"), raw: message });
         break;
       }
@@ -825,6 +957,12 @@ class ClaudeSession implements RuntimeSession {
   }
 
   async abort(): Promise<void> {
+    // Mark this as a genuine, user-initiated Stop so the interrupt marker the
+    // CLI is about to write is labeled with certainty (not via the shutdown
+    // flag). Clear any stale credential-reload suppression — a user Stop must
+    // always be shown, never silenced.
+    this.userAbortPending = true;
+    this.suppressNextInterrupt = false;
     if (this.query?.interrupt) {
       try {
         await this.query.interrupt();
