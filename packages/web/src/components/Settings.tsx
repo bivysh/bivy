@@ -1613,8 +1613,8 @@ function NodesPanel({ state }: { state: AppState }) {
       {statsOpen && <StatsPanel onClose={() => setStatsOpen(false)} />}
 
       {hosted && (
-        <>
-          <label className="field-label">Node</label>
+        <section className="settings-section">
+          <h4 className="settings-subhead">Node</h4>
           <div className="picker-list">
             {nodes.length === 0 && <div className="picker-empty">No nodes found.</div>}
             {nodes.map((n) => (
@@ -1637,7 +1637,7 @@ function NodesPanel({ state }: { state: AppState }) {
               />
             ))}
           </div>
-        </>
+        </section>
       )}
 
       {!nodeOnline ? (
@@ -1650,153 +1650,164 @@ function NodesPanel({ state }: { state: AppState }) {
         <p className="muted">Loading node settings…</p>
       ) : (
         <>
-          <label className="field-label">Node name</label>
-          <input
-            className="picker-search"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="My Mac"
-          />
+          <section className="settings-section">
+            <h4 className="settings-subhead">Identity</h4>
+            <label className="field-label">Node name</label>
+            <input
+              className="picker-search"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="My Mac"
+            />
+          </section>
 
-          <label className="field-label">Default agent</label>
-          <select
-            className="picker-search"
-            value={form.defaultAgent}
-            onChange={(e) => setForm({ ...form, defaultAgent: e.target.value })}
-          >
-            {runtimes.map((r) => (
-              <option key={r.id} value={r.id}>{r.displayName || r.name || r.id}</option>
-            ))}
-            {!runtimes.some((r) => r.id === form.defaultAgent) && (
-              <option value={form.defaultAgent}>{form.defaultAgent}</option>
-            )}
-          </select>
-
-          <label className="field-label">Default model</label>
-          {modelSelectable ? (
+          <section className="settings-section">
+            <h4 className="settings-subhead">Session defaults</h4>
+            <label className="field-label">Default agent</label>
             <select
               className="picker-search"
-              value={form.defaultModel ? form.defaultModel.id : ""}
-              onChange={(e) => {
-                const m = models.find((x) => x.id === e.target.value);
-                setForm({
-                  ...form,
-                  defaultModel: m ? { provider: String((m as { provider?: unknown }).provider ?? ""), id: m.id } : null,
-                });
-              }}
+              value={form.defaultAgent}
+              onChange={(e) => setForm({ ...form, defaultAgent: e.target.value })}
             >
-              <option value="">Default (agent decides)</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>{m.label || m.id}</option>
+              {runtimes.map((r) => (
+                <option key={r.id} value={r.id}>{r.displayName || r.name || r.id}</option>
               ))}
-              {form.defaultModel && !models.some((m) => m.id === form.defaultModel!.id) && (
-                <option value={form.defaultModel.id}>{form.defaultModel.id}</option>
+              {!runtimes.some((r) => r.id === form.defaultAgent) && (
+                <option value={form.defaultAgent}>{form.defaultAgent}</option>
               )}
             </select>
-          ) : (
-            <p className="muted">This agent selects its own model — nothing to set.</p>
-          )}
 
-          <label className="field-label">Default sandbox mode</label>
-          <div className="seg-row">
-            {SANDBOX_TIERS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={`seg-btn${form.defaultSandbox === t.id ? " active" : ""}`}
-                onClick={() => setForm({ ...form, defaultSandbox: t.id })}
-                title={t.hint}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          <p className="muted small">{SANDBOX_TIERS.find((t) => t.id === form.defaultSandbox)?.hint}</p>
-
-          <label className="field-label">GitHub session limit</label>
-          <input
-            className="picker-search"
-            type="number"
-            min={0}
-            value={form.githubMaxConcurrent}
-            onChange={(e) => setForm({ ...form, githubMaxConcurrent: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
-          />
-          <p className="muted small">Max GitHub-triggered sessions this node runs at once; the rest queue until a slot frees. 0 = unlimited.</p>
-
-          <label className="field-label">GitHub issue prompt</label>
-          <textarea
-            className="picker-search"
-            rows={8}
-            value={form.githubIssuePrompt}
-            onChange={(e) => setForm({ ...form, githubIssuePrompt: e.target.value })}
-          />
-          <p className="muted small">
-            The instructions sent to the agent as its first message when it picks up a GitHub issue (after the issue's own
-            title/description/link). The default asks it to understand the issue, do thorough work, run tests/linter/type-checks,
-            and open its own pull request when done — edit freely, or clear and save to restore the default.
-          </p>
-          <div className="row-actions">
-            <button className="btn" onClick={resetIssuePrompt}>Reset to default</button>
-          </div>
-
-          <label className="field-label">Session sync</label>
-          <div className="settings-toggle-row">
-            <div className="settings-toggle-text">
-              <span className="settings-toggle-title">Keep sessions synced to a standby node</span>
-              <span className="muted small">
-                Warm-replicate each session's transcript to another of your nodes over the encrypted
-                relay, so a session can be picked up elsewhere if this node goes offline. Data stays
-                node-to-node; the control plane never sees it.
-              </span>
-            </div>
-            <Toggle
-              checked={form.sessionSync}
-              onChange={(v) => setForm({ ...form, sessionSync: v, worktreeSync: v ? form.worktreeSync : false })}
-              label="Enable session sync"
-            />
-          </div>
-          <div className={`settings-toggle-row${form.sessionSync ? "" : " disabled"}`}>
-            <div className="settings-toggle-text">
-              <span className="settings-toggle-title">Also sync the workspace (git checkpoints)</span>
-              <span className="muted small">
-                Ship each turn's git checkpoint too, so the promoted session keeps its working tree and
-                can continue coding — not just show history. Needs session sync; ignored for non-git workspaces.
-              </span>
-            </div>
-            <Toggle
-              checked={form.worktreeSync}
-              disabled={!form.sessionSync}
-              onChange={(v) => setForm({ ...form, worktreeSync: v })}
-              label="Enable worktree sync"
-            />
-          </div>
-          {form.sessionSync && (
-            <>
-              <label className="field-label">Standby node</label>
+            <label className="field-label">Default model</label>
+            {modelSelectable ? (
               <select
                 className="picker-search"
-                value={form.syncStandbyNodeId ?? ""}
-                onChange={(e) => setForm({ ...form, syncStandbyNodeId: e.target.value || undefined })}
+                value={form.defaultModel ? form.defaultModel.id : ""}
+                onChange={(e) => {
+                  const m = models.find((x) => x.id === e.target.value);
+                  setForm({
+                    ...form,
+                    defaultModel: m ? { provider: String((m as { provider?: unknown }).provider ?? ""), id: m.id } : null,
+                  });
+                }}
               >
-                <option value="">Choose a node to replicate to…</option>
-                {nodes
-                  .filter((n) => n.id !== currentNodeId)
-                  .map((n) => (
-                    <option key={n.id} value={n.id}>
-                      {(n.name || n.id) + (n.online ? "" : " (offline)")}
-                    </option>
-                  ))}
-                {form.syncStandbyNodeId && !nodes.some((n) => n.id === form.syncStandbyNodeId) && (
-                  <option value={form.syncStandbyNodeId}>{form.syncStandbyNodeId}</option>
+                <option value="">Default (agent decides)</option>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label || m.id}</option>
+                ))}
+                {form.defaultModel && !models.some((m) => m.id === form.defaultModel!.id) && (
+                  <option value={form.defaultModel.id}>{form.defaultModel.id}</option>
                 )}
               </select>
-              <p className="muted small">
-                Sessions on this node warm-replicate to the standby over the encrypted relay. If this
-                node goes offline, open the session on the standby and choose “Continue here”.
-                {nodes.filter((n) => n.id !== currentNodeId).length === 0 && " Add a second node to enable this."}
-              </p>
-            </>
-          )}
+            ) : (
+              <p className="muted">This agent selects its own model — nothing to set.</p>
+            )}
+
+            <label className="field-label">Default sandbox mode</label>
+            <div className="seg-row">
+              {SANDBOX_TIERS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`seg-btn${form.defaultSandbox === t.id ? " active" : ""}`}
+                  onClick={() => setForm({ ...form, defaultSandbox: t.id })}
+                  title={t.hint}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <p className="muted small">{SANDBOX_TIERS.find((t) => t.id === form.defaultSandbox)?.hint}</p>
+          </section>
+
+          <section className="settings-section">
+            <h4 className="settings-subhead">GitHub</h4>
+            <label className="field-label">GitHub session limit</label>
+            <input
+              className="picker-search"
+              type="number"
+              min={0}
+              value={form.githubMaxConcurrent}
+              onChange={(e) => setForm({ ...form, githubMaxConcurrent: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
+            />
+            <p className="muted small">Max GitHub-triggered sessions this node runs at once; the rest queue until a slot frees. 0 = unlimited.</p>
+
+            <label className="field-label">GitHub issue prompt</label>
+            <textarea
+              className="picker-search"
+              rows={8}
+              value={form.githubIssuePrompt}
+              onChange={(e) => setForm({ ...form, githubIssuePrompt: e.target.value })}
+            />
+            <p className="muted small">
+              The instructions sent to the agent as its first message when it picks up a GitHub issue (after the issue's own
+              title/description/link). The default asks it to understand the issue, do thorough work, run tests/linter/type-checks,
+              and open its own pull request when done — edit freely, or clear and save to restore the default.
+            </p>
+            <div className="row-actions">
+              <button className="btn" onClick={resetIssuePrompt}>Reset to default</button>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h4 className="settings-subhead">Session sync</h4>
+            <div className="settings-toggle-row">
+              <div className="settings-toggle-text">
+                <span className="settings-toggle-title">Keep sessions synced to a standby node</span>
+                <span className="muted small">
+                  Warm-replicate each session's transcript to another of your nodes over the encrypted
+                  relay, so a session can be picked up elsewhere if this node goes offline. Data stays
+                  node-to-node; the control plane never sees it.
+                </span>
+              </div>
+              <Toggle
+                checked={form.sessionSync}
+                onChange={(v) => setForm({ ...form, sessionSync: v, worktreeSync: v ? form.worktreeSync : false })}
+                label="Enable session sync"
+              />
+            </div>
+            <div className={`settings-toggle-row${form.sessionSync ? "" : " disabled"}`}>
+              <div className="settings-toggle-text">
+                <span className="settings-toggle-title">Also sync the workspace (git checkpoints)</span>
+                <span className="muted small">
+                  Ship each turn's git checkpoint too, so the promoted session keeps its working tree and
+                  can continue coding — not just show history. Needs session sync; ignored for non-git workspaces.
+                </span>
+              </div>
+              <Toggle
+                checked={form.worktreeSync}
+                disabled={!form.sessionSync}
+                onChange={(v) => setForm({ ...form, worktreeSync: v })}
+                label="Enable worktree sync"
+              />
+            </div>
+            {form.sessionSync && (
+              <>
+                <label className="field-label">Standby node</label>
+                <select
+                  className="picker-search"
+                  value={form.syncStandbyNodeId ?? ""}
+                  onChange={(e) => setForm({ ...form, syncStandbyNodeId: e.target.value || undefined })}
+                >
+                  <option value="">Choose a node to replicate to…</option>
+                  {nodes
+                    .filter((n) => n.id !== currentNodeId)
+                    .map((n) => (
+                      <option key={n.id} value={n.id}>
+                        {(n.name || n.id) + (n.online ? "" : " (offline)")}
+                      </option>
+                    ))}
+                  {form.syncStandbyNodeId && !nodes.some((n) => n.id === form.syncStandbyNodeId) && (
+                    <option value={form.syncStandbyNodeId}>{form.syncStandbyNodeId}</option>
+                  )}
+                </select>
+                <p className="muted small">
+                  Sessions on this node warm-replicate to the standby over the encrypted relay. If this
+                  node goes offline, open the session on the standby and choose “Continue here”.
+                  {nodes.filter((n) => n.id !== currentNodeId).length === 0 && " Add a second node to enable this."}
+                </p>
+              </>
+            )}
+          </section>
 
           <div className="row-actions">
             <button className="btn primary" onClick={save}>Save</button>

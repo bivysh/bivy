@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Removing a node from the account flags its apps for rotation, so a
   surviving node mints a fresh vault key on its next sync. (#88)
 
+### Changed
+
+- **Nodes settings panel: fields grouped into labeled sections** — the panel
+  used to list a dozen unrelated fields (node name, default agent/model,
+  sandbox mode, GitHub session limit, GitHub issue prompt, session sync) as
+  one continuous flat list with no visual separation, which read as a wall of
+  text, especially in the mobile drill-in view. Fields are now grouped under
+  labeled sections (Node, Identity, Session defaults, GitHub, Session sync)
+  with divider lines between them, matching the grouping already used by the
+  GitHub App and GitHub Queue panels. (#74)
+
 ### Fixed
 
 - The GitHub issue queue's per-node concurrency cap now actually lets issues
