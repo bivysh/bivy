@@ -79,10 +79,24 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
   const [repo, setRepo] = useState("");
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // Split from the old single `msg`, which rendered a launch failure and a
+  // launch success in the same muted <p> — a failure read like a neutral
+  // status line (#140). `err` gets the queue panel's `chip err` treatment.
   const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   const refreshMachines = () =>
     controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId)));
+  // Poll while a machine is still booting so its status/IP update without the
+  // user having to close and reopen the sheet (#140) — stops once nothing is
+  // in a transitional state.
+  useEffect(() => {
+    if (!machines.some((m) => m.status === "starting")) return;
+    const t = setInterval(refreshMachines, 5000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [machines]);
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t)));
     // Pre-fill from the preferences the user saved in Settings → Ephemeral
@@ -125,6 +139,11 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
   }, [hasToken, providerId, region]);
 
   const saveToken = async () => {
+    // token isn't cleared until the await resolves, so without this guard a
+    // second click before then fires another save (#140).
+    if (saving) return;
+    setSaving(true);
+    setErr(null);
     try {
       await controller.setEphemeralToken(providerId, token.trim());
       setToken("");
@@ -132,19 +151,22 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
       onKeysChanged();
       setMsg("Token saved on this device.");
     } catch (e) {
-      setMsg(String((e as Error).message || e));
+      setErr(String((e as Error).message || e));
+    } finally {
+      setSaving(false);
     }
   };
 
   const launch = async () => {
     setBusy(true);
     setMsg(null);
+    setErr(null);
     try {
       await controller.launchEphemeral({ provider: providerId, region, size, ttlMinutes: ttl, repo: repo.trim() || undefined });
       setMsg("Launching — it will appear in the node list once it boots.");
       refreshMachines();
     } catch (e) {
-      setMsg(String((e as Error).message || e));
+      setErr(String((e as Error).message || e));
     } finally {
       setBusy(false);
     }
@@ -169,8 +191,8 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
           </div>
           <label className="field-label">{catalog.tokenLabel}</label>
           <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste token" />
-          <button className="btn primary" disabled={!token.trim()} onClick={saveToken}>
-            Save token
+          <button className="btn primary" disabled={!token.trim() || saving} onClick={saveToken}>
+            {saving ? "Saving…" : "Save token"}
           </button>
         </>
       ) : (
@@ -237,10 +259,14 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
           onConfirm={() => { confirm.action(); setConfirm(null); }}
         />
       )}
+      {err && <span className="chip err">{err}</span>}
       {msg && <p className="muted">{msg}</p>}
       {machines.length > 0 && (
         <>
-          <label className="field-label">Launched machines</label>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <label className="field-label">Launched machines</label>
+            <button type="button" className="link-btn" onClick={refreshMachines}>Refresh</button>
+          </div>
           <div className="picker-list">
             {machines.map((m) => (
               <PickerItem

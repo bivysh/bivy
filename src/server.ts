@@ -2401,15 +2401,17 @@ const RELAY_COMMANDS: Record<string, Command> = {
     ctx.broadcast({ type: "node.updated", name });
     ctx.reply({ type: "node.updated", name });
   },
-  "node.settings.get"(_msg, ctx) {
-    ctx.reply({ type: "node.settings", settings: nodeSettingsSnapshot() });
+  "node.settings.get"(msg, ctx) {
+    ctx.reply({ type: "node.settings", requestId: msg.requestId, settings: nodeSettingsSnapshot() });
   },
   async "node.settings.set"(msg, ctx) {
     try {
       const settings = await applyNodeSettings((msg.settings as Record<string, unknown>) ?? msg);
-      ctx.reply({ type: "node.settings", settings });
+      // requestId round-trips so the caller (setNodeSettings) can tell its own
+      // save landed apart from an unrelated node.settings.get reply — see #140.
+      ctx.reply({ type: "node.settings", requestId: msg.requestId, settings });
     } catch (error) {
-      ctx.reply({ type: "node.settings.error", error: error instanceof Error ? error.message : String(error) });
+      ctx.reply({ type: "node.settings.error", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
     }
   },
   async "node.stats"(msg, ctx) {
@@ -2792,14 +2794,20 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "provider.apiKey"(msg) {
+  async "provider.apiKey"(msg, ctx) {
     try {
       await setProviderApiKey(credsDir, String(msg.provider ?? msg.id ?? ""), String(msg.key ?? ""));
       await pushModelAuthToControlPlane();
       await refreshSessionAfterAuth();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
+      // Dedicated per-request ack (separate from the list broadcast above, which
+      // every client gets) so the saving client can tell its own save landed
+      // instead of assuming success the moment the command was sent — see #140.
+      ctx.reply({ type: "provider.apiKey.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "provider.apiKey.error", requestId: msg.requestId, error: message });
     }
   },
   async "provider.oauth.reset"(msg) {
@@ -2840,14 +2848,18 @@ const RELAY_COMMANDS: Record<string, Command> = {
   async "models.custom.presets"() {
     relay?.sendEvent({ type: "models.custom.presets", presets: await localModelPresets() });
   },
-  async "models.custom.save"(msg) {
+  async "models.custom.save"(msg, ctx) {
     try {
       // The client sends the same field set as the REST body (baseUrl, api,
       // apiKey, models[], compat, name, providerId). persistLocalModelSave
       // broadcasts the refreshed list to every client, requester included.
       await persistLocalModelSave((msg as any)?.spec ?? msg);
+      // Dedicated per-request ack — see the provider.apiKey comment above (#140).
+      ctx.reply({ type: "models.custom.save.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "models.custom.save.error", requestId: msg.requestId, error: message });
     }
   },
   async "models.custom.remove"(msg) {
@@ -2864,12 +2876,16 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "stt.config.set"(msg) {
+  async "stt.config.set"(msg, ctx) {
     try {
       const config = await applySttConfigChange(msg as Record<string, unknown>);
       broadcast({ type: "stt.config", ...config });
+      // Dedicated per-request ack — see the provider.apiKey comment above (#140).
+      ctx.reply({ type: "stt.config.set.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "stt.config.set.error", requestId: msg.requestId, error: message });
     }
   },
   async transcribe(msg) {
