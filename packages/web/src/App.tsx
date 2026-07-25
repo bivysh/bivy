@@ -53,6 +53,9 @@ export function App() {
    *  one — always the selected node's default workspace, never the active
    *  chat's cwd. See #460. */
   const [terminalStandalone, setTerminalStandalone] = useState(false);
+  /** "Continue in terminal": the overlay hands the active chat session off to
+   *  the runtime's interactive TUI (the reverse of "continue in chat"). */
+  const [terminalTui, setTerminalTui] = useState(false);
   // Node picker for the standalone terminal button — only shown when there's
   // more than one node to choose from (see openStandaloneTerminal).
   const [terminalNodePicker, setTerminalNodePicker] = useState(false);
@@ -158,6 +161,7 @@ export function App() {
     if (controller.direct || state.nodes.length <= 1) {
       setTerminalTarget(null);
       setTerminalStandalone(true);
+      setTerminalTui(false);
       setTerminalOpen(true);
       return;
     }
@@ -170,6 +174,7 @@ export function App() {
       if (!controller.direct && nodeId !== state.currentNodeId) controller.switchNode(nodeId);
       setTerminalTarget(null);
       setTerminalStandalone(true);
+      setTerminalTui(false);
       setTerminalOpen(true);
       setDrawerOpen(false);
     },
@@ -188,6 +193,7 @@ export function App() {
       const open = () => {
         setTerminalTarget(termId);
         setTerminalStandalone(false);
+        setTerminalTui(false);
         setTerminalOpen(true);
       };
       setDrawerOpen(false);
@@ -201,6 +207,18 @@ export function App() {
     },
     [state.currentNodeId],
   );
+
+  // "Continue in terminal": open the overlay bound to the active chat session in
+  // interactive-TUI mode. The overlay sends `terminal.open.tui`, which resumes
+  // this same conversation in the runtime's native CLI — the reverse of the
+  // terminal's "continue in chat" (takeover). Gated on the session runtime's
+  // `interactiveTui` capability at the call site (SessionMenu).
+  const continueInTerminal = useCallback(() => {
+    setTerminalTarget(null);
+    setTerminalStandalone(false);
+    setTerminalTui(true);
+    setTerminalOpen(true);
+  }, []);
 
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
@@ -228,6 +246,14 @@ export function App() {
   const closeDrawer = () => setDrawerOpen(false);
   const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId);
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
+  // "Continue in terminal" is offered only when this session's runtime can hand
+  // itself to its native TUI on the node (capability `interactiveTui`) — the
+  // analog of the terminal's capability-gated "continue in chat". Absent caps
+  // (older node / runtime not yet loaded) default to hidden.
+  const activeRuntimeCaps = state.runtimes.find((r) => r.id === activeSession?.runtimeId)?.capabilities as
+    | { interactiveTui?: boolean }
+    | undefined;
+  const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
 
   // Approval/question cards render inline in the active session's chat scroll, so
   // only show the ones that belong to that session. Items are still kept globally
@@ -330,7 +356,7 @@ export function App() {
           </div>
           <div className="topbar-actions">
             {online && (
-              <button className="icon-btn term-btn" onClick={() => { setTerminalTarget(null); setTerminalStandalone(false); setTerminalOpen(true); }} title="Terminal" aria-label="Open terminal">
+              <button className="icon-btn term-btn" onClick={() => { setTerminalTarget(null); setTerminalStandalone(false); setTerminalTui(false); setTerminalOpen(true); }} title="Terminal" aria-label="Open terminal">
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <rect x="3" y="4" width="18" height="16" rx="2" />
                   <path d="m7 9 3 3-3 3" />
@@ -346,6 +372,7 @@ export function App() {
                 prs={activeSession?.prs}
                 collapsed={collapsed}
                 onToggleCollapsed={toggleCollapsed}
+                onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
               />
             )}
           </div>
@@ -490,10 +517,12 @@ export function App() {
             sessionId={terminalStandalone ? null : state.activeSessionId}
             attachTermId={terminalTarget}
             standalone={terminalStandalone}
+            tui={terminalTui}
             onClose={() => {
               setTerminalOpen(false);
               setTerminalTarget(null);
               setTerminalStandalone(false);
+              setTerminalTui(false);
             }}
           />
         </Suspense>
