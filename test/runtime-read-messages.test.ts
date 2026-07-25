@@ -56,7 +56,19 @@ fs.mkdirSync(projectDir, { recursive: true });
 const claudeSessionId = "11111111-2222-3333-4444-555555555555";
 const jsonl = [
   { type: "user", message: { role: "user", content: "hi claude" }, timestamp: "2026-01-01T00:00:00Z" },
+  // Model-only meta the CLI writes for itself must be DROPPED, not replayed as
+  // chat. One relies on the isMeta flag, one on the text net (a task-notification
+  // block with no flag), exercising both drop paths.
+  { type: "user", isMeta: true, message: { role: "user", content: [{ type: "text", text: "<system-reminder>do the thing</system-reminder>" }] }, timestamp: "2026-01-01T00:00:00.3Z" },
+  { type: "user", message: { role: "user", content: [{ type: "text", text: "<task-notification><status>completed</status></task-notification>" }] }, timestamp: "2026-01-01T00:00:00.4Z" },
+  // A genuine user Stop (no shutdown flag) is ALWAYS kept as "Stopped by user.".
+  { type: "user", message: { role: "user", content: "[Request interrupted by user]" }, timestamp: "2026-01-01T00:00:00.5Z" },
+  // A teardown/restart the session CONTINUED PAST (assistant reply follows) was
+  // recovered — e.g. a credential-reload re-drive — so it's dropped as noise.
+  { type: "user", interruptedByShutdown: true, message: { role: "user", content: "[Request interrupted by user]" }, timestamp: "2026-01-01T00:00:00.6Z" },
   { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "hello!" }] }, timestamp: "2026-01-01T00:00:01Z" },
+  // A TRAILING restart — the session actually ended interrupted — IS surfaced.
+  { type: "user", interruptedByShutdown: true, message: { role: "user", content: "[Request interrupted by user]" }, timestamp: "2026-01-01T00:00:02Z" },
 ].map((e) => JSON.stringify(e)).join("\n");
 fs.writeFileSync(path.join(projectDir, `${claudeSessionId}.jsonl`), `${jsonl}\n`);
 
@@ -66,12 +78,23 @@ try {
   const claude = new ClaudeCodeRuntime();
   const claudeMsgs = claude.readMessages(claudeSessionId);
   assert.ok(claudeMsgs, "Claude readMessages returns a transcript for a stored session");
-  assert.equal(claudeMsgs!.length, 2, "both persisted Claude messages are read back");
+  // Kept: user prompt, "Stopped by user." notice, assistant reply, trailing
+  // "restarted" notice. Dropped: 2 model-only meta turns + the mid (recovered)
+  // restart notice.
+  assert.equal(claudeMsgs!.length, 4, "user Stop + trailing restart shown; meta + recovered restart dropped");
   assert.deepEqual(
     claudeMsgs!.map((m) => (m as { role: string }).role),
-    ["user", "assistant"],
-    "Claude roles round-trip through the transcript read",
+    ["user", "system", "assistant", "system"],
+    "interrupt markers become system notices in place; a recovered restart is dropped",
   );
+  // The raw marker/tags must not survive as chat text — the interrupt is shown as
+  // a labeled notice instead, and a teardown is never blamed on the user.
+  const claudeText = JSON.stringify(claudeMsgs);
+  assert.ok(!claudeText.includes("Request interrupted"), "the raw '[Request interrupted by user]' marker text is gone");
+  assert.ok(!claudeText.includes("task-notification"), "the <task-notification> block is filtered out");
+  assert.ok(!claudeText.includes("system-reminder"), "the isMeta <system-reminder> turn is filtered out");
+  assert.equal((claudeMsgs![1] as { content: string }).content, "Stopped by user.", "an unflagged interrupt is always kept, labeled a user Stop");
+  assert.equal((claudeMsgs![3] as { content: string }).content, "Interrupted — the session was restarted.", "a trailing shutdown interrupt is labeled a restart, not a user Stop");
   // An unknown session id reads empty (no throw) — the uniform fall-back signal.
   assert.deepEqual(
     claude.readMessages("00000000-0000-0000-0000-000000000000"),

@@ -36,6 +36,23 @@ describe("renderHistory block interleaving", () => {
     expect(entries[4].text).not.toContain("I'll make the temporary file");
   });
 
+  it("drops harness meta turns (interrupt marker, task-notification/system-reminder) from history", () => {
+    // Defense-in-depth for transcripts persisted before the runtime-level filter
+    // existed. The CLI writes these into its transcript for the model; they must
+    // not render as chat bubbles. A real user message that merely *starts* with
+    // "<div>" must survive.
+    const entries = renderHistory([
+      { role: "user", content: "[Request interrupted by user]" },
+      { role: "user", content: "<task-notification><status>completed</status></task-notification>" },
+      { role: "system", content: "<system-reminder>internal note</system-reminder>" },
+      { role: "user", content: "<div> how do I center this?" },
+      { role: "assistant", content: "You can use flexbox." },
+    ]);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ role: "user", text: "<div> how do I center this?" });
+    expect(entries[1]).toMatchObject({ role: "assistant", text: "You can use flexbox." });
+  });
+
   it("handles string content and text-only assistant messages unchanged", () => {
     const entries = renderHistory([{ role: "assistant", content: "just text" }]);
     expect(entries).toHaveLength(1);
