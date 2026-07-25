@@ -201,7 +201,10 @@ async function main(): Promise<void> {
     rly.send(
       JSON.stringify({
         t: "pair",
-        p: JSON.stringify({ k: "pair.account", sessionToken: grant, devicePublicKeyB64: keypair.publicKeyB64, label: args.label }),
+        // `ephemeral`: this is a transient CLI bridge, not a user device — the
+        // control plane authorizes it but keeps it out of the account's
+        // "Signed-in devices" list.
+        p: JSON.stringify({ k: "pair.account", sessionToken: grant, devicePublicKeyB64: keypair.publicKeyB64, label: args.label, ephemeral: true }),
       }),
     );
   };
