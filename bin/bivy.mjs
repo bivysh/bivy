@@ -473,17 +473,28 @@ async function ensurePythonCommand(command, packageName, label) {
   return code === 0 && commandExists(command);
 }
 
+// Single source of truth for what `bivy agents:install` installs, so its help
+// text (see printHelp) can never drift from what it actually does (#113).
+const BUNDLED_AGENTS = [
+  { command: "claude", npmPackage: "@anthropic-ai/claude-code", label: "Claude Code" },
+  { command: "codex", npmPackage: "@openai/codex", label: "Codex" },
+  { command: "opencode", npmPackage: "opencode-ai/opencode", label: "OpenCode" },
+  { command: "aider", pythonPackage: "aider-chat", label: "Aider" },
+  { command: "hermes", npmPackage: "hermes", label: "Hermes" },
+  { command: "gemini", npmPackage: "@google/gemini-cli", label: "Gemini CLI" },
+];
+
 async function ensureBundledAgents() {
   if (process.env.BIVY_SKIP_AGENT_PREINSTALL === "1") return true;
   console.log(c.dim("Ensuring bundled agent runtimes are installed…"));
-  const results = [];
-  results.push(await ensureNodePackage("@anthropic-ai/claude-agent-sdk"));
-  results.push(await ensureNpmCommand("claude", "@anthropic-ai/claude-code", "Claude Code"));
-  results.push(await ensureNpmCommand("codex", "@openai/codex", "Codex"));
-  results.push(await ensureNpmCommand("opencode", "opencode-ai/opencode", "OpenCode"));
-  results.push(await ensurePythonCommand("aider", "aider-chat", "Aider"));
-  results.push(await ensureNpmCommand("hermes", "hermes", "Hermes"));
-  results.push(await ensureNpmCommand("gemini", "@google/gemini-cli", "Gemini CLI"));
+  const results = [await ensureNodePackage("@anthropic-ai/claude-agent-sdk")];
+  for (const agent of BUNDLED_AGENTS) {
+    results.push(
+      agent.pythonPackage
+        ? await ensurePythonCommand(agent.command, agent.pythonPackage, agent.label)
+        : await ensureNpmCommand(agent.command, agent.npmPackage, agent.label),
+    );
+  }
   const ok = results.every(Boolean);
   if (!ok) console.log(c.yellow("Some optional agent runtimes could not be installed. Bivy will still run; install them later from the Agents screen or re-run 'bivy agents:install'."));
   return ok;
@@ -1077,6 +1088,17 @@ async function resolveNodeTarget(nodeName) {
 async function cmdNodes(args = []) {
   const [sub, ...rest] = args;
 
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy nodes [list] | bivy nodes add <name> <url> [--token <token>] | bivy nodes remove <name>\n\nList directly-registered nodes plus (when relay is configured) your account's control-plane nodes, and add/remove direct routes. Run a session on any of them with 'bivy run --node <name>' — direct nodes connect straight to their URL, account nodes tunnel through the relay.");
+    return;
+  }
+
+  if (sub && sub !== "list" && sub !== "ls" && sub !== "add" && sub !== "remove" && sub !== "rm") {
+    console.error(c.red(`Unknown nodes subcommand: ${sub}. Usage: bivy nodes [list|add|remove]`));
+    process.exit(1);
+    return;
+  }
+
   if (sub === "add") {
     const name = rest[0];
     const nodeUrl = rest[1];
@@ -1142,6 +1164,10 @@ async function cmdNodes(args = []) {
 // showing which are installed on PATH. `bivy run <agent>` starts one; the bundled
 // ones are installed with `bivy agents:install`. `--json` for machine-readable output.
 function cmdAgents(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy agents [--json]\n\nList the agents Bivy can launch ('bivy run <agent>') and which are installed on PATH. 'bivy agents:install' installs the bundled ones.");
+    return;
+  }
   const asJson = args.includes("--json");
   const rows = [...BUILTIN_TERMINAL_AGENTS.entries()].map(([id, meta]) => {
     if (meta.type === "native-pi") {
@@ -1171,7 +1197,11 @@ function cmdAgents(args = []) {
 // `bivy token` — mint and print a device token for THIS node. Copy it to another
 // machine and `bivy nodes add <name> <this-url> --token <token>` to let it run
 // sessions here over a direct/tunnelled connection.
-async function cmdToken() {
+async function cmdToken(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy token\n\nMint and print a device token for this node. Copy it to another machine and run 'bivy nodes add <name> <this-url> --token <token>' there.");
+    return;
+  }
   const config = loadConfig();
   if (!(await ensureNodeRunning(config))) {
     console.error(c.red(`Could not start the Bivy node at ${url(config)}.`));
@@ -1192,6 +1222,17 @@ async function cmdToken() {
 // the "agent shims" helpers above for the mechanism.
 async function cmdShim(args = []) {
   const [sub, ...rest] = args;
+
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy shim [status] | bivy shim install <agent> [--dir <dir>] [--headless \"<flags>\"] [--force] | bivy shim uninstall <agent>\n\nMake an interactive agent binary launch its native TUI in a Bivy PTY (remote-visible; resumable as chat).");
+    return;
+  }
+
+  if (sub && sub !== "status" && sub !== "list" && sub !== "install" && sub !== "add" && sub !== "uninstall" && sub !== "remove" && sub !== "rm") {
+    console.error(c.red(`Unknown shim subcommand: ${sub}. Usage: bivy shim install|uninstall|status <agent>`));
+    process.exit(1);
+    return;
+  }
 
   if (sub === "install" || sub === "add") {
     const agent = rest.find((a) => !a.startsWith("-"));
@@ -1333,6 +1374,10 @@ async function cmdShim(args = []) {
 // running in a pinned run-terminal (started via the shim or `bivy run`) and
 // reopen its pinned session as a governed chat you can drive from the app.
 async function cmdTakeover(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy takeover <termId|session-id>\n\nStop a pinned run-terminal's native TUI (started via the shim or 'bivy run') and reopen its session as a governed chat you can drive from the app.");
+    return;
+  }
   if (!(await ensureDeps())) process.exit(1);
   const ref = args.find((a) => !a.startsWith("-"));
   if (!ref) { console.error(c.red("Usage: bivy takeover <termId|session-id>")); process.exit(1); return; }
@@ -1366,6 +1411,9 @@ async function cmdTakeover(args = []) {
 // `bivy exec "<prompt>"` — one-shot headless run: create/resume a session, send
 // one prompt, print the final answer to stdout, exit. Working details go to
 // stderr so stdout is pipe-clean. Delegates to src/exec.ts (needs the WS client).
+// Deliberately does NOT intercept -h/--help here (unlike most other
+// subcommands, #113): the prompt is free text, and 'bivy exec --help' is a
+// legitimate (if odd) way to ask the agent about the --help flag.
 async function cmdExec(args = []) {
   if (!(await ensureDeps())) process.exit(1);
   const config = loadConfig();
@@ -1596,6 +1644,14 @@ async function fetchJson(baseUrl, pathName, token) {
 //   --limit/-n N    cap how many saved sessions to show (default: unlimited — all of them)
 //   <n> | <id>      select non-interactively (index in the list, or a session id)
 async function cmdSessions(args = [], opts = {}) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(
+      opts.autoResume
+        ? "Usage: bivy resume [n|id] [--json]\n\nResume a session directly (default: most recent). Alias for 'bivy sessions' that jumps straight to a chosen entry."
+        : "Usage: bivy sessions [n|id] [--json] [--limit N]\n\nList recent sessions (live + saved) and resume one. Alias: ls.",
+    );
+    return;
+  }
   if (!(await ensureDeps())) process.exit(1);
   const json = args.includes("--json");
   const nArg = argValue(args, "limit") || argValue(args, "n");
@@ -1694,6 +1750,10 @@ async function cmdSessions(args = [], opts = {}) {
 // PTY is closed; a durable session's current turn is aborted (add --delete to
 // also remove the saved session). Ids come from `bivy sessions`.
 async function cmdKill(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy kill <id> [--delete]\n\nStop a session/terminal. Ids come from 'bivy sessions'. --delete (alias --rm) also removes a saved session.");
+    return;
+  }
   if (!(await ensureDeps())) process.exit(1);
   const del = args.includes("--delete") || args.includes("--rm");
   const id = args.find((a) => !a.startsWith("-"));
@@ -1731,6 +1791,10 @@ async function cmdKill(args = []) {
 // which does the control-plane epoch compare-and-set and materializes the replica
 // worktree. Run it on the standby node that holds the replica.
 async function cmdPromote(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy promote <session-id>\n\nContinue a warm-replicated session on THIS node when its owner went offline. Run it on the standby node that holds the replica.");
+    return;
+  }
   if (!(await ensureDeps())) process.exit(1);
   const id = args.find((a) => !a.startsWith("-"));
   if (!id) { console.error(c.red("Usage: bivy promote <session-id>")); process.exit(1); return; }
@@ -1756,6 +1820,8 @@ async function cmdPromote(args = []) {
 
 // `bivy send <id> "<message>"` — send a prompt to an existing session and stream
 // the reply. Thin wrapper over the headless exec client with --session.
+// Deliberately does NOT intercept -h/--help (see cmdExec above) — the message
+// is free text a caller may legitimately want to send verbatim.
 async function cmdSend(args = []) {
   if (!(await ensureDeps())) process.exit(1);
   const id = args.find((a) => !a.startsWith("-"));
@@ -2802,7 +2868,11 @@ function terminalQr(text) {
 
 // --- commands ---------------------------------------------------------------
 
-async function cmdSetup() {
+async function cmdSetup(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy setup\n\nFirst-run wizard: deps, remote sync + sign-in, background service. Safe to re-run later to change the workspace, default agent, or remote access.");
+    return;
+  }
   console.log(c.bold("\n  Bivy — node setup\n"));
   if (process.getuid?.() === 0) {
     console.log(c.yellow("You are running setup as root. For a real node, create a normal user (e.g. 'bivy') and install there."));
@@ -3057,7 +3127,11 @@ async function finishSetupRemote(config, setupSession = null) {
   console.log("");
 }
 
-async function cmdStart() {
+async function cmdStart(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy start\n\nRun the daemon in the foreground (Ctrl+C to stop). For a persistent background service, see 'bivy service install' or 'bivy setup'.");
+    return;
+  }
   if (!(await ensureDeps())) process.exit(1);
   const config = loadConfig();
   console.log(c.green(`Starting node at ${url(config)} (Ctrl+C to stop)…`));
@@ -3066,6 +3140,10 @@ async function cmdStart() {
 }
 
 async function cmdStatus(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy status [--json]\n\nShow config and whether the node is reachable. Exits non-zero when the node is down, so it works as a health gate in scripts.");
+    return;
+  }
   const json = args.includes("--json");
   const config = loadConfig();
   const reachable = await isReachable(config);
@@ -3110,6 +3188,10 @@ async function cmdStatus(args = []) {
 // `bivy doctor` — one health screen: runtime deps, node reachability, model auth,
 // remote/relay, and agents on PATH.
 async function cmdDoctor(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy doctor\n\nHealth check: runtime deps, node reachability, model auth, remote/relay, and agents on PATH. Exits non-zero if Node is unsupported or the node is unreachable, so it can gate CI/monitoring.");
+    return;
+  }
   if (!(await ensureDeps())) process.exit(1);
 
   const config = loadConfig();
@@ -3140,7 +3222,10 @@ async function cmdDoctor(args = []) {
   console.log(`  ${mark(hasModelConfig(config), authOwner !== "bivy")} model ${hasModelConfig(config) ? "configured" : authOwner === "bivy" ? c.dim("not configured — run 'bivy login'") : c.dim("agent-native auth — use the agent's CLI login if needed")}`);
   const relayConfigured = Boolean(status?.relay?.configured || fs.existsSync(relayConfigPath));
   console.log(`  ${relayConfigured ? ok : c.dim("○")} remote ${relayConfigured ? (status?.relay?.connected ? c.green("relay connected") : "relay configured") : c.dim("local only — 'bivy relay:setup' to enable")}`);
-  const agents = ["claude", "codex", "gemini", "goose", "aider", "opencode"].filter((a) => commandExists(a));
+  // Derived from BUILTIN_TERMINAL_AGENTS (the same list 'bivy agents'/'bivy run'
+  // use) rather than a hand-maintained list, so it can't drift out of sync (#113).
+  const agentCommands = [...BUILTIN_TERMINAL_AGENTS.values()].filter((a) => a.type === "command").map((a) => a.command);
+  const agents = agentCommands.filter((a) => commandExists(a));
   console.log(`  ${mark(agents.length > 0, true)} agents on PATH: ${agents.length ? c.cyan(agents.join(", ")) : c.dim("none (built-in Pi still works; 'bivy agents:install')")}`);
   console.log("");
 
@@ -3154,6 +3239,10 @@ async function cmdDoctor(args = []) {
 // systemd journal (Linux service), the launchd log files (macOS service), or the
 // background node.log captured by `bivy start`.
 async function cmdLogs(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy logs [-f|--follow] [-n|--lines N]\n\nTail the node logs (systemd journal, launchd, or the background log from 'bivy start').");
+    return;
+  }
   const follow = args.includes("-f") || args.includes("--follow");
   const nArg = argValue(args, "lines") || argValue(args, "n");
   const lines = Number(nArg) > 0 ? String(Math.floor(Number(nArg))) : "80";
@@ -3194,6 +3283,10 @@ async function tailFiles(files, lines, follow) {
 }
 
 async function cmdUpdate(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy update [--force|--no-wait]\n\nUpdate Bivy + install deps + restart service. Waits for active sessions to finish a turn first; --force/--no-wait skips the wait. See 'bivy update:log' for the last run's output.");
+    return;
+  }
   // Inside a Bivy web/PWA terminal the shell is a child of the node's own
   // process, so `restartService()` — the final step of an update — tears down
   // this very terminal. Run inline and you lose all output the moment it lands.
@@ -3288,6 +3381,10 @@ async function runUpdate(args = []) {
 // After a `bivy update` detaches and this terminal reconnects, this is how you
 // confirm the background update succeeded.
 function cmdUpdateLog(args) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy update:log [-f|--follow]\n\nShow output of the last (or in-progress) 'bivy update' run.");
+    return;
+  }
   if (!fs.existsSync(updateLogPath)) {
     console.log(c.dim("No update log yet — run 'bivy update' first."));
     return;
@@ -3324,6 +3421,10 @@ function cmdUpdateLog(args) {
 }
 
 async function cmdLogin(args) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy login [provider]\n\nSign into a model provider (Pi's native /login). With no provider, prompts interactively for the auth method and provider.");
+    return;
+  }
   if (!(await ensureDeps())) process.exit(1);
   const config = loadConfig();
   const code = await run(nodeBin, [...nodeScriptArgs(bivyLoginEntry), ...args], {
@@ -3333,7 +3434,11 @@ async function cmdLogin(args) {
   process.exit(code);
 }
 
-async function cmdLinkPhone() {
+async function cmdLinkPhone(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy link\n\nShow a remote web/PWA link (and QR) in the terminal, single-use and short-lived (5 minutes). Requires 'bivy relay:setup' first.");
+    return;
+  }
   if (!(await ensureDeps())) process.exit(1);
   const config = loadConfig();
   if (!(await isReachable(config))) {
@@ -3492,6 +3597,10 @@ async function cmdUninstall(args = []) {
 }
 
 async function cmdRelaySetup(args) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy relay:setup [--email <email>|--github] [--session-token <token>]\n\nEnable secure remote web/PWA access (sign in once). With no flags, prompts interactively for GitHub or email sign-in.");
+    return;
+  }
   if (!(await ensureDeps())) process.exit(1);
   const config = loadConfig();
   let passthrough = args;
@@ -3541,6 +3650,10 @@ async function cmdRelaySetup(args) {
 }
 
 async function cmdService(args) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy service <install|uninstall|status>\n\nManage the background service (systemd on Linux, launchd on macOS) that keeps the node running across reboots.");
+    return;
+  }
   const action = args[0];
   if (action === "install") {
     if (!(await ensureDeps())) process.exit(1);
@@ -3550,7 +3663,8 @@ async function cmdService(args) {
   } else if (action === "status") {
     console.log(serviceStatusLine());
   } else {
-    console.log("Usage: bivy service <install|uninstall|status>");
+    console.error(c.red(`${action ? `Unknown service action: ${action}. ` : ""}Usage: bivy service <install|uninstall|status>`));
+    process.exit(1);
   }
 }
 
@@ -3570,7 +3684,7 @@ function printHelp() {
 ${c.bold("bivy")} — Bivy node CLI
 
   ${c.cyan("bivy run claude")}   Run a native agent (real CLI/TUI) as a relay-visible session
-  ${c.cyan("bivy run <agent>")}  claude | codex | opencode | aider | hermes | gemini | pi | -- <command>
+  ${c.cyan("bivy run <agent>")}  ${[...BUILTIN_TERMINAL_AGENTS.keys()].join(" | ")} | -- <command>
   ${c.cyan("bivy run <agent> --name <label>")}  Name the session (shown in 'bivy sessions' and the app)
   ${c.cyan("bivy run <agent> --model <model>")}  Run with a specific model (passed to the agent, shown in the cockpit)
   ${c.cyan("bivy run <agent> --node <name>")}  Start the session on another registered node
@@ -3599,7 +3713,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy login")}      Sign into a model provider (Pi /login)
   ${c.cyan("bivy update")}     Update Bivy + install deps + restart service (waits for active sessions to finish a turn; --force to skip)
   ${c.cyan("bivy update:log")} Show output of the last (or in-progress) update
-  ${c.cyan("bivy agents:install")}  Install bundled agents (Claude, Codex, OpenCode, Aider, Hermes, Gemini CLI)
+  ${c.cyan("bivy agents:install")}  Install bundled agents (${BUNDLED_AGENTS.map((a) => a.label).join(", ")})
   ${c.cyan("bivy open")}       Open the remote web/PWA app
   ${c.cyan("bivy service")}    install | uninstall | status
   ${c.cyan("bivy uninstall")}    Remove Bivy and all its data (--keep-sessions, --keep-worktrees, --dry-run)
@@ -3628,13 +3742,25 @@ async function main() {
       break;
     case "setup":
     case "init":
-      await cmdSetup();
+      await cmdSetup(args);
       break;
     case "start":
     case "dev":
-      await cmdStart();
+      await cmdStart(args);
       break;
     case "run":
+      // Only intercept bivy's own '--help'/'-h', and only when no agent was given
+      // ('bivy run --help'/'bivy run -h'). Once an agent is named the rest of the
+      // args (including its own --help) pass straight through to it — e.g.
+      // 'bivy run claude --help' must show Claude's help, not bivy's.
+      if (args[0] === "-h" || args[0] === "--help") {
+        console.log(`Usage: bivy run <agent> [--name <label>] [--model <model>] [--node <name>] [--clone [remote]] [--workspace <dir>] | -- <command>
+
+Run a native agent (real CLI/TUI) as a relay-visible session.
+Agents: ${[...BUILTIN_TERMINAL_AGENTS.keys()].join(", ")}, or -- <command> for anything else.
+An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
+        break;
+      }
       await cmdRun(args);
       break;
     case "sessions":
@@ -3661,7 +3787,7 @@ async function main() {
       await cmdTakeover(args);
       break;
     case "token":
-      await cmdToken();
+      await cmdToken(args);
       break;
     case "exec":
       await cmdExec(args);
@@ -3681,9 +3807,14 @@ async function main() {
       cmdCompletions(args);
       break;
     case "stop":
+      if (args.includes("-h") || args.includes("--help")) { console.log("Usage: bivy stop\n\nStop the background service."); break; }
       stopService();
       break;
     case "restart":
+      if (args.includes("-h") || args.includes("--help")) {
+        console.log("Usage: bivy restart [--force|--no-wait]\n\nRestart the background service. Waits for active sessions to finish a turn first; --force/--no-wait skips the wait.");
+        break;
+      }
       await waitForIdleSessions(loadConfig(), { skip: args.includes("--force") || args.includes("--no-wait") });
       if (restartService()) {
         console.log(c.green("Service restarted."));
@@ -3714,10 +3845,18 @@ async function main() {
       break;
     case "agents:install":
     case "runtimes:install":
+      if (args.includes("-h") || args.includes("--help")) {
+        console.log(`Usage: bivy agents:install\n\nInstall bundled agent runtimes (${BUNDLED_AGENTS.map((a) => a.label).join(", ")}).`);
+        break;
+      }
       if (!(await ensureDeps())) process.exit(1);
       await ensureBundledAgents();
       break;
     case "open": {
+      if (args.includes("-h") || args.includes("--help")) {
+        console.log("Usage: bivy open\n\nOpen the remote web/PWA app in your browser (requires 'bivy relay:setup' first).");
+        break;
+      }
       const config = loadConfig();
       const remote = await openRemoteApp(config);
       if (!remote) {
@@ -3735,25 +3874,41 @@ async function main() {
       await cmdUninstall(args);
       break;
     case "link":
-      await cmdLinkPhone();
+      await cmdLinkPhone(args);
       break;
     case "relay:setup":
       await cmdRelaySetup(args);
       break;
     case "github:connect":
     case "connect-repo":
+      if (args.includes("-h") || args.includes("--help")) {
+        console.log("Usage: bivy github:connect [owner/repo]\n\nAuthorize repo access for the repo picker via GitHub's device flow. The resulting repo-scoped token is stored in this node's encrypted local vault.");
+        break;
+      }
       if (!(await ensureDeps())) process.exit(1);
-      await run(nodeBin, [...nodeScriptArgs(githubConnectEntry), ...args], { cwd: repoRoot, env: process.env });
+      process.exit(await run(nodeBin, [...nodeScriptArgs(githubConnectEntry), ...args], { cwd: repoRoot, env: process.env }));
       break;
     case "github:app-connect":
+      if (args.includes("-h") || args.includes("--help")) {
+        console.log("Usage: bivy github:app-connect --app-id <id>|--slug <slug> --key <path.pem> [--label <name>] [--node-label <label>] [--rotate-webhook]\n\nConnect an existing GitHub App. The private key stays in this node's local vault.");
+        break;
+      }
       if (!(await ensureDeps())) process.exit(1);
-      await run(nodeBin, [...nodeScriptArgs(githubAppConnectEntry), ...args], { cwd: repoRoot, env: process.env });
+      process.exit(await run(nodeBin, [...nodeScriptArgs(githubAppConnectEntry), ...args], { cwd: repoRoot, env: process.env }));
       break;
     case "github:app-sync":
+      if (args.includes("-h") || args.includes("--help")) {
+        console.log("Usage: bivy github:app-sync [on|off]\n\nSync connected GitHub App keys (E2E-encrypted) to this account's other opted-in nodes. With no argument, prints the current status.");
+        break;
+      }
       if (!(await ensureDeps())) process.exit(1);
-      await run(nodeBin, [...nodeScriptArgs(githubAppSyncEntry), ...args], { cwd: repoRoot, env: process.env });
+      process.exit(await run(nodeBin, [...nodeScriptArgs(githubAppSyncEntry), ...args], { cwd: repoRoot, env: process.env }));
       break;
     case "github:app-create": {
+      if (args.includes("-h") || args.includes("--help")) {
+        console.log("Usage: bivy github:app-create [--org <org>]\n\nOne-click: create + connect a GitHub App. Opens the manifest flow in your browser (or prints instructions on a headless server). The private key never leaves this node.");
+        break;
+      }
       // One-click: open the node's manifest flow in the browser. The node
       // creates the app on GitHub and keeps the private key locally.
       const nodePort = Number(process.env.PORT || 4317);
@@ -3785,15 +3940,22 @@ async function main() {
       break;
     }
     case "secrets":
-    case "secret":
+    case "secret": {
       if (!(await ensureDeps())) process.exit(1);
-      await run(nodeBin, [...nodeScriptArgs(secretsEntry), ...args], { cwd: repoRoot, env: process.env });
+      // secrets-cli.ts only recognizes "--help"/"help" as the FIRST argument, so
+      // a subcommand-position --help (e.g. 'bivy secrets list --help') would
+      // otherwise be ignored and the live action would run anyway (#113).
+      const forwardArgs = (args.includes("-h") || args.includes("--help")) ? ["--help"] : args;
+      process.exit(await run(nodeBin, [...nodeScriptArgs(secretsEntry), ...forwardArgs], { cwd: repoRoot, env: process.env }));
       break;
+    }
     case "voice":
-    case "stt":
+    case "stt": {
       if (!(await ensureDeps())) process.exit(1);
-      await run(nodeBin, [...nodeScriptArgs(sttEntry), ...args], { cwd: repoRoot, env: process.env });
+      const forwardArgs = (args.includes("-h") || args.includes("--help")) ? ["--help"] : args;
+      process.exit(await run(nodeBin, [...nodeScriptArgs(sttEntry), ...forwardArgs], { cwd: repoRoot, env: process.env }));
       break;
+    }
     case "mcp-proxy":
       // Universal Agent Harness MCP proxy. Launched by an agent in front of its
       // MCP servers; its stdin/stdout ARE the JSON-RPC stream, so emit nothing
