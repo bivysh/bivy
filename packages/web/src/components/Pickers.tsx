@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, ModelInfo, RuntimeInfo } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { Sheet, PickerItem } from "./Sheet.js";
+import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { SANDBOX_TIERS } from "./Settings.js";
 
@@ -394,11 +395,25 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
 // ---- Model picker (+ reasoning pill) ----
 function ReasoningPill({ state }: { state: AppState }) {
   const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  // Dismiss the dropdown on an outside tap or Escape — it's inside the model
+  // picker sheet, so Escape here closes just this menu (topmost layer), not the
+  // sheet. Without this it only closed by re-tapping the pill or choosing a
+  // level, and tapping elsewhere left it floating, which read as stuck.
+  useModalEscape(() => setOpen(false), open);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [open]);
   const t = state.thinking;
   if (!t.supportsThinking || !t.availableThinkingLevels || t.availableThinkingLevels.length <= 1) return null;
   const label = THINKING_LABELS[t.thinkingLevel] || t.thinkingLevel;
   return (
-    <div className="reasoning-wrap">
+    <div className="reasoning-wrap" ref={wrapRef}>
       <button className="reasoning-pill" onClick={() => setOpen((v) => !v)}>
         ✦ {label} {open ? "▾" : "▸"}
       </button>
