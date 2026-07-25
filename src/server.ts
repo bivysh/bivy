@@ -1879,6 +1879,23 @@ function handleTerminalMessage(
       void (async () => {
         const record = resolveSession(msg.sessionId);
         if (!record) { emit({ type: "terminal.error", error: "Session not found for TUI." }); return; }
+        // Idempotent "go to terminal": a TUI is already live for this session
+        // (opened here, on another device, or before a reload). Re-attach the
+        // caller to that same PTY — replaying its scrollback — instead of
+        // spawning a second CLI that would fight over the one session file and
+        // orphan the first. A stale id (PTY already gone) falls through to a
+        // fresh launch below.
+        if (record.tuiTermId) {
+          const snapshot = terminals.snapshot(record.tuiTermId);
+          if (snapshot != null) {
+            owned.add(record.tuiTermId);
+            if (typeof msg.cols !== "undefined" || typeof msg.rows !== "undefined") {
+              terminals.resize(record.tuiTermId, Number(msg.cols) || 80, Number(msg.rows) || 24);
+            }
+            emit({ type: "terminal.attached", termId: record.tuiTermId, data: snapshot });
+            return;
+          }
+        }
         if (sessionBusy(record)) { emit({ type: "terminal.error", sessionId: record.id, error: "Finish or stop the current turn before opening the TUI." }); return; }
         let spec;
         try { spec = record.session.interactiveTuiCommand ? await record.session.interactiveTuiCommand() : null; }
@@ -1915,6 +1932,27 @@ function handleTerminalMessage(
           emit({ type: "terminal.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) });
         }
       })();
+      return true;
+    }
+    case "terminal.close.tui": {
+      // "Take over in chat": stop the interactive TUI that owns this session and
+      // hand it back to governed chat. Closing the PTY runs the same onExit path
+      // as the user quitting the CLI — it clears tuiTermId, flips tuiRefreshing,
+      // rebuilds the in-process session from disk (refreshRecordAfterTui), and
+      // broadcasts `terminal.tui {active:false}` — so the composer unlocks with
+      // whatever the TUI wrote. Resolve the PTY server-side from the session so a
+      // client that never held the termId (another device, post-reload) can do it.
+      const record = resolveSession(msg.sessionId);
+      const termId = record?.tuiTermId;
+      if (termId) {
+        terminals.close(termId);
+        owned.delete(termId);
+        clearBellNotify(termId);
+      } else if (record) {
+        // No live TUI to close — make sure the client isn't left locked on a
+        // stale flag by re-asserting the unlocked state for this session.
+        broadcastTuiState(record.id, false);
+      }
       return true;
     }
     case "terminal.attach": {

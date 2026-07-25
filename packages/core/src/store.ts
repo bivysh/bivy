@@ -436,6 +436,10 @@ export interface AppState {
   runTerminals: RunTerminalSummary[];
   activeSessionId: string | null;
   activeTitle: string;
+  /** Sessions currently driven by their interactive TUI (single-writer): chat
+   *  for these is locked until the TUI exits. Fed by `terminal.tui` broadcasts
+   *  so every device shows the same locked/unlocked state. */
+  tuiSessions: string[];
   github: GithubContext;
   transcript: TranscriptEntry[];
   working: boolean;
@@ -574,6 +578,7 @@ export function initialState(): AppState {
     runTerminals: [],
     activeSessionId: null,
     activeTitle: "New session",
+    tuiSessions: [],
     github: { issueUrl: null, prUrl: null, branch: null, repo: null, prs: [] },
     transcript: [],
     working: false,
@@ -1463,6 +1468,18 @@ export class SessionStore {
       case "terminal.exit": {
         const termId = String((event as any).termId || "");
         if (termId) this.set({ runTerminals: this.state.runTerminals.filter((t) => t.termId !== termId) });
+        return;
+      }
+      case "terminal.tui": {
+        // A session was handed to / returned from its interactive TUI. Track the
+        // locked set so the composer for that session can show the "open in the
+        // terminal" banner instead of a rejected send. Idempotent add/remove.
+        const sid = String((event as any).sessionId || "");
+        if (!sid) return;
+        const active = Boolean((event as any).active);
+        const has = this.state.tuiSessions.includes(sid);
+        if (active && !has) this.set({ tuiSessions: [...this.state.tuiSessions, sid] });
+        else if (!active && has) this.set({ tuiSessions: this.state.tuiSessions.filter((s) => s !== sid) });
         return;
       }
       case "sessions.list": {

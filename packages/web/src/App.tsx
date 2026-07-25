@@ -130,7 +130,12 @@ export function App() {
     state.status === "reconnecting" ||
     (everConnectedRef.current &&
       (state.status === "connecting" || state.status === "linking" || state.status === "pairing"));
-  const canCompose = online || transientReconnect;
+  // The active session is being driven by its interactive TUI (single writer):
+  // chat sends are refused by the node until the TUI exits. Rather than let a
+  // send fail with an error, lock the composer and show a banner offering to
+  // jump to the terminal or take the session back into chat.
+  const activeTuiLocked = Boolean(state.activeSessionId && state.tuiSessions.includes(state.activeSessionId));
+  const canCompose = (online || transientReconnect) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
   useEdgeSwipe({ isOpen: drawerOpen, onOpen: () => setDrawerOpen(true), onClose: () => setDrawerOpen(false) });
@@ -219,6 +224,13 @@ export function App() {
     setTerminalTui(true);
     setTerminalOpen(true);
   }, []);
+
+  // "Take over in chat" from the TUI lock banner: ask the node to stop the TUI
+  // that owns the active session; it rebuilds the session from disk and
+  // broadcasts `terminal.tui {active:false}`, which unlocks the composer.
+  const takeoverInChat = useCallback(() => {
+    if (state.activeSessionId) controller.closeSessionTui(state.activeSessionId);
+  }, [state.activeSessionId]);
 
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
@@ -470,10 +482,24 @@ export function App() {
           )}
         </div>
 
+        {activeTuiLocked && (
+          <div className="composer-tui-lock" role="status">
+            <span className="composer-tui-lock-text">This session is open in the terminal (TUI).</span>
+            <div className="composer-tui-lock-actions">
+              <button type="button" className="ghost-btn" onClick={continueInTerminal}>
+                Go to terminal
+              </button>
+              <button type="button" className="btn primary" onClick={takeoverInChat}>
+                Take over in chat
+              </button>
+            </div>
+          </div>
+        )}
+
         <Composer
           state={state}
           disabled={!canCompose}
-          disabledHint={state.status === "offline" ? "Not connected" : "Connecting…"}
+          disabledHint={activeTuiLocked ? "Open in the terminal — take over to chat here" : state.status === "offline" ? "Not connected" : "Connecting…"}
           working={state.working}
           onSend={(text, attachments) => controller.sendPrompt(text, attachments)}
           onAbort={() => controller.abort()}
