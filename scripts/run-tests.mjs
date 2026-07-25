@@ -9,7 +9,7 @@
 // result. This auto-discovers `test/*.test.ts`, runs each independently,
 // continues past failures, and prints one summary. Exit code is non-zero if any
 // suite (ts or the shell installer tests) fails.
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,18 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const testDir = path.join(repoRoot, "test");
 const tsxBin = path.join(repoRoot, "node_modules", ".bin", "tsx");
+
+// Preflight: without tsx every .test.ts suite fails instantly with an opaque
+// spawn error, so the summary reads "N/N failed" and hides the real cause. Fail
+// loudly with the actual fix instead. (Historically `build:release` could empty
+// node_modules and produce exactly this — see issue #11.)
+if (!existsSync(tsxBin)) {
+  process.stderr.write(
+    `\nCannot run tests: ${path.relative(repoRoot, tsxBin)} is missing.\n` +
+      `Dependencies are not installed (or were removed). Run \`npm install\` and try again.\n`,
+  );
+  process.exit(1);
+}
 
 const tsSuites = readdirSync(testDir)
   .filter((f) => f.endsWith(".test.ts"))

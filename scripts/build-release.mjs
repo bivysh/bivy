@@ -28,6 +28,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { curateManifest } from "./release-manifest.mjs";
 
 const argv = process.argv.slice(2);
 const doPublish = argv.includes("--publish");
@@ -85,29 +86,17 @@ for (const item of [
   copy(item[0], item[1]);
 }
 
-// The private monorepo currently contains mobile dependencies that are not
-// needed by the node installer. Keep the downloadable package small and focused.
+// Curate the staged manifest: allowlist the scripts that reference only shipped
+// paths (bin/, dist/), drop devDependencies and workspaces, prune mobile-only
+// deps, and repoint start/dev at dist. Allowlisting (not denylisting) means a new
+// dev-only script never silently ships broken — see scripts/release-manifest.mjs
+// and issue #7. The `prepare`/`prepublishOnly` scripts drop out of the allowlist:
+// `prepare` runs a dev-only git-hook cleanup that npm would auto-run on install
+// (MODULE_NOT_FOUND in a packaged install), and `prepublishOnly` only guards a
+// stray root publish — this staged dir is the sanctioned publish path.
 const pkgPath = path.join(app, "package.json");
 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-for (const dep of ["expo", "react", "react-native"]) delete pkg.dependencies?.[dep];
-for (const dep of ["heroicons"]) delete pkg.devDependencies?.[dep];
-pkg.scripts.start = "node dist/server.js";
-pkg.scripts.dev = "node dist/server.js";
-// `prepare` runs a dev-only git-hook cleanup (scripts/disable-git-hooks.mjs),
-// which is neither shipped in the release nor meaningful in a packaged, non-git
-// install. npm runs `prepare` automatically on `npm install`, so leaving it in
-// aborts the installer with MODULE_NOT_FOUND. Drop it from the artifact.
-delete pkg.scripts.prepare;
-// The staging dir IS the sanctioned publish path, so drop the root's
-// `prepublishOnly` guard here — it exists only to hard-fail a stray
-// `npm publish` from the repo root (which would ship the whole monorepo).
-delete pkg.scripts.prepublishOnly;
-// The artifact ships no `packages/` workspaces (the web PWA is built/served by
-// the control plane, not the node). Drop the monorepo `workspaces` field and the
-// workspace-scoped scripts so they don't dangle in the installed package.
-delete pkg.workspaces;
-for (const s of ["build:web", "dev:web", "test:core", "typecheck:web"]) delete pkg.scripts?.[s];
-fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+fs.writeFileSync(pkgPath, `${JSON.stringify(curateManifest(pkg), null, 2)}\n`);
 run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: app });
 
 const releasePkg = JSON.parse(fs.readFileSync(path.join(app, "package.json"), "utf8"));
