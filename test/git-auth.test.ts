@@ -26,6 +26,14 @@ async function check(name: string, fn: () => void | Promise<void>) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-git-auth-"));
 const dataDir = path.join(tmp, "data");
 fs.mkdirSync(dataDir, { recursive: true });
+// Isolate the data dir END TO END (issue #1). configureGitAuth() + the worker
+// reading endpoint.json next to itself already pin the helper to this test's dir,
+// but git-auth's UNCONFIGURED fallback (credDir when no override is set) resolves
+// via defaultDataDir(). Pinning BIVY_DATA_DIR here closes that last path so no
+// code route can reach a real daemon's data dir and return its live token — the
+// failure this test hid on a machine with a running node.
+const savedDataDir = process.env.BIVY_DATA_DIR;
+process.env.BIVY_DATA_DIR = dataDir;
 configureGitAuth(dataDir);
 
 // A stub of the daemon's loopback git-credential endpoint. Records each request
@@ -171,6 +179,8 @@ await check("migration: rewriting a tokenized origin to clean drops the token", 
 
 server.close();
 fs.rmSync(tmp, { recursive: true, force: true });
+if (savedDataDir === undefined) delete process.env.BIVY_DATA_DIR;
+else process.env.BIVY_DATA_DIR = savedDataDir;
 
 if (failures) {
   console.error(`\ngit-auth: ${failures} test(s) failed`);
