@@ -117,6 +117,19 @@ await check("helper supplies no credential when the endpoint has no token (404)"
   assert.ok(!/password=/.test(out), `expected no password, got: ${out}`);
 });
 
+await check("credConfigArgs resets the helper chain before adding bivy's helper", () => {
+  // Guards H1: a pre-existing host github.com helper (osxkeychain, `gh`, store)
+  // must not shadow bivy's and leak the human's personal token into agent clones.
+  const args = credConfigArgs();
+  const flags = args.filter((_, i) => i % 2 === 1); // values follow each "-c"
+  // Empty resets must appear, and must come BEFORE bivy's real helper value.
+  assert.ok(flags.includes("credential.helper="), "must clear the generic helper chain");
+  assert.ok(flags.includes("credential.https://github.com.helper="), "must clear the host helper chain");
+  const resetIdx = flags.indexOf("credential.https://github.com.helper=");
+  const realIdx = flags.findIndex((f) => /^credential\.https:\/\/github\.com\.helper=.+/.test(f));
+  assert.ok(realIdx > resetIdx, "bivy's helper must be added after the reset");
+});
+
 await check("nothing long-lived is stored on disk (fetch-on-demand)", () => {
   const credDir = path.join(dataDir, "git-cred");
   assert.ok(fs.existsSync(path.join(credDir, "credential-helper.sh")), "shim should exist");

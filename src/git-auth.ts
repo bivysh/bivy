@@ -126,10 +126,21 @@ export function writeGitCredentialEndpoint(url: string, secret: string): void {
 export function credConfigArgs(): string[] {
   const helper = ensureCredentialHelper();
   return [
+    // Reset the credential-helper chain BEFORE adding bivy's helper. Git collects
+    // helpers from system/global/local config and consults them in order, using the
+    // FIRST that returns a password; command-line `-c` is appended last. So without a
+    // reset, any pre-existing github.com helper on the host (osxkeychain, `gh`, store,
+    // manager-core) is consulted first and would hand the agent the human's personal,
+    // broadly-scoped token instead of bivy's scoped, short-lived one. An empty helper
+    // value clears the accumulated list, so bivy's is the only helper that runs.
     "-c",
-    "credential.https://github.com.useHttpPath=true",
+    "credential.helper=",
+    "-c",
+    "credential.https://github.com.helper=",
     "-c",
     `credential.https://github.com.helper=${helper}`,
+    "-c",
+    "credential.https://github.com.useHttpPath=true",
   ];
 }
 
@@ -149,5 +160,13 @@ export async function configureRepoCredentialHelper(
 ): Promise<void> {
   const helper = ensureCredentialHelper();
   await git(["-C", dest, "config", "--local", "credential.https://github.com.useHttpPath", "true"]);
-  await git(["-C", dest, "config", "--local", "credential.https://github.com.helper", helper]);
+  // Reset the helper chain for this repo, then set ONLY bivy's helper, so AGENT-run
+  // git never falls back to an inherited host helper holding the human's personal
+  // token (see credConfigArgs for the full rationale). Clear any prior values first
+  // so re-running stays idempotent (--unset-all returns 5 when the key is absent).
+  await git(["-C", dest, "config", "--local", "--unset-all", "credential.helper"]).catch(() => {});
+  await git(["-C", dest, "config", "--local", "--unset-all", "credential.https://github.com.helper"]).catch(() => {});
+  await git(["-C", dest, "config", "--local", "--add", "credential.helper", ""]);
+  await git(["-C", dest, "config", "--local", "--add", "credential.https://github.com.helper", ""]);
+  await git(["-C", dest, "config", "--local", "--add", "credential.https://github.com.helper", helper]);
 }

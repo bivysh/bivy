@@ -4762,7 +4762,7 @@ function runNativeCommand(command: MeshCommand) {
   return { ok: true, runId };
 }
 
-const guardianInterceptor: ToolInterceptor = async ({ sessionId, toolName, input, signal }) => {
+const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, input, signal }) => {
   // AskUserQuestion is a Bivy-owned interaction, not a governed side effect: any
   // agent that emits it (pi's stealth toolset mirrors Claude Code; the Claude SDK
   // has it natively) is intercepted here and answered via Bivy's own question
@@ -4813,6 +4813,20 @@ const guardianInterceptor: ToolInterceptor = async ({ sessionId, toolName, input
 
   if (!approved) {
     return { block: true, reason: `User rejected ${toolName}` };
+  }
+};
+
+// Fail-closed wrapper around the guardian. The interceptor IS the security
+// boundary (policy + approvals + questions), so if any of it throws — a bug in
+// rule evaluation, a rejected approval promise, an aborted signal — the tool
+// must be BLOCKED, never allowed to fall through to the SDK's default outcome.
+const guardianInterceptor: ToolInterceptor = async (params) => {
+  try {
+    return await guardianInterceptorImpl(params);
+  } catch (error) {
+    broadcast({ type: "tool.blocked", sessionId: params.sessionId, toolName: params.toolName, reason: "internal approval error" });
+    if (process.env.BIVY_DEBUG) console.error("guardianInterceptor error:", error);
+    return { block: true, reason: "internal approval error" };
   }
 };
 
@@ -5574,6 +5588,7 @@ function detachSessionRecord(record: SessionRecord, reason: string) {
   persistSessionMetadata(record, "idle");
   eventLog.flush(record.id);
   questionManager.cancelForSession(record.id);
+  approvals.cancelForSession(record.id);
   record.unsubscribe?.();
   record.unsubscribe = undefined;
   sessionEvents.flush(record.id);
@@ -5600,6 +5615,9 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   // guardian promise (and the tool call behind it) settles rather than hanging
   // until timeout. Belt-and-suspenders alongside the tool-call abort signal.
   questionManager.cancelForSession(record.id);
+  // Same for a pending approval: deny it so its card closes and the guardian
+  // promise settles instead of haunting connected clients until the 5-min timeout.
+  approvals.cancelForSession(record.id);
   record.unsubscribe?.();
   record.unsubscribe = undefined;
   // Flush any pending coalesced update (so the last streamed text isn't lost),
