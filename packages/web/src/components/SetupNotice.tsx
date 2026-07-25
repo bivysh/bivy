@@ -23,8 +23,39 @@ export function SetupNotice() {
   const [email, setEmail] = useState("");
   const [note, setNote] = useState<{ text: string; href?: string } | null>(null);
   const [sending, setSending] = useState(false);
+  // The address a magic link was last sent to, so we can offer an explicit
+  // "resend" instead of leaving the user on a static "check your email" message
+  // with no recourse if it never arrives.
+  const [sentTo, setSentTo] = useState<string | null>(null);
   const [githubBusy, setGithubBusy] = useState(false);
   const [githubError, setGithubError] = useState<string | null>(null);
+  // A failure bounced back from the OAuth callback (?authError=<code>), e.g. a
+  // GitHub account with no verified email. Shown prominently so the user lands
+  // on the sign-in card with a clear reason and a path forward, not a dead-end
+  // error page from the callback.
+  const [signInError, setSignInError] = useState<string | null>(null);
+  useEffect(() => {
+    let code = "";
+    try {
+      const params = new URLSearchParams(location.search);
+      code = (params.get("authError") || "").trim();
+      if (code) {
+        params.delete("authError");
+        const qs = params.toString();
+        history.replaceState(null, "", location.pathname + (qs ? `?${qs}` : "") + location.hash);
+      }
+    } catch {
+      /* ignore malformed query */
+    }
+    if (!code) return;
+    const messages: Record<string, string> = {
+      "github-email":
+        "GitHub didn't share a verified email, so we couldn't sign you in. Add and verify an email on your GitHub account, or use email sign-in below.",
+      "github-config": "Couldn't complete GitHub sign-in due to a server issue. Please try again in a moment.",
+      expired: "That sign-in request was invalid or expired. Please try again.",
+    };
+    setSignInError(messages[code] || "Sign-in failed. Please try again.");
+  }, []);
   // The authorize URL, once known, so it can render as a real clickable link —
   // the guaranteed fallback when neither window.open() attempt below actually
   // showed the user a tab (popup blockers, Safari's user-gesture timeout across
@@ -51,10 +82,9 @@ export function SetupNotice() {
     setAuthorizeUrl(null);
   }
 
-  async function sendMagicLink(e: React.FormEvent) {
-    e.preventDefault();
-    const value = email.trim();
+  async function requestMagicLink(value: string) {
     if (!value || sending) return;
+    setSignInError(null);
     setSending(true);
     setNote({ text: "Sending…" });
     try {
@@ -65,13 +95,23 @@ export function SetupNotice() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || "Could not send sign-in link.");
-      if (data?.devLink) setNote({ text: "Dev link:", href: data.devLink });
-      else setNote({ text: "Check your email for a sign-in link." });
+      if (data?.devLink) {
+        setNote({ text: "Dev link:", href: data.devLink });
+      } else {
+        setNote({ text: `Check your email — we sent a sign-in link to ${value}.` });
+      }
+      setSentTo(value);
     } catch (err) {
       setNote({ text: err instanceof Error ? err.message : "Could not send sign-in link." });
+      setSentTo(null);
     } finally {
       setSending(false);
     }
+  }
+
+  function sendMagicLink(e: React.FormEvent) {
+    e.preventDefault();
+    void requestMagicLink(email.trim());
   }
 
   // Installed-app GitHub sign-in: open OAuth in a browser tab, poll for the
@@ -79,6 +119,7 @@ export function SetupNotice() {
   async function githubDeviceSignIn() {
     if (githubBusy) return;
     setGithubError(null);
+    setSignInError(null);
     setGithubBusy(true);
     setAuthorizeUrl(null);
     cancelled.current = false;
@@ -132,6 +173,11 @@ export function SetupNotice() {
         <div className="setup-glyph">⛺</div>
         <h1>Bivy</h1>
         <p>Sign in to reach your coding agents from anywhere.</p>
+        {signInError && (
+          <div className="setup-error" role="alert">
+            {signInError}
+          </div>
+        )}
         {standalone ? (
           <button
             type="button"
@@ -147,7 +193,7 @@ export function SetupNotice() {
           <a
             className="btn primary block"
             href={`${origin}/auth/github/start?return=${encodeURIComponent(location.pathname)}`}
-            onClick={() => setRedirecting(true)}
+            onClick={() => { setSignInError(null); setRedirecting(true); }}
           >
             {redirecting ? "Redirecting…" : "Sign in with GitHub"}
           </a>
@@ -190,6 +236,15 @@ export function SetupNotice() {
             {note.href && (
               <a href={note.href}>{note.href}</a>
             )}
+          </p>
+        )}
+        {sentTo && !sending && (
+          <p className="setup-note muted">
+            Didn't get it? Check your spam folder, or{" "}
+            <button type="button" className="link-btn" onClick={() => void requestMagicLink(sentTo)}>
+              resend the link
+            </button>
+            . You can also edit the address above and send again.
           </p>
         )}
       </div>

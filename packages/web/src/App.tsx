@@ -17,6 +17,7 @@ import { GithubPill } from "./components/GithubPill.js";
 import { UsageBar } from "./components/UsageBar.js";
 import { ChangesCard } from "./components/ChangesCard.js";
 import { ErrorToast } from "./components/ErrorToast.js";
+import { NoticeToast } from "./components/NoticeToast.js";
 import { Settings } from "./components/Settings.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { NodePicker } from "./components/Pickers.js";
@@ -71,6 +72,18 @@ export function App() {
     }, 30000);
     return () => clearInterval(id);
   }, [refreshGithubQueue]);
+  // Signed in on the hosted app but no node yet: poll for a newly-installed
+  // machine so the empty state advances to the live app the moment the node
+  // dials in — the user shouldn't have to hit "Refresh nodes" after running the
+  // installer. Stops as soon as a node is selected (the card disappears).
+  const awaitingNode = !controller.direct && state.signedIn && !state.currentNodeId;
+  useEffect(() => {
+    if (!awaitingNode) return;
+    const id = setInterval(() => {
+      if (document.visibilityState !== "hidden") void controller.refreshNodes();
+    }, 4000);
+    return () => clearInterval(id);
+  }, [awaitingNode]);
   // Focus view: collapse interim messages (thinking, tool cards, intermediate
   // assistant prose) down to just the conversation. Persisted so the choice
   // sticks across reloads and session switches.
@@ -205,6 +218,7 @@ export function App() {
       <>
         <SetupNotice />
         <div className="toast-stack">
+          <NoticeToast />
           <UpdatePrompt />
         </div>
       </>
@@ -362,14 +376,18 @@ export function App() {
                   <pre className="code-snippet"><code>curl -fsSL https://bivy.sh/install.sh | bash</code></pre>
                 </li>
                 <li>
-                  <strong>No machine handy?</strong> Launch an ephemeral server below (<strong>Pro</strong>) — it spins up in the cloud and self-destructs after its TTL.
+                  <strong>No machine handy?</strong> Launch an ephemeral server below — it spins up in the cloud with your own provider token and self-destructs after its TTL. Included on the free plan.
                 </li>
               </ul>
+              <p className="onboarding-waiting" role="status" aria-live="polite">
+                <span className="onboarding-spinner" aria-hidden />
+                Waiting for your machine to connect… this page updates automatically once it does.
+              </p>
             </div>
             <div className="onboarding-actions">
               <a className="btn primary" href="/install.sh">Download installer</a>
               <button className="btn" onClick={() => setEphemeralOpen(true)}>Quick ephemeral server</button>
-              <button className="btn" onClick={() => controller.refreshNodes()}>Refresh nodes</button>
+              <button className="btn ghost" onClick={() => controller.refreshNodes()}>Refresh now</button>
             </div>
           </div>
         )}
@@ -487,6 +505,7 @@ export function App() {
           time meant overlapping, illegible toasts. This wrapper stacks them
           instead. */}
       <div className="toast-stack">
+        <NoticeToast />
         <ErrorToast />
         <UpdatePrompt />
       </div>

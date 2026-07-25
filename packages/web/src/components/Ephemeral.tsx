@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import {
   EPHEMERAL_PROVIDERS,
   ephemeralAdapter,
-  type AccountMe,
   type EphemeralMachine,
   type ProviderKeyInfo,
   type ProviderSize,
@@ -23,48 +22,28 @@ const TTL_OPTIONS = [
 export function EphemeralSheet({ onClose }: { onClose: () => void }) {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
   const [provider, setProvider] = useState<string | null>(null);
-  const [me, setMe] = useState<AccountMe | null>(null);
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys);
   useEffect(() => {
     refreshKeys();
-    controller.fetchMe().then(setMe).catch(() => {});
   }, []);
 
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === provider);
-  // undefined (self-host / still loading) reads as allowed; only a definite
-  // `false` from the control plane gates the feature. The server enforces this
-  // too (POST /api/ephemeral/exec) — this is UX so free users see the upsell
-  // instead of a failed launch.
-  const ephemeralAllowed = me?.entitlements?.ephemeralEnabled !== false;
 
+  // Ephemeral cloud runners are included on every plan (each launch draws from
+  // the shared weekly run cap), so there's no upgrade gate here.
   return (
     <Sheet
       title={catalog ? catalog.name : "Ephemeral machine"}
       onClose={onClose}
       headExtra={
-        provider && ephemeralAllowed ? (
+        provider ? (
           <button className="sheet-back" onClick={() => setProvider(null)} aria-label="Back">
             ‹
           </button>
         ) : undefined
       }
     >
-      {me && !ephemeralAllowed ? (
-        <div className="picker-list">
-          <p className="muted settings-intro">
-            Quick ephemeral servers are a Pro feature. Upgrade to spin up a temporary cloud runner from your
-            phone — or install Bivy on your own Mac or Linux machine, free forever.
-          </p>
-          <div className="row-actions">
-            <button className="btn primary" onClick={() => controller.startCheckout().catch(() => {})}>
-              Upgrade to Pro
-            </button>
-            <a className="btn ghost" href="/install.sh">
-              Download installer
-            </a>
-          </div>
-        </div>
-      ) : !provider ? (
+      {!provider ? (
         <div className="picker-list">
           <p className="muted settings-intro">Bring your own cloud token to spin up a temporary node that self-destructs at its TTL.</p>
           {EPHEMERAL_PROVIDERS.map((p) => {

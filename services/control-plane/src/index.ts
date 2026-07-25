@@ -779,17 +779,28 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   const state = String(req.query.state ?? "").trim();
   const stored = takeOauthState(state);
   if (!code || !stored) {
-    return res.status(400).type("html").send("<h1>Sign-in failed</h1><p>Invalid or expired request. Please try again.</p>");
+    // No usable state means no trustworthy return path, so land on root — but
+    // still return the user to the sign-in card (with a reason) rather than a
+    // dead-end error page they'd have to navigate away from by hand.
+    return res.redirect(`/?authError=expired`);
   }
   const { email, reason } = await githubPrimaryEmail(code, `${baseUrl(req)}/auth/github/callback`);
   if (!email || !validEmail(email)) {
-    // Distinct copy per failure mode so the browser hints at the real cause; the
-    // server logs (see githubPrimaryEmail) carry the operator-facing detail.
-    const detail =
-      reason === "token-exchange"
-        ? "Couldn't complete GitHub sign-in — the authorization code could not be exchanged. This is a server configuration issue; please try again in a moment."
-        : "GitHub didn't return a verified email. Make sure your GitHub account has a verified email address and that you granted the email permission, then try again.";
-    return res.status(400).type("html").send(`<h1>Sign-in failed</h1><p>${detail}</p>`);
+    const errCode = reason === "token-exchange" ? "github-config" : "github-email";
+    // The device (CLI/app) flow finishes in a throwaway browser tab that never
+    // returns to the client, so a short HTML page is the only feedback available
+    // there. The browser flow instead bounces back to the sign-in card with a
+    // reason code, so the user lands somewhere they can immediately retry or
+    // switch to email sign-in — not a dead end.
+    if (stored.deviceId) {
+      const detail =
+        reason === "token-exchange"
+          ? "Couldn't complete GitHub sign-in — the authorization code could not be exchanged. This is a server configuration issue; please try again in a moment."
+          : "GitHub didn't return a verified email. Make sure your GitHub account has a verified email address and that you granted the email permission, then try again.";
+      return res.status(400).type("html").send(`<h1>Sign-in failed</h1><p>${detail}</p>`);
+    }
+    const path = safeReturnPath(stored.returnPath, "/");
+    return res.redirect(`${path}${path.includes("?") ? "&" : "?"}authError=${errCode}`);
   }
   // Resolve by verified email → links GitHub and magic-link to one account.
   const account = await store.findOrCreateAccount(email);

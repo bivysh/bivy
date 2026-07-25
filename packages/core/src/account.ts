@@ -506,6 +506,12 @@ export async function logout(store: LocalStore, devicePublicKeyB64?: string, fet
   });
 }
 
+/** Display price for the Pro plan. The authoritative amount lives in Stripe
+ *  (env STRIPE_PRICE_PRO on the control plane); this is the marketing label
+ *  shown on in-app upgrade CTAs so users see the cost before the redirect.
+ *  Keep it in sync with the pricing section on the marketing site. */
+export const PRO_PRICE_LABEL = "$15/mo";
+
 /** Start a Stripe checkout; returns the URL to redirect to. */
 export async function billingCheckout(store: LocalStore, plan = "pro", fetchImpl: typeof fetch = fetch): Promise<string> {
   const res = await fetchImpl(`${cpBase(store)}/billing/checkout`, {

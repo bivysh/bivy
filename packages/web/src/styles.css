@@ -1119,6 +1119,8 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .onboarding-steps { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.45; display: grid; gap: 10px; }
 .onboarding-steps strong { color: var(--ink); }
 .onboarding-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.onboarding-waiting { display: flex; align-items: center; gap: 8px; margin-top: 12px !important; color: var(--muted); font-size: 12.5px; }
+.onboarding-spinner { flex: none; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; }
 @media (max-width: 720px) { .onboarding-card { flex-direction: column; } .onboarding-actions { justify-content: flex-start; } }
 .app-dialog { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 18px; }
 .app-dialog-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.42); backdrop-filter: blur(3px); }
@@ -1402,6 +1404,18 @@ select.picker-search { appearance: auto; }
 .error-toast-text { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .error-toast-close { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; position: sticky; top: 0; }
 
+/* Success/confirmation toast — same shape as the error toast, positive accent. */
+.notice-toast {
+  display: flex; align-items: flex-start; gap: 10px; max-width: min(92vw, 560px);
+  max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--ok); border-left-width: 3px;
+  border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.28);
+  animation: sheet-up 0.16s ease;
+}
+.notice-toast-icon { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; background: var(--ok); color: #fff; font-weight: 700; font-size: 12px; display: grid; place-items: center; }
+.notice-toast-text { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.notice-toast-close { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; position: sticky; top: 0; }
+
 /* ---- Setup / sign-in ---- */
 /* Center within the *visual* viewport (--app-h from viewport.ts), not the
    layout viewport: `100%` includes the area behind the mobile browser chrome,
@@ -1426,6 +1440,7 @@ select.picker-search { appearance: auto; }
 .setup-email input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); color: var(--ink); font: inherit; font-size: 16px; }
 .setup-email .btn { flex: none; white-space: nowrap; }
 .setup-note { margin-top: 10px; word-break: break-word; }
+.setup-error { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--danger); border-left-width: 3px; border-radius: 10px; background: var(--danger-soft, transparent); color: var(--ink); font-size: 13px; line-height: 1.4; text-align: left; }
 .banner.inline { border-radius: 8px; margin: 8px 0; }
 
 /* GitHub App — connected status card */
