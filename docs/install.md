@@ -102,9 +102,8 @@ the background service reuse the same workspace/port/credentials.
 You can start from the hosted app first:
 
 1. Open the Bivy PWA and sign in with GitHub or email.
-2. If no runner is connected, the app shows two paths:
+2. If no runner is connected, the app shows how to connect one:
    - **Connect your own computer** — run `curl -fsSL https://bivy.sh/install.sh | bash` on macOS/Linux. Setup signs the node into the same account and enrolls it on the hosted relay.
-   - **Quick ephemeral server** — use the in-app ephemeral machine flow to launch a short-lived server for trial work.
 3. Free accounts include one hosted-relay node, so the first computer can connect without upgrading.
 
 ## Secure remote web/PWA access (hosted relay)

@@ -5,6 +5,7 @@ import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { EphemeralSheet } from "./Ephemeral.js";
 import { AddNodeSheet } from "./AddNodeSheet.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
 /**
  * Header control (relay mode): shows the current node and a menu to switch nodes,
@@ -105,17 +106,19 @@ export function NodeSwitcher() {
             <span className="node-menu-glyph">+</span>
             <span className="node-menu-name">Add a node…</span>
           </button>
-          <button
-            className="node-menu-item"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              setEphemeralOpen(true);
-            }}
-          >
-            <span className="node-menu-glyph">⚡</span>
-            <span className="node-menu-name">Ephemeral machine…</span>
-          </button>
+          {EPHEMERAL_MACHINES_ENABLED && (
+            <button
+              className="node-menu-item"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                setEphemeralOpen(true);
+              }}
+            >
+              <span className="node-menu-glyph">⚡</span>
+              <span className="node-menu-name">Ephemeral machine…</span>
+            </button>
+          )}
           <div className="node-menu-sep" />
           <button className="node-menu-item danger" role="menuitem" onClick={() => controller.signOut()}>
             Sign out

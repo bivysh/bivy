@@ -1,5 +1,10 @@
 # Ephemeral sessions
 
+> **Status: not currently enabled.** The ephemeral-machines UI is hidden behind a
+> feature flag (`EPHEMERAL_MACHINES_ENABLED` in `packages/web/src/flags.ts`) while
+> the feature is built out. This page documents the design and the code that
+> remains in the tree; it is not linked from the docs index or the site yet.
+
 Ephemeral sessions are short-lived Bivy nodes created for one task/session. The control plane still stores metadata only; prompts, files, tool output, credentials, and agent transcripts remain on the ephemeral machine and are destroyed with it unless the user explicitly exports a branch/PR/artifact.
 
 ## Product shape

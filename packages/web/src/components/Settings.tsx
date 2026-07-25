@@ -12,6 +12,7 @@ import { GithubQueuePanel } from "./GithubQueue.js";
 import { StatsPanel } from "./StatsPanel.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import type { SettingsView } from "../router.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
 // The view enumeration lives in router.ts (as `SettingsView`) so the router can
 // validate a `/settings/:view` path without importing this component module;
@@ -220,7 +221,9 @@ export function Settings({
       label: "Infrastructure",
       items: [
         { id: "nodes", label: "Nodes", icon: <IconServer /> },
-        { id: "ephemeral", label: "Ephemeral machines", icon: <IconBolt /> },
+        ...(EPHEMERAL_MACHINES_ENABLED
+          ? [{ id: "ephemeral" as View, label: "Ephemeral machines", icon: <IconBolt /> }]
+          : []),
       ],
     },
   ];
@@ -310,7 +313,7 @@ export function Settings({
               />
             )}
             {activeView === "nodes" && <NodesPanel state={state} />}
-            {activeView === "ephemeral" && <EphemeralPanel />}
+            {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
             {activeView === "account" && <AccountPanel />}
             {activeView === "link" && <LinkPanel onDone={onClose} />}
           </div>
@@ -1514,10 +1517,12 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
             </ul>
           </section>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">Ephemeral runner</h4>
-            {renderEphemeral()}
-          </section>
+          {EPHEMERAL_MACHINES_ENABLED && (
+            <section className="settings-section">
+              <h4 className="settings-subhead">Ephemeral runner</h4>
+              {renderEphemeral()}
+            </section>
+          )}
         </>
       )}
 

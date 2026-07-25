@@ -16,6 +16,7 @@ import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { PrBadge, relTime, toMs } from "./SessionList.js";
 import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
 // Cap on the GitHub queue "Sessions" list before a "Show more" link appears
 // (issue #531) — with many queue sessions the list otherwise grows unbounded
@@ -335,6 +336,7 @@ export function GithubQueuePanel({
   // the guard so a later render (e.g. after the user fixes a missing token)
   // can retry rather than wedging silently for the rest of the session.
   useEffect(() => {
+    if (!EPHEMERAL_MACHINES_ENABLED) return;
     if (!canQuery || !workQueueEnabled) return;
     if (!ephemeralDefault || !ephemeralDefault.enabled || !ephemeralDefault.provider || !defaultProviderConfigured) return;
     if (anyNodeOnline || !waiting || waiting.length === 0) return;
@@ -487,7 +489,7 @@ export function GithubQueuePanel({
               </div>
             </div>
 
-            {autoLaunching && (
+            {EPHEMERAL_MACHINES_ENABLED && autoLaunching && (
               <p className="muted" style={{ marginBottom: 10 }}>⚡ Provisioning an ephemeral runner to pick these up…</p>
             )}
 
@@ -508,7 +510,7 @@ export function GithubQueuePanel({
                           <a className="queue-item-main link" href={w.url} target="_blank" rel="noopener noreferrer" title={title}>
                             <span className="queue-item-title">
                               {title}
-                              {w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
+                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
                           </a>
@@ -516,7 +518,7 @@ export function GithubQueuePanel({
                           <div className="queue-item-main" title={title}>
                             <span className="queue-item-title">
                               {title}
-                              {w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
+                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
                           </div>
@@ -542,16 +544,18 @@ export function GithubQueuePanel({
                       </div>
                       {open && (
                         <div className="queue-run">
-                          <label className="queue-run-field">
-                            <span>Target</span>
-                            <select value={assignTarget} onChange={(e) => setAssignTarget(e.target.value as "node" | "ephemeral")}>
-                              <option value="node">A running node</option>
-                              <option value="ephemeral" disabled={configuredProviders.length === 0}>
-                                Ephemeral server{configuredProviders.length === 0 ? " (add a provider token first)" : ""}
-                              </option>
-                            </select>
-                          </label>
-                          {assignTarget === "node" ? (
+                          {EPHEMERAL_MACHINES_ENABLED && (
+                            <label className="queue-run-field">
+                              <span>Target</span>
+                              <select value={assignTarget} onChange={(e) => setAssignTarget(e.target.value as "node" | "ephemeral")}>
+                                <option value="node">A running node</option>
+                                <option value="ephemeral" disabled={configuredProviders.length === 0}>
+                                  Ephemeral server{configuredProviders.length === 0 ? " (add a provider token first)" : ""}
+                                </option>
+                              </select>
+                            </label>
+                          )}
+                          {assignTarget === "node" || !EPHEMERAL_MACHINES_ENABLED ? (
                             <label className="queue-run-field">
                               <span>Node</span>
                               <select value={assignNode} onChange={(e) => setAssignNode(e.target.value)}>

@@ -20,6 +20,7 @@ import { ErrorToast } from "./components/ErrorToast.js";
 import { Settings } from "./components/Settings.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { NodePicker } from "./components/Pickers.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
 // bundle). It's an on-demand overlay, so load it lazily to keep the initial app
 // paint fast; the chunk is fetched the first time the user opens a terminal.
@@ -354,21 +355,25 @@ export function App() {
           <div className="onboarding-card" role="status">
             <div>
               <div className="kicker">No runner connected yet</div>
-              <h2>Connect a computer or launch a quick server</h2>
-              <p>Bivy runs agents on machines you control. Pick either option to get going:</p>
+              <h2>Connect a computer to get going</h2>
+              <p>Bivy runs agents on machines you control. Install it on a machine you own to get going:</p>
               <ul className="onboarding-steps">
                 <li>
                   <strong>Install on your own machine</strong> — run this on your Mac or Linux computer for persistent work:
                   <pre className="code-snippet"><code>curl -fsSL https://bivy.sh/install.sh | bash</code></pre>
                 </li>
-                <li>
-                  <strong>No machine handy?</strong> Launch an ephemeral server below (<strong>Pro</strong>) — it spins up in the cloud and self-destructs after its TTL.
-                </li>
+                {EPHEMERAL_MACHINES_ENABLED && (
+                  <li>
+                    <strong>No machine handy?</strong> Launch an ephemeral server below (<strong>Pro</strong>) — it spins up in the cloud and self-destructs after its TTL.
+                  </li>
+                )}
               </ul>
             </div>
             <div className="onboarding-actions">
               <a className="btn primary" href="/install.sh">Download installer</a>
-              <button className="btn" onClick={() => setEphemeralOpen(true)}>Quick ephemeral server</button>
+              {EPHEMERAL_MACHINES_ENABLED && (
+                <button className="btn" onClick={() => setEphemeralOpen(true)}>Quick ephemeral server</button>
+              )}
               <button className="btn" onClick={() => controller.refreshNodes()}>Refresh nodes</button>
             </div>
           </div>

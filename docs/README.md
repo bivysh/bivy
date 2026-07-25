@@ -16,7 +16,6 @@ run your first agent session.
 | --- | --- |
 | [agent-shim.md](agent-shim.md) | Users running an agent Bivy doesn't ship with, and anyone adding a new one. |
 | [agents/](agents/README.md) | Per-agent setup: install command, how to authenticate it, model picker, resume support, and known gaps — one short page per agent in the picker. |
-| [ephemeral-sessions.md](ephemeral-sessions.md) | Users who want throwaway machines per session instead of running on their own box. |
 | [troubleshooting.md](troubleshooting.md) | Anyone whose node won't start, won't connect, or won't behave. |
 
 ## Remote access

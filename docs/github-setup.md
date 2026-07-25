@@ -96,7 +96,7 @@ distinct app, owned by that org, installable only on that org's repositories.
 ## Using it from more than one node
 
 By default a connected app's private key lives only on the node that ran
-`github:app-connect`/`github:app-create` — a second node, or a fresh/ephemeral
+`github:app-connect`/`github:app-create` — a second node, or a fresh
 machine, has no key and can't serve that app's work until it's connected there
 too. To let an app connected on one node also serve your OTHER nodes without
 re-uploading the `.pem` anywhere, opt each of them in:
