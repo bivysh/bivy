@@ -30,6 +30,10 @@ type SecretFile = { version: 1; records: Record<string, SecretRecord> };
 function nowIso() { return new Date().toISOString(); }
 function empty(): SecretFile { return { version: 1, records: {} }; }
 
+// The vault's LAST-RESORT default (used only by `new SecretVault()` with no
+// appDir — every daemon path passes an explicit one). Deliberately the home dir,
+// NOT the daemon's <install>/.bivy: the vault refuses to mint a master key inside
+// a git working tree, and <install>/.bivy is inside the repo in a dev checkout.
 export function defaultSecretsDir(appDir?: string) {
   if (appDir) return appDir;
   return process.env.BIVY_DATA_DIR || path.join(os.homedir(), ".bivy");
@@ -215,7 +219,7 @@ export class SecretVault {
       throw new Error(
         `Refusing to create the local secrets master key inside a git working tree (${this.dir}). ` +
           `Point BIVY_DATA_DIR (or the vault's appDir) somewhere outside of any git repository — ` +
-          `the default is now ${path.join(os.homedir(), ".bivy")}.`,
+          `e.g. ${path.join(os.homedir(), ".bivy")}.`,
       );
     }
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });

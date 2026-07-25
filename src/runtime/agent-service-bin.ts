@@ -28,6 +28,7 @@ import { AgentService, type ServiceConnection } from "./agent-service.js";
 import { encodeFrame, FrameDecoder, type ClientMessage } from "./rpc-protocol.js";
 import { parseRemoteAddress } from "./remote.js";
 import { makeRuntime, type AgentRuntime } from "./index.js";
+import { defaultDataDir } from "../data-dir.js";
 import type { SandboxTier } from "../harness/sandbox.js";
 
 /** Adapt a raw socket to the transport-agnostic ServiceConnection. */
@@ -89,7 +90,7 @@ export function startAgentServiceServer(options: ServiceServerOptions): Promise<
 
 /** Build the default runtime provider backed by the real runtime registry. */
 export function defaultRuntimeProvider(): (runtimeId: string, sandbox?: string) => AgentRuntime {
-  const appDir = process.env.BIVY_DATA_DIR ?? path.join(process.cwd(), ".bivy");
+  const appDir = defaultDataDir();
   const piDir = path.join(appDir, "pi");
   const sessionsDir = path.join(piDir, "sessions");
   // The shared, agent-neutral credential vault (not inside any agent's dir).

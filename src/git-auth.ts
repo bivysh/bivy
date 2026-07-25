@@ -11,18 +11,15 @@
 // since both run under a live daemon.
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { defaultDataDir } from "./data-dir.js";
 
 // Set by configureGitAuth() at daemon startup. Falls back to BIVY_DATA_DIR / the
 // default data dir so the module still works in tests and one-off scripts.
 let credRootOverride: string | null = null;
 
-function dataDir(): string {
-  return process.env.BIVY_DATA_DIR ? path.resolve(process.env.BIVY_DATA_DIR) : path.join(os.homedir(), ".bivy");
-}
 function credDir(): string {
-  return credRootOverride ?? path.join(dataDir(), "git-cred");
+  return credRootOverride ?? path.join(defaultDataDir(), "git-cred");
 }
 function shimPath(): string {
   return path.join(credDir(), "credential-helper.sh");
