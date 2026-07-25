@@ -115,7 +115,9 @@ export class SiblingClient {
     }
     if (msg.t === "ready" || msg.t === "peer.online") {
       // Begin account pairing to obtain the sibling's room key.
-      this.sendControl({ t: "pair", p: { k: "pair.account", sessionToken: grant, devicePublicKeyB64: this.keypair.publicKeyB64, label: this.opts.label ?? "Bivy replica" } });
+      // `ephemeral`: a sibling replica is a node↔node bridge, not a user device —
+      // authorized for the room key but never listed as a signed-in device.
+      this.sendControl({ t: "pair", p: { k: "pair.account", sessionToken: grant, devicePublicKeyB64: this.keypair.publicKeyB64, label: this.opts.label ?? "Bivy replica", ephemeral: true } });
       return;
     }
     if (msg.t === "pair") {

@@ -208,7 +208,7 @@ export class RelayConnector {
    * `pair.welcome` carrying the ECDH-wrapped room key.
    */
   private async handlePairFrame(payload: string) {
-    let msg: { k?: string; devicePublicKeyB64?: string; proofB64?: string; label?: string; sessionToken?: string };
+    let msg: { k?: string; devicePublicKeyB64?: string; proofB64?: string; label?: string; sessionToken?: string; ephemeral?: boolean };
     try {
       msg = JSON.parse(payload);
     } catch {
@@ -223,7 +223,7 @@ export class RelayConnector {
         label: msg.label,
       });
     } else if (msg.k === "pair.account" && msg.devicePublicKeyB64 && msg.sessionToken) {
-      const auth = await this.authorizeAccountPairing(msg.sessionToken, msg.devicePublicKeyB64, msg.label);
+      const auth = await this.authorizeAccountPairing(msg.sessionToken, msg.devicePublicKeyB64, msg.label, msg.ephemeral === true);
       if (auth.ok) welcome = this.pairing.trustDevice({ devicePublicKeyB64: msg.devicePublicKeyB64, label: msg.label });
       else reason = auth.reason;
     } else {
@@ -245,13 +245,14 @@ export class RelayConnector {
     sessionToken: string,
     devicePublicKeyB64: string,
     label?: string,
+    ephemeral = false,
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     if (!this.config.controlPlaneUrl) return { ok: false, reason: "Node is not linked to a control plane." };
     try {
       const res = await fetch(`${this.config.controlPlaneUrl.replace(/\/$/, "")}/node/authorize-client`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${this.config.enrollmentToken}` },
-        body: JSON.stringify({ sessionToken, devicePublicKeyB64, label }),
+        body: JSON.stringify({ sessionToken, devicePublicKeyB64, label, ephemeral }),
         // Node's fetch has no default timeout. Without this, a control plane that
         // accepts the TCP connection but never responds would hang pairing (and,
         // on the mintTicket path, the whole relay reconnect) indefinitely.

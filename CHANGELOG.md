@@ -30,6 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Transient CLI/relay clients no longer clutter "Signed-in devices".**
+  `bivy run --node` bridges and sibling-node replicas paired with a node via
+  the same `pair.account` handshake a phone/browser uses, so the control plane
+  recorded each one as a durable paired device. Because these tools can mint a
+  fresh device keypair per invocation (probes, tests, one-off runs), the
+  account's Account & billing → Signed-in devices list filled up with rows
+  like "Bivy CLI probe" and "Bivy CLI (run --node)" that never got cleaned up.
+  These transient connections now mark their pairing `ephemeral`: the node
+  still authorizes them and hands over the room key, but the control plane
+  skips the paired-device record, so only real user devices are listed (and
+  the account's device count stays accurate). Genuine app/QR devices are
+  unaffected.
 - The GitHub issue queue's per-node concurrency cap now actually lets issues
   run in parallel up to the configured limit. `GitHubTaskPoller` (and the
   hosted work-queue's `ControlPlaneTaskPoller`) used to `await` each claimed
