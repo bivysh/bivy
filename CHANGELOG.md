@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The GitHub issue queue's per-node concurrency cap now actually lets issues
+  run in parallel up to the configured limit. `GitHubTaskPoller` (and the
+  hosted work-queue's `ControlPlaneTaskPoller`) used to `await` each claimed
+  issue/item to completion before even considering the next one in the same
+  poll tick, so — regardless of the concurrency setting — only one ran at a
+  time; the cap only ever appeared to do anything when two `setInterval` ticks
+  happened to overlap by luck. Issues/items now start concurrently (still
+  capped) within a single tick. (#116)
 - `bivy relay:setup` now honors `BIVY_DATA_DIR` like every other entry point
   instead of hardcoding `<repoRoot>/.bivy`. On a global/packaged install
   (where the CLI resolves the data dir to `~/.bivy`) it used to write

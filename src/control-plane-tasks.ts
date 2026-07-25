@@ -137,29 +137,43 @@ export class ControlPlaneTaskPoller {
       return;
     }
     const max = this.maxConcurrent?.() ?? 0;
+    const running: Promise<void>[] = [];
     for (const item of items) {
       if (this.inFlight.has(item.id)) continue;
       // Honor the node's concurrency cap: leave the rest in the queue for a later
       // tick (or an idle node) to claim when a slot frees.
       if (max > 0 && this.inFlight.size >= max) break;
+      // Reserve the slot synchronously (no `await` since the last check) so a
+      // later item considered in this same loop sees an accurate
+      // `inFlight.size` — then kick it off without awaiting it here (only
+      // collecting the promise to await below). Awaiting an item to completion
+      // before starting the next one meant the cap was never really exercised
+      // within a single tick: items ran one at a time regardless of `max`, and
+      // only overlapping `setInterval` ticks happened to run more than one
+      // concurrently.
       this.inFlight.add(item.id);
+      running.push(this.runOne(item));
+    }
+    await Promise.all(running);
+  }
+
+  private async runOne(item: WorkItem): Promise<void> {
+    try {
+      // Claim first so only one node runs it; skip if another node won (no
+      // claim → not ours → don't run or complete it).
+      if (!(await claimWork(this.cfg, item.id))) return;
       try {
-        // Claim first so only one node runs it; skip if another node won (no
-        // claim → not ours → don't run or complete it).
-        if (!(await claimWork(this.cfg, item.id))) continue;
-        try {
-          console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
-          await this.runItem(item);
-        } catch (error) {
-          console.warn(`[control-plane-tasks] item ${item.id} failed:`, error);
-        } finally {
-          // Mark done so it leaves the queue even if the run threw — a failed
-          // item shouldn't be retried forever (it's recorded on the issue/PR).
-          await completeWork(this.cfg, item.id);
-        }
+        console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
+        await this.runItem(item);
+      } catch (error) {
+        console.warn(`[control-plane-tasks] item ${item.id} failed:`, error);
       } finally {
-        this.inFlight.delete(item.id);
+        // Mark done so it leaves the queue even if the run threw — a failed
+        // item shouldn't be retried forever (it's recorded on the issue/PR).
+        await completeWork(this.cfg, item.id);
       }
+    } finally {
+      this.inFlight.delete(item.id);
     }
   }
 }

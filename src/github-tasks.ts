@@ -652,22 +652,36 @@ export class GitHubTaskPoller {
       return;
     }
     const max = this.maxConcurrent?.() ?? 0;
+    const running: Promise<void>[] = [];
     for (const issue of selectActionableIssues(issues, this.cfg.claimLabel)) {
       if (this.inFlight.has(issue.number)) continue;
       // Honor the node's concurrency cap: leave the rest labelled/unclaimed so a
       // later tick (or an idle node) picks them up when a slot frees.
       if (max > 0 && this.inFlight.size >= max) break;
+      // Reserve the slot synchronously (no `await` since the last check) so a
+      // second issue considered later in this same loop sees an accurate
+      // `inFlight.size` — then kick it off without awaiting it here (only
+      // collecting the promise to await below). Awaiting a task to completion
+      // before starting the next one meant the cap was never really exercised
+      // within a single tick: issues ran one at a time regardless of `max`, and
+      // only overlapping `setInterval` ticks happened to run more than one
+      // concurrently.
       this.inFlight.add(issue.number);
-      try {
-        // Claim first so a restart or another node won't re-pick it.
-        await addLabel(this.cfg, issue.number, this.cfg.claimLabel);
-        console.log(`[github-tasks] picking up issue #${issue.number}: ${issue.title}`);
-        await this.runTask(issue);
-      } catch (error) {
-        console.warn(`[github-tasks] issue #${issue.number} failed:`, error);
-      } finally {
-        this.inFlight.delete(issue.number);
-      }
+      running.push(this.runIssue(issue));
+    }
+    await Promise.all(running);
+  }
+
+  private async runIssue(issue: GitHubIssue): Promise<void> {
+    try {
+      // Claim first so a restart or another node won't re-pick it.
+      await addLabel(this.cfg, issue.number, this.cfg.claimLabel);
+      console.log(`[github-tasks] picking up issue #${issue.number}: ${issue.title}`);
+      await this.runTask(issue);
+    } catch (error) {
+      console.warn(`[github-tasks] issue #${issue.number} failed:`, error);
+    } finally {
+      this.inFlight.delete(issue.number);
     }
   }
 }
