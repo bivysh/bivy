@@ -822,6 +822,12 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         <p className="muted">
           Any OpenAI-compatible server — Ollama, LM Studio, vLLM, SGLang, or a self-hosted / Azure endpoint.
         </p>
+        <p className="muted small">
+          This endpoint is account-wide, not just this node: it syncs (encrypted) to every node signed in to your
+          account, the same way provider keys do. A <code>localhost</code> base URL only resolves on the machine
+          that has it — another node can use it only if it also runs the same server at that address locally. If
+          the server is reachable over the network, point the base URL at that machine's address instead.
+        </p>
 
         <label className="field-label">Display name</label>
         <input className="picker-search" value={draft.name} placeholder="My local models" onChange={(e) => set({ name: e.target.value })} />
@@ -842,6 +848,13 @@ function LocalModelsPanel({ state }: { state: AppState }) {
           placeholder={isAzure ? "https://YOUR-RESOURCE.openai.azure.com" : "http://localhost:11434/v1"}
           onChange={(e) => set({ baseUrl: e.target.value })}
         />
+        {/localhost|127\.0\.0\.1/i.test(draft.baseUrl) && (
+          <p className="muted small">
+            ⚠ This points at the current node's own machine. Once synced, other nodes will only reach it if they
+            also run a server at <code>{draft.baseUrl.match(/localhost|127\.0\.0\.1/i)?.[0] ?? "localhost"}</code>
+            {" "}themselves.
+          </p>
+        )}
 
         <label className="field-label">API type</label>
         <select
@@ -894,6 +907,12 @@ function LocalModelsPanel({ state }: { state: AppState }) {
           onConfirm={() => { confirm.action(); setConfirm(null); }}
         />
       )}
+
+      <p className="muted settings-intro">
+        Endpoints here sync to every node signed in to your account, the same as provider keys — they aren't scoped
+        to just this node. A <code>localhost</code> base URL is only reachable from the machine that has it, so an
+        endpoint like Ollama's default needs that same server running on each node that should use it.
+      </p>
 
       <div className="picker-list">
         {state.localModels.length === 0 && <div className="picker-empty">No local or custom endpoints yet.</div>}
