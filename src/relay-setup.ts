@@ -3,9 +3,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { fileURLToPath } from "node:url";
 import { NodeIdentity } from "./identity.js";
 import { hostedEndpoints } from "./hosted-endpoints.mjs";
 import { openBrowser } from "./browser-open.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * One-time node relay setup.
@@ -156,8 +159,12 @@ async function githubDeviceLogin(controlPlaneUrl: string): Promise<string> {
 }
 
 async function main() {
-  const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-  const appDir = path.join(repoRoot, ".bivy");
+  const repoRoot = path.resolve(__dirname, "..");
+  // Honor the same override as every other entry point (server.ts, native-pi.ts,
+  // bivy-login.ts, secrets-cli.ts, …) so a global/packaged install writes
+  // relay.json and the node identity into the real data dir instead of a
+  // package directory that gets wiped on update. See issue #2.
+  const appDir = process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy");
   const endpoints = hostedEndpoints();
   const controlPlaneUrl = (arg("control-plane", process.env.BIVY_CONTROL_PLANE_URL) ?? endpoints.controlPlane).replace(/\/$/, "");
   const relayUrl = (arg("relay", process.env.BIVY_RELAY_URL) ?? endpoints.relay).replace(/\/$/, "");
