@@ -444,12 +444,14 @@
   <!-- HERO -->
   <section class="hero">
     <div class="wrap">
-      <h1>Run coding agents on machines you own.</h1>
+      <h1>The Claude Code experience — for any agent, on hardware you own.</h1>
       <p class="lede">
-        Bivy runs Claude Code, Codex, Gemini CLI, Aider and other agent CLIs on your
-        own laptop or server — your keys, your repo, your toolchain, nothing uploaded —
-        then puts every session in a real chat app on your phone: the full transcript,
-        the diffs, the approval it's waiting on, and a terminal only when you want one.
+        The terminal-and-app experience of a hosted coding agent — but for <em>any</em>
+        agent (Claude Code, Codex, Gemini CLI or nine others), running on your own laptop
+        or server, with your keys, your sign-ins and your repo, and none of the run caps,
+        token markup, or repo uploads the cloud providers make you accept. Every session
+        also lands in a real chat app on your phone: the full transcript, the diffs, the
+        approval it's waiting on, and a terminal only when you want one.
       </p>
 
       <div class="install">
@@ -489,6 +491,100 @@
         <img src="./screenshots/cli-session.png"
              alt="A Bivy CLI session running an agent in an isolated worktree, with tests passing."
              loading="lazy">
+      </div>
+    </div>
+  </section>
+
+  <!-- THE APP -->
+  <section id="app">
+    <div class="wrap">
+      <p class="kicker">The app</p>
+      <h2>The app a hosted agent keeps for itself — for any agent, on your hardware.</h2>
+      <p class="prose">
+        This is the mobile companion most agent CLIs don't ship on their own: whichever
+        agent and model you're running — Claude Code, Codex, or nine others — on machines
+        you own, with your own keys, reachable from anywhere. Not a PTY squeezed onto a
+        small screen, but a real chat client — read the transcript, scan the diffs,
+        approve the one thing it's waiting on, and steer the run from a composer built for
+        it, with dictation and attachments. Kick work off from the couch and let it run on
+        the hardware in your pocket's reach — plus the same label-an-issue,
+        get-a-pull-request-back workflow other agents lock to their own hosted compute. See
+        <a href="#github" style="color:var(--accent);text-decoration:none">the GitHub work queue</a> below.
+      </p>
+
+      <div class="app-split">
+        <div class="app-shot">
+          <img src="./screenshots/app-session.png"
+               alt="The Bivy app on a phone: an agent fixing a double-charge bug, showing the prompt, what it read and ran, the resulting diff, and a composer with agent, model and voice controls."
+               loading="lazy">
+        </div>
+
+        <ul class="app-list">
+          <li>
+            <b>Pick up any session, on any machine</b>
+            One list across every node you own. A session you started with
+            <code>bivy run</code> in a terminal is the same session here — open it and keep going.
+          </li>
+          <li>
+            <b>Type it, paste it, or say it</b>
+            A real composer, not a terminal squeezed onto a small screen. Dictate a prompt
+            instead of thumb-typing it, attach a screenshot straight from your camera roll,
+            and use the agent's own slash commands with autocomplete. A half-written
+            message survives a reload or a jump to another session.
+          </li>
+          <li class="promo">
+            <span class="eyebrow">Only in Bivy</span>
+            <b>Change agent, model, or machine mid-run</b>
+            Swap Claude Code for Codex, move to a bigger model, or fork the whole session
+            onto another node — transcript and uncommitted work included.
+          </li>
+          <li>
+            <b>See the work, not a summary</b>
+            Every tool call, command, and file edit, with the diff attached. Expand
+            <em>"read 5 files, ran 10 commands"</em> to check exactly what it touched
+            before you trust it.
+          </li>
+          <li>
+            <b>Undo a turn you don't like</b>
+            Bivy takes a git checkpoint around every turn, for every agent. Undo the last
+            one from your phone, or scrub back through the timeline and rewind to any
+            earlier point — so letting an agent run isn't a one-way door.
+          </li>
+          <li>
+            <b>Approve from wherever you are</b>
+            Force-push, publish, deploy and sudo always pause for a human, and you can ask
+            to be consulted on far more. When an agent stops — or just asks you a question
+            — it shows up in the app with the command, the risk, and the raw tool input, and
+            one tap unblocks it instead of a run sitting idle until you're back at your desk.
+          </li>
+          <li>
+            <b>Know what it's costing</b>
+            A live token and dollar counter on every session, so a long autonomous run
+            never surprises you.
+          </li>
+          <li>
+            <b>A terminal only when you want one</b>
+            Chat is the default. But a full PTY on the machine is one tap away for the
+            moments you want it — run the tests yourself or take over when the agent gets
+            stuck. It can attach to an existing tmux, zellij or screen session too.
+          </li>
+          <li>
+            <b>Installs like an app</b>
+            Add it to your home screen from the browser — no app store, no download, no
+            review queue. It launches full-screen, paints your recent sessions from cache
+            before the network answers, and never force-reloads you mid-session.
+            Push notifications come find you when a run finishes or stalls, so you don't
+            have to keep the tab open.
+          </li>
+        </ul>
+      </div>
+
+      <div class="notice">
+        <p><b>Nothing to set up separately.</b> The app is part of the free plan. There's
+        no download — <code>bivy setup</code> walks you through remote access and prints a
+        QR code, and scanning it pairs your phone; <code>bivy link</code> prints a fresh
+        one any time. Pairing is an encrypted handshake with your own node, so the app
+        streams your session without the relay or our servers being able to read it.</p>
       </div>
     </div>
   </section>
@@ -578,100 +674,6 @@
           on your device and is never sent to us. Set up and run as many as you like on
           any plan — each launch counts as one of your runs for the week.</p>
         </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- THE APP -->
-  <section id="app">
-    <div class="wrap">
-      <p class="kicker">The app</p>
-      <h2>Any agent, any model — a real chat client, not a terminal crammed onto a phone.</h2>
-      <p class="prose">
-        This is the mobile companion most agent CLIs don't ship on their own: whichever
-        agent and model you're running — Claude Code, Codex, or nine others — on machines
-        you own, with your own keys, reachable from anywhere. Not a PTY squeezed onto a
-        small screen, but a real chat client — read the transcript, scan the diffs,
-        approve the one thing it's waiting on, and steer the run from a composer built for
-        it, with dictation and attachments. Kick work off from the couch and let it run on
-        the hardware in your pocket's reach — plus the same label-an-issue,
-        get-a-pull-request-back workflow other agents lock to their own hosted compute. See
-        <a href="#github" style="color:var(--accent);text-decoration:none">the GitHub work queue</a> below.
-      </p>
-
-      <div class="app-split">
-        <div class="app-shot">
-          <img src="./screenshots/app-session.png"
-               alt="The Bivy app on a phone: an agent fixing a double-charge bug, showing the prompt, what it read and ran, the resulting diff, and a composer with agent, model and voice controls."
-               loading="lazy">
-        </div>
-
-        <ul class="app-list">
-          <li>
-            <b>Pick up any session, on any machine</b>
-            One list across every node you own. A session you started with
-            <code>bivy run</code> in a terminal is the same session here — open it and keep going.
-          </li>
-          <li>
-            <b>Type it, paste it, or say it</b>
-            A real composer, not a terminal squeezed onto a small screen. Dictate a prompt
-            instead of thumb-typing it, attach a screenshot straight from your camera roll,
-            and use the agent's own slash commands with autocomplete. A half-written
-            message survives a reload or a jump to another session.
-          </li>
-          <li class="promo">
-            <span class="eyebrow">Only in Bivy</span>
-            <b>Change agent, model, or machine mid-run</b>
-            Swap Claude Code for Codex, move to a bigger model, or fork the whole session
-            onto another node — transcript and uncommitted work included.
-          </li>
-          <li>
-            <b>See the work, not a summary</b>
-            Every tool call, command, and file edit, with the diff attached. Expand
-            <em>"read 5 files, ran 10 commands"</em> to check exactly what it touched
-            before you trust it.
-          </li>
-          <li>
-            <b>Undo a turn you don't like</b>
-            Bivy takes a git checkpoint around every turn, for every agent. Undo the last
-            one from your phone, or scrub back through the timeline and rewind to any
-            earlier point — so letting an agent run isn't a one-way door.
-          </li>
-          <li>
-            <b>Approve from wherever you are</b>
-            Force-push, publish, deploy and sudo always pause for a human, and you can ask
-            to be consulted on far more. When an agent stops — or just asks you a question
-            — it shows up in the app with the command, the risk, and the raw tool input, and
-            one tap unblocks it instead of a run sitting idle until you're back at your desk.
-          </li>
-          <li>
-            <b>Know what it's costing</b>
-            A live token and dollar counter on every session, so a long autonomous run
-            never surprises you.
-          </li>
-          <li>
-            <b>A terminal only when you want one</b>
-            Chat is the default. But a full PTY on the machine is one tap away for the
-            moments you want it — run the tests yourself or take over when the agent gets
-            stuck. It can attach to an existing tmux, zellij or screen session too.
-          </li>
-          <li>
-            <b>Installs like an app</b>
-            Add it to your home screen from the browser — no app store, no download, no
-            review queue. It launches full-screen, paints your recent sessions from cache
-            before the network answers, and never force-reloads you mid-session.
-            Push notifications come find you when a run finishes or stalls, so you don't
-            have to keep the tab open.
-          </li>
-        </ul>
-      </div>
-
-      <div class="notice">
-        <p><b>Nothing to set up separately.</b> The app is part of the free plan. There's
-        no download — <code>bivy setup</code> walks you through remote access and prints a
-        QR code, and scanning it pairs your phone; <code>bivy link</code> prints a fresh
-        one any time. Pairing is an encrypted handshake with your own node, so the app
-        streams your session without the relay or our servers being able to read it.</p>
       </div>
     </div>
   </section>
