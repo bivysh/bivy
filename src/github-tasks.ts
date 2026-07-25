@@ -193,6 +193,31 @@ export function buildTaskPrompt(issue: GitHubIssue, instructions?: string): stri
   ].join("\n");
 }
 
+/**
+ * Build the prompt used to resume a session found by `reconcileOrphanedIssueWork`
+ * (src/server.ts) on startup — one whose worktree still has unclaimed work
+ * (uncommitted edits, or commits with no PR yet) and wasn't reopened live this
+ * run. Any such session was, by construction, cut off mid-task by the node
+ * process dying (crash, OOM-kill, redeploy) rather than by the agent finishing
+ * or a human stopping it — see issue #125 ("Agent should resume its task
+ * automatically after a session restart"). Unlike `buildTaskPrompt`, this does
+ * NOT restate the issue as a new request: it tells the agent plainly that it
+ * was interrupted, so it picks up the existing worktree state (via `git
+ * status`/`git diff`/`git log`) instead of re-deriving the task from scratch or
+ * mistaking its own partial edits for someone else's.
+ */
+export function buildResumePrompt(issue: GitHubIssue): string {
+  return [
+    `You were working on GitHub issue #${issue.number}${issue.title ? `: ${issue.title}` : ""} when your session was interrupted by a restart — not because you finished the task or a human told you to stop.`,
+    "",
+    "Resume exactly where you left off. Start by checking `git status`, `git diff`, and `git log` in this worktree to see what you'd already changed or committed, then finish the task from there.",
+    "",
+    "Before you consider yourself done, run this project's tests, linter, and type-checker, and fix anything they turn up.",
+    "",
+    "When you're finished, commit and push your changes yourself. If this branch already has an open pull request, leave it — just make sure it reflects the finished work; otherwise open one yourself, referencing this issue.",
+  ].join("\n");
+}
+
 /** Parse optional bivy directives from issue body for agent/model selection.
  *  Supports lines like:
  *    bivy-agent: pi

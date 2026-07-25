@@ -64,6 +64,7 @@ import {
   GitHubTaskPoller,
   resolveGitHubTaskConfig,
   buildTaskPrompt,
+  buildResumePrompt,
   DEFAULT_ISSUE_INSTRUCTIONS,
   parseBivyDirectives,
   commitAll,
@@ -4214,12 +4215,17 @@ async function anthropicHeadersFromNodeCredential(): Promise<Record<string, stri
 }
 
 /**
- * On startup, finish reporting on any GitHub-issue session a previous process
- * death (crash, OOM-kill, unclean restart) interrupted mid-flight.
- * `reportIssueOutcome`'s commit-safety-net → publish → detect sequence lives
- * entirely in the in-memory promise chain started by
- * `runIssueTaskInner`/`runIssueFollowUp` — if the process dies after the agent
- * produced changes but before that chain finishes, nothing durable records
+ * On startup, resume any GitHub-issue session a previous process death (crash,
+ * OOM-kill, unclean restart) interrupted mid-flight — see issue #125 ("Agent
+ * should resume its task automatically after a session restart"). Before this,
+ * the node would only finish *reporting* on whatever was already on disk
+ * (commit → publish → detect), never actually re-drive the agent: if the
+ * process died while the agent still had work left (tests to run, files left
+ * to touch, nothing committed yet), the task just sat there until a human
+ * noticed and nudged it with a new message. `reportIssueOutcome`'s
+ * commit-safety-net → publish → detect sequence lives entirely in the
+ * in-memory promise chain started by `runIssueTaskInner`/`runIssueFollowUp` —
+ * if the process dies before that chain finishes, nothing durable records
  * "this was in progress", and nothing retries it: the only re-entry point,
  * `runIssueFollowUp`, needs a *new* webhook event on the issue, not just a
  * restart, and a plain chat message to the resumed session doesn't go through
@@ -4228,13 +4234,16 @@ async function anthropicHeadersFromNodeCredential(): Promise<Record<string, stri
  * This scans persisted session metadata for issue-sourced sessions whose
  * worktree is still on disk, still has unclaimed work (uncommitted changes, or
  * commits already ahead of base with no open PR yet), and isn't already being
- * driven live this run, then resumes it and re-runs `reportIssueOutcome`. It
- * deliberately does NOT replay the agent's turn — only what's already on disk
- * gets committed/published/detected — so a session killed mid-turn still gets
- * its branch pushed and any PR it already opened picked up, instead of sitting
- * orphaned forever. Best-effort: any session/config it can't cleanly resolve is
- * skipped and logged, never thrown, so one bad row can't block the rest or
- * crash startup.
+ * driven live this run. Any such session was, by construction, cut off by the
+ * node process dying rather than by the agent finishing or a human stopping
+ * it, so it resumes the session, gives the agent one more turn
+ * (`buildResumePrompt`) to pick up where it left off and finish the task, then
+ * runs `reportIssueOutcome` exactly as a fresh pickup or follow-up would.
+ * Serialized per-issue through `withIssueLock` so this can't race a webhook
+ * that re-triggers the same issue while startup reconciliation is still
+ * running. Best-effort: any session/config it can't cleanly resolve is skipped
+ * and logged, never thrown, so one bad row can't block the rest or crash
+ * startup.
  */
 async function reconcileOrphanedIssueWork(): Promise<void> {
   const sourceRe = /^issue:([^/]+)\/([^#]+)#(\d+)$/;
@@ -4246,6 +4255,7 @@ async function reconcileOrphanedIssueWork(): Promise<void> {
     if (!fs.existsSync(wtPath)) continue; // worktree pruned/gone — nothing left to recover
     const [, owner, repo, numStr] = m;
     const issueNumber = Number(numStr);
+    const source = `issue:${owner}/${repo}#${issueNumber}`;
     try {
       const token = await resolveTokenForRepo(owner, repo);
       if (!token) continue; // no token yet — try again next boot
@@ -4268,15 +4278,20 @@ async function reconcileOrphanedIssueWork(): Promise<void> {
       const issue = await getIssue(cfg, issueNumber);
       if (!issue) continue; // issue gone/inaccessible — leave it for a human to sort out
 
-      console.log(`[github-tasks] recovering orphaned issue automation for #${issueNumber} (session ${meta.id}) after an interrupted run`);
-      const record = await resolveOrResumeSession(meta.id, meta.path);
-      if (!record?.worktree) continue;
-      record.githubIssueUrl = `https://github.com/${owner}/${repo}/issues/${issueNumber}`;
-      const branch = meta.branch;
-      const emit: IssueEmit = (rec, stage, message, extra = {}) => {
-        broadcast({ type: "session.github_issue_status", sessionId: rec.id, issueNumber, repo: `${owner}/${repo}`, branch, stage, message, ...extra });
-      };
-      await reportIssueOutcome(cfg, issue, record, emit, { followUp: false });
+      console.log(`[github-tasks] resuming orphaned issue automation for #${issueNumber} (session ${meta.id}) after an interrupted run`);
+      await withIssueLock(source, async () => {
+        const record = await resolveOrResumeSession(meta.id, meta.path);
+        if (!record?.worktree) return;
+        record.githubIssueUrl = `https://github.com/${owner}/${repo}/issues/${issueNumber}`;
+        const branch = meta.branch!;
+        const emit: IssueEmit = (rec, stage, message, extra = {}) => {
+          broadcast({ type: "session.github_issue_status", sessionId: rec.id, issueNumber, repo: `${owner}/${repo}`, branch, stage, message, ...extra });
+        };
+        emit(record, "resumed", `Resuming issue #${issueNumber} after a restart interrupted the previous run.`);
+        await runSessionTurn(record, buildResumePrompt(issue));
+        emit(record, "agent_done", `Agent resumed and finished issue #${issueNumber}; checking for changes.`);
+        await reportIssueOutcome(cfg, issue, record, emit, { followUp: false });
+      });
     } catch (error) {
       console.warn(`[github-tasks] could not recover issue #${issueNumber} automation for session ${meta.id}`, error);
     }

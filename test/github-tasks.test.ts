@@ -11,6 +11,7 @@ import {
   selectActionableIssues,
   GitHubTaskPoller,
   buildTaskPrompt,
+  buildResumePrompt,
   DEFAULT_ISSUE_INSTRUCTIONS,
   ensureLabel,
   ensureTaskLabels,
@@ -244,6 +245,34 @@ check("buildTaskPrompt: a custom instructions override replaces the default", ()
 check("buildTaskPrompt: a blank/whitespace-only override falls back to the default", () => {
   const prompt = buildTaskPrompt({ number: 2, title: "T", body: "b", labels: [], url: "" }, "   ");
   assert.ok(prompt.includes(DEFAULT_ISSUE_INSTRUCTIONS));
+});
+
+// ---------------------------------------------------------------------------
+// buildResumePrompt — issue #125: an agent whose session was cut off by a
+// restart (not by finishing, not by a human Stop) must resume its own task,
+// not be re-handed the issue as if it were a fresh request.
+// ---------------------------------------------------------------------------
+check("buildResumePrompt: names the issue, says restart (not the agent or a human), and never re-includes the issue body as a new ask", () => {
+  const prompt = buildResumePrompt({ number: 9, title: "Add X", body: "Please add X.", labels: [], url: "" });
+  assert.ok(prompt.includes("#9"));
+  assert.ok(prompt.includes("Add X"));
+  assert.ok(/interrupted by a restart/i.test(prompt));
+  assert.ok(/not because you finished/i.test(prompt));
+  assert.ok(!prompt.includes("Please add X."), "the original issue body is not restated as a new request");
+});
+
+check("buildResumePrompt: tells the agent to inspect existing worktree state before acting", () => {
+  const prompt = buildResumePrompt({ number: 3, title: "T", body: "b", labels: [], url: "" });
+  assert.ok(/git status/.test(prompt));
+  assert.ok(/git diff/.test(prompt));
+  assert.ok(/git log/.test(prompt));
+  assert.ok(/tests, linter, and type-checker/i.test(prompt));
+});
+
+check("buildResumePrompt: handles a missing title", () => {
+  const prompt = buildResumePrompt({ number: 4, title: "", body: "", labels: [], url: "" });
+  assert.ok(prompt.includes("#4"));
+  assert.ok(!prompt.includes("#4:"));
 });
 
 checkAsync("ensureLabel: treats 201 created and 422 exists as success", async () => {
