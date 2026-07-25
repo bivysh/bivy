@@ -121,6 +121,12 @@ export class AppController {
   private pendingTranscriptions = new Map<string, { resolve: (text: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight session-fork requests (export → bundle, import → done), by requestId. */
   private pendingForks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  /** In-flight saves awaiting a node ack (node.settings, provider.apiKey,
+   *  models.custom.save, stt.config.set), by requestId — see awaitAck/resolveAck.
+   *  These commands had no protocol-level ack before #140: the UI would show
+   *  "Saved" the instant the command was sent, regardless of whether the node
+   *  actually accepted it. */
+  private pendingAcks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** Persistent transcript cache (IndexedDB) for instant paint + incremental backfill. */
   private transcriptCache: TranscriptCache = createTranscriptCache({ maxSessions: 50 });
   /** A GitHub App manifest `code` captured from a redirect, sent once connected. */
@@ -293,6 +299,11 @@ export class AppController {
     const handlers = {
       onEvent: (event: ServerEvent) => {
         const type = String(event.type || "");
+        // Settle any save() awaiting this reply (see awaitAck) before anything
+        // else — harmless no-op when the requestId doesn't match a pending save
+        // (e.g. a plain .get(), or an event from an unrelated flow that happens
+        // to carry its own requestId).
+        this.resolveAck(event);
         if (type === "pong") {
           const rid = String(event.requestId || "");
           if (rid) this.pendingLivenessPings.delete(rid);
@@ -699,6 +710,41 @@ export class AppController {
 
   private send(command: Command): void {
     void this.transport.send(command);
+  }
+
+  /**
+   * Send a command and await its correlated reply instead of assuming success
+   * the moment it was handed to the transport. A handful of node-settings-style
+   * saves (node.settings.set, provider.apiKey, models.custom.save,
+   * stt.config.set) used to be fire-and-forget with no ack at all — the UI
+   * showed "Saved" immediately regardless of whether the node accepted the
+   * change (#140). The node now echoes our requestId back on both success and
+   * failure (a `*.error`-suffixed type rejects; anything else resolves).
+   */
+  private awaitAck(command: Command, timeoutMs = 10000): Promise<ServerEvent> {
+    const rid = requestId();
+    return new Promise<ServerEvent>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingAcks.delete(rid);
+        reject(new Error("Timed out waiting for the node to respond."));
+      }, timeoutMs);
+      this.pendingAcks.set(rid, { resolve, reject, timer });
+      void this.transport.send({ ...command, requestId: rid });
+    });
+  }
+
+  /** Resolve/reject an in-flight awaitAck() call from its matching reply. */
+  private resolveAck(event: ServerEvent): void {
+    const rid = String(event.requestId || "");
+    const pending = rid ? this.pendingAcks.get(rid) : undefined;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingAcks.delete(rid);
+    if (String(event.type || "").endsWith(".error")) {
+      pending.reject(new Error(String((event as { error?: unknown }).error || "Save failed")));
+    } else {
+      pending.resolve(event);
+    }
   }
 
   // --- Session fork (docs/session-fork-plan.md) --------------------------------
@@ -1148,8 +1194,10 @@ export class AppController {
   getNodeSettings(): void {
     this.send({ kind: "node.settings.get" });
   }
-  setNodeSettings(patch: Record<string, unknown>): void {
-    this.send({ kind: "node.settings.set", settings: patch });
+  /** Save node settings and resolve once the node acks the change (or reject
+   *  with its error) instead of assuming success the moment it was sent. */
+  setNodeSettings(patch: Record<string, unknown>): Promise<void> {
+    return this.awaitAck({ kind: "node.settings.set", settings: patch }).then(() => undefined);
   }
 
   /** Sandbox tier for the next new session (null = use the node default). */
@@ -1456,8 +1504,10 @@ export class AppController {
   getProviderAuth(provider: string): void {
     this.send({ kind: "provider.auth.get", provider });
   }
-  saveApiKey(provider: string, key: string): void {
-    this.send({ kind: "provider.apiKey", provider, key });
+  /** Save an API key and resolve once the node acks it (or reject with its
+   *  error) instead of assuming success the moment it was sent. */
+  saveApiKey(provider: string, key: string): Promise<void> {
+    return this.awaitAck({ kind: "provider.apiKey", provider, key }).then(() => undefined);
   }
   removeProvider(provider: string): void {
     this.send({ kind: "provider.remove", provider });
@@ -1481,9 +1531,11 @@ export class AppController {
     this.send({ kind: "models.custom.presets" });
   }
   /** Save (create or update) a local/custom provider. `spec` matches the node's
-   *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }. */
-  saveLocalModel(spec: Record<string, unknown>): void {
-    this.send({ kind: "models.custom.save", spec });
+   *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }.
+   *  Resolves once the node acks the save (or rejects with its error) instead
+   *  of assuming success the moment it was sent. */
+  saveLocalModel(spec: Record<string, unknown>): Promise<void> {
+    return this.awaitAck({ kind: "models.custom.save", spec }).then(() => undefined);
   }
   removeLocalModel(id: string): void {
     this.send({ kind: "models.custom.remove", id });
@@ -1498,8 +1550,10 @@ export class AppController {
   setSttProvider(provider: string): void {
     this.send({ kind: "stt.config.set", provider });
   }
-  saveSttKey(provider: string, value: string): void {
-    this.send({ kind: "stt.config.set", setKey: { provider, value } });
+  /** Save a speech-to-text provider key and resolve once the node acks it (or
+   *  reject with its error) instead of assuming success the moment it was sent. */
+  saveSttKey(provider: string, value: string): Promise<void> {
+    return this.awaitAck({ kind: "stt.config.set", setKey: { provider, value } }).then(() => undefined);
   }
   removeSttKey(provider: string): void {
     this.send({ kind: "stt.config.set", removeKey: provider });

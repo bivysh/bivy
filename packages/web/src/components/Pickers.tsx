@@ -72,12 +72,12 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
     if (repo) controller.listBranches(repo);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const repos = useMemo(() => {
+  const { repos, repoTotal } = useMemo(() => {
     const query = q.trim().toLowerCase();
     const list = query
       ? state.repos.filter((r) => `${r.slug} ${r.description || ""}`.toLowerCase().includes(query))
       : state.repos;
-    return list.slice(0, 60);
+    return { repos: list.slice(0, 60), repoTotal: list.length };
   }, [state.repos, q]);
 
   if (branchFor) {
@@ -141,6 +141,9 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
             />
           );
         })}
+        {repoTotal > repos.length && (
+          <div className="picker-empty">Showing first {repos.length} of {repoTotal} — search to narrow.</div>
+        )}
       </div>
     </Sheet>
   );
@@ -167,10 +170,10 @@ function RepoBranchPicker({
   // resolved for (branchesRepo); until that catches up to the repo we drilled
   // into, show the loading state rather than another repo's branches.
   const loading = state.branchesLoading || state.branchesRepo !== repo;
-  const branches = useMemo(() => {
+  const { branches, branchTotal } = useMemo(() => {
     const query = q.trim().toLowerCase();
     const list = query ? state.branches.filter((b) => b.name.toLowerCase().includes(query)) : state.branches;
-    return list.slice(0, 200);
+    return { branches: list.slice(0, 200), branchTotal: list.length };
   }, [state.branches, q]);
   // Prefer the default branch from the repo listing (already loaded) so the
   // "Default branch (main)" row is labelled and pickable INSTANTLY — before the
@@ -222,6 +225,9 @@ function RepoBranchPicker({
               onClick={() => pick(b.name)}
             />
           ))}
+        {!loading && branchTotal > branches.length && (
+          <div className="picker-empty">Showing first {branches.length} of {branchTotal} — search to narrow.</div>
+        )}
       </div>
     </Sheet>
   );

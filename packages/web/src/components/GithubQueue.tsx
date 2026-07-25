@@ -17,6 +17,7 @@ import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { PrBadge, relTime, toMs } from "./SessionList.js";
 import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
+import { ConfirmDialog } from "./AppDialog.js";
 
 // Cap on the GitHub queue "Sessions" list before a "Show more" link appears
 // (issue #531) — with many queue sessions the list otherwise grows unbounded
@@ -108,6 +109,8 @@ export function GithubQueuePanel({
   // Removing a single item / clearing the whole queue.
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
+  const [queueActionErr, setQueueActionErr] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
   // Global "refresh GitHub status" scan (issue #530): reconciles every session
   // this node has tracked that carries PR state, not just the ones listed here
   // — a session that finished or was never reattached keeps whatever PR state
@@ -263,25 +266,28 @@ export function GithubQueuePanel({
 
   const removeItem = async (id: string) => {
     setDeletingId(id);
+    setQueueActionErr(null);
     try {
       await controller.deleteWorkItem(id);
       if (assignOpenId === id) setAssignOpenId(null);
       onRefresh();
-    } catch {
-      /* leave it in place; a Refresh will reconcile */
+    } catch (e) {
+      // The button reverting with no message read as if nothing happened —
+      // surface why the item is still there instead of failing silently (#140).
+      setQueueActionErr(String((e as Error)?.message || e));
     } finally {
       setDeletingId(null);
     }
   };
   const clearAll = async () => {
-    if (!window.confirm("Remove all waiting items from the queue? Items already picked up keep running.")) return;
     setClearing(true);
+    setQueueActionErr(null);
     try {
       await controller.clearWorkQueue();
       setAssignOpenId(null);
       onRefresh();
-    } catch {
-      /* ignore; Refresh reconciles */
+    } catch (e) {
+      setQueueActionErr(String((e as Error)?.message || e));
     } finally {
       setClearing(false);
     }
@@ -470,7 +476,7 @@ export function GithubQueuePanel({
               </h4>
               <div className="queue-head-actions">
                 {waiting && waiting.length > 0 && (
-                  <button className="link-btn danger" onClick={clearAll} disabled={clearing}>
+                  <button className="link-btn danger" onClick={() => setConfirmClear(true)} disabled={clearing}>
                     {clearing ? "Clearing…" : "Clear queue"}
                   </button>
                 )}
@@ -479,6 +485,19 @@ export function GithubQueuePanel({
                 </button>
               </div>
             </div>
+
+            {confirmClear && (
+              <ConfirmDialog
+                title="Clear the queue?"
+                message="Remove all waiting items from the queue? Items already picked up keep running."
+                confirmLabel="Clear queue"
+                danger
+                onCancel={() => setConfirmClear(false)}
+                onConfirm={() => { setConfirmClear(false); clearAll(); }}
+              />
+            )}
+
+            {queueActionErr && <div className="banner error inline">{queueActionErr}</div>}
 
             {autoLaunching && (
               <p className="muted" style={{ marginBottom: 10 }}>⚡ Provisioning an ephemeral runner to pick these up…</p>
