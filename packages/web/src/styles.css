@@ -651,6 +651,18 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .composer-gh:empty { display: none; }
 .pill-gh { flex: none; }
 
+/* TUI single-writer lock banner: shown in place of a usable composer while the
+   active session is driven by its interactive terminal. Offers to jump to that
+   terminal or take the session back into chat. */
+.composer-tui-lock {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 8px 10px 0; padding: 8px 12px;
+  border: 1px solid var(--accent); border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+}
+.composer-tui-lock-text { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--ink); }
+.composer-tui-lock-actions { flex: none; display: flex; gap: 8px; }
+
 /* "/" slash-command pill: opens the composer's command menu. `margin-left: auto`
    parks it on the right edge of the band (top-right over the composer) whether or
    not a GitHub pill shares the row. Sized/round like the GitHub pill for a matched

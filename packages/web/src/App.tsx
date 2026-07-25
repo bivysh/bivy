@@ -53,6 +53,9 @@ export function App() {
    *  one — always the selected node's default workspace, never the active
    *  chat's cwd. See #460. */
   const [terminalStandalone, setTerminalStandalone] = useState(false);
+  /** "Continue in terminal": the overlay hands the active chat session off to
+   *  the runtime's interactive TUI (the reverse of "continue in chat"). */
+  const [terminalTui, setTerminalTui] = useState(false);
   // Node picker for the standalone terminal button — only shown when there's
   // more than one node to choose from (see openStandaloneTerminal).
   const [terminalNodePicker, setTerminalNodePicker] = useState(false);
@@ -127,7 +130,12 @@ export function App() {
     state.status === "reconnecting" ||
     (everConnectedRef.current &&
       (state.status === "connecting" || state.status === "linking" || state.status === "pairing"));
-  const canCompose = online || transientReconnect;
+  // The active session is being driven by its interactive TUI (single writer):
+  // chat sends are refused by the node until the TUI exits. Rather than let a
+  // send fail with an error, lock the composer and show a banner offering to
+  // jump to the terminal or take the session back into chat.
+  const activeTuiLocked = Boolean(state.activeSessionId && state.tuiSessions.includes(state.activeSessionId));
+  const canCompose = (online || transientReconnect) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
   useEdgeSwipe({ isOpen: drawerOpen, onOpen: () => setDrawerOpen(true), onClose: () => setDrawerOpen(false) });
@@ -158,6 +166,7 @@ export function App() {
     if (controller.direct || state.nodes.length <= 1) {
       setTerminalTarget(null);
       setTerminalStandalone(true);
+      setTerminalTui(false);
       setTerminalOpen(true);
       return;
     }
@@ -170,6 +179,7 @@ export function App() {
       if (!controller.direct && nodeId !== state.currentNodeId) controller.switchNode(nodeId);
       setTerminalTarget(null);
       setTerminalStandalone(true);
+      setTerminalTui(false);
       setTerminalOpen(true);
       setDrawerOpen(false);
     },
@@ -188,6 +198,7 @@ export function App() {
       const open = () => {
         setTerminalTarget(termId);
         setTerminalStandalone(false);
+        setTerminalTui(false);
         setTerminalOpen(true);
       };
       setDrawerOpen(false);
@@ -201,6 +212,25 @@ export function App() {
     },
     [state.currentNodeId],
   );
+
+  // "Continue in terminal": open the overlay bound to the active chat session in
+  // interactive-TUI mode. The overlay sends `terminal.open.tui`, which resumes
+  // this same conversation in the runtime's native CLI — the reverse of the
+  // terminal's "continue in chat" (takeover). Gated on the session runtime's
+  // `interactiveTui` capability at the call site (SessionMenu).
+  const continueInTerminal = useCallback(() => {
+    setTerminalTarget(null);
+    setTerminalStandalone(false);
+    setTerminalTui(true);
+    setTerminalOpen(true);
+  }, []);
+
+  // "Take over in chat" from the TUI lock banner: ask the node to stop the TUI
+  // that owns the active session; it rebuilds the session from disk and
+  // broadcasts `terminal.tui {active:false}`, which unlocks the composer.
+  const takeoverInChat = useCallback(() => {
+    if (state.activeSessionId) controller.closeSessionTui(state.activeSessionId);
+  }, [state.activeSessionId]);
 
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
@@ -228,6 +258,14 @@ export function App() {
   const closeDrawer = () => setDrawerOpen(false);
   const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId);
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
+  // "Continue in terminal" is offered only when this session's runtime can hand
+  // itself to its native TUI on the node (capability `interactiveTui`) — the
+  // analog of the terminal's capability-gated "continue in chat". Absent caps
+  // (older node / runtime not yet loaded) default to hidden.
+  const activeRuntimeCaps = state.runtimes.find((r) => r.id === activeSession?.runtimeId)?.capabilities as
+    | { interactiveTui?: boolean }
+    | undefined;
+  const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
 
   // Approval/question cards render inline in the active session's chat scroll, so
   // only show the ones that belong to that session. Items are still kept globally
@@ -330,7 +368,7 @@ export function App() {
           </div>
           <div className="topbar-actions">
             {online && (
-              <button className="icon-btn term-btn" onClick={() => { setTerminalTarget(null); setTerminalStandalone(false); setTerminalOpen(true); }} title="Terminal" aria-label="Open terminal">
+              <button className="icon-btn term-btn" onClick={() => { setTerminalTarget(null); setTerminalStandalone(false); setTerminalTui(false); setTerminalOpen(true); }} title="Terminal" aria-label="Open terminal">
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <rect x="3" y="4" width="18" height="16" rx="2" />
                   <path d="m7 9 3 3-3 3" />
@@ -346,6 +384,7 @@ export function App() {
                 prs={activeSession?.prs}
                 collapsed={collapsed}
                 onToggleCollapsed={toggleCollapsed}
+                onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
               />
             )}
           </div>
@@ -443,10 +482,24 @@ export function App() {
           )}
         </div>
 
+        {activeTuiLocked && (
+          <div className="composer-tui-lock" role="status">
+            <span className="composer-tui-lock-text">This session is open in the terminal (TUI).</span>
+            <div className="composer-tui-lock-actions">
+              <button type="button" className="ghost-btn" onClick={continueInTerminal}>
+                Go to terminal
+              </button>
+              <button type="button" className="btn primary" onClick={takeoverInChat}>
+                Take over in chat
+              </button>
+            </div>
+          </div>
+        )}
+
         <Composer
           state={state}
           disabled={!canCompose}
-          disabledHint={state.status === "offline" ? "Not connected" : "Connecting…"}
+          disabledHint={activeTuiLocked ? "Open in the terminal — take over to chat here" : state.status === "offline" ? "Not connected" : "Connecting…"}
           working={state.working}
           onSend={(text, attachments) => controller.sendPrompt(text, attachments)}
           onAbort={() => controller.abort()}
@@ -490,10 +543,12 @@ export function App() {
             sessionId={terminalStandalone ? null : state.activeSessionId}
             attachTermId={terminalTarget}
             standalone={terminalStandalone}
+            tui={terminalTui}
             onClose={() => {
               setTerminalOpen(false);
               setTerminalTarget(null);
               setTerminalStandalone(false);
+              setTerminalTui(false);
             }}
           />
         </Suspense>
