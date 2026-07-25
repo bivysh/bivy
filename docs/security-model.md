@@ -106,8 +106,23 @@ key. Worst case it can make a pairing attempt fail; it cannot leak the room key.
 
 The node's HTTP/WebSocket API on `localhost:4317` can run shell commands and
 edit files. By default it authorizes any **loopback** caller without a token so
-the local UI works out of the box (`BIVY_REQUIRE_LOCAL_AUTH=1` forces token auth
-even on loopback).
+the local UI works out of the box — but only on a host it believes has a single
+human user. `loopbackAllowed()` in `src/auth.ts` calls `isMultiUserHost()` to
+make that call: on Linux it counts `/etc/passwd` accounts with a real login
+shell and a normal (non-system) UID, and on macOS it counts real accounts from
+`dscl . -list /Users UniqueID`; more than one means the bypass is off by
+default, because loopback is shared by every local account and is not
+isolation between them. Windows detection isn't implemented, so the bypass
+stays on there today. `BIVY_REQUIRE_LOCAL_AUTH=1` always forces token auth even
+on loopback (e.g. Windows, or if you don't trust the detection); `=0` always
+keeps the bypass on even if the host looks shared. `BIVY_MULTI_USER_HOST=1`/`=0`
+overrides just the detection, if it's guessing wrong for your box. Detection is
+deliberately conservative (biased toward false negatives, not false positives)
+so it never surprises a single-user machine into requiring a token it never
+needed before.
+
+When the bypass is off, every `/api` and `/ws` caller — including the CLI —
+must present a device token, which they get from the bootstrap endpoint below.
 
 That default would otherwise let any web page you visit drive your agent. The
 actionable surface (`/api`, `/ws`) therefore rejects requests whose browser
@@ -295,9 +310,14 @@ security-conscious user to know before trusting it with anything sensitive.
    partial. Do not treat Bivy as an isolation boundary.
 2. **The hard-floor deny list is heuristic.** Regex over a shell command string.
    It stops accidents, not a determined agent.
-3. **Loopback is trusted by default.** Any process running as any user on the
-   machine can reach `localhost:4317`; only the bootstrap-secret gate protects
-   the token-minting endpoint. Set `BIVY_REQUIRE_LOCAL_AUTH=1` on shared hosts.
+3. **Loopback is trusted by default on hosts we believe are single-user.** On a
+   host `isMultiUserHost()` (`src/auth.ts`) recognizes as shared, token auth is
+   required automatically and any process on the machine — any user — can
+   otherwise only reach the token-minting endpoint, which is itself gated by
+   the bootstrap secret. Detection is heuristic (`/etc/passwd` on Linux, `dscl`
+   on macOS, not implemented on Windows) and errs toward *not* flagging a host
+   as shared, so it can be wrong in either direction. If in doubt, set
+   `BIVY_REQUIRE_LOCAL_AUTH=1` explicitly rather than relying on detection.
 4. **`BIVY_ALLOW_ANY_ORIGIN=1` fully disables the rebinding/cross-origin
    guard.** It exists as an escape hatch; using it re-opens the attack the guard
    was written to close.

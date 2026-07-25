@@ -7065,9 +7065,6 @@ app.get("/api/git-credential", async (req, res) => {
   }
 });
 
-// All /api routes require auth (loopback may bypass per config).
-app.use("/api", authMiddleware(identity));
-
 // Loopback-only bootstrap: a same-machine caller (the CLI, a direct-mode web
 // client, or the git-credential helper) mints itself a device token so it uses
 // the same auth path as remote clients (Step 0c). Rejected off-loopback.
@@ -7079,6 +7076,14 @@ app.use("/api", authMiddleware(identity));
 // to a 0600 file the owner can read). The caller reads that secret and presents
 // it here. Set BIVY_OPEN_BOOTSTRAP=1 to drop this requirement on trusted
 // single-user machines.
+//
+// Registered BEFORE the general `/api` auth middleware (below): this route is
+// how a loopback caller with no token gets one in the first place, so it can't
+// itself require the middleware's isAuthorized() to already be satisfied — on
+// a host where the general loopback bypass is off (multi-user detection,
+// BIVY_REQUIRE_LOCAL_AUTH=1), that would make bootstrap unreachable. It has its
+// own, stricter gate (loopback + secret) instead, exactly like /api/git-credential
+// above.
 function bootstrapSecretAccepted(req: express.Request): boolean {
   if (process.env.BIVY_OPEN_BOOTSTRAP === "1") return true;
   const headerValue = req.headers["x-bivy-bootstrap"];
@@ -7100,6 +7105,10 @@ app.post("/api/auth/bootstrap", (req, res) => {
   broadcast({ type: "device.created", device });
   res.json({ ok: true, device, token });
 });
+
+// All other /api routes require auth (loopback may bypass, per config and host
+// — see loopbackAllowed()/isMultiUserHost() in src/auth.ts).
+app.use("/api", authMiddleware(identity));
 
 // Reload relay.json without forcing the user to restart the whole node. This is
 // used by `bivy relay:setup` after it enrolls the node.
