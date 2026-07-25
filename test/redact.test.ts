@@ -49,6 +49,62 @@ function run() {
     assert.ok(out.includes("***REDACTED***"), "inserts marker for provider key");
   }
 
+  // Bivy's own bearer tokens — device tokens, enrollment tokens, and account
+  // session tokens (the exact `cat ~/.bivy/relay.json` / `cat ~/.bivy/node.json`
+  // leak vectors from issue #109), plus the other `<prefix>_` shapes minted by
+  // the control plane.
+  for (const tok of [
+    `mesh_${"A".repeat(43)}`, // device token (identity.ts)
+    `enr_${"B".repeat(43)}`, // node enrollment token (relay-setup.ts -> relay.json)
+    `sess_${"C".repeat(32)}`, // account session token
+    `mlt_${"D".repeat(32)}`, // magic-link sign-in token
+    `lnk_${"E".repeat(32)}`, // remote-device link grant
+    `tkt_${"F".repeat(32)}`, // single-use relay ticket
+  ]) {
+    const out = redactSecrets(`token=${tok}`);
+    assert.ok(!out.includes(tok), `masks bivy token ${tok.slice(0, 5)}…`);
+    assert.ok(out.includes("***REDACTED***"), "inserts marker for bivy token");
+  }
+  // A short, non-token `mesh_`-prefixed fragment must not be over-redacted.
+  assert.equal(redactSecrets("use the mesh_short flag"), "use the mesh_short flag", "leaves short mesh_ fragments alone");
+
+  // JWTs (e.g. a GitHub App JWT printed while debugging createAppJwt()).
+  const jwt = "eyJhbGciOiJSUzI1NiJ9.eyJpYXQiOjE3MDAwMDAwMDAsImlzcyI6IjEyMzQ1In0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU";
+  const jwtOut = redactSecrets(`Authorization: Bearer ${jwt}`);
+  assert.ok(!jwtOut.includes(jwt), "masks JWT");
+  assert.ok(jwtOut.includes("***REDACTED***"), "inserts marker for JWT");
+
+  // Generic `Authorization: Bearer <token>` — a bearer shape with no specific
+  // prefix of its own (e.g. a third-party bearer echoed while debugging).
+  const bearerOut = redactSecrets("curl -H 'Authorization: Bearer abcDEF0123456789ghiJKL' https://example.com");
+  assert.ok(!bearerOut.includes("abcDEF0123456789ghiJKL"), "masks generic bearer token");
+  assert.ok(bearerOut.includes("Bearer ***REDACTED***"), "keeps the Bearer scheme, masks the credential");
+  // The bare word "Bearer" with nothing following must not be touched.
+  assert.equal(redactSecrets("Bearer of good news"), "Bearer of good news", "leaves bare 'Bearer' word alone");
+
+  // Pairing secrets / room keys / private keys: high-entropy values with no
+  // prefix of their own, identified by the known JSON field name next to them
+  // (device-registry.ts, pairing-crypto.ts, server.ts's GitHub App vault).
+  const secretsJson = JSON.stringify({
+    roomKeyB64: "r".repeat(44),
+    privateKeyB64: "p".repeat(44),
+    pairSecretB64: "s".repeat(44),
+    vaultKeyB64: "v".repeat(44),
+    deviceSecret: "d".repeat(44),
+    webhookSecret: "w".repeat(44),
+    sessionToken: "t".repeat(44),
+    privateKeyPem: "-----BEGIN PRIVATE KEY-----\\nexample-fixture-not-a-real-key-MIIBVQIBADANBgkqhkiG9w0BAQ\\n-----END PRIVATE KEY-----",
+    // Public keys are not secret and must survive untouched.
+    publicKeyB64: "public-key-value-not-a-secret",
+  });
+  const secretsOut = redactSecrets(secretsJson);
+  for (const value of ["r".repeat(44), "p".repeat(44), "s".repeat(44), "v".repeat(44), "d".repeat(44), "w".repeat(44), "t".repeat(44)]) {
+    assert.ok(!secretsOut.includes(value), `masks known-key-adjacent secret value (${value[0]})`);
+  }
+  assert.ok(!secretsOut.includes("MIIBVQIBADANBgkqhkiG9w0BAQ"), "masks PEM private key value");
+  assert.ok(secretsOut.includes("public-key-value-not-a-secret"), "leaves public key values alone");
+  assert.ok(JSON.parse(secretsOut), "redacted JSON with known-secret fields is still valid JSON");
+
   // Non-secret text is untouched.
   assert.equal(redactSecrets("just a normal https://github.com/bivysh/bivy line"), "just a normal https://github.com/bivysh/bivy line", "leaves credential-free URLs alone");
   // A short `sk-` fragment is not a key and must not be over-redacted.
