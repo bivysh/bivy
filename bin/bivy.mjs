@@ -98,6 +98,7 @@ const githubAppSyncEntry = path.join(repoRoot, packaged ? "dist/github-app-sync-
 const secretsEntry = path.join(repoRoot, packaged ? "dist/secrets-cli.js" : "src/secrets-cli.ts");
 const sttEntry = path.join(repoRoot, packaged ? "dist/stt-cli.js" : "src/stt-cli.ts");
 const attachEntry = path.join(repoRoot, packaged ? "dist/attach.js" : "src/attach.ts");
+const relayAttachEntry = path.join(repoRoot, packaged ? "dist/relay-attach.js" : "src/relay-attach.ts");
 const execEntry = path.join(repoRoot, packaged ? "dist/exec.js" : "src/exec.ts");
 const mcpProxyEntry = path.join(repoRoot, packaged ? "dist/harness/mcp-proxy-cli.js" : "src/harness/mcp-proxy-cli.ts");
 const qrEntry = path.join(repoRoot, "public", "qr.js");
@@ -1048,18 +1049,19 @@ async function resolveNodeTarget(nodeName) {
       const list = Array.isArray(data) ? data : (data?.nodes || []);
       const match = list.find((n) => n.name === nodeName || n.id === nodeName);
       if (match) {
-        throw new Error(
-          `Node "${nodeName}" is registered to your account (${match.online ? "online" : "offline"}) but has no direct route from here yet.\n` +
-          `  Relay-tunnelled routing is in progress (verified crypto core in src/relay-cli-crypto.ts;\n` +
-          `  transport design in docs/relay-node-cli.md). For now, add a directly-reachable URL:\n` +
-          `    on that node:  ${c.cyan("bivy token")}   ${c.dim("# prints a device token")}\n` +
-          `    here:          ${c.cyan(`bivy nodes add ${nodeName} http://<host>:4317 --token <token>`)}\n` +
-          `  Any reachable address works: LAN IP, Tailscale/VPN name, or an SSH tunnel to localhost:4317.`,
-        );
+        // Account node with no direct route: tunnel to it through the relay,
+        // exactly as a phone does. resolveNodeTarget stays synchronous about the
+        // decision; the relay-attach bridge performs the actual pairing.
+        if (!match.online) {
+          throw new Error(`Node "${nodeName}" is registered to your account but is currently offline.`);
+        }
+        return { source: "relay", nodeId: match.id, name: match.name || nodeName };
       }
     } catch (error) {
-      if (error instanceof Error && /work in progress/.test(error.message)) throw error;
-      // Control-plane lookup failed (offline/misconfigured) — fall through to the generic error.
+      // A concrete "offline" decision is actionable — surface it. Any other
+      // control-plane failure (lookup unreachable) falls through to the generic
+      // "unknown node" error below.
+      if (error instanceof Error && /is currently offline/.test(error.message)) throw error;
     }
   }
 
@@ -1121,11 +1123,13 @@ async function cmdNodes(args = []) {
     try {
       const data = await controlPlaneNodeApi(relay, "/nodes");
       const cpNodes = Array.isArray(data) ? data : (data?.nodes || []);
-      console.log(c.bold("\n  Account nodes") + c.dim("  (from the control plane)\n"));
+      console.log(c.bold("\n  Account nodes") + c.dim("  (from the control plane — run on any online one with 'bivy run --node <name>')\n"));
       if (cpNodes.length === 0) console.log(c.dim("  none registered"));
       else for (const n of cpNodes) {
-        const inRegistry = names.includes(n.name) ? c.dim("  [direct route configured]") : c.dim("  add a direct route to run here");
-        console.log(`  ${c.cyan(String(n.name).padEnd(14))} ${n.online ? c.green("● online") : c.dim("○ offline")}${inRegistry}`);
+        const route = names.includes(n.name)
+          ? c.dim("  [direct route configured]")
+          : (n.online ? c.dim("  reachable over the relay") : "");
+        console.log(`  ${c.cyan(String(n.name).padEnd(14))} ${n.online ? c.green("● online") : c.dim("○ offline")}${route}`);
       }
     } catch {
       console.log(c.dim("\n  (could not reach the control plane to list account nodes)"));
@@ -1483,11 +1487,36 @@ async function cmdRun(args = []) {
     console.log(c.dim(`session id ${pinnedSessionId} — resume in a terminal with '${agentId} --resume ${pinnedSessionId}'`));
   }
 
-  // Remote target: start the session on another node over a direct connection.
+  // Remote target: start the session on another node.
   if (node) {
     let target;
     try { target = await resolveNodeTarget(node); }
     catch (error) { console.error(c.red(error?.message || String(error))); process.exit(1); return; }
+
+    // Account node with no direct route: tunnel through the relay (the same
+    // path a phone uses). The command must resolve on the REMOTE node's PATH, so
+    // send the agent's bare command rather than this machine's absolute path.
+    if (target.source === "relay") {
+      if (agentId !== "--" && terminalAgent(agentId).agent?.type === "native-pi") {
+        console.error(c.red("Pi runs only on the local node. For --node, pick an installed agent (e.g. claude, codex)."));
+        process.exit(1);
+        return;
+      }
+      const remoteCommand = agentId === "--" ? resolved.spec.command : (terminalAgent(agentId).agent?.command || resolved.spec.command);
+      const spec = { ...resolved.spec, command: remoteCommand, name, model, workspace: undefined };
+      console.log(c.dim(`Starting on ${c.cyan(target.name)} over the relay…`));
+      await run(nodeBin, [
+        ...nodeScriptArgs(relayAttachEntry),
+        "--node-id", target.nodeId,
+        "--node-name", target.name,
+        "--relay-config", relayConfigPath,
+        "--attach-cmd", JSON.stringify(nodeScriptArgs(attachEntry)),
+        "--run", JSON.stringify(spec),
+      ], { cwd: repoRoot, env: process.env });
+      return;
+    }
+
+    // Direct node: a reachable URL (LAN, Tailscale/VPN, SSH tunnel).
     if (!(await isUrlReachable(target.url))) {
       console.error(c.red(`Node "${node}" at ${target.url} is not reachable right now.`));
       process.exit(1);
