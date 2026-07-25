@@ -447,9 +447,9 @@
       <h1>Run coding agents on machines you own.</h1>
       <p class="lede">
         Bivy runs Claude Code, Codex, Gemini CLI, Aider and other agent CLIs on your
-        own laptop or server — with your keys, your repo, and your toolchain — then puts
-        every session in an app on your phone: the full transcript, the diffs, a real
-        terminal, and the approval it's waiting on.
+        own laptop or server — your keys, your repo, your toolchain, nothing uploaded —
+        then puts every session in a real chat app on your phone: the full transcript,
+        the diffs, the approval it's waiting on, and a terminal only when you want one.
       </p>
 
       <div class="install">
@@ -471,8 +471,9 @@
       </div>
 
       <p class="sub" style="margin:22px 0 0">
-        Your code never leaves your machine — agents run in real terminals on hardware you
-        control, and Bivy adds the session layer, approvals, and remote access around them.
+        You own the machine, the keys, and the code — no vendor sandbox, no repository
+        upload, no token markup. Agents run in real terminals on hardware you control,
+        and Bivy adds the session layer, approvals, and remote access around them.
         Free, 10 runs a week, forever: no credit card, no trial clock. Setup is one command
         and a guided wizard, and uninstall is one command too.
       </p>
@@ -589,10 +590,13 @@
       <p class="prose">
         This is the mobile companion most agent CLIs don't ship on their own: whichever
         agent and model you're running — Claude Code, Codex, or nine others — on machines
-        you own, with your own keys, reachable from anywhere. A composer built for chatting
-        with an agent, with dictation and attachments, not a PTY squeezed onto a small
-        screen — plus the same label-an-issue, get-a-pull-request-back workflow other
-        agents lock to their own hosted compute. See <a href="#github" style="color:var(--accent);text-decoration:none">the GitHub work queue</a> below.
+        you own, with your own keys, reachable from anywhere. Not a PTY squeezed onto a
+        small screen, but a real chat client — read the transcript, scan the diffs,
+        approve the one thing it's waiting on, and steer the run from a composer built for
+        it, with dictation and attachments. Kick work off from the couch and let it run on
+        the hardware in your pocket's reach — plus the same label-an-issue,
+        get-a-pull-request-back workflow other agents lock to their own hosted compute. See
+        <a href="#github" style="color:var(--accent);text-decoration:none">the GitHub work queue</a> below.
       </p>
 
       <div class="app-split">
@@ -641,17 +645,15 @@
             one tap unblocks it instead of a run sitting idle until you're back at your desk.
           </li>
           <li>
-            <b>Drop into a real terminal, when you need one</b>
-            A full PTY on the machine, in your pocket — run the tests yourself, check
-            <code>git status</code>, or take over when the agent gets stuck. With a touch
-            key bar for <kbd>esc</kbd>, <kbd>tab</kbd>, ctrl and arrows, so a phone
-            keyboard stops being the reason you wait until you're home. It can attach to
-            an existing tmux, zellij or screen session too.
-          </li>
-          <li>
             <b>Know what it's costing</b>
             A live token and dollar counter on every session, so a long autonomous run
             never surprises you.
+          </li>
+          <li>
+            <b>A terminal only when you want one</b>
+            Chat is the default. But a full PTY on the machine is one tap away for the
+            moments you want it — run the tests yourself or take over when the agent gets
+            stuck. It can attach to an existing tmux, zellij or screen session too.
           </li>
           <li>
             <b>Installs like an app</b>
