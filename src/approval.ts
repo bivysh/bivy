@@ -25,10 +25,22 @@ type Pending = {
   timeout: NodeJS.Timeout;
 };
 
+/** Cap on retained resolved/expired approvals so a long-lived daemon can't grow
+ * history (and every /api/approvals + session-list scan) without bound. */
+const MAX_HISTORY = 200;
+
 export class ApprovalManager {
   private pending = new Map<string, Pending>();
   private history: ApprovalRequest[] = [];
   private listeners = new Set<(request: ApprovalRequest) => void>();
+
+  /** Append to history, trimming to the most recent MAX_HISTORY entries. */
+  private record(request: ApprovalRequest) {
+    this.history.push(request);
+    if (this.history.length > MAX_HISTORY) {
+      this.history.splice(0, this.history.length - MAX_HISTORY);
+    }
+  }
 
   onRequest(listener: (request: ApprovalRequest) => void) {
     this.listeners.add(listener);
@@ -70,7 +82,7 @@ export class ApprovalManager {
         if (!pending) return;
         pending.request.status = "expired";
         this.pending.delete(request.id);
-        this.history.push(pending.request);
+        this.record(pending.request);
         resolve(false);
       }, input.timeoutMs ?? 5 * 60_000);
 
@@ -87,9 +99,18 @@ export class ApprovalManager {
     clearTimeout(pending.timeout);
     pending.request.status = approved ? "approved" : "rejected";
     this.pending.delete(id);
-    this.history.push(pending.request);
+    this.record(pending.request);
     pending.resolve(approved);
     return true;
+  }
+
+  /** Cancel (deny) any pending approvals for a session being torn down, so a
+   * killed/closed session's ApprovalCard doesn't linger on connected clients
+   * until its 5-minute timeout. Mirrors QuestionManager.cancelForSession. */
+  cancelForSession(sessionId: string) {
+    for (const [id, pending] of this.pending) {
+      if (pending.request.sessionId === sessionId) this.resolve(id, false);
+    }
   }
 
   resolveAll(approved: boolean) {

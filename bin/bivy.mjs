@@ -1385,9 +1385,10 @@ async function cmdExec(args = []) {
 function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
-    "run", "sessions", "ls", "resume", "promote", "nodes", "agents", "shim", "takeover", "token", "exec",
-    "setup", "start", "stop", "restart", "status", "doctor", "logs", "login",
-    "update", "open", "service", "secrets", "relay:setup", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help",
+    "run", "sessions", "ls", "resume", "promote", "nodes", "agents", "agents:install", "shim", "takeover", "token", "exec",
+    "send", "kill", "setup", "start", "stop", "restart", "status", "doctor", "logs", "login",
+    "update", "update:log", "open", "service", "secrets", "voice", "link", "relay:setup",
+    "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
   const agents = [...BUILTIN_TERMINAL_AGENTS.keys()];
 
@@ -3524,6 +3525,17 @@ async function cmdService(args) {
   }
 }
 
+// Read this CLI's version from the shipped package.json. Best-effort: a missing
+// or malformed manifest should never crash `bivy --version`.
+function readSelfVersion() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+    return typeof pkg.version === "string" ? pkg.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 function printHelp() {
   console.log(`
 ${c.bold("bivy")} — Bivy node CLI
@@ -3556,8 +3568,8 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy doctor")}     Health check: deps, node, model, remote, agents
   ${c.cyan("bivy logs")} [-f]   Tail the node logs (systemd journal, launchd, or background log)
   ${c.cyan("bivy login")}      Sign into a model provider (Pi /login)
-  ${c.cyan("bivy update")}     update Bivy + install deps + restart service (waits for active sessions to finish a turn; --force to skip)
-  ${c.cyan("bivy update:log")} show output of the last (or in-progress) update
+  ${c.cyan("bivy update")}     Update Bivy + install deps + restart service (waits for active sessions to finish a turn; --force to skip)
+  ${c.cyan("bivy update:log")} Show output of the last (or in-progress) update
   ${c.cyan("bivy agents:install")}  Install bundled agents (Claude, Codex, OpenCode, Aider, Hermes, Gemini CLI)
   ${c.cyan("bivy open")}       Open the remote web/PWA app
   ${c.cyan("bivy service")}    install | uninstall | status
@@ -3571,6 +3583,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy secrets")}    list | set | ref | delete | doctor | resolve
   ${c.cyan("bivy voice")}      Configure speech-to-text: provider | key | remove | status
   ${c.cyan("bivy completions")} <bash|zsh|fish>  Print a shell completion script
+  ${c.cyan("bivy version")}    Print the installed Bivy version (alias: --version, -v)
 `);
 }
 
@@ -3763,6 +3776,11 @@ async function main() {
     case "-h":
     case "--help":
       printHelp();
+      break;
+    case "version":
+    case "--version":
+    case "-v":
+      console.log(readSelfVersion());
       break;
     default:
       console.error(c.red(`Unknown command: ${command}`));
