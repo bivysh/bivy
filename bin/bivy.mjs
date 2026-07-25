@@ -1089,7 +1089,7 @@ async function cmdNodes(args = []) {
   const [sub, ...rest] = args;
 
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy nodes [list] | bivy nodes add <name> <url> [--token <token>] | bivy nodes remove <name>\n\nList/add/remove other Bivy nodes you can run sessions on directly ('bivy run --node <name>').");
+    console.log("Usage: bivy nodes [list] | bivy nodes add <name> <url> [--token <token>] | bivy nodes remove <name>\n\nList directly-registered nodes plus (when relay is configured) your account's control-plane nodes, and add/remove direct routes. Run a session on any of them with 'bivy run --node <name>' — direct nodes connect straight to their URL, account nodes tunnel through the relay.");
     return;
   }
 
