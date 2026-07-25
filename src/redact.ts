@@ -45,13 +45,63 @@ const PROVIDER_KEYS: RegExp[] = [
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
 ];
 
+// Bivy's own bearer tokens — all minted as `<prefix>_` + `randomBytes(...).
+// toString("base64url")` (see identity.ts's `mesh_` device tokens and the
+// control-plane's `postgres-store.ts`):
+//   mesh_…  device access token (identity.ts, `.bivy/node.json` creation flow)
+//   enr_…   node enrollment token (relay-setup.ts, written to `.bivy/relay.json`)
+//   sess_…  account session token (the bearer used while enrolling/pairing)
+//   mlt_…   magic-link sign-in token
+//   lnk_…   remote-device link grant
+//   tkt_…   single-use relay ticket
+const BIVY_TOKEN = /\b(?:mesh|enr|sess|mlt|lnk|tkt)_[A-Za-z0-9_-]{20,}\b/g;
+
+// JWTs (three dot-separated base64url segments, header always decodes to `{"`
+// so it always starts `eyJ`). Covers GitHub App JWTs (server.ts's
+// `createAppJwt`) and any other JWT an agent might print.
+const JWT = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
+
+// Generic `Authorization: Bearer <token>` — catches bearer credentials that
+// don't match one of the specific shapes above (e.g. a third-party bearer an
+// agent echoes while debugging a request). Case-insensitive on the scheme
+// name; keeps "Bearer"/"bearer" as written and only masks the credential.
+const BEARER_HEADER = /\b(bearer\s+)[A-Za-z0-9._-]{16,}\b/gi;
+
+// Pairing secrets / room keys / private keys: high-entropy string *values*
+// serialized right next to one of Bivy's own known secret-bearing field
+// names (device-registry.ts, pairing-crypto.ts, server.ts's GitHub App vault).
+// These are raw random bytes with no distinctive prefix of their own, so we
+// key off the surrounding JSON field name instead — e.g.
+// `"roomKeyB64":"<...>"` in a synced device-registry / vault write, or the
+// account session forwarded as `"sessionToken":"<...>"` during pairing.
+const KNOWN_SECRET_FIELDS = [
+  "roomKeyB64",
+  "privateKeyB64",
+  "pairSecretB64",
+  "pairSecret",
+  "vaultKeyB64",
+  "deviceSecret",
+  "webhookSecret",
+  "sessionToken",
+  "enrollmentToken",
+  "privateKeyPem",
+];
+const KNOWN_SECRET_FIELD_VALUE = new RegExp(
+  `("(?:${KNOWN_SECRET_FIELDS.join("|")})"\\s*:\\s*")[^"\\\\]*(?:\\\\.[^"\\\\]*)*(")`,
+  "g",
+);
+
 /** Mask credentials in `text`. Safe on non-string / empty input. */
 export function redactSecrets(text: string): string {
   if (!text) return text;
   let out = text
     .replace(URL_CREDENTIAL, `$1:${REDACTED}@`)
     .replace(GH_TOKEN, REDACTED)
-    .replace(GH_FINE_PAT, REDACTED);
+    .replace(GH_FINE_PAT, REDACTED)
+    .replace(BIVY_TOKEN, REDACTED)
+    .replace(JWT, REDACTED)
+    .replace(BEARER_HEADER, `$1${REDACTED}`)
+    .replace(KNOWN_SECRET_FIELD_VALUE, `$1${REDACTED}$2`);
   for (const re of PROVIDER_KEYS) out = out.replace(re, REDACTED);
   return out;
 }
