@@ -93,7 +93,7 @@ function run() {
     deviceSecret: "d".repeat(44),
     webhookSecret: "w".repeat(44),
     sessionToken: "t".repeat(44),
-    privateKeyPem: "-----BEGIN PRIVATE KEY-----\\nMIIBVQIBADANBgkqhkiG9w0BAQ\\n-----END PRIVATE KEY-----",
+    privateKeyPem: "-----BEGIN PRIVATE KEY-----\\nexample-fixture-not-a-real-key-MIIBVQIBADANBgkqhkiG9w0BAQ\\n-----END PRIVATE KEY-----",
     // Public keys are not secret and must survive untouched.
     publicKeyB64: "public-key-value-not-a-secret",
   });
