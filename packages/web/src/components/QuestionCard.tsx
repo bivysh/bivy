@@ -80,10 +80,10 @@ function QuestionCard({
   };
   const answered = request.questions.every((_, qi) => isAnswered(qi));
 
-  const submit = () => {
-    lastAction.current = "answer";
-    setPending(true);
-    setStalled(false);
+  // Build the { question → answer } payload from the current selection, including
+  // any "Other" free-text. Shared by submit and retry so a resend never silently
+  // drops the custom answer (retry used to rebuild from `selected` alone).
+  const buildAnswers = (): Record<string, string> => {
     const answers: Record<string, string> = {};
     request.questions.forEach((q, qi) => {
       const parts = [...(selected[qi] || [])];
@@ -93,7 +93,14 @@ function QuestionCard({
       }
       answers[q.question] = parts.join(", ");
     });
-    onAnswer(request.id, request.sessionId, answers);
+    return answers;
+  };
+
+  const submit = () => {
+    lastAction.current = "answer";
+    setPending(true);
+    setStalled(false);
+    onAnswer(request.id, request.sessionId, buildAnswers());
     armStallTimer();
   };
   const skip = () => {
@@ -108,9 +115,7 @@ function QuestionCard({
     if (lastAction.current === "skip") {
       onCancel(request.id, request.sessionId);
     } else {
-      const answers: Record<string, string> = {};
-      request.questions.forEach((q, qi) => { answers[q.question] = (selected[qi] || []).join(", "); });
-      onAnswer(request.id, request.sessionId, answers);
+      onAnswer(request.id, request.sessionId, buildAnswers());
     }
     armStallTimer();
   };

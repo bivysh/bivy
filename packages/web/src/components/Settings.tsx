@@ -11,6 +11,7 @@ import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { StatsPanel } from "./StatsPanel.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
+import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 
 // The view enumeration lives in router.ts (as `SettingsView`) so the router can
@@ -186,16 +187,15 @@ export function Settings({
   // close (parity with the Sheet primitive this replaced).
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  // Escape closes the modal — but only when Settings is the topmost layer.
+  // A confirm dialog or sheet opened from within a panel registers above this,
+  // so its Escape cancels *it* and leaves Settings open (it used to tear the
+  // whole modal down in one press).
+  useModalEscape(() => onCloseRef.current());
+  // Restore focus to whatever opened Settings when it closes.
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCloseRef.current();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      opener?.focus?.();
-    };
+    return () => { opener?.focus?.(); };
   }, []);
 
   const groups: NavGroup[] = [

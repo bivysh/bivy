@@ -14,6 +14,7 @@ import type { RuntimeInfo, ServerEvent } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { RenameDialog } from "./AppDialog.js";
 import { writeClipboard } from "../clipboard.js";
+import { useModalEscape } from "../modalStack.js";
 
 interface RunTerminal {
   termId: string;
@@ -334,6 +335,19 @@ export function TerminalOverlay({
   // offer "continue as chat" when that terminal carries a pinned session id.
   const [currentTermId, setCurrentTermId] = useState<string | null>(null);
   const [showAttach, setShowAttach] = useState(false);
+  const attachWrapRef = useRef<HTMLDivElement>(null);
+  // Dismiss the "Attach ▾" menu on an outside tap or Escape. Escape is claimed
+  // (topmost layer) so it closes the menu instead of reaching the PTY; with the
+  // menu closed Escape flows to the terminal as usual.
+  useModalEscape(() => setShowAttach(false), showAttach);
+  useEffect(() => {
+    if (!showAttach) return;
+    const onDown = (e: PointerEvent) => {
+      if (attachWrapRef.current && !attachWrapRef.current.contains(e.target as Node)) setShowAttach(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [showAttach]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [fontSize, setFontSize] = useState<number>(readFontSize);
@@ -1122,8 +1136,8 @@ export function TerminalOverlay({
             </button>
           )}
           {hasAttachables && (
-            <div className="term-attach-wrap">
-              <button className="ghost-btn" onClick={() => setShowAttach((v) => !v)}>
+            <div className="term-attach-wrap" ref={attachWrapRef}>
+              <button className="ghost-btn" onClick={() => setShowAttach((v) => !v)} aria-haspopup="menu" aria-expanded={showAttach}>
                 Attach ▾
               </button>
               {showAttach && (
