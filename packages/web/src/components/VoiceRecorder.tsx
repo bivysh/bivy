@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
+import { useModalEscape } from "../modalStack.js";
 
 // The in-composer recording bar (mirrors the dictation UI in the screenshot):
 // a cancel ✕, a live waveform, an elapsed timer, and a confirm ✓ that stops the
@@ -60,6 +61,8 @@ export function VoiceRecorder({
 }) {
   const [elapsed, setElapsed] = useState(0);
   const [busy, setBusy] = useState(false);
+  // Escape backs out of the recording bar at any point.
+  useModalEscape(() => cancel());
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -205,7 +208,12 @@ export function VoiceRecorder({
         onCancel();
       }
     } else {
-      setBusy(true);
+      // The mic hasn't finished initializing (the getUserMedia permission
+      // prompt is still up, or was denied). There's nothing to stop and no
+      // recorder to ever fire onstop, so spinning `busy` here would wedge the
+      // bar forever with cancel unavailable. Just back out — the user can tap
+      // the mic again once permission is granted.
+      cancel();
     }
   }
 
@@ -222,7 +230,10 @@ export function VoiceRecorder({
 
   return (
     <div className="voice-bar" role="group" aria-label="Voice recording">
-      <button type="button" className="voice-btn cancel" onClick={cancel} disabled={busy} aria-label="Cancel recording">
+      {/* Stays enabled while transcribing: a hung/slow transcription must never
+          leave the user trapped on a spinner with no way out (cancel short-
+          circuits the in-flight result via cancelledRef). */}
+      <button type="button" className="voice-btn cancel" onClick={cancel} aria-label="Cancel recording">
         ✕
       </button>
       <div className="voice-wave" aria-hidden>

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useModalEscape } from "../modalStack.js";
 
 const FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
 
@@ -23,8 +24,11 @@ export function Sheet({
   autoFocusSearch?: boolean;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+
+  // Escape closes — coordinated so only the topmost open layer responds (a
+  // popover or dialog raised from inside the sheet cancels itself first, rather
+  // than this sheet closing out from under it).
+  useModalEscape(onClose);
 
   // Modal focus management: move focus into the sheet on open, keep Tab inside
   // it, and restore focus to the opener on close so keyboard / screen-reader
@@ -35,18 +39,14 @@ export function Sheet({
     const focusables = () => (body ? Array.from(body.querySelectorAll<HTMLElement>(FOCUSABLE)) : []);
     // Prefer the search input if the sheet has one, else the first control. When
     // auto-focus is off, focus the dialog container itself (tabindex=-1) instead:
-    // focus stays trapped in the sheet (Tab/Escape/restore-on-close still work)
-    // but no soft keyboard opens, so the full list is visible.
+    // focus stays trapped in the sheet (Tab/restore-on-close still work) but no
+    // soft keyboard opens, so the full list is visible.
     const first = autoFocusSearch
       ? (body?.querySelector<HTMLElement>('input, textarea') ?? focusables()[0])
       : body;
     first?.focus();
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onCloseRef.current();
-        return;
-      }
       if (e.key !== "Tab") return;
       const items = focusables();
       if (items.length === 0) return;
