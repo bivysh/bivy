@@ -367,7 +367,15 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .msg.assistant ul, .msg.assistant ol { padding-left: 1.4em; }
 .msg.assistant li { margin: 0.15em 0; }
 .msg.assistant li.task-list-item { list-style: none; margin-left: -1.2em; }
-.msg.assistant li.task-list-item input { margin-right: 6px; }
+.msg.assistant li.task-list-item input { margin-right: 6px; vertical-align: middle; }
+/* Belt-and-suspenders for the common case (markdown.ts already unwraps a
+   task item whose body is a sole paragraph, so normally there's no <p> here
+   at all). If a <p> still lands directly after the checkbox — e.g. it's the
+   first of several blocks, such as a paragraph followed by a nested list —
+   render just that leading paragraph inline so the label sits beside the
+   checkbox instead of dropping to its own line; any later block (the
+   nested list, a code block, etc.) stays block-level and wraps below. */
+.msg.assistant li.task-list-item input + p { display: inline; margin: 0; }
 .msg.assistant hr { border: 0; border-top: 1px solid var(--line); margin: 0.9em 0; }
 .msg.assistant blockquote { border-left: 3px solid var(--line-strong); padding-left: 12px; color: var(--muted); }
 .msg.assistant a { color: var(--accent); text-decoration: underline; }
