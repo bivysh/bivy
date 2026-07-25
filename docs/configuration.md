@@ -48,8 +48,8 @@ process, so the daemon, agents and helper scripts all agree.
 
 > Caveat: helper entry points that are launched *directly* rather than through
 > the `bivy` CLI fall back to different defaults —
-> `<install-dir>/.bivy` for most, `~/.bivy` for the git credential helper, and
-> `$PWD/.bivy` for the secret vault and the standalone agent service. Set
+> `<install-dir>/.bivy` for most, `~/.bivy` for the git credential helper and the
+> secret vault, and `$PWD/.bivy` for the standalone agent service. Set
 > `BIVY_DATA_DIR` explicitly if you run those by hand.
 
 ### Files in the data directory

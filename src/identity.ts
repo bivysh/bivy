@@ -52,26 +52,47 @@ export class NodeIdentity {
 
   static load(appDir: string): NodeIdentity {
     const configPath = path.join(appDir, "node.json");
-    fs.mkdirSync(appDir, { recursive: true });
+    fs.mkdirSync(appDir, { recursive: true, mode: 0o700 });
+
+    let raw: string | undefined;
+    try {
+      raw = fs.readFileSync(configPath, "utf8");
+    } catch (error) {
+      // Only a missing file means "no identity yet". Any other read failure
+      // (permission denied, I/O error, etc.) must not mint a fresh identity.
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+    }
 
     let config: NodeConfig;
-    try {
-      const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<NodeConfig>;
-      config = {
-        nodeId: typeof raw.nodeId === "string" && raw.nodeId ? raw.nodeId : `node_${randomUUID()}`,
-        name:
-          typeof raw.name === "string" && raw.name.trim()
-            ? migrateNodeName(raw.name.trim())
-            : defaultNodeName(),
-        createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
-        devices: Array.isArray(raw.devices) ? (raw.devices as DeviceRecord[]) : [],
-      };
-    } catch {
+    if (raw === undefined) {
       config = {
         nodeId: `node_${randomUUID()}`,
         name: defaultNodeName(),
         createdAt: new Date().toISOString(),
         devices: [],
+      };
+    } else {
+      let parsed: Partial<NodeConfig>;
+      try {
+        parsed = JSON.parse(raw) as Partial<NodeConfig>;
+      } catch {
+        // The file exists but is corrupt/truncated. Minting a fresh nodeId here
+        // would silently invalidate every device paired with this node, so fail
+        // loudly instead and let the operator decide how to recover.
+        throw new Error(
+          `Node identity file at ${configPath} is corrupt and could not be parsed. Refusing to generate a ` +
+            `new node identity (this would invalidate every paired device). Restore it from a backup, or ` +
+            `remove the file manually if you intend to start fresh.`,
+        );
+      }
+      config = {
+        nodeId: typeof parsed.nodeId === "string" && parsed.nodeId ? parsed.nodeId : `node_${randomUUID()}`,
+        name:
+          typeof parsed.name === "string" && parsed.name.trim()
+            ? migrateNodeName(parsed.name.trim())
+            : defaultNodeName(),
+        createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
+        devices: Array.isArray(parsed.devices) ? (parsed.devices as DeviceRecord[]) : [],
       };
     }
 
@@ -81,7 +102,17 @@ export class NodeIdentity {
   }
 
   private persist() {
-    fs.writeFileSync(this.configPath, `${JSON.stringify(this.config, null, 2)}\n`, { mode: 0o600 });
+    // Atomic write: write to a tmp file in the same directory, then rename over
+    // the target. This guarantees readers never observe a partially-written or
+    // truncated node.json, even if the process is killed mid-write.
+    const tmp = `${this.configPath}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(this.config, null, 2)}\n`, { mode: 0o600 });
+    try {
+      fs.chmodSync(tmp, 0o600);
+    } catch {
+      // Best effort on platforms without chmod.
+    }
+    fs.renameSync(tmp, this.configPath);
     try {
       fs.chmodSync(this.configPath, 0o600);
     } catch {

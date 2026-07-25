@@ -32,7 +32,18 @@ function empty(): SecretFile { return { version: 1, records: {} }; }
 
 export function defaultSecretsDir(appDir?: string) {
   if (appDir) return appDir;
-  return process.env.BIVY_DATA_DIR || path.join(process.cwd(), ".bivy");
+  return process.env.BIVY_DATA_DIR || path.join(os.homedir(), ".bivy");
+}
+
+/** True if `dir`, or any of its parents, is a git working tree (has a `.git` entry). */
+function isInsideGitWorkTree(dir: string): boolean {
+  let current = path.resolve(dir);
+  for (;;) {
+    if (fs.existsSync(path.join(current, ".git"))) return true;
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
 }
 
 export function normalizeSecretId(id: string): string {
@@ -48,11 +59,26 @@ function fileMode(file: string, mode: number) {
 }
 
 function readJson(file: string): SecretFile {
+  let raw: string;
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<SecretFile>;
+    raw = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    // Only a missing file means "nothing stored yet". Any other read failure
+    // (permission denied, I/O error, etc.) must not be treated as empty.
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return empty();
+    throw error;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<SecretFile>;
     return { version: 1, records: parsed.records && typeof parsed.records === "object" ? parsed.records as Record<string, SecretRecord> : {} };
   } catch {
-    return empty();
+    // The file exists but is corrupt/truncated. Overwriting it with an empty
+    // record set would silently discard every stored secret reference, so
+    // fail loudly instead and let the caller decide how to recover.
+    throw new Error(
+      `Secrets file at ${file} is corrupt and could not be parsed. Refusing to reset it to empty. ` +
+        `Restore it from a backup, or remove the file manually if you intend to start fresh.`,
+    );
   }
 }
 
@@ -184,6 +210,13 @@ export class SecretVault {
       // Only mint a fresh key when the file genuinely does not exist. A transient
       // read failure (EMFILE, permission blip) must NOT regenerate the key.
       if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+    }
+    if (isInsideGitWorkTree(this.dir)) {
+      throw new Error(
+        `Refusing to create the local secrets master key inside a git working tree (${this.dir}). ` +
+          `Point BIVY_DATA_DIR (or the vault's appDir) somewhere outside of any git repository — ` +
+          `the default is now ${path.join(os.homedir(), ".bivy")}.`,
+      );
     }
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     const key = randomBytes(32);

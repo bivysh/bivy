@@ -112,4 +112,36 @@ await test("a fresh store generates a random room key (no static seed)", () => {
   assert.ok(!a.equals(b), "two fresh stores get independent room keys");
 });
 
+await test("a corrupt pairing.json throws instead of silently regenerating", () => {
+  const dir = tmpDir();
+  const file = path.join(dir, "pairing.json");
+  fs.writeFileSync(file, "{not valid json");
+  assert.throws(() => PairingStore.load(dir), /corrupt/i);
+  // The corrupt file must be left exactly as-is — no regeneration attempt.
+  assert.equal(fs.readFileSync(file, "utf8"), "{not valid json");
+});
+
+await test("a pairing.json missing required fields throws instead of silently regenerating", () => {
+  const dir = tmpDir();
+  const file = path.join(dir, "pairing.json");
+  fs.writeFileSync(file, JSON.stringify({ devices: [] }));
+  assert.throws(() => PairingStore.load(dir), /missing required fields/i);
+});
+
+await test("a missing pairing.json is the normal first-run case (no throw)", () => {
+  assert.doesNotThrow(() => PairingStore.load(tmpDir()));
+});
+
+await test("persist() writes atomically: no leftover .tmp file, dir is private", () => {
+  const dir = tmpDir();
+  const store = PairingStore.load(dir);
+  pairDevice(store);
+  assert.ok(fs.existsSync(path.join(dir, "pairing.json")));
+  assert.equal(fs.existsSync(path.join(dir, "pairing.json.tmp")), false);
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(dir).mode & 0o777, 0o700, "data dir should be created with mode 0700");
+    assert.equal(fs.statSync(path.join(dir, "pairing.json")).mode & 0o777, 0o600);
+  }
+});
+
 console.log(`\nAll ${passed} device-registry tests passed.`);

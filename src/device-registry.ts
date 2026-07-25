@@ -73,20 +73,44 @@ export class PairingStore {
    */
   static load(appDir: string): PairingStore {
     const filePath = path.join(appDir, "pairing.json");
-    if (fs.existsSync(filePath)) {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<PairingFile>;
-        if (parsed.nodeKeypair?.publicKeyB64 && parsed.roomKeyB64) {
-          return new PairingStore(filePath, {
-            nodeKeypair: parsed.nodeKeypair,
-            roomKeyB64: parsed.roomKeyB64,
-            devices: Array.isArray(parsed.devices) ? parsed.devices : [],
-          });
-        }
-      } catch {
-        // fall through and regenerate
-      }
+
+    let raw: string | undefined;
+    try {
+      raw = fs.readFileSync(filePath, "utf8");
+    } catch (error) {
+      // Only a missing file means "never paired yet". Any other read failure
+      // (permission denied, I/O error, etc.) must not mint a fresh identity.
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
     }
+
+    if (raw !== undefined) {
+      let parsed: Partial<PairingFile>;
+      try {
+        parsed = JSON.parse(raw) as Partial<PairingFile>;
+      } catch {
+        // The file exists but is corrupt/truncated. Minting a fresh keypair and
+        // room key here would silently invalidate every paired device, so fail
+        // loudly instead and let the operator decide how to recover.
+        throw new Error(
+          `Pairing state file at ${filePath} is corrupt and could not be parsed. Refusing to generate a ` +
+            `new keypair/room key (this would invalidate every paired device). Restore it from a backup, ` +
+            `or remove the file manually if you intend to start fresh.`,
+        );
+      }
+      if (!parsed.nodeKeypair?.publicKeyB64 || !parsed.roomKeyB64) {
+        throw new Error(
+          `Pairing state file at ${filePath} is missing required fields (nodeKeypair/roomKeyB64). Refusing ` +
+            `to generate a new keypair/room key (this would invalidate every paired device). Restore it ` +
+            `from a backup, or remove the file manually if you intend to start fresh.`,
+        );
+      }
+      return new PairingStore(filePath, {
+        nodeKeypair: parsed.nodeKeypair,
+        roomKeyB64: parsed.roomKeyB64,
+        devices: Array.isArray(parsed.devices) ? parsed.devices : [],
+      });
+    }
+
     const data: PairingFile = {
       nodeKeypair: generatePairingKeypair(),
       roomKeyB64: generateRoomKey().toString("base64"),
@@ -98,8 +122,17 @@ export class PairingStore {
   }
 
   private persist() {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), { mode: 0o600 });
+    fs.mkdirSync(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
+    // Atomic write: write to a tmp file in the same directory, then rename over
+    // the target, so readers never observe a partially-written/truncated file.
+    const tmp = `${this.filePath}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(this.data, null, 2)}\n`, { mode: 0o600 });
+    try {
+      fs.chmodSync(tmp, 0o600);
+    } catch {
+      // best effort on platforms without chmod
+    }
+    fs.renameSync(tmp, this.filePath);
     try {
       fs.chmodSync(this.filePath, 0o600);
     } catch {
