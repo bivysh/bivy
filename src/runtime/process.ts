@@ -143,6 +143,34 @@ export interface ProcessRuntimeOptions {
   usageReporting?: boolean;
 }
 
+/**
+ * Send `signal` to `child`'s whole process group when possible, so a forking CLI
+ * agent's grandchildren (it shells out to git/npm/build tools, or forks its own
+ * worker processes) die with it instead of being orphaned. Relies on the child
+ * having been spawned `detached` (making it its own process-group leader, POSIX
+ * only — see the spawn() call in ProcessSession.prompt); `process.kill(-pid,
+ * signal)` then targets the whole group, mirroring `pty-runner.py`'s
+ * `os.killpg`. Falls back to killing just the direct child on Windows (no
+ * negative-pid group kill there) or if the group is already gone.
+ */
+function killProcessGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (pid && process.platform !== "win32") {
+    try {
+      process.kill(-pid, signal);
+      return;
+    } catch {
+      // No such process group (already exited) or we're not its leader — fall
+      // through to a direct kill of the child itself.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // Already exited.
+  }
+}
+
 function splitArgs(value: string | undefined): string[] {
   if (!value?.trim()) return [];
   try {
@@ -393,6 +421,11 @@ class ProcessSession implements RuntimeSession {
       // network broker when BIVY_EGRESS_PROXY is enabled (else it's {}).
       env: { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env, ...credentialEnv, ...prepareEnv, ...egressEnv() },
       stdio: "pipe",
+      // Detached so the child becomes the leader of its own process group
+      // (POSIX) — see killProcessGroup() / abort() below, which kill that whole
+      // group instead of just this direct child. Without this, a forking CLI
+      // agent's grandchildren survive `abort()` as orphans.
+      detached: process.platform !== "win32",
     });
     this.child = child;
 
@@ -488,11 +521,15 @@ class ProcessSession implements RuntimeSession {
   }
 
   async abort(): Promise<void> {
-    if (!this.child) return;
-    this.child.kill("SIGTERM");
-    setTimeout(() => {
-      if (this.child) this.child.kill("SIGKILL");
-    }, 2000).unref();
+    // Capture the live child now — not inside the timer below — so a fast
+    // re-spawn (a new prompt() started after this turn's process has already
+    // exited) can never be caught by the delayed SIGKILL: the timer always
+    // targets *this* turn's process/group, whatever `this.child` points to by
+    // the time it fires.
+    const child = this.child;
+    if (!child) return;
+    killProcessGroup(child, "SIGTERM");
+    setTimeout(() => killProcessGroup(child, "SIGKILL"), 2000).unref();
   }
 
   dispose(): void {

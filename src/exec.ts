@@ -156,7 +156,16 @@ async function main() {
   });
 
   socket.on("error", (e) => finish(1, `Connection error: ${e instanceof Error ? e.message : String(e)}`));
-  socket.on("close", () => { if (!settled) finish(answer ? 0 : 1, answer ? undefined : "Connection closed before the turn finished."); });
+  // A close here means the socket dropped before an `agent_end` event was ever
+  // seen (a real completion calls finish(0) itself, closing the socket and
+  // setting `settled` first — so this handler is then a no-op). That's always
+  // abnormal: a mid-turn disconnect must exit non-zero even when partial
+  // assistant text already streamed in, otherwise a script reading `answer`
+  // (or just checking $?) sees a clean success for a truncated reply.
+  socket.on("close", () => {
+    if (settled) return;
+    finish(1, answer ? "Connection closed before the turn finished (received a partial answer)." : "Connection closed before the turn finished.");
+  });
 
   socket.on("message", (raw) => {
     let msg: Record<string, unknown>;

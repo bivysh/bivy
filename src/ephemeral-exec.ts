@@ -42,17 +42,45 @@ export interface EphemeralExecResult {
   body: unknown;
 }
 
-/** Perform one allowlisted provider request for a remote device. Rejects any non-provider host. */
+/** Hard cap on redirect hops, so a provider (or a MITM) can't wedge us in a loop. */
+const MAX_REDIRECTS = 5;
+
+function checkAllowedHost(url: string): string {
+  let host: string;
+  try { host = new URL(url).host; } catch { throw new Error(`Bad provider URL: ${url}`); }
+  if (!EPHEMERAL_ALLOWED_HOSTS.has(host)) throw new Error(`Refusing to proxy to non-provider host: ${host}`);
+  return host;
+}
+
+/**
+ * How a redirect changes the follow-up request, mirroring the WHATWG fetch spec's
+ * own `redirect: "follow"` behavior (which we're replicating manually below so we
+ * can re-validate the target host on every hop): 303 always downgrades to a
+ * bodyless GET; 301/302 do the same but only for a non-GET/HEAD method; 307/308
+ * preserve the original method and body.
+ */
+function nextHopRequest(status: number, method: string, payload: string | undefined): { method: string; payload: string | undefined } {
+  if (status === 303 || ((status === 301 || status === 302) && method !== "GET" && method !== "HEAD")) {
+    return { method: "GET", payload: undefined };
+  }
+  return { method, payload };
+}
+
+/**
+ * Perform one allowlisted provider request for a remote device. Rejects any
+ * non-provider host — including a redirect target: the allowlist check ran only
+ * on the *initial* URL, but a plain `fetch` follows redirects transparently, so a
+ * provider response (or anyone able to influence it) could 302 us — Authorization
+ * header and all — to an arbitrary host. `redirect: "manual"` disables that
+ * auto-follow so every hop's Location is re-checked against the same allowlist
+ * before it's requested.
+ */
 export async function execEphemeralRequest(
   request: EphemeralExecRequest | undefined,
   fetchImpl: typeof fetch = fetch,
 ): Promise<EphemeralExecResult> {
-  const url = String(request?.url ?? "");
-  let host: string;
-  try { host = new URL(url).host; } catch { throw new Error(`Bad provider URL: ${url}`); }
-  if (!EPHEMERAL_ALLOWED_HOSTS.has(host)) throw new Error(`Refusing to proxy to non-provider host: ${host}`);
-
-  const method = String(request?.method ?? "GET").toUpperCase();
+  let url = String(request?.url ?? "");
+  let method = String(request?.method ?? "GET").toUpperCase();
   const headers: Record<string, string> = { ...(request?.headers ?? {}) };
   let payload: string | undefined;
   if (request?.body !== undefined && request?.body !== null && method !== "GET" && method !== "HEAD") {
@@ -63,11 +91,27 @@ export async function execEphemeralRequest(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
-    const res = await fetchImpl(url, { method, headers, body: payload, signal: controller.signal });
-    const text = await res.text();
-    let body: unknown = text;
-    try { body = text ? JSON.parse(text) : null; } catch { /* non-JSON provider response */ }
-    return { status: res.status, body };
+    for (let hop = 0; ; hop++) {
+      const host = checkAllowedHost(url);
+      const res = await fetchImpl(url, { method, headers, body: payload, signal: controller.signal, redirect: "manual" });
+
+      if (res.status >= 300 && res.status < 400 && res.status !== 304) {
+        if (hop >= MAX_REDIRECTS) throw new Error(`Too many redirects proxying to ${host}`);
+        const location = res.headers.get("location");
+        if (!location) throw new Error(`Redirect from ${host} (${res.status}) had no Location header`);
+        // Resolve relative to the current hop; the loop's next iteration
+        // re-validates this new host before it's ever requested — the whole
+        // point of this loop.
+        url = new URL(location, url).toString();
+        ({ method, payload } = nextHopRequest(res.status, method, payload));
+        continue;
+      }
+
+      const text = await res.text();
+      let body: unknown = text;
+      try { body = text ? JSON.parse(text) : null; } catch { /* non-JSON provider response */ }
+      return { status: res.status, body };
+    }
   } finally {
     clearTimeout(timeout);
   }
