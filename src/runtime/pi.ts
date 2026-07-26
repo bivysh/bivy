@@ -424,6 +424,9 @@ export class PiRuntime implements AgentRuntime {
     // pi transcripts are structured messages that round-trip through the session
     // store, so a pi->pi fork is full fidelity (see exportForFork/importForFork).
     forkTransport: true,
+    // The pi-coding-agent SDK implements both explicitly: prompting mid-turn
+    // with no streamingBehavior hint throws, forcing every caller to choose.
+    streamingBehaviors: ["steer", "followUp"],
   };
 
   constructor(private readonly options: PiRuntimeOptions) {}

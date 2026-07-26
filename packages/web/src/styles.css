@@ -741,6 +741,13 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .composer-btn.send:disabled { opacity: 0.35; cursor: default; }
 .composer-btn.stop { background: var(--danger); color: #fff; }
 .composer-btn.stop:active { transform: scale(0.92); }
+/* "Steer current turn": an explicit interrupt, distinct from the default Send
+   (which queues while busy — see FollowupQueue). --accent is already a warm
+   orange (the Send button), so this borrows --unseen's blue instead — a color
+   used nowhere else in the composer — to read as clearly "not a normal send." */
+.composer-btn.steer { background: var(--unseen); color: #fff; }
+.composer-btn.steer:hover { filter: brightness(1.1); }
+.composer-btn.steer:active { transform: scale(0.92); }
 .attach-pill, .pause-pill { padding: 4px 8px; }
 
 /* Voice-input trigger: a circular icon button seated just left of Send. */
@@ -809,6 +816,45 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .attach-chip.has-thumb { padding-left: 3px; }
 .attach-thumb-btn { flex: none; border: 0; padding: 0; background: none; cursor: zoom-in; line-height: 0; border-radius: 5px; overflow: hidden; }
 .attach-thumb { display: block; width: 28px; height: 28px; object-fit: cover; border-radius: 5px; }
+
+/* Queued follow-ups (issue #154) — a panel just above the composer showing
+   prompts held back while the session is busy, with their order and delivery
+   state. Reuses .queue-action-btn (GithubQueue's button look) for edit/
+   remove/reorder/send-next so this reads as the same "manage a queue"
+   pattern already established there, rather than inventing a new one. */
+.followup-queue { margin: 8px 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.followup-queue-head { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 2px; }
+.followup-list { display: flex; flex-direction: column; gap: 6px; }
+.followup-card {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+  overflow: hidden;
+}
+.followup-card.locked { opacity: 0.75; }
+.followup-card-row {
+  display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
+}
+.followup-card-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 10px; }
+.followup-reorder { display: flex; flex-direction: column; gap: 2px; flex: none; }
+.followup-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.followup-status { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; }
+.followup-card.locked .followup-status { color: var(--accent); }
+.followup-text { font-size: 14px; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.followup-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.followup-card-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+.followup-edit { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; }
+.followup-edit-input {
+  width: 100%; resize: vertical; min-height: 44px; font: inherit; font-size: 14px;
+  border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--ink);
+  padding: 6px 8px;
+}
+.followup-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* Bigger tap targets for the reorder/edit/remove icon buttons specifically —
+   the shared .queue-action-btn.icon sizing (from GithubQueue) is a bit tight
+   for a control someone taps repeatedly on a phone to walk an item up a queue. */
+.followup-reorder .queue-action-btn.icon,
+.followup-card-actions .queue-action-btn.icon {
+  min-width: 32px; min-height: 32px;
+}
 
 /* Drag-and-drop drop zone over the composer card. */
 .composer-card.dragging { border-color: var(--accent); }
