@@ -1434,18 +1434,27 @@ select.picker-search { appearance: auto; }
    which pulls the card off-center. Safe-area padding keeps a tall card clear of
    the notch and home indicator.
 
-   Height is pinned to --app-h and the container scrolls: when the on-screen
-   keyboard opens (focusing the email field), --app-h shrinks to the region above
-   the keyboard, and a card taller than that region must stay reachable. Plain
-   centering (place-items/justify-content: center) would clip the card's top off
-   the viewport with no way to scroll to it — the page itself can't scroll
-   (html/body overflow: hidden). Instead the card centers via `margin: auto` in a
-   scrollable flex column: auto margins center it when it fits and collapse to
-   keep the top edge scrollable when it doesn't (unlike justify-content: center,
-   which strands overflow above the scrollport on iOS Safari). align-items keeps
-   the width:100%/max-width:380px card centered horizontally and bounded on any
-   phone, so it never overflows the right edge. */
+   position:fixed + top:--app-top + height:--app-h pins the screen to the visual
+   viewport, exactly like the signed-in `.app` shell (see viewport.ts). This is
+   the part that was missing: a plain in-flow `height:--app-h` block still lets
+   iOS scroll the *layout* viewport to reveal the focused email field, which drags
+   the whole card up — clipping the top off-screen and stranding it above the
+   keyboard with a large dead gap below. Pinned to the visual viewport with
+   nothing outside it scrollable, iOS has nothing to drift, so the box stays
+   locked to the region above the keyboard.
+
+   Inside that box the container scrolls (overflow-y:auto) and the card centers
+   via `margin: auto`: auto margins center it when it fits and collapse to keep
+   the top edge reachable when a short viewport (keyboard up) makes the card
+   taller than the box — unlike justify-content: center, which strands overflow
+   above the scrollport on iOS Safari. align-items keeps the
+   width:100%/max-width:380px card centered horizontally and bounded on any phone,
+   so it never overflows the right edge. */
 .setup {
+  position: fixed;
+  top: var(--app-top, 0px);
+  left: 0;
+  width: 100%;
   height: var(--app-h, 100dvh);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
