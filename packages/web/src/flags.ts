@@ -17,4 +17,4 @@
  * "Ephemeral machines" panel, and the GitHub Queue's ephemeral dispatch/
  * auto-provision options.
  */
-export const EPHEMERAL_MACHINES_ENABLED = false;
+export const EPHEMERAL_MACHINES_ENABLED = true;
