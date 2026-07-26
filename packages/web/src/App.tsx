@@ -407,7 +407,9 @@ export function App() {
 
         {needsNode && (
           <ConnectRunner
+            nodes={state.nodes}
             ephemeralEnabled={EPHEMERAL_MACHINES_ENABLED}
+            onPickNode={(nodeId) => controller.switchNode(nodeId)}
             onEphemeral={() => setEphemeralOpen(true)}
             onRefresh={() => controller.refreshNodes()}
           />
