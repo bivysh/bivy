@@ -1124,16 +1124,74 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
      leaving this visible doesn't introduce a second × there. */
 }
 
-.onboarding-card { margin: 10px 12px 0; border: 1px solid var(--line); border-radius: 18px; background: var(--surface-2); padding: 16px; display: flex; gap: 14px; justify-content: space-between; align-items: flex-start; }
-.onboarding-card .kicker { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-.onboarding-card h2 { margin: 3px 0 6px; font-size: 18px; }
-.onboarding-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
-.onboarding-steps { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.45; display: grid; gap: 10px; }
-.onboarding-steps strong { color: var(--ink); }
-.onboarding-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.onboarding-waiting { display: flex; align-items: center; gap: 8px; margin-top: 12px !important; color: var(--muted); font-size: 12.5px; }
-.onboarding-spinner { flex: none; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; }
-@media (max-width: 720px) { .onboarding-card { flex-direction: column; } .onboarding-actions { justify-content: flex-start; } }
+/* ---- Connect-a-runner onboarding screen ---- */
+.connect-runner { width: min(560px, 100%); margin: 4px auto 0; padding: 20px 16px 8px; display: flex; flex-direction: column; gap: 20px; }
+.connect-hero { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.connect-hero-icon {
+  width: 56px; height: 56px; margin-bottom: 6px; display: grid; place-items: center;
+  border-radius: 16px; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+.connect-kicker { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
+.connect-title { margin: 0; font-size: 22px; line-height: 1.2; letter-spacing: -0.01em; }
+.connect-sub { margin: 2px 0 0; max-width: 42ch; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+
+.connect-options { display: flex; flex-direction: column; gap: 12px; }
+.connect-option {
+  border: 1px solid var(--line); border-radius: 16px; background: var(--surface-2);
+  padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.connect-option:hover { border-color: var(--line-strong); box-shadow: 0 6px 24px rgba(0,0,0,0.10); }
+.connect-option-head { display: flex; align-items: flex-start; gap: 12px; }
+.connect-option-badge {
+  flex: none; width: 36px; height: 36px; display: grid; place-items: center;
+  border-radius: 10px; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.connect-option-copy { min-width: 0; }
+.connect-option-copy h3 { margin: 1px 0 3px; font-size: 15px; }
+.connect-option-copy p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+
+.connect-command {
+  display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+.connect-command code {
+  flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--ink);
+  scrollbar-width: none;
+}
+.connect-command code::-webkit-scrollbar { display: none; }
+.connect-copy {
+  flex: none; display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  padding: 7px 11px; border-radius: 8px; border: 1px solid var(--line-strong);
+  background: var(--surface-2); color: var(--ink); font: inherit; font-size: 12px; font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.connect-copy:hover { background: var(--surface-3); }
+.connect-copy.is-copied { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line-strong)); }
+.connect-copy svg { display: block; }
+
+.connect-option-link { align-self: flex-start; color: var(--accent); font-size: 12.5px; font-weight: 600; text-decoration: none; }
+.connect-option-link:hover { text-decoration: underline; }
+.connect-option-cta { align-self: flex-start; }
+
+.connect-waiting {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 14px; border: 1px dashed var(--line-strong); border-radius: 12px;
+  color: var(--muted); font-size: 12.5px;
+}
+.connect-waiting-text { flex: 1; min-width: 0; }
+.connect-refresh {
+  flex: none; cursor: pointer; padding: 5px 10px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: transparent; color: var(--ink);
+  font: inherit; font-size: 12px; font-weight: 600;
+}
+.connect-refresh:hover { background: var(--surface-2); }
+.onboarding-spinner { flex: none; width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; }
+@media (max-width: 480px) { .connect-runner { gap: 16px; } .connect-title { font-size: 20px; } }
 .app-dialog { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 18px; }
 .app-dialog-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.42); backdrop-filter: blur(3px); }
 .app-dialog-body { position: relative; width: min(420px, 100%); border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface); box-shadow: 0 24px 80px rgba(0,0,0,0.36); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
