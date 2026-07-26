@@ -308,7 +308,7 @@ export interface AutomationDefinition {
   model?: string;
   nodeLabel?: string;
   ephemeral?: boolean;
-  approvalMode?: "ask" | "autonomous" | "never";
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   enabled?: boolean;
   schedule?:

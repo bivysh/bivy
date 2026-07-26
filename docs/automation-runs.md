@@ -20,8 +20,14 @@ The domain separates four records:
 
 Runs initially target a new session. The schema also represents an existing
 session target without enabling continuation yet. Routing intent carries the
-node label, runtime, model, and ephemeral preference. Output is limited to
-references such as session, branch, pull request, artifact, or a failure summary.
+node label, runtime, model, ephemeral preference, sandbox tier, and approval
+mode (`never` / `risky` / `always` / `autonomous`, the same vocabulary as
+`BIVY_APPROVAL_MODE` — see docs/security-model.md). The claiming node applies
+runtime, model, and sandbox when it creates the run's session, and applies
+approval mode for the lifetime of that session; an unset value on the
+definition falls back to the node's own configured default. Output is limited
+to references such as session, branch, pull request, artifact, or a failure
+summary.
 
 ## Compatibility and migration
 

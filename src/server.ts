@@ -795,7 +795,7 @@ let relay: RelayConnector | undefined;
 const clients = new Set<WebSocket>();
 const commandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const oauthLogins = new Map<string, OAuthLoginState>();
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -809,6 +809,9 @@ type CreateSessionOptions = {
   runtimeId?: string;
   /** Per-session sandbox tier override; defaults to the node's configured tier. */
   sandbox?: SandboxTier;
+  /** Per-session approval-mode override (e.g. a scheduled automation's default);
+   *  defaults to the node's configured approval mode. */
+  approvalMode?: ApprovalMode;
   /** Throwaway session (e.g. the model-picker scratch): kept in memory for reuse
    *  but never persisted to metadata while it stays empty, so it can't leave an
    *  "untitled"/empty row behind. */
@@ -4518,6 +4521,7 @@ async function runWorkItem(item: ControlPlaneWorkItem) {
     source: `queue:${item.source}`,
     runtimeId: item.runtimeId,
     sandbox: normalizeSandboxTier(item.sandbox),
+    approvalMode: approvalModeFrom(item.approvalMode),
   });
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
@@ -4869,7 +4873,10 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
   const repo = record?.source?.startsWith("repo:") ? record.source.slice("repo:".length) : undefined;
   const branch = record?.worktree?.branch;
   const policy = new PolicyEngine({
-    mode: approvalMode,
+    // A session created from a scheduled/manual automation may carry its own
+    // approval-mode default (item.approvalMode in runWorkItem); otherwise fall
+    // back to the node's globally configured mode.
+    mode: record?.approvalMode ?? approvalMode,
     isRiskyIntegration: (tool) => integrations.isRiskyTool(tool),
   });
   let { decision, reason, risk } = policy.decideToolCall(workspace, toolName, input);
@@ -6530,7 +6537,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // bump it to now (only real activity should reorder the sidebar). A brand-new
   // session legitimately starts "active now".
   const resumedLastActive = requestedSessionFile ? metaLastActiveMs(storedMeta) : undefined;
-  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral };
+  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: opts.approvalMode, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral };
   // Stage 2 slice 4: a re-attached session recovers its still-running TUI
   // terminal link (the PTY survives a detach) from the session→terminal registry.
   if (attached) {

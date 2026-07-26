@@ -36,7 +36,7 @@ export interface WorkItem {
   url?: string;
   runtimeId?: string; // agent/runtime override chosen via the queue "Run…" action
   model?: string; // model override chosen via the queue "Run…" action
-  approvalMode?: "ask" | "autonomous" | "never";
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)

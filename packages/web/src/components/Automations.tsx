@@ -30,7 +30,7 @@ export function AutomationsPanel({ state }: { state: AppState }) {
   const [nodeLabel, setNodeLabel] = useState("");
   const [runtimeId, setRuntimeId] = useState("");
   const [model, setModel] = useState("");
-  const [approvalMode, setApprovalMode] = useState<"ask" | "autonomous" | "never">("autonomous");
+  const [approvalMode, setApprovalMode] = useState<"never" | "risky" | "always" | "autonomous">("autonomous");
   const [sandbox, setSandbox] = useState<"read-only" | "workspace-write" | "danger-full-access">("workspace-write");
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -112,7 +112,7 @@ export function AutomationsPanel({ state }: { state: AppState }) {
     setNodeLabel(item.nodeLabel || "");
     setRuntimeId(item.runtimeId || "");
     setModel(item.model || "");
-    setApprovalMode(item.approvalMode || "autonomous");
+    setApprovalMode(item.approvalMode ?? "autonomous");
     setSandbox(item.sandbox || "workspace-write");
     setKind(item.schedule.kind);
     if (item.schedule.kind === "cron") {
@@ -143,7 +143,7 @@ export function AutomationsPanel({ state }: { state: AppState }) {
           <label className="field-label">Node label (optional)<input value={nodeLabel} onChange={(e) => setNodeLabel(e.target.value)} placeholder="bivy/laptop" /></label>
           <label className="field-label">Runtime (optional)<input value={runtimeId} onChange={(e) => setRuntimeId(e.target.value)} /></label>
           <label className="field-label">Model (optional)<input value={model} onChange={(e) => setModel(e.target.value)} /></label>
-          <label className="field-label">Approvals<select value={approvalMode} onChange={(e) => setApprovalMode(e.target.value as typeof approvalMode)}><option value="ask">Ask</option><option value="autonomous">Autonomous</option><option value="never">Never ask</option></select></label>
+          <label className="field-label">Approvals<select value={approvalMode} onChange={(e) => setApprovalMode(e.target.value as typeof approvalMode)}><option value="autonomous">Autonomous (default; pauses only for high-risk actions)</option><option value="risky">Ask before risky actions</option><option value="always">Ask before every action</option><option value="never">Never ask</option></select></label>
           <label className="field-label">Sandbox<select value={sandbox} onChange={(e) => setSandbox(e.target.value as typeof sandbox)}><option value="read-only">Read only</option><option value="workspace-write">Workspace write</option><option value="danger-full-access">Full access</option></select></label>
           <button className="btn primary" disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "Create schedule"}</button>
         </form>

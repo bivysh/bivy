@@ -471,7 +471,7 @@ export interface AccountAutomation {
   runtimeId?: string;
   model?: string;
   nodeLabel?: string;
-  approvalMode?: "ask" | "autonomous" | "never";
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   enabled: boolean;
   schedule: AutomationSchedule;
