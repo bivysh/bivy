@@ -3960,6 +3960,7 @@ function withIssueLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 interface RunIssueOverrides {
   runtimeId?: string;
   model?: string;
+  onStarted?: (record: SessionRecord, resumed: boolean) => void;
 }
 
 async function runIssueTask(cfg: GitHubTaskConfig, issue: GitHubIssue, overrides: RunIssueOverrides = {}) {
@@ -3981,6 +3982,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   // which now adopts the existing remote branch rather than colliding.
   const existing = findIssueSession(source);
   if (existing?.worktree && fs.existsSync(existing.worktree.path)) {
+    overrides.onStarted?.(existing, true);
     return runIssueFollowUp(cfg, issue, existing, emit);
   }
 
@@ -4054,6 +4056,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
     try { await (record.session as any).setModel("", directives.model); } catch {}
   }
   if (!record.worktree) throw new Error("worktree was not created for the issue session");
+  overrides.onStarted?.(record, false);
 
   try {
     emit(record, "started", `Started work on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
@@ -4471,7 +4474,11 @@ async function resolveTokenForRepo(owner: string, repo: string): Promise<string 
   return resolveGitHubToken();
 }
 
-async function runWorkItem(item: ControlPlaneWorkItem) {
+async function runWorkItem(
+  item: ControlPlaneWorkItem,
+  resume?: import("./control-plane-tasks.js").WorkAttempt,
+  report?: (metadata: import("./control-plane-tasks.js").WorkRunMetadata) => void,
+) {
   // A labelled issue ("github:issue") and an @-mention comment ("github:comment")
   // both run the same way: clone, work on a branch, open a PR, comment back. For
   // a comment the instruction is item.body (bivy-agent:/bivy-model: directives in
@@ -4497,13 +4504,35 @@ async function runWorkItem(item: ControlPlaneWorkItem) {
       body: item.body ?? "",
       labels: [],
       url: item.url ?? "",
-    }, { runtimeId: item.runtimeId, model: item.model });
-    return;
+    }, {
+      runtimeId: item.runtimeId,
+      model: item.model,
+      onStarted: (record, resumed) => report?.({
+        sessionId: record.id,
+        worktreePath: record.worktree?.path,
+        resumed: resumed || Boolean(resume?.sessionId && resume.sessionId === record.id),
+      }),
+    });
+    const record = findIssueSession(`issue:${parsed.owner}/${parsed.repo}#${item.issueNumber}`);
+    return record ? {
+      sessionId: record.id,
+      worktreePath: record.worktree?.path,
+      checkpointId: (await harness.checkpoints(record.id))[0]?.id,
+      resumed: Boolean(resume?.sessionId && resume.sessionId === record.id),
+    } : undefined;
   }
   // Generic prompt (Slack, or an issue with no repo): a background session in the
   // default workspace so it doesn't steal the user's focused session.
-  const record = await createSession(defaultWorkspace, undefined, { makeActive: false, source: `queue:${item.source}` });
+  const prior = resume?.sessionId ? openSessions.get(resume.sessionId) : undefined;
+  const record = prior ?? await createSession(defaultWorkspace, undefined, { makeActive: false, source: `queue:${item.source}` });
+  report?.({ sessionId: record.id, worktreePath: record.worktree?.path, resumed: Boolean(prior) });
   await record.session.prompt(item.body ? `${item.title}\n\n${item.body}` : item.title);
+  return {
+    sessionId: record.id,
+    worktreePath: record.worktree?.path,
+    checkpointId: (await harness.checkpoints(record.id))[0]?.id,
+    resumed: Boolean(prior),
+  };
 }
 
 function startControlPlaneTasksIfConfigured() {
@@ -4522,7 +4551,22 @@ function startControlPlaneTasksIfConfigured() {
   // with no manual BIVY_NODE_LABEL needed.
   const cfg = resolveControlPlaneTaskConfig(loadRelayConfig(appDir), process.env, identity.name);
   if (!cfg) return;
-  controlPlanePoller = new ControlPlaneTaskPoller(cfg, runWorkItem, nodeGithubMaxConcurrent);
+  controlPlanePoller = new ControlPlaneTaskPoller(
+    cfg,
+    runWorkItem,
+    nodeGithubMaxConcurrent,
+    async (item, status, message) => {
+      await sendNotificationHint({
+        kind: "session_error",
+        title: status === "needs_attention" ? "Automation needs attention" : "Automation failed",
+        body: `${item.title}: ${message}`.slice(0, 240),
+      });
+    },
+    async (metadata) => {
+      const record = metadata.sessionId ? openSessions.get(metadata.sessionId) : undefined;
+      if (record) await record.session.abort().catch(() => {});
+    },
+  );
   controlPlanePoller.start();
 }
 

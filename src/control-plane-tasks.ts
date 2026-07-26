@@ -38,7 +38,22 @@ export interface WorkItem {
   model?: string; // model override chosen via the queue "Run…" action
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)
+  attempts?: WorkAttempt[];
 }
+export interface WorkAttempt {
+  id: string;
+  number: number;
+  sessionId?: string;
+  checkpointId?: string;
+  worktreePath?: string;
+}
+export interface WorkRunMetadata {
+  sessionId?: string;
+  checkpointId?: string;
+  worktreePath?: string;
+  resumed?: boolean;
+}
+export type WorkFailureClass = "transient" | "provider_quota" | "provider_auth" | "agent_error" | "task_failure" | "policy_denial" | "cancellation" | "unknown";
 
 /**
  * Build config from the relay enrollment + node label. Returns null if disabled.
@@ -77,10 +92,11 @@ export function resolveControlPlaneTaskConfig(
   };
 }
 
-async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string): Promise<Response> {
+async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string, body?: unknown): Promise<Response> {
   return fetch(`${cfg.controlPlaneUrl}${path}`, {
     method,
-    headers: { authorization: `Bearer ${cfg.enrollmentToken}` },
+    headers: { authorization: `Bearer ${cfg.enrollmentToken}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
 }
 
@@ -92,13 +108,33 @@ export async function fetchPendingWork(cfg: ControlPlaneTaskConfig): Promise<Wor
 }
 
 /** Atomically claim an item. Returns true only if THIS node won the claim. */
-export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promise<boolean> {
+export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promise<WorkAttempt | undefined> {
   const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/claim`);
-  return res.ok;
+  if (!res.ok) return undefined;
+  const data = await res.json().catch(() => ({})) as { attempt?: WorkAttempt };
+  return data.attempt;
 }
 
-export async function completeWork(cfg: ControlPlaneTaskConfig, id: string): Promise<void> {
-  await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/complete`).catch(() => {});
+async function updateAttempt(cfg: ControlPlaneTaskConfig, itemId: string, attemptId: string, action: "heartbeat" | "finish", body: unknown): Promise<{ ok: boolean; status?: string }> {
+  const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(itemId)}/attempts/${encodeURIComponent(attemptId)}/${action}`, body);
+  const data = await res.json().catch(() => ({})) as { item?: { status?: string } };
+  return { ok: res.ok, status: data.item?.status };
+}
+
+/** Stable, intentionally conservative classification: only transport/node loss retries automatically. */
+export function classifyWorkFailure(error: unknown): { failureClass: WorkFailureClass; attentionReason?: "credentials" | "approval" | "merge_conflict" | "policy"; status: "failed" | "needs_attention" | "cancelled"; message: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  const text = `${message} ${(error as { code?: string } | null)?.code ?? ""}`.toLowerCase();
+  if (/abort|cancel/.test(text)) return { failureClass: "cancellation", status: "cancelled", message };
+  if (/policy|denied|destructive action/.test(text)) return { failureClass: "policy_denial", attentionReason: "policy", status: "needs_attention", message };
+  if (/approval|required approval|permission/.test(text)) return { failureClass: "policy_denial", attentionReason: "approval", status: "needs_attention", message };
+  if (/merge conflict|conflict.*merge|unmerged files/.test(text)) return { failureClass: "task_failure", attentionReason: "merge_conflict", status: "needs_attention", message };
+  if (/401|403|unauthori[sz]ed|invalid.*(?:token|key)|credential|login required|authentication/.test(text)) return { failureClass: "provider_auth", attentionReason: "credentials", status: "needs_attention", message };
+  if (/429|quota|rate.?limit|insufficient_quota|usage limit/.test(text)) return { failureClass: "provider_quota", attentionReason: "credentials", status: "needs_attention", message };
+  if (/econn|etimedout|timeout|socket|network|fetch failed|connection|node.*(?:lost|offline)|service unavailable|502|503|504/.test(text)) return { failureClass: "transient", status: "failed", message };
+  if (/test(?:s)? failed|task failed|exit code/.test(text)) return { failureClass: "task_failure", status: "failed", message };
+  if (/agent|model/.test(text)) return { failureClass: "agent_error", status: "failed", message };
+  return { failureClass: "unknown", status: "failed", message };
 }
 
 export class ControlPlaneTaskPoller {
@@ -107,10 +143,12 @@ export class ControlPlaneTaskPoller {
 
   constructor(
     private readonly cfg: ControlPlaneTaskConfig,
-    private readonly runItem: (item: WorkItem) => Promise<void>,
+    private readonly runItem: (item: WorkItem, resume?: WorkAttempt, report?: (metadata: WorkRunMetadata) => void) => Promise<WorkRunMetadata | void>,
     /** Node's cap on concurrently-running queue sessions (0/undefined = unlimited).
      *  Read fresh each tick so the Settings → Nodes value takes effect live. */
     private readonly maxConcurrent?: () => number,
+    private readonly notifyFinal?: (item: WorkItem, status: "failed" | "needs_attention", message: string) => Promise<void> | void,
+    private readonly stopStaleRun?: (metadata: WorkRunMetadata) => Promise<void> | void,
   ) {}
 
   start(): void {
@@ -161,16 +199,47 @@ export class ControlPlaneTaskPoller {
     try {
       // Claim first so only one node runs it; skip if another node won (no
       // claim → not ours → don't run or complete it).
-      if (!(await claimWork(this.cfg, item.id))) return;
+      const attempt = await claimWork(this.cfg, item.id);
+      if (!attempt) return;
+      let leaseCurrent = true;
+      let metadata: WorkRunMetadata = {};
+      const heartbeat = setInterval(() => {
+        void updateAttempt(this.cfg, item.id, attempt.id, "heartbeat", metadata).then((result) => {
+          if (leaseCurrent && !result.ok) void this.stopStaleRun?.(metadata);
+          leaseCurrent = result.ok;
+        }).catch(() => {
+          if (leaseCurrent) void this.stopStaleRun?.(metadata);
+          leaseCurrent = false;
+        });
+      }, 15_000);
+      heartbeat.unref?.();
       try {
         console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
-        await this.runItem(item);
+        metadata = (await this.runItem(item, item.attempts?.at(-1), (next) => {
+          metadata = { ...metadata, ...next };
+          void updateAttempt(this.cfg, item.id, attempt.id, "heartbeat", metadata).then((result) => {
+            if (leaseCurrent && !result.ok) void this.stopStaleRun?.(metadata);
+            leaseCurrent = result.ok;
+          }).catch(() => {
+            if (leaseCurrent) void this.stopStaleRun?.(metadata);
+            leaseCurrent = false;
+          });
+        })) ?? metadata;
+        if (leaseCurrent) {
+          const renewed = await updateAttempt(this.cfg, item.id, attempt.id, "heartbeat", metadata);
+          leaseCurrent = renewed.ok;
+          if (!leaseCurrent) return;
+          await updateAttempt(this.cfg, item.id, attempt.id, "finish", { status: "succeeded" });
+        }
       } catch (error) {
         console.warn(`[control-plane-tasks] item ${item.id} failed:`, error);
+        const failure = classifyWorkFailure(error);
+        if (leaseCurrent) {
+          const result = await updateAttempt(this.cfg, item.id, attempt.id, "finish", failure);
+          if (result.status === "failed" || result.status === "needs_attention") await this.notifyFinal?.(item, result.status, failure.message);
+        }
       } finally {
-        // Mark done so it leaves the queue even if the run threw — a failed
-        // item shouldn't be retried forever (it's recorded on the issue/PR).
-        await completeWork(this.cfg, item.id);
+        clearInterval(heartbeat);
       }
     } finally {
       this.inFlight.delete(item.id);

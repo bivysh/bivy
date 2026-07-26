@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHash } from "node:crypto";
+import type { RouteCandidate, RouteReason, RoutingPolicy } from "./routing.js";
 
 /**
  * Control plane data store.
@@ -287,7 +288,42 @@ export interface GithubAppKeyRequest {
 // never reaches the control plane), then marks it done. The
 // control plane stores only routing metadata: ids, repo slug, issue number,
 // title/body text of the request. Never agent output or credentials.
-export type WorkItemStatus = "pending" | "claimed" | "done";
+export type WorkItemStatus = "pending" | "running" | "succeeded" | "failed" | "needs_attention" | "cancelled";
+export type WorkFailureClass =
+  | "transient"
+  | "provider_quota"
+  | "provider_auth"
+  | "agent_error"
+  | "task_failure"
+  | "policy_denial"
+  | "cancellation"
+  | "unknown";
+export type WorkAttentionReason = "credentials" | "approval" | "merge_conflict" | "policy";
+export interface WorkAttempt {
+  id: string;
+  workItemId: string;
+  number: number;
+  nodeId: string;
+  status: "running" | "succeeded" | "failed" | "needs_attention" | "cancelled" | "expired";
+  leaseExpiresAt: string;
+  heartbeatAt: string;
+  startedAt: string;
+  completedAt?: string;
+  failureClass?: WorkFailureClass;
+  error?: string;
+  sessionId?: string;
+  checkpointId?: string;
+  worktreePath?: string;
+  resumed: boolean;
+  route?: WorkRouteDecision;
+}
+export interface WorkRouteDecision {
+  status: "selected" | "waiting" | "needs_attention";
+  selected?: RouteCandidate;
+  reasons: RouteReason[];
+  decidedAt: string;
+  waitUntil?: string;
+}
 export interface WorkItem {
   id: string;
   accountId: string;
@@ -324,6 +360,17 @@ export interface WorkItem {
   // `label` alone drives routing; an ephemeral machine serves a one-off
   // `bivy/<slug>` label no differently than a persistent node would.
   ephemeral?: boolean;
+  maxAttempts: number;
+  backoffBaseMs: number;
+  backoffMaxMs: number;
+  nextAttemptAt?: string;
+  failureClass?: WorkFailureClass;
+  attentionReason?: WorkAttentionReason;
+  lastError?: string;
+  attempts?: WorkAttempt[];
+  retryableFailureClasses: WorkFailureClass[];
+  routingPolicy?: RoutingPolicy;
+  route?: WorkRouteDecision;
 }
 export type WorkItemInput = {
   label?: string;
@@ -344,6 +391,10 @@ export type WorkItemInput = {
   defaultRouted?: boolean;
   runtimeId?: string;
   model?: string;
+  maxAttempts?: number;
+  backoffBaseMs?: number;
+  backoffMaxMs?: number;
+  retryableFailureClasses?: WorkFailureClass[];
   installationId?: string;
   appId?: string;
 };
@@ -705,7 +756,12 @@ export interface MeshStore {
   listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]>;
   // Recent work items for the account (any status) — powers the incoming-queue UI.
   listWorkItems(accountId: string, limit?: number): Promise<WorkItem[]>;
-  claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
+  claimWorkItem(accountId: string, nodeId: string, id: string, leaseMs: number): Promise<{ item: WorkItem; attempt: WorkAttempt } | undefined>;
+  heartbeatWorkAttempt(accountId: string, nodeId: string, id: string, attemptId: string, leaseMs: number, resume?: { sessionId?: string; checkpointId?: string; worktreePath?: string; resumed?: boolean }): Promise<WorkAttempt | undefined>;
+  finishWorkAttempt(accountId: string, nodeId: string, id: string, attemptId: string, result: { status: "succeeded" | "failed" | "needs_attention" | "cancelled"; failureClass?: WorkFailureClass; attentionReason?: WorkAttentionReason; error?: string }): Promise<WorkItem | undefined>;
+  cancelWorkItem(accountId: string, id: string): Promise<WorkItem | undefined>;
+  retryWorkItem(accountId: string, id: string): Promise<WorkItem | undefined>;
+  setWorkRoute(accountId: string, id: string, policy: RoutingPolicy, route: WorkRouteDecision): Promise<WorkItem | undefined>;
   // Record that a run STARTED, keyed by its session id (idempotent: recording the
   // same `(accountId, sessionId)` twice is a no-op, so reconnects and repeated
   // session advertises never double-count). `runKey` is the distinct-run identifier
@@ -719,7 +775,6 @@ export interface MeshStore {
   // can never be counted again, so this is pure housekeeping to keep the table lean;
   // called on an interval by the control plane. Returns how many rows were removed.
   pruneRunStartsBefore(beforeIso: string): Promise<number>;
-  completeWorkItem(accountId: string, id: string): Promise<void>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node
   // changes so already-queued work follows the new default. Returns the updated items.

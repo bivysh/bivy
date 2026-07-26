@@ -195,15 +195,15 @@ await test("work queue: enqueue, list by label, claim (atomic), complete", async
 
   // Claim is atomic: the first claimer wins, a second returns undefined.
   const claimed = await store.claimWorkItem(account.id, node.id, a.id);
-  assert.equal(claimed?.status, "claimed");
-  assert.equal(claimed?.claimedByNodeId, node.id);
+  assert.equal(claimed?.item.status, "running");
+  assert.equal(claimed?.item.claimedByNodeId, node.id);
   assert.equal(await store.claimWorkItem(account.id, node.id, a.id), undefined);
 
   // Claimed items drop out of the pending list.
   const afterClaim = await store.listPendingWorkItems(account.id, ["bivy"]);
   assert.equal(afterClaim.length, 0);
 
-  await store.completeWorkItem(account.id, a.id);
+  await store.finishWorkAttempt(account.id, node.id, a.id, claimed!.attempt.id, { status: "succeeded" });
 });
 
 await test("work queue: items are account-scoped; cross-account claim is denied", async () => {
@@ -306,8 +306,8 @@ await test("enqueueWorkItem collapses an issue's many deliveries into one pendin
   assert.equal(edited.id, opened.id, "third delivery collapses too");
   assert.equal((await store.listWorkItems(acct.id)).length, 1, "only one queue entry exists");
   // Once the item leaves pending, the collapse key frees so the issue can re-run.
-  await store.claimWorkItem(acct.id, node.id, opened.id);
-  await store.completeWorkItem(acct.id, opened.id);
+  const attempt = await store.claimWorkItem(acct.id, node.id, opened.id);
+  await store.finishWorkAttempt(acct.id, node.id, opened.id, attempt!.attempt.id, { status: "succeeded" });
   const rerun = await store.enqueueWorkItem(acct.id, { source: "github:issue", title: "Fix again", repo: "o/r", issueNumber: 7, collapseKey: key, dedupeKey: "gh:d4" });
   assert.notEqual(rerun.id, opened.id, "a re-label after completion starts a fresh run");
 });
@@ -617,7 +617,7 @@ await test("listWorkItems returns all the account's items regardless of status",
   const items = await store.listWorkItems(acct.id);
   assert.equal(items.length, 2);
   // Both present; the claimed one keeps its status (pending items also listed).
-  assert.equal(items.find((w) => w.id === b.id)?.status, "claimed");
+  assert.equal(items.find((w) => w.id === b.id)?.status, "running");
   assert.equal(items.find((w) => w.id === a.id)?.status, "pending");
   // Account-scoped.
   const other = await store.findOrCreateAccount("q2@example.com");
