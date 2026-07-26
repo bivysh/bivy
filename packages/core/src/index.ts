@@ -24,3 +24,8 @@ export * from "./store.js";
 export * from "./followups.js";
 export * from "./transcript-cache.js";
 export * from "./slash.js";
+// Not barrel-exported: execution-policy.ts intentionally defines its own
+// `SandboxTier`/`normalizeSandboxTier` (kept dependency-free from store.ts, so
+// it stays usable from a bare node process with no store/DOM types in scope),
+// which collides by name with store.ts's own. Import it directly via the
+// "@bivy/core/execution-policy" subpath (see package.json `exports`) instead.

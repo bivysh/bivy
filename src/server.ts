@@ -49,6 +49,27 @@ import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from 
 import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-client.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
+import {
+  evaluateChangedFiles,
+  parseExecutionPolicy,
+  type ExecutionPolicy,
+  type PolicyEvidence,
+  type PolicyOutcomeStatus,
+} from "@bivy/core/execution-policy";
+import {
+  PolicyViolationError,
+  assertBranchAllowed,
+  assertModelAllowed,
+  assertRepoAllowed,
+  assertRuntimeAllowed,
+  buildPolicyEvidence,
+  isWorktreeClean,
+  listChangedFiles,
+  resolveEffectiveApprovalMode,
+  resolveEffectiveSandboxTier,
+  runRequiredChecks,
+  verifyPullRequest,
+} from "./harness/job-policy.js";
 import { TerminalManager } from "./terminal.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
 import { createWorktree, removeWorktree, branchSlug, type Worktree } from "./worktree.js";
@@ -139,6 +160,7 @@ import {
   ControlPlaneTaskPoller,
   resolveControlPlaneTaskConfig,
   type WorkItem as ControlPlaneWorkItem,
+  type WorkItemOutcome,
 } from "./control-plane-tasks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -799,7 +821,16 @@ let relay: RelayConnector | undefined;
 const clients = new Set<WebSocket>();
 const commandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const oauthLogins = new Map<string, OAuthLoginState>();
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>;
+  /** Execution-policy approval floor for this session (issue #155) — the
+   *  guardian interceptor clamps the node's global approvalMode UP to this, so
+   *  a policy-governed run can never be guarded more loosely than its policy
+   *  requires. Set once at session creation from the policy's floor; nothing
+   *  inside the session (an agent-issued instruction, a tool call) can change it.
+   *  Distinct from `approvalMode` above, which is the routing intent's *chosen*
+   *  mode (e.g. from an automation definition) — the floor still applies on
+   *  top of whatever that resolves to. */
+  approvalModeFloor?: ApprovalMode };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -1192,7 +1223,24 @@ type NodeSettings = {
    *  "auto" re-drives the interrupted turn on boot; "manual" leaves it for the
    *  user to resume with one tap. Issue automation always auto-resumes regardless. */
   sessionResumeMode: "auto" | "manual";
+  /** This node's default execution policy for automation runs (issue #155). */
+  githubExecutionPolicy: ExecutionPolicy;
 };
+
+/**
+ * This node's execution policy for GitHub-queue automation (issue #155):
+ * allowed runtimes/models, the sandbox/approval floor, required non-interactive
+ * checks, clean-commit/PR requirements, changed-file globs. Absence — every
+ * automation that existed before this feature — parses to
+ * `defaultExecutionPolicy()`, which is fully permissive and matches prior
+ * behavior exactly; this is the migration story for existing GitHub-queue work:
+ * a safe default computed on read, not a one-time upgrade that has to run.
+ * `parseExecutionPolicy` is always tolerant, so a malformed stored value
+ * degrades to defaults rather than breaking issue pickup.
+ */
+function nodeGithubExecutionPolicy(): ExecutionPolicy {
+  return parseExecutionPolicy(readSettings().githubExecutionPolicy).policy;
+}
 
 /** The node's default model for new sessions, or null (= use the runtime default). */
 function nodeDefaultModel(): { provider: string; id: string } | null {
@@ -1251,6 +1299,7 @@ function nodeSettingsSnapshot(): NodeSettings {
       return typeof v === "string" && v.trim() ? v.trim() : undefined;
     })(),
     sessionResumeMode: nodeSessionResumeMode(),
+    githubExecutionPolicy: nodeGithubExecutionPolicy(),
   };
 }
 
@@ -1303,6 +1352,13 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   }
   if ("sessionResumeMode" in patch) {
     settings.sessionResumeMode = patch.sessionResumeMode === "manual" ? "manual" : "auto";
+  }
+  if ("githubExecutionPolicy" in patch) {
+    // Store the normalized, re-parsed policy (never the raw submitted value) —
+    // parseExecutionPolicy tolerantly drops anything invalid, so what lands on
+    // disk (and what nodeGithubExecutionPolicy later enforces) is always the
+    // exact effective policy the caller was just shown, not raw unvalidated input.
+    settings.githubExecutionPolicy = parseExecutionPolicy(patch.githubExecutionPolicy).policy;
   }
   writeSettings(settings);
   const snapshot = nodeSettingsSnapshot();
@@ -4050,12 +4106,19 @@ interface RunIssueOverrides {
   model?: string;
 }
 
-async function runIssueTask(cfg: GitHubTaskConfig, issue: GitHubIssue, overrides: RunIssueOverrides = {}) {
+/** The disposition of one issue-automation run — threaded back up to
+ *  `runWorkItem` so the hosted-queue poller can report it to the control
+ *  plane (issue #155's "node run completion reporting"). A run that never
+ *  reached policy evaluation (e.g. a live follow-up session with nothing new)
+ *  still resolves to a definite status — never left implicit. */
+type IssueRunOutcome = { status: PolicyOutcomeStatus; evidence?: PolicyEvidence };
+
+async function runIssueTask(cfg: GitHubTaskConfig, issue: GitHubIssue, overrides: RunIssueOverrides = {}): Promise<IssueRunOutcome> {
   const source = `issue:${cfg.owner}/${cfg.repo}#${issue.number}`;
   return withIssueLock(source, () => runIssueTaskInner(cfg, issue, source, overrides));
 }
 
-async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, source: string, overrides: RunIssueOverrides = {}) {
+async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, source: string, overrides: RunIssueOverrides = {}): Promise<IssueRunOutcome> {
   const branch = issueBranchName(issue.number);
   const emit: IssueEmit = (record, stage, message, extra = {}) => {
     broadcast({ type: "session.github_issue_status", sessionId: record.id, issueNumber: issue.number, repo: `${cfg.owner}/${cfg.repo}`, branch, stage, message, ...extra });
@@ -4090,8 +4153,53 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
     if (cfg.label && cfg.label !== cfg.claimLabel) {
       await removeLabel(cfg, issue.number, cfg.label).catch(() => {});
     }
-    return;
+    return { status: "succeeded" };
   }
+
+  // --- Execution policy gate (issue #155) ---------------------------------
+  // The node is the sole enforcement authority, and this runs BEFORE any
+  // worktree/session exists: a disallowed repo/branch/runtime/model never gets
+  // as far as spending a worktree or an agent turn. Runtime allowlist checks
+  // the id `resolveRuntimeId` actually resolves to — including its own
+  // fallback-when-unavailable behavior — never just what was requested, so a
+  // runtime-host fallback can't slip outside the allowlist either.
+  const policy = nodeGithubExecutionPolicy();
+  const parsed = parseBivyDirectives(issue.body);
+  // Manual "Run…" overrides win over in-body directives, then the node's
+  // *configured* default agent (Settings → Nodes → "Default agent"). We resolve
+  // the default explicitly here rather than leaving `runtimeId` undefined for
+  // `createSession` to fill in, because that fallback uses the mutable
+  // `defaultRuntimeId` global — which the web UI reassigns to the *last used*
+  // agent on every `runtime.select`. Issue pickups must honor the persisted
+  // default, not whatever agent a human last happened to click. Resolved here
+  // (before the policy gate below) so the allowlist check sees the same id
+  // the session will actually launch with.
+  const directives = {
+    runtimeId: overrides.runtimeId || parsed.runtimeId || nodeConfiguredDefaultAgent(),
+    model: overrides.model || parsed.model,
+  };
+  try {
+    assertRepoAllowed(policy, `${cfg.owner}/${cfg.repo}`);
+    assertBranchAllowed(policy, branch);
+    assertRuntimeAllowed(policy, resolveRuntimeId(directives.runtimeId));
+    assertModelAllowed(policy, directives.model);
+  } catch (error) {
+    const reason = error instanceof PolicyViolationError ? error.message : String(error);
+    console.warn(`[github-tasks] issue #${issue.number} blocked by execution policy: ${reason}`);
+    broadcast({ type: "session.github_issue_status", sessionId: "", issueNumber: issue.number, repo: `${cfg.owner}/${cfg.repo}`, branch, stage: "policy_blocked", message: `Blocked by this node's execution policy: ${reason}` });
+    await commentIssue(cfg, issue.number, `🤖 Blocked by this node's execution policy: ${reason}`).catch(() => {});
+    // Claim it so the poller stops re-listing an issue that will never be
+    // pickable under this policy — the same sticky-skip pattern as the
+    // already-merged guard above.
+    await addLabel(cfg, issue.number, cfg.claimLabel).catch(() => {});
+    if (cfg.label && cfg.label !== cfg.claimLabel) {
+      await removeLabel(cfg, issue.number, cfg.label).catch(() => {});
+    }
+    return { status: "failed", evidence: buildPolicyEvidence({ policy, checks: [], cleanCommit: true, pullRequest: { required: false, verified: true }, changedFiles: { ok: true, violations: [] }, extraHardViolations: [reason] }) };
+  }
+  // The sandbox tier this run launches at can only be clamped UP to the
+  // policy's floor — never down, regardless of the node's own default.
+  const effectiveSandbox = resolveEffectiveSandboxTier(policy, sandboxTier());
 
   // Visibly signal pickup on the issue itself: swap the routing label (e.g.
   // `bivy`) for the claim label (`bivy:in-progress`) and leave a comment naming
@@ -4102,18 +4210,6 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   // which already added the claim label before calling in here.
   await announcePickup(cfg, issue.number, identity.name);
 
-  const parsed = parseBivyDirectives(issue.body);
-  // Manual "Run…" overrides win over in-body directives, then the node's
-  // *configured* default agent (Settings → Nodes → "Default agent"). We resolve
-  // the default explicitly here rather than leaving `runtimeId` undefined for
-  // `createSession` to fill in, because that fallback uses the mutable
-  // `defaultRuntimeId` global — which the web UI reassigns to the *last used*
-  // agent on every `runtime.select`. Issue pickups must honor the persisted
-  // default, not whatever agent a human last happened to click.
-  const directives = {
-    runtimeId: overrides.runtimeId || parsed.runtimeId || nodeConfiguredDefaultAgent(),
-    model: overrides.model || parsed.model,
-  };
   // `cfg.repoDir` is a long-lived shared clone reused across every pickup on this
   // node. The hosted control-plane dispatch path (runWorkItem) refreshes it via
   // `cloneOrUpdateRepo` first, but the direct self-hosted poller
@@ -4135,7 +4231,13 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
     makeActive: false,
     source,
     runtimeId: directives.runtimeId,
+    sandbox: effectiveSandbox,
   });
+  // The approval mode this session's guardian actually guards tool calls with
+  // — clamped UP to the policy floor, independent of (and never lower than)
+  // the node's current global approval mode. Nothing inside the session can
+  // change this once set (see the guardianInterceptorImpl read of it).
+  record.approvalModeFloor = resolveEffectiveApprovalMode(policy, approvalMode);
   record.githubIssueUrl = `https://github.com/${cfg.owner}/${cfg.repo}/issues/${issue.number}`;
   // Title the session from the issue up front so it never shows as "Untitled
   // session" in the sidebar — issue title + number is a good, stable start (the
@@ -4152,7 +4254,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
     emit(record, "started", `Started work on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
     await runSessionTurn(record, buildTaskPrompt(issue, nodeGithubIssuePrompt()));
     emit(record, "agent_done", `Agent finished issue #${issue.number}; checking for changes.`);
-    await reportIssueOutcome(cfg, issue, record, emit, { followUp: false });
+    return await reportIssueOutcome(cfg, issue, record, emit, { followUp: false });
   } catch (error) {
     emit(record, "failed", `GitHub issue #${issue.number} failed: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
@@ -4165,7 +4267,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
  * the new comment as another turn in the same worktree, then report the outcome
  * the same way a fresh pickup does.
  */
-async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, record: SessionRecord, emit: IssueEmit) {
+async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, record: SessionRecord, emit: IssueEmit): Promise<IssueRunOutcome> {
   const wt = record.worktree;
   if (!wt) throw new Error("issue session has no worktree");
   try {
@@ -4195,7 +4297,7 @@ async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, recor
 
     await runSessionTurn(record, buildFollowUpPrompt(issue));
     emit(record, "agent_done", `Agent handled the follow-up on issue #${issue.number}; checking for changes.`);
-    await reportIssueOutcome(cfg, issue, record, emit, { followUp: true });
+    return await reportIssueOutcome(cfg, issue, record, emit, { followUp: true });
   } catch (error) {
     emit(record, "failed", `GitHub issue #${issue.number} follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
@@ -4223,7 +4325,7 @@ async function reportIssueOutcome(
   record: SessionRecord,
   emit: IssueEmit,
   opts: { followUp: boolean },
-) {
+): Promise<IssueRunOutcome> {
   const wt = record.worktree;
   if (!wt) throw new Error("issue session has no worktree");
 
@@ -4237,6 +4339,40 @@ async function reportIssueOutcome(
   await maybePushWorktreeBranch(record);
   await maybeDetectPullRequest(record);
 
+  // --- Execution policy evaluation (issue #155) ---------------------------
+  // Runs through the governed, non-interactive check path with a timeout and
+  // bounded/sanitized output (src/harness/job-policy.ts) — this is the ONLY
+  // place a required-check command actually executes. With no policy
+  // configured (every automation before this feature), every signal below is
+  // trivially satisfied and `evidence.status` is always "succeeded", so this
+  // block changes nothing for an unconfigured job.
+  const policy = nodeGithubExecutionPolicy();
+  const [cleanCommit, changedFiles, checks] = await Promise.all([
+    isWorktreeClean(wt.path),
+    listChangedFiles(wt.path, base),
+    runRequiredChecks(policy.requiredChecks, wt.path),
+  ]);
+  const evidence = buildPolicyEvidence({
+    policy,
+    runtimeId: record.runtimeId,
+    sandboxTier: record.sandbox,
+    approvalMode: record.approvalModeFloor,
+    checks,
+    cleanCommit,
+    pullRequest: verifyPullRequest(policy, primaryPr(record.prs)),
+    changedFiles: evaluateChangedFiles(policy, changedFiles),
+  });
+  if (evidence.status !== "succeeded") {
+    const message = `🤖 This run did not satisfy this node's execution policy (${evidence.status.replace("_", " ")}): ${evidence.violations.join("; ")}`;
+    emit(record, evidence.status === "failed" ? "policy_failed" : "policy_needs_attention", message, { violations: evidence.violations });
+    await commentIssue(cfg, issue.number, message).catch(() => {});
+    // Leave the claim label in place either way — the run is not done in any
+    // sense the policy recognizes as success, so it stays visibly "in
+    // progress" rather than silently dropping off the issue (mirrors the
+    // existing "pushed, no PR yet" path below, which also leaves it set).
+    return { status: evidence.status, evidence };
+  }
+
   if (record.prUrl) {
     emit(record, "pr_opened", `Pull request ready for issue #${issue.number}.`, { prUrl: record.prUrl });
     await commentIssue(cfg, issue.number, `🤖 ${record.prUrl}`).catch(() => {});
@@ -4246,7 +4382,7 @@ async function reportIssueOutcome(
     // acceptance criteria, label state should stay consistent through the
     // pickup → in-progress → PR lifecycle rather than accumulate.
     await removeLabel(cfg, issue.number, cfg.claimLabel).catch(() => {});
-    return;
+    return { status: "succeeded", evidence };
   }
 
   if (!ahead) {
@@ -4260,7 +4396,7 @@ async function reportIssueOutcome(
     // also mis-routing follow-up mentions before pickRoutingLabel was hardened;
     // clearing it keeps issue label state consistent across the pickup lifecycle.
     await removeLabel(cfg, issue.number, cfg.claimLabel).catch(() => {});
-    return;
+    return { status: "succeeded", evidence };
   }
 
   emit(record, "pushed", `Pushed ${wt.branch} for issue #${issue.number}; no pull request yet.`);
@@ -4269,6 +4405,7 @@ async function reportIssueOutcome(
     issue.number,
     `🤖 Pushed \`${wt.branch}\` but didn't open a pull request. Comment \`@bivy\` again to continue, or open one from the session's chat (\`/pr\`).`,
   ).catch(() => {});
+  return { status: "succeeded", evidence };
 }
 
 /** The live open session for an issue (by source tag), if we still have one. */
@@ -4492,7 +4629,10 @@ async function reconcileInterruptedSessions(): Promise<void> {
 async function startGitHubTasksIfConfigured() {
   const cfg = await resolveGitHubTaskConfig();
   if (!cfg) return;
-  githubPoller = new GitHubTaskPoller(cfg, (issue) => runIssueTask(cfg, issue), nodeGithubMaxConcurrent);
+  // The direct GitHub poller has no completion-reporting channel (GitHub label
+  // state IS its completion signal — see reportIssueOutcome); the outcome is
+  // only meaningful to the hosted control-plane path (runWorkItem).
+  githubPoller = new GitHubTaskPoller(cfg, async (issue) => { await runIssueTask(cfg, issue); }, nodeGithubMaxConcurrent);
   githubPoller.start();
 }
 
@@ -4608,7 +4748,7 @@ async function resolveTokenForRepo(owner: string, repo: string): Promise<string 
   return resolveGitHubToken();
 }
 
-async function runWorkItem(item: ControlPlaneWorkItem) {
+async function runWorkItem(item: ControlPlaneWorkItem): Promise<WorkItemOutcome> {
   if ((item.source === "schedule" || item.source === "manual") && item.body?.startsWith("bivy-room-v1:")) {
     const [, nodeId, ...payload] = item.body.split(":");
     if (nodeId !== identity.nodeId || payload.length === 0) {
@@ -4639,28 +4779,48 @@ async function runWorkItem(item: ControlPlaneWorkItem) {
       claimLabel: `${item.label}:in-progress`,
       pollMs: 60_000,
     };
-    await runIssueTask(cfg, {
+    const outcome = await runIssueTask(cfg, {
       number: item.issueNumber,
       title: item.title,
       body: item.body ?? "",
       labels: [],
       url: item.url ?? "",
     }, { runtimeId: item.runtimeId, model: item.model });
-    return;
+    // The control plane only ever gets bounded/sanitized evidence (check ids,
+    // exit status, duration, short redacted summaries) — never raw command
+    // output, diffs, or file contents (issue #155 non-goal).
+    return { status: outcome.status, evidence: outcome.evidence };
   }
-  // Generic prompt (Slack, or an issue with no repo): a background session in the
-  // default workspace so it doesn't steal the user's focused session.
+  // Generic prompt (Slack, manual, or schedule with no repo): a background
+  // session in the default workspace so it doesn't steal the user's focused
+  // session. No worktree/commit/PR concept applies here (no repo to govern),
+  // but the node's runtime/model allowlist and sandbox/approval floor still
+  // do (issue #155) — this is the routing-intent path scheduled/manual/Slack
+  // runs use, so the same policy that governs GitHub pickups governs these too.
+  const policy = nodeGithubExecutionPolicy();
+  try {
+    assertRuntimeAllowed(policy, resolveRuntimeId(item.runtimeId));
+    assertModelAllowed(policy, item.model);
+  } catch (error) {
+    const reason = error instanceof PolicyViolationError ? error.message : String(error);
+    console.warn(`[control-plane-tasks] item ${item.id} blocked by execution policy: ${reason}`);
+    return { status: "failed", evidence: buildPolicyEvidence({ policy, checks: [], cleanCommit: true, pullRequest: { required: false, verified: true }, changedFiles: { ok: true, violations: [] }, extraHardViolations: [reason] }) };
+  }
+  const effectiveSandbox = resolveEffectiveSandboxTier(policy, normalizeSandboxTier(item.sandbox) ?? sandboxTier());
+  const effectiveApprovalMode = resolveEffectiveApprovalMode(policy, approvalModeFrom(item.approvalMode) ?? approvalMode);
   const record = await createSession(defaultWorkspace, undefined, {
     makeActive: false,
     source: `queue:${item.source}`,
     runtimeId: item.runtimeId,
-    sandbox: normalizeSandboxTier(item.sandbox),
-    approvalMode: approvalModeFrom(item.approvalMode),
+    sandbox: effectiveSandbox,
+    approvalMode: effectiveApprovalMode,
   });
+  record.approvalModeFloor = effectiveApprovalMode;
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
   }
   await record.session.prompt(item.body ? `${item.title}\n\n${item.body}` : item.title);
+  return { status: "succeeded" };
 }
 
 function startControlPlaneTasksIfConfigured() {
@@ -5006,11 +5166,19 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
   const workspace = record?.workspace ?? active?.workspace ?? defaultWorkspace;
   const repo = record?.source?.startsWith("repo:") ? record.source.slice("repo:".length) : undefined;
   const branch = record?.worktree?.branch;
+  // A session created from a scheduled/manual automation may carry its own
+  // approval-mode default (item.approvalMode in runWorkItem); otherwise fall
+  // back to the node's globally configured mode. Either way, a policy-governed
+  // session (issue #155) also carries its own approval floor, clamped UP at
+  // session creation and never relaxable from inside the session — guard with
+  // whichever is stricter, so the node's global mode (or a live routing-intent
+  // change) can never drop a policy-governed session below its own floor.
+  const requestedApprovalMode = record?.approvalMode ?? approvalMode;
+  const effectiveApprovalMode = record?.approvalModeFloor
+    ? resolveEffectiveApprovalMode({ version: 1, requiredApprovalMode: record.approvalModeFloor }, requestedApprovalMode)
+    : requestedApprovalMode;
   const policy = new PolicyEngine({
-    // A session created from a scheduled/manual automation may carry its own
-    // approval-mode default (item.approvalMode in runWorkItem); otherwise fall
-    // back to the node's globally configured mode.
-    mode: record?.approvalMode ?? approvalMode,
+    mode: effectiveApprovalMode,
     isRiskyIntegration: (tool) => integrations.isRiskyTool(tool),
   });
   let { decision, reason, risk } = policy.decideToolCall(workspace, toolName, input);

@@ -36,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   creation. The control plane only ever holds routing metadata plus the
   ciphertext; it cannot read the instructions. (#148)
 
+- **Execution policy for automation runs** — an automation definition can now
+  declare a versioned policy the NODE enforces (the control plane only
+  routes/stores metadata): allowed runtimes/models, a sandbox-tier and
+  approval-mode floor a run can never be launched below, a changed-file
+  allow/deny glob, and required non-interactive validation commands (run with
+  a timeout, output bounded and redacted before it's ever stored). A run whose
+  policy requires a clean commit or a verified pull request is reported
+  `needs_attention` — never a false success — and a hard violation (forbidden
+  runtime/model, a failed required check, a changed-file violation) is
+  `failed`. Edit it from Settings → Nodes → Execution policy, which previews
+  the effective (defaulted + validated) policy before saving; absent
+  configuration parses to fully permissive defaults, so every existing
+  automation keeps behaving exactly as before. (#155)
 - **GitHub App key sync across nodes** — `bivy github:app-sync on` opts a node
   into pulling/pushing a connected GitHub App's private key E2E-encrypted
   through the control plane, so connecting an app on one node makes it usable

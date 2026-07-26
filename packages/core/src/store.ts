@@ -16,6 +16,7 @@
 
 import type { ConnectionStatus, PromptAttachment, ServerEvent } from "./protocol.js";
 import type { AccountNode } from "./account.js";
+import type { ExecutionPolicy } from "./execution-policy.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml } from "./markdown.js";
 import { eventKind, normalizeEventType, toolCallId, toolInput, toolName } from "./tool-activity.js";
@@ -449,6 +450,13 @@ export interface NodeSettings {
    *  re-drives the interrupted turn on boot, "manual" waits for a one-tap Resume.
    *  Governs interactive sessions only — issue automation always auto-resumes. */
   sessionResumeMode: "auto" | "manual";
+  /** This node's default execution policy for automation runs (issue #155):
+   *  allowed runtimes/models, sandbox/approval floor, required checks,
+   *  clean-commit/PR requirements, changed-file globs. Applies to every
+   *  automation-run trigger (GitHub, Slack, manual, webhook, schedule) unless
+   *  a specific automation definition overrides it. See
+   *  `@bivy/core/execution-policy` for the full shape/parse/merge helpers. */
+  githubExecutionPolicy?: ExecutionPolicy;
 }
 
 export interface AppState {

@@ -400,6 +400,13 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN;
       -- Automation is the canonical domain. Existing work_items are migrated in
       -- place so old API clients retain their ids and issue context.
+      -- (Issue #155's policy-run disposition rides in the `output` JSONB
+      -- column below as `output.policyEvidence` — a bounded/sanitized
+      -- `PolicyEvidence` from @bivy/core/execution-policy: check ids, exit
+      -- status, duration, short redacted summaries, never raw command output,
+      -- diffs, or file contents — rather than a separate column, since the
+      -- disposition itself is just the run's terminal `status`, which this
+      -- table already tracks via AutomationRunStatus.)
       CREATE TABLE IF NOT EXISTS automation_definitions (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -1772,12 +1779,25 @@ export class PostgresStore implements MeshStore {
     return rowCount ?? 0;
   }
 
-  async completeWorkItem(accountId: string, id: string): Promise<void> {
+  async completeWorkItem(accountId: string, id: string, outcome?: { status: "succeeded" | "needs_attention"; evidence?: unknown }): Promise<void> {
     // Older nodes only know claim → complete. Adapt that boundary onto the
     // canonical lifecycle without preserving a second legacy transition path.
     const current = await this.getAutomationRun(accountId, id);
     if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running");
-    await this.transitionAutomationRun(accountId, id, "succeeded");
+    // Defense in depth (issue #155): the node already bounds/sanitizes policy
+    // evidence (never raw output, diffs, or file contents), but cap what lands
+    // in Postgres too, so a misbehaving/future node can't grow this table
+    // unbounded. Oversized evidence is dropped, not truncated in place — JSON
+    // truncated mid-structure wouldn't parse back cleanly, and a missing
+    // evidence blob is a far safer failure mode than a corrupt one.
+    const MAX_EVIDENCE_BYTES = 32 * 1024;
+    let evidence = outcome?.evidence ?? null;
+    if (evidence !== null) {
+      const serialized = JSON.stringify(evidence);
+      if (!serialized || serialized.length > MAX_EVIDENCE_BYTES) evidence = null;
+    }
+    const output = evidence !== null ? { ...(current?.output ?? {}), policyEvidence: evidence } : current?.output;
+    await this.transitionAutomationRun(accountId, id, outcome?.status ?? "succeeded", output);
   }
 
   async deleteWorkItem(accountId: string, id: string): Promise<boolean> {

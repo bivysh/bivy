@@ -1128,6 +1128,11 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .theme-seg-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); color: var(--accent); }
 .theme-seg-icon { display: inline-flex; }
 
+/* Execution policy editor (issue #155): raw JSON in, effective policy preview out */
+.policy-editor { font-family: var(--mono-font, ui-monospace, monospace); font-size: 12px; white-space: pre; resize: vertical; }
+.policy-preview { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 12px; font-family: var(--mono-font, ui-monospace, monospace); overflow-x: auto; max-height: 320px; overflow-y: auto; }
+.policy-errors { margin: 4px 0 0; padding-left: 18px; }
+
 /* Notifications: on/off + per-event switches */
 .settings-toggle-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 10px 0; }
 .settings-toggle-row + .settings-toggle-row { border-top: 1px solid var(--line); }

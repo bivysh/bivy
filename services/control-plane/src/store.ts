@@ -344,7 +344,13 @@ export interface AutomationRun {
     approvalMode?: AutomationDefinition["approvalMode"];
     sandbox?: AutomationDefinition["sandbox"];
   };
-  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+  // `failure` is a short human-readable reason. `policyEvidence` — when a
+  // policy is configured (issue #155) — is the bounded/sanitized
+  // `PolicyEvidence` from `@bivy/core/execution-policy` (check ids, exit
+  // status, duration, short redacted summaries): never raw command output,
+  // diffs, or file contents. The control plane only ever routes/stores this;
+  // the node is the sole authority that produces and interprets it.
+  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string; policyEvidence?: unknown };
   title: string;
   body?: string;
   source: string;
@@ -831,7 +837,12 @@ export interface MeshStore {
   // can never be counted again, so this is pure housekeeping to keep the table lean;
   // called on an interval by the control plane. Returns how many rows were removed.
   pruneRunStartsBefore(beforeIso: string): Promise<number>;
-  completeWorkItem(accountId: string, id: string): Promise<void>;
+  // `status` is the terminal AutomationRunStatus the node observed
+  // ("succeeded" or "needs_attention" — never "failed"; a hard policy
+  // violation goes through `transitionAutomationRun(..., "failed", ...)`
+  // directly, same as any other run failure). `evidence`, when present, is the
+  // bounded/sanitized `PolicyEvidence` — stored in `output.policyEvidence`.
+  completeWorkItem(accountId: string, id: string, outcome?: { status: "succeeded" | "needs_attention"; evidence?: unknown }): Promise<void>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node
   // changes so already-queued work follows the new default. Returns the updated items.
