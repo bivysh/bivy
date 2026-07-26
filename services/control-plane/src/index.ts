@@ -1667,7 +1667,30 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     claimedAt: w.claimedAt,
     claimedByNodeId: w.claimedByNodeId,
     completedAt: w.completedAt,
+    maxAttempts: w.maxAttempts,
+    nextAttemptAt: w.nextAttemptAt,
+    failureClass: w.failureClass,
+    attentionReason: w.attentionReason,
+    lastError: w.lastError,
+    attempts: w.attempts,
   })));
+}));
+
+app.post("/account/work-items/:id/cancel", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const item = await store.cancelWorkItem(client.accountId, String(req.params.id));
+  if (!item) return res.status(409).json({ error: "Run cannot be cancelled" });
+  res.json({ ok: true, item });
+}));
+
+app.post("/account/work-items/:id/retry", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const item = await store.retryWorkItem(client.accountId, String(req.params.id));
+  if (!item) return res.status(409).json({ error: "Run is not retryable manually" });
+  void notifyRelaysWorkAvailable(client.accountId, item);
+  res.json({ ok: true, item });
 }));
 
 // Manually dispatch a *pending* queue item to a chosen node + agent (the queue
@@ -1896,15 +1919,36 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   if (allowance.exhausted) {
     return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
   }
-  const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
-  if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
-  res.json({ ok: true, item });
+  const claimed = await store.claimWorkItem(node.accountId, node.id, String(req.params.id), 45_000);
+  if (!claimed) return res.status(409).json({ error: "Already leased, capped, or unknown" });
+  res.json({ ok: true, ...claimed });
 }));
 
-app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) => {
+app.post("/node/work/:id/attempts/:attemptId/heartbeat", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  await store.completeWorkItem(node.accountId, String(req.params.id));
-  res.json({ ok: true });
+  const attempt = await store.heartbeatWorkAttempt(node.accountId, node.id, String(req.params.id), String(req.params.attemptId), 45_000, {
+    sessionId: typeof req.body?.sessionId === "string" ? req.body.sessionId : undefined,
+    checkpointId: typeof req.body?.checkpointId === "string" ? req.body.checkpointId : undefined,
+    worktreePath: typeof req.body?.worktreePath === "string" ? req.body.worktreePath : undefined,
+    resumed: Boolean(req.body?.resumed),
+  });
+  if (!attempt) return res.status(409).json({ error: "Attempt lease is no longer current" });
+  res.json({ ok: true, attempt });
+}));
+
+app.post("/node/work/:id/attempts/:attemptId/finish", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const status = String(req.body?.status ?? "");
+  if (!["succeeded", "failed", "needs_attention", "cancelled"].includes(status)) return res.status(400).json({ error: "Invalid attempt status" });
+  const item = await store.finishWorkAttempt(node.accountId, node.id, String(req.params.id), String(req.params.attemptId), {
+    status: status as "succeeded" | "failed" | "needs_attention" | "cancelled",
+    failureClass: req.body?.failureClass,
+    attentionReason: req.body?.attentionReason,
+    error: typeof req.body?.error === "string" ? req.body.error : undefined,
+  });
+  if (!item) return res.status(409).json({ error: "Attempt lease is no longer current" });
+  if (item.status === "pending") void notifyRelaysWorkAvailable(node.accountId, item);
+  res.json({ ok: true, item });
 }));
 
 // The node mints a short-lived, node-scoped client grant to link a remote

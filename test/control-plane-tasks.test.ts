@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   resolveControlPlaneTaskConfig,
   ControlPlaneTaskPoller,
+  classifyWorkFailure,
   type ControlPlaneTaskConfig,
   type WorkItem,
 } from "../src/control-plane-tasks.js";
@@ -99,7 +100,7 @@ test("poller: claims then runs then completes; skips items lost to another node"
     if (url.includes("/claim")) {
       // w1 claim succeeds; w2 was taken by another node (409).
       const ok = url.includes("w1");
-      return { ok, json: async () => ({}) } as Response;
+      return { ok, json: async () => ok ? ({ attempt: { id: `a-${url.includes("w1") ? "w1" : "w2"}`, number: 1 } }) : ({}) } as Response;
     }
     return { ok: true, json: async () => ({}) } as Response; // complete
   }) as typeof fetch;
@@ -116,11 +117,11 @@ test("poller: claims then runs then completes; skips items lost to another node"
   }
 
   assert.deepEqual(ran, ["w1"], "only the successfully-claimed item runs");
-  // w1: claim + complete; w2: claim only (lost), no complete.
+  // w1: claim + fenced finish; w2: claim only (lost), no finish.
   assert.ok(calls.includes("POST https://cp/node/work/w1/claim"));
-  assert.ok(calls.includes("POST https://cp/node/work/w1/complete"));
+  assert.ok(calls.some((call) => call.includes("/node/work/w1/attempts/a-w1/finish")));
   assert.ok(calls.includes("POST https://cp/node/work/w2/claim"));
-  assert.ok(!calls.includes("POST https://cp/node/work/w2/complete"));
+  assert.ok(!calls.some((call) => call.includes("/node/work/w2/") && call.includes("/finish")));
 });
 
 // ---------------------------------------------------------------------------
@@ -149,7 +150,7 @@ test("poller: runs up to the concurrency cap in parallel, not one at a time", as
     if (url.includes("/claim")) {
       const m = /\/node\/work\/([^/]+)\/claim$/.exec(url);
       if (method === "POST" && m) claimed.push(m[1]);
-      return { ok: true, json: async () => ({}) } as Response;
+      return { ok: true, json: async () => ({ attempt: { id: `a-${m?.[1]}`, number: 1 } }) } as Response;
     }
     return { ok: true, json: async () => ({}) } as Response; // complete
   }) as typeof fetch;
@@ -187,6 +188,14 @@ test("poller: runs up to the concurrency cap in parallel, not one at a time", as
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test("failure classifier distinguishes quota/auth, policy, cancellation, and transient loss", () => {
+  assert.deepEqual(classifyWorkFailure(new Error("HTTP 429 quota exceeded")).failureClass, "provider_quota");
+  assert.deepEqual(classifyWorkFailure(new Error("401 invalid token")).failureClass, "provider_auth");
+  assert.deepEqual(classifyWorkFailure(new Error("policy denied destructive action")).status, "needs_attention");
+  assert.deepEqual(classifyWorkFailure(new Error("operation cancelled")).status, "cancelled");
+  assert.deepEqual(classifyWorkFailure(Object.assign(new Error("socket reset"), { code: "ECONNRESET" })).failureClass, "transient");
 });
 
 for (const { name, fn } of tests) {

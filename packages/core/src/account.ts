@@ -435,7 +435,7 @@ export async function setEphemeralQueueDefault(
 export interface GithubQueueItem {
   id: string;
   source: string; // "github:issue" | "github:comment" | "slack"
-  status: "pending" | "claimed" | "done";
+  status: "pending" | "running" | "succeeded" | "failed" | "needs_attention" | "cancelled";
   label: string;
   title: string;
   repo?: string;
@@ -452,6 +452,12 @@ export interface GithubQueueItem {
   claimedAt?: string;
   claimedByNodeId?: string;
   completedAt?: string;
+  maxAttempts: number;
+  nextAttemptAt?: string;
+  failureClass?: string;
+  attentionReason?: string;
+  lastError?: string;
+  attempts?: Array<{ id: string; number: number; nodeId: string; status: string; startedAt: string; completedAt?: string; error?: string; sessionId?: string; resumed: boolean }>;
 }
 
 /** Recent incoming work items for the account, newest first (queue UI). */
@@ -504,6 +510,16 @@ export async function deleteWorkItem(store: LocalStore, id: string, fetchImpl: t
     const data: any = await res.json().catch(() => ({}));
     throw new Error(data?.error || `delete work item failed: ${res.status}`);
   }
+}
+
+export async function cancelWorkItem(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/work-items/${encodeURIComponent(id)}/cancel`, { method: "POST", headers: authHeaders(store) });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({})) as any)?.error || `cancel failed: ${res.status}`);
+}
+
+export async function retryWorkItem(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/work-items/${encodeURIComponent(id)}/retry`, { method: "POST", headers: authHeaders(store) });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({})) as any)?.error || `retry failed: ${res.status}`);
 }
 
 /** Clear every pending (waiting) item from the account's GitHub queue. Returns how many were removed. */

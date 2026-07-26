@@ -250,7 +250,7 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
   });
 
   // --- Work queue ------------------------------------------------------------
-  await test("work queue: enqueue, label routing, atomic claim, complete", async (store) => {
+  await test("work queue: enqueue, label routing, atomic attempt claim, complete", async (store) => {
     const acct = await store.findOrCreateAccount("contract-wq@example.com");
     const { node } = await store.enrollNode(acct.id, "node-wq", "Laptop");
     const a = await store.enqueueWorkItem(acct.id, { label: "bivy", source: "github:issue", title: "A" });
@@ -266,10 +266,80 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(blank.label, "bivy");
 
     const claimed = await store.claimWorkItem(acct.id, node.id, a.id);
-    assert.equal(claimed?.status, "claimed");
+    assert.equal(claimed?.item.status, "running");
+    assert.equal(claimed?.attempt.number, 1);
     assert.equal(await store.claimWorkItem(acct.id, node.id, a.id), undefined); // second claim loses
-    await store.completeWorkItem(acct.id, a.id);
-    assert.equal((await store.listWorkItems(acct.id)).find((w) => w.id === a.id)?.status, "done");
+    await store.finishWorkAttempt(acct.id, node.id, a.id, claimed!.attempt.id, { status: "succeeded" });
+    assert.equal((await store.listWorkItems(acct.id)).find((w) => w.id === a.id)?.status, "succeeded");
+  });
+
+  await test("work queue: lease expiry permits takeover and fences late completion", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-lease@example.com");
+    const n1 = (await store.enrollNode(acct.id, "lease-node-1", "One")).node;
+    const n2 = (await store.enrollNode(acct.id, "lease-node-2", "Two")).node;
+    const item = await store.enqueueWorkItem(acct.id, { source: "slack", title: "leased" });
+    const first = await store.claimWorkItem(acct.id, n1.id, item.id, 100);
+    assert.ok(first);
+    await store.heartbeatWorkAttempt(acct.id, n1.id, item.id, first!.attempt.id, 30, {
+      sessionId: "session-durable",
+      checkpointId: "checkpoint-1",
+      worktreePath: "/worktrees/run",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const restartView = await store.listPendingWorkItems(acct.id, ["bivy"]);
+    assert.equal(restartView[0]?.attempts?.[0]?.sessionId, "session-durable", "restart sees resume metadata");
+    const second = await store.claimWorkItem(acct.id, n2.id, item.id, 30_000);
+    assert.equal(second?.attempt.number, 2);
+    assert.equal(await store.finishWorkAttempt(acct.id, n1.id, item.id, first!.attempt.id, { status: "succeeded" }), undefined);
+    await store.finishWorkAttempt(acct.id, n2.id, item.id, second!.attempt.id, { status: "succeeded" });
+    const saved = (await store.listWorkItems(acct.id)).find((w) => w.id === item.id)!;
+    assert.equal(saved.status, "succeeded");
+    assert.deepEqual(saved.attempts?.map((a) => a.status), ["expired", "succeeded"]);
+  });
+
+  await test("work queue: cancellation and manual retry preserve attempt history", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-cancel@example.com");
+    const node = (await store.enrollNode(acct.id, "cancel-node", "Node")).node;
+    const item = await store.enqueueWorkItem(acct.id, { source: "slack", title: "cancel" });
+    const first = await store.claimWorkItem(acct.id, node.id, item.id);
+    assert.ok(first);
+    assert.equal((await store.cancelWorkItem(acct.id, item.id))?.status, "cancelled");
+    assert.equal((await store.retryWorkItem(acct.id, item.id))?.status, "pending");
+    const second = await store.claimWorkItem(acct.id, node.id, item.id);
+    assert.equal(second?.attempt.number, 2);
+    const saved = (await store.listWorkItems(acct.id)).find((w) => w.id === item.id)!;
+    assert.deepEqual(saved.attempts?.map((a) => a.status), ["cancelled", "running"]);
+  });
+
+  await test("work queue: retry backoff and attempt cap persist in the run", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-retry@example.com");
+    const node = (await store.enrollNode(acct.id, "retry-node", "Node")).node;
+    const item = await store.enqueueWorkItem(acct.id, {
+      source: "slack",
+      title: "retry",
+      maxAttempts: 2,
+      backoffBaseMs: 200,
+      backoffMaxMs: 200,
+      retryableFailureClasses: ["transient"],
+    });
+    const first = await store.claimWorkItem(acct.id, node.id, item.id);
+    const scheduled = await store.finishWorkAttempt(acct.id, node.id, item.id, first!.attempt.id, {
+      status: "failed",
+      failureClass: "transient",
+      error: "node lost",
+    });
+    assert.equal(scheduled?.status, "pending");
+    assert.ok(scheduled?.nextAttemptAt);
+    assert.equal((await store.listPendingWorkItems(acct.id, ["bivy"])).length, 0, "backoff is enforced durably");
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    const second = await store.claimWorkItem(acct.id, node.id, item.id);
+    const terminal = await store.finishWorkAttempt(acct.id, node.id, item.id, second!.attempt.id, {
+      status: "failed",
+      failureClass: "transient",
+      error: "node lost again",
+    });
+    assert.equal(terminal?.status, "failed", "attempt cap prevents a third automatic retry");
+    assert.equal(terminal?.nextAttemptAt, undefined);
   });
 
   await test("work queue: dedupeKey is idempotent per account", async (store) => {
