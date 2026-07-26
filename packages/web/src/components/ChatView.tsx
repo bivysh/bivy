@@ -81,6 +81,7 @@ function AttachmentChip({ attachment }: { attachment: PromptAttachment }) {
 // renders something tappable.
 function actionLabel(action: string): string {
   if (action === "/new") return "New session";
+  if (action === "/resume") return "Resume";
   return `Run ${action}`;
 }
 
