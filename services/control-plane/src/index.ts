@@ -1667,7 +1667,68 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     claimedAt: w.claimedAt,
     claimedByNodeId: w.claimedByNodeId,
     completedAt: w.completedAt,
+    triggerId: w.triggerId,
+    triggerKind: w.triggerKind,
+    definitionId: w.definitionId,
+    attempt: w.attempt,
+    targetKind: w.targetKind,
+    startedAt: w.startedAt,
+    output: w.output,
   })));
+}));
+
+// Trigger-neutral automation API. The work-item endpoints below remain
+// compatibility adapters over these same rows.
+app.get("/account/automations", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listAutomationDefinitions(client.accountId));
+}));
+
+app.post("/account/automations", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name) return res.status(400).json({ error: "name is required" });
+  const definition = await store.createAutomationDefinition(client.accountId, {
+    name,
+    templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : undefined,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined,
+    model: typeof req.body?.model === "string" ? req.body.model : undefined,
+    nodeLabel: typeof req.body?.nodeLabel === "string" ? req.body.nodeLabel : undefined,
+    ephemeral: typeof req.body?.ephemeral === "boolean" ? req.body.ephemeral : undefined,
+  });
+  res.status(201).json(definition);
+}));
+
+app.get("/account/automation-runs", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listAutomationRuns(client.accountId, Number(req.query.limit) || 50));
+}));
+
+app.get("/account/automation-triggers", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listTriggerEvents(client.accountId, Number(req.query.limit) || 50));
+}));
+
+app.post("/account/automation-runs", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
+  if (!title) return res.status(400).json({ error: "title is required" });
+  const run = await store.enqueueAutomationRun(client.accountId, {
+    source: "manual",
+    triggerKind: "manual",
+    title,
+    label: typeof req.body?.label === "string" ? req.body.label : undefined,
+    definitionId: typeof req.body?.definitionId === "string" ? req.body.definitionId : undefined,
+    dedupeKey: typeof req.body?.sourceKey === "string" ? req.body.sourceKey : undefined,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined,
+    model: typeof req.body?.model === "string" ? req.body.model : undefined,
+  });
+  res.status(201).json(run);
 }));
 
 // Manually dispatch a *pending* queue item to a chosen node + agent (the queue
@@ -1903,8 +1964,39 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
 
 app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  await store.completeWorkItem(node.accountId, String(req.params.id));
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id) {
+    return res.status(409).json({ error: "Run is not owned by this node" });
+  }
+  await store.completeWorkItem(node.accountId, id);
+  // Compatibility for older nodes that skip the explicit /running transition.
+  await store.recordRunStart(node.accountId, `automation:${id}`);
   res.json({ ok: true });
+}));
+
+app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id || current.status !== "claimed") {
+    return res.status(409).json({ error: "Run is not claimed by this node" });
+  }
+  const run = await store.transitionAutomationRun(node.accountId, id, "running");
+  await store.recordRunStart(node.accountId, `automation:${id}`);
+  res.json({ ok: true, run });
+}));
+
+app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id) {
+    return res.status(409).json({ error: "Run is not owned by this node" });
+  }
+  const run = await store.transitionAutomationRun(node.accountId, id, "failed");
+  if (!run) return res.status(404).json({ error: "Unknown run" });
+  res.json({ ok: true, run });
 }));
 
 // The node mints a short-lived, node-scoped client grant to link a remote

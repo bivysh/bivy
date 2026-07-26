@@ -33,6 +33,11 @@ import {
   type UsageMetrics,
   type WorkItem,
   type WorkItemInput,
+  type AutomationDefinition,
+  type AutomationRun,
+  type AutomationRunStatus,
+  type AutomationTriggerKind,
+  type TriggerEvent,
   entitlementsForPlan,
   hashToken,
   disambiguateNodeName,
@@ -387,6 +392,56 @@ export class PostgresStore implements MeshStore {
       -- freshly-provisioned ephemeral server rather than an already-running
       -- node (issue #532). Display only; routing is entirely by the label column.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN;
+      -- Automation is the canonical domain. Existing work_items are migrated in
+      -- place so old API clients retain their ids and issue context.
+      CREATE TABLE IF NOT EXISTS automation_definitions (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        template_ciphertext TEXT,
+        runtime_id TEXT,
+        model TEXT,
+        node_label TEXT,
+        ephemeral BOOLEAN,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS trigger_events (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        source_key TEXT,
+        source_ref JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_events_source
+        ON trigger_events(account_id, source_key) WHERE source_key IS NOT NULL;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS definition_id TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS trigger_id TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS trigger_kind TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS target_kind TEXT NOT NULL DEFAULT 'new_session';
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS target_session_id TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS output JSONB;
+      INSERT INTO trigger_events (id, account_id, kind, created_at)
+        SELECT 'legacy:' || id, account_id,
+          CASE WHEN source LIKE 'github:%' THEN 'github'
+               WHEN source = 'slack' THEN 'slack'
+               WHEN source = 'manual' THEN 'manual'
+               ELSE 'webhook' END,
+          created_at
+        FROM work_items
+        WHERE trigger_id IS NULL
+        ON CONFLICT DO NOTHING;
+      UPDATE work_items SET
+        trigger_id = COALESCE(trigger_id, 'legacy:' || id),
+        trigger_kind = COALESCE(trigger_kind,
+          CASE WHEN source LIKE 'github:%' THEN 'github'
+               WHEN source = 'slack' THEN 'slack'
+               WHEN source = 'manual' THEN 'manual'
+               ELSE 'webhook' END),
+        status = CASE WHEN status = 'done' THEN 'succeeded' ELSE status END;
 
       -- One row per distinct run the account has started, keyed by run key (the
       -- session id). Powers the free-tier daily cap: runs today = rows whose
@@ -1304,20 +1359,87 @@ export class PostgresStore implements MeshStore {
   }
 
   async enqueueWorkItem(accountId: string, input: WorkItemInput): Promise<WorkItem> {
+    const run = await this.enqueueAutomationRun(accountId, input);
+    const { rows } = await this.query(`SELECT * FROM work_items WHERE account_id = $1 AND id = $2`, [accountId, run.id]);
+    return mapWorkItem(rows[0]);
+  }
+
+  async createAutomationDefinition(
+    accountId: string,
+    input: Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt">,
+  ): Promise<AutomationDefinition> {
+    const { rows } = await this.query(
+      `INSERT INTO automation_definitions
+      (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
+        input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null],
+    );
+    return mapAutomationDefinition(rows[0]);
+  }
+
+  async listAutomationDefinitions(accountId: string): Promise<AutomationDefinition[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM automation_definitions WHERE account_id = $1 ORDER BY created_at DESC`,
+      [accountId],
+    );
+    return rows.map(mapAutomationDefinition);
+  }
+
+  async listTriggerEvents(accountId: string, limit = 50): Promise<TriggerEvent[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM trigger_events WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [accountId, Math.max(1, Math.min(200, limit))],
+    );
+    return rows.map(mapTriggerEvent);
+  }
+
+  async enqueueAutomationRun(accountId: string, input: WorkItemInput): Promise<AutomationRun> {
     const dedupeKey = input.dedupeKey ?? null;
     const collapseKey = input.collapseKey ?? null;
+    let definition: AutomationDefinition | undefined;
+    if (input.definitionId) {
+      const found = await this.query(
+        `SELECT * FROM automation_definitions WHERE account_id = $1 AND id = $2`,
+        [accountId, input.definitionId],
+      );
+      if (!found.rows[0]) throw Object.assign(new Error("Unknown automation definition"), { status: 404 });
+      definition = mapAutomationDefinition(found.rows[0]);
+    }
+    const triggerKind = triggerKindForSource(input.triggerKind, input.source);
+    const triggerId = `trigger_${randomUUID()}`;
+    const sourceRef = {
+      ...(input.repo ? { repo: input.repo } : {}),
+      ...(input.issueNumber !== undefined ? { issueNumber: input.issueNumber } : {}),
+      ...(input.url ? { url: input.url } : {}),
+    };
+    const trigger = await this.query(
+      `INSERT INTO trigger_events (id, account_id, kind, source_key, source_ref)
+       VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING id`,
+      [triggerId, accountId, triggerKind, dedupeKey, JSON.stringify(sourceRef)],
+    );
+    let canonicalTriggerId = trigger.rows[0]?.id as string | undefined;
+    if (!canonicalTriggerId && dedupeKey) {
+      const existing = await this.query(
+        `SELECT id FROM trigger_events WHERE account_id = $1 AND source_key = $2`,
+        [accountId, dedupeKey],
+      );
+      canonicalTriggerId = existing.rows[0]?.id;
+    }
+    canonicalTriggerId ??= triggerId;
+    const target = input.target ?? { kind: "new_session" as const };
     // Two partial-unique constraints can fire: the per-delivery dedupe key and the
     // per-issue collapse key (only against the still-pending row). ON CONFLICT DO
     // NOTHING covers both; on either conflict we return the existing item.
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
         `work_${randomUUID()}`,
         accountId,
-        normalizeWorkLabel(input.label),
+        normalizeWorkLabel(input.label ?? definition?.nodeLabel),
         input.source,
         input.title,
         input.body ?? null,
@@ -1327,13 +1449,19 @@ export class PostgresStore implements MeshStore {
         dedupeKey,
         collapseKey,
         input.defaultRouted ?? null,
-        input.runtimeId ?? null,
-        input.model ?? null,
+        input.runtimeId ?? definition?.runtimeId ?? null,
+        input.model ?? definition?.model ?? null,
         input.installationId ?? null,
         input.appId ?? null,
+        input.definitionId ?? null,
+        canonicalTriggerId,
+        triggerKind,
+        target.kind,
+        target.kind === "existing_session" ? target.sessionId : null,
+        input.ephemeral ?? definition?.ephemeral ?? null,
       ],
     );
-    if (rows[0]) return mapWorkItem(rows[0]);
+    if (rows[0]) return mapAutomationRun(rows[0]);
     // Conflict: a redelivery (dedupe key) or another delivery for an issue that
     // already has a pending item (collapse key). Return the existing one so the
     // caller stays idempotent and no duplicate lands in the queue.
@@ -1342,13 +1470,49 @@ export class PostgresStore implements MeshStore {
         `SELECT * FROM work_items WHERE account_id = $1 AND dedupe_key = $2 LIMIT 1`,
         [accountId, dedupeKey],
       );
-      if (existing.rows[0]) return mapWorkItem(existing.rows[0]);
+      if (existing.rows[0]) return mapAutomationRun(existing.rows[0]);
     }
     const existingPending = await this.query(
       `SELECT * FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND status = 'pending' LIMIT 1`,
       [accountId, collapseKey],
     );
-    return mapWorkItem(existingPending.rows[0]);
+    return mapAutomationRun(existingPending.rows[0]);
+  }
+
+  async getAutomationRun(accountId: string, id: string): Promise<AutomationRun | undefined> {
+    const { rows } = await this.query(`SELECT * FROM work_items WHERE account_id = $1 AND id = $2`, [accountId, id]);
+    return rows[0] ? mapAutomationRun(rows[0]) : undefined;
+  }
+
+  async listAutomationRuns(accountId: string, limit = 50): Promise<AutomationRun[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM work_items WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [accountId, Math.max(1, Math.min(200, limit))],
+    );
+    return rows.map(mapAutomationRun);
+  }
+
+  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined> {
+    const from: Record<AutomationRunStatus, AutomationRunStatus[]> = {
+      pending: [],
+      claimed: [],
+      running: ["claimed"],
+      needs_attention: ["running"],
+      succeeded: ["running", "needs_attention"],
+      failed: ["running", "needs_attention"],
+      cancelled: ["pending", "claimed", "running", "needs_attention"],
+    };
+    if (from[status].length === 0) return undefined;
+    const terminal = ["succeeded", "failed", "cancelled"].includes(status);
+    const { rows } = await this.query(
+      `UPDATE work_items SET status = $3,
+       started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
+       completed_at = CASE WHEN $4 THEN COALESCE(completed_at, now()) ELSE completed_at END,
+       output = COALESCE($5, output)
+       WHERE account_id = $1 AND id = $2 AND status = ANY($6) RETURNING *`,
+      [accountId, id, status, terminal, output ? JSON.stringify(output) : null, from[status]],
+    );
+    return rows[0] ? mapAutomationRun(rows[0]) : undefined;
   }
 
   async rerouteDefaultRoutedPending(accountId: string, label: string): Promise<WorkItem[]> {
@@ -1440,10 +1604,11 @@ export class PostgresStore implements MeshStore {
   }
 
   async completeWorkItem(accountId: string, id: string): Promise<void> {
-    await this.query(
-      `UPDATE work_items SET status = 'done', completed_at = now() WHERE id = $2 AND account_id = $1`,
-      [accountId, id],
-    );
+    // Older nodes only know claim → complete. Adapt that boundary onto the
+    // canonical lifecycle without preserving a second legacy transition path.
+    const current = await this.getAutomationRun(accountId, id);
+    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running");
+    await this.transitionAutomationRun(accountId, id, "succeeded");
   }
 
   async deleteWorkItem(accountId: string, id: string): Promise<boolean> {
@@ -1507,6 +1672,84 @@ function mapWorkItem(row: any): WorkItem {
     installationId: row.installation_id ?? undefined,
     appId: row.app_id ?? undefined,
     ephemeral: row.ephemeral ?? undefined,
+    definitionId: row.definition_id ?? undefined,
+    triggerId: row.trigger_id ?? undefined,
+    triggerKind: row.trigger_kind ?? undefined,
+    attempt: Number(row.attempt ?? 1),
+    targetKind: row.target_kind ?? "new_session",
+    targetSessionId: row.target_session_id ?? undefined,
+    startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
+    output: row.output ?? undefined,
+  };
+}
+
+function triggerKindForSource(explicit: AutomationTriggerKind | undefined, source: string): AutomationTriggerKind {
+  if (explicit) return explicit;
+  if (source.startsWith("github:")) return "github";
+  if (source === "slack") return "slack";
+  if (source === "manual") return "manual";
+  return "webhook";
+}
+
+function mapAutomationDefinition(row: any): AutomationDefinition {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    name: row.name,
+    templateCiphertext: row.template_ciphertext ?? undefined,
+    runtimeId: row.runtime_id ?? undefined,
+    model: row.model ?? undefined,
+    nodeLabel: row.node_label ?? undefined,
+    ephemeral: row.ephemeral ?? undefined,
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
+function mapTriggerEvent(row: any): TriggerEvent {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    kind: row.kind,
+    sourceKey: row.source_key ?? undefined,
+    sourceRef: row.source_ref ?? undefined,
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+function mapAutomationRun(row: any): AutomationRun {
+  const sourceRef = {
+    ...(row.repo ? { repo: row.repo } : {}),
+    ...(row.issue_number !== null && row.issue_number !== undefined ? { issueNumber: row.issue_number } : {}),
+    ...(row.url ? { url: row.url } : {}),
+  };
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    definitionId: row.definition_id ?? undefined,
+    triggerId: row.trigger_id ?? `legacy:${row.id}`,
+    triggerKind: triggerKindForSource(row.trigger_kind ?? undefined, row.source),
+    status: row.status === "done" ? "succeeded" : row.status,
+    attempt: Number(row.attempt ?? 1),
+    target: row.target_kind === "existing_session"
+      ? { kind: "existing_session", sessionId: row.target_session_id }
+      : { kind: "new_session" },
+    routing: {
+      nodeLabel: row.label,
+      runtimeId: row.runtime_id ?? undefined,
+      model: row.model ?? undefined,
+      ephemeral: row.ephemeral ?? undefined,
+    },
+    output: row.output ?? undefined,
+    title: row.title,
+    body: row.body ?? undefined,
+    source: row.source,
+    sourceRef: Object.keys(sourceRef).length ? sourceRef : undefined,
+    createdAt: new Date(row.created_at).toISOString(),
+    claimedByNodeId: row.claimed_by_node_id ?? undefined,
+    claimedAt: row.claimed_at ? new Date(row.claimed_at).toISOString() : undefined,
+    startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
   };
 }
 
