@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Automations panel: node selector instead of free text, plus an ephemeral
+  fallback toggle** — the generic webhook automations panel's "Default node"
+  field used to be a plain text box you had to type a node's label into
+  correctly, unlike the GitHub App panel's dropdown of known nodes; it's now
+  the same dropdown (falling back to text only when the account has no known
+  nodes yet), for both creating a webhook and editing an existing one's
+  routing. The account-wide "auto-provision an ephemeral server when nothing's
+  online" toggle — previously only visible in GitHub App settings — is also
+  now shown here, since the shared automation-run queue already picks up
+  webhook-triggered work the same way it picks up GitHub work. (#166)
 - **Nodes settings panel: fields grouped into labeled sections** — the panel
   used to list a dozen unrelated fields (node name, default agent/model,
   sandbox mode, GitHub session limit, GitHub issue prompt, session sync) as

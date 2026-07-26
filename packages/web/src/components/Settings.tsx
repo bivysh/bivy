@@ -1097,12 +1097,119 @@ function VoicePanel({ state }: { state: AppState }) {
   );
 }
 
+// Node-label selector shared by the GitHub App "Default node" field and the
+// generic Automations webhook routing default (issue #166): a dropdown of the
+// account's known nodes, exactly like the GitHub issues flow, so a routing
+// default is picked rather than typed blind. Only falls back to free text when
+// the account has no known nodes yet (nothing to pick from).
+function NodeRouteSelect({
+  nodes,
+  value,
+  onChange,
+  disabled,
+}: {
+  nodes: AccountNode[];
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+}) {
+  if (nodes.length === 0) {
+    return (
+      <input
+        className="picker-search"
+        value={value}
+        placeholder="node label, e.g. macbook"
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+  return (
+    <select className="picker-search" value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
+      <option value="">Shared queue (any online node)</option>
+      {nodes.map((n) => (
+        <option key={n.id} value={n.name || n.id}>{n.name || n.id}</option>
+      ))}
+      {value && !nodes.some((n) => (n.name || n.id) === value) && <option value={value}>{value}</option>}
+    </select>
+  );
+}
+
+// Account-level "auto-provision an ephemeral server when nothing's online"
+// preference (issue #532), self-contained so both the GitHub App panel and the
+// generic Automations panel can offer it (issue #166) without each keeping a
+// separate copy of the fetch/save plumbing — it's one account setting either
+// way, and (per the trigger-neutral automation-run queue) already covers
+// webhook-triggered runs alongside GitHub ones once enabled.
+function EphemeralQueueDefaultSection({ hint }: { hint?: string }) {
+  const [ephemeralKeys, setEphemeralKeys] = useState<ProviderKeyInfo[]>([]);
+  const [ephemeralDefault, setEphemeralDefault] = useState<EphemeralQueueDefault | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
+    controller.getEphemeralQueueDefault().then(setEphemeralDefault).catch(() => setEphemeralDefault(null));
+  }, []);
+  const configuredProviders = ephemeralKeys.filter((k) => k.configured);
+  const defaultProviderConfigured = Boolean(
+    ephemeralDefault?.provider && ephemeralKeys.find((k) => k.id === ephemeralDefault.provider)?.configured,
+  );
+  const save = async (patch: Partial<EphemeralQueueDefault>) => {
+    setErr(null);
+    setBusy(true);
+    try {
+      setEphemeralDefault(await controller.setEphemeralQueueDefault(patch));
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <div className="settings-toggle-row">
+        <div className="settings-toggle-text">
+          <span className="settings-toggle-title">Auto-provision when nothing's online</span>
+          <span className="muted small">
+            {hint ||
+              "Spin up a short-lived server from your saved provider token to pick up queued work when nothing persistent is online, then tear it down."}
+          </span>
+        </div>
+        <Toggle
+          checked={Boolean(ephemeralDefault?.enabled)}
+          disabled={busy || configuredProviders.length === 0}
+          onChange={(v) => save({ enabled: v, provider: ephemeralDefault?.provider || configuredProviders[0]?.id })}
+          label="Auto-provision an ephemeral server when nothing's online"
+        />
+      </div>
+      {configuredProviders.length === 0 ? (
+        <p className="muted">Add a Fly.io or Hetzner token in Ephemeral settings to enable this.</p>
+      ) : (
+        ephemeralDefault?.enabled && (
+          <>
+            <select className="picker-search" value={ephemeralDefault.provider ?? ""} onChange={(e) => save({ provider: e.target.value })}>
+              {configuredProviders.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            {!defaultProviderConfigured && (
+              <p className="muted">This device has no saved token for {ephemeralDefault.provider} — add one in Ephemeral settings to actually help out.</p>
+            )}
+            {err && <span className="chip err">{err}</span>}
+          </>
+        )
+      )}
+    </>
+  );
+}
+
 // ---- Generic signed automation webhooks ----
 function AutomationsPanel() {
   const [hooks, setHooks] = useState<AutomationHook[]>([]);
   const [outcomes, setOutcomes] = useState<AutomationOutcome[]>([]);
   const [template, setTemplate] = useState("Follow the incoming instruction in the current workspace.");
   const [route, setRoute] = useState("");
+  const [nodes, setNodes] = useState<AccountNode[]>([]);
   const [revealed, setRevealed] = useState<{ hook: AutomationHook; secret: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1115,7 +1222,15 @@ function AutomationsPanel() {
       setError(e instanceof Error ? e.message : "Could not load automation hooks.");
     }
   };
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    void refresh();
+    controller.listNodes().then(setNodes).catch(() => {});
+  }, []);
+  const updateHookRoute = (hook: AutomationHook, next: string) => {
+    void updateAutomationHook(controller.local, hook.id, { routingDefault: next })
+      .then(refresh)
+      .catch((err) => setError(String(err)));
+  };
   const create = async () => {
     setBusy(true); setError("");
     try {
@@ -1163,9 +1278,15 @@ curl -X POST '${revealed.hook.endpoint}' \\
         <textarea className="field-input" rows={3} value={template} maxLength={2000} onChange={(e) => setTemplate(e.target.value)} />
         <p className="settings-hint">This fixed instruction is prepended to each event. Payloads cannot select commands, runtimes, models, or executable templates.</p>
         <label className="field-label">Default node (optional)</label>
-        <input className="field-input" value={route} maxLength={80} placeholder="macbook" onChange={(e) => setRoute(e.target.value)} />
+        <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
         <button className="btn primary" disabled={busy || !template.trim()} onClick={() => void create()}>Create webhook</button>
       </section>
+      {EPHEMERAL_MACHINES_ENABLED && (
+        <section className="settings-section">
+          <h4 className="settings-subhead">Ephemeral fallback</h4>
+          <EphemeralQueueDefaultSection hint="Spin up a short-lived server from your saved provider token to pick up any queued run — including these webhooks — when nothing persistent is online, then tear it down. One account-wide setting; also shown in GitHub App settings." />
+        </section>
+      )}
       {hooks.map((hook) => (
         <section className="settings-section" key={hook.id}>
           <div className="settings-row">
@@ -1174,6 +1295,8 @@ curl -X POST '${revealed.hook.endpoint}' \\
               void updateAutomationHook(controller.local, hook.id, { enabled: e.target.checked }).then(refresh).catch((err) => setError(String(err)));
             }} /> Enabled</label>
           </div>
+          <label className="field-label">Default node</label>
+          <NodeRouteSelect nodes={nodes} value={hook.routingDefault} onChange={(v) => updateHookRoute(hook, v)} disabled={busy} />
           <p className="settings-hint">Routes to {hook.routingDefault ? `bivy/${hook.routingDefault}` : "the shared bivy queue"}.</p>
           <div className="settings-actions">
             <button className="btn" disabled={busy} onClick={() => void rotate(hook)}>Rotate secret</button>
@@ -1223,13 +1346,6 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   // collapse it behind a button instead of always showing the full form, so
   // the common case (you already have an app) isn't buried under it.
   const [addAppOpen, setAddAppOpen] = useState(false);
-  // Ephemeral-runner default: auto-provision a short-lived server to pick up
-  // queued work when nothing persistent is online. Moved here from the GitHub
-  // Queue panel — it's account-level GitHub-App config, not per-queue state.
-  const [ephemeralKeys, setEphemeralKeys] = useState<ProviderKeyInfo[]>([]);
-  const [ephemeralDefault, setEphemeralDefault] = useState<EphemeralQueueDefault | null>(null);
-  const [ephemeralBusy, setEphemeralBusy] = useState(false);
-  const [ephemeralErr, setEphemeralErr] = useState<string | null>(null);
   const app = state.githubApp;
   const phase = app?.phase ?? "idle";
   // Identity for list keys and per-row busy/error state. Hooks created before
@@ -1315,8 +1431,6 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
     if (!canQuery) return;
     controller.fetchGithubApp().then(setInfo).catch(() => setInfo(null));
     controller.listNodes().then(setNodes).catch(() => {});
-    controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
-    controller.getEphemeralQueueDefault().then(setEphemeralDefault).catch(() => setEphemeralDefault(null));
   };
   useEffect(refresh, []);
   // Re-pull once the create flow reports success, so "connected" appears without
@@ -1334,21 +1448,6 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
 
   // The apps share the same routing copy; show the first one's handle as the example.
   const primaryMention = apps.find((a) => a.mention)?.mention;
-  const configuredProviders = ephemeralKeys.filter((k) => k.configured);
-  const defaultProviderConfigured = Boolean(
-    ephemeralDefault?.provider && ephemeralKeys.find((k) => k.id === ephemeralDefault.provider)?.configured,
-  );
-  const saveEphemeralDefault = async (patch: Partial<EphemeralQueueDefault>) => {
-    setEphemeralErr(null);
-    setEphemeralBusy(true);
-    try {
-      setEphemeralDefault(await controller.setEphemeralQueueDefault(patch));
-    } catch (e) {
-      setEphemeralErr(String((e as Error)?.message || e));
-    } finally {
-      setEphemeralBusy(false);
-    }
-  };
   const saveDefaultNode = async () => {
     setDefaultNodeMsg(null);
     setSavingDefaultNode(true);
@@ -1389,46 +1488,6 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
       setDisconnectingId(null);
     }
   };
-  const renderEphemeral = () => (
-    <>
-      <div className="settings-toggle-row">
-        <div className="settings-toggle-text">
-          <span className="settings-toggle-title">Auto-provision when nothing's online</span>
-          <span className="muted small">
-            Spin up a short-lived server from your saved provider token to pick up queued work when nothing
-            persistent is online, then tear it down.
-          </span>
-        </div>
-        <Toggle
-          checked={Boolean(ephemeralDefault?.enabled)}
-          disabled={ephemeralBusy || configuredProviders.length === 0}
-          onChange={(v) => saveEphemeralDefault({ enabled: v, provider: ephemeralDefault?.provider || configuredProviders[0]?.id })}
-          label="Auto-provision an ephemeral server when nothing's online"
-        />
-      </div>
-      {configuredProviders.length === 0 ? (
-        <p className="muted">Add a Fly.io or Hetzner token in Ephemeral settings to enable this.</p>
-      ) : (
-        ephemeralDefault?.enabled && (
-          <>
-            <select
-              className="picker-search"
-              value={ephemeralDefault.provider ?? ""}
-              onChange={(e) => saveEphemeralDefault({ provider: e.target.value })}
-            >
-              {configuredProviders.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            {!defaultProviderConfigured && (
-              <p className="muted">This device has no saved token for {ephemeralDefault.provider} — add one in Ephemeral settings to actually help out.</p>
-            )}
-            {ephemeralErr && <span className="chip err">{ephemeralErr}</span>}
-          </>
-        )
-      )}
-    </>
-  );
   const renderApp = (entry: GithubAppEntry) => (
     <div className="gh-connected" key={appKey(entry)}>
       <div className="gh-connected-head">
@@ -1607,24 +1666,7 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
               match the label that node serves (its name below, or whatever it was started with via <code>--node-label</code>).
               One setting for the whole account: it applies to every app above.
             </p>
-            {nodes.length > 0 ? (
-              <select className="picker-search" value={defaultNode} onChange={(e) => setDefaultNode(e.target.value)}>
-                <option value="">Shared queue (any online node)</option>
-                {nodes.map((n) => (
-                  <option key={n.id} value={n.name || n.id}>{n.name || n.id}</option>
-                ))}
-                {defaultNode && !nodes.some((n) => (n.name || n.id) === defaultNode) && (
-                  <option value={defaultNode}>{defaultNode}</option>
-                )}
-              </select>
-            ) : (
-              <input
-                className="picker-search"
-                value={defaultNode}
-                placeholder="node label, e.g. macbook"
-                onChange={(e) => setDefaultNode(e.target.value)}
-              />
-            )}
+            <NodeRouteSelect nodes={nodes} value={defaultNode} onChange={setDefaultNode} />
             <div className="row-actions">
               <button className="btn primary" disabled={savingDefaultNode} onClick={saveDefaultNode}>
                 {savingDefaultNode ? "Saving…" : "Save"}
@@ -1646,7 +1688,7 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
           {EPHEMERAL_MACHINES_ENABLED && (
             <section className="settings-section">
               <h4 className="settings-subhead">Ephemeral runner</h4>
-              {renderEphemeral()}
+              <EphemeralQueueDefaultSection />
             </section>
           )}
         </>
