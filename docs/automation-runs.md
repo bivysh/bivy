@@ -27,7 +27,8 @@ runtime, model, and sandbox when it creates the run's session, and applies
 approval mode for the lifetime of that session; an unset value on the
 definition falls back to the node's own configured default. Output is limited
 to references such as session, branch, pull request, artifact, or a failure
-summary.
+summary. Account APIs expose definitions, trigger history, and run history
+separately; the legacy work-item API is a projection of the same run records.
 
 ## Compatibility and migration
 

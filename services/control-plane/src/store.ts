@@ -411,6 +411,7 @@ export type WorkItemInput = {
   repo?: string;
   issueNumber?: number;
   url?: string;
+  externalId?: string;
   // When set, enqueue is idempotent: a second enqueue with the same key for the
   // same account returns the existing item instead of creating a duplicate.
   // Webhook redeliveries reuse their delivery id, so this stops duplicate work.
@@ -471,6 +472,13 @@ export interface InboundHook {
   // so a reinstalled/deleted node no longer shows a false "connected".
   servingNodeId?: string;
   servingNodeSeenAt?: string; // ISO time the serving node last (re)registered
+  // Generic automation configuration. The template is a fixed instruction
+  // prefix selected by the account; payload data is appended as plain text and
+  // can never select a runtime, model, command, or executable template engine.
+  enabled?: boolean;
+  templateInstruction?: string;
+  routingDefault?: string;
+  updatedAt?: string;
 }
 
 // --- Shared normalization helpers --------------------------------------------
@@ -742,10 +750,16 @@ export interface MeshStore {
 
   // Inbound hooks (route a third-party webhook to an account) + work queue.
   createInboundHook(accountId: string, kind: string): Promise<InboundHook>;
+  listInboundHooks(accountId: string, kind?: string): Promise<InboundHook[]>;
   getInboundHook(id: string): Promise<InboundHook | undefined>;
   // Adopt an externally-generated secret (e.g. a GitHub App manifest returns the
   // webhook secret at creation time). Scoped to the owning account.
   setInboundHookSecret(accountId: string, id: string, secret: string): Promise<InboundHook | undefined>;
+  updateInboundHook(
+    accountId: string,
+    id: string,
+    patch: { enabled?: boolean; templateInstruction?: string; routingDefault?: string },
+  ): Promise<InboundHook | undefined>;
   // Register GitHub App display/routing metadata (slug → mention handle, name, and
   // the numeric App ID for the reconnect form's pre-fill).
   setInboundHookAppMeta(
@@ -791,7 +805,10 @@ export interface MeshStore {
   listAutomationDefinitions(accountId: string): Promise<AutomationDefinition[]>;
   listDueAutomationDefinitions(nowIso: string, limit?: number): Promise<AutomationDefinition[]>;
   enqueueScheduledOccurrence(accountId: string, definitionId: string, occurrenceIso: string, nextRunAt?: string): Promise<AutomationRun | undefined>;
+  listTriggerEvents(accountId: string, limit?: number): Promise<TriggerEvent[]>;
   enqueueAutomationRun(accountId: string, input: WorkItemInput): Promise<AutomationRun>;
+  enqueueAutomationRunWithResult(accountId: string, input: WorkItemInput): Promise<{ run: AutomationRun; created: boolean }>;
+  getAutomationRunBySourceKey(accountId: string, sourceKey: string): Promise<AutomationRun | undefined>;
   listAutomationRuns(accountId: string, limit?: number): Promise<AutomationRun[]>;
   getAutomationRun(accountId: string, id: string): Promise<AutomationRun | undefined>;
   transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined>;

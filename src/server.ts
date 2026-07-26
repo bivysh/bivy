@@ -65,6 +65,7 @@ import {
   resolveGitHubTaskConfig,
   buildTaskPrompt,
   buildResumePrompt,
+  buildInteractiveResumePrompt,
   DEFAULT_ISSUE_INSTRUCTIONS,
   parseBivyDirectives,
   commitAll,
@@ -359,7 +360,9 @@ const metadata = MetadataStore.load(appDir);
 // A fresh process has no live runtimes, so any persisted "working" status is
 // stale from a prior crash/kill. Clear it at boot; otherwise those sessions'
 // worktrees are permanently exempted from cleanup (an unbounded disk leak).
-metadata.resetStaleWorking();
+// The ids it returns are exactly the sessions cut off mid-turn by the death —
+// the resume reconciler (reconcileInterruptedSessions) picks them up.
+const interruptedSessionIds = metadata.resetStaleWorking();
 const defaultWorkspace = process.env.BIVY_WORKSPACE ?? repoRoot;
 // Where repo-backed sessions clone GitHub repos (one checkout per repo, reused).
 const reposRoot = process.env.BIVY_REPOS_DIR ?? path.join(appDir, "repos");
@@ -1184,6 +1187,10 @@ type NodeSettings = {
   sessionSync: boolean;
   worktreeSync: boolean;
   syncStandbyNodeId?: string;
+  /** How an interactive session whose turn was cut off by a restart recovers:
+   *  "auto" re-drives the interrupted turn on boot; "manual" leaves it for the
+   *  user to resume with one tap. Issue automation always auto-resumes regardless. */
+  sessionResumeMode: "auto" | "manual";
 };
 
 /** The node's default model for new sessions, or null (= use the runtime default). */
@@ -1192,6 +1199,24 @@ function nodeDefaultModel(): { provider: string; id: string } | null {
   const provider = String(m?.provider ?? "").trim();
   const id = String(m?.id ?? "").trim();
   return provider && id ? { provider, id } : null;
+}
+
+/** The agent GitHub-issue pickups should default to when the issue body carries
+ *  no `bivy-agent:` directive and no manual "Run…" override — i.e. the persisted
+ *  Settings → Nodes → "Default agent" value. Falls back to the boot-time
+ *  `defaultRuntimeId` when never configured. Crucially this reads the persisted
+ *  `settings.defaultAgent` rather than the mutable `defaultRuntimeId` global,
+ *  which the web UI overwrites with the *last used* agent on every
+ *  `runtime.select`. Mirrors `nodeSettingsSnapshot().defaultAgent`. */
+function nodeConfiguredDefaultAgent(): string {
+  const s = readSettings();
+  return typeof s.defaultAgent === "string" && s.defaultAgent.trim() ? s.defaultAgent.trim() : defaultRuntimeId;
+}
+
+/** How interactive sessions recover after a restart interrupted them mid-turn.
+ *  Defaults to "auto" (re-drive the turn); "manual" waits for a user tap. */
+function nodeSessionResumeMode(): "auto" | "manual" {
+  return readSettings().sessionResumeMode === "manual" ? "manual" : "auto";
 }
 
 /** Max concurrent GitHub-queue sessions this node runs at once (0 = unlimited). */
@@ -1224,6 +1249,7 @@ function nodeSettingsSnapshot(): NodeSettings {
       const v = readSettings().syncStandbyNodeId;
       return typeof v === "string" && v.trim() ? v.trim() : undefined;
     })(),
+    sessionResumeMode: nodeSessionResumeMode(),
   };
 }
 
@@ -1273,6 +1299,9 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   if ("syncStandbyNodeId" in patch) {
     const v = typeof patch.syncStandbyNodeId === "string" ? patch.syncStandbyNodeId.trim() : "";
     settings.syncStandbyNodeId = v || undefined;
+  }
+  if ("sessionResumeMode" in patch) {
+    settings.sessionResumeMode = patch.sessionResumeMode === "manual" ? "manual" : "auto";
   }
   writeSettings(settings);
   const snapshot = nodeSettingsSnapshot();
@@ -2661,6 +2690,18 @@ const RELAY_COMMANDS: Record<string, Command> = {
     // A reconnecting/opening client missed the one-shot card broadcast; put
     // any still-pending question/approval back so it can be answered.
     replayPendingInteractions(record.id);
+    // Manual resume mode: a turn this session was running when the node restarted
+    // was left for the user to continue. Offer a one-tap Resume next to the
+    // restored transcript (the marker is cleared once any turn completes).
+    if (metadata.getSession(record.id)?.resumePending) {
+      relay?.sendEvent({
+        type: "session.notice",
+        sessionId: record.id,
+        level: "info",
+        message: "This session was interrupted by a restart before its last turn finished.",
+        action: "/resume",
+      });
+    }
   },
   approval(msg, ctx) {
     const id = String(msg.id ?? "");
@@ -4018,10 +4059,15 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   await announcePickup(cfg, issue.number, identity.name);
 
   const parsed = parseBivyDirectives(issue.body);
-  // Manual "Run…" overrides win over in-body directives; fall back to directives,
-  // then to the node's defaults inside createSession/setModel.
+  // Manual "Run…" overrides win over in-body directives, then the node's
+  // *configured* default agent (Settings → Nodes → "Default agent"). We resolve
+  // the default explicitly here rather than leaving `runtimeId` undefined for
+  // `createSession` to fill in, because that fallback uses the mutable
+  // `defaultRuntimeId` global — which the web UI reassigns to the *last used*
+  // agent on every `runtime.select`. Issue pickups must honor the persisted
+  // default, not whatever agent a human last happened to click.
   const directives = {
-    runtimeId: overrides.runtimeId || parsed.runtimeId,
+    runtimeId: overrides.runtimeId || parsed.runtimeId || nodeConfiguredDefaultAgent(),
     model: overrides.model || parsed.model,
   };
   // `cfg.repoDir` is a long-lived shared clone reused across every pickup on this
@@ -4351,6 +4397,50 @@ async function reconcileOrphanedIssueWork(): Promise<void> {
       });
     } catch (error) {
       console.warn(`[github-tasks] could not recover issue #${issueNumber} automation for session ${meta.id}`, error);
+    }
+  }
+}
+
+/**
+ * On startup, recover any *interactive* session whose turn was cut off mid-flight
+ * by a process death (crash, OOM-kill, unclean restart). `resetStaleWorking()`
+ * captured their ids at boot — a persisted "working" status can only be stale in a
+ * fresh process, and a turn the user stopped or that finished cleanly went through
+ * clearSessionWorking → "idle", so this set is exactly the genuinely-interrupted
+ * turns. Issue-sourced sessions are handled by reconcileOrphanedIssueWork (which
+ * also commits/pushes/reports), so they're skipped here.
+ *
+ * Behaviour follows the node's `sessionResumeMode`:
+ *   - "auto"   → re-drive the interrupted turn now with a generic resume prompt,
+ *                so the agent finishes what it was doing without a human nudge.
+ *   - "manual" → leave a durable `resumePending` marker so opening the session
+ *                offers a one-tap "Resume" instead of silently spending tokens.
+ *
+ * Best-effort and non-blocking: any session it can't resolve is skipped and
+ * logged, never thrown, so one bad row can't block the rest or crash startup.
+ */
+async function reconcileInterruptedSessions(): Promise<void> {
+  if (!interruptedSessionIds.length) return;
+  const mode = nodeSessionResumeMode();
+  for (const id of interruptedSessionIds) {
+    const meta = metadata.getSession(id);
+    if (!meta) continue;
+    // Issue automation resumes via reconcileOrphanedIssueWork (always auto).
+    if (meta.source && meta.source.startsWith("issue:")) continue;
+    if (openSessions.has(id)) continue; // already live this run (a client opened it during boot)
+    if (mode === "manual") {
+      metadata.setResumePending(id, true);
+      continue;
+    }
+    try {
+      console.log(`[resume] auto-resuming interactive session ${id} interrupted by a restart`);
+      const record = await resolveOrResumeSession(id, meta.path);
+      if (!record) continue; // transcript gone / unresolvable — nothing to resume
+      await runSessionTurn(record, buildInteractiveResumePrompt());
+    } catch (error) {
+      // Clear any marker so a persistently-failing session can't loop forever.
+      metadata.setResumePending(id, false);
+      console.warn(`[resume] could not auto-resume session ${id}`, error);
     }
   }
 }
@@ -5825,6 +5915,9 @@ function clearSessionWorking(record: SessionRecord) {
   record.isWorking = false;
   record.lastActivity = undefined;
   record.workingStartedAt = undefined;
+  // A completed turn clears any pending manual-resume offer: the session has now
+  // moved on (whether it was the resume itself or an unrelated new message).
+  metadata.setResumePending(record.id, false);
   persistSessionMetadata(record, sessionStatus(record));
   scheduleAdvertise(); // working → idle transition
 }
@@ -8963,6 +9056,9 @@ const server = app.listen(port, host, async () => {
   // restart interrupted before it could commit/push/open a PR. Never delays
   // startup and never throws (see reconcileOrphanedIssueWork).
   void reconcileOrphanedIssueWork().catch((error) => console.warn("[github-tasks] orphaned-issue reconciliation failed", error));
+  // Recover interactive sessions a restart interrupted mid-turn (auto-continue, or
+  // flag for a one-tap manual Resume) per the node's sessionResumeMode setting.
+  void reconcileInterruptedSessions().catch((error) => console.warn("[resume] interrupted-session reconciliation failed", error));
   // Universal Agent Harness — network effect boundary (opt-in via
   // BIVY_EGRESS_PROXY). Governs/logs outbound traffic of CLI agents, which
   // inherit the proxy env from process.ts.

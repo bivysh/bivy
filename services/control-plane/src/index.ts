@@ -25,6 +25,9 @@ import {
   verifySlackSignature,
   parseSlackCommand,
   applyDefaultNode,
+  verifyAutomationSignature,
+  parseAutomationEvent,
+  renderAutomationInstruction,
 } from "./webhooks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -296,6 +299,7 @@ app.use("/billing/webhook", express.raw({ type: "application/json", limit: "1mb"
 // Inbound third-party webhooks need the RAW body to verify their HMAC signature,
 // so capture it before the JSON parser runs (GitHub sends JSON, Slack sends
 // urlencoded — match any content-type).
+app.use("/webhooks/automation", express.raw({ type: () => true, limit: "64kb" }));
 app.use("/webhooks", express.raw({ type: () => true, limit: "1mb" }));
 app.use(express.json({ limit: "1mb" }));
 // Time every request under its matched route pattern for the /metrics
@@ -1451,6 +1455,98 @@ app.post("/account/hooks", requireUser, asyncHandler(async (req, res) => {
   res.json({ ok: true, id: hook.id, kind, secret: hook.secret, url });
 }));
 
+function publicAutomationHook(req: Request, hook: Awaited<ReturnType<typeof store.getInboundHook>>) {
+  if (!hook) return undefined;
+  return {
+    id: hook.id,
+    endpoint: `${baseUrl(req)}/webhooks/automation/${hook.id}`,
+    enabled: hook.enabled !== false,
+    templateInstruction: hook.templateInstruction || "",
+    routingDefault: hook.routingDefault || "",
+    createdAt: hook.createdAt,
+    updatedAt: hook.updatedAt,
+  };
+}
+
+// Generic automations are managed separately from provider hooks. Secrets are
+// intentionally omitted from list/update responses and disclosed exactly once
+// on create or rotation.
+app.get("/account/automation-hooks", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const hooks = await store.listInboundHooks(account.id, "automation");
+  const work = (await store.listAutomationRuns(account.id, 100))
+    .filter((run) => run.source.startsWith("automation:"))
+    .slice(0, 20)
+    .map((run) => ({
+      id: run.id,
+      hookId: run.source.slice("automation:".length),
+      status: run.status,
+      title: run.title,
+      createdAt: run.createdAt,
+      claimedAt: run.claimedAt,
+      completedAt: run.completedAt,
+    }));
+  res.json({ hooks: hooks.map((hook) => publicAutomationHook(req, hook)), outcomes: work });
+}));
+
+app.post("/account/automation-hooks", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const templateInstruction = String(req.body?.templateInstruction ?? "").trim();
+  const routingDefault = String(req.body?.routingDefault ?? "").trim();
+  if (!templateInstruction || templateInstruction.length > 2_000) {
+    return res.status(400).json({ code: "invalid_request", error: "Template instruction must be 1–2000 characters." });
+  }
+  if (routingDefault && !/^[A-Za-z0-9._-]+$/.test(routingDefault)) {
+    return res.status(400).json({ code: "invalid_request", error: "Routing default contains invalid characters." });
+  }
+  let hook = await store.createInboundHook(account.id, "automation");
+  hook = (await store.updateInboundHook(account.id, hook.id, { templateInstruction, routingDefault })) ?? hook;
+  res.status(201).json({ ...publicAutomationHook(req, hook), secret: hook.secret });
+}));
+
+app.patch("/account/automation-hooks/:id", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const patch: { enabled?: boolean; templateInstruction?: string; routingDefault?: string } = {};
+  if (typeof req.body?.enabled === "boolean") patch.enabled = req.body.enabled;
+  if (typeof req.body?.templateInstruction === "string") {
+    const value = req.body.templateInstruction.trim();
+    if (!value || value.length > 2_000) return res.status(400).json({ code: "invalid_request", error: "Invalid template instruction." });
+    patch.templateInstruction = value;
+  }
+  if (typeof req.body?.routingDefault === "string") {
+    const value = req.body.routingDefault.trim();
+    if (value && !/^[A-Za-z0-9._-]+$/.test(value)) return res.status(400).json({ code: "invalid_request", error: "Invalid routing default." });
+    patch.routingDefault = value;
+  }
+  const hook = await store.updateInboundHook(account.id, String(req.params.id), patch);
+  if (!hook || hook.kind !== "automation") return res.status(404).json({ code: "not_found", error: "Unknown automation hook." });
+  res.json(publicAutomationHook(req, hook));
+}));
+
+app.post("/account/automation-hooks/:id/rotate", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const existing = await store.getInboundHook(String(req.params.id));
+  if (!existing || existing.accountId !== account.id || existing.kind !== "automation") {
+    return res.status(404).json({ code: "not_found", error: "Unknown automation hook." });
+  }
+  const secret = randomBytes(32).toString("base64url");
+  const hook = await store.setInboundHookSecret(account.id, existing.id, secret);
+  res.json({ ...publicAutomationHook(req, hook), secret });
+}));
+
+// Revoke invalidates the secret and leaves a disabled tombstone so callers get
+// the stable `disabled` result rather than an ambiguous 404.
+app.delete("/account/automation-hooks/:id", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const existing = await store.getInboundHook(String(req.params.id));
+  if (!existing || existing.accountId !== account.id || existing.kind !== "automation") {
+    return res.status(404).json({ code: "not_found", error: "Unknown automation hook." });
+  }
+  await store.setInboundHookSecret(account.id, existing.id, randomBytes(32).toString("base64url"));
+  await store.updateInboundHook(account.id, existing.id, { enabled: false });
+  res.json({ ok: true });
+}));
+
 // Node-side setup helper. The CLI only has a node enrollment token after
 // `bivy relay:setup`; let that node create an account-scoped inbound hook so
 // GitHub issue setup can be completed from the machine that will run the work,
@@ -1793,6 +1889,12 @@ app.get("/account/automation-runs", asyncHandler(async (req, res) => {
   res.json(await store.listAutomationRuns(client.accountId, Number(req.query.limit) || 50));
 }));
 
+app.get("/account/automation-triggers", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listTriggerEvents(client.accountId, Number(req.query.limit) || 50));
+}));
+
 app.post("/account/automation-runs", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
@@ -1895,6 +1997,77 @@ app.delete("/account/work-items/:id", asyncHandler(async (req, res) => {
 // `/webhooks/github_app/<id>`. Registering only the `github` path made every
 // GitHub App delivery hit a non-existent route and 404 before reaching this
 // handler — so no app-driven issue/comment ever enqueued.
+const automationRateWindows = new Map<string, { startedAt: number; count: number }>();
+function consumeAutomationRate(key: string, limit: number, now = Date.now()): boolean {
+  const current = automationRateWindows.get(key);
+  if (!current || now - current.startedAt >= 60_000) {
+    automationRateWindows.set(key, { startedAt: now, count: 1 });
+    return true;
+  }
+  current.count += 1;
+  return current.count <= limit;
+}
+
+app.post("/webhooks/automation/:id", asyncHandler(async (req, res) => {
+  const hook = await store.getInboundHook(String(req.params.id));
+  if (!hook || hook.kind !== "automation") return res.status(404).json({ code: "not_found" });
+  if (hook.enabled === false) return res.status(410).json({ code: "disabled" });
+  if (!consumeAutomationRate(`hook:${hook.id}`, 60)) {
+    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
+  }
+  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!verifyAutomationSignature(hook.secret, raw, req.headers["x-bivy-signature-256"] as string | undefined)) {
+    return res.status(401).json({ code: "invalid_signature" });
+  }
+  if (!consumeAutomationRate(`account:${hook.accountId}`, 300)) {
+    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
+  }
+  const idempotencyKey = String(req.headers["x-bivy-idempotency-key"] ?? "").trim();
+  if (!idempotencyKey || idempotencyKey.length > 200 || /[^\x21-\x7e]/.test(idempotencyKey)) {
+    return res.status(400).json({ code: "invalid_request", error: "A valid X-Bivy-Idempotency-Key header is required." });
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw.toString("utf8"));
+  } catch {
+    return res.status(400).json({ code: "invalid_request", error: "Invalid JSON." });
+  }
+  const event = parseAutomationEvent(payload);
+  if (!event || !hook.templateInstruction) {
+    return res.status(400).json({ code: "invalid_request", error: "Event does not match automation schema version 1." });
+  }
+  const dedupeKey = `automation:${hook.id}:${idempotencyKey}`;
+  const replay = await store.getAutomationRunBySourceKey(hook.accountId, dedupeKey);
+  if (replay) return res.status(200).json({ code: "duplicate", id: replay.id });
+  const entitlements = await store.entitlements(hook.accountId);
+  if (!entitlements.workQueueEnabled) return res.status(429).json({ code: "quota_exhausted" });
+  const allowance = await runAllowance(hook.accountId);
+  if (allowance.exhausted) {
+    return res.status(429).json({ code: "quota_exhausted", limit: allowance.limit, used: allowance.used });
+  }
+  const route = event.routing || hook.routingDefault;
+  const label = route ? `bivy/${route}` : "bivy";
+  const result = await store.enqueueAutomationRunWithResult(hook.accountId, {
+    label,
+    source: `automation:${hook.id}`,
+    triggerKind: "webhook",
+    title: event.title || event.instruction.slice(0, 200),
+    body: renderAutomationInstruction(hook.templateInstruction, event),
+    url: event.sourceUrl,
+    externalId: event.externalId,
+    dedupeKey,
+    defaultRouted: !route,
+  });
+  if (!result.created) {
+    return res.status(200).json({ code: "duplicate", id: result.run.id });
+  }
+  void notifyRelaysWorkAvailable(hook.accountId, {
+    id: result.run.id,
+    label: result.run.routing.nodeLabel,
+  });
+  res.status(202).json({ code: "accepted", id: result.run.id, label });
+}));
+
 app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(async (req, res) => {
   const hook = await store.getInboundHook(String(req.params.id));
   if (!hook || (hook.kind !== "github" && hook.kind !== "github_app")) return res.status(404).json({ error: "Unknown hook" });
@@ -2426,6 +2599,9 @@ app.post("/internal/node-status", requireRelay, asyncHandler(async (req, res) =>
 
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   const status = (error as { status?: number })?.status ?? 500;
+  if (status === 413 && req.path.startsWith("/webhooks/automation/")) {
+    return res.status(413).json({ code: "payload_too_large" });
+  }
   const message = String(error instanceof Error ? error.message : error);
   // Deliberate client errors (4xx) carry an explicit status and a message meant
   // for the caller (e.g. "Node limit reached"). Anything else is an unexpected

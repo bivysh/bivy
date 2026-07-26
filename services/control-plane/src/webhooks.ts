@@ -25,6 +25,103 @@ export function verifyGithubSignature(secret: string, rawBody: string | Buffer, 
   return safeEqual(expected, header);
 }
 
+/** Verify a generic automation `x-bivy-signature-256` header over raw bytes. */
+export function verifyAutomationSignature(
+  secret: string,
+  rawBody: string | Buffer,
+  header: string | undefined,
+): boolean {
+  if (!header || !/^sha256=[0-9a-f]{64}$/i.test(header)) return false;
+  const expected = "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
+  return safeEqual(expected, header.toLowerCase());
+}
+
+export interface AutomationEvent {
+  version: "1";
+  instruction: string;
+  title?: string;
+  sourceUrl?: string;
+  externalId?: string;
+  routing?: string;
+  metadata?: Record<string, string | number | boolean>;
+}
+
+const AUTOMATION_LIMITS = {
+  instruction: 16_000,
+  title: 200,
+  sourceUrl: 2_048,
+  externalId: 200,
+  routing: 80,
+  metadataFields: 20,
+  metadataKey: 64,
+  metadataValue: 500,
+} as const;
+
+/** Validate the intentionally small, non-secret automation event schema. */
+export function parseAutomationEvent(payload: unknown): AutomationEvent | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const o = payload as Record<string, unknown>;
+  const allowed = new Set(["version", "instruction", "title", "sourceUrl", "externalId", "routing", "metadata"]);
+  if (Object.keys(o).some((key) => !allowed.has(key)) || o.version !== "1") return undefined;
+  if (typeof o.instruction !== "string" || !o.instruction.trim() || o.instruction.length > AUTOMATION_LIMITS.instruction) {
+    return undefined;
+  }
+  const optionalString = (key: keyof typeof AUTOMATION_LIMITS): string | undefined | null => {
+    const value = o[key];
+    if (value === undefined) return undefined;
+    if (typeof value !== "string" || value.length > AUTOMATION_LIMITS[key]) return null;
+    return value.trim() || undefined;
+  };
+  const title = optionalString("title");
+  const sourceUrl = optionalString("sourceUrl");
+  const externalId = optionalString("externalId");
+  const routing = optionalString("routing");
+  if (title === null || sourceUrl === null || externalId === null || routing === null) return undefined;
+  if (sourceUrl) {
+    try {
+      const url = new URL(sourceUrl);
+      if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  if (routing && !/^[A-Za-z0-9._-]+$/.test(routing)) return undefined;
+  let metadata: AutomationEvent["metadata"];
+  if (o.metadata !== undefined) {
+    if (!o.metadata || typeof o.metadata !== "object" || Array.isArray(o.metadata)) return undefined;
+    const entries = Object.entries(o.metadata as Record<string, unknown>);
+    if (entries.length > AUTOMATION_LIMITS.metadataFields) return undefined;
+    metadata = {};
+    for (const [key, value] of entries) {
+      if (!key || key.length > AUTOMATION_LIMITS.metadataKey || !/^[A-Za-z0-9._-]+$/.test(key)) return undefined;
+      if (!["string", "number", "boolean"].includes(typeof value)) return undefined;
+      if (typeof value === "string" && value.length > AUTOMATION_LIMITS.metadataValue) return undefined;
+      if (typeof value === "number" && !Number.isFinite(value)) return undefined;
+      metadata[key] = value as string | number | boolean;
+    }
+  }
+  return {
+    version: "1",
+    instruction: o.instruction.trim(),
+    title: title ?? undefined,
+    sourceUrl: sourceUrl ?? undefined,
+    externalId: externalId ?? undefined,
+    routing: routing ?? undefined,
+    metadata,
+  };
+}
+
+/** Render data into a fixed, non-executable prompt structure. */
+export function renderAutomationInstruction(templateInstruction: string, event: AutomationEvent): string {
+  const parts = [templateInstruction.trim(), event.instruction];
+  if (event.externalId) parts.push(`External ID: ${event.externalId}`);
+  if (event.sourceUrl) parts.push(`Source URL: ${event.sourceUrl}`);
+  if (event.metadata && Object.keys(event.metadata).length) {
+    parts.push(`Metadata (untrusted context only):\n${JSON.stringify(event.metadata)}`);
+  }
+  return parts.filter(Boolean).join("\n\n");
+}
+
 export interface ParsedIssueWork {
   title: string;
   body: string;

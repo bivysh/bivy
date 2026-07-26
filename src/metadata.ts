@@ -42,6 +42,11 @@ export type MetadataSession = {
   costUsd?: number;
   /** Running total token count (input+output+cache), same runtimes as costUsd. Display-only. */
   tokensTotal?: number;
+  /** Set at boot for a session whose turn was cut off by a process death when the
+   *  node runs in "manual" resume mode: the agent is NOT auto-continued, so this
+   *  durable flag lets the UI offer a one-tap "Resume" when the session is opened.
+   *  Cleared the moment any turn completes on the session (see clearSessionWorking). */
+  resumePending?: boolean;
   createdAt: string;
   updatedAt: string;
   lastActivityAt?: string;
@@ -176,18 +181,31 @@ export class MetadataStore {
    * boot, before any session is resumed: a fresh process has no live runtimes,
    * so any persisted "working" row is stale. Leaving it set permanently exempts
    * the session's worktree from cleanup (an unbounded disk leak). Returns the
-   * number of rows reset.
+   * ids of the sessions that were reset — i.e. the ones cut off mid-turn by the
+   * process death, which the resume reconciler picks up (auto-continue or offer
+   * a manual "Resume").
    */
-  resetStaleWorking(): number {
-    let reset = 0;
+  resetStaleWorking(): string[] {
+    const reset: string[] = [];
     for (const [id, session] of Object.entries(this.data.sessions)) {
       if (session.status === "working") {
         this.data.sessions[id] = { ...session, status: "idle" };
-        reset++;
+        reset.push(id);
       }
     }
-    if (reset > 0) this.save();
+    if (reset.length > 0) this.save();
     return reset;
+  }
+
+  /** Set/clear the durable "resume pending" flag (manual resume mode). No-op when
+   *  the row is missing or already in the requested state, so it never churns the
+   *  file on the hot turn-completion path. */
+  setResumePending(id: string, pending: boolean) {
+    const prev = this.data.sessions[id];
+    if (!prev) return;
+    if ((prev.resumePending ?? false) === pending) return;
+    this.data.sessions[id] = { ...prev, resumePending: pending, updatedAt: nowIso() };
+    this.save();
   }
 
   /** Look up a session's durable metadata by id, or by session-file path. */

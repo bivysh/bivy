@@ -37,6 +37,7 @@ import {
   type AutomationRun,
   type AutomationRunStatus,
   type AutomationTriggerKind,
+  type TriggerEvent,
   entitlementsForPlan,
   hashToken,
   disambiguateNodeName,
@@ -351,6 +352,12 @@ export class PostgresStore implements MeshStore {
       -- stale "connected" after a node delete/reinstall.
       ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS serving_node_id      TEXT;
       ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS serving_node_seen_at TIMESTAMPTZ;
+      -- Generic automation hooks use a deliberately non-executable template:
+      -- a fixed instruction prefix plus the event instruction as plain text.
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true;
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS template_instruction TEXT;
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS routing_default TEXT;
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
       CREATE TABLE IF NOT EXISTS work_items (
         id                 TEXT PRIMARY KEY,
@@ -1254,6 +1261,16 @@ export class PostgresStore implements MeshStore {
     return mapHook(rows[0]);
   }
 
+  async listInboundHooks(accountId: string, kind?: string): Promise<InboundHook[]> {
+    const { rows } = kind
+      ? await this.query(
+          `SELECT * FROM inbound_hooks WHERE account_id = $1 AND kind = $2 ORDER BY created_at DESC`,
+          [accountId, kind],
+        )
+      : await this.query(`SELECT * FROM inbound_hooks WHERE account_id = $1 ORDER BY created_at DESC`, [accountId]);
+    return rows.map(mapHook);
+  }
+
   async getInboundHook(id: string): Promise<InboundHook | undefined> {
     const { rows } = await this.query(`SELECT * FROM inbound_hooks WHERE id = $1`, [id]);
     return rows[0] ? mapHook(rows[0]) : undefined;
@@ -1261,8 +1278,34 @@ export class PostgresStore implements MeshStore {
 
   async setInboundHookSecret(accountId: string, id: string, secret: string): Promise<InboundHook | undefined> {
     const { rows } = await this.query(
-      `UPDATE inbound_hooks SET secret = $3 WHERE id = $2 AND account_id = $1 RETURNING *`,
+      `UPDATE inbound_hooks SET secret = $3, updated_at = now() WHERE id = $2 AND account_id = $1 RETURNING *`,
       [accountId, id, secret],
+    );
+    return rows[0] ? mapHook(rows[0]) : undefined;
+  }
+
+  async updateInboundHook(
+    accountId: string,
+    id: string,
+    patch: { enabled?: boolean; templateInstruction?: string; routingDefault?: string },
+  ): Promise<InboundHook | undefined> {
+    const { rows } = await this.query(
+      `UPDATE inbound_hooks
+       SET enabled = CASE WHEN $3 THEN $4 ELSE enabled END,
+           template_instruction = CASE WHEN $5 THEN $6 ELSE template_instruction END,
+           routing_default = CASE WHEN $7 THEN $8 ELSE routing_default END,
+           updated_at = now()
+       WHERE id = $2 AND account_id = $1 RETURNING *`,
+      [
+        accountId,
+        id,
+        patch.enabled !== undefined,
+        patch.enabled ?? null,
+        patch.templateInstruction !== undefined,
+        patch.templateInstruction?.trim() || null,
+        patch.routingDefault !== undefined,
+        patch.routingDefault?.trim() || null,
+      ],
     );
     return rows[0] ? mapHook(rows[0]) : undefined;
   }
@@ -1488,7 +1531,33 @@ export class PostgresStore implements MeshStore {
     return (rowCount ?? 0) > 0 ? run : undefined;
   }
 
+  async listTriggerEvents(accountId: string, limit = 50): Promise<TriggerEvent[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM trigger_events WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [accountId, Math.max(1, Math.min(200, limit))],
+    );
+    return rows.map(mapTriggerEvent);
+  }
+
+  async getAutomationRunBySourceKey(accountId: string, sourceKey: string): Promise<AutomationRun | undefined> {
+    const { rows } = await this.query(
+      `SELECT w.* FROM work_items w
+       JOIN trigger_events t ON t.id = w.trigger_id
+       WHERE w.account_id = $1 AND t.account_id = $1 AND t.source_key = $2
+       LIMIT 1`,
+      [accountId, sourceKey],
+    );
+    return rows[0] ? mapAutomationRun(rows[0]) : undefined;
+  }
+
   async enqueueAutomationRun(accountId: string, input: WorkItemInput): Promise<AutomationRun> {
+    return (await this.enqueueAutomationRunWithResult(accountId, input)).run;
+  }
+
+  async enqueueAutomationRunWithResult(
+    accountId: string,
+    input: WorkItemInput,
+  ): Promise<{ run: AutomationRun; created: boolean }> {
     const dedupeKey = input.dedupeKey ?? null;
     const collapseKey = input.collapseKey ?? null;
     let definition: AutomationDefinition | undefined;
@@ -1506,6 +1575,7 @@ export class PostgresStore implements MeshStore {
       ...(input.repo ? { repo: input.repo } : {}),
       ...(input.issueNumber !== undefined ? { issueNumber: input.issueNumber } : {}),
       ...(input.url ? { url: input.url } : {}),
+      ...(input.externalId ? { externalId: input.externalId } : {}),
     };
     const trigger = await this.query(
       `INSERT INTO trigger_events (id, account_id, kind, source_key, source_ref)
@@ -1557,7 +1627,7 @@ export class PostgresStore implements MeshStore {
         input.sandbox ?? definition?.sandbox ?? null,
       ],
     );
-    if (rows[0]) return mapAutomationRun(rows[0]);
+    if (rows[0]) return { run: mapAutomationRun(rows[0]), created: true };
     // Conflict: a redelivery (dedupe key) or another delivery for an issue that
     // already has a pending item (collapse key). Return the existing one so the
     // caller stays idempotent and no duplicate lands in the queue.
@@ -1566,13 +1636,13 @@ export class PostgresStore implements MeshStore {
         `SELECT * FROM work_items WHERE account_id = $1 AND dedupe_key = $2 LIMIT 1`,
         [accountId, dedupeKey],
       );
-      if (existing.rows[0]) return mapAutomationRun(existing.rows[0]);
+      if (existing.rows[0]) return { run: mapAutomationRun(existing.rows[0]), created: false };
     }
     const existingPending = await this.query(
       `SELECT * FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND status = 'pending' LIMIT 1`,
       [accountId, collapseKey],
     );
-    return mapAutomationRun(existingPending.rows[0]);
+    return { run: mapAutomationRun(existingPending.rows[0]), created: false };
   }
 
   async getAutomationRun(accountId: string, id: string): Promise<AutomationRun | undefined> {
@@ -1744,6 +1814,10 @@ function mapHook(row: any): InboundHook {
     defaultNode: row.default_node ?? undefined,
     servingNodeId: row.serving_node_id ?? undefined,
     servingNodeSeenAt: row.serving_node_seen_at ? new Date(row.serving_node_seen_at).toISOString() : undefined,
+    enabled: row.enabled ?? true,
+    templateInstruction: row.template_instruction ?? undefined,
+    routingDefault: row.routing_default ?? undefined,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
   };
 }
 
@@ -1810,6 +1884,17 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     lastScheduledAt: row.last_scheduled_at ? new Date(row.last_scheduled_at).toISOString() : undefined,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
+function mapTriggerEvent(row: any): TriggerEvent {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    kind: row.kind,
+    sourceKey: row.source_key ?? undefined,
+    sourceRef: row.source_ref ?? undefined,
+    createdAt: new Date(row.created_at).toISOString(),
   };
 }
 
