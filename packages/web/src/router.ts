@@ -27,6 +27,7 @@ export type SettingsView =
   | "voice"
   | "github"
   | "queue"
+  | "automations"
   | "nodes"
   | "ephemeral"
   | "account"
@@ -40,6 +41,7 @@ const SETTINGS_VIEWS: readonly SettingsView[] = [
   "voice",
   "github",
   "queue",
+  "automations",
   "nodes",
   "ephemeral",
   "account",

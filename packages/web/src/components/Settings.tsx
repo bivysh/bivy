@@ -9,6 +9,7 @@ import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
+import { AutomationsPanel } from "./Automations.js";
 import { StatsPanel } from "./StatsPanel.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
@@ -140,6 +141,7 @@ const TITLES: Record<View, string> = {
   voice: "Voice input",
   github: "GitHub App",
   queue: "GitHub Queue",
+  automations: "Automations",
   nodes: "Nodes",
   ephemeral: "Ephemeral machines",
   account: "Account & billing",
@@ -215,6 +217,7 @@ export function Settings({
       items: [
         { id: "github", label: "GitHub App", icon: <IconGithub /> },
         { id: "queue", label: "GitHub Queue", icon: <IconQueue /> },
+        { id: "automations", label: "Automations", icon: <IconBolt /> },
       ],
     },
     {
@@ -316,6 +319,7 @@ export function Settings({
                 onOpenGithubSettings={() => onViewChange("github")}
               />
             )}
+            {activeView === "automations" && <AutomationsPanel state={state} />}
             {activeView === "nodes" && <NodesPanel state={state} />}
             {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
             {activeView === "account" && <AccountPanel />}

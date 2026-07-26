@@ -4472,6 +4472,17 @@ async function resolveTokenForRepo(owner: string, repo: string): Promise<string 
 }
 
 async function runWorkItem(item: ControlPlaneWorkItem) {
+  if ((item.source === "schedule" || item.source === "manual") && item.body?.startsWith("bivy-room-v1:")) {
+    const [, nodeId, ...payload] = item.body.split(":");
+    if (nodeId !== identity.nodeId || payload.length === 0) {
+      throw new Error("scheduled instructions were encrypted for a different node");
+    }
+    try {
+      item = { ...item, body: open(pairingStore.roomKey(), payload.join(":")) };
+    } catch {
+      throw new Error("could not decrypt scheduled instructions on this node");
+    }
+  }
   // A labelled issue ("github:issue") and an @-mention comment ("github:comment")
   // both run the same way: clone, work on a branch, open a PR, comment back. For
   // a comment the instruction is item.body (bivy-agent:/bivy-model: directives in
@@ -4502,7 +4513,15 @@ async function runWorkItem(item: ControlPlaneWorkItem) {
   }
   // Generic prompt (Slack, or an issue with no repo): a background session in the
   // default workspace so it doesn't steal the user's focused session.
-  const record = await createSession(defaultWorkspace, undefined, { makeActive: false, source: `queue:${item.source}` });
+  const record = await createSession(defaultWorkspace, undefined, {
+    makeActive: false,
+    source: `queue:${item.source}`,
+    runtimeId: item.runtimeId,
+    sandbox: normalizeSandboxTier(item.sandbox),
+  });
+  if (item.model) {
+    try { await record.session.setModel("", item.model); } catch {}
+  }
   await record.session.prompt(item.body ? `${item.title}\n\n${item.body}` : item.title);
 }
 

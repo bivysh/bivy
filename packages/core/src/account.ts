@@ -460,6 +460,95 @@ export interface GithubQueueItem {
   startedAt?: string;
 }
 
+export type AutomationSchedule =
+  | { kind: "once"; at: string }
+  | { kind: "cron"; expression: string; timezone: string };
+
+export interface AccountAutomation {
+  id: string;
+  name: string;
+  templateCiphertext?: string;
+  runtimeId?: string;
+  model?: string;
+  nodeLabel?: string;
+  approvalMode?: "ask" | "autonomous" | "never";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  enabled: boolean;
+  schedule: AutomationSchedule;
+  nextRunAt?: string;
+  lastScheduledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AccountAutomationRun {
+  id: string;
+  definitionId?: string;
+  triggerKind: string;
+  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled";
+  title: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+}
+
+async function automationRequest<T>(
+  store: LocalStore,
+  path: string,
+  init: RequestInit = {},
+  fetchImpl: typeof fetch = fetch,
+): Promise<T> {
+  const res = await fetchImpl(`${cpBase(store)}${path}`, {
+    ...init,
+    headers: authHeaders(store),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `automation request failed: ${res.status}`);
+  return data as T;
+}
+
+export function fetchAutomations(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AccountAutomation[]> {
+  return automationRequest(store, "/account/automations", {}, fetchImpl);
+}
+
+export function createAutomation(
+  store: LocalStore,
+  input: Omit<AccountAutomation, "id" | "createdAt" | "updatedAt" | "lastScheduledAt">,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomation> {
+  return automationRequest(store, "/account/automations", { method: "POST", body: JSON.stringify(input) }, fetchImpl);
+}
+
+export function updateAutomation(
+  store: LocalStore,
+  id: string,
+  patch: Partial<AccountAutomation>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomation> {
+  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }, fetchImpl);
+}
+
+export async function deleteAutomation(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automations/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: authHeaders(store),
+  });
+  if (!res.ok) throw new Error(`delete automation failed: ${res.status}`);
+}
+
+export function runAutomationNow(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<AccountAutomationRun> {
+  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/run`, { method: "POST" }, fetchImpl);
+}
+
+export function fetchAutomationRuns(
+  store: LocalStore,
+  limit = 50,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun[]> {
+  return automationRequest(store, `/account/automation-runs?limit=${encodeURIComponent(String(limit))}`, {}, fetchImpl);
+}
+
 /** Recent incoming work items for the account, newest first (queue UI). */
 export async function fetchGithubQueue(store: LocalStore, limit = 30, fetchImpl: typeof fetch = fetch): Promise<GithubQueueItem[]> {
   const res = await fetchImpl(`${cpBase(store)}/account/work-items?limit=${encodeURIComponent(String(limit))}`, {
