@@ -29,7 +29,7 @@ export const EXECUTION_POLICY_VERSION = 1;
  *  browser bundle. Keep the vocabulary in sync with that file. */
 export type SandboxTier = "read-only" | "workspace-write" | "danger-full-access";
 
-/** Mirrors `ApprovalMode` in src/approval.ts — see note on SandboxTier above. */
+/** Mirrors `ApprovalMode` in src/guard.ts — see note on SandboxTier above. */
 export type ApprovalMode = "never" | "risky" | "always" | "autonomous";
 
 const SANDBOX_TIERS: SandboxTier[] = ["read-only", "workspace-write", "danger-full-access"];

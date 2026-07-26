@@ -94,7 +94,11 @@ For GitHub issue work, Bivy currently stores:
 - issue title/body used to prompt the agent;
 - routing label, for example `bivy` or `bivy/macbook`;
 - queue status: pending, claimed, done;
-- claim/completion timestamps and node id.
+- claim/completion timestamps and node id;
+- if the node has an execution policy configured (see below): the run's
+  outcome (`succeeded` / `failed` / `needs_attention`) and bounded/sanitized
+  policy evidence — check identifiers, exit codes, durations, and short
+  redacted output summaries.
 
 Bivy does **not** store repository files, diffs, terminal output, model transcripts, model API keys, or GitHub access tokens for the node.
 
@@ -180,6 +184,50 @@ web app. Once set, anything that would have routed to the bare `bivy` queue is
 rewritten to `bivy/<default node>` before it's enqueued — an explicit
 `bivy/<node>` label or `on <node>` directive on the issue/comment still always
 wins over the default.
+
+## Execution policy
+
+By default a picked-up issue runs with whatever runtime, model, sandbox tier,
+and approval mode the node is already configured with — the behavior described
+above. On top of that, a node can declare an **execution policy** — a
+versioned, declarative contract the node itself enforces on every
+GitHub-triggered run:
+
+- **Allowed runtimes and models** — reject a run outside an allowlist, including
+  after runtime-host fallback (the resolved runtime is what's checked, never
+  just what was requested).
+- **Sandbox-tier and approval-mode floor** — the strictest setting a run may
+  launch at; a run can request something looser, but the node always clamps it
+  up to the floor. Nothing inside a running session can relax this.
+- **Maximum duration**, **allowed repositories/branches** (glob-capable), and
+  whether **network** or **MCP** access is allowed.
+- **Required checks** — non-interactive validation commands (e.g. `npm test`,
+  `npm run lint`) the node runs itself, with a timeout and bounded/redacted
+  output, before a run can be reported as successful.
+- **Clean commit / pull request required** — whether the run must leave a clean
+  worktree and/or open a real, API-verified pull request to count as success.
+- **Changed-file allow/deny globs** — restrict which paths a run is allowed to
+  touch.
+
+Configure this from **Settings → Nodes → Execution policy**, which edits the
+policy as JSON and shows a live preview of the *effective* (validated,
+defaulted) policy before you save. An empty/unset policy — every automation
+that existed before this feature — parses to fully permissive defaults, so
+existing setups keep behaving exactly as before; this is the migration story,
+not a one-time upgrade step.
+
+A run whose policy isn't satisfied is never reported as a silent success:
+
+- a forbidden runtime/model, a failed or timed-out required check, or a
+  changed-file glob violation makes the run **failed**;
+- a missing clean commit or a missing verified pull request when the policy
+  requires one makes the run **needs_attention** — recoverable, but still
+  never a plain success.
+
+The control plane only ever routes and stores this outcome plus a bounded,
+sanitized summary of each check (id, exit code, duration, a short redacted
+tail of output) — never raw command output, diffs, or file contents. The node
+remains the sole authority that decides and enforces the policy.
 
 ## Failure behavior
 
