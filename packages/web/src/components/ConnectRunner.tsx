@@ -1,22 +1,29 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
+import type { AccountNode } from "@bivy/core";
 import { writeClipboard } from "../clipboard.js";
 
 const INSTALL_CMD = "curl -fsSL https://bivy.sh/install.sh | bash";
 
 /**
- * The "no runner connected" onboarding screen shown on a fresh session before
- * any machine has paired. Presents the two ways to get a runner online — install
- * on your own machine, or (when enabled) spin up an ephemeral cloud server — as
- * two self-contained option cards, with a live "waiting to connect" indicator.
+ * The "no runner connected" onboarding screen shown on a fresh session before a
+ * node is selected. Presents the two ways to get a runner online — install on
+ * your own machine, or (when enabled) spin up an ephemeral cloud server — plus,
+ * when the account already has enrolled nodes, a list of them: picking one opens
+ * a new session on that node. A live "waiting to connect" indicator sits at the
+ * bottom.
  */
 export function ConnectRunner({
+  nodes,
   ephemeralEnabled,
+  onPickNode,
   onEphemeral,
   onRefresh,
 }: {
+  nodes: AccountNode[];
   ephemeralEnabled: boolean;
+  onPickNode: (nodeId: string) => void;
   onEphemeral: () => void;
   onRefresh: () => void;
 }) {
@@ -119,9 +126,37 @@ export function ConnectRunner({
         )}
       </div>
 
+      {nodes.length > 0 && (
+        <div className="connect-nodes">
+          <div className="connect-nodes-head">Your nodes</div>
+          <div className="connect-nodes-list">
+            {nodes.map((n) => (
+              <button
+                key={n.id}
+                type="button"
+                className="connect-node"
+                onClick={() => onPickNode(n.id)}
+                title={n.online ? "Start a new session on this node" : "This node is offline — selecting it will try to reconnect"}
+              >
+                <span className={`node-dot${n.online ? " online" : ""}`} aria-hidden />
+                <span className="connect-node-name">{n.name || n.id}</span>
+                <span className={`connect-node-status${n.online ? " is-online" : ""}`}>
+                  {n.online ? "Online" : "Offline"}
+                </span>
+                <svg className="connect-node-caret" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="m9 6 6 6-6 6" />
+                </svg>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="connect-waiting">
         <span className="onboarding-spinner" aria-hidden />
-        <span className="connect-waiting-text">Waiting for a runner to connect…</span>
+        <span className="connect-waiting-text">
+          {nodes.length > 0 ? "Or wait for another runner to connect…" : "Waiting for a runner to connect…"}
+        </span>
         <button type="button" className="connect-refresh" onClick={onRefresh}>
           Refresh now
         </button>
