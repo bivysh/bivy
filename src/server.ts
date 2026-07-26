@@ -1191,6 +1191,18 @@ function nodeDefaultModel(): { provider: string; id: string } | null {
   return provider && id ? { provider, id } : null;
 }
 
+/** The agent GitHub-issue pickups should default to when the issue body carries
+ *  no `bivy-agent:` directive and no manual "Run…" override — i.e. the persisted
+ *  Settings → Nodes → "Default agent" value. Falls back to the boot-time
+ *  `defaultRuntimeId` when never configured. Crucially this reads the persisted
+ *  `settings.defaultAgent` rather than the mutable `defaultRuntimeId` global,
+ *  which the web UI overwrites with the *last used* agent on every
+ *  `runtime.select`. Mirrors `nodeSettingsSnapshot().defaultAgent`. */
+function nodeConfiguredDefaultAgent(): string {
+  const s = readSettings();
+  return typeof s.defaultAgent === "string" && s.defaultAgent.trim() ? s.defaultAgent.trim() : defaultRuntimeId;
+}
+
 /** Max concurrent GitHub-queue sessions this node runs at once (0 = unlimited). */
 function nodeGithubMaxConcurrent(): number {
   const n = Number(readSettings().githubMaxConcurrent);
@@ -4015,10 +4027,15 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   await announcePickup(cfg, issue.number, identity.name);
 
   const parsed = parseBivyDirectives(issue.body);
-  // Manual "Run…" overrides win over in-body directives; fall back to directives,
-  // then to the node's defaults inside createSession/setModel.
+  // Manual "Run…" overrides win over in-body directives, then the node's
+  // *configured* default agent (Settings → Nodes → "Default agent"). We resolve
+  // the default explicitly here rather than leaving `runtimeId` undefined for
+  // `createSession` to fill in, because that fallback uses the mutable
+  // `defaultRuntimeId` global — which the web UI reassigns to the *last used*
+  // agent on every `runtime.select`. Issue pickups must honor the persisted
+  // default, not whatever agent a human last happened to click.
   const directives = {
-    runtimeId: overrides.runtimeId || parsed.runtimeId,
+    runtimeId: overrides.runtimeId || parsed.runtimeId || nodeConfiguredDefaultAgent(),
     model: overrides.model || parsed.model,
   };
   // `cfg.repoDir` is a long-lived shared clone reused across every pickup on this
