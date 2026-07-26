@@ -985,7 +985,8 @@ export class AppController {
           source: s.source || previous?.source,
           branch: s.branch || previous?.branch,
           status: s.status,
-          updatedAt: previous?.updatedAt || s.updatedAt,
+          attention: Array.isArray(s.attention) ? s.attention : previous?.attention,
+          updatedAt: s.updatedAt || previous?.updatedAt,
         };
       }));
       this.store.setSessions(sessions.filter((s) => s.sessionId && s.nodeId));

@@ -27,7 +27,8 @@ async function setup() {
 await test("replace + list round-trips metadata, never plaintext titles", async () => {
   const { store, accountId, nodeId } = await setup();
   await store.replaceNodeSessions(accountId, nodeId, [
-    { sessionId: "s1", status: "working", source: "issue:#12", titleEnc: "OPAQUE_BLOB", branch: "bivy/issue-12" },
+    { sessionId: "s1", status: "working", source: "issue:#12", titleEnc: "OPAQUE_BLOB", branch: "bivy/issue-12",
+      attention: [{ id: "approval-1", kind: "approval", severity: "warning", createdAt: "2026-01-01T00:00:00.000Z" }] },
   ]);
   const list = await store.listAccountSessions(accountId);
   assert.equal(list.length, 1);
@@ -36,6 +37,7 @@ await test("replace + list round-trips metadata, never plaintext titles", async 
   assert.equal(list[0].status, "working");
   assert.equal(list[0].source, "issue:#12");
   assert.equal(list[0].titleEnc, "OPAQUE_BLOB"); // stored verbatim, never decrypted
+  assert.deepEqual(list[0].attention, [{ id: "approval-1", kind: "approval", severity: "warning", createdAt: "2026-01-01T00:00:00.000Z" }]);
   assert.ok(list[0].updatedAt, "stamped with updatedAt");
 });
 

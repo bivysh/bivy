@@ -221,6 +221,7 @@ export class PostgresStore implements MeshStore {
       -- up. Routing metadata like node_id, not E2E payload. ADD COLUMN IF NOT
       -- EXISTS keeps this a safe, idempotent migration on existing databases.
       ALTER TABLE session_index ADD COLUMN IF NOT EXISTS agent_service_address TEXT;
+      ALTER TABLE session_index ADD COLUMN IF NOT EXISTS attention JSONB;
 
       -- Session replication ownership (docs/session-replication.md). Keyed by
       -- session, NOT node, so it survives the wholesale rewrite of session_index
@@ -863,9 +864,9 @@ export class PostgresStore implements MeshStore {
         await client.query(`DELETE FROM session_index WHERE node_id = $1`, [nodeId]);
         for (const s of sessions) {
           await client.query(
-            `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
-            [nodeId, s.sessionId, accountId, s.status, s.source ?? null, s.titleEnc ?? null, s.branch ?? null, s.agentServiceAddress ?? null],
+            `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, attention, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`,
+            [nodeId, s.sessionId, accountId, s.status, s.source ?? null, s.titleEnc ?? null, s.branch ?? null, s.agentServiceAddress ?? null, JSON.stringify(s.attention ?? [])],
           );
           // Count this run the first time its session is advertised. The session
           // index is rewritten wholesale on every advertise, but run_starts is
@@ -902,6 +903,7 @@ export class PostgresStore implements MeshStore {
       titleEnc: row.title_enc ?? undefined,
       branch: row.branch ?? undefined,
       agentServiceAddress: row.agent_service_address ?? undefined,
+      attention: Array.isArray(row.attention) ? row.attention : undefined,
       updatedAt: new Date(row.updated_at).toISOString(),
     }));
   }
@@ -919,6 +921,7 @@ export class PostgresStore implements MeshStore {
       titleEnc: row.title_enc ?? undefined,
       branch: row.branch ?? undefined,
       agentServiceAddress: row.agent_service_address ?? undefined,
+      attention: Array.isArray(row.attention) ? row.attention : undefined,
       updatedAt: new Date(row.updated_at).toISOString(),
     }));
   }

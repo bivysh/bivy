@@ -50,7 +50,7 @@ function ApprovalCard({
   };
   const badgeText = f.severity === "critical" ? "Permanent" : f.severity === "high" ? "High risk" : f.severity === "medium" ? "Medium risk" : "Low risk";
   return (
-    <div className={`approval-card sev-${f.severity}${pending ? " pending" : ""}`}>
+    <div id={`attention-${encodeURIComponent(approval.id)}`} className={`approval-card sev-${f.severity}${pending ? " pending" : ""}`}>
       <div className="approval-head">
         <span className="approval-title">{f.title}</span>
         <span className={`approval-badge tone-${f.severity}`}>{badgeText}</span>

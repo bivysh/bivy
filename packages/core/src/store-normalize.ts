@@ -208,6 +208,7 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       sandbox: normalizeSandboxTier(s?.sandbox ?? s?.bivySession?.sandbox),
       prUrl: s?.prUrl || undefined,
       prs: normalizePrs(s?.prs, s?.prUrl),
+      attention: Array.isArray(s?.attention) ? s.attention : prevById.get(sessionId)?.attention,
       // The node has no concept of these — carry them over from the row we
       // already had (see the "seen"/"unseen" client-local state doc on
       // SessionSummary.lastSeenAt/finishedAt) so a routine list refresh never

@@ -1065,6 +1065,28 @@ function sessionAdvertsFrom(raw: unknown) {
       source: s.source != null ? String(s.source) : undefined,
       titleEnc: s.titleEnc != null ? String(s.titleEnc) : undefined,
       branch: s.branch != null ? String(s.branch) : undefined,
+      attention: Array.isArray(s.attention)
+        ? s.attention.slice(0, 50).flatMap((rawItem: unknown) => {
+            if (!rawItem || typeof rawItem !== "object") return [];
+            const item = rawItem as Record<string, unknown>;
+            const kind = String(item.kind || "");
+            const severity = String(item.severity || "");
+            const id = String(item.id || "").slice(0, 256);
+            const createdAt = String(item.createdAt || "");
+            if (!id || !["approval", "question", "session", "automation"].includes(kind)
+              || !["info", "warning", "error", "critical"].includes(severity)
+              || !Number.isFinite(Date.parse(createdAt))) return [];
+            return [{
+              id,
+              kind: kind as "approval" | "question" | "session" | "automation",
+              severity: severity as "info" | "warning" | "error" | "critical",
+              createdAt,
+              ...(item.updatedAt && Number.isFinite(Date.parse(String(item.updatedAt)))
+                ? { updatedAt: String(item.updatedAt) }
+                : {}),
+            }];
+          })
+        : undefined,
       // Stage 2 routing metadata (see store.ts SessionIndexEntry). Node-only.
       agentServiceAddress: s.agentServiceAddress != null ? String(s.agentServiceAddress) : undefined,
     }))
@@ -1123,12 +1145,15 @@ app.post("/internal/notifications/hints", requireNode, asyncHandler(async (req, 
   const node = (req as Request & { node: NodeRecord }).node;
   const kind = String(req.body?.kind || req.body?.type || "session");
   const sessionId = String(req.body?.sessionId || "");
+  const attentionId = String(req.body?.attentionId || "");
   const title = String(req.body?.title || (kind === "approval_requested" ? "Approval needed" : kind === "session_done" ? "Session finished" : kind === "session_error" ? "Session hit an error" : kind === "question_asked" ? "Bivy needs your input" : kind === "terminal_bell" ? "Terminal bell" : "Bivy update"));
   const body = String(req.body?.body || (kind === "approval_requested" ? "A session wants to run something — tap to approve or deny." : kind === "session_done" ? "A session finished — tap to review the result." : kind === "session_error" ? "A session failed its last turn — tap to see what went wrong." : kind === "question_asked" ? "A session is asking a question — tap to answer." : kind === "terminal_bell" ? "A terminal rang the bell — it may be waiting for you." : "Open Bivy to continue."));
   // Deep link via the SPA session route (`/sessions/:id`) — the client router
   // matches that path — carrying the owning node as a query param so a click can
   // switch to it before opening. Without a session id we can only open the root.
-  const url = sessionId ? `/sessions/${encodeURIComponent(sessionId)}?node=${encodeURIComponent(node.id)}` : "/";
+  const url = sessionId
+    ? `/sessions/${encodeURIComponent(sessionId)}?node=${encodeURIComponent(node.id)}${attentionId ? `&attention=${encodeURIComponent(attentionId)}` : ""}`
+    : "/";
   const result = await sendPushToAccount(node.accountId, { title, body, kind, nodeId: node.id, sessionId, url });
   res.json({ ok: true, ...result });
 }));
