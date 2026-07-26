@@ -33,6 +33,8 @@ import {
   type UsageMetrics,
   type WorkItem,
   type WorkItemInput,
+  type WorkAttempt,
+  type WorkFailureClass,
   entitlementsForPlan,
   hashToken,
   disambiguateNodeName,
@@ -387,6 +389,37 @@ export class PostgresStore implements MeshStore {
       -- freshly-provisioned ephemeral server rather than an already-running
       -- node (issue #532). Display only; routing is entirely by the label column.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS backoff_base_ms INTEGER NOT NULL DEFAULT 5000;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS backoff_max_ms INTEGER NOT NULL DEFAULT 300000;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS failure_class TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attention_reason TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS last_error TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS retryable_failure_classes JSONB NOT NULL DEFAULT '["transient"]'::jsonb;
+      UPDATE work_items SET status = 'running' WHERE status = 'claimed';
+      UPDATE work_items SET status = 'succeeded' WHERE status = 'done';
+
+      CREATE TABLE IF NOT EXISTS work_attempts (
+        id TEXT PRIMARY KEY,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        attempt_number INTEGER NOT NULL,
+        node_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        lease_expires_at TIMESTAMPTZ NOT NULL,
+        heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        completed_at TIMESTAMPTZ,
+        failure_class TEXT,
+        error TEXT,
+        session_id TEXT,
+        checkpoint_id TEXT,
+        worktree_path TEXT,
+        resumed BOOLEAN NOT NULL DEFAULT false,
+        UNIQUE(work_item_id, attempt_number)
+      );
 
       -- One row per distinct run the account has started, keyed by run key (the
       -- session id). Powers the free-tier daily cap: runs today = rows whose
@@ -408,6 +441,8 @@ export class PostgresStore implements MeshStore {
       CREATE INDEX IF NOT EXISTS idx_push_subscriptions_account ON push_subscriptions(account_id);
       CREATE INDEX IF NOT EXISTS idx_inbound_hooks_account ON inbound_hooks(account_id);
       CREATE INDEX IF NOT EXISTS idx_work_items_pending ON work_items(account_id, status, label);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_work_attempts_active ON work_attempts(work_item_id) WHERE status = 'running';
+      CREATE INDEX IF NOT EXISTS idx_work_attempts_item ON work_attempts(work_item_id, attempt_number);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_dedupe ON work_items(account_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
       -- One PENDING item per (account, collapse_key). The partial predicate on
       -- status='pending' frees the key once the item is claimed/done, so a later
@@ -1310,8 +1345,8 @@ export class PostgresStore implements MeshStore {
     // per-issue collapse key (only against the still-pending row). ON CONFLICT DO
     // NOTHING covers both; on either conflict we return the existing item.
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, max_attempts, backoff_base_ms, backoff_max_ms, retryable_failure_classes)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -1331,6 +1366,10 @@ export class PostgresStore implements MeshStore {
         input.model ?? null,
         input.installationId ?? null,
         input.appId ?? null,
+        Math.max(1, Math.min(20, Math.floor(input.maxAttempts ?? 3))),
+        Math.max(0, Math.floor(input.backoffBaseMs ?? 5000)),
+        Math.max(0, Math.floor(input.backoffMaxMs ?? 300000)),
+        JSON.stringify(input.retryableFailureClasses?.length ? input.retryableFailureClasses : ["transient"]),
       ],
     );
     if (rows[0]) return mapWorkItem(rows[0]);
@@ -1380,12 +1419,25 @@ export class PostgresStore implements MeshStore {
   async listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]> {
     if (labels.length === 0) return [];
     const { rows } = await this.query(
-      `SELECT * FROM work_items
-       WHERE account_id = $1 AND status = 'pending' AND label = ANY($2)
-       ORDER BY created_at ASC`,
+      `SELECT w.* FROM work_items w
+       LEFT JOIN work_attempts a ON a.work_item_id = w.id AND a.status = 'running' AND a.lease_expires_at > now()
+       WHERE w.account_id = $1 AND w.label = ANY($2)
+         AND (w.status = 'pending' OR (w.status = 'running' AND a.id IS NULL))
+         AND (w.next_attempt_at IS NULL OR w.next_attempt_at <= now())
+       ORDER BY w.created_at ASC`,
       [accountId, labels],
     );
-    return rows.map(mapWorkItem);
+    const items = rows.map(mapWorkItem);
+    if (!items.length) return items;
+    const ids = new Set(items.map((item) => item.id));
+    const attempts = await this.query(`SELECT * FROM work_attempts WHERE account_id = $1 ORDER BY attempt_number`, [accountId]);
+    for (const row of attempts.rows) {
+      const attempt = mapWorkAttempt(row);
+      if (!ids.has(attempt.workItemId)) continue;
+      const item = items.find((candidate) => candidate.id === attempt.workItemId)!;
+      (item.attempts ??= []).push(attempt);
+    }
+    return items;
   }
 
   async listWorkItems(accountId: string, limit = 50): Promise<WorkItem[]> {
@@ -1393,17 +1445,133 @@ export class PostgresStore implements MeshStore {
       `SELECT * FROM work_items WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2`,
       [accountId, Math.max(1, Math.min(200, limit))],
     );
-    return rows.map(mapWorkItem);
+    const items = rows.map(mapWorkItem);
+    if (!items.length) return items;
+    const ids = new Set(items.map((item) => item.id));
+    const attempts = await this.query(
+      `SELECT * FROM work_attempts WHERE account_id = $1
+         AND work_item_id IN (SELECT id FROM work_items WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2)
+       ORDER BY attempt_number`,
+      [items[0]!.accountId, Math.max(1, Math.min(200, limit))],
+    );
+    const byItem = new Map<string, WorkAttempt[]>();
+    for (const row of attempts.rows) {
+      const attempt = mapWorkAttempt(row);
+      if (!ids.has(attempt.workItemId)) continue;
+      const list = byItem.get(attempt.workItemId) ?? [];
+      list.push(attempt);
+      byItem.set(attempt.workItemId, list);
+    }
+    for (const item of items) item.attempts = byItem.get(item.id) ?? [];
+    return items;
   }
 
-  async claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
-    // Conditional UPDATE makes the claim atomic: only the row still pending flips.
+  async claimWorkItem(accountId: string, nodeId: string, id: string, leaseMs = 45_000): Promise<{ item: WorkItem; attempt: WorkAttempt } | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const locked = await client.query(`SELECT * FROM work_items WHERE account_id = $1 AND id = $2 FOR UPDATE`, [accountId, id]);
+      const row = locked.rows[0];
+      if (!row || !["pending", "running"].includes(row.status) || (row.next_attempt_at && new Date(row.next_attempt_at).getTime() > Date.now())) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      await client.query(
+        `UPDATE work_attempts SET status = 'expired', completed_at = now(), failure_class = 'transient',
+           error = COALESCE(error, 'Attempt lease expired; worker was interrupted')
+         WHERE work_item_id = $1 AND status = 'running' AND lease_expires_at <= now()`,
+        [id],
+      );
+      const active = await client.query(`SELECT 1 FROM work_attempts WHERE work_item_id = $1 AND status = 'running'`, [id]);
+      const number = Number(row.attempt_count ?? 0) + 1;
+      if (active.rows.length || number > Number(row.max_attempts ?? 3)) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const attemptId = `attempt_${randomUUID()}`;
+      const inserted = await client.query(
+        `INSERT INTO work_attempts (id, work_item_id, account_id, attempt_number, node_id, lease_expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [attemptId, id, accountId, number, nodeId, new Date(Date.now() + Math.max(1, leaseMs)).toISOString()],
+      );
+      const updated = await client.query(
+        `UPDATE work_items SET status = 'running', claimed_by_node_id = $3, claimed_at = now(),
+           next_attempt_at = NULL, completed_at = NULL, attempt_count = $4 WHERE account_id = $1 AND id = $2 RETURNING *`,
+        [accountId, id, nodeId, number],
+      );
+      await client.query("COMMIT");
+      return { item: mapWorkItem(updated.rows[0]), attempt: mapWorkAttempt(inserted.rows[0]) };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async heartbeatWorkAttempt(accountId: string, nodeId: string, id: string, attemptId: string, leaseMs: number, resume: { sessionId?: string; checkpointId?: string; worktreePath?: string; resumed?: boolean } = {}): Promise<WorkAttempt | undefined> {
     const { rows } = await this.query(
-      `UPDATE work_items
-       SET status = 'claimed', claimed_by_node_id = $3, claimed_at = now()
-       WHERE id = $2 AND account_id = $1 AND status = 'pending'
-       RETURNING *`,
-      [accountId, id, nodeId],
+      `UPDATE work_attempts SET heartbeat_at = now(), lease_expires_at = $5,
+         session_id = COALESCE($6, session_id), checkpoint_id = COALESCE($7, checkpoint_id),
+         worktree_path = COALESCE($8, worktree_path), resumed = resumed OR $9
+       WHERE id = $4 AND work_item_id = $3 AND account_id = $1 AND node_id = $2
+         AND status = 'running' AND lease_expires_at > now() RETURNING *`,
+      [accountId, nodeId, id, attemptId, new Date(Date.now() + Math.max(1, leaseMs)).toISOString(), resume.sessionId ?? null, resume.checkpointId ?? null, resume.worktreePath ?? null, Boolean(resume.resumed)],
+    );
+    return rows[0] ? mapWorkAttempt(rows[0]) : undefined;
+  }
+
+  async finishWorkAttempt(accountId: string, nodeId: string, id: string, attemptId: string, result: { status: "succeeded" | "failed" | "needs_attention" | "cancelled"; failureClass?: WorkFailureClass; attentionReason?: "credentials" | "approval" | "merge_conflict" | "policy"; error?: string }): Promise<WorkItem | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const attempt = await client.query(
+        `UPDATE work_attempts SET status = $5, completed_at = now(), failure_class = $6, error = $7
+         WHERE account_id = $1 AND node_id = $2 AND work_item_id = $3 AND id = $4
+           AND status = 'running' AND lease_expires_at > now() RETURNING *`,
+        [accountId, nodeId, id, attemptId, result.status, result.failureClass ?? null, result.error?.slice(0, 2000) ?? null],
+      );
+      if (!attempt.rows[0]) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const itemRow = await client.query(`SELECT * FROM work_items WHERE account_id = $1 AND id = $2 FOR UPDATE`, [accountId, id]);
+      const item = itemRow.rows[0];
+      const retryableClasses = Array.isArray(item.retryable_failure_classes) ? item.retryable_failure_classes : ["transient"];
+      const retryable = result.status === "failed" && Boolean(result.failureClass && retryableClasses.includes(result.failureClass));
+      const canRetry = retryable && Number(attempt.rows[0].attempt_number) < Number(item.max_attempts);
+      const delay = Math.min(Number(item.backoff_max_ms), Number(item.backoff_base_ms) * (2 ** Math.max(0, Number(attempt.rows[0].attempt_number) - 1)));
+      const status = canRetry ? "pending" : result.status;
+      const updated = await client.query(
+        `UPDATE work_items SET status = $3, completed_at = CASE WHEN $3 = 'pending' THEN NULL ELSE now() END,
+           next_attempt_at = CASE WHEN $3 = 'pending' THEN $4::timestamptz ELSE NULL END,
+           failure_class = $5, attention_reason = $6, last_error = $7
+         WHERE account_id = $1 AND id = $2 RETURNING *`,
+        [accountId, id, status, new Date(Date.now() + delay).toISOString(), result.failureClass ?? null, result.attentionReason ?? null, result.error?.slice(0, 2000) ?? null],
+      );
+      await client.query("COMMIT");
+      return mapWorkItem(updated.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async cancelWorkItem(accountId: string, id: string): Promise<WorkItem | undefined> {
+    await this.query(`UPDATE work_attempts SET status = 'cancelled', completed_at = now(), failure_class = 'cancellation' WHERE account_id = $1 AND work_item_id = $2 AND status = 'running'`, [accountId, id]);
+    const { rows } = await this.query(`UPDATE work_items SET status = 'cancelled', completed_at = now(), next_attempt_at = NULL, failure_class = 'cancellation' WHERE account_id = $1 AND id = $2 AND status NOT IN ('succeeded', 'cancelled') RETURNING *`, [accountId, id]);
+    return rows[0] ? mapWorkItem(rows[0]) : undefined;
+  }
+
+  async retryWorkItem(accountId: string, id: string): Promise<WorkItem | undefined> {
+    const { rows } = await this.query(
+      `UPDATE work_items SET status = 'pending', next_attempt_at = now(), completed_at = NULL,
+         max_attempts = GREATEST(max_attempts, (SELECT count(*) + 1 FROM work_attempts WHERE work_item_id = $2)),
+         failure_class = NULL, attention_reason = NULL, last_error = NULL
+       WHERE account_id = $1 AND id = $2 AND status IN ('failed', 'needs_attention', 'cancelled') RETURNING *`,
+      [accountId, id],
     );
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
@@ -1437,13 +1605,6 @@ export class PostgresStore implements MeshStore {
       [beforeIso],
     );
     return rowCount ?? 0;
-  }
-
-  async completeWorkItem(accountId: string, id: string): Promise<void> {
-    await this.query(
-      `UPDATE work_items SET status = 'done', completed_at = now() WHERE id = $2 AND account_id = $1`,
-      [accountId, id],
-    );
   }
 
   async deleteWorkItem(accountId: string, id: string): Promise<boolean> {
@@ -1507,6 +1668,34 @@ function mapWorkItem(row: any): WorkItem {
     installationId: row.installation_id ?? undefined,
     appId: row.app_id ?? undefined,
     ephemeral: row.ephemeral ?? undefined,
+    maxAttempts: Number(row.max_attempts ?? 3),
+    backoffBaseMs: Number(row.backoff_base_ms ?? 5000),
+    backoffMaxMs: Number(row.backoff_max_ms ?? 300000),
+    nextAttemptAt: row.next_attempt_at ? new Date(row.next_attempt_at).toISOString() : undefined,
+    failureClass: row.failure_class ?? undefined,
+    attentionReason: row.attention_reason ?? undefined,
+    lastError: row.last_error ?? undefined,
+    retryableFailureClasses: Array.isArray(row.retryable_failure_classes) ? row.retryable_failure_classes : ["transient"],
+  };
+}
+
+function mapWorkAttempt(row: any): WorkAttempt {
+  return {
+    id: row.id,
+    workItemId: row.work_item_id,
+    number: Number(row.attempt_number),
+    nodeId: row.node_id,
+    status: row.status,
+    leaseExpiresAt: new Date(row.lease_expires_at).toISOString(),
+    heartbeatAt: new Date(row.heartbeat_at).toISOString(),
+    startedAt: new Date(row.started_at).toISOString(),
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
+    failureClass: row.failure_class ?? undefined,
+    error: row.error ?? undefined,
+    sessionId: row.session_id ?? undefined,
+    checkpointId: row.checkpoint_id ?? undefined,
+    worktreePath: row.worktree_path ?? undefined,
+    resumed: Boolean(row.resumed),
   };
 }
 

@@ -20,6 +20,8 @@ import {
   fetchGithubQueue,
   assignWorkItem,
   deleteWorkItem,
+  cancelWorkItem,
+  retryWorkItem,
   clearWorkQueue,
   disconnectGithubApp,
   setGithubAppDefaultNode,
@@ -1684,6 +1686,12 @@ export class AppController {
   /** Remove a single item from the GitHub queue. */
   deleteWorkItem(id: string): Promise<void> {
     return deleteWorkItem(this.local, id);
+  }
+  cancelWorkItem(id: string): Promise<void> {
+    return cancelWorkItem(this.local, id);
+  }
+  retryWorkItem(id: string): Promise<void> {
+    return retryWorkItem(this.local, id);
   }
   /** Clear every pending (waiting) item from the GitHub queue. */
   clearWorkQueue(): Promise<number> {

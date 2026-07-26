@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Durable automation attempts with retry/resume and lease fencing** — a
+  queued automation run is now tracked as a logical run plus an append-only
+  history of leased execution attempts. Attempts carry a heartbeat and lease
+  expiry, so an interrupted worker's stale attempt is fenced (its late
+  completion can never overwrite a takeover) and another worker can safely
+  reclaim the run. Failures are classified (transient transport/node loss,
+  provider quota, provider auth, agent error, task failure, policy denial,
+  cancellation, unknown); only the classes marked retryable are retried
+  automatically, with a bounded exponential backoff, a per-run attempt cap,
+  and a persisted next-attempt timestamp that survives a control-plane
+  restart. Runs that need a person (expired credentials, a required approval,
+  a merge conflict, or a policy denial) surface as `needs_attention` instead
+  of retrying silently, and a push notification goes out on both final
+  failure and `needs_attention`. The queue UI lists every attempt (including
+  whether it resumed a prior session/checkpoint/worktree) and adds Cancel and
+  manual Retry actions. (#150)
+
 - **GitHub App key sync across nodes** — `bivy github:app-sync on` opts a node
   into pulling/pushing a connected GitHub App's private key E2E-encrypted
   through the control plane, so connecting an app on one node makes it usable
