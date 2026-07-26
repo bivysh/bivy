@@ -1737,6 +1737,15 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   if (!schedule) return res.status(400).json({ error: "schedule is required" });
   const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : current.enabled;
   const scheduleChanged = req.body?.schedule !== undefined;
+  // Recompute the occurrence when (re-)enabling or when the schedule changed;
+  // otherwise keep the current occurrence (or clear it while disabled).
+  const recompute = enabled && (scheduleChanged || !current.enabled);
+  const nextRunAt = recompute
+    ? nextOccurrence(schedule, new Date(Date.now() - 1))
+    : enabled ? current.nextRunAt : undefined;
+  // Mirror the create-time guard: an enabled definition whose only occurrence is
+  // in the past would sit enabled but never run.
+  if (recompute && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
   const patch = {
     name: typeof req.body?.name === "string" ? req.body.name.trim() || current.name : current.name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : current.templateCiphertext,
@@ -1747,9 +1756,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : current.sandbox,
     enabled,
     schedule,
-    nextRunAt: enabled && (scheduleChanged || !current.enabled)
-      ? nextOccurrence(schedule, new Date(Date.now() - 1))
-      : enabled ? current.nextRunAt : undefined,
+    nextRunAt,
   };
   res.json(await store.updateAutomationDefinition(client.accountId, current.id, patch));
 }));

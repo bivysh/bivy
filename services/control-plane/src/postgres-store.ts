@@ -441,6 +441,8 @@ export class PostgresStore implements MeshStore {
         FROM work_items
         WHERE trigger_id IS NULL
         ON CONFLICT DO NOTHING;
+      -- Backfill only the rows that still need it. Without this predicate the
+      -- statement rewrites every work_items row on every control-plane start.
       UPDATE work_items SET
         trigger_id = COALESCE(trigger_id, 'legacy:' || id),
         trigger_kind = COALESCE(trigger_kind,
@@ -448,7 +450,8 @@ export class PostgresStore implements MeshStore {
                WHEN source = 'slack' THEN 'slack'
                WHEN source = 'manual' THEN 'manual'
                ELSE 'webhook' END),
-        status = CASE WHEN status = 'done' THEN 'succeeded' ELSE status END;
+        status = CASE WHEN status = 'done' THEN 'succeeded' ELSE status END
+      WHERE trigger_id IS NULL OR trigger_kind IS NULL OR status = 'done';
       CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_occurrence
         ON work_items(account_id, dedupe_key) WHERE dedupe_key LIKE 'schedule:%';
       CREATE INDEX IF NOT EXISTS idx_automation_definitions_due
@@ -1438,16 +1441,18 @@ export class PostgresStore implements MeshStore {
   }
 
   async listDueAutomationDefinitions(nowIso: string, limit = 100): Promise<AutomationDefinition[]> {
+    // Filter and bound in SQL so the partial index idx_automation_definitions_due
+    // is used and the scan is proportional to due rows, not total-enabled rows.
+    // `next_run_at <= $1` already excludes NULLs (NULL comparisons are never
+    // true), so no separate IS NOT NULL is needed.
     const { rows } = await this.query(
       `SELECT * FROM automation_definitions
-       WHERE enabled=true AND next_run_at IS NOT NULL
-       ORDER BY next_run_at ASC`,
+       WHERE enabled=true AND next_run_at <= $1
+       ORDER BY next_run_at ASC
+       LIMIT $2`,
+      [new Date(nowIso), Math.max(1, Math.min(500, limit))],
     );
-    const now = new Date(nowIso).getTime();
-    return rows
-      .map(mapAutomationDefinition)
-      .filter((definition) => definition.nextRunAt && new Date(definition.nextRunAt).getTime() <= now)
-      .slice(0, Math.max(1, Math.min(500, limit)));
+    return rows.map(mapAutomationDefinition);
   }
 
   async enqueueScheduledOccurrence(
@@ -1590,7 +1595,10 @@ export class PostgresStore implements MeshStore {
       running: ["claimed"],
       needs_attention: ["running"],
       succeeded: ["running", "needs_attention"],
-      failed: ["running", "needs_attention"],
+      // Allow failure straight from "claimed": a node can throw before the
+      // best-effort /running transition lands, and the run must still terminate
+      // rather than get stuck claimed.
+      failed: ["claimed", "running", "needs_attention"],
       cancelled: ["pending", "claimed", "running", "needs_attention"],
     };
     if (from[status].length === 0) return undefined;

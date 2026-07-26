@@ -313,6 +313,18 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     });
     assert.equal(slack.triggerKind, "slack");
     assert.equal(redelivery.id, slack.id);
+
+    // A node can throw before its best-effort /running transition lands, so a
+    // failure must terminate a still-"claimed" run rather than get stuck.
+    const stuck = await store.enqueueAutomationRun(acct.id, {
+      source: "manual",
+      triggerKind: "manual",
+      title: "Claimed then threw",
+      dedupeKey: "manual:stuck",
+    });
+    assert.ok(await store.claimWorkItem(acct.id, a.id, stuck.id));
+    assert.equal((await store.getAutomationRun(acct.id, stuck.id))?.status, "claimed");
+    assert.equal((await store.transitionAutomationRun(acct.id, stuck.id, "failed"))?.status, "failed");
   });
 
   await test("work queue: dedupeKey is idempotent per account", async (store) => {
