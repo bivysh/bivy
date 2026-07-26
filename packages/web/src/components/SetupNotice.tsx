@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
-import { isStandaloneDisplay, startGithubDeviceLogin, pollDeviceLogin } from "@bivy/core";
+import { isStandaloneDisplay, startGithubDeviceLogin, startEmailDeviceLogin, pollDeviceLogin, type EmailDeviceLogin } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 
 /**
@@ -9,17 +9,24 @@ import { controller } from "../store/useStore.js";
  * in. Offers GitHub OAuth and email magic-link sign-in. Once signed in, the app
  * shell renders and a node is picked from the header NodeSwitcher.
  *
- * GitHub sign-in uses one of two flows:
- *  - Browser tab: a full-page redirect to /auth/github/start; the callback
+ * Both GitHub and email sign-in use one of two flows, chosen by display mode:
+ *  - Browser tab: GitHub is a full-page redirect to /auth/github/start and email
+ *    is the redirect-based magic link (/auth/magic-link/start); the callback
  *    returns the session token in the URL fragment, captured on boot.
- *  - Installed PWA / home-screen app: a redirect would leave the app's manifest
- *    scope (github.com, then a control-plane URL outside scope), so the browser
- *    hands OAuth to the system browser and the finished session never returns to
- *    the installed window. Instead we open GitHub in a browser tab and poll the
- *    device-login endpoint — the app window stays put and stays connected.
+ *  - Installed PWA / home-screen app: a redirect (or an emailed link) opens in
+ *    the system browser, outside the app's manifest scope, so the finished
+ *    session never returns to the installed window. Instead we start a device
+ *    login (GitHub tab, or an emailed link) and poll the device endpoint — the
+ *    app window stays put and finishes sign-in in place.
  */
 export function SetupNotice() {
   const origin = location.origin;
+  // An installed/home-screen PWA runs in a scoped window; an emailed magic link
+  // opens in the system browser, not this window, so the redirect-based sign-in
+  // would finish in that browser tab and never return here. Detect standalone so
+  // both GitHub and email sign-in fall back to the device-poll flow, which keeps
+  // the app window put and completes in place. See isStandaloneDisplay().
+  const standalone = isStandaloneDisplay();
   const [email, setEmail] = useState("");
   const [note, setNote] = useState<{ text: string; href?: string } | null>(null);
   const [sending, setSending] = useState(false);
@@ -73,7 +80,19 @@ export function SetupNotice() {
   // reused across a second `githubDeviceSignIn()` call, but this ref is reset
   // at the start of each attempt.
   const cancelled = useRef(false);
-  useEffect(() => () => void (cancelled.current = true), []);
+  // Standalone email sign-in polls in the background after the link is sent, for
+  // as long as the link stays valid. Each attempt owns its own cancel token so a
+  // resend cleanly stops the previous poll loop instead of two loops racing on a
+  // single shared flag. `emailWaiting` drives the "waiting for the link" UI.
+  const [emailWaiting, setEmailWaiting] = useState(false);
+  const emailPoll = useRef<{ cancelled: boolean } | null>(null);
+  useEffect(
+    () => () => {
+      cancelled.current = true;
+      if (emailPoll.current) emailPoll.current.cancelled = true;
+    },
+    [],
+  );
 
   function cancelGithubSignIn() {
     cancelled.current = true;
@@ -82,12 +101,70 @@ export function SetupNotice() {
     setAuthorizeUrl(null);
   }
 
+  function cancelEmailSignIn() {
+    if (emailPoll.current) emailPoll.current.cancelled = true;
+    emailPoll.current = null;
+    setEmailWaiting(false);
+    setNote(null);
+    setSentTo(null);
+  }
+
+  // Poll for a standalone email device-login to complete, then finish sign-in in
+  // place (no navigation). Owns its cancel token so a superseding attempt or an
+  // unmount stops exactly this loop.
+  async function pollEmailDeviceLogin(login: EmailDeviceLogin, token: { cancelled: boolean }) {
+    const deadline = Date.now() + login.expiresInMs;
+    try {
+      while (!token.cancelled && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, login.intervalMs));
+        if (token.cancelled) return;
+        const result = await pollDeviceLogin(controller.local, login.deviceId, login.deviceSecret);
+        if (token.cancelled) return;
+        if (result.status === "complete") {
+          controller.completeSignIn(result.token);
+          return;
+        }
+        if (result.status === "expired" || result.status === "error") {
+          throw new Error(result.error || "That sign-in link expired. Please request a new one.");
+        }
+      }
+      if (!token.cancelled) throw new Error("Sign-in timed out. Please request a new link.");
+    } catch (err) {
+      if (!token.cancelled) {
+        setSignInError(err instanceof Error ? err.message : "Sign-in failed.");
+        setEmailWaiting(false);
+      }
+    } finally {
+      if (emailPoll.current === token) emailPoll.current = null;
+    }
+  }
+
   async function requestMagicLink(value: string) {
     if (!value || sending) return;
     setSignInError(null);
     setSending(true);
     setNote({ text: "Sending…" });
     try {
+      // Installed PWA: an emailed link opens in the system browser, not this
+      // window, so use the device flow — send the link, then poll here and finish
+      // in place so the installed window becomes the signed-in app. See
+      // startEmailDeviceLogin / the GitHub device flow below.
+      if (standalone) {
+        // Supersede any previous attempt's poll so a resend doesn't leave two loops.
+        if (emailPoll.current) emailPoll.current.cancelled = true;
+        const login = await startEmailDeviceLogin(controller.local, value);
+        if (login.devLink) {
+          setNote({ text: "Dev link:", href: login.devLink });
+        } else {
+          setNote({ text: `Check your email — we sent a sign-in link to ${value}. Open it on this device and you'll be signed in here automatically.` });
+        }
+        setSentTo(value);
+        setEmailWaiting(true);
+        const token = { cancelled: false };
+        emailPoll.current = token;
+        void pollEmailDeviceLogin(login, token);
+        return;
+      }
       const res = await fetch(`${origin}/auth/magic-link/start`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -104,6 +181,7 @@ export function SetupNotice() {
     } catch (err) {
       setNote({ text: err instanceof Error ? err.message : "Could not send sign-in link." });
       setSentTo(null);
+      setEmailWaiting(false);
     } finally {
       setSending(false);
     }
@@ -165,8 +243,6 @@ export function SetupNotice() {
     }
   }
 
-  const standalone = isStandaloneDisplay();
-
   return (
     <div className="setup">
       <div className="setup-card">
@@ -226,8 +302,8 @@ export function SetupNotice() {
             onChange={(e) => setEmail(e.target.value)}
             required
           />
-          <button className="btn" type="submit" disabled={sending || !email.trim()}>
-            Email me a link
+          <button className="btn" type="submit" disabled={sending || emailWaiting || !email.trim()}>
+            {emailWaiting ? "Waiting for link…" : "Email me a link"}
           </button>
         </form>
         {note && (
@@ -236,6 +312,14 @@ export function SetupNotice() {
             {note.href && (
               <a href={note.href}>{note.href}</a>
             )}
+          </p>
+        )}
+        {emailWaiting && (
+          <p className="setup-note muted">
+            Keep this window open — signing you in automatically once you tap the link.{" "}
+            <button type="button" className="link-btn" onClick={cancelEmailSignIn}>
+              Cancel
+            </button>
           </p>
         )}
         {sentTo && !sending && (

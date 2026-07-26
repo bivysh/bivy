@@ -126,6 +126,47 @@ export async function startGithubDeviceLogin(store: LocalStore, fetchImpl: typeo
   };
 }
 
+export interface EmailDeviceLogin {
+  deviceId: string;
+  deviceSecret: string;
+  /** How often to poll, ms. */
+  intervalMs: number;
+  /** How long the login stays valid, ms. */
+  expiresInMs: number;
+  /** Whether the email was actually sent (false in dev with no mailer). */
+  sent: boolean;
+  /** Dev-only: the magic link, surfaced when no mailer is configured. */
+  devLink?: string;
+}
+
+/**
+ * Begin a hands-free email magic-link sign-in for an installed app. The control
+ * plane emails a link the user opens in whatever browser their mail client hands
+ * it to; the app window itself never navigates and instead polls
+ * `/auth/device/poll` for completion. This is what makes magic-link sign-in work
+ * in an installed/standalone PWA: an emailed link opens in the system browser,
+ * not the installed window, so the redirect-based flow would strand the finished
+ * session in that browser tab — the same reason GitHub sign-in uses the device
+ * flow when standalone (see startGithubDeviceLogin / isStandaloneDisplay).
+ */
+export async function startEmailDeviceLogin(store: LocalStore, email: string, fetchImpl: typeof fetch = fetch): Promise<EmailDeviceLogin> {
+  const res = await fetchImpl(`${cpBase(store)}/auth/device/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  const data = (await res.json().catch(() => ({}))) as Partial<EmailDeviceLogin> & { error?: string };
+  if (!res.ok || !data.deviceId) throw new Error(data.error || "Could not send sign-in link.");
+  return {
+    deviceId: String(data.deviceId),
+    deviceSecret: String(data.deviceSecret),
+    intervalMs: Number(data.intervalMs) || 2000,
+    expiresInMs: Number(data.expiresInMs) || 15 * 60_000,
+    sent: Boolean(data.sent),
+    ...(data.devLink ? { devLink: String(data.devLink) } : {}),
+  };
+}
+
 export type DevicePollResult =
   | { status: "pending" }
   | { status: "complete"; token: string }

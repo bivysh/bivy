@@ -615,11 +615,42 @@ export class AppController {
     if (this.direct || !this.signedIn) return;
     this.lastNodeRefreshAt = Date.now();
     try {
-      this.store.setNodes(await this.listNodes());
+      const nodes = await this.listNodes();
+      this.store.setNodes(nodes);
+      // A persisted current node the account no longer has — removed, or a
+      // never-completed enrollment left behind by a sign-in/QR link — can never
+      // be reached: the relay dials it forever and eventually surfaces the node's
+      // "Forbidden" pairing rejection while the header spins on a raw node id.
+      // Drop the stale selection so the app falls back to the graceful "No runner
+      // connected" empty state instead. Guarded to a successfully fetched list
+      // (the catch below leaves a transient fetch failure alone); an enrolled but
+      // merely offline node still appears in the list, so this only clears nodes
+      // that are genuinely gone.
+      if (this.local.cur && !nodes.some((n) => n.id === this.local.cur)) {
+        this.clearCurrentNode();
+      }
       void this.refreshAccountSessions();
     } catch {
       /* non-fatal; header just shows the current node */
     }
+  }
+
+  /**
+   * Drop the current node selection and stop dialing it. Returns the hosted app
+   * to the "connect a node" empty state (needsNode) instead of spinning forever
+   * on a node that isn't there. Closes the transport so the relay reconnect loop
+   * halts, clears the persisted id, and resets the session pane.
+   */
+  private clearCurrentNode(): void {
+    try {
+      this.transport.close();
+    } catch {
+      /* noop */
+    }
+    this.local.cur = "";
+    this.store.setCurrentNode(null);
+    this.store.resetSession();
+    this.store.setStatus("offline");
   }
 
   private lastNodeRefreshAt = 0;
