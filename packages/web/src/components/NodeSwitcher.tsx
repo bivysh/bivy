@@ -7,6 +7,7 @@ import { EphemeralSheet } from "./Ephemeral.js";
 import { AddNodeSheet } from "./AddNodeSheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { useModalEscape } from "../modalStack.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
 /**
  * Header control (relay mode): shows the current node and a menu to switch nodes,
@@ -111,17 +112,19 @@ export function NodeSwitcher() {
             <span className="node-menu-glyph">+</span>
             <span className="node-menu-name">Add a node…</span>
           </button>
-          <button
-            className="node-menu-item"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              setEphemeralOpen(true);
-            }}
-          >
-            <span className="node-menu-glyph">⚡</span>
-            <span className="node-menu-name">Ephemeral machine…</span>
-          </button>
+          {EPHEMERAL_MACHINES_ENABLED && (
+            <button
+              className="node-menu-item"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                setEphemeralOpen(true);
+              }}
+            >
+              <span className="node-menu-glyph">⚡</span>
+              <span className="node-menu-name">Ephemeral machine…</span>
+            </button>
+          )}
           <div className="node-menu-sep" />
           {/* Confirm first — signing out here used to be a single tap with no
               undo (it drops the session and returns to the sign-in screen),

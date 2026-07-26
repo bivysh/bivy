@@ -264,8 +264,7 @@ column ("Native sandbox" vs "Effect-level (FS/MCP/net)" vs "Boundary only").
   vars; anything using raw sockets or ignoring `HTTP_PROXY` bypasses it. For
   HTTPS it sees `host:port` via `CONNECT`, not content.
 - If you need a real isolation boundary for an untrusted agent or untrusted
-  code, run the node inside a VM or container you control, or use an ephemeral
-  machine ([`ephemeral-sessions.md`](ephemeral-sessions.md)).
+  code, run the node inside a VM or container you control.
 
 ## Secret redaction in logs
 

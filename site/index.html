@@ -667,13 +667,6 @@
           already pay for — if you can install it there, Bivy runs there. Connect as many
           machines as you like, on every plan.</p>
         </div>
-        <div class="feature">
-          <h3>Ephemeral cloud machines</h3>
-          <p>No spare machine? Have Bivy start a short-lived runner on Fly.io, Hetzner or
-          AWS EC2, work there, then destroy it — using your own provider token, which stays
-          on your device and is never sent to us. Set up and run as many as you like on
-          any plan — each launch counts as one of your runs for the week.</p>
-        </div>
       </div>
     </div>
   </section>
@@ -735,10 +728,9 @@
             <li>Durable sessions and worktrees</li>
             <li>Approvals and sandbox tiers</li>
             <li>Unlimited relay-connected nodes</li>
-            <li>Ephemeral cloud runners</li>
             <li>Push notifications</li>
             <li>Cross-node session index</li>
-            <li>10 runs / week — any source (manual, app, GitHub, ephemeral)</li>
+            <li>10 runs / week — any source (manual, app, GitHub)</li>
             <li>The full phone and browser app</li>
             <li>Community support</li>
           </ul>
@@ -756,7 +748,6 @@
             <li>Durable sessions and worktrees</li>
             <li>Approvals and sandbox tiers</li>
             <li>Unlimited relay-connected nodes</li>
-            <li>Ephemeral cloud runners</li>
             <li>Push notifications</li>
             <li>Cross-node session index</li>
             <li class="hl">Unlimited runs — no weekly cap</li>
@@ -955,7 +946,6 @@
           <ul>
             <li><a href="https://github.com/bivysh/bivy/blob/main/docs/remote-access.md">Remote access &amp; PWA</a></li>
             <li><a href="https://github.com/bivysh/bivy/blob/main/docs/github-work-queue.md">GitHub work queue</a></li>
-            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/ephemeral-sessions.md">Ephemeral machines</a></li>
           </ul>
         </div>
         <div>
@@ -986,7 +976,7 @@
         <details>
           <summary>What counts as a run?</summary>
           <p>A run is one agent session you start — from the CLI, the phone or browser app,
-          a labeled GitHub issue, or an ephemeral cloud machine. All four sources draw from
+          or a labeled GitHub issue. All three sources draw from
           the same count: 10 per rolling seven days on the free plan (a moving window, not a
           fixed calendar week), and unlimited on Pro. Self-host the control plane and there's
           no run limit at all.</p>
@@ -1053,7 +1043,7 @@
           <summary>How stable is 0.1?</summary>
           <p>It is the first public release of 0.x software. The core loop — run an agent,
           keep the session, reach it remotely, approve actions — is solid and used daily.
-          Newer surfaces such as ephemeral cloud machines and credential sync between nodes
+          Newer surfaces such as credential sync between nodes
           are rougher. Interfaces can change between releases.</p>
         </details>
       </div>

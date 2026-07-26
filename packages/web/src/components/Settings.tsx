@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
@@ -13,6 +13,7 @@ import { StatsPanel } from "./StatsPanel.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
 // The view enumeration lives in router.ts (as `SettingsView`) so the router can
 // validate a `/settings/:view` path without importing this component module;
@@ -220,7 +221,9 @@ export function Settings({
       label: "Infrastructure",
       items: [
         { id: "nodes", label: "Nodes", icon: <IconServer /> },
-        { id: "ephemeral", label: "Ephemeral machines", icon: <IconBolt /> },
+        ...(EPHEMERAL_MACHINES_ENABLED
+          ? [{ id: "ephemeral" as View, label: "Ephemeral machines", icon: <IconBolt /> }]
+          : []),
       ],
     },
   ];
@@ -314,7 +317,7 @@ export function Settings({
               />
             )}
             {activeView === "nodes" && <NodesPanel state={state} />}
-            {activeView === "ephemeral" && <EphemeralPanel />}
+            {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
             {activeView === "account" && <AccountPanel />}
             {activeView === "link" && <LinkPanel onDone={onClose} />}
           </div>
@@ -1534,10 +1537,12 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
             </ul>
           </section>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">Ephemeral runner</h4>
-            {renderEphemeral()}
-          </section>
+          {EPHEMERAL_MACHINES_ENABLED && (
+            <section className="settings-section">
+              <h4 className="settings-subhead">Ephemeral runner</h4>
+              {renderEphemeral()}
+            </section>
+          )}
         </>
       )}
 
@@ -1907,7 +1912,104 @@ function EphemeralPanel() {
           );
         })}
       </div>
+      <EphemeralModelKeys />
     </div>
+  );
+}
+
+// Model API keys held on THIS device to seed a freshly-launched machine's vault
+// over its encrypted channel — so a brand-new runner has model credentials even
+// when it's the account's only node and there's no peer to sync the model-auth
+// vault from (the cold-start gap; see docs/ephemeral-sessions.md). API keys
+// only; agent subscription/OAuth logins can't be replayed onto disposable
+// machines. Same device-local privacy model as the cloud provider tokens above.
+const COMMON_MODEL_PROVIDERS = [
+  "anthropic", "openai", "google", "groq", "mistral",
+  "openrouter", "deepseek", "xai", "together", "fireworks", "cohere",
+];
+
+function EphemeralModelKeys() {
+  const [keys, setKeys] = useState<EphemeralModelKeyInfo[]>([]);
+  const [provider, setProvider] = useState("");
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const refresh = () => controller.listEphemeralModelKeys().then(setKeys).catch(() => {});
+  useEffect(() => { refresh(); }, []);
+
+  const save = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await controller.setEphemeralModelKey(provider, key);
+      setProvider("");
+      setKey("");
+      setMsg("Saved on this device.");
+      refresh();
+    } catch (e) {
+      setMsg(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section">
+      <h4 className="settings-subhead">Model keys for new machines</h4>
+      <p className="muted small">
+        API keys kept on this device and pushed into a freshly-launched machine over its encrypted channel, so a
+        brand-new runner has model credentials even when it's your only node. Never sent to our servers or baked into
+        the machine image. API keys only — agent subscription logins can't be seeded this way.
+      </p>
+      {keys.length > 0 && (
+        <div className="picker-list">
+          {keys.map((k) => (
+            <PickerItem
+              key={k.provider}
+              title={k.provider}
+              meta={k.configured ? "Key saved on this device" : "Not set"}
+              right={
+                <button
+                  type="button"
+                  className="picker-action danger"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    controller.removeEphemeralModelKey(k.provider).then(refresh);
+                  }}
+                >
+                  Remove
+                </button>
+              }
+            />
+          ))}
+        </div>
+      )}
+      <datalist id="eph-model-providers">
+        {COMMON_MODEL_PROVIDERS.map((p) => (
+          <option key={p} value={p} />
+        ))}
+      </datalist>
+      <label className="field-label">Provider</label>
+      <input
+        className="picker-search"
+        list="eph-model-providers"
+        value={provider}
+        placeholder="e.g. anthropic"
+        onChange={(e) => setProvider(e.target.value)}
+      />
+      <label className="field-label">API key</label>
+      <input
+        className="picker-search"
+        type="password"
+        value={key}
+        placeholder="Paste key"
+        onChange={(e) => setKey(e.target.value)}
+      />
+      <button className="btn primary" disabled={busy || !provider.trim() || !key.trim()} onClick={save}>
+        {busy ? "Saving…" : "Save key"}
+      </button>
+      {msg && <p className="muted">{msg}</p>}
+    </section>
   );
 }
 
