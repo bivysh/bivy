@@ -1707,6 +1707,12 @@ app.get("/account/automation-runs", asyncHandler(async (req, res) => {
   res.json(await store.listAutomationRuns(client.accountId, Number(req.query.limit) || 50));
 }));
 
+app.get("/account/automation-triggers", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listTriggerEvents(client.accountId, Number(req.query.limit) || 50));
+}));
+
 app.post("/account/automation-runs", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });

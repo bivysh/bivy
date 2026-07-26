@@ -22,6 +22,8 @@ Runs initially target a new session. The schema also represents an existing
 session target without enabling continuation yet. Routing intent carries the
 node label, runtime, model, and ephemeral preference. Output is limited to
 references such as session, branch, pull request, artifact, or a failure summary.
+Account APIs expose definitions, trigger history, and run history separately;
+the legacy work-item API is a projection of the same run records.
 
 ## Compatibility and migration
 

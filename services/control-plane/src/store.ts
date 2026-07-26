@@ -767,6 +767,7 @@ export interface MeshStore {
   enqueueWorkItem(accountId: string, input: WorkItemInput): Promise<WorkItem>;
   createAutomationDefinition(accountId: string, input: Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt">): Promise<AutomationDefinition>;
   listAutomationDefinitions(accountId: string): Promise<AutomationDefinition[]>;
+  listTriggerEvents(accountId: string, limit?: number): Promise<TriggerEvent[]>;
   enqueueAutomationRun(accountId: string, input: WorkItemInput): Promise<AutomationRun>;
   listAutomationRuns(accountId: string, limit?: number): Promise<AutomationRun[]>;
   getAutomationRun(accountId: string, id: string): Promise<AutomationRun | undefined>;

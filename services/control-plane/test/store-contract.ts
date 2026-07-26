@@ -266,6 +266,10 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(blank.label, "bivy");
 
     const claimed = await store.claimWorkItem(acct.id, node.id, a.id);
+    const canonical = await store.getAutomationRun(acct.id, a.id);
+    assert.equal(canonical?.triggerKind, "github");
+    assert.equal(canonical?.routing.nodeLabel, "bivy");
+    assert.equal(canonical?.title, "A");
     assert.equal(claimed?.status, "claimed");
     assert.equal(await store.claimWorkItem(acct.id, node.id, a.id), undefined); // second claim loses
     await store.completeWorkItem(acct.id, a.id);
@@ -313,6 +317,9 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     });
     assert.equal(slack.triggerKind, "slack");
     assert.equal(redelivery.id, slack.id);
+    const triggers = await store.listTriggerEvents(acct.id);
+    assert.equal(triggers.some((event) => event.id === slack.triggerId && event.sourceKey === "slack:event:1"), true);
+    assert.equal((await store.listTriggerEvents((await store.findOrCreateAccount("contract-automation-other@example.com")).id)).length, 0);
   });
 
   await test("work queue: dedupeKey is idempotent per account", async (store) => {

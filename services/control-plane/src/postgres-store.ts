@@ -37,6 +37,7 @@ import {
   type AutomationRun,
   type AutomationRunStatus,
   type AutomationTriggerKind,
+  type TriggerEvent,
   entitlementsForPlan,
   hashToken,
   disambiguateNodeName,
@@ -1385,6 +1386,14 @@ export class PostgresStore implements MeshStore {
     return rows.map(mapAutomationDefinition);
   }
 
+  async listTriggerEvents(accountId: string, limit = 50): Promise<TriggerEvent[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM trigger_events WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [accountId, Math.max(1, Math.min(200, limit))],
+    );
+    return rows.map(mapTriggerEvent);
+  }
+
   async enqueueAutomationRun(accountId: string, input: WorkItemInput): Promise<AutomationRun> {
     const dedupeKey = input.dedupeKey ?? null;
     const collapseKey = input.collapseKey ?? null;
@@ -1694,6 +1703,17 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     ephemeral: row.ephemeral ?? undefined,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
+function mapTriggerEvent(row: any): TriggerEvent {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    kind: row.kind,
+    sourceKey: row.source_key ?? undefined,
+    sourceRef: row.source_ref ?? undefined,
+    createdAt: new Date(row.created_at).toISOString(),
   };
 }
 
