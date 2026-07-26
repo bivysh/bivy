@@ -259,6 +259,29 @@ export class DirectTransport implements Transport {
           });
           break;
         }
+        case "session.discover": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const data: any = await this.directApi("/api/sessions/discover");
+            this.emit({ type: "session.discover.result", requestId, sessions: data?.sessions ?? [] });
+          } catch (error) {
+            this.emit({ type: "session.discover.error", requestId, error: (error as Error)?.message || String(error) });
+          }
+          break;
+        }
+        case "session.import": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const p: any = await this.directApi("/api/sessions/import", {
+              method: "POST",
+              body: JSON.stringify({ runtimeId: obj.runtimeId, ref: obj.ref }),
+            });
+            this.emit({ type: "session.import.result", requestId, sessionId: p.sessionId, runtimeId: p.runtimeId });
+          } catch (error) {
+            this.emit({ type: "session.import.error", requestId, error: (error as Error)?.message || String(error) });
+          }
+          break;
+        }
         case "session.delete":
           await this.directApi("/api/sessions/delete", {
             method: "POST",
