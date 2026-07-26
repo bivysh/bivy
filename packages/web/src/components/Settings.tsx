@@ -1620,6 +1620,7 @@ function NodesPanel({ state }: { state: AppState }) {
         sessionSync: form.sessionSync,
         worktreeSync: form.worktreeSync,
         syncStandbyNodeId: form.syncStandbyNodeId ?? "",
+        sessionResumeMode: form.sessionResumeMode,
       });
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
@@ -1787,6 +1788,32 @@ function NodesPanel({ state }: { state: AppState }) {
             <div className="row-actions">
               <button className="btn" onClick={resetIssuePrompt}>Reset to default</button>
             </div>
+          </section>
+
+          <section className="settings-section">
+            <h4 className="settings-subhead">Session resume</h4>
+            <label className="field-label">After a restart interrupts a session</label>
+            <div className="seg-row">
+              {([
+                { id: "auto", label: "Auto-resume", hint: "The agent automatically continues the interrupted turn when the node restarts." },
+                { id: "manual", label: "Manual", hint: "The interrupted session waits and offers a one-tap Resume when you open it." },
+              ] as const).map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  className={`seg-btn${form.sessionResumeMode === o.id ? " active" : ""}`}
+                  onClick={() => setForm({ ...form, sessionResumeMode: o.id })}
+                  title={o.hint}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <p className="muted small">
+              {form.sessionResumeMode === "manual"
+                ? "Interrupted sessions wait for you to tap Resume — nothing runs on its own. GitHub issue automation still resumes automatically."
+                : "The agent picks up an interrupted turn on its own after the node restarts."}
+            </p>
           </section>
 
           <section className="settings-section">
