@@ -52,6 +52,37 @@ Two exceptions you should know about:
   GitHub webhook and routes them to a node. If you use the work queue, issue
   text transits and rests on the control plane. See
   [`github-work-queue.md`](github-work-queue.md).
+- **Generic automation webhooks.** Each account hook has a high-entropy signing
+  secret. The control plane verifies `X-Bivy-Signature-256` as an HMAC-SHA256
+  over the exact request bytes before parsing or persisting anything. Requests
+  are capped at 64 KiB, require an account-scoped idempotency key, and accept
+  only the versioned schema documented by the settings example. Metadata is
+  bounded, scalar, and explicitly treated as untrusted context. Events are
+  appended to a fixed instruction template; payloads cannot select runtimes,
+  models, shell commands, JavaScript, or executable templates. Hook secrets and
+  bodies are never logged. Rotation immediately invalidates the old secret, and
+  revocation retains only a disabled endpoint with a newly randomized secret.
+
+Automation events use this closed schema (unknown fields are rejected):
+
+```json
+{
+  "version": "1",
+  "instruction": "Run the test suite and investigate failures",
+  "title": "CI failed",
+  "sourceUrl": "https://ci.example/builds/123",
+  "externalId": "build-123",
+  "routing": "macbook",
+  "metadata": { "branch": "main", "attempt": 2 }
+}
+```
+
+`instruction` is required. The other event fields are optional; `metadata`
+accepts at most 20 bounded scalar values and must not contain secrets. Every
+request also requires `X-Bivy-Idempotency-Key` and
+`X-Bivy-Signature-256: sha256=<hex HMAC>`. Responses are stable:
+`202 accepted`, `200 duplicate`, `401 invalid_signature`, `410 disabled`,
+`413 payload_too_large`, and `429 quota_exhausted`.
 
 ### What the relay sees
 
