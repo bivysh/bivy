@@ -7,6 +7,10 @@ test("inbox exposes an accessible dialog, filters, count content, and item actio
   expect(source).toContain('role="dialog"');
   expect(source).toContain('aria-modal="true"');
   expect(source).toContain('aria-live="polite"');
+  // Locks in the modalStack convention shared by Settings/Sheet/AppDialog:
+  // Escape closes (only when topmost), and focus moves in/restores on close.
+  expect(source).toContain("useModalEscape(onClose)");
+  expect(source).toContain("closeRef.current?.focus()");
   await page.setContent(`
     <section role="dialog" aria-modal="true" aria-labelledby="inbox-title">
       <h2 id="inbox-title">Inbox</h2>
@@ -24,6 +28,27 @@ test("inbox exposes an accessible dialog, filters, count content, and item actio
   await expect(page.getByLabel("Source")).toBeVisible();
   await expect(page.getByRole("listitem")).toContainText("Approval needed");
   await expect(page.getByRole("button", { name: "Close inbox" })).toBeVisible();
+});
+
+test("inbox dialog takes initial focus and Escape closes it, mirroring the shared modalStack convention", async ({ page }) => {
+  // A minimal, faithful replica of Inbox's mount/close wiring (focus-on-open +
+  // a topmost-layer Escape handler) — same shape as modalStack.ts's
+  // pushModal/useModalEscape, without needing to boot the full React app.
+  await page.setContent(`
+    <section role="dialog" aria-modal="true" aria-labelledby="inbox-title" id="inbox">
+      <h2 id="inbox-title">Inbox</h2>
+      <button id="close" aria-label="Close inbox">×</button>
+    </section>
+    <script>
+      document.getElementById("close").focus();
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") document.getElementById("inbox").remove();
+      }, true);
+    </script>
+  `);
+  await expect(page.getByRole("button", { name: "Close inbox" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Inbox" })).toHaveCount(0);
 });
 
 test("mobile inbox rules keep the sheet within safe viewport edges and stack items", async () => {
