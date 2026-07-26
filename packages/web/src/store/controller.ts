@@ -125,6 +125,12 @@ export class AppController {
   private pendingTranscriptions = new Map<string, { resolve: (text: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight session-fork requests (export → bundle, import → done), by requestId. */
   private pendingForks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  /** In-flight saves awaiting a node ack (node.settings, provider.apiKey,
+   *  models.custom.save, stt.config.set), by requestId — see awaitAck/resolveAck.
+   *  These commands had no protocol-level ack before #140: the UI would show
+   *  "Saved" the instant the command was sent, regardless of whether the node
+   *  actually accepted it. */
+  private pendingAcks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** Persistent transcript cache (IndexedDB) for instant paint + incremental backfill. */
   private transcriptCache: TranscriptCache = createTranscriptCache({ maxSessions: 50 });
   /** A GitHub App manifest `code` captured from a redirect, sent once connected. */
@@ -191,6 +197,11 @@ export class AppController {
     // Seed the reactive auth flag from the token we may have just consumed above,
     // so the very first render lands on the right surface (sign-in vs. shell).
     this.store.setSignedIn(this.signedIn);
+    // Handle a return from Stripe checkout (?checkout=success|cancel) and a
+    // "Go Pro" deep link from the marketing site (?intent=upgrade). Runs after
+    // the auth flag is seeded so the upgrade intent can resume the moment the
+    // user is signed in (a fresh sign-in redirect lands here already signed in).
+    this.handleBillingReturn();
     // Remember the route we booted on (a `/sessions/:id` deep link, `/sessions/new`,
     // or root). It's replayed once we're first online — see applyInitialRoute.
     this.pendingRoute = parseRoute();
@@ -220,10 +231,83 @@ export class AppController {
     }
   }
 
+  /** localStorage key marking a pending "Go Pro" intent that must survive the
+   *  full-page sign-in redirect (which drops the query string). */
+  private static readonly UPGRADE_INTENT_KEY = "bivy_upgrade_intent";
+
+  /**
+   * React to a Stripe checkout return and to a "Go Pro" deep link:
+   *   - `?checkout=success` → confirmation banner (the plan flips via webhook,
+   *     which the Account panel picks up on its next /me fetch).
+   *   - `?checkout=cancel`  → neutral "still on free" banner, no dead-end.
+   *   - `?intent=upgrade`   → resume checkout. If signed in, redirect straight to
+   *     Stripe; if not, remember the intent so it fires once sign-in completes.
+   * Consumed params are stripped so they neither linger nor re-fire on reload.
+   */
+  private handleBillingReturn(): void {
+    let checkout = "";
+    let intent = "";
+    try {
+      const params = new URLSearchParams(location.search);
+      checkout = (params.get("checkout") || "").trim();
+      intent = (params.get("intent") || "").trim();
+      if (checkout || intent) {
+        params.delete("checkout");
+        params.delete("intent");
+        const qs = params.toString();
+        history.replaceState(null, "", location.pathname + (qs ? `?${qs}` : "") + location.hash);
+      }
+    } catch {
+      /* ignore malformed query */
+    }
+
+    if (checkout === "success") {
+      // A completed checkout supersedes any remembered intent.
+      this.clearUpgradeIntent();
+      this.store.setNotice("You're on Pro — thanks! Unlimited runs are unlocked. It may take a few seconds to show in Settings.");
+      return;
+    }
+    if (checkout === "cancel") {
+      this.clearUpgradeIntent();
+      this.store.setNotice("Checkout canceled — you're still on the free plan. Upgrade any time from Settings.");
+      return;
+    }
+
+    if (intent === "upgrade") {
+      if (this.signedIn) {
+        void this.startCheckout().catch((e) => this.store.setError(e instanceof Error ? e.message : String(e)));
+      } else {
+        // Persist across the sign-in redirect; resumed below on the next load.
+        try { localStorage.setItem(AppController.UPGRADE_INTENT_KEY, "1"); } catch { /* ignore */ }
+      }
+      return;
+    }
+
+    // No billing params this load: resume a remembered "Go Pro" intent once the
+    // user has signed in (e.g. right after the OAuth/magic-link redirect).
+    if (this.signedIn && this.hasUpgradeIntent()) {
+      this.clearUpgradeIntent();
+      void this.startCheckout().catch((e) => this.store.setError(e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  private hasUpgradeIntent(): boolean {
+    try { return localStorage.getItem(AppController.UPGRADE_INTENT_KEY) === "1"; } catch { return false; }
+  }
+
+  private clearUpgradeIntent(): void {
+    try { localStorage.removeItem(AppController.UPGRADE_INTENT_KEY); } catch { /* ignore */ }
+  }
+
   private buildTransport(): Transport {
     const handlers = {
       onEvent: (event: ServerEvent) => {
         const type = String(event.type || "");
+        // Settle any save() awaiting this reply (see awaitAck) before anything
+        // else — harmless no-op when the requestId doesn't match a pending save
+        // (e.g. a plain .get(), or an event from an unrelated flow that happens
+        // to carry its own requestId).
+        this.resolveAck(event);
         if (type === "pong") {
           const rid = String(event.requestId || "");
           if (rid) this.pendingLivenessPings.delete(rid);
@@ -240,6 +324,10 @@ export class AppController {
         if (type.startsWith("terminal.") || type.startsWith("multiplexer.")) {
           if (["terminal.list", "terminal.created", "terminal.activity", "terminal.closed", "terminal.exit"].includes(type)) {
             this.store.apply(this.eventWithNodeScope(event));
+          } else if (type === "terminal.tui") {
+            // Composer single-writer lock — keyed by (raw) session id, so no node
+            // scoping needed; the store folds it into `tuiSessions`.
+            this.store.apply(event);
           }
           for (const fn of this.terminalListeners) fn(event);
           return;
@@ -626,6 +714,41 @@ export class AppController {
 
   private send(command: Command): void {
     void this.transport.send(command);
+  }
+
+  /**
+   * Send a command and await its correlated reply instead of assuming success
+   * the moment it was handed to the transport. A handful of node-settings-style
+   * saves (node.settings.set, provider.apiKey, models.custom.save,
+   * stt.config.set) used to be fire-and-forget with no ack at all — the UI
+   * showed "Saved" immediately regardless of whether the node accepted the
+   * change (#140). The node now echoes our requestId back on both success and
+   * failure (a `*.error`-suffixed type rejects; anything else resolves).
+   */
+  private awaitAck(command: Command, timeoutMs = 10000): Promise<ServerEvent> {
+    const rid = requestId();
+    return new Promise<ServerEvent>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingAcks.delete(rid);
+        reject(new Error("Timed out waiting for the node to respond."));
+      }, timeoutMs);
+      this.pendingAcks.set(rid, { resolve, reject, timer });
+      void this.transport.send({ ...command, requestId: rid });
+    });
+  }
+
+  /** Resolve/reject an in-flight awaitAck() call from its matching reply. */
+  private resolveAck(event: ServerEvent): void {
+    const rid = String(event.requestId || "");
+    const pending = rid ? this.pendingAcks.get(rid) : undefined;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingAcks.delete(rid);
+    if (String(event.type || "").endsWith(".error")) {
+      pending.reject(new Error(String((event as { error?: unknown }).error || "Save failed")));
+    } else {
+      pending.resolve(event);
+    }
   }
 
   // --- Session fork (docs/session-fork-plan.md) --------------------------------
@@ -1078,8 +1201,10 @@ export class AppController {
   getNodeSettings(): void {
     this.send({ kind: "node.settings.get" });
   }
-  setNodeSettings(patch: Record<string, unknown>): void {
-    this.send({ kind: "node.settings.set", settings: patch });
+  /** Save node settings and resolve once the node acks the change (or reject
+   *  with its error) instead of assuming success the moment it was sent. */
+  setNodeSettings(patch: Record<string, unknown>): Promise<void> {
+    return this.awaitAck({ kind: "node.settings.set", settings: patch }).then(() => undefined);
   }
 
   /** Sandbox tier for the next new session (null = use the node default). */
@@ -1386,8 +1511,10 @@ export class AppController {
   getProviderAuth(provider: string): void {
     this.send({ kind: "provider.auth.get", provider });
   }
-  saveApiKey(provider: string, key: string): void {
-    this.send({ kind: "provider.apiKey", provider, key });
+  /** Save an API key and resolve once the node acks it (or reject with its
+   *  error) instead of assuming success the moment it was sent. */
+  saveApiKey(provider: string, key: string): Promise<void> {
+    return this.awaitAck({ kind: "provider.apiKey", provider, key }).then(() => undefined);
   }
   removeProvider(provider: string): void {
     this.send({ kind: "provider.remove", provider });
@@ -1411,9 +1538,11 @@ export class AppController {
     this.send({ kind: "models.custom.presets" });
   }
   /** Save (create or update) a local/custom provider. `spec` matches the node's
-   *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }. */
-  saveLocalModel(spec: Record<string, unknown>): void {
-    this.send({ kind: "models.custom.save", spec });
+   *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }.
+   *  Resolves once the node acks the save (or rejects with its error) instead
+   *  of assuming success the moment it was sent. */
+  saveLocalModel(spec: Record<string, unknown>): Promise<void> {
+    return this.awaitAck({ kind: "models.custom.save", spec }).then(() => undefined);
   }
   removeLocalModel(id: string): void {
     this.send({ kind: "models.custom.remove", id });
@@ -1428,8 +1557,10 @@ export class AppController {
   setSttProvider(provider: string): void {
     this.send({ kind: "stt.config.set", provider });
   }
-  saveSttKey(provider: string, value: string): void {
-    this.send({ kind: "stt.config.set", setKey: { provider, value } });
+  /** Save a speech-to-text provider key and resolve once the node acks it (or
+   *  reject with its error) instead of assuming success the moment it was sent. */
+  saveSttKey(provider: string, value: string): Promise<void> {
+    return this.awaitAck({ kind: "stt.config.set", setKey: { provider, value } }).then(() => undefined);
   }
   removeSttKey(provider: string): void {
     this.send({ kind: "stt.config.set", removeKey: provider });
@@ -1766,6 +1897,14 @@ export class AppController {
   /** Send a terminal.* command (open/attach/input/resize/close, list, mux). */
   sendTerminal(cmd: Command): void {
     this.send(cmd);
+  }
+
+  /** "Take over in chat": stop the interactive TUI that currently owns a session
+   *  and return it to governed chat. The node closes the PTY, rebuilds the
+   *  session from disk, and broadcasts `terminal.tui {active:false}` to unlock
+   *  the composer everywhere. */
+  closeSessionTui(sessionId: string): void {
+    this.send({ kind: "terminal.close.tui", sessionId });
   }
 
   /** Apply a pasted device-link payload (QR text) and reconnect. */

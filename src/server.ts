@@ -1879,6 +1879,23 @@ function handleTerminalMessage(
       void (async () => {
         const record = resolveSession(msg.sessionId);
         if (!record) { emit({ type: "terminal.error", error: "Session not found for TUI." }); return; }
+        // Idempotent "go to terminal": a TUI is already live for this session
+        // (opened here, on another device, or before a reload). Re-attach the
+        // caller to that same PTY — replaying its scrollback — instead of
+        // spawning a second CLI that would fight over the one session file and
+        // orphan the first. A stale id (PTY already gone) falls through to a
+        // fresh launch below.
+        if (record.tuiTermId) {
+          const snapshot = terminals.snapshot(record.tuiTermId);
+          if (snapshot != null) {
+            owned.add(record.tuiTermId);
+            if (typeof msg.cols !== "undefined" || typeof msg.rows !== "undefined") {
+              terminals.resize(record.tuiTermId, Number(msg.cols) || 80, Number(msg.rows) || 24);
+            }
+            emit({ type: "terminal.attached", termId: record.tuiTermId, data: snapshot });
+            return;
+          }
+        }
         if (sessionBusy(record)) { emit({ type: "terminal.error", sessionId: record.id, error: "Finish or stop the current turn before opening the TUI." }); return; }
         let spec;
         try { spec = record.session.interactiveTuiCommand ? await record.session.interactiveTuiCommand() : null; }
@@ -1915,6 +1932,27 @@ function handleTerminalMessage(
           emit({ type: "terminal.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) });
         }
       })();
+      return true;
+    }
+    case "terminal.close.tui": {
+      // "Take over in chat": stop the interactive TUI that owns this session and
+      // hand it back to governed chat. Closing the PTY runs the same onExit path
+      // as the user quitting the CLI — it clears tuiTermId, flips tuiRefreshing,
+      // rebuilds the in-process session from disk (refreshRecordAfterTui), and
+      // broadcasts `terminal.tui {active:false}` — so the composer unlocks with
+      // whatever the TUI wrote. Resolve the PTY server-side from the session so a
+      // client that never held the termId (another device, post-reload) can do it.
+      const record = resolveSession(msg.sessionId);
+      const termId = record?.tuiTermId;
+      if (termId) {
+        terminals.close(termId);
+        owned.delete(termId);
+        clearBellNotify(termId);
+      } else if (record) {
+        // No live TUI to close — make sure the client isn't left locked on a
+        // stale flag by re-asserting the unlocked state for this session.
+        broadcastTuiState(record.id, false);
+      }
       return true;
     }
     case "terminal.attach": {
@@ -2363,15 +2401,17 @@ const RELAY_COMMANDS: Record<string, Command> = {
     ctx.broadcast({ type: "node.updated", name });
     ctx.reply({ type: "node.updated", name });
   },
-  "node.settings.get"(_msg, ctx) {
-    ctx.reply({ type: "node.settings", settings: nodeSettingsSnapshot() });
+  "node.settings.get"(msg, ctx) {
+    ctx.reply({ type: "node.settings", requestId: msg.requestId, settings: nodeSettingsSnapshot() });
   },
   async "node.settings.set"(msg, ctx) {
     try {
       const settings = await applyNodeSettings((msg.settings as Record<string, unknown>) ?? msg);
-      ctx.reply({ type: "node.settings", settings });
+      // requestId round-trips so the caller (setNodeSettings) can tell its own
+      // save landed apart from an unrelated node.settings.get reply — see #140.
+      ctx.reply({ type: "node.settings", requestId: msg.requestId, settings });
     } catch (error) {
-      ctx.reply({ type: "node.settings.error", error: error instanceof Error ? error.message : String(error) });
+      ctx.reply({ type: "node.settings.error", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
     }
   },
   async "node.stats"(msg, ctx) {
@@ -2754,14 +2794,20 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "provider.apiKey"(msg) {
+  async "provider.apiKey"(msg, ctx) {
     try {
       await setProviderApiKey(credsDir, String(msg.provider ?? msg.id ?? ""), String(msg.key ?? ""));
       await pushModelAuthToControlPlane();
       await refreshSessionAfterAuth();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
+      // Dedicated per-request ack (separate from the list broadcast above, which
+      // every client gets) so the saving client can tell its own save landed
+      // instead of assuming success the moment the command was sent — see #140.
+      ctx.reply({ type: "provider.apiKey.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "provider.apiKey.error", requestId: msg.requestId, error: message });
     }
   },
   async "provider.oauth.reset"(msg) {
@@ -2802,14 +2848,18 @@ const RELAY_COMMANDS: Record<string, Command> = {
   async "models.custom.presets"() {
     relay?.sendEvent({ type: "models.custom.presets", presets: await localModelPresets() });
   },
-  async "models.custom.save"(msg) {
+  async "models.custom.save"(msg, ctx) {
     try {
       // The client sends the same field set as the REST body (baseUrl, api,
       // apiKey, models[], compat, name, providerId). persistLocalModelSave
       // broadcasts the refreshed list to every client, requester included.
       await persistLocalModelSave((msg as any)?.spec ?? msg);
+      // Dedicated per-request ack — see the provider.apiKey comment above (#140).
+      ctx.reply({ type: "models.custom.save.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "models.custom.save.error", requestId: msg.requestId, error: message });
     }
   },
   async "models.custom.remove"(msg) {
@@ -2826,12 +2876,16 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "stt.config.set"(msg) {
+  async "stt.config.set"(msg, ctx) {
     try {
       const config = await applySttConfigChange(msg as Record<string, unknown>);
       broadcast({ type: "stt.config", ...config });
+      // Dedicated per-request ack — see the provider.apiKey comment above (#140).
+      ctx.reply({ type: "stt.config.set.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "stt.config.set.error", requestId: msg.requestId, error: message });
     }
   },
   async transcribe(msg) {

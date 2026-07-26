@@ -5,6 +5,8 @@ import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { EphemeralSheet } from "./Ephemeral.js";
 import { AddNodeSheet } from "./AddNodeSheet.js";
+import { ConfirmDialog } from "./AppDialog.js";
+import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
 /**
@@ -17,7 +19,11 @@ export function NodeSwitcher() {
   const [open, setOpen] = useState(false);
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // Escape closes the open menu (topmost-layer coordinated), matching every
+  // other popover in the app.
+  useModalEscape(() => setOpen(false), open);
   // A transient connection blip (reconnecting) or the very first connect used to
   // drop a full-width "Reconnecting…" banner into the layout, shoving the page
   // down on every mobile network hiccup. Instead the status indicator (the node
@@ -120,10 +126,23 @@ export function NodeSwitcher() {
             </button>
           )}
           <div className="node-menu-sep" />
-          <button className="node-menu-item danger" role="menuitem" onClick={() => controller.signOut()}>
+          {/* Confirm first — signing out here used to be a single tap with no
+              undo (it drops the session and returns to the sign-in screen),
+              while the identical action in Settings already confirms. */}
+          <button className="node-menu-item danger" role="menuitem" onClick={() => { setOpen(false); setConfirmSignOut(true); }}>
             Sign out
           </button>
         </div>
+      )}
+      {confirmSignOut && (
+        <ConfirmDialog
+          title="Sign out?"
+          message="Sign out of Bivy on this device?"
+          confirmLabel="Sign out"
+          danger
+          onCancel={() => setConfirmSignOut(false)}
+          onConfirm={() => { setConfirmSignOut(false); controller.signOut(); }}
+        />
       )}
       {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} />}
       {addNodeOpen && <AddNodeSheet onClose={() => setAddNodeOpen(false)} />}

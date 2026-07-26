@@ -372,15 +372,23 @@ export class DirectTransport implements Transport {
             await this.directApi(`/api/auth/providers/${encodeURIComponent(String(obj.provider || ""))}`),
           );
           break;
-        case "provider.apiKey":
-          this.emitMerged(
-            "providers.list",
-            await this.directApi("/api/auth/api-key", {
-              method: "POST",
-              body: JSON.stringify({ provider: obj.provider, key: obj.key }),
-            }),
-          );
+        case "provider.apiKey": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            this.emitMerged(
+              "providers.list",
+              await this.directApi("/api/auth/api-key", {
+                method: "POST",
+                body: JSON.stringify({ provider: obj.provider, key: obj.key }),
+              }),
+            );
+            // Dedicated per-request ack, mirroring the relay path — see #140.
+            this.emit({ type: "provider.apiKey.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "provider.apiKey.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
           break;
+        }
         case "provider.remove":
           this.emitMerged(
             "providers.list",
@@ -393,15 +401,23 @@ export class DirectTransport implements Transport {
         case "models.custom.presets":
           this.emitMerged("models.custom.presets", await this.directApi("/api/models/catalog"));
           break;
-        case "models.custom.save":
-          this.emitMerged(
-            "models.custom.list",
-            await this.directApi("/api/models/custom", {
-              method: "POST",
-              body: JSON.stringify((obj as any).spec ?? obj),
-            }),
-          );
+        case "models.custom.save": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            this.emitMerged(
+              "models.custom.list",
+              await this.directApi("/api/models/custom", {
+                method: "POST",
+                body: JSON.stringify((obj as any).spec ?? obj),
+              }),
+            );
+            // Dedicated per-request ack, mirroring the relay path — see #140.
+            this.emit({ type: "models.custom.save.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "models.custom.save.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
           break;
+        }
         case "models.custom.remove":
           this.emitMerged(
             "models.custom.list",
@@ -421,14 +437,23 @@ export class DirectTransport implements Transport {
           this.emitMerged("workspaces.list", await this.directApi("/api/workspaces"));
           break;
         case "node.settings.get":
-          this.emit({ type: "node.settings", settings: await this.directApi("/api/node/settings") });
+          this.emit({
+            type: "node.settings",
+            requestId: String(obj.requestId ?? ""),
+            settings: await this.directApi("/api/node/settings"),
+          });
           break;
         case "node.settings.set": {
-          const res = await this.directApi("/api/node/settings", {
-            method: "POST",
-            body: JSON.stringify((obj.settings as Record<string, unknown>) ?? obj),
-          });
-          this.emit({ type: "node.settings", settings: (res as { settings?: unknown })?.settings ?? res });
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const res = await this.directApi("/api/node/settings", {
+              method: "POST",
+              body: JSON.stringify((obj.settings as Record<string, unknown>) ?? obj),
+            });
+            this.emit({ type: "node.settings", requestId, settings: (res as { settings?: unknown })?.settings ?? res });
+          } catch (error) {
+            this.emit({ type: "node.settings.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
           break;
         }
         case "provider.oauth.reset":
@@ -507,15 +532,23 @@ export class DirectTransport implements Transport {
         case "stt.config.get":
           this.emitMerged("stt.config", await this.directApi("/api/stt/config"));
           break;
-        case "stt.config.set":
-          this.emitMerged(
-            "stt.config",
-            await this.directApi("/api/stt/config", {
-              method: "POST",
-              body: JSON.stringify({ provider: obj.provider, setKey: obj.setKey, removeKey: obj.removeKey }),
-            }),
-          );
+        case "stt.config.set": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            this.emitMerged(
+              "stt.config",
+              await this.directApi("/api/stt/config", {
+                method: "POST",
+                body: JSON.stringify({ provider: obj.provider, setKey: obj.setKey, removeKey: obj.removeKey }),
+              }),
+            );
+            // Dedicated per-request ack, mirroring the relay path — see #140.
+            this.emit({ type: "stt.config.set.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "stt.config.set.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
           break;
+        }
         case "transcribe":
           // Re-emit the REST result as the same `transcription` event the relay
           // path produces, so the controller resolves one uniform result stream.

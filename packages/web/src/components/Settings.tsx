@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AccountNode, AppState, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -11,6 +11,7 @@ import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { StatsPanel } from "./StatsPanel.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
+import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
@@ -187,16 +188,15 @@ export function Settings({
   // close (parity with the Sheet primitive this replaced).
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  // Escape closes the modal — but only when Settings is the topmost layer.
+  // A confirm dialog or sheet opened from within a panel registers above this,
+  // so its Escape cancels *it* and leaves Settings open (it used to tear the
+  // whole modal down in one press).
+  useModalEscape(() => onCloseRef.current());
+  // Restore focus to whatever opened Settings when it closes.
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCloseRef.current();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      opener?.focus?.();
-    };
+    return () => { opener?.focus?.(); };
   }, []);
 
   const groups: NavGroup[] = [
@@ -239,6 +239,9 @@ export function Settings({
 
   const q = query.trim().toLowerCase();
   const matches = (label: string) => !q || label.toLowerCase().includes(q);
+  // A query matching nothing used to hide every group and leave the sidebar
+  // blank — looked broken rather than "no results" (#140).
+  const hasVisibleNavItem = groups.some((group) => group.items.some((it) => matches(it.label)));
 
   const title = activeView ? TITLES[activeView] : "Settings";
 
@@ -264,6 +267,7 @@ export function Settings({
             />
           </div>
           <nav className="settings-nav-groups">
+            {!hasVisibleNavItem && <div className="picker-empty">No settings match "{query.trim()}"</div>}
             {groups.map((group) => {
               const visible = group.items.filter((it) => matches(it.label));
               if (visible.length === 0) return null;
@@ -377,7 +381,6 @@ function Toggle({ checked, onChange, disabled, label }: { checked: boolean; onCh
 
 // ---- Notifications (push on/off + per-event choices) ----
 function NotificationsPanel() {
-  const [me, setMe] = useState<AccountMe | null>(null);
   const [status, setStatus] = useState<{ supported: boolean; subscribed: boolean; permission: string } | null>(null);
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -385,13 +388,19 @@ function NotificationsPanel() {
 
   const reloadStatus = () => controller.pushStatus().then(setStatus).catch(() => {});
   useEffect(() => {
-    controller.fetchMe().then(setMe).catch(() => {});
     reloadStatus();
     controller.getNotificationPreferences().then(setPrefs).catch(() => {});
   }, []);
 
-  const ent = me?.entitlements;
-  const pushAllowed = ent?.pushEnabled !== false; // undefined (self-host/loading) = allowed
+  // The enable/disable result (or a save error) used to sit there forever —
+  // auto-dismiss it like every other transient status message in Settings (#140).
+  useEffect(() => {
+    if (!msg) return;
+    const t = setTimeout(() => setMsg(null), 5000);
+    return () => clearTimeout(t);
+  }, [msg]);
+
+  // Push notifications are included on every plan, so there's no upgrade gate.
   const on = Boolean(status?.subscribed);
 
   const setMaster = async (next: boolean) => {
@@ -421,20 +430,6 @@ function NotificationsPanel() {
     return (
       <div className="settings-form">
         <p className="muted">Push notifications aren't supported on this device or browser.</p>
-      </div>
-    );
-  }
-
-  if (me && !pushAllowed) {
-    return (
-      <div className="settings-form">
-        <label className="field-label">Push notifications</label>
-        <p className="muted">Push notifications are a Pro feature.</p>
-        <div className="row-actions">
-          <button className="btn primary" onClick={() => controller.startCheckout().catch((e) => setMsg(String(e.message || e)))}>
-            Upgrade
-          </button>
-        </div>
       </div>
     );
   }
@@ -503,11 +498,10 @@ function nodeProviderSummary(n: AccountNode): { text: string; expired: boolean }
 function ProvidersPanel({ state }: { state: AppState }) {
   // Holds just the id, not a snapshot of the ProviderInfo object: `managing`
   // below is re-derived from live `state.providers` every render instead, so
-  // a save/remove — which have no direct ack, only an eventual refreshed
-  // providers.list — actually shows up in this detail view (e.g. the
-  // "Connected" chip) instead of the view staying frozen on the object as it
-  // looked when the user first tapped in, unrelated to whether the save
-  // actually landed.
+  // a remove (whose only signal is an eventual refreshed providers.list —
+  // save now awaits a direct ack, see saveApiKey) actually shows up in this
+  // detail view (e.g. the "Connected" chip) instead of the view staying
+  // frozen on the object as it looked when the user first tapped in.
   // In hosted (relay) mode the account can have several nodes, each with its
   // own provider logins/keys. `state.providers` only ever reflects the node the
   // app is currently connected to, so managing another node's keys used to mean
@@ -521,6 +515,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [keyErr, setKeyErr] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   useEffect(() => {
     controller.listProviders();
@@ -607,22 +602,25 @@ function ProvidersPanel({ state }: { state: AppState }) {
                   <button
                     className="btn primary"
                     disabled={!key.trim() || busy}
-                    onClick={() => {
+                    onClick={async () => {
                       setBusy(true);
-                      controller.saveApiKey(managing.id, key.trim());
-                      setKey("");
-                      // provider.apiKey has no direct ack — re-list so the
-                      // "Connected" chip (managing is now derived live from
-                      // state.providers, see above) reflects the node's real
-                      // outcome instead of a blind timer that looked saved
-                      // either way.
-                      setTimeout(() => {
+                      setKeyErr(null);
+                      try {
+                        // Awaits the node's real ack instead of a blind timer
+                        // that looked saved either way — see #140.
+                        await controller.saveApiKey(managing.id, key.trim());
+                        setKey("");
+                        // Re-list so the "Connected" chip (managing is derived
+                        // live from state.providers, see above) reflects it.
                         controller.listProviders();
+                      } catch (e) {
+                        setKeyErr(String((e as Error)?.message || e));
+                      } finally {
                         setBusy(false);
-                      }, 500);
+                      }
                     }}
                   >
-                    Save key
+                    {busy ? "Saving…" : "Save key"}
                   </button>
                   {managing.configured && (
                     <button
@@ -642,6 +640,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
                     </button>
                   )}
                 </div>
+                {keyErr && <div className="banner error inline">{keyErr}</div>}
               </>
             )}
           </>
@@ -785,6 +784,7 @@ function draftFromPreset(p: LocalModelPreset): LocalModelDraft {
 function LocalModelsPanel({ state }: { state: AppState }) {
   const [draft, setDraft] = useState<LocalModelDraft | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
 
   useEffect(() => {
@@ -793,34 +793,44 @@ function LocalModelsPanel({ state }: { state: AppState }) {
   }, []);
 
   const set = (patch: Partial<LocalModelDraft>) => setDraft((d) => ({ ...(d ?? EMPTY_DRAFT), ...patch }));
+  // Opening a (possibly different) draft always clears a stale error from a
+  // previous attempt, so it can't linger on an unrelated endpoint.
+  const openDraft = (d: LocalModelDraft | null) => {
+    setSaveErr(null);
+    setDraft(d);
+  };
 
   if (draft) {
     const canSave = draft.baseUrl.trim().length > 0 && !busy;
     const apiIsKnown = KNOWN_APIS.some((o) => o.value === draft.api);
     const isAzure = draft.api.toLowerCase().startsWith("azure");
-    const save = () => {
+    const save = async () => {
       setBusy(true);
-      controller.saveLocalModel({
-        providerId: (draft.providerId || draft.name || "local").trim(),
-        name: draft.name.trim() || undefined,
-        baseUrl: draft.baseUrl.trim(),
-        api: draft.api.trim() || "openai-completions",
-        // Only send a key when the user typed one, so editing without retyping
-        // it doesn't wipe the stored key (the node merges onto the previous spec).
-        ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
-        models: parseModelLines(draft.models),
-      });
-      // models.custom.save has no direct ack beyond the refreshed list; re-list
-      // so the panel reflects the node's real outcome, then close the form.
-      setTimeout(() => {
+      setSaveErr(null);
+      try {
+        // Awaits the node's real ack instead of a blind timer that closed the
+        // form (looking saved) even when the node rejected it — see #140.
+        await controller.saveLocalModel({
+          providerId: (draft.providerId || draft.name || "local").trim(),
+          name: draft.name.trim() || undefined,
+          baseUrl: draft.baseUrl.trim(),
+          api: draft.api.trim() || "openai-completions",
+          // Only send a key when the user typed one, so editing without retyping
+          // it doesn't wipe the stored key (the node merges onto the previous spec).
+          ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+          models: parseModelLines(draft.models),
+        });
         controller.listLocalModels();
-        setBusy(false);
         setDraft(null);
-      }, 400);
+      } catch (e) {
+        setSaveErr(String((e as Error)?.message || e));
+      } finally {
+        setBusy(false);
+      }
     };
     return (
       <div className="settings-form">
-        <button className="link-btn" onClick={() => setDraft(null)}>‹ All endpoints</button>
+        <button className="link-btn" onClick={() => openDraft(null)}>‹ All endpoints</button>
         <h3>{draft.editing ? draft.name || draft.providerId : "Add endpoint"}</h3>
         <p className="muted">
           Any OpenAI-compatible server — Ollama, LM Studio, vLLM, SGLang, or a self-hosted / Azure endpoint.
@@ -891,9 +901,12 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         )}
 
         <div className="row-actions">
-          <button className="btn primary" disabled={!canSave} onClick={save}>{draft.editing ? "Save changes" : "Add endpoint"}</button>
-          <button className="btn" onClick={() => setDraft(null)}>Cancel</button>
+          <button className="btn primary" disabled={!canSave} onClick={save}>
+            {busy ? "Saving…" : draft.editing ? "Save changes" : "Add endpoint"}
+          </button>
+          <button className="btn" onClick={() => openDraft(null)}>Cancel</button>
         </div>
+        {saveErr && <div className="banner error inline">{saveErr}</div>}
       </div>
     );
   }
@@ -942,19 +955,19 @@ function LocalModelsPanel({ state }: { state: AppState }) {
                 Remove
               </button>
             }
-            onClick={() => setDraft(draftFromProvider(p))}
+            onClick={() => openDraft(draftFromProvider(p))}
           />
         ))}
       </div>
 
-      <button className="btn primary block" onClick={() => setDraft({ ...EMPTY_DRAFT })}>+ Add endpoint</button>
+      <button className="btn primary block" onClick={() => openDraft({ ...EMPTY_DRAFT })}>+ Add endpoint</button>
 
       {state.localModelPresets.length > 0 && (
         <>
           <label className="field-label">Quick add</label>
           <div className="row-actions" style={{ flexWrap: "wrap" }}>
             {state.localModelPresets.map((preset) => (
-              <button key={preset.id} className="btn" title={preset.note} onClick={() => setDraft(draftFromPreset(preset))}>
+              <button key={preset.id} className="btn" title={preset.note} onClick={() => openDraft(draftFromPreset(preset))}>
                 {preset.name}
               </button>
             ))}
@@ -968,7 +981,10 @@ function LocalModelsPanel({ state }: { state: AppState }) {
 // ---- Voice input (speech-to-text) ----
 function VoicePanel({ state }: { state: AppState }) {
   const [keys, setKeys] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
+  // Keyed by provider id, not a single shared flag — saving one provider's key
+  // used to disable Save for every other row too (#140).
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [errById, setErrById] = useState<Record<string, string>>({});
   const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
   useEffect(() => {
     controller.getSttConfig();
@@ -978,17 +994,17 @@ function VoicePanel({ state }: { state: AppState }) {
 
   return (
     <div className="settings-form">
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          message={confirm.message}
+          confirmLabel="Remove"
+          danger
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => { confirm.action(); setConfirm(null); }}
+        />
+      )}
       <p className="muted settings-intro">
-        {confirm && (
-          <ConfirmDialog
-            title={confirm.title}
-            message={confirm.message}
-            confirmLabel="Remove"
-            danger
-            onCancel={() => setConfirm(null)}
-            onConfirm={() => { confirm.action(); setConfirm(null); }}
-          />
-        )}
         Dictate into the composer with the mic button. With a key set, recordings are transcribed by your chosen
         provider using the key stored on this node. With no key, voice falls back to your browser's built-in dictation
         (no key needed, but lower accuracy). Note: <strong>Groq</strong> (fast Whisper hosting, key from console.groq.com)
@@ -1029,21 +1045,24 @@ function VoicePanel({ state }: { state: AppState }) {
           <div className="row-actions">
             <button
               className="btn primary"
-              disabled={!(keys[p.id] || "").trim() || busy}
-              onClick={() => {
-                setBusy(true);
-                controller.saveSttKey(p.id, (keys[p.id] || "").trim());
-                setKeys((k) => ({ ...k, [p.id]: "" }));
-                // stt.config.set has no direct ack — re-fetch so the "Key
-                // set" chip (already reactive off state.sttConfig) reflects
-                // the node's real outcome instead of a blind timer.
-                setTimeout(() => {
+              disabled={!(keys[p.id] || "").trim() || busyId === p.id}
+              onClick={async () => {
+                setBusyId(p.id);
+                setErrById((e) => ({ ...e, [p.id]: "" }));
+                try {
+                  // Awaits the node's real ack instead of a blind timer — see #140.
+                  await controller.saveSttKey(p.id, (keys[p.id] || "").trim());
+                  setKeys((k) => ({ ...k, [p.id]: "" }));
+                  // "Key set" chip is reactive off state.sttConfig — refresh it.
                   controller.getSttConfig();
-                  setBusy(false);
-                }, 500);
+                } catch (e) {
+                  setErrById((cur) => ({ ...cur, [p.id]: String((e as Error)?.message || e) }));
+                } finally {
+                  setBusyId(null);
+                }
               }}
             >
-              Save key
+              {busyId === p.id ? "Saving…" : "Save key"}
             </button>
             {p.configured && (
               <button
@@ -1053,8 +1072,8 @@ function VoicePanel({ state }: { state: AppState }) {
                   message: `Remove the stored ${p.label} key?`,
                   action: () => {
                     controller.removeSttKey(p.id);
-                    // stt.config.set has no direct ack — re-fetch so the "Key
-                    // set" chip reflects the node's real outcome.
+                    // stt.config.set (remove) has no direct ack — re-fetch so
+                    // the "Key set" chip reflects the node's real outcome.
                     setTimeout(() => controller.getSttConfig(), 500);
                   },
                 })}
@@ -1063,6 +1082,7 @@ function VoicePanel({ state }: { state: AppState }) {
               </button>
             )}
           </div>
+          {errById[p.id] && <div className="banner error inline">{errById[p.id]}</div>}
         </div>
       ))}
     </div>
@@ -1547,6 +1567,8 @@ function NodesPanel({ state }: { state: AppState }) {
   const [nodes, setNodes] = useState<Awaited<ReturnType<typeof controller.listNodes>>>([]);
   const [form, setForm] = useState<NodeSettings | null>(null);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const currentNodeId = controller.local.cur;
 
@@ -1579,28 +1601,42 @@ function NodesPanel({ state }: { state: AppState }) {
   const modelSelectable = agentCaps?.modelSelection !== false;
   const models = state.models;
 
-  const save = () => {
-    if (!form) return;
-    controller.setNodeSettings({
-      name: form.name,
-      defaultAgent: form.defaultAgent,
-      defaultModel: modelSelectable ? form.defaultModel : null,
-      defaultSandbox: form.defaultSandbox,
-      githubMaxConcurrent: form.githubMaxConcurrent,
-      githubIssuePrompt: form.githubIssuePrompt,
-      sessionSync: form.sessionSync,
-      worktreeSync: form.worktreeSync,
-      syncStandbyNodeId: form.syncStandbyNodeId ?? "",
-    });
-    setSavedMsg("Saved");
-    setTimeout(() => setSavedMsg(null), 1500);
+  const save = async () => {
+    if (!form || saving) return;
+    setSaving(true);
+    setSaveErr(null);
+    setSavedMsg(null);
+    try {
+      // setNodeSettings now resolves once the node actually acks the change
+      // (or rejects with its error) instead of assuming success the moment
+      // the command was sent — see #140.
+      await controller.setNodeSettings({
+        name: form.name,
+        defaultAgent: form.defaultAgent,
+        defaultModel: modelSelectable ? form.defaultModel : null,
+        defaultSandbox: form.defaultSandbox,
+        githubMaxConcurrent: form.githubMaxConcurrent,
+        githubIssuePrompt: form.githubIssuePrompt,
+        sessionSync: form.sessionSync,
+        worktreeSync: form.worktreeSync,
+        syncStandbyNodeId: form.syncStandbyNodeId ?? "",
+      });
+      setSavedMsg("Saved");
+      setTimeout(() => setSavedMsg(null), 1500);
+    } catch (e) {
+      setSaveErr(String((e as Error)?.message || e));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const resetIssuePrompt = () => {
     if (!form || !settings) return;
-    controller.setNodeSettings({ githubIssuePrompt: "" });
-    // Re-seed from the node once it echoes back the restored default.
-    setTimeout(reload, 300);
+    setSaveErr(null);
+    controller
+      .setNodeSettings({ githubIssuePrompt: "" })
+      .then(reload)
+      .catch((e) => setSaveErr(String((e as Error)?.message || e)));
   };
 
   return (
@@ -1815,8 +1851,9 @@ function NodesPanel({ state }: { state: AppState }) {
           </section>
 
           <div className="row-actions">
-            <button className="btn primary" onClick={save}>Save</button>
+            <button className="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
+            {saveErr && <span className="chip err">{saveErr}</span>}
           </div>
         </>
       )}
@@ -1990,6 +2027,9 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // Both saveToken and savePrefs are already real awaited requests — the
+  // missing piece was an in-flight guard against a double-submit (#140).
+  const [busy, setBusy] = useState(false);
 
   const refreshMachines = () =>
     controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId))).catch(() => {});
@@ -2022,6 +2062,8 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
   }, [hasToken, providerId, region]);
 
   const saveToken = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
       await controller.setEphemeralToken(providerId, token.trim());
       setToken("");
@@ -2030,16 +2072,22 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
       setMsg("Token saved on this device.");
     } catch (e) {
       setMsg(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
     }
   };
 
   const savePrefs = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
       await controller.setEphemeralPrefs(providerId, { region, size, ttlMinutes: ttl, repo: repo.trim() || null });
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
     } catch (e) {
       setMsg(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -2068,7 +2116,7 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
           </div>
           <label className="field-label">{catalog.tokenLabel}</label>
           <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste token" />
-          <button className="btn primary" disabled={!token.trim()} onClick={saveToken}>Save token</button>
+          <button className="btn primary" disabled={!token.trim() || busy} onClick={saveToken}>{busy ? "Saving…" : "Save token"}</button>
         </>
       ) : (
         <>
@@ -2094,7 +2142,7 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
           <input className="picker-search" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo" />
 
           <div className="row-actions">
-            <button className="btn primary" onClick={savePrefs}>Save preferences</button>
+            <button className="btn primary" disabled={busy} onClick={savePrefs}>{busy ? "Saving…" : "Save preferences"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
             <button
               className="btn danger-ghost"
@@ -2154,6 +2202,7 @@ function AccountPanel() {
   const [nodes, setNodes] = useState<Awaited<ReturnType<typeof controller.listNodes>>>([]);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   const reloadMe = () => controller.fetchMe().then(setMe).catch(() => {});
   const reloadDevices = () => controller.listDevices().then(setDevices).catch(() => {});
@@ -2165,9 +2214,6 @@ function AccountPanel() {
   const ent = me?.entitlements;
   const counts = me?.counts;
   const free = (ent?.plan || me?.account?.plan) === "free";
-  // Undefined maxNodes = unlimited (no node cap on any plan). Show a placeholder
-  // until `me` loads so it never briefly reads "∞" mid-fetch.
-  const nodeCap = ent ? (ent.maxNodes ?? "∞") : "—";
   // Free's one cap: runs per rolling 7-day window across every source. Undefined = unlimited (paid).
   const runCap = ent ? (ent.weeklyRunLimit ?? "∞") : "—";
   return (
@@ -2186,18 +2232,41 @@ function AccountPanel() {
       <div className="stat-grid">
         <Stat label="Plan" value={planLabel(ent?.plan || me?.account?.plan)} />
         <Stat label="Runs / week" value={`${counts?.runsThisWeek ?? "—"} / ${runCap}`} />
-        <Stat label="Nodes" value={`${counts?.nodes ?? "—"} / ${nodeCap}`} />
-        <Stat label="Sessions" value={`${counts?.sessions ?? "—"}`} />
-        <Stat label="Devices" value={`${counts?.devices ?? "—"}`} />
       </div>
+      {free && (
+        <p className="muted settings-intro">
+          You're on the free plan — everything's included, capped at {runCap} runs per rolling 7 days across
+          every source (manual, app, GitHub queue, ephemeral). Pro removes the cap for {PRO_PRICE_LABEL}.
+        </p>
+      )}
       <div className="row-actions">
         {free ? (
-          <button className="btn primary" onClick={() => controller.startCheckout().catch((e) => setErr(String(e.message || e)))}>
-            Upgrade
+          <button
+            className="btn primary"
+            disabled={opening}
+            onClick={() => {
+              setOpening(true);
+              setErr(null);
+              // Both buttons fetch a redirect URL before navigating away — with
+              // no busy state the button just looked dead in that gap (#140).
+              // `finally` only fires on a failure to redirect; success replaces
+              // this page before it can run.
+              controller.startCheckout().catch((e) => setErr(String(e.message || e))).finally(() => setOpening(false));
+            }}
+          >
+            {opening ? "Opening…" : `Upgrade to Pro — ${PRO_PRICE_LABEL}`}
           </button>
         ) : (
-          <button className="btn" onClick={() => controller.openBillingPortal().catch((e) => setErr(String(e.message || e)))}>
-            Manage billing
+          <button
+            className="btn"
+            disabled={opening}
+            onClick={() => {
+              setOpening(true);
+              setErr(null);
+              controller.openBillingPortal().catch((e) => setErr(String(e.message || e))).finally(() => setOpening(false));
+            }}
+          >
+            {opening ? "Opening…" : "Manage billing"}
           </button>
         )}
       </div>
@@ -2307,7 +2376,19 @@ function LinkPanel({ onDone }: { onDone: () => void }) {
   return (
     <div className="settings-form">
       <p className="muted">Paste a device-link URL or code from another Bivy client to add its node here.</p>
-      <textarea className="picker-search" rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="https://…#… or code" />
+      <textarea
+        className="picker-search"
+        rows={4}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          // Clear the stale error as soon as the user edits — otherwise a
+          // failed link keeps showing "didn't look like a valid device link"
+          // through a correction and retry, until the next success (#140).
+          setErr(null);
+        }}
+        placeholder="https://…#… or code"
+      />
       <button
         className="btn primary"
         disabled={!text.trim()}

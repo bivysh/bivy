@@ -515,13 +515,15 @@ export function Composer({
           )}
           {slashMenu.length > 0 && (
             <div className="slash-menu" role="listbox" aria-label="Commands">
-              {slashMenu.map((cmd, i) => (
+              {slashMenu.map((cmd, i) => {
+                const activeIndex = Math.min(menuIndex, slashMenu.length - 1);
+                return (
                 <button
                   type="button"
                   key={cmd.name}
-                  className={`slash-item${i === Math.min(menuIndex, slashMenu.length - 1) ? " active" : ""}`}
+                  className={`slash-item${i === activeIndex ? " active" : ""}`}
                   role="option"
-                  aria-selected={i === menuIndex}
+                  aria-selected={i === activeIndex}
                   // onMouseDown (not onClick) so the textarea doesn't blur and
                   // swallow the tap before the handler runs.
                   onMouseDown={(e) => { e.preventDefault(); chooseFromMenu(cmd); }}
@@ -529,7 +531,8 @@ export function Composer({
                   <span className="slash-name">{cmd.name}</span>
                   <span className="slash-desc">{cmd.description}</span>
                 </button>
-              ))}
+                );
+              })}
             </div>
           )}
           {(attachments.length > 0 || readingCount > 0) && (

@@ -436,6 +436,10 @@ export interface AppState {
   runTerminals: RunTerminalSummary[];
   activeSessionId: string | null;
   activeTitle: string;
+  /** Sessions currently driven by their interactive TUI (single-writer): chat
+   *  for these is locked until the TUI exits. Fed by `terminal.tui` broadcasts
+   *  so every device shows the same locked/unlocked state. */
+  tuiSessions: string[];
   github: GithubContext;
   transcript: TranscriptEntry[];
   working: boolean;
@@ -528,6 +532,10 @@ export interface AppState {
    */
   commandsBySession: Record<string, SlashCommand[]>;
   error: string | null;
+  /** A transient, non-error confirmation banner (e.g. "You're on Pro"). Shown as
+   *  a success toast and auto-dismissed by the UI. Distinct from `error` so the
+   *  two can coexist and are styled differently. */
+  notice: string | null;
 }
 
 /** A harness checkpoint (rewind target) for the active session. */
@@ -570,6 +578,7 @@ export function initialState(): AppState {
     runTerminals: [],
     activeSessionId: null,
     activeTitle: "New session",
+    tuiSessions: [],
     github: { issueUrl: null, prUrl: null, branch: null, repo: null, prs: [] },
     transcript: [],
     working: false,
@@ -615,6 +624,7 @@ export function initialState(): AppState {
     checkpoints: [],
     commandsBySession: {},
     error: null,
+    notice: null,
   };
 }
 
@@ -1162,6 +1172,7 @@ export class SessionStore {
       // them across a node switch.
       commandsBySession: {},
       error: null,
+      notice: null,
       // Per-node settings (name, default agent/model, GitHub prompt, sync
       // config, …) must never survive a switch — otherwise a still-editable
       // form can keep showing the *previous* node's settings under the
@@ -1173,6 +1184,11 @@ export class SessionStore {
 
   setError(message: string): void {
     this.set({ error: message });
+  }
+
+  /** Show (or clear, with "") a transient success/confirmation banner. */
+  setNotice(message: string): void {
+    this.set({ notice: message });
   }
 
   /** Append a local system message to the active transcript (client-only, not
@@ -1452,6 +1468,18 @@ export class SessionStore {
       case "terminal.exit": {
         const termId = String((event as any).termId || "");
         if (termId) this.set({ runTerminals: this.state.runTerminals.filter((t) => t.termId !== termId) });
+        return;
+      }
+      case "terminal.tui": {
+        // A session was handed to / returned from its interactive TUI. Track the
+        // locked set so the composer for that session can show the "open in the
+        // terminal" banner instead of a rejected send. Idempotent add/remove.
+        const sid = String((event as any).sessionId || "");
+        if (!sid) return;
+        const active = Boolean((event as any).active);
+        const has = this.state.tuiSessions.includes(sid);
+        if (active && !has) this.set({ tuiSessions: [...this.state.tuiSessions, sid] });
+        else if (!active && has) this.set({ tuiSessions: this.state.tuiSessions.filter((s) => s !== sid) });
         return;
       }
       case "sessions.list": {
