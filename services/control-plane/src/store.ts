@@ -279,7 +279,7 @@ export interface GithubAppKeyRequest {
   createdAt: string;
 }
 
-// --- Work queue (E2/E4) -------------------------------------------------------
+// --- Automation runs / legacy work queue adapter ------------------------------
 // Inbound front doors (GitHub issue webhook, Slack command) enqueue WORK ITEMS
 // on the control plane. The node — which dials outbound only (invariant #4) —
 // gets a best-effort relay push hint, then PULLS/claims pending items over the
@@ -287,7 +287,59 @@ export interface GithubAppKeyRequest {
 // never reaches the control plane), then marks it done. The
 // control plane stores only routing metadata: ids, repo slug, issue number,
 // title/body text of the request. Never agent output or credentials.
-export type WorkItemStatus = "pending" | "claimed" | "done";
+export type AutomationRunStatus =
+  | "pending"
+  | "claimed"
+  | "running"
+  | "needs_attention"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+/** Compatibility status accepted by clients deployed before the automation model. */
+export type WorkItemStatus = AutomationRunStatus | "done";
+export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | "schedule";
+export interface AutomationDefinition {
+  id: string;
+  accountId: string;
+  name: string;
+  /** End-to-end encrypted template; the control plane cannot inspect instructions. */
+  templateCiphertext?: string;
+  runtimeId?: string;
+  model?: string;
+  nodeLabel?: string;
+  ephemeral?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface TriggerEvent {
+  id: string;
+  accountId: string;
+  kind: AutomationTriggerKind;
+  sourceKey?: string;
+  sourceRef?: { repo?: string; issueNumber?: number; url?: string; externalId?: string };
+  createdAt: string;
+}
+export interface AutomationRun {
+  id: string;
+  accountId: string;
+  definitionId?: string;
+  triggerId: string;
+  triggerKind: AutomationTriggerKind;
+  status: AutomationRunStatus;
+  attempt: number;
+  target: { kind: "new_session" } | { kind: "existing_session"; sessionId: string };
+  routing: { nodeLabel: string; runtimeId?: string; model?: string; ephemeral?: boolean };
+  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+  title: string;
+  body?: string;
+  source: string;
+  sourceRef?: TriggerEvent["sourceRef"];
+  createdAt: string;
+  claimedByNodeId?: string;
+  claimedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
 export interface WorkItem {
   id: string;
   accountId: string;
@@ -324,6 +376,15 @@ export interface WorkItem {
   // `label` alone drives routing; an ephemeral machine serves a one-off
   // `bivy/<slug>` label no differently than a persistent node would.
   ephemeral?: boolean;
+  /** Canonical automation fields; legacy clients can ignore these. */
+  definitionId?: string;
+  triggerId?: string;
+  triggerKind?: AutomationTriggerKind;
+  attempt?: number;
+  targetKind?: "new_session" | "existing_session";
+  targetSessionId?: string;
+  startedAt?: string;
+  output?: AutomationRun["output"];
 }
 export type WorkItemInput = {
   label?: string;
@@ -344,8 +405,12 @@ export type WorkItemInput = {
   defaultRouted?: boolean;
   runtimeId?: string;
   model?: string;
+  ephemeral?: boolean;
   installationId?: string;
   appId?: string;
+  definitionId?: string;
+  triggerKind?: AutomationTriggerKind;
+  target?: AutomationRun["target"];
 };
 
 // Per-account inbound hook: a stable id + secret a user configures in GitHub /
@@ -700,6 +765,12 @@ export interface MeshStore {
   // Remove just one app's hooks (disconnecting a single app, leaving the rest).
   deleteGithubAppHooksForApp(accountId: string, appId: string): Promise<number>;
   enqueueWorkItem(accountId: string, input: WorkItemInput): Promise<WorkItem>;
+  createAutomationDefinition(accountId: string, input: Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt">): Promise<AutomationDefinition>;
+  listAutomationDefinitions(accountId: string): Promise<AutomationDefinition[]>;
+  enqueueAutomationRun(accountId: string, input: WorkItemInput): Promise<AutomationRun>;
+  listAutomationRuns(accountId: string, limit?: number): Promise<AutomationRun[]>;
+  getAutomationRun(accountId: string, id: string): Promise<AutomationRun | undefined>;
+  transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined>;
   // Pending items a node may run: the account's items whose label the node serves
   // (a node serving "bivy" also serves "bivy/<self>"; pass the labels it accepts).
   listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]>;

@@ -269,7 +269,50 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(claimed?.status, "claimed");
     assert.equal(await store.claimWorkItem(acct.id, node.id, a.id), undefined); // second claim loses
     await store.completeWorkItem(acct.id, a.id);
-    assert.equal((await store.listWorkItems(acct.id)).find((w) => w.id === a.id)?.status, "done");
+    assert.equal((await store.listWorkItems(acct.id)).find((w) => w.id === a.id)?.status, "succeeded");
+  });
+
+  await test("automation runs: trigger-neutral lifecycle and concurrent claim", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-automation@example.com");
+    const { node: a } = await store.enrollNode(acct.id, "auto-a", "A");
+    const { node: b } = await store.enrollNode(acct.id, "auto-b", "B");
+    const definition = await store.createAutomationDefinition(acct.id, {
+      name: "Triage",
+      templateCiphertext: "encrypted-template",
+      runtimeId: "codex",
+      nodeLabel: "bivy",
+    });
+    const run = await store.enqueueAutomationRun(acct.id, {
+      source: "manual",
+      triggerKind: "manual",
+      definitionId: definition.id,
+      title: "Investigate",
+      dedupeKey: "manual:one",
+    });
+    assert.equal(run.status, "pending");
+    assert.equal(run.triggerKind, "manual");
+    assert.equal(run.target.kind, "new_session");
+    const [claimA, claimB] = await Promise.all([
+      store.claimWorkItem(acct.id, a.id, run.id),
+      store.claimWorkItem(acct.id, b.id, run.id),
+    ]);
+    assert.equal([claimA, claimB].filter(Boolean).length, 1);
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "running"))?.status, "running");
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "needs_attention"))?.status, "needs_attention");
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "failed", { failure: "operator stopped" }))?.output?.failure, "operator stopped");
+
+    const slack = await store.enqueueAutomationRun(acct.id, {
+      source: "slack",
+      title: "Ship it",
+      dedupeKey: "slack:event:1",
+    });
+    const redelivery = await store.enqueueAutomationRun(acct.id, {
+      source: "slack",
+      title: "duplicate",
+      dedupeKey: "slack:event:1",
+    });
+    assert.equal(slack.triggerKind, "slack");
+    assert.equal(redelivery.id, slack.id);
   });
 
   await test("work queue: dedupeKey is idempotent per account", async (store) => {

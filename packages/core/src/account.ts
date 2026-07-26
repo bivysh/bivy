@@ -435,7 +435,7 @@ export async function setEphemeralQueueDefault(
 export interface GithubQueueItem {
   id: string;
   source: string; // "github:issue" | "github:comment" | "slack"
-  status: "pending" | "claimed" | "done";
+  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
   label: string;
   title: string;
   repo?: string;
@@ -452,6 +452,12 @@ export interface GithubQueueItem {
   claimedAt?: string;
   claimedByNodeId?: string;
   completedAt?: string;
+  triggerId?: string;
+  triggerKind?: "github" | "slack" | "manual" | "webhook" | "schedule";
+  definitionId?: string;
+  attempt?: number;
+  targetKind?: "new_session" | "existing_session";
+  startedAt?: string;
 }
 
 /** Recent incoming work items for the account, newest first (queue UI). */
