@@ -149,6 +149,13 @@ export function App() {
   const runCommand = useCallback((name: string, _args?: string) => {
     switch (name) {
       case "/new": controller.newSession(); break;
+      case "/resume":
+        // Manual resume: continue the turn a restart interrupted. Sent as a normal
+        // prompt to the active session so it streams and re-arms the turn state.
+        controller.sendPrompt(
+          "Please continue — your previous turn was interrupted by a restart before it finished. Pick up exactly where you left off and finish what you were doing.",
+        );
+        break;
     }
   }, []);
 
