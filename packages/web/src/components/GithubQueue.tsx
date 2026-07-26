@@ -20,6 +20,16 @@ import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
+function RouteExplanation({ route }: { route: NonNullable<GithubQueueItem["route"]> }) {
+  const text = route.status === "waiting"
+    ? route.reasons[0]?.message
+    : route.status === "needs_attention"
+      ? `Needs attention: ${route.reasons.filter((reason) => reason.hard).map((reason) => reason.message).join(" ")}`
+      : route.reasons.find((reason) => reason.code === "fallback_selected")?.message
+        ?? `Routed to ${route.selected?.nodeLabel ?? route.selected?.id}`;
+  return <span className="queue-item-meta">{text}</span>;
+}
+
 // Cap on the GitHub queue "Sessions" list before a "Show more" link appears
 // (issue #531) — with many queue sessions the list otherwise grows unbounded
 // and dominates the panel.
@@ -537,6 +547,7 @@ export function GithubQueuePanel({
                               {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
+                            {w.route && <RouteExplanation route={w.route} />}
                           </a>
                         ) : (
                           <div className="queue-item-main" title={title}>
@@ -545,6 +556,7 @@ export function GithubQueuePanel({
                               {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
+                            {w.route && <RouteExplanation route={w.route} />}
                           </div>
                         )}
                         <div className="queue-card-actions">

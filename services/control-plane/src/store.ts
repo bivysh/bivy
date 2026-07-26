@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHash } from "node:crypto";
+import type { RouteCandidate, RouteReason, RoutingPolicy } from "./routing.js";
 
 /**
  * Control plane data store.
@@ -314,6 +315,14 @@ export interface WorkAttempt {
   checkpointId?: string;
   worktreePath?: string;
   resumed: boolean;
+  route?: WorkRouteDecision;
+}
+export interface WorkRouteDecision {
+  status: "selected" | "waiting" | "needs_attention";
+  selected?: RouteCandidate;
+  reasons: RouteReason[];
+  decidedAt: string;
+  waitUntil?: string;
 }
 export interface WorkItem {
   id: string;
@@ -360,6 +369,8 @@ export interface WorkItem {
   lastError?: string;
   attempts?: WorkAttempt[];
   retryableFailureClasses: WorkFailureClass[];
+  routingPolicy?: RoutingPolicy;
+  route?: WorkRouteDecision;
 }
 export type WorkItemInput = {
   label?: string;
@@ -750,6 +761,7 @@ export interface MeshStore {
   finishWorkAttempt(accountId: string, nodeId: string, id: string, attemptId: string, result: { status: "succeeded" | "failed" | "needs_attention" | "cancelled"; failureClass?: WorkFailureClass; attentionReason?: WorkAttentionReason; error?: string }): Promise<WorkItem | undefined>;
   cancelWorkItem(accountId: string, id: string): Promise<WorkItem | undefined>;
   retryWorkItem(accountId: string, id: string): Promise<WorkItem | undefined>;
+  setWorkRoute(accountId: string, id: string, policy: RoutingPolicy, route: WorkRouteDecision): Promise<WorkItem | undefined>;
   // Record that a run STARTED, keyed by its session id (idempotent: recording the
   // same `(accountId, sessionId)` twice is a no-op, so reconnects and repeated
   // session advertises never double-count). `runKey` is the distinct-run identifier

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
+import type { RoutingPolicy } from "./routing.js";
 import {
   type Account,
   type DeviceLoginStatus,
@@ -35,6 +36,7 @@ import {
   type WorkItemInput,
   type WorkAttempt,
   type WorkFailureClass,
+  type WorkRouteDecision,
   entitlementsForPlan,
   hashToken,
   disambiguateNodeName,
@@ -398,6 +400,8 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS last_error TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS retryable_failure_classes JSONB NOT NULL DEFAULT '["transient"]'::jsonb;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS routing_policy JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS route_decision JSONB;
       UPDATE work_items SET status = 'running' WHERE status = 'claimed';
       UPDATE work_items SET status = 'succeeded' WHERE status = 'done';
 
@@ -418,6 +422,7 @@ export class PostgresStore implements MeshStore {
         checkpoint_id TEXT,
         worktree_path TEXT,
         resumed BOOLEAN NOT NULL DEFAULT false,
+        route_decision JSONB,
         UNIQUE(work_item_id, attempt_number)
       );
 
@@ -443,6 +448,7 @@ export class PostgresStore implements MeshStore {
       CREATE INDEX IF NOT EXISTS idx_work_items_pending ON work_items(account_id, status, label);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_attempts_active ON work_attempts(work_item_id) WHERE status = 'running';
       CREATE INDEX IF NOT EXISTS idx_work_attempts_item ON work_attempts(work_item_id, attempt_number);
+      ALTER TABLE work_attempts ADD COLUMN IF NOT EXISTS route_decision JSONB;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_dedupe ON work_items(account_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
       -- One PENDING item per (account, collapse_key). The partial predicate on
       -- status='pending' frees the key once the item is claimed/done, so a later
@@ -1490,9 +1496,9 @@ export class PostgresStore implements MeshStore {
       }
       const attemptId = `attempt_${randomUUID()}`;
       const inserted = await client.query(
-        `INSERT INTO work_attempts (id, work_item_id, account_id, attempt_number, node_id, lease_expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-        [attemptId, id, accountId, number, nodeId, new Date(Date.now() + Math.max(1, leaseMs)).toISOString()],
+        `INSERT INTO work_attempts (id, work_item_id, account_id, attempt_number, node_id, lease_expires_at, route_decision)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [attemptId, id, accountId, number, nodeId, new Date(Date.now() + Math.max(1, leaseMs)).toISOString(), row.route_decision ? JSON.stringify(row.route_decision) : null],
       );
       const updated = await client.query(
         `UPDATE work_items SET status = 'running', claimed_by_node_id = $3, claimed_at = now(),
@@ -1545,7 +1551,8 @@ export class PostgresStore implements MeshStore {
       const updated = await client.query(
         `UPDATE work_items SET status = $3, completed_at = CASE WHEN $3 = 'pending' THEN NULL ELSE now() END,
            next_attempt_at = CASE WHEN $3 = 'pending' THEN $4::timestamptz ELSE NULL END,
-           failure_class = $5, attention_reason = $6, last_error = $7
+           failure_class = $5, attention_reason = $6, last_error = $7,
+           route_decision = CASE WHEN $3 = 'pending' THEN NULL ELSE route_decision END
          WHERE account_id = $1 AND id = $2 RETURNING *`,
         [accountId, id, status, new Date(Date.now() + delay).toISOString(), result.failureClass ?? null, result.attentionReason ?? null, result.error?.slice(0, 2000) ?? null],
       );
@@ -1569,9 +1576,25 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `UPDATE work_items SET status = 'pending', next_attempt_at = now(), completed_at = NULL,
          max_attempts = GREATEST(max_attempts, (SELECT count(*) + 1 FROM work_attempts WHERE work_item_id = $2)),
-         failure_class = NULL, attention_reason = NULL, last_error = NULL
+         failure_class = NULL, attention_reason = NULL, last_error = NULL, route_decision = NULL
        WHERE account_id = $1 AND id = $2 AND status IN ('failed', 'needs_attention', 'cancelled') RETURNING *`,
       [accountId, id],
+    );
+    return rows[0] ? mapWorkItem(rows[0]) : undefined;
+  }
+
+  async setWorkRoute(accountId: string, id: string, policy: RoutingPolicy, route: WorkRouteDecision): Promise<WorkItem | undefined> {
+    const status = route.status === "needs_attention" ? "needs_attention" : "pending";
+    const { rows } = await this.query(
+      `UPDATE work_items SET routing_policy = $3, route_decision = $4, status = $5,
+       label = COALESCE($6, label), runtime_id = COALESCE($7, runtime_id),
+       model = COALESCE($8, model), ephemeral = COALESCE($9, ephemeral)
+       WHERE account_id = $1 AND id = $2 AND status IN ('pending', 'needs_attention')
+       RETURNING *`,
+      [accountId, id, JSON.stringify(policy), JSON.stringify(route), status,
+        route.selected?.kind === "node" ? route.selected.nodeLabel : null,
+        route.selected?.runtime ?? null, route.selected?.model ?? null,
+        route.selected ? route.selected.kind === "ephemeral" : null],
     );
     return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
@@ -1676,6 +1699,8 @@ function mapWorkItem(row: any): WorkItem {
     attentionReason: row.attention_reason ?? undefined,
     lastError: row.last_error ?? undefined,
     retryableFailureClasses: Array.isArray(row.retryable_failure_classes) ? row.retryable_failure_classes : ["transient"],
+    routingPolicy: row.routing_policy ?? undefined,
+    route: row.route_decision ?? undefined,
   };
 }
 
@@ -1696,6 +1721,7 @@ function mapWorkAttempt(row: any): WorkAttempt {
     checkpointId: row.checkpoint_id ?? undefined,
     worktreePath: row.worktree_path ?? undefined,
     resumed: Boolean(row.resumed),
+    route: row.route_decision ?? undefined,
   };
 }
 

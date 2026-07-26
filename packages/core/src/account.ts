@@ -458,6 +458,13 @@ export interface GithubQueueItem {
   attentionReason?: string;
   lastError?: string;
   attempts?: Array<{ id: string; number: number; nodeId: string; status: string; startedAt: string; completedAt?: string; error?: string; sessionId?: string; resumed: boolean }>;
+  route?: {
+    status: "selected" | "waiting" | "needs_attention";
+    selected?: { kind: "node" | "ephemeral"; id: string; nodeLabel?: string; runtime?: string; model?: string; provider?: string };
+    reasons: Array<{ code: string; message: string; hard: boolean }>;
+    decidedAt: string;
+    waitUntil?: string;
+  };
 }
 
 /** Recent incoming work items for the account, newest first (queue UI). */

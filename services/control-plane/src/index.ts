@@ -9,6 +9,7 @@ import Stripe from "stripe";
 import webpush from "web-push";
 import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { countActiveAccountSessions } from "./session-count.js";
+import { decideRoute, type RoutingNode, type RoutingPolicy, type EphemeralRoute } from "./routing.js";
 import { createStore } from "./store-factory.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
@@ -1673,7 +1674,36 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     attentionReason: w.attentionReason,
     lastError: w.lastError,
     attempts: w.attempts,
+    route: w.route,
   })));
+}));
+
+app.post("/account/work-items/:id/route", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const item = (await store.listWorkItems(client.accountId, 200)).find((candidate) => candidate.id === String(req.params.id));
+  if (!item) return res.status(404).json({ error: "Unknown automation run" });
+  if (item.status !== "pending" && item.status !== "needs_attention") return res.status(409).json({ error: "Run is not routable" });
+  const policy = req.body?.policy as RoutingPolicy;
+  if (!policy || typeof policy.requiredSandboxPolicy !== "string" || typeof policy.requiredApprovalPolicy !== "string") {
+    return res.status(400).json({ error: "Routing policy must include sandbox and approval requirements" });
+  }
+  const now = Date.now();
+  const decision = decideRoute({
+    policy,
+    nodes: Array.isArray(req.body?.nodes) ? req.body.nodes as RoutingNode[] : [],
+    ephemeral: req.body?.ephemeral as EphemeralRoute | undefined,
+    queuedAt: Date.parse(item.createdAt),
+    now,
+  });
+  const route = {
+    status: decision.status,
+    ...(decision.status === "selected" ? { selected: decision.selected } : {}),
+    reasons: decision.reasons,
+    decidedAt: new Date(now).toISOString(),
+    ...(decision.status === "waiting" ? { waitUntil: new Date(decision.waitUntil).toISOString() } : {}),
+  };
+  res.json({ item: await store.setWorkRoute(client.accountId, item.id, policy, route), decision });
 }));
 
 app.post("/account/work-items/:id/cancel", asyncHandler(async (req, res) => {

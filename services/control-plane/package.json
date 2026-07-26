@@ -8,7 +8,7 @@
     "dev": "tsx src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test:unit": "tsx test/store.test.ts && tsx test/store-contract.test.ts && tsx test/session-index.test.ts && tsx test/session-count.test.ts && tsx test/relay-shards.test.ts && tsx test/redirect.test.ts && tsx test/webhooks.test.ts && tsx test/billing-lifecycle.test.ts && tsx test/push-entitlements.test.ts && tsx test/notification-preferences.test.ts"
+    "test:unit": "tsx test/routing.test.ts && tsx test/store.test.ts && tsx test/store-contract.test.ts && tsx test/session-index.test.ts && tsx test/session-count.test.ts && tsx test/relay-shards.test.ts && tsx test/redirect.test.ts && tsx test/webhooks.test.ts && tsx test/billing-lifecycle.test.ts && tsx test/push-entitlements.test.ts && tsx test/notification-preferences.test.ts"
   },
   "dependencies": {
     "@sentry/node": "^10.67.0",
