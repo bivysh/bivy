@@ -1432,15 +1432,29 @@ select.picker-search { appearance: auto; }
 /* Center within the *visual* viewport (--app-h from viewport.ts), not the
    layout viewport: `100%` includes the area behind the mobile browser chrome,
    which pulls the card off-center. Safe-area padding keeps a tall card clear of
-   the notch and home indicator. */
-/* grid-template-columns: minmax(0, 1fr) bounds the single column to the
-   container. Without it the auto track grows to the card's 380px max-content and,
-   on a viewport narrower than 380px + padding (any phone), overflows the right
-   edge — the card looks shoved off-centre with its right side clipped. The card
-   then takes width:100% to fill that bounded track and its max-width caps it on
-   wide screens. */
-.setup { min-height: var(--app-h, 100dvh); display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom)); }
-.setup-card { width: 100%; max-width: 380px; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; }
+   the notch and home indicator.
+
+   Height is pinned to --app-h and the container scrolls: when the on-screen
+   keyboard opens (focusing the email field), --app-h shrinks to the region above
+   the keyboard, and a card taller than that region must stay reachable. Plain
+   centering (place-items/justify-content: center) would clip the card's top off
+   the viewport with no way to scroll to it — the page itself can't scroll
+   (html/body overflow: hidden). Instead the card centers via `margin: auto` in a
+   scrollable flex column: auto margins center it when it fits and collapse to
+   keep the top edge scrollable when it doesn't (unlike justify-content: center,
+   which strands overflow above the scrollport on iOS Safari). align-items keeps
+   the width:100%/max-width:380px card centered horizontally and bounded on any
+   phone, so it never overflows the right edge. */
+.setup {
+  height: var(--app-h, 100dvh);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+}
+.setup-card { width: 100%; max-width: 380px; margin: auto; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; }
 .setup-glyph { font-size: 44px; }
 .setup-card h1 { margin: 6px 0 12px; }
 .setup-card p { color: var(--ink); margin: 8px 0; }

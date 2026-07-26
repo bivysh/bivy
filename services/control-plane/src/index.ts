@@ -577,8 +577,16 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
 // same address land on the SAME account. Minimal scope at login (read:user,
 // user:email); repo scope is requested later, only when a repo is connected to
 // the work queue. See docs/product-definition.md and docs/DEVELOPMENT_PLAN.md C1.
-const githubClientId = process.env.GITHUB_OAUTH_CLIENT_ID;
-const githubClientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET;
+// Accept the BIVY_-prefixed names as a fallback. GitHub reserves the `GITHUB_`
+// prefix for Actions secrets, so the canonical secrets are stored as
+// BIVY_GITHUB_OAUTH_CLIENT_ID / _SECRET (see scripts/sync-github-env.sh). A
+// deployment that forwards its Actions secrets into the runtime environment
+// verbatim ends up with the BIVY_-prefixed names set but the plain ones empty —
+// which silently disables GitHub sign-in and surfaces as "the authorization code
+// could not be exchanged" (an empty client secret) at token-exchange time.
+// Reading either name removes that entire class of misconfiguration.
+const githubClientId = process.env.GITHUB_OAUTH_CLIENT_ID || process.env.BIVY_GITHUB_OAUTH_CLIENT_ID;
+const githubClientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET || process.env.BIVY_GITHUB_OAUTH_CLIENT_SECRET;
 const githubConfigured = Boolean(githubClientId && githubClientSecret);
 
 // Short-lived CSRF/login state. In-memory is fine for a single instance; a
