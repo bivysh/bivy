@@ -489,6 +489,48 @@ function sendDeviceSignedIn(res: Response, email: string): void {
   res.type("html").send(deviceSignedInHtml(email));
 }
 
+// The device-flow OAuth/magic-link tab that fails must not be a dead end: give
+// it a way back. "Back to sign in" is a plain same-origin link (always works,
+// even for a tab opened from an email/QR link that can't self-close). "Close
+// this tab" wires window.close() for the app-opened tab — whitelisted by hash
+// like signedInCloseScript, since the global script-src is 'self' only.
+const closeTabScript = `var b=document.getElementById('close-tab');if(b){b.addEventListener('click',function(){try{window.close();}catch(e){/* not closable */}});}`;
+const closeTabScriptHash = `sha256-${createHash("sha256").update(closeTabScript).digest("base64")}`;
+
+function signInFailedHtml(detail: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign-in failed</title>
+<style>body{font-family:system-ui,sans-serif;background:#0a0f20;color:#eef2ff;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;box-sizing:border-box}
+.card{background:#0f1530;border:1px solid #233056;border-radius:16px;padding:32px 40px;text-align:center;max-width:360px}
+h1{font-size:20px;margin:0 0 8px}p{color:#9aa6cf;margin:6px 0;line-height:1.45}
+.actions{display:flex;flex-direction:column;gap:10px;margin-top:20px}
+.btn{display:block;padding:11px 16px;border-radius:10px;border:1px solid #2b3a66;background:#1b2545;color:#eef2ff;font:inherit;font-size:15px;text-decoration:none;cursor:pointer}
+.btn.ghost{background:transparent}</style></head>
+<body><div class="card"><h1>Sign-in failed</h1><p>${escapeHtml(detail)}</p>
+<div class="actions"><a class="btn" href="/">Back to sign in</a><button id="close-tab" class="btn ghost" type="button">Close this tab</button></div></div>
+<script>${closeTabScript}</script>
+</body></html>`;
+}
+
+// Send the device sign-in failure page, relaxing this one response's CSP just
+// enough to run the close-button snippet (whitelisted by hash) and its inline
+// styles; the global script-src stays 'self'-only for every other route.
+function sendSignInFailed(res: Response, status: number, detail: string): void {
+  res.setHeader(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      `script-src 'self' '${closeTabScriptHash}'`,
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join("; "),
+  );
+  res.status(status).type("html").send(signInFailedHtml(detail));
+}
+
 function stripePriceToPlan(priceId: string | null | undefined): Plan | undefined {
   if (priceId && stripePrices.pro && priceId === stripePrices.pro) return "pro";
   if (priceId && stripePrices.team && priceId === stripePrices.team) return "team";
@@ -705,7 +747,7 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const loginToken = String(req.query?.token ?? "").trim();
   const deviceId = String(req.query?.device ?? "").trim();
   const account = await store.consumeLoginToken(loginToken);
-  if (!account) return res.status(401).type("html").send("<h1>Invalid or expired login link</h1>");
+  if (!account) return sendSignInFailed(res, 401, "This sign-in link is invalid or has expired. Request a new one from the sign-in screen.");
   // Device-login flow (hands-free CLI sign-in): mark the pending device login
   // complete and tell the user to return to their terminal. No session is
   // embedded here — the CLI mints it when it polls.
@@ -796,16 +838,17 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   if (!email || !validEmail(email)) {
     const errCode = reason === "token-exchange" ? "github-config" : "github-email";
     // The device (CLI/app) flow finishes in a throwaway browser tab that never
-    // returns to the client, so a short HTML page is the only feedback available
-    // there. The browser flow instead bounces back to the sign-in card with a
-    // reason code, so the user lands somewhere they can immediately retry or
-    // switch to email sign-in — not a dead end.
+    // returns to the client, so an HTML page is the only feedback available
+    // there — but not a dead end: it offers "Back to sign in" and "Close this
+    // tab" so the user can recover without hand-editing the URL. The browser flow
+    // instead bounces back to the sign-in card with a reason code, landing the
+    // user somewhere they can immediately retry or switch to email sign-in.
     if (stored.deviceId) {
       const detail =
         reason === "token-exchange"
           ? "Couldn't complete GitHub sign-in — the authorization code could not be exchanged. This is a server configuration issue; please try again in a moment."
           : "GitHub didn't return a verified email. Make sure your GitHub account has a verified email address and that you granted the email permission, then try again.";
-      return res.status(400).type("html").send(`<h1>Sign-in failed</h1><p>${detail}</p>`);
+      return sendSignInFailed(res, 400, detail);
     }
     const path = safeReturnPath(stored.returnPath, "/");
     return res.redirect(`${path}${path.includes("?") ? "&" : "?"}authError=${errCode}`);
