@@ -331,6 +331,34 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal((await store.listWorkItems(acct.id)).length, 1);
   });
 
+  await test("automation hooks configure safely and report replay deduplication", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-automation@example.com");
+    const hook = await store.createInboundHook(acct.id, "automation");
+    const configured = await store.updateInboundHook(acct.id, hook.id, {
+      templateInstruction: "Investigate this event.",
+      routingDefault: "runner",
+      enabled: true,
+    });
+    assert.equal(configured?.secret, hook.secret);
+    assert.equal(configured?.templateInstruction, "Investigate this event.");
+    assert.equal((await store.listInboundHooks(acct.id, "automation")).length, 1);
+    const first = await store.enqueueAutomationRunWithResult(acct.id, {
+      source: `automation:${hook.id}`,
+      triggerKind: "webhook",
+      title: "Alert",
+      dedupeKey: `automation:${hook.id}:delivery-1`,
+    });
+    const replay = await store.enqueueAutomationRunWithResult(acct.id, {
+      source: `automation:${hook.id}`,
+      triggerKind: "webhook",
+      title: "Changed",
+      dedupeKey: `automation:${hook.id}:delivery-1`,
+    });
+    assert.equal(first.created, true);
+    assert.equal(replay.created, false);
+    assert.equal(replay.run.id, first.run.id);
+  });
+
   await test("work queue: reroute + assign only affect pending items", async (store) => {
     const acct = await store.findOrCreateAccount("contract-route@example.com");
     const shared = await store.enqueueWorkItem(acct.id, { source: "github:issue", title: "s", label: "bivy", defaultRouted: true });
