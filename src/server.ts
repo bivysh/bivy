@@ -1596,6 +1596,8 @@ interface RunTerminalSpec {
   workspace?: string;
   cols?: number;
   rows?: number;
+  /** Stable id of the client launching/attaching, for per-client PTY sizing. */
+  clientId?: string;
   /** Session id pinned at launch (e.g. `claude --session-id <uuid>`), if any. */
   sessionId?: string;
 }
@@ -1621,7 +1623,7 @@ async function openRunTerminal(spec: RunTerminalSpec, emit: (event: unknown) => 
   if (spec.mux) {
     const existing = runTerminalForMux(spec.mux);
     if (existing) {
-      if (spec.cols !== undefined || spec.rows !== undefined) terminals.resize(existing, spec.cols || 80, spec.rows || 24);
+      if (spec.clientId && (spec.cols !== undefined || spec.rows !== undefined)) terminals.setClientSize(existing, spec.clientId, spec.cols || 80, spec.rows || 24);
       emit({ type: "terminal.attached", termId: existing, data: terminals.snapshot(existing) ?? "" });
       return existing;
     }
@@ -1662,6 +1664,7 @@ async function openRunTerminal(spec: RunTerminalSpec, emit: (event: unknown) => 
       env: { ...credentialEnv, ...(spec.agent === "pi" ? { BIVY_WORKSPACE: workspace } : {}) },
       cols: spec.cols,
       rows: spec.rows,
+      clientId: spec.clientId,
       meta: { kind: "run", agent: spec.agent, model: spec.model, label, name, autoName: !explicitName && !spec.mux, command: commandLine, mux: spec.mux, sessionId: spec.sessionId },
       onData: (data) => {
         // Raw bytes go only to the sockets attached to this run-terminal (+ the
@@ -1818,6 +1821,11 @@ function handleTerminalMessage(
   msg: { kind?: string; termId?: unknown; data?: unknown; cols?: unknown; rows?: unknown; workspace?: unknown; sessionId?: unknown; agent?: unknown; label?: unknown; name?: unknown; model?: unknown; command?: unknown; args?: unknown; mux?: unknown; standalone?: unknown },
   emit: (event: unknown) => void,
   owned: Set<string>,
+  // Stable id for the transport (socket/relay) this message arrived on. A shared
+  // PTY is sized to the min over all attached clients, keyed by this id, so a
+  // second client attaching at a different window size can't reflow the first
+  // client's TUI. See TerminalManager.setClientSize.
+  clientId: string,
   viewRun?: (termId: string) => void,
 ): boolean {
   switch (msg.kind) {
@@ -1862,6 +1870,7 @@ function handleTerminalMessage(
         workspace: typeof msg.workspace === "string" && msg.workspace ? msg.workspace : undefined,
         cols: Number(msg.cols) || undefined,
         rows: Number(msg.rows) || undefined,
+        clientId,
         sessionId: typeof msg.sessionId === "string" && msg.sessionId ? msg.sessionId : undefined,
       }, emit).then((runId) => { if (runId) viewRun?.(runId); });
       return true;
@@ -1883,6 +1892,7 @@ function handleTerminalMessage(
         mux: `${kind}:${name}`,
         cols: Number(msg.cols) || undefined,
         rows: Number(msg.rows) || undefined,
+        clientId,
       }, emit).then((muxId) => { if (muxId) viewRun?.(muxId); });
       return true;
     }
@@ -1905,6 +1915,7 @@ function handleTerminalMessage(
           workspace,
           cols: Number(msg.cols) || undefined,
           rows: Number(msg.rows) || undefined,
+          clientId,
           onData: (data) => emit({ type: "terminal.output", termId: id, data }),
           onBell: () => maybeNotifyBell(id),
           onExit: (code) => {
@@ -1938,7 +1949,7 @@ function handleTerminalMessage(
           if (snapshot != null) {
             owned.add(record.tuiTermId);
             if (typeof msg.cols !== "undefined" || typeof msg.rows !== "undefined") {
-              terminals.resize(record.tuiTermId, Number(msg.cols) || 80, Number(msg.rows) || 24);
+              terminals.setClientSize(record.tuiTermId, clientId, Number(msg.cols) || 80, Number(msg.rows) || 24);
             }
             emit({ type: "terminal.attached", termId: record.tuiTermId, data: snapshot });
             return;
@@ -1958,6 +1969,7 @@ function handleTerminalMessage(
             env: spec.env,
             cols: Number(msg.cols) || undefined,
             rows: Number(msg.rows) || undefined,
+            clientId,
             onData: (data) => emit({ type: "terminal.output", termId: id, data }),
             onExit: (code) => {
               owned.delete(id);
@@ -2018,7 +2030,7 @@ function handleTerminalMessage(
           if (viewRun && runTerminals.has(msg.termId)) viewRun(msg.termId);
           else owned.add(msg.termId);
           if (typeof msg.cols !== "undefined" || typeof msg.rows !== "undefined") {
-            terminals.resize(msg.termId, Number(msg.cols) || 80, Number(msg.rows) || 24);
+            terminals.setClientSize(msg.termId, clientId, Number(msg.cols) || 80, Number(msg.rows) || 24);
           }
           emit({ type: "terminal.attached", termId: msg.termId, data: snapshot });
         } else {
@@ -2033,7 +2045,13 @@ function handleTerminalMessage(
       if (typeof msg.termId === "string" && typeof msg.data === "string") terminals.write(msg.termId, msg.data);
       return true;
     case "terminal.resize":
-      if (typeof msg.termId === "string") terminals.resize(msg.termId, Number(msg.cols) || 80, Number(msg.rows) || 24);
+      if (typeof msg.termId === "string") terminals.setClientSize(msg.termId, clientId, Number(msg.cols) || 80, Number(msg.rows) || 24);
+      return true;
+    case "terminal.detach":
+      // A client stopped viewing this terminal but kept its transport open (e.g.
+      // navigated away from a shared run-terminal). Forget its size so the PTY
+      // grows back to the min of whoever is still attached.
+      if (typeof msg.termId === "string") terminals.dropClientSize(msg.termId, clientId);
       return true;
     case "terminal.close":
       if (typeof msg.termId === "string") {
@@ -3348,6 +3366,9 @@ const RELAY_COMMANDS: Record<string, Command> = {
 // encrypted relay channel; `broadcast` reaches all clients (local + relay).
 const relayCtx: CommandCtx = { reply: (event) => relay?.sendEvent(event), broadcast };
 
+// Shared per-client size slot for all relay-tunneled clients (see below).
+const RELAY_CLIENT_ID = "relay";
+
 async function handleRelayMessage(msg: ClientMessage) {
   try {
     const command = RELAY_COMMANDS[msg.kind];
@@ -3358,7 +3379,11 @@ async function handleRelayMessage(msg: ClientMessage) {
     // Fallthrough for kinds not in RELAY_COMMANDS: terminal.* frames go to the
     // PTY manager; anything else is an unknown client message.
     if (typeof msg.kind === "string" && msg.kind.startsWith("terminal.")) {
-      handleTerminalMessage(msg, (event) => relay?.sendEvent(event), relayTerminals);
+      // The relay is a single tunnel with no per-remote-client identity at this
+      // layer, so every relay-tunneled client shares one size slot. That still
+      // keeps them distinct from each local socket, so a PTY shared between a
+      // local terminal and a relay-attached app is sized to their min.
+      handleTerminalMessage(msg, (event) => relay?.sendEvent(event), relayTerminals, RELAY_CLIENT_ID);
       return;
     }
     console.warn("[relay] unknown client message kind:", msg.kind);
@@ -3371,6 +3396,9 @@ function startRelayIfConfigured() {
   const config = loadRelayConfig(appDir);
   if (!config) return false;
   relay?.stop();
+  // Reconnecting drops any remote clients the old tunnel carried; release the
+  // shared relay size slot so local PTYs it may have shrunk grow back.
+  terminals.dropClient(RELAY_CLIENT_ID);
   relay = new RelayConnector(config, (msg) => void handleRelayMessage(msg), {
     pairing: pairingStore,
     onWorkAvailable: () => controlPlanePoller?.poke(),
@@ -9324,6 +9352,9 @@ wss.on("connection", (socket, req) => {
   // Terminals opened on this socket; closed when the socket disconnects so a
   // dropped browser tab doesn't leak shells. Output is unicast to this socket.
   const ownedTerminals = new Set<string>();
+  // Stable id for this socket, keying its per-terminal size so several clients
+  // sharing a PTY size it to their min (see TerminalManager.setClientSize).
+  const clientTerminalId = `sock-${randomUUID()}`;
   socket.send(JSON.stringify({ type: "hello", activeSessionId: active?.id, activeSession: active ? { id: active.id, isStreaming: sessionBusy(active), lastActivity: active.lastActivity, workingStartedAt: active.workingStartedAt } : null }));
   socket.on("message", (raw) => {
     let msg: { kind?: string };
@@ -9340,12 +9371,15 @@ wss.on("connection", (socket, req) => {
     if (typeof msg?.kind === "string" && msg.kind.startsWith("terminal.")) {
       handleTerminalMessage(msg, (event) => {
         if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
-      }, ownedTerminals, (termId) => addRunViewer(termId, socket));
+      }, ownedTerminals, clientTerminalId, (termId) => addRunViewer(termId, socket));
     }
   });
   socket.on("close", () => {
     clients.delete(socket);
     dropRunViewer(socket);
+    // Release this socket's size on every terminal it sized (owned or just
+    // viewed) so shared PTYs grow back to the min of whoever's left attached.
+    terminals.dropClient(clientTerminalId);
     for (const id of ownedTerminals) terminals.close(id);
   });
 });
@@ -9365,6 +9399,9 @@ function shutdown(signal: string) {
     try { closeSessionRecord(record, "shutdown"); } catch {}
   }
   eventLog.flushAll();
+  // Persist the tail of the debounced metadata writes (status/activity updates
+  // are coalesced on the hot path — see MetadataStore.save).
+  try { metadata.flushSync(); } catch {}
   terminals.disposeAll();
   // Drop persistent client/relay sockets so server.close() can actually drain;
   // otherwise a lingering WebSocket keeps the process alive until the supervisor

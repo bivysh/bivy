@@ -1151,11 +1151,14 @@ app.post("/internal/nodes/:nodeId/capabilities", requireNode, asyncHandler(async
 app.put("/internal/nodes/:nodeId/sessions/:sessionId", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   if (String(req.params.nodeId) !== node.id) return res.status(403).json({ error: "Forbidden" });
+  // Incremental single-session upsert. This used to read the node's ENTIRE
+  // session index and rewrite it wholesale on every call; since a session's
+  // status flips constantly, that was O(sessions) work per flip (O(sessions²)
+  // in aggregate) and a wholesale DELETE+reinsert per event — a primary cause
+  // of the control plane pegging a core under load. Removals are still handled
+  // by the periodic full advertise via POST /node/sessions.
   const advert = sessionAdvertsFrom([{ ...req.body, sessionId: req.params.sessionId }]);
-  const existing = (await store.listAccountSessions(node.accountId))
-    .filter((s) => s.nodeId === node.id && s.sessionId !== String(req.params.sessionId))
-    .map(({ nodeId: _nodeId, updatedAt: _updatedAt, ...s }) => s);
-  await store.replaceNodeSessions(node.accountId, node.id, [...existing, ...advert]);
+  for (const s of advert) await store.upsertNodeSession(node.accountId, node.id, s);
   res.json({ ok: true, count: advert.length });
 }));
 

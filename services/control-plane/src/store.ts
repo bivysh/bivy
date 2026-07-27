@@ -738,6 +738,11 @@ export interface MeshStore {
   // Session index (cross-node unified view). A node replaces its full current
   // session list; clients read the merged list for the account.
   replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<void>;
+  // Incremental single-session advertise. A session's status flips constantly
+  // (idle→working→needs_action); routing that through `replaceNodeSessions`
+  // means reading and rewriting the node's ENTIRE index per flip — O(sessions)
+  // work per event, O(sessions²) in aggregate. This upserts just the one row.
+  upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<void>;
   listAccountSessions(accountId: string): Promise<SessionIndexEntry[]>;
   // A single node reads back its OWN sessions, including the node-only
   // `agentServiceAddress` routing metadata (Stage 3: a restarting daemon adopts
