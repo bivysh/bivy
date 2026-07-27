@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ModelInfo } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { Sheet } from "./Sheet.js";
@@ -17,11 +17,13 @@ function modelKey(model: ModelInfo & { provider?: unknown }): string {
  * default is context-aware: move when the node changes, copy when it doesn't.
  */
 export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
-  const { nodes, currentNodeId, runtimes, models, currentModel, selectedAgentId, sessions } = useAppState();
-  // The composer's selected agent can differ from the agent that owns the open
-  // session. Fork decisions must be relative to the source session, otherwise a
-  // same-agent fork can accidentally take the export/import path (or vice versa).
-  const sourceAgentId = sessions.find((s) => s.sessionId === sessionId)?.runtimeId ?? selectedAgentId;
+  const { nodes, currentNodeId, runtimes, models, currentModel, activeSessionId, activeRuntimeId, sessions } = useAppState();
+  // selectedAgentId is the node/global draft preference, not the owner of an
+  // existing session. Prefer the runtime from canonical history for the active
+  // session, with its session-list row only as an early open-paint fallback.
+  const sourceAgentId = activeSessionId === sessionId && activeRuntimeId
+    ? activeRuntimeId
+    : sessions.find((s) => s.sessionId === sessionId)?.runtimeId ?? null;
 
   const [destNodeId, setDestNodeId] = useState<string>(currentNodeId ?? "");
   const [agentId, setAgentId] = useState<string | null>(sourceAgentId);
@@ -31,6 +33,12 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
   const [status, setStatus] = useState<"idle" | "working" | "error" | "warn">("idle");
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [warnings, setWarnings] = useState<Array<{ label?: string; detail?: string }>>([]);
+
+  // A sheet can open while canonical history is still arriving. Adopt the
+  // session runtime once known, but never overwrite a choice the user made.
+  useEffect(() => {
+    if (agentId == null && sourceAgentId) setAgentId(sourceAgentId);
+  }, [agentId, sourceAgentId]);
 
   const crossNode = Boolean(currentNodeId) && destNodeId !== currentNodeId;
   // Context-aware default until the user picks: move across nodes, copy in place.

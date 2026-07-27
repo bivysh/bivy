@@ -317,24 +317,18 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
     );
   }, [state.runtimes, q]);
 
-  // Exactly one agent is "the one this new session will start with": the
-  // explicit selection if the user (or draft restore) made one, otherwise the
-  // node's flagged default. Deriving a single id here — the same way the
-  // composer's agent pill does (via selectedAgentId) — is what stops two rows
-  // showing a checkmark at once: `selectedAgentId` and a runtime's stale
-  // `current` flag routinely disagree for a beat after an agent switch (the
-  // pick is applied optimistically before the node's runtime.updated lands), so
-  // OR-ing them lit up both the outgoing default and the incoming pick.
-  const selectedAgentId =
-    state.selectedAgentId ?? (state.runtimes.find((r) => (r as any).current)?.id || null);
-
   const cloningActiveSession = Boolean(state.activeSessionId);
+  // For an active session, "current" means the runtime that owns that session,
+  // never the globally last-used/default runtime for new drafts.
+  const selectedAgentId = cloningActiveSession
+    ? state.activeRuntimeId ?? state.sessions.find((s) => s.sessionId === state.activeSessionId)?.runtimeId ?? null
+    : state.selectedAgentId ?? (state.runtimes.find((r) => (r as any).current)?.id || null);
 
   return (
     <Sheet title={cloningActiveSession ? "Hand off to agent" : "Agent"} onClose={onClose} autoFocusSearch={false}>
       {cloningActiveSession && (
         <div className="picker-empty">
-          Choosing an agent will clone this session into a new draft with a handoff summary. It does not continue the same session in-place.
+          Choosing an agent forks this session with its transcript and working files, then opens the fork in that agent.
         </div>
       )}
       <input className="picker-search" placeholder="Search agents…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -361,7 +355,7 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
                 <RuntimeMeta
                   runtime={a}
                   text={cloningActiveSession
-                    ? ["Clone + handoff", chips || (a as any).description].filter(Boolean).join(" · ")
+                    ? ["Fork + handoff", chips || (a as any).description].filter(Boolean).join(" · ")
                     : chips || (a as any).description}
                 />
               }
