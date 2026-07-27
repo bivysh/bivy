@@ -400,12 +400,12 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN;
       -- Automation is the canonical domain. Existing work_items are migrated in
       -- place so old API clients retain their ids and issue context.
-      -- (Issue #155's policy-run disposition rides in the `output` JSONB
-      -- column below as `output.policyEvidence` — a bounded/sanitized
-      -- `PolicyEvidence` from @bivy/core/execution-policy: check ids, exit
+      -- (Issue #155's policy-run disposition rides in the output JSONB
+      -- column below as output.policyEvidence -- a bounded/sanitized
+      -- PolicyEvidence from @bivy/core/execution-policy: check ids, exit
       -- status, duration, short redacted summaries, never raw command output,
-      -- diffs, or file contents — rather than a separate column, since the
-      -- disposition itself is just the run's terminal `status`, which this
+      -- diffs, or file contents -- rather than a separate column, since the
+      -- disposition itself is just the run's terminal status, which this
       -- table already tracks via AutomationRunStatus.)
       CREATE TABLE IF NOT EXISTS automation_definitions (
         id TEXT PRIMARY KEY,

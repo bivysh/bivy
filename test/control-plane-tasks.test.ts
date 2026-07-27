@@ -105,8 +105,13 @@ test("poller: claims then runs then completes; skips items lost to another node"
   }) as typeof fetch;
 
   const ran: string[] = [];
+  // A real runItem (runWorkItem in server.ts) always resolves to an explicit
+  // WorkItemOutcome — "succeeded" here, matching the run actually completing
+  // without a policy violation (issue #155: a void/undefined return, or a
+  // throw, reports "failed" instead — see the next test below).
   const poller = new ControlPlaneTaskPoller(cfg, async (item) => {
     ran.push(item.id);
+    return { status: "succeeded" } as const;
   });
   try {
     // Drive one tick directly (start() also sets an interval we don't want here).
@@ -116,11 +121,51 @@ test("poller: claims then runs then completes; skips items lost to another node"
   }
 
   assert.deepEqual(ran, ["w1"], "only the successfully-claimed item runs");
-  // w1: claim + complete; w2: claim only (lost), no complete.
+  // w1: claim + running + complete; w2: claim only (lost), no running/complete.
   assert.ok(calls.includes("POST https://cp/node/work/w1/claim"));
+  assert.ok(calls.includes("POST https://cp/node/work/w1/running"));
   assert.ok(calls.includes("POST https://cp/node/work/w1/complete"));
   assert.ok(calls.includes("POST https://cp/node/work/w2/claim"));
+  assert.ok(!calls.includes("POST https://cp/node/work/w2/running"));
   assert.ok(!calls.includes("POST https://cp/node/work/w2/complete"));
+});
+
+// ---------------------------------------------------------------------------
+// Issue #155: never a false success. When runItem throws, or resolves with no
+// explicit outcome, the poller must report the item as FAILED (POST .../fail)
+// rather than defaulting to "complete" — a failed/uninstrumented run must
+// never be silently recorded as succeeded.
+// ---------------------------------------------------------------------------
+test("poller: a throwing/void runItem reports failed, never a false success", async () => {
+  const cfg: ControlPlaneTaskConfig = {
+    controlPlaneUrl: "https://cp",
+    enrollmentToken: "tok",
+    labels: ["bivy"],
+    pollMs: 60_000,
+  };
+  const pending: WorkItem[] = [
+    { id: "w1", label: "bivy", source: "slack", status: "pending", title: "do A" },
+  ];
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: { method?: string }) => {
+    const method = init?.method ?? "GET";
+    calls.push(`${method} ${url}`);
+    if (url.includes("/node/work?")) return { ok: true, json: async () => ({ items: pending }) } as Response;
+    return { ok: true, json: async () => ({}) } as Response;
+  }) as typeof fetch;
+
+  const poller = new ControlPlaneTaskPoller(cfg, async () => {
+    throw new Error("boom");
+  });
+  try {
+    await (poller as unknown as { tick: () => Promise<void> }).tick();
+  } finally {
+    globalThis.fetch = original;
+  }
+
+  assert.ok(calls.includes("POST https://cp/node/work/w1/fail"), "a throw reports failure via /fail");
+  assert.ok(!calls.includes("POST https://cp/node/work/w1/complete"), "never reported as a success");
 });
 
 // ---------------------------------------------------------------------------
