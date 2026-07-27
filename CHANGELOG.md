@@ -116,6 +116,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   daemon under a TTL `timeout`. Also added an official-nodejs.org Node 22
   fallback to `install.sh` since `deb.nodesource.com/setup_22.x` now returns
   `403` (apt otherwise falls back to Node 18, which is too old for Bivy).
+  Launching also self-heals the fallout from the above: every self-destructed
+  machine left an orphaned `eph-*` node enrolled on the account, and enough of
+  them tripped the plan's node limit so new launches failed enrollment with a
+  generic "Could not enroll the machine". A node-limit-blocked launch now reaps
+  its own orphaned ephemeral nodes (offline `eph-*` nodes past their boot grace,
+  never a persistent or still-booting node) — and drops any lingering local
+  "Launched machines" row for them — then retries.
 - **Transient CLI/relay clients no longer clutter "Signed-in devices".**
   `bivy run --node` bridges and sibling-node replicas paired with a node via
   the same `pair.account` handshake a phone/browser uses, so the control plane
