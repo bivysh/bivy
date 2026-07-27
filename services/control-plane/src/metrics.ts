@@ -69,6 +69,42 @@ new client.Gauge({
   },
 });
 
+// --- Product funnel ---------------------------------------------------------
+
+/**
+ * Low-cardinality launch funnel milestones. These are aggregate operational
+ * analytics, not user tracking: labels are fixed product metadata and the log
+ * line deliberately contains no account id, email, session id, or content.
+ *
+ * The matching structured log makes the events usable before a Prometheus
+ * dashboard exists (and gives hosted ops a simple audit trail across restarts,
+ * while the in-process Counter resets on restart).
+ */
+export type FunnelEvent =
+  | "sign_in_completed"
+  | "node_enrolled"
+  | "run_started"
+  | "quota_blocked"
+  | "checkout_started"
+  | "plan_changed";
+
+const funnelEvents = new client.Counter({
+  name: "bivy_funnel_events_total",
+  help: "Privacy-safe product funnel milestones.",
+  labelNames: ["event", "source", "plan"],
+  registers: [register],
+});
+
+export function recordFunnelEvent(event: FunnelEvent, source: string, plan: string, count = 1): void {
+  if (!Number.isFinite(count) || count <= 0) return;
+  // Call sites only pass bounded enums/product constants. Keep a final fallback
+  // here so a malformed integration cannot create an unbounded Prometheus label.
+  const safeSource = /^[a-z][a-z0-9_]{0,39}$/.test(source) ? source : "other";
+  const safePlan = /^(free|pro|team)$/.test(plan) ? plan : "unknown";
+  funnelEvents.inc({ event, source: safeSource, plan: safePlan }, count);
+  console.info(`[funnel] ${JSON.stringify({ event, source: safeSource, plan: safePlan, count })}`);
+}
+
 // --- Business / usage gauges ------------------------------------------------
 
 const accountsTotal = new client.Gauge({

@@ -847,7 +847,7 @@ export class PostgresStore implements MeshStore {
       );
       await client.query("COMMIT");
       const { enrollmentTokenHash: _h, ...node } = mapNode(rows[0]);
-      return { node, enrollmentToken };
+      return { node, enrollmentToken, created: !current };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -953,8 +953,9 @@ export class PostgresStore implements MeshStore {
     return (rowCount ?? 0) > 0;
   }
 
-  async replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<void> {
+  async replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<number> {
     const client = await this.pool.connect();
+    let newRunStarts = 0;
     try {
       await client.query("BEGIN");
       // Only touch the index if the node belongs to this account.
@@ -1002,12 +1003,22 @@ export class PostgresStore implements MeshStore {
           // through which EVERY source (manual, app, work queue, ephemeral) lands
           // in the daily counter, since every run eventually advertises a session.
           const runStartsRows = sessions.map((_, i) => `($1, $${i + 2})`).join(", ");
-          await client.query(
-            `INSERT INTO run_starts (account_id, run_key)
-             VALUES ${runStartsRows}
-             ON CONFLICT (account_id, run_key) DO NOTHING`,
+          // Read existing keys first only to work around pg-mem returning rows
+          // for ON CONFLICT DO NOTHING. Real Postgres's RETURNING remains the
+          // concurrency authority; filtering known rows makes both agree.
+          const existingRuns = await client.query(
+            `SELECT run_key FROM run_starts WHERE account_id = $1 AND run_key IN (${sessions.map((_, i) => `$${i + 2}`).join(", ")})`,
             [accountId, ...sessions.map((s) => s.sessionId)],
           );
+          const existingKeys = new Set(existingRuns.rows.map((row: { run_key: string }) => row.run_key));
+          const insertedRuns = await client.query(
+            `INSERT INTO run_starts (account_id, run_key)
+             VALUES ${runStartsRows}
+             ON CONFLICT (account_id, run_key) DO NOTHING
+             RETURNING run_key`,
+            [accountId, ...sessions.map((s) => s.sessionId)],
+          );
+          newRunStarts = insertedRuns.rows.filter((row: { run_key: string }) => !existingKeys.has(row.run_key)).length;
         }
       }
       await client.query("COMMIT");
@@ -1017,10 +1028,12 @@ export class PostgresStore implements MeshStore {
     } finally {
       client.release();
     }
+    return newRunStarts;
   }
 
-  async upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<void> {
+  async upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<boolean> {
     const client = await this.pool.connect();
+    let runStarted = false;
     try {
       await client.query("BEGIN");
       // Only touch the index if the node belongs to this account (mirrors
@@ -1045,12 +1058,18 @@ export class PostgresStore implements MeshStore {
         // Count each run the first time its session is advertised — same funnel
         // as replaceNodeSessions (keyed by (account, session), DO NOTHING, so a
         // session only ever counts once).
-        await client.query(
-          `INSERT INTO run_starts (account_id, run_key)
-           VALUES ($1, $2)
-           ON CONFLICT (account_id, run_key) DO NOTHING`,
+        const existingRun = await client.query(
+          `SELECT 1 FROM run_starts WHERE account_id = $1 AND run_key = $2`,
           [accountId, session.sessionId],
         );
+        const insertedRun = await client.query(
+          `INSERT INTO run_starts (account_id, run_key)
+           VALUES ($1, $2)
+           ON CONFLICT (account_id, run_key) DO NOTHING
+           RETURNING run_key`,
+          [accountId, session.sessionId],
+        );
+        runStarted = existingRun.rows.length === 0 && insertedRun.rows.length > 0;
       }
       await client.query("COMMIT");
     } catch (error) {
@@ -1059,6 +1078,7 @@ export class PostgresStore implements MeshStore {
     } finally {
       client.release();
     }
+    return runStarted;
   }
 
   async listAccountSessions(accountId: string): Promise<SessionIndexEntry[]> {
@@ -1902,15 +1922,21 @@ export class PostgresStore implements MeshStore {
     return mapWorkItem(withEvent[0] ?? rows[0]);
   }
 
-  async recordRunStart(accountId: string, runKey: string): Promise<void> {
+  async recordRunStart(accountId: string, runKey: string): Promise<boolean> {
     // Idempotent: PRIMARY KEY(account_id, run_key) + DO NOTHING means recording the
     // same run twice (reconnects, repeated advertises) leaves the original
     // started_at intact and never inflates the daily count.
-    await this.query(
-      `INSERT INTO run_starts (account_id, run_key) VALUES ($1, $2)
-       ON CONFLICT (account_id, run_key) DO NOTHING`,
+    const existing = await this.query(
+      `SELECT 1 FROM run_starts WHERE account_id = $1 AND run_key = $2`,
       [accountId, runKey],
     );
+    const { rows } = await this.query(
+      `INSERT INTO run_starts (account_id, run_key) VALUES ($1, $2)
+       ON CONFLICT (account_id, run_key) DO NOTHING
+       RETURNING run_key`,
+      [accountId, runKey],
+    );
+    return existing.rows.length === 0 && rows.length > 0;
   }
 
   async countRunStartsSince(accountId: string, sinceIso: string): Promise<number> {
