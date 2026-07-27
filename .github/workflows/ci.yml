@@ -131,45 +131,40 @@ jobs:
           node-version: '22.19.0'
       - run: node scripts/check-links.mjs
 
-  relay:
+  # Relay + control-plane share a job: the relay suite already spawns the control
+  # plane as a child process (so it installs control-plane deps anyway), and the
+  # `relay` path filter already fires on control-plane changes. Splitting them
+  # meant a control-plane PR paid two per-job billed minutes for what is one
+  # install's worth of work; folded together it's one. Gated on either area
+  # changing so neither loses coverage.
+  services:
     needs: changes
-    if: needs.changes.outputs.relay == 'true'
+    if: needs.changes.outputs.relay == 'true' || needs.changes.outputs.control_plane == 'true'
+    name: relay + control-plane
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: services/relay
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22.19.0'
           cache: npm
-          cache-dependency-path: services/relay/package-lock.json
-      - run: npm ci
-      - run: npm run typecheck
-      # test:unit (test/e2e.ts, test/entitlements.test.ts) spawns the control
-      # plane as a child process to test against, so its deps must exist too.
+          cache-dependency-path: |
+            services/relay/package-lock.json
+            services/control-plane/package-lock.json
       - run: npm ci
         working-directory: services/control-plane
-      - run: npm run --if-present test:unit
-
-  control-plane:
-    needs: changes
-    if: needs.changes.outputs.control_plane == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: services/control-plane
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.19.0'
-          cache: npm
-          cache-dependency-path: services/control-plane/package-lock.json
-      - run: npm ci
       - run: npm run typecheck
+        working-directory: services/control-plane
       - run: npm run test:unit
+        working-directory: services/control-plane
+      - run: npm ci
+        working-directory: services/relay
+      - run: npm run typecheck
+        working-directory: services/relay
+      # relay's test:unit (test/e2e.ts, test/entitlements.test.ts) spawns the
+      # control plane installed just above as a child process to test against.
+      - run: npm run --if-present test:unit
+        working-directory: services/relay
 
   # Full remote-path and X25519 pairing e2e over the real control plane + relay.
   # These spawn services/control-plane and services/relay as child processes, so
@@ -202,7 +197,7 @@ jobs:
   # leaves a required check unreported and blocking the PR.
   ci-ok:
     if: ${{ always() }}
-    needs: [changes, core, docs-links, relay, control-plane, remote-e2e]
+    needs: [changes, core, docs-links, services, remote-e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Verify no required job failed
