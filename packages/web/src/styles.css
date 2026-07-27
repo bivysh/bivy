@@ -975,6 +975,9 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 
 /* ---- Fork sheet ---- */
 .picker-section { padding: 4px 0; }
+.fork-select-field { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
+.fork-select-field label { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.fork-select-field select { width: 100%; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); color: var(--ink); }
 .fork-toggle { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-size: 13px; color: var(--ink); }
 .fork-toggle input { width: 16px; height: 16px; }
 .fork-error { margin: 4px 12px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); color: var(--danger, #d33); font-size: 12px; }

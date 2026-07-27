@@ -1019,6 +1019,10 @@ export class AppController {
       kind: "session.fork.import",
       bundle,
       transcriptUrl,
+      // A same-node cross-agent fork still shares the source repository. It
+      // needs a fresh branch/worktree; adopting the checked-out source branch
+      // makes git fail with “already used by worktree”.
+      sameNode: !crossNode,
       ...(opts.agentId ? { agent: opts.agentId } : {}),
       ...(opts.model ? { model: opts.model } : {}),
     }, 180000);
