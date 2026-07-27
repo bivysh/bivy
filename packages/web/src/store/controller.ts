@@ -965,23 +965,30 @@ export class AppController {
 
   /**
    * Fork `sourceSessionId` onto `destNodeId` (default: same node), optionally on a
-   * different agent/model, keeping (copy) or retiring (move) the source. Returns
+   * different agent/model, keeping (copy) or retiring (move) the source. `agentId`
+   * is the selected TARGET agent (not merely an "agent changed" flag). Returns
    * the new session id + fidelity ("full" | "seeded"). Throws on any step so the
    * caller can surface it and — critically — NOT retire the source.
    */
   async forkSession(
     sourceSessionId: string,
-    opts: { destNodeId?: string; agentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
+    opts: { destNodeId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
   ): Promise<{ sessionId: string; fidelity: string; missing: Array<{ label?: string; detail?: string }> }> {
     const sourceNodeId = this.local.cur;
     const destNodeId = opts.destNodeId ?? sourceNodeId;
     const crossNode = !this.direct && Boolean(destNodeId) && destNodeId !== sourceNodeId;
+    const state = this.store.getState();
+    const sourceAgentId = opts.sourceAgentId ?? state.sessions.find((session) => session.sessionId === sourceSessionId)?.runtimeId;
+    const targetAgentId = opts.agentId ?? sourceAgentId;
+    // If the source runtime is absent from a stale session summary, prefer the
+    // explicit target path over silently assuming the source/default runtime.
+    const crossAgent = Boolean(targetAgentId && (!sourceAgentId || targetAgentId !== sourceAgentId));
 
-    // Fast path: a same-node fork with no agent change is done entirely on the
-    // node — the transcript never round-trips out to the client and back. The
-    // model may still change (applied cheaply on the new session). Any node or
-    // agent change falls through to the export/import path below.
-    if (!crossNode && !opts.agentId) {
+    // Fast path: a same-node, same-agent fork is done entirely on the node — the
+    // transcript never round-trips out to the client and back. The model may
+    // still change (applied cheaply on the new session). An explicitly selected
+    // different target agent falls through to export/import.
+    if (!crossNode && !crossAgent) {
       const doneEvent = await this.forkRequest(
         { kind: "session.fork.local", sessionId: sourceSessionId, ...(opts.model ? { model: opts.model } : {}) },
         180000,
@@ -1001,7 +1008,7 @@ export class AppController {
     //    chosen agent so the source can drop the native transcript payload when
     //    the fork targets a different runtime that could never replay it.
     const exportEvent = await this.forkRequest(
-      { kind: "session.fork.export", sessionId: sourceSessionId, ...(opts.agentId ? { agent: opts.agentId } : {}) },
+      { kind: "session.fork.export", sessionId: sourceSessionId, ...(targetAgentId ? { agent: targetAgentId } : {}) },
       60000,
     );
     const bundle = (exportEvent as { bundle?: unknown }).bundle;
@@ -1023,10 +1030,14 @@ export class AppController {
       // needs a fresh branch/worktree; adopting the checked-out source branch
       // makes git fail with “already used by worktree”.
       sameNode: !crossNode,
-      ...(opts.agentId ? { agent: opts.agentId } : {}),
+      ...(targetAgentId ? { agent: targetAgentId } : {}),
       ...(opts.model ? { model: opts.model } : {}),
     }, 180000);
     const newSessionId = String((doneEvent as { sessionId?: unknown }).sessionId || "");
+    const actualAgentId = String((doneEvent as { runtimeId?: unknown }).runtimeId || "");
+    if (targetAgentId && actualAgentId && actualAgentId !== targetAgentId) {
+      throw new Error(`Fork requested agent ${targetAgentId}, but the destination used ${actualAgentId}`);
+    }
     const fidelity = String((doneEvent as { fidelity?: unknown }).fidelity || "seeded");
     const seedPrompt = (doneEvent as { seedPrompt?: unknown }).seedPrompt;
     const missingRaw = (doneEvent as { missing?: unknown }).missing;

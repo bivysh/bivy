@@ -46,7 +46,11 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
     try {
       const result = await controller.forkSession(sessionId, {
         destNodeId: crossNode ? destNodeId : undefined,
-        agentId: agentId && agentId !== sourceAgentId ? agentId : undefined,
+        // Pass the selected target explicitly. The controller compares it with
+        // the source session's runtime; treating this as only an "agent change"
+        // made the target ambiguous and allowed forks to fall back to the source.
+        agentId: agentId ?? undefined,
+        sourceAgentId: sourceAgentId ?? undefined,
         model: agentUnchanged && model ? { provider: String(model.provider), id: String(model.id) } : undefined,
         retireSource: willRetire,
       });
