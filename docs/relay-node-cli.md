@@ -32,7 +32,7 @@ generalized here to an interactive PTY.
 
 ```
 1. POST {controlPlane}/node/sibling-link-grant  {nodeId}   (Bearer enrollment token)
-        → { grant, relayUrl }                 client-scoped, single-use-ish grant
+        → { grant, relayUrl }                 client-scoped, single-use grant
 2. POST {controlPlane}/client/relay-ticket      {nodeId}   (Bearer grant)
         → { ticket, relayUrl }                 single-use relay ticket
 3. WS   {relay}/client?ticket=…&nodeId=<target>

@@ -7,7 +7,7 @@ Symptom-first fixes for a Bivy node. Everything here runs on your own machine.
 ```bash
 bivy doctor      # deps, node reachability, model auth, relay, agents on PATH
 bivy status      # config, service state, sessions, paired devices
-bivy logs -n 100 # the last 100 lines the node printed
+bivy logs --n 100 # the last 100 lines the node printed
 ```
 
 `bivy doctor` exits non-zero when Node.js is too old or the node is unreachable,
@@ -124,7 +124,7 @@ sudo apt-get update && sudo apt-get install -y build-essential python3
 
 ```bash
 bivy service status
-bivy logs -n 100
+bivy logs --n 100
 bivy start          # run in the foreground to see the real startup error
 ```
 
@@ -153,7 +153,7 @@ tail -n 100 /tmp/bivy.log /tmp/bivy.err.log           # macOS (launchd)
 tail -n 100 ~/.bivy/node.log                          # fallback
 ```
 
-`bivy logs [-f] [-n N]` picks the right one for you.
+`bivy logs [-f] [--n N]` picks the right one for you.
 
 ## Port 4317 in use
 
@@ -403,7 +403,7 @@ Open an issue at `https://github.com/bivysh/bivy` with:
 
 - OS and CPU (`uname -a`), and `node -v`
 - the exact command you ran
-- the last ~100 lines of `bivy logs -n 100`
+- the last ~100 lines of `bivy logs --n 100`
 - `bivy doctor` output
 
 Redact anything sensitive first. Logs can contain file paths and prompt text.

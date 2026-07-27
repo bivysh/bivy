@@ -4,7 +4,7 @@ Bivy Core runs the node + CLI locally without any hosted account (drive it from 
 
 **Just want the fastest path to a running stack?** See [self-host-quickstart.md](self-host-quickstart.md) for the numbered walkthrough and the full environment variable checklist. This doc is the deeper operational reference — read it before you rely on a self-hosted deployment for anything that matters.
 
-## Maturity & support
+## Maturity and support
 
 **Bivy is beta software (v0.x).** Interfaces and behavior can change between releases, and it is not production-hardened yet.
 

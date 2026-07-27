@@ -183,10 +183,10 @@ For defense in depth, consider adding a `Condition` on `TerminateInstances` scop
 Known limitations for the first cut: launches into your account's **default VPC/subnet** (no `SubnetId`/`SecurityGroupId` params yet) — accounts without a default VPC will need that added before EC2 works; regions are a curated list of six (`us-east-1`, `us-west-2`, `eu-west-1`, `eu-central-1`, `ap-southeast-1`, `ap-northeast-1`) rather than all AWS regions, each needing its EC2 + SSM hosts allowlisted; instance types are a curated x86_64 "T"-family subset (Graviton/ARM64 is a natural follow-up, paired with the arm64 SSM AMI parameter).
 
 UI safety notes:
-- Tell users the token should be scoped to a disposable project/org where possible.
-- Show the planned region, size, max TTL, and estimated cost before provisioning.
-- Include a **Destroy machine now** button and a visible teardown status.
-- Store provider tokens in the same secret path as other user-provided keys; never in session transcripts.
+- The token should be scoped to a disposable project/org where possible.
+- The planned region, size, max TTL, and estimated cost are shown before provisioning.
+- A **Destroy machine now** button and a visible teardown status are always available.
+- Provider tokens are stored in the same secret path as other user-provided keys, never in session transcripts.
 
 ## Minimum implementation
 

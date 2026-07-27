@@ -6,8 +6,8 @@ over real TLS, working from cellular (true NAT traversal).
 ```
         phone (cellular)                     your PC (node)
               │                                    │
-   https://app.bivy.sh                          │ dials outbound
-              │  wss://relay.bivy.sh  ◄─────────┘
+   https://app.example.com                      │ dials outbound
+              │  wss://relay.example.com  ◄─────┘
               ▼                │
         ┌───────────┐   ┌──────────────┐
         │   Caddy    │──▶│ control plane │  (accounts, registry, grants)
@@ -16,19 +16,25 @@ over real TLS, working from cellular (true NAT traversal).
         └───────────┘    └──────────────┘
 ```
 
-## 1. Provision Hetzner
+For the fully numbered walkthrough, see
+[`../docs/self-host-quickstart.md`](../docs/self-host-quickstart.md). This page
+is the shorter reference for the files in this directory.
 
-- Create a small Ubuntu VPS (1 vCPU / 1 GB is enough for staging).
+## 1. Provision a server
+
+- Create a small Ubuntu VPS (1 vCPU / 1 GB is enough to start).
 - Add your SSH key to the server.
-- Point two DNS A records at the VPS IP:
-  - `app.bivy.sh` (control plane + remote web client)
-  - `relay.bivy.sh` (relay)
-- Install Docker + Compose on the server:
+- Point two DNS A/AAAA records at the VPS IP:
+  - `app.example.com` (control plane + remote web client)
+  - `relay.example.com` (relay)
+- Open ports 80 and 443 (Caddy needs both for the HTTP→HTTPS redirect and
+  Let's Encrypt).
+- Install Docker + the Compose plugin:
 
 ```bash
 ssh root@YOUR_SERVER_IP
 apt-get update
-apt-get install -y ca-certificates curl gnupg rsync
+apt-get install -y ca-certificates curl gnupg git
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 chmod a+r /etc/apt/keyrings/docker.gpg
@@ -38,85 +44,45 @@ apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
-Optional but recommended: create a deploy user. This setup uses `github`:
+## 2. Get the repo onto the server
+
+`deploy/self-host.sh` resolves its own repo root, so it needs a real checkout,
+not just the `deploy/` directory copied over.
 
 ```bash
-adduser github
-usermod -aG docker github
-mkdir -p /home/github/.ssh
-cp /root/.ssh/authorized_keys /home/github/.ssh/authorized_keys
-chown -R github:github /home/github/.ssh
+mkdir -p /opt/bivy && cd /opt/bivy
+git clone https://github.com/bivysh/bivy.git .
 ```
 
-## 2. First-time server config
+## 3. Deploy
 
-The GitHub pipeline uploads code and renders `deploy/.env` / `deploy/Caddyfile` from GitHub Environment secrets/vars on every deploy. Create the app directory once during provisioning; the deploy workflow does not use `sudo`.
+One command builds and starts the stack:
 
 ```bash
-ssh root@YOUR_SERVER_IP
-mkdir -p /opt/bivy
-chown -R github:github /opt/bivy
+bash deploy/self-host.sh app.example.com relay.example.com
 ```
 
-Then continue as the deploy user:
+It writes `deploy/.env` and `deploy/Caddyfile` on first run (generating a random
+`RELAY_SECRET` and Postgres password), then starts control-plane + relay + Caddy,
+plus a bundled Postgres. Caddy obtains Let's Encrypt certificates automatically,
+so you get real `https://` and `wss://` with no extra steps. Re-running the
+script rebuilds and restarts in place, keeping the existing `.env` and Caddyfile.
+
+To use a managed/hosted Postgres (DigitalOcean, Render, Neon, Supabase, RDS, …)
+instead of the bundled container, set `DATABASE_URL` (keep the `sslmode` your
+provider gives you):
 
 ```bash
-ssh github@YOUR_SERVER_IP
-cd /opt/bivy
+DATABASE_URL=postgres://user:pass@host:25060/db?sslmode=require \
+  bash deploy/self-host.sh app.example.com relay.example.com
 ```
 
-Set the deploy values in GitHub **Environment: staging** secrets/vars. The pipeline overwrites `deploy/.env` and `deploy/Caddyfile` on the server each deploy.
+Fill in the optional feature settings in `deploy/.env` when you want them —
+login email (`RESEND_API_KEY`), GitHub OAuth, or web push — then re-run the
+script to apply them.
 
-Use strong secrets:
-
-```bash
-openssl rand -base64 48   # RELAY_SECRET
-openssl rand -base64 32   # POSTGRES_PASSWORD
-```
-
-Caddy obtains Let's Encrypt certificates automatically, so you get real
-`https://` and `wss://` with no extra steps.
-
-## 3. GitHub Actions deployment pipeline
-
-This repo includes `.github/workflows/deploy-staging.yml`.
-
-Add these GitHub repo secrets:
-
-- `HETZNER_HOST` — server IP or hostname
-- `HETZNER_USER` — `github` for this setup
-- `HETZNER_SSH_KEY` — private key allowed to SSH into the server
-- `RELAY_SECRET` — shared relay/control-plane secret
-- `POSTGRES_PASSWORD` — Postgres password
-
-Optional GitHub Environment vars/secrets:
-
-- `CP_DOMAIN` — defaults to `app.bivy.sh`
-- `RELAY_DOMAIN` — defaults to `relay.bivy.sh`
-- `AUTH_EMAIL_FROM`, `RESEND_API_KEY`
-- `BIVY_GITHUB_OAUTH_CLIENT_ID`, `BIVY_GITHUB_OAUTH_CLIENT_SECRET`
-- Stripe keys/prices and entitlement toggles
-
-On push to `main`, the workflow:
-
-1. runs root/control-plane/relay typechecks,
-2. runs relay + remote-path e2e tests,
-3. verifies `/opt/bivy` exists and is writable by `HETZNER_USER`,
-4. rsyncs the repo to `/opt/bivy`,
-5. runs `deploy/staging-deploy.sh`, which executes Docker Compose.
-
-Manual deploys are also available from GitHub Actions via **Run workflow**.
-
-## 4. Manual deploy command
-
-On the server:
-
-```bash
-cd /opt/bivy
-bash deploy/staging-deploy.sh
-```
-
-Or, directly:
+Or run Compose directly if you'd rather manage `deploy/.env` and
+`deploy/Caddyfile` yourself:
 
 ```bash
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build --remove-orphans
@@ -128,27 +94,28 @@ Check logs:
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env logs -f control-plane relay postgres caddy
 ```
 
-See `../docs/staging-ops.md` for backups, restore drill, and health checks.
+See [`../docs/self-host.md`](../docs/self-host.md) for backups, restore drills,
+secret rotation, and health checks.
 
-## 5. Connect your PC as a node
+## 4. Connect your PC as a node
 
 ```bash
 # in the repo root, on your PC
 npm run relay:setup -- \
-  --control-plane https://app.bivy.sh \
-  --relay wss://relay.bivy.sh \
-  --email you@bivy.sh
+  --control-plane https://app.example.com \
+  --relay wss://relay.example.com \
+  --email you@example.com
 npm run dev
 ```
 
 The daemon dials the relay on start (`[relay] connected`).
 
-## 6. Link your phone
+## 5. Link your phone
 
 In the PC web UI sidebar → **Link remote device** → scan the QR with your phone
 (works from anywhere afterwards, including cellular). The phone opens
-`https://app.bivy.sh/#…`, connects through the relay, and controls
-the node. The session is end-to-end encrypted; the relay only sees ciphertext.
+`https://app.example.com/#…`, connects through the relay, and controls the node.
+The session is end-to-end encrypted; the relay only sees ciphertext.
 
 ## Zero-infra alternative: Tailscale
 
@@ -158,14 +125,17 @@ plane + relay locally, and use the PC's Tailscale IP/hostname in `relay:setup`
 Put your phone on the same tailnet. You lose public TLS but get real
 cross-network NAT traversal for testing.
 
-## Staging status
+## What this deploy includes
 
-This deploy uses **Postgres** for control-plane metadata and is suitable for
-staging the full hosted relay path. The control plane auto-creates its tables on
-startup.
+- **Postgres** for control-plane metadata (bundled container, or a managed
+  database via `DATABASE_URL`). The control plane auto-creates its tables on
+  startup.
+- **Entitlement enforcement off** (`ENFORCE_ENTITLEMENTS=0`): every feature is
+  on for every account on a self-hosted stack, so there is no billing to
+  configure.
+- **Device pairing over an X25519 handshake** — the room key is delivered
+  ECDH-wrapped over the relay, not embedded in the QR — with per-device
+  revocation. See [`../docs/security-model.md`](../docs/security-model.md).
 
-Still harden before real production use: real auth (magic-link/OAuth), Stripe
-with signed webhooks, and rate limiting.
-Device pairing now uses an X25519 handshake (the room key is delivered ECDH-
-wrapped over the relay, not embedded in the QR) with per-device revocation — see
-`../docs/security-model.md`.
+Self-hosting is community best-effort and unsupported: you own TLS, backups,
+upgrades, and hardening. See [`../docs/self-host.md`](../docs/self-host.md).

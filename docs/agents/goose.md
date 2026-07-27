@@ -8,7 +8,7 @@ Block's open-source agent (`block/goose`), run under Bivy with its
 ## Install
 
 ```bash
-brew install block/tap/goose
+curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash
 ```
 
 ## Authentication

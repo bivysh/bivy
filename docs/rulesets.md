@@ -5,8 +5,8 @@ offline node, a network blip — Bivy no longer treats every failure as a dead
 end. A **ruleset** is user-authored policy that decides what happens next: retry,
 reroute through a fallback route, or park the run for a human.
 
-This document describes the condition taxonomy, the architecture, the schema, and
-the milestone that shipped first (the work-queue slice).
+This page covers the condition taxonomy Bivy classifies failures into, the
+ruleset schema you author, the built-in default, and where rulesets apply today.
 
 ## The seam: one matcher, context-specific effectors
 
@@ -86,7 +86,7 @@ Validate untrusted input with `validateRuleset(value)` → `{ ok, ruleset?, erro
 lacks credentials** on the node (via an injected `hasCredential` predicate), so a
 chain can list routes that only some nodes can serve.
 
-### The built-in default is safe, not clever
+### The built-in default
 
 `DEFAULT_RULESET` retries infra hiccups (transient transport, node-offline,
 rate-limits) with backoff, and **parks** quota / auth / context failures for a
@@ -127,12 +127,6 @@ Notable properties:
   (`maxAttempts`, backoff cap); on exhaustion they surface as `needs_attention`
   rather than silently failing.
 
-### Tests
-
-- `test/policy-conditions.test.ts` — the classifier across every condition + metadata parsing.
-- `test/policy-run-policy.test.ts` — schema validation, the matcher, and every decision path (retry, exhaustion, reroute chain + credential-skip, park, give_up, backoff math).
-- `test/control-plane-policy.test.ts` — the queue effector loop end-to-end (retry→complete, reroute rewrites routing, park→needs-attention, give_up→fail, no-policy back-compat).
-
 ## Milestone 2 — in-session model reroute (shipped)
 
 The session effector's first, fully in-place action: when a live turn ends in a
@@ -155,23 +149,18 @@ of surfacing the error.
 - **Bounded**: the per-turn reroute budget resets on each user prompt; when the
   chain drains the error surfaces as before.
 
-Tests: `test/session-reroute.test.ts` (chain walk, exhaustion, non-covered
-conditions, no-op skip, per-turn reset, failed-swap handling).
+## Not yet supported
 
-## Not yet built (the backlog)
+These are not available yet:
 
-In rough order:
-
-1. **Session `suggest` mode** — ask before costly/lossy actions in interactive
-   sessions (reuse `QuestionManager` / `ApprovalManager`) rather than acting
-   automatically; today the session model reroute (a same-provider downgrade) acts
-   automatically within its bounded budget.
-2. **`continue` action** — for `context_overflow`, fork into a fresh session
-   preserving run lineage + workspace (full vs seeded fidelity), rather than park.
-3. **Waiting state + claim leases** — a durable `waiting` / `nextEligibleAt` so a
-   long `retry-after` releases the node slot instead of sleeping, and a lease so a
-   dead node's claimed run is reclaimed rather than stranded.
-4. **Catalog-backed `hasCredential`** wired into the queue effector so
-   user-authored fallback chains skip un-credentialed routes in production.
-5. **Node fallback** — warm-standby promotion → cross-node fork → ephemeral, with
-   ownership fencing (`ownerEpoch`) before any of it goes automatic.
+- **Session `suggest` mode** — asking before costly or lossy actions in
+  interactive sessions, rather than acting automatically within the bounded
+  budget.
+- **`continue` action** — for `context_overflow`, forking into a fresh session
+  that preserves run lineage and workspace, rather than parking.
+- **Waiting state and claim leases** — releasing a node slot during a long
+  `retry-after` instead of sleeping, and reclaiming a dead node's claimed run.
+- **Credential-aware queue reroute** — skipping un-credentialed fallback routes
+  in the queue effector.
+- **Node fallback** — warm-standby promotion, cross-node fork, and ephemeral
+  routing with ownership fencing.

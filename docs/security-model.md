@@ -333,8 +333,8 @@ This is pattern-based. It does not catch a secret shape Bivy has no pattern for.
 
 ## Known limitations for 0.1
 
-Bivy 0.1 is an early public release. These are the things we would want a
-security-conscious user to know before trusting it with anything sensitive.
+Bivy 0.1 is an early public release. Know these before trusting it with anything
+sensitive.
 
 1. **No Bivy-owned OS sandbox.** As above: agents without a native sandbox run
    as your user with your permissions. Bivy's governance is effect-level and
