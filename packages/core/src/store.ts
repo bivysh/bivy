@@ -78,6 +78,10 @@ export interface SessionSummary {
   sessionId: string;
   /** On-disk session file path — required to open a not-yet-loaded session. */
   path?: string;
+  /** Repository/default workspace recorded by the node. */
+  workspace?: string;
+  /** Effective isolated worktree for this session, when it has one. */
+  worktree?: string;
   name: string;
   source?: string;
   /** Relay/account mode: node that owns this session. Used by all-node lists. */
@@ -1704,6 +1708,9 @@ export class SessionStore {
           this.upsertSession({
             sessionId: sid,
             path: e.sessionFile || e.path,
+            workspace: e.workspace || e.bivySession?.workspace,
+            worktree: e.worktree || e.bivySession?.worktree || e.bivySession?.workspaceContext?.worktree,
+            branch: e.branch || e.bivySession?.branch,
             // Default the name/last-active only for a genuinely NEW row. A
             // session merely being (re)opened re-broadcasts session.created with
             // no fresh timestamp; falling back to "Untitled session"/Date.now()

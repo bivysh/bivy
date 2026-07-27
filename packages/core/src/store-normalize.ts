@@ -196,6 +196,8 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
     byId.set(sessionId, {
       sessionId,
       path: s?.path || s?.sessionFile || undefined,
+      workspace: s?.workspace || s?.bivySession?.workspace || undefined,
+      worktree: s?.worktree || s?.bivySession?.worktree || s?.bivySession?.workspaceContext?.worktree || undefined,
       name: String(s?.name || "Untitled session"),
       source: s?.source,
       nodeId: s?.nodeId || undefined,

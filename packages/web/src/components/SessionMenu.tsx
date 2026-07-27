@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { controller, useAppState } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
 import { ForkSheet } from "./ForkSheet.js";
+import { sessionReferenceText, writeClipboard } from "../clipboard.js";
+import { routePath } from "../router.js";
 
 // See SessionList's identical constant/rationale.
 const PR_BUSY_TIMEOUT_MS = 20000;
@@ -17,6 +19,12 @@ export function SessionMenu({
   sessionId,
   name,
   isRepo,
+  node,
+  agent,
+  workspace,
+  worktree,
+  branch,
+  sessionFile,
   collapsed,
   onToggleCollapsed,
   onContinueInTerminal,
@@ -24,6 +32,12 @@ export function SessionMenu({
   sessionId: string;
   name: string;
   isRepo: boolean;
+  node?: string;
+  agent?: string;
+  workspace?: string;
+  worktree?: string;
+  branch?: string;
+  sessionFile?: string;
   /** Focus view: hide interim messages and tool use, leaving the conversation. */
   collapsed: boolean;
   onToggleCollapsed: () => void;
@@ -74,6 +88,22 @@ export function SessionMenu({
   const del = () => {
     close();
     setDeleting(true);
+  };
+  const copyReference = async () => {
+    close();
+    const url = `${location.origin}${routePath({ kind: "session", id: sessionId })}`;
+    const copied = await writeClipboard(sessionReferenceText({
+      url,
+      sessionId,
+      node,
+      agent,
+      workspace,
+      worktree,
+      branch,
+      sessionFile,
+    }));
+    if (copied) controller.store.setNotice("Session reference copied");
+    else controller.store.setError("Couldn't copy the session reference");
   };
   const refreshPrStatus = () => {
     setPrBusy(true);
@@ -127,6 +157,9 @@ export function SessionMenu({
             }}
           >
             {collapsed ? "Show all messages" : "Focus view — hide tool use"}
+          </button>
+          <button className="session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
+            Copy session reference
           </button>
           <button className="session-actions-item" role="menuitem" onClick={rename} disabled={prBusy}>
             Rename
