@@ -76,6 +76,7 @@ import {
   nextQueuedFollowup,
   type PendingFollowup,
   type PromptAttachment,
+  type Ruleset,
   type RuntimeInfo,
   type ServerEvent,
   type StreamingBehavior,
@@ -1681,6 +1682,22 @@ export class AppController {
   }
   removeLocalModel(id: string): void {
     this.send({ kind: "models.custom.remove", id });
+  }
+
+  // --- Settings: rulesets (run-orchestration policy) ----------------------
+
+  /** Pull the ruleset list into state (each with its `active` flag). */
+  listRulesets(): void {
+    this.send({ kind: "rulesets.list" });
+  }
+  /** Save (create or update) a ruleset. `active` optionally (de)selects it as the
+   *  queue's active ruleset. Resolves once the node acks (validation passes) or
+   *  rejects with the node's validation error. */
+  saveRuleset(ruleset: Ruleset, active?: boolean): Promise<void> {
+    return this.awaitAck({ kind: "rulesets.save", ruleset, active }).then(() => undefined);
+  }
+  removeRuleset(name: string): void {
+    this.send({ kind: "rulesets.remove", name });
   }
 
   // --- Settings: voice input (speech-to-text) ----------------------------

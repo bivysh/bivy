@@ -9,9 +9,10 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import { listRuntimes, catalogRuntimes, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
-import { createRunPolicy } from "./policy/run-policy.js";
+import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController } from "./policy/session-reroute.js";
+import { listRulesetInfos, upsertRuleset, removeRuleset, activeRulesetFor } from "./runtime/ruleset-store.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
@@ -352,6 +353,49 @@ async function persistLocalModelRemove(id: string): Promise<void> {
   void pushModelAuthToControlPlane().catch(() => {});
   await broadcastLocalModels();
 }
+
+// --- Rulesets (run-orchestration policy; docs/rulesets.md). --------------------
+// Bivy owns the ruleset registry (ruleset-store.ts); it is node-local, not
+// synced through the credential envelope, because policy is per-machine. One
+// ruleset may be ACTIVE — the work-queue effector consults it (activeQueueRuleset
+// below), falling back to the built-in DEFAULT_RULESET when none is active.
+const rulesetsDir = appDir;
+
+function rulesetInfos() {
+  return listRulesetInfos(rulesetsDir);
+}
+
+/** Re-emit the ruleset list to every connected client (relay + direct). */
+function broadcastRulesets(): void {
+  broadcast({ type: "rulesets.list", rulesets: rulesetInfos() });
+}
+
+/** Save (validate + store) a ruleset; `active` optionally (de)selects it as the
+ *  queue's active ruleset. Returns the stored name. */
+function persistRulesetSave(input: unknown, active?: boolean): { name: string } {
+  const result = upsertRuleset(rulesetsDir, input, active);
+  broadcastRulesets();
+  return result;
+}
+
+function persistRulesetRemove(name: string): void {
+  removeRuleset(rulesetsDir, name);
+  broadcastRulesets();
+}
+
+/** The ruleset the work queue should run under right now: the user's active
+ *  ruleset if it applies to the queue, else undefined (→ DEFAULT_RULESET). Read
+ *  lazily on each decision so edits in the UI take effect without a restart. */
+function activeQueueRuleset(): Ruleset | undefined {
+  return activeRulesetFor(rulesetsDir, "queue");
+}
+
+// The queue effector's policy. Thin wrapper so a freshly-saved active ruleset is
+// picked up on the next failed attempt — createRunPolicy is stateless/cheap and
+// failures are rare, so rebuilding per decision costs nothing meaningful.
+const queueRunPolicy: RunPolicy = {
+  decide: (ctx) => createRunPolicy({ context: "queue", ruleset: activeQueueRuleset() }).decide(ctx),
+};
 // Bivy is distributed on npm, so "is there a newer version?" is a registry
 // question. Overridable for self-hosted or mirrored registries.
 const updateRegistryUrl = process.env.BIVY_UPDATE_REGISTRY_URL ?? "https://registry.npmjs.org/bivy/latest";
@@ -3028,6 +3072,28 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
+  // --- Rulesets (run-orchestration policy; Bivy-owned, node-local). ---
+  "rulesets.list"(_msg, ctx) {
+    ctx.reply({ type: "rulesets.list", rulesets: rulesetInfos() });
+  },
+  "rulesets.save"(msg, ctx) {
+    try {
+      const active = typeof (msg as any).active === "boolean" ? (msg as any).active : undefined;
+      persistRulesetSave((msg as any)?.ruleset ?? msg, active);
+      // Dedicated per-request ack — see the provider.apiKey/models.custom.save comments (#140).
+      ctx.reply({ type: "rulesets.save.ok", requestId: msg.requestId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.reply({ type: "rulesets.save.error", requestId: msg.requestId, error: message });
+    }
+  },
+  "rulesets.remove"(msg) {
+    try {
+      persistRulesetRemove(String((msg as any).name ?? ""));
+    } catch (error) {
+      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
   async "stt.config.get"() {
     try {
       relay?.sendEvent({ type: "stt.config", ...(await getSttConfig(appDir)) });
@@ -4804,7 +4870,7 @@ function startControlPlaneTasksIfConfigured() {
   // limit, park quota/auth/context); user-authored rulesets can add fallback
   // chains. Queue runs are unattended, so they act automatically within bounds.
   controlPlanePoller = new ControlPlaneTaskPoller(cfg, runWorkItem, nodeGithubMaxConcurrent, {
-    policy: createRunPolicy({ context: "queue" }),
+    policy: queueRunPolicy,
   });
   controlPlanePoller.start();
 }
@@ -8046,6 +8112,44 @@ app.delete("/api/models/custom/:id", async (req, res, next) => {
     res.json({ ok: true, providers: await localModelSummaries() });
   } catch (error) {
     if (error instanceof Error && /provider id required/.test(error.message)) {
+      return res.status(400).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+
+// --- Rulesets (run-orchestration policy; docs/rulesets.md) ---
+// Bivy's registry (ruleset-store.ts) is the source of truth. These REST routes
+// serve the same-origin (direct) transport; the relay transport uses the
+// rulesets.* WS commands. Validation (400) mirrors validateRuleset's message.
+app.get("/api/rulesets", (_req, res, next) => {
+  try {
+    res.json({ rulesets: rulesetInfos() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/rulesets", (req, res, next) => {
+  try {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const active = typeof body.active === "boolean" ? (body.active as boolean) : undefined;
+    const result = persistRulesetSave(body.ruleset ?? body, active);
+    res.json({ ok: true, name: result.name, rulesets: rulesetInfos() });
+  } catch (error) {
+    if (error instanceof Error && /^Invalid ruleset:|ruleset name required/.test(error.message)) {
+      return res.status(400).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+
+app.delete("/api/rulesets/:name", (req, res, next) => {
+  try {
+    persistRulesetRemove(String(req.params.name || ""));
+    res.json({ ok: true, rulesets: rulesetInfos() });
+  } catch (error) {
+    if (error instanceof Error && /ruleset name required/.test(error.message)) {
       return res.status(400).json({ error: error.message });
     }
     next(error);

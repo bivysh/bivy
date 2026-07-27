@@ -86,6 +86,24 @@ Validate untrusted input with `validateRuleset(value)` → `{ ok, ruleset?, erro
 lacks credentials** on the node (via an injected `hasCredential` predicate), so a
 chain can list routes that only some nodes can serve.
 
+### Authoring rulesets in the app
+
+Rulesets are edited from **Settings → Rulesets** in the web app. Each node owns
+its own registry (`<appDir>/rulesets.json`, non-secret config only — never synced
+through the credential envelope, since policy is per-machine). The panel is a
+structured editor over the schema above: pick the failure conditions a rule
+matches, choose retry / reroute / park, set the attempt bound and backoff, and —
+for reroute — order the fallback chain. The node validates every save with
+`validateRuleset` before it is stored, so an invalid shape is rejected with a
+readable error rather than silently persisted.
+
+One ruleset may be marked **active**. That is the ruleset the work-queue effector
+runs under (`activeQueueRuleset` in `src/server.ts`), read lazily on each failed
+attempt so an edit in the UI takes effect on the next failure without a restart.
+An active ruleset only steers a context it `appliesTo` — an active session-only
+ruleset never touches the unattended queue. With no active ruleset, the queue
+falls back to `DEFAULT_RULESET` below.
+
 ### The built-in default
 
 `DEFAULT_RULESET` retries infra hiccups (transient transport, node-offline,
