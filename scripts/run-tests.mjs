@@ -76,15 +76,22 @@ const tsSuites = readdirSync(testDir)
   .sort()
   .map((f) => ({ name: f, cmd: tsxBin, args: [path.join(testDir, f)], ports: portsForFile(path.join(testDir, f)) }));
 
-// Shell installer tests (previously the tail of the chain).
+// Shell installer tests. Each runs the real install.sh, which mutates global,
+// un-sandboxable state a port key can't model — it writes shell rc files, reads
+// /dev/tty, and launches setup — so two of them at once race (that's exactly
+// what flaked `installer-path.sh` when first parallelized). They stay a SERIAL
+// tail, run one at a time after the parallel pool drains, just as they were the
+// tail of the old `&&` chain. They're cheap; the ~141s all lived in .test.ts.
 const shSuites = ["installer-migration.sh", "installer-path.sh"].map((f) => ({
   name: f,
   cmd: "bash",
   args: [path.join(testDir, f)],
-  ports: portsForFile(path.join(testDir, f)),
+  ports: new Set(),
 }));
 
 const suites = [...tsSuites, ...shSuites];
+const parallelSuites = tsSuites; // .test.ts suites parallelize (port-aware)
+const serialSuites = shSuites; // installer suites run serially afterward
 
 const parallelism = availableParallelism?.() ?? cpus().length ?? 1;
 const concurrency = Math.max(1, Number(process.env.TEST_CONCURRENCY) || parallelism);
@@ -92,13 +99,13 @@ const concurrency = Math.max(1, Number(process.env.TEST_CONCURRENCY) || parallel
 const failures = [];
 const start = Date.now();
 const activePorts = new Set(); // ports held by currently-running suites
-const pending = [...suites];
 let running = 0;
 let done = 0;
 
 process.stdout.write(
-  `Running ${suites.length} suites, up to ${concurrency} at a time` +
-    (concurrency === 1 ? " (serial)\n" : "\n"),
+  `Running ${suites.length} suites: ${parallelSuites.length} in parallel ` +
+    `(up to ${concurrency}), then ${serialSuites.length} serial` +
+    (concurrency === 1 ? " — parallel phase capped to 1\n" : "\n"),
 );
 
 function runSuite(suite) {
@@ -127,16 +134,18 @@ function runSuite(suite) {
   });
 }
 
-// Greedy, port-aware scheduler. On every free slot we scan the pending list for
-// the first suite whose fixed ports are all currently free, start it, and mark
-// its ports busy until it exits. A suite blocked only by a port (not the slot
-// limit) simply waits for the holder to finish — no deadlock, because a suite
-// can conflict only with one that is actively running, and running suites always
-// make progress.
-async function schedule() {
+// Greedy, port-aware scheduler for the parallel phase. On every free slot we
+// scan the pending list for the first suite whose fixed ports are all currently
+// free, start it, and mark its ports busy until it exits. A suite blocked only
+// by a port (not the slot limit) simply waits for the holder to finish — no
+// deadlock, because a suite can conflict only with one that is actively running,
+// and running suites always make progress.
+async function runParallel(list) {
+  const pending = [...list];
+  let completed = 0;
   await new Promise((resolveAll) => {
     const pump = () => {
-      if (done === suites.length) {
+      if (completed === list.length) {
         resolveAll();
         return;
       }
@@ -153,6 +162,7 @@ async function schedule() {
         runSuite(suite).then(() => {
           running -= 1;
           for (const p of suite.ports) activePorts.delete(p);
+          completed += 1;
           pump();
         });
         // don't advance i: the list shifted; re-scan from the same index
@@ -162,7 +172,11 @@ async function schedule() {
   });
 }
 
-await schedule();
+await runParallel(parallelSuites);
+// Serial tail: one installer suite at a time, never overlapping anything else.
+for (const suite of serialSuites) {
+  await runSuite(suite);
+}
 
 const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 process.stdout.write(`\n${"=".repeat(48)}\n`);
