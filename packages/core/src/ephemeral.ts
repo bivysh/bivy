@@ -1703,6 +1703,64 @@ export async function listEphemeralSizes(
   }
 }
 
+/** How long after a machine record is created we still treat its (offline) node
+ *  as possibly mid-boot rather than a reapable orphan. A real ephemeral node
+ *  stays *online* once connected, so an `eph-*` node still offline past this
+ *  window is dead — but a machine can take a couple minutes to install Bivy and
+ *  dial in, so give boots a generous margin before reaping. */
+const EPHEMERAL_BOOT_GRACE_MS = 15 * 60 * 1000;
+
+/**
+ * Delete this account's orphaned ephemeral nodes so a node-limit-blocked launch
+ * can proceed. An orphan is an **offline** `eph-*` node whose box self-destructed
+ * or never booted and was never unenrolled. Deliberately conservative:
+ *  - only `eph-*` nodes (a persistent node is never touched);
+ *  - only offline ones (a live ephemeral node stays connected — this is the real
+ *    safety check);
+ *  - never one still inside its boot grace window (a machine we launched moments
+ *    ago is offline simply because it hasn't dialed in yet).
+ * When a reaped node still has a local machine record (a box that died but whose
+ * "Launched machines" row lingered), that stale record is dropped too. Returns
+ * how many nodes were reaped. Best-effort — a failed delete is skipped, not fatal.
+ */
+export async function reapOrphanEphemeralNodes(
+  deps: { store: LocalStore; machines: MachineStore },
+  fetchImpl: typeof fetch,
+): Promise<number> {
+  const auth = { authorization: `Bearer ${deps.store.s}` };
+  let nodes: Array<{ id?: unknown; online?: unknown }> = [];
+  try {
+    const res = await fetchImpl(`${cpBase(deps.store)}/nodes`, { headers: auth });
+    const data = await res.json().catch(() => []);
+    if (res.ok && Array.isArray(data)) nodes = data;
+  } catch {
+    return 0;
+  }
+  const byNode = new Map<string, EphemeralMachine>();
+  for (const m of await deps.machines.list().catch(() => [])) if (m.nodeId) byNode.set(m.nodeId, m);
+  const now = Date.now();
+  let reaped = 0;
+  for (const node of nodes) {
+    const id = typeof node?.id === "string" ? node.id : "";
+    if (!id.startsWith("eph-") || node.online !== false) continue;
+    const local = byNode.get(id);
+    if (local) {
+      const age = now - Date.parse(String(local.createdAt || ""));
+      if (Number.isFinite(age) && age < EPHEMERAL_BOOT_GRACE_MS) continue; // likely still booting
+    }
+    try {
+      const del = await fetchImpl(`${cpBase(deps.store)}/nodes/${encodeURIComponent(id)}`, { method: "DELETE", headers: auth });
+      if (del.ok) {
+        reaped++;
+        if (local) await deps.machines.remove(local.id).catch(() => {});
+      }
+    } catch {
+      /* skip; a transient delete failure just means one fewer freed slot */
+    }
+  }
+  return reaped;
+}
+
 /**
  * Provision an ephemeral node: enroll it on the account, mint a room key, build
  * cloud-init, and ask the provider to boot a machine that self-destructs at TTL.
@@ -1718,12 +1776,27 @@ export async function launchEphemeralMachine(
   if (!token) throw new Error(`Add a ${adapter.name} token first.`);
 
   const nodeId = "eph-" + randHex(8);
-  const enrollRes = await fetchImpl(`${cpBase(deps.store)}/nodes/enroll`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${deps.store.s}` },
-    body: JSON.stringify({ nodeId, name: opts.name || `Ephemeral ${adapter.name}` }),
-  });
-  const enroll: any = await enrollRes.json().catch(() => ({}));
+  const enrollBody = JSON.stringify({ nodeId, name: opts.name || `Ephemeral ${adapter.name}` });
+  const enrollOnce = async () => {
+    const res = await fetchImpl(`${cpBase(deps.store)}/nodes/enroll`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${deps.store.s}` },
+      body: enrollBody,
+    });
+    return { res, data: (await res.json().catch(() => ({}))) as any };
+  };
+  let { res: enrollRes, data: enroll } = await enrollOnce();
+  // A machine that self-destructs (or never boots) leaves its enrolled node
+  // behind — the control plane isn't told the box is gone, only the device's
+  // Destroy button unenrolls it. Enough of those orphaned `eph-*` nodes and the
+  // account hits its plan node limit, and every new launch fails enrollment with
+  // a 402 that surfaces as the generic "Could not enroll the machine". So when we
+  // hit the limit, reap our own orphaned ephemeral nodes (offline `eph-*` nodes
+  // this device no longer tracks a machine for — never a persistent node) and
+  // retry once. Self-heals the account rather than stranding the user.
+  if (!enrollRes.ok && enrollRes.status === 402 && /node limit/i.test(String(enroll?.error ?? ""))) {
+    if ((await reapOrphanEphemeralNodes(deps, fetchImpl)) > 0) ({ res: enrollRes, data: enroll } = await enrollOnce());
+  }
   if (!enrollRes.ok || !enroll?.enrollmentToken) throw new Error(enroll?.error || "Could not enroll the machine");
 
   const roomBytes = crypto.getRandomValues(new Uint8Array(32));
