@@ -3241,7 +3241,10 @@ const RELAY_COMMANDS: Record<string, Command> = {
         targetRuntimeId: agentFrom(msg) ?? bundle.record.runtimeId,
         model: modelFrom(msg),
         transcriptUrl: typeof msg.transcriptUrl === "string" ? msg.transcriptUrl : undefined,
-        worktree: "adopt",
+        // Cross-agent forks can use this import handler without changing
+        // nodes. In that case the source branch is already checked out here,
+        // so cut an independent fork branch instead of trying to adopt it.
+        worktree: msg.sameNode === true ? "fresh" : "adopt",
         detectPrereqs: true,
       });
       if (!outcome.ok) {
