@@ -10,7 +10,6 @@ import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { AutomationsPanel } from "./Automations.js";
-import { StatsPanel } from "./StatsPanel.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
@@ -1728,7 +1727,6 @@ function NodesPanel({ state }: { state: AppState }) {
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
-  const [statsOpen, setStatsOpen] = useState(false);
   const currentNodeId = controller.local.cur;
 
   const reload = () => {
@@ -1801,43 +1799,33 @@ function NodesPanel({ state }: { state: AppState }) {
 
   return (
     <div className="settings-form">
-      <p className="muted settings-intro">
-        Per-node defaults for new sessions plus a cap on how many GitHub-triggered sessions run at once.
-        {hosted ? " Settings apply to the node you're connected to — pick another below to edit it." : ""}
-      </p>
-
-      <div className="row-actions">
-        <button className="btn" onClick={() => setStatsOpen(true)}>
-          View node stats →
-        </button>
-      </div>
-      {statsOpen && <StatsPanel onClose={() => setStatsOpen(false)} />}
-
       {hosted && (
         <section className="settings-section">
-          <h4 className="settings-subhead">Node</h4>
-          <div className="picker-list">
-            {nodes.length === 0 && <div className="picker-empty">No nodes found.</div>}
+          <label className="field-label" htmlFor="node-settings-node">Node</label>
+          <select
+            id="node-settings-node"
+            className="picker-search"
+            value={currentNodeId ?? ""}
+            disabled={nodes.length === 0}
+            onChange={(e) => {
+              const nodeId = e.target.value;
+              if (!nodeId || nodeId === currentNodeId) return;
+              controller.switchNode(nodeId);
+              // Don't show the outgoing node's settings a moment longer than
+              // necessary. The effect above pulls the new node's settings
+              // once the transport actually confirms it's online — no fixed
+              // timeout guess, and no window where a picked *offline* node
+              // would keep displaying whatever was left over from before.
+              setForm(null);
+            }}
+          >
+            {nodes.length === 0 && <option value="">No nodes found</option>}
             {nodes.map((n) => (
-              <PickerItem
-                key={n.id}
-                active={n.id === currentNodeId}
-                title={n.name || n.id}
-                meta={n.online ? "Online" : "Offline"}
-                right={n.id === currentNodeId ? <span className="chip ok">Editing</span> : undefined}
-                onClick={() => {
-                  if (n.id === currentNodeId) return;
-                  controller.switchNode(n.id);
-                  // Don't show the outgoing node's settings a moment longer than
-                  // necessary. The effect above pulls the new node's settings
-                  // once the transport actually confirms it's online — no fixed
-                  // timeout guess, and no window where a picked *offline* node
-                  // would keep displaying whatever was left over from before.
-                  setForm(null);
-                }}
-              />
+              <option key={n.id} value={n.id}>
+                {n.name || n.id}{n.online ? "" : " (offline)"}
+              </option>
             ))}
-          </div>
+          </select>
         </section>
       )}
 
