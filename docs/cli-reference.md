@@ -636,8 +636,9 @@ What it actually does depends on how Bivy was installed:
   the installer.
 
 Inside a Bivy web/PWA terminal (`BIVY_TERMINAL=1`) the update re-execs itself
-detached, logging to `<data-dir>/update.log`, and returns immediately — the
-restart would otherwise kill the terminal you are watching.
+detached, logs to `<data-dir>/update.log`, and mirrors live progress into the
+terminal until the node restarts. The web terminal reconnects automatically;
+the detached process survives the restart and finishes the update.
 
 ```bash
 bivy update
