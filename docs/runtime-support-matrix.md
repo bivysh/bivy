@@ -34,7 +34,7 @@ Every picker CLI agent's launch flags are overridable per node with
 agent's own native containment flags for the tier, e.g. Gemini/Qwen's
 `--approval-mode <mode>`), and its selectable model list with `BIVY_<ID>_MODELS`
 (a JSON array of `{id,name?,provider?}`), so an operator can adapt to a CLI
-version we haven't pinned — or expose more models — without a code change. Model
+version Bivy hasn't pinned — or expose more models — without a code change. Model
 selection is wired for the agents with a clean model flag today (Gemini/Qwen
 `-m`, Aider/OpenCode `--model`); the others run on their own default until a flag
 is wired.

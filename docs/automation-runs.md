@@ -15,23 +15,20 @@ The domain separates four records:
   are `pending`, `claimed`, `running`, `needs_attention`, `succeeded`, `failed`,
   and `cancelled`. A conditional `pending` to `claimed` update provides one
   winner when nodes race.
-- An **attempt** is represented explicitly on the run and starts at one. Retry
-  policy is intentionally outside the current model, but a run's evidence
-  timeline (below) can already record a `retry`/`fallback` event with a
-  bounded reason and an incremented attempt number the moment that policy
-  lands, without a storage migration.
+- An **attempt** is represented explicitly on the run and starts at one. A run's
+  evidence timeline (below) can record a `retry`/`fallback` event with a bounded
+  reason and an incremented attempt number.
 
-Runs initially target a new session. The schema also represents an existing
-session target without enabling continuation yet. Routing intent carries the
+Each run targets a new session. Routing intent carries the
 node label, runtime, model, ephemeral preference, sandbox tier, and approval
 mode (`never` / `risky` / `always` / `autonomous`, the same vocabulary as
-`BIVY_APPROVAL_MODE` — see docs/security-model.md). The claiming node applies
+`BIVY_APPROVAL_MODE` — see [security-model.md](security-model.md)). The claiming node applies
 runtime, model, and sandbox when it creates the run's session, and applies
 approval mode for the lifetime of that session; an unset value on the
 definition falls back to the node's own configured default. Output is limited
 to references such as session, branch, pull request, artifact, or a failure
 summary. Account APIs expose definitions, trigger history, and run history
-separately; the legacy work-item API is a projection of the same run records.
+separately; the older work-item API reads from the same run records.
 
 ## Run evidence and outcome reports
 
@@ -65,14 +62,11 @@ output. The GitHub queue UI renders this as a per-run "Outcome reports"
 timeline with a **Copy sanitized report** export — the same JSON object the
 control plane stores, nothing more.
 
-## Compatibility and migration
+## Compatibility
 
-The existing `work_items` rows are the canonical run storage, evolved in place
-rather than copied into a parallel queue. Startup migration backfills legacy
-rows with a trigger identity, inferred trigger kind, attempt one, and a new
-session target; legacy `done` rows become `succeeded`. Existing work-item
-endpoints and fields remain adapters over these records, so repository and issue
-context remains available to current nodes and the queue UI.
+Existing work-queue items continue to work unchanged: the older work-item
+endpoints and fields read from the same run records, so repository and issue
+context stays available to current nodes and the queue UI.
 
 ## Privacy and metering boundary
 

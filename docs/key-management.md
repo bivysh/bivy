@@ -1,6 +1,6 @@
 # Bivy key management
 
-Bivy's security boundary is that provider credentials stay on the node or in a vault you control. Bivy Cloud should not receive model API keys, GitHub repo tokens, OAuth refresh tokens, prompts, transcripts, or workspace files.
+Bivy's security boundary is that provider credentials stay on the node or in a vault you control. Bivy Cloud does not receive model API keys, GitHub repo tokens, OAuth refresh tokens, prompts, transcripts, or workspace files.
 
 ## Current secret locations
 

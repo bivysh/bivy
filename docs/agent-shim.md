@@ -147,8 +147,8 @@ launch-time session-id flag to pin, so a takeover **discovers** the session by c
 (`discoverCodexSessionForCwd`) and reopens it on the resumable Codex runtime,
 which continues it via `codex exec resume <id> --json` with history preloaded from
 the rollout. Governance is **effect-level** (the exec jail) — not per-tool
-approval cards — because Codex's runtime doesn't intercept tools yet. The exact
-resume flags are unverified against a live Codex; override the default with
+approval cards — because Codex's runtime doesn't intercept tools yet. If the
+resume flags need adjusting for your Codex version, override the default with
 `BIVY_CODEX_RESUME_TEMPLATE` (a JSON arg array with `{id}`/`{tier}` placeholders).
 
 Bivy also reads Codex's on-disk rollout (`$CODEX_HOME/sessions/**/rollout-*.jsonl`)
@@ -161,11 +161,8 @@ GET /api/codex/sessions/<id>/messages
 
 A *fully governed* (in-chat approval) takeover for Codex is still gated on the
 Codex runtime gaining tool interception or Codex speaking the
-bivy-agent-protocol. The rollout reader
-(`src/runtime/codex-sessions.ts`, unit-tested in `test/codex-sessions.test.ts`)
-and the resumable ProcessRuntime (`test/process-resume.test.ts`) are best-effort
-and validated against the documented format / via a stub, not yet against a live
-Codex.
+bivy-agent-protocol. The rollout reader and the resumable ProcessRuntime are
+built against Codex's documented rollout format.
 
 ## Status / roadmap
 

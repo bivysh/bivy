@@ -23,9 +23,9 @@ qwen
 
 Separately, and automatically: a Bivy-vault credential stored under the
 `qwen` provider is forwarded to the process every turn as `QWEN_API_KEY`
-(Bivy's generic per-provider convention — this hasn't been verified against
-what your Qwen Code version actually reads, so the native login above is the
-safer bet):
+(Bivy's generic per-provider convention). The native login above is the reliable
+path; this hand-off only helps if your Qwen Code version reads `QWEN_API_KEY`
+from the environment:
 
 ```bash
 bivy login   # pick the Qwen entry from the menu, if present

@@ -125,9 +125,9 @@ CLI flags always win over both, for the commands that have them
 (`bivy exec --agent`, `bivy relay:setup --control-plane`, `bivy prune
 --data-dir`, and so on).
 
-### A note on how values are parsed
+### How values are parsed
 
-This matters more than it should:
+Value parsing is not uniform across variables:
 
 - Strict `"1"` booleans (nothing else counts): `BIVY_ALLOW_ANY_ORIGIN`,
   `BIVY_OPEN_BOOTSTRAP`, `BIVY_GITHUB_TASKS`, `BIVY_GITHUB_HOSTED_TASKS`,
@@ -556,5 +556,5 @@ For operators running the self-hosted stack on a box.
 | `BIVY_PRUNE_DOCKER` | `prune.sh` | `0` disables | `1` |
 | `BIVY_PRUNE_DOCKER_ALL` | `prune.sh` | `1` runs `docker system prune -af` | `0` |
 | `BIVY_PRUNE` | `self-host.sh` | `0` \| `1` \| unset | unset = prune only when a stack already exists |
-| `APP_DIR` | `staging-deploy.sh` | path | `/opt/bivy` |
-| `CP_DOMAIN`, `RELAY_DOMAIN` | `self-host.sh` | hostname | prompted |
+| `DATABASE_URL` | `self-host.sh` | postgres URL | unset = bundled Postgres container |
+| `CP_DOMAIN`, `RELAY_DOMAIN` | `self-host.sh` | hostname | positional args (`<app-domain> <relay-domain>`) |
