@@ -3,7 +3,12 @@
 import { useMemo, useState } from "react";
 import type { ModelInfo } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
-import { Sheet, PickerItem } from "./Sheet.js";
+import { Sheet } from "./Sheet.js";
+
+/** Stable select value for a model; provider + id together identify it. */
+function modelKey(model: ModelInfo & { provider?: unknown }): string {
+  return JSON.stringify([String(model.provider), String(model.id)]);
+}
 
 /**
  * Fork a session (docs/session-fork-plan.md): continue it in a new session on
@@ -107,19 +112,21 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
       </div>
 
       {agentUnchanged && models.length > 0 && (
-        <div className="picker-section">
-          <div className="picker-section-label">Model</div>
-          <div className="picker-list">
+        <div className="picker-section fork-select-field">
+          <label htmlFor="fork-model">Model</label>
+          <select
+            id="fork-model"
+            value={model ? modelKey(model) : ""}
+            disabled={busy}
+            onChange={(e) => {
+              const selected = models.find((m) => modelKey(m) === e.target.value);
+              if (selected) setModel(selected);
+            }}
+          >
             {models.map((m) => (
-              <PickerItem
-                key={`${m.provider}/${m.id}`}
-                active={model?.id === m.id && model?.provider === m.provider}
-                title={String(m.name || m.id)}
-                disabled={busy}
-                onClick={() => setModel(m)}
-              />
+              <option key={modelKey(m)} value={modelKey(m)}>{String(m.name || m.id)}</option>
             ))}
-          </div>
+          </select>
         </div>
       )}
 
