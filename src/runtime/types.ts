@@ -48,8 +48,16 @@ export interface PromptImage {
   mimeType: string;
 }
 
+/**
+ * How a prompt sent while the session is already streaming should be handled:
+ * `"steer"` injects it into the current turn immediately; `"followUp"` defers
+ * it until the current turn ends. Not every runtime honors both — see
+ * RuntimeCapabilities.streamingBehaviors.
+ */
+export type StreamingBehavior = "steer" | "followUp";
+
 export interface PromptOptions {
-  streamingBehavior?: "steer" | "followUp";
+  streamingBehavior?: StreamingBehavior;
   images?: PromptImage[];
 }
 
@@ -411,6 +419,19 @@ export interface RuntimeCapabilities {
    * absent/empty = none advertised.
    */
   commands?: AgentCommand[];
+  /**
+   * Which streamingBehavior hints (see PromptOptions.streamingBehavior) this
+   * runtime actually honors when prompted mid-turn, so the client (issue #154's
+   * queued-follow-ups UI) knows whether an explicit "Steer current turn"
+   * action is safe to offer at all. Absent/empty means the client should never
+   * attempt a mid-turn prompt for this runtime — hold everything in its own
+   * queue and only ever send into an idle session. Advertised statically here
+   * for a built-in runtime (Pi, Claude Code); a protocol/RPC shim can instead
+   * declare it in its `hello` (see capabilitiesFromHello in
+   * src/runtime/protocol.ts), which defaults to none when omitted — an
+   * arbitrary shim must opt in before the client will ever try to interrupt it.
+   */
+  streamingBehaviors?: StreamingBehavior[];
   /**
    * The runtime can enumerate its own provider-native sessions that exist on
    * this node's filesystem but that Bivy did not start (see issue #156) —

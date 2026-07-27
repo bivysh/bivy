@@ -2363,6 +2363,17 @@ const sessionNewDedupe = createSessionNewDedupe<SessionRecord>();
 const dedupeSessionNew = (requestId: string | undefined, create: () => Promise<SessionRecord>) =>
   sessionNewDedupe.run(requestId, create);
 
+// Idempotency for `prompt`, keyed by the client's clientMessageId (the same
+// generic key->promise cache as above, reused for a different key) — see
+// issue #154's queued follow-ups. A client that isn't sure whether a queued
+// item's send actually reached the node before the socket dropped (see
+// AppController.retryStuckFollowups) resends it verbatim after reconnecting;
+// this makes that safe by collapsing a retried clientMessageId onto the
+// original broadcast + turn instead of double-prompting the runtime.
+const promptDedupe = createSessionNewDedupe<void>();
+const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<void>) =>
+  promptDedupe.run(clientMessageId, run);
+
 const RELAY_COMMANDS: Record<string, Command> = {
   ping(msg, ctx) {
     ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
@@ -3115,10 +3126,13 @@ const RELAY_COMMANDS: Record<string, Command> = {
       [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
       (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
     const agentPrompt = promptForAgent(record, promptText);
-    broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: msg.clientMessageId });
-    void maybeNameSession(record, promptText);
-    harnessBeginTurn(record);
-    void record.session.prompt(agentPrompt, promptOptionsFor(record, msg.streamingBehavior, images)).catch((error) => {
+    const cmid = typeof msg.clientMessageId === "string" && msg.clientMessageId ? msg.clientMessageId : undefined;
+    void dedupePrompt(cmid, async () => {
+      broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: msg.clientMessageId });
+      void maybeNameSession(record, promptText);
+      harnessBeginTurn(record);
+      await record.session.prompt(agentPrompt, promptOptionsFor(record, msg.streamingBehavior, images));
+    }).catch((error) => {
       // Mirror the HTTP path (see the /prompt route): a rejected turn after
       // the runtime marked the session working emits no agent_end, so without
       // this the relay client (PWA) is stranded on "Working…" forever with
@@ -8936,12 +8950,15 @@ app.post("/api/session/prompt", async (req, res, next) => {
       [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
       (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
     const agentPrompt = promptForAgent(record, promptText);
-    broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
+    const cmid = typeof req.body?.clientMessageId === "string" && req.body.clientMessageId ? req.body.clientMessageId : undefined;
     markSessionWorking(record, { type: "agent_start" });
-    void maybeNameSession(record, promptText);
-    harnessBeginTurn(record);
     // Do not await completion; events stream over WebSocket.
-    void session.prompt(agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images)).catch((error) => {
+    void dedupePrompt(cmid, async () => {
+      broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
+      void maybeNameSession(record, promptText);
+      harnessBeginTurn(record);
+      await session.prompt(agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images));
+    }).catch((error) => {
       clearSessionWorking(record);
       broadcast({ type: "session.error", sessionId: record.id, error: String(error?.stack ?? error) });
     });

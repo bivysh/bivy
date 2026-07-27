@@ -67,10 +67,16 @@ import {
   type PairedDevice,
   type Command,
   type ConnectionStatus,
+  type FollowupEditResult,
+  mustQueueFollowup,
   type ModelInfo,
+  nextQueuedFollowup,
+  type PendingFollowup,
   type PromptAttachment,
   type RuntimeInfo,
   type ServerEvent,
+  type StreamingBehavior,
+  supportsSteering as runtimeSupportsSteering,
   type Transport,
   importRoomKey,
   open as openSealed,
@@ -183,7 +189,19 @@ export class AppController {
     // node after the one-shot refresh in maybeFlushPendingPrompt already ran —
     // that race left it invisible in the sidebar until the next reconnect.
     // Re-pull the list once the turn actually settles as a self-healing backstop.
-    this.store.onSessionSettled = () => this.refreshSessions();
+    // The turn settling is also the drain point for any queued follow-ups (see
+    // drainFollowups) — sending the next one only once the current turn is
+    // fully done, never mid-stream (that would silently steer instead of
+    // queueing) — and a durable-enough signal to clear a "sending" item whose
+    // own delivery ack (session.user_message) never arrived (settleSendingFollowups).
+    this.store.onSessionSettled = () => {
+      this.refreshSessions();
+      const sid = this.store.getState().activeSessionId;
+      if (sid) {
+        this.store.settleSendingFollowups(sid);
+        this.drainFollowups(sid);
+      }
+    };
     // Live convergence: refresh the moment the node tells us a session was
     // created (ours or another client's), instead of only on this session's
     // own eventual agent_end.
@@ -374,6 +392,7 @@ export class AppController {
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
         this.maybeFlushPendingPrompt(appliedEvent);
+        this.maybeConfirmFollowup(appliedEvent);
         this.maybeRestoreDraftAgent(appliedEvent);
         this.maybeRefreshModelsForRuntime(appliedEvent);
         this.reconcileSessionList(appliedEvent);
@@ -1206,7 +1225,10 @@ export class AppController {
     // refresh. A cross-node selection was already opened just above.
     if (!openedAfterNodeSwitch) this.applyInitialRoute();
     const sid = this.store.getState().activeSessionId;
-    if (sid && !openedAfterNodeSwitch) this.requestHistory(sid);
+    if (sid && !openedAfterNodeSwitch) {
+      this.requestHistory(sid);
+      this.retryStuckFollowups(sid);
+    }
     // No active session but a session.new is still pending → its session.history
     // was lost to the drop. Re-fire it (idempotent on the node by requestId) so the
     // draft that wedged on the opening spinner finally binds and flushes its prompt.
@@ -1372,7 +1394,14 @@ export class AppController {
     this.chooseAgent(target);
   }
 
-  /** Send a prompt, creating a session first if there isn't an active one. */
+  /**
+   * Send a prompt, creating a session first if there isn't an active one. A
+   * prompt for an already-active session is either sent right away or held in
+   * the visible follow-up queue (AppState.followupsBySession) — see mustQueue.
+   * Queued items are edit/reorder/removable (see editFollowup etc.) and drain
+   * out one at a time as each turn settles (drainFollowups), or can be pushed
+   * through early via sendFollowupNow/steerNow.
+   */
   sendPrompt(text: string, attachments?: PromptAttachment[]): void {
     const trimmed = text.trim();
     const files = attachments && attachments.length ? attachments : undefined;
@@ -1380,6 +1409,10 @@ export class AppController {
     const cmid = clientMessageId();
     const active = this.store.getState().activeSessionId;
     if (active) {
+      if (this.mustQueue(active)) {
+        this.store.enqueueFollowup(active, { id: cmid, text: trimmed, attachments: files }, Date.now());
+        return;
+      }
       this.store.addUserMessage(trimmed, cmid, files);
       this.send({ kind: "prompt", sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files });
       return;
@@ -2092,6 +2125,172 @@ export class AppController {
   abort(): void {
     const active = this.store.getState().activeSessionId;
     if (active) this.send({ kind: "abort", sessionId: active });
+  }
+
+  // --- Queued follow-ups (issue #154) -------------------------------------
+  //
+  // A prompt sent to an already-busy session used to go straight over the
+  // wire and rely on the node/runtime to sort out ordering (its default is to
+  // "steer" the running turn — see src/server.ts's promptOptionsFor). That left
+  // a follow-up invisible and uneditable the instant it was sent. Now it's
+  // held in AppState.followupsBySession (visible, editable, reorderable) until
+  // either the current turn settles (auto-drain, one at a time, in display
+  // order) or the user explicitly pushes it through early (sendFollowupNow /
+  // steerNow). See SessionStore's queued-follow-ups CRUD for the data-shape
+  // invariants; everything here is about *when* to call it.
+
+  /** A new prompt for this session must be held in the visible queue rather
+   *  than sent immediately: the session is mid-turn, or earlier queued items
+   *  are still waiting (sending straight through would silently jump the
+   *  queue and reorder ahead of them — see the reordering acceptance test).
+   *  See packages/core/src/followups.ts's mustQueueFollowup for the (unit
+   *  tested) decision itself. */
+  private mustQueue(sessionId: string): boolean {
+    return mustQueueFollowup(this.store.getFollowups(sessionId).length, this.store.getState().working);
+  }
+
+  /** Whether the active runtime has advertised it can safely accept an
+   *  explicit mid-turn interrupt (`streamingBehavior: "steer"`). Read from the
+   *  live capabilities merged onto the selected runtime row (session.created /
+   *  session.capabilities — see SessionStore.mergeRuntimeCapabilities and
+   *  src/runtime/types.ts's RuntimeCapabilities.streamingBehaviors on the
+   *  node). The composer/queue UI use this to decide whether "Steer current
+   *  turn" is even offered; when false, a busy session only ever queues —
+   *  never attempts an interrupt the runtime hasn't promised to honor. See
+   *  packages/core/src/followups.ts's supportsSteering for the (unit tested)
+   *  capability check itself. */
+  supportsSteering(): boolean {
+    const s = this.store.getState();
+    const runtime = s.runtimes.find((r) => r.id === s.selectedAgentId);
+    return runtimeSupportsSteering(runtime?.capabilities as { streamingBehaviors?: unknown } | undefined);
+  }
+
+  /** The queue for a session, in delivery order. */
+  getFollowups(sessionId: string): PendingFollowup[] {
+    return this.store.getFollowups(sessionId);
+  }
+
+  /** Edit a still-queued item. `expectedVersion` must match the version the
+   *  caller last read (see PendingFollowup.version) — a mismatch means it
+   *  changed underneath the editor (another tab, or it started sending while
+   *  the edit was open) and is rejected rather than silently overwritten; the
+   *  caller should show the current (already-reactive) state and let the user
+   *  retry instead of reapplying their edit over it. */
+  editFollowup(sessionId: string, id: string, patch: { text: string; attachments?: PromptAttachment[] }, expectedVersion: number): FollowupEditResult {
+    return this.store.editFollowup(sessionId, id, patch, expectedVersion, Date.now());
+  }
+
+  /** Remove a still-queued item. No-op once it's already dispatched. */
+  removeFollowup(sessionId: string, id: string): boolean {
+    return this.store.removeFollowup(sessionId, id);
+  }
+
+  /** Reorder a still-queued item to `toIndex` among the queue. No-op once it's
+   *  already dispatched. */
+  reorderFollowup(sessionId: string, id: string, toIndex: number): boolean {
+    return this.store.reorderFollowup(sessionId, id, toIndex);
+  }
+
+  /**
+   * Force a still-queued item to the front and deliver it as soon as possible:
+   * immediately if the session has gone idle since it was queued, as an
+   * explicit steer if it's busy and the runtime supports one (see
+   * supportsSteering), or otherwise just promoted to the front — sending it
+   * into a busy runtime with no real steer semantics would silently interrupt
+   * it, so it stays queued for the normal turn-end drain instead. No-op for an
+   * item that isn't (or is no longer) queued.
+   */
+  sendFollowupNow(sessionId: string, id: string): void {
+    const item = this.store.getFollowups(sessionId).find((f) => f.id === id);
+    if (!item || item.status !== "queued") return;
+    this.store.reorderFollowup(sessionId, id, 0);
+    if (!this.store.getState().working) {
+      this.drainFollowups(sessionId);
+      return;
+    }
+    if (this.supportsSteering()) this.dispatchFollowup(sessionId, item, "steer");
+  }
+
+  /**
+   * The explicit "Steer current turn" action: inject `text` into the running
+   * turn right now, bypassing the queue entirely (it never becomes a queued
+   * item). No-op unless the session is actually busy and the runtime
+   * advertised steer support — the composer only offers this action when both
+   * hold, but a stale click (the turn just ended, or the runtime changed) must
+   * not fall back to silently queueing something the user asked to inject NOW
+   * — so this returns whether it actually sent, and the caller (the composer)
+   * only clears the draft on a true send, never discarding unsent text.
+   */
+  steerNow(text: string, attachments?: PromptAttachment[]): boolean {
+    const trimmed = text.trim();
+    const files = attachments && attachments.length ? attachments : undefined;
+    if (!trimmed && !files) return false;
+    const active = this.store.getState().activeSessionId;
+    if (!active || !this.store.getState().working || !this.supportsSteering()) return false;
+    const cmid = clientMessageId();
+    this.store.addUserMessage(trimmed, cmid, files);
+    this.send({ kind: "prompt", sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files, streamingBehavior: "steer" });
+    return true;
+  }
+
+  /** Send the front queued item now. Called once a turn settles (agent_end),
+   *  and defensively whenever the session might have gone idle between an
+   *  enqueue and this check. No-op while busy or with nothing queued — the
+   *  queue only ever has one item in flight ("sending") at a time. */
+  private drainFollowups(sessionId: string): void {
+    if (sessionId !== this.store.getState().activeSessionId) return;
+    if (this.store.getState().working) return;
+    const next = nextQueuedFollowup(this.store.getFollowups(sessionId));
+    if (!next) return;
+    this.dispatchFollowup(sessionId, next);
+  }
+
+  /** Actually send a queued item: mark it "sending" (so it can't be double-
+   *  dispatched or edited mid-flight), fold it into the transcript exactly
+   *  like any other sent prompt, and put it on the wire. Confirmed sent — and
+   *  dropped from the queue — by maybeConfirmFollowup once the node echoes it
+   *  back (or, failing that, once the turn it started settles regardless —
+   *  see settleSendingFollowups). */
+  private dispatchFollowup(sessionId: string, item: PendingFollowup, streamingBehavior?: StreamingBehavior): void {
+    this.store.markFollowupSending(sessionId, item.id, Date.now());
+    this.store.addUserMessage(item.text, item.id, item.attachments);
+    this.send({
+      kind: "prompt",
+      sessionId,
+      text: item.text,
+      clientMessageId: item.id,
+      attachments: item.attachments,
+      ...(streamingBehavior ? { streamingBehavior } : {}),
+    });
+  }
+
+  /** The node's echo of a prompt (session.user_message) is the protocol
+   *  acknowledgement that a dispatched follow-up actually reached it —
+   *  matched by clientMessageId. Drop it from the visible queue; it's a normal
+   *  transcript message now (deduped against the optimistic bubble exactly
+   *  like any other send — see SessionStore's `pending` map). This never fires
+   *  for a plain (non-queued) send: confirmFollowupSent no-ops when the id
+   *  isn't in the queue. */
+  private maybeConfirmFollowup(event: { type?: string; sessionId?: string; clientMessageId?: unknown }): void {
+    if (event.type !== "session.user_message") return;
+    const sid = event.sessionId || this.store.getState().activeSessionId;
+    const cmid = typeof event.clientMessageId === "string" ? event.clientMessageId : undefined;
+    if (!sid || !cmid) return;
+    this.store.confirmFollowupSent(sid, cmid);
+  }
+
+  /** A follow-up left "sending" when the socket dropped before its delivery
+   *  could be confirmed is retried verbatim (same clientMessageId) once
+   *  reconnected — see onReconnected. Safe to resend even if it DID land: the
+   *  node dedupes `prompt` by clientMessageId (mirroring session.new's
+   *  requestId dedupe — see src/session/session-new-dedupe.ts and its prompt
+   *  reuse in src/server.ts), so a prompt that already landed is a no-op
+   *  rather than a duplicate turn. */
+  private retryStuckFollowups(sessionId: string): void {
+    for (const item of this.store.getFollowups(sessionId)) {
+      if (item.status !== "sending") continue;
+      this.send({ kind: "prompt", sessionId, text: item.text, clientMessageId: item.id, attachments: item.attachments });
+    }
   }
 
   // --- Session lifecycle actions -----------------------------------------

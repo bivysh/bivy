@@ -15,6 +15,14 @@ const advertiseModels = !process.env.FIXTURE_NO_MODELS;
 // purely via its hello (no Bivy-side `resumable` option): the host then honors
 // session.resume. Off by default so the base test keeps asserting resume === false.
 const advertiseResume = !!process.env.FIXTURE_RESUME || process.env.FIXTURE_PROTOCOL_RESUME === '1';
+// Issue #154: a shim opts into the client offering "Steer current turn" by
+// advertising which streamingBehavior hints it actually honors mid-turn.
+// Comma-separated so a test can ask for e.g. "steer" or "steer,followUp";
+// unset means the hello omits it entirely (the safe default — see
+// capabilitiesFromHello in src/runtime/protocol.ts).
+const streamingBehaviors = process.env.FIXTURE_STREAMING_BEHAVIORS
+  ? process.env.FIXTURE_STREAMING_BEHAVIORS.split(',').filter(Boolean)
+  : undefined;
 let selectedModel = 'fixture-small';
 send({
   type: 'hello',
@@ -39,6 +47,7 @@ send({
     toolInterception: true,
     modelSelection: false,
     resume: advertiseResume,
+    ...(streamingBehaviors ? { streamingBehaviors } : {}),
     // Agent-native slash commands surfaced in the composer's autocomplete; the
     // host forwards the raw "/name" line as a prompt when one is invoked. The
     // bogus middle entry is dropped by the host's validation (no leading slash).

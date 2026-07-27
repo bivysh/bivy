@@ -19,6 +19,7 @@ import type {
   RuntimeMessage,
   RuntimeSession,
   SessionSummary,
+  StreamingBehavior,
   ToolInterceptor,
   UsageSnapshot,
 } from "./types.js";
@@ -142,8 +143,22 @@ export function protocolCommandsFromEnv(): AgentCommand[] | undefined {
   }
 }
 
+/**
+ * Validate a `streamingBehaviors` array from a hello (e.g.
+ * `["steer","followUp"]`). A shim must explicitly opt in before the client
+ * will ever attempt a mid-turn prompt against it — see RuntimeCapabilities.
+ * streamingBehaviors — so anything malformed/absent is dropped rather than
+ * defaulted to some assumed support.
+ */
+function parseStreamingBehaviors(raw: unknown): StreamingBehavior[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = Array.from(new Set(raw.filter((v): v is StreamingBehavior => v === "steer" || v === "followUp")));
+  return out.length ? out : undefined;
+}
+
 function capabilitiesFromHello(raw: unknown): RuntimeCapabilities {
   const c = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const streamingBehaviors = parseStreamingBehaviors(c.streamingBehaviors);
   return {
     toolInterception: c.toolInterception === true,
     modelSelection: c.modelSelection === true,
@@ -151,6 +166,7 @@ function capabilitiesFromHello(raw: unknown): RuntimeCapabilities {
     resume: c.resume === true,
     fork: false,
     commands: parseAgentCommands(c.commands),
+    ...(streamingBehaviors ? { streamingBehaviors } : {}),
   };
 }
 

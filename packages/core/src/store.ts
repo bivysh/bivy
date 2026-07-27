@@ -161,6 +161,32 @@ export interface RuntimeInfo {
   [k: string]: unknown;
 }
 
+export type FollowupStatus = "queued" | "sending" | "sent" | "failed";
+
+/**
+ * A follow-up prompt visible in the composer's queue for a session — see
+ * AppState.followupsBySession. `id` is the same clientMessageId the prompt is
+ * eventually sent with, so the node's `session.user_message` echo (the
+ * protocol acknowledgement) can be matched back to it and retire it from the
+ * queue. `version` is bumped on every content edit; a caller editing against a
+ * stale version (e.g. a second browser tab, or a UI racing the item's own
+ * delivery) is rejected rather than silently overwriting newer state — see
+ * SessionStore.editFollowup.
+ */
+export interface PendingFollowup {
+  id: string;
+  text: string;
+  attachments?: PromptAttachment[];
+  status: FollowupStatus;
+  createdAt: number;
+  updatedAt: number;
+  version: number;
+}
+
+export type FollowupEditResult =
+  | { ok: true; item: PendingFollowup }
+  | { ok: false; reason: "not_found" | "stale" | "not_queued" };
+
 export interface ApprovalRequest {
   id: string;
   sessionId?: string;
@@ -535,6 +561,20 @@ export interface AppState {
    * on a node switch.
    */
   commandsBySession: Record<string, SlashCommand[]>;
+  /**
+   * Follow-up prompts the composer queued instead of sending immediately —
+   * because the session was mid-turn, or the queue already held something (so
+   * a new prompt can't jump ahead of it) — keyed by sessionId. Per-session for
+   * the same reason as commandsBySession: switching sessions must never blend
+   * one session's queue into another's. Only ever populated for a *real*
+   * session — a prompt sent before the very first session.new resolves is
+   * handled by AppController's own pendingPrompt/pendingFollowups instead (a
+   * narrower, invisible race that predates a session existing at all). See
+   * AppController.sendPrompt/drainFollowups for the delivery lifecycle (queued
+   * -> sending -> gone, folded into the transcript as a normal message once
+   * the node acknowledges it).
+   */
+  followupsBySession: Record<string, PendingFollowup[]>;
   error: string | null;
   /** A transient, non-error confirmation banner (e.g. "You're on Pro"). Shown as
    *  a success toast and auto-dismissed by the UI. Distinct from `error` so the
@@ -627,6 +667,7 @@ export function initialState(): AppState {
     changes: null,
     checkpoints: [],
     commandsBySession: {},
+    followupsBySession: {},
     error: null,
     notice: null,
   };
@@ -1094,6 +1135,154 @@ export class SessionStore {
     this.set({ commandsBySession: next });
   }
 
+  // --- Queued follow-ups (issue #154) -------------------------------------
+  // A small CRUD surface over AppState.followupsBySession. These methods only
+  // touch that map's data shape and invariants (ordering, status, version);
+  // AppController owns *when* to call them (busy-gating, dispatch, retry,
+  // drain-on-turn-end) — see its sendPrompt/drainFollowups/dispatchFollowup.
+
+  /** The queued follow-ups for a session, in delivery order. */
+  getFollowups(sessionId: string): PendingFollowup[] {
+    return this.state.followupsBySession[sessionId] ?? [];
+  }
+
+  private setFollowupsFor(sessionId: string, list: PendingFollowup[]): void {
+    const next = { ...this.state.followupsBySession };
+    if (list.length) next[sessionId] = list;
+    else delete next[sessionId];
+    this.set({ followupsBySession: next });
+  }
+
+  /** Append a new queued follow-up. `id` becomes its clientMessageId once sent.
+   *  A duplicate id (e.g. a doubled dispatch racing itself) is ignored rather
+   *  than creating a second entry. */
+  enqueueFollowup(sessionId: string, item: { id: string; text: string; attachments?: PromptAttachment[] }, now: number): PendingFollowup {
+    const list = this.getFollowups(sessionId);
+    const existing = list.find((f) => f.id === item.id);
+    if (existing) return existing;
+    const created: PendingFollowup = {
+      id: item.id,
+      text: item.text,
+      attachments: item.attachments,
+      status: "queued",
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+    };
+    this.setFollowupsFor(sessionId, [...list, created]);
+    return created;
+  }
+
+  /**
+   * Edit a still-queued item's text/attachments. Rejects rather than
+   * overwriting when: the item is gone (`not_found`), already dispatched
+   * (`not_queued` — editing something already in flight would not change what
+   * the agent receives), or `expectedVersion` no longer matches the item's
+   * current version (`stale` — someone else changed it since the caller last
+   * read it; at minimum, a second controller/tab editing concurrently). The
+   * caller (composer edit UI) should re-read the current item and let the user
+   * retry rather than silently reapplying their edit over newer state.
+   */
+  editFollowup(
+    sessionId: string,
+    id: string,
+    patch: { text: string; attachments?: PromptAttachment[] },
+    expectedVersion: number,
+    now: number,
+  ): FollowupEditResult {
+    const list = this.getFollowups(sessionId);
+    const idx = list.findIndex((f) => f.id === id);
+    if (idx < 0) return { ok: false, reason: "not_found" };
+    const item = list[idx]!;
+    if (item.status !== "queued") return { ok: false, reason: "not_queued" };
+    if (item.version !== expectedVersion) return { ok: false, reason: "stale" };
+    const updated: PendingFollowup = { ...item, text: patch.text, attachments: patch.attachments, version: item.version + 1, updatedAt: now };
+    const next = list.slice();
+    next[idx] = updated;
+    this.setFollowupsFor(sessionId, next);
+    return { ok: true, item: updated };
+  }
+
+  /** Remove a still-queued item. No-op (returns false) once it's dispatched —
+   *  removing something already sending/sent can't change what the agent
+   *  receives, and would desync the visible queue from reality. */
+  removeFollowup(sessionId: string, id: string): boolean {
+    const list = this.getFollowups(sessionId);
+    const item = list.find((f) => f.id === id);
+    if (!item || item.status !== "queued") return false;
+    this.setFollowupsFor(sessionId, list.filter((f) => f.id !== id));
+    return true;
+  }
+
+  /** Move a still-queued item to `toIndex` among the queued items (clamped).
+   *  No-op once it's dispatched, for the same reason removeFollowup guards it. */
+  reorderFollowup(sessionId: string, id: string, toIndex: number): boolean {
+    const list = this.getFollowups(sessionId);
+    const idx = list.findIndex((f) => f.id === id);
+    if (idx < 0 || list[idx]!.status !== "queued") return false;
+    const clamped = Math.max(0, Math.min(toIndex, list.length - 1));
+    if (clamped === idx) return true;
+    const next = list.slice();
+    const [moved] = next.splice(idx, 1);
+    next.splice(clamped, 0, moved!);
+    this.setFollowupsFor(sessionId, next);
+    return true;
+  }
+
+  /** Mark an item as actually being sent (about to go over the wire). Kept
+   *  distinct from removal so a lost ack (e.g. the socket drops mid-send) can
+   *  be told apart from "never attempted" — see revertFollowupToQueued. */
+  markFollowupSending(sessionId: string, id: string, now: number): PendingFollowup | undefined {
+    const list = this.getFollowups(sessionId);
+    const idx = list.findIndex((f) => f.id === id);
+    if (idx < 0) return undefined;
+    const updated: PendingFollowup = { ...list[idx]!, status: "sending", updatedAt: now };
+    const next = list.slice();
+    next[idx] = updated;
+    this.setFollowupsFor(sessionId, next);
+    return updated;
+  }
+
+  /** Delivery is confirmed (the node's session.user_message echo, or a turn
+   *  actually completing — see AppController) — drop it from the visible
+   *  queue; it's an ordinary transcript message now, not something pending. */
+  confirmFollowupSent(sessionId: string, id: string): void {
+    const list = this.getFollowups(sessionId);
+    if (!list.some((f) => f.id === id)) return;
+    this.setFollowupsFor(sessionId, list.filter((f) => f.id !== id));
+  }
+
+  /** A dispatched send could not be confirmed (e.g. the socket dropped before
+   *  any ack arrived) — put it back at the FRONT of the queue, queued again, so
+   *  a retry preserves delivery order instead of racing behind newer items. */
+  revertFollowupToQueued(sessionId: string, id: string, now: number): void {
+    const list = this.getFollowups(sessionId);
+    const idx = list.findIndex((f) => f.id === id);
+    if (idx < 0 || list[idx]!.status !== "sending") return;
+    const item: PendingFollowup = { ...list[idx]!, status: "queued", updatedAt: now };
+    this.setFollowupsFor(sessionId, [item, ...list.filter((f) => f.id !== id)]);
+  }
+
+  /** Drop any items still marked "sending" for a session whose turn just
+   *  settled (agent_end). Reaching agent_end proves the runtime received
+   *  whatever prompt started that turn, so this is the "durable equivalent" to
+   *  an explicit ack for the rare case the node's session.user_message echo
+   *  itself never arrived (e.g. a reconnect raced it) — without this a
+   *  followup could show "sending" forever even though it plainly succeeded. */
+  settleSendingFollowups(sessionId: string): void {
+    const list = this.getFollowups(sessionId);
+    if (!list.some((f) => f.status === "sending")) return;
+    this.setFollowupsFor(sessionId, list.filter((f) => f.status !== "sending"));
+  }
+
+  /** Forget a session's queue entirely (on delete). */
+  dropFollowups(sessionId: string): void {
+    if (!(sessionId in this.state.followupsBySession)) return;
+    const next = { ...this.state.followupsBySession };
+    delete next[sessionId];
+    this.set({ followupsBySession: next });
+  }
+
   setStatus(status: ConnectionStatus): void {
     if (status !== this.state.status) this.set({ status });
   }
@@ -1175,6 +1364,10 @@ export class SessionStore {
       // Advertised commands are per session on the previous node; never carry
       // them across a node switch.
       commandsBySession: {},
+      // Queued follow-ups are per session on the previous node too — a session
+      // id could even collide across nodes, so carrying this over risks
+      // "delivering" a queued prompt into an unrelated session on the new node.
+      followupsBySession: {},
       error: null,
       notice: null,
       // Per-node settings (name, default agent/model, GitHub prompt, sync
@@ -1595,6 +1788,7 @@ export class SessionStore {
           ),
         });
         if (sid) this.dropSessionCommands(sid);
+        if (sid) this.dropFollowups(sid);
         if (sid && sid === this.state.activeSessionId) this.resetActiveSession();
         return;
       }

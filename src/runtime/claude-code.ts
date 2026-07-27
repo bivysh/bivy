@@ -1216,6 +1216,11 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     // The on-disk jsonl transcript can be exported and re-materialised on another
     // node under a fresh session id, so a claude->claude fork is full fidelity.
     forkTransport: true,
+    // Claude Code ignores the streamingBehavior hint entirely — a mid-turn
+    // prompt always re-enters the live input queue and behaves like an
+    // immediate steer, regardless of what's asked for. There is no real
+    // "followUp" (defer until the turn ends) here, so only advertise steer.
+    streamingBehaviors: ["steer"],
     // Claude sessions started outside Bivy (a bare `claude` in a terminal) are
     // discoverable across claudeProjectDirs() and every discovered session can
     // be adopted with a true native resume (see discoverNativeSessions below).
