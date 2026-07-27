@@ -33,6 +33,14 @@ import {
   type UsageMetrics,
   type WorkItem,
   type WorkItemInput,
+  type AutomationDefinition,
+  type AutomationRun,
+  type AutomationRunStatus,
+  type AutomationTriggerKind,
+  type TriggerEvent,
+  type RunEvidenceEvent,
+  type RunCheck,
+  type RunEvidencePatch,
   entitlementsForPlan,
   hashToken,
   disambiguateNodeName,
@@ -348,6 +356,12 @@ export class PostgresStore implements MeshStore {
       -- stale "connected" after a node delete/reinstall.
       ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS serving_node_id      TEXT;
       ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS serving_node_seen_at TIMESTAMPTZ;
+      -- Generic automation hooks use a deliberately non-executable template:
+      -- a fixed instruction prefix plus the event instruction as plain text.
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true;
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS template_instruction TEXT;
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS routing_default TEXT;
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
       CREATE TABLE IF NOT EXISTS work_items (
         id                 TEXT PRIMARY KEY,
@@ -388,6 +402,92 @@ export class PostgresStore implements MeshStore {
       -- freshly-provisioned ephemeral server rather than an already-running
       -- node (issue #532). Display only; routing is entirely by the label column.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN;
+      -- Automation is the canonical domain. Existing work_items are migrated in
+      -- place so old API clients retain their ids and issue context.
+      CREATE TABLE IF NOT EXISTS automation_definitions (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        template_ciphertext TEXT,
+        runtime_id TEXT,
+        model TEXT,
+        node_label TEXT,
+        ephemeral BOOLEAN,
+        approval_mode TEXT,
+        sandbox TEXT,
+        enabled BOOLEAN NOT NULL DEFAULT true,
+        schedule JSONB NOT NULL DEFAULT '{"kind":"once","at":"9999-12-31T00:00:00.000Z"}',
+        next_run_at TIMESTAMPTZ,
+        last_scheduled_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      -- CREATE TABLE IF NOT EXISTS is a no-op on a pre-existing table, so a DB
+      -- created before these columns existed never gets them — and init() then
+      -- crashes the whole control plane on the idx_automation_definitions_due
+      -- index below (which references next_run_at/enabled). Backfill them the
+      -- same way work_items does, before any statement that reads them.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS approval_mode TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS sandbox TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS schedule JSONB NOT NULL DEFAULT '{"kind":"once","at":"9999-12-31T00:00:00.000Z"}';
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS last_scheduled_at TIMESTAMPTZ;
+      CREATE TABLE IF NOT EXISTS trigger_events (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        source_key TEXT,
+        source_ref JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_events_source
+        ON trigger_events(account_id, source_key) WHERE source_key IS NOT NULL;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS definition_id TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS trigger_id TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS trigger_kind TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS target_kind TEXT NOT NULL DEFAULT 'new_session';
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS target_session_id TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS output JSONB;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS approval_mode TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sandbox TEXT;
+      -- Privacy-safe run evidence (issue #153): why this node/runtime was chosen,
+      -- declared-check results, and an ordered event timeline. All three are
+      -- allowlisted/bounded by run-evidence.ts before they ever reach here.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS routing_reason TEXT;
+      -- Explicit ::jsonb cast on the default (not just relying on the column
+      -- type): without it, pg-mem — the in-memory Postgres the test suite runs
+      -- against — stores the literal two-character text "[]" instead of an
+      -- empty JSON array, which then silently corrupts every array spread.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS checks JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS events JSONB NOT NULL DEFAULT '[]'::jsonb;
+      INSERT INTO trigger_events (id, account_id, kind, created_at)
+        SELECT 'legacy:' || id, account_id,
+          CASE WHEN source LIKE 'github:%' THEN 'github'
+               WHEN source = 'slack' THEN 'slack'
+               WHEN source = 'manual' THEN 'manual'
+               ELSE 'webhook' END,
+          created_at
+        FROM work_items
+        WHERE trigger_id IS NULL
+        ON CONFLICT DO NOTHING;
+      -- Backfill only the rows that still need it. Without this predicate the
+      -- statement rewrites every work_items row on every control-plane start.
+      UPDATE work_items SET
+        trigger_id = COALESCE(trigger_id, 'legacy:' || id),
+        trigger_kind = COALESCE(trigger_kind,
+          CASE WHEN source LIKE 'github:%' THEN 'github'
+               WHEN source = 'slack' THEN 'slack'
+               WHEN source = 'manual' THEN 'manual'
+               ELSE 'webhook' END),
+        status = CASE WHEN status = 'done' THEN 'succeeded' ELSE status END
+      WHERE trigger_id IS NULL OR trigger_kind IS NULL OR status = 'done';
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_occurrence
+        ON work_items(account_id, dedupe_key) WHERE dedupe_key LIKE 'schedule:%';
+      CREATE INDEX IF NOT EXISTS idx_automation_definitions_due
+        ON automation_definitions(next_run_at) WHERE enabled = true;
 
       -- One row per distinct run the account has started, keyed by run key (the
       -- session id). Powers the free-tier daily cap: runs today = rows whose
@@ -748,7 +848,7 @@ export class PostgresStore implements MeshStore {
       );
       await client.query("COMMIT");
       const { enrollmentTokenHash: _h, ...node } = mapNode(rows[0]);
-      return { node, enrollmentToken };
+      return { node, enrollmentToken, created: !current };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -854,31 +954,73 @@ export class PostgresStore implements MeshStore {
     return (rowCount ?? 0) > 0;
   }
 
-  async replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<void> {
+  async replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<number> {
     const client = await this.pool.connect();
+    let newRunStarts = 0;
     try {
       await client.query("BEGIN");
       // Only touch the index if the node belongs to this account.
       const owns = await client.query(`SELECT 1 FROM nodes WHERE id = $1 AND account_id = $2`, [nodeId, accountId]);
       if (owns.rowCount) {
         await client.query(`DELETE FROM session_index WHERE node_id = $1`, [nodeId]);
-        for (const s of sessions) {
+        // Batched via a multi-row VALUES insert instead of one round trip per
+        // session: every node advertise (1s-debounced, plus a 60s full resync
+        // per node — see src/server.ts) used to cost 2 sequential awaited
+        // queries PER session (insert into session_index, insert into
+        // run_starts) on one held pooled connection. That's fine at 1-2
+        // sessions but scales linearly with concurrent nodes × sessions ×
+        // advertise frequency; batching drops it to a fixed 2 queries no
+        // matter how many sessions are in the advert. (Plain multi-row VALUES,
+        // not unnest($1::text[], ...) — pg-mem, which the whole store is
+        // deliberately tested against, doesn't support multi-array unnest.)
+        if (sessions.length > 0) {
+          const sessionIndexCols = 9;
+          const sessionIndexValues: unknown[] = [];
+          const sessionIndexRows = sessions
+            .map((s, i) => {
+              const base = i * sessionIndexCols;
+              sessionIndexValues.push(
+                nodeId,
+                s.sessionId,
+                accountId,
+                s.status,
+                s.source ?? null,
+                s.titleEnc ?? null,
+                s.branch ?? null,
+                s.agentServiceAddress ?? null,
+                JSON.stringify(s.attention ?? []),
+              );
+              return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, now())`;
+            })
+            .join(", ");
           await client.query(
             `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, attention, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`,
-            [nodeId, s.sessionId, accountId, s.status, s.source ?? null, s.titleEnc ?? null, s.branch ?? null, s.agentServiceAddress ?? null, JSON.stringify(s.attention ?? [])],
+             VALUES ${sessionIndexRows}`,
+            sessionIndexValues,
           );
-          // Count this run the first time its session is advertised. The session
+          // Count each run the first time its session is advertised. The session
           // index is rewritten wholesale on every advertise, but run_starts is
           // keyed by (account, session) with DO NOTHING, so a session only ever
           // counts once — the day it first appears. This is the single funnel
           // through which EVERY source (manual, app, work queue, ephemeral) lands
           // in the daily counter, since every run eventually advertises a session.
-          await client.query(
-            `INSERT INTO run_starts (account_id, run_key) VALUES ($1, $2)
-             ON CONFLICT (account_id, run_key) DO NOTHING`,
-            [accountId, s.sessionId],
+          const runStartsRows = sessions.map((_, i) => `($1, $${i + 2})`).join(", ");
+          // Read existing keys first only to work around pg-mem returning rows
+          // for ON CONFLICT DO NOTHING. Real Postgres's RETURNING remains the
+          // concurrency authority; filtering known rows makes both agree.
+          const existingRuns = await client.query(
+            `SELECT run_key FROM run_starts WHERE account_id = $1 AND run_key IN (${sessions.map((_, i) => `$${i + 2}`).join(", ")})`,
+            [accountId, ...sessions.map((s) => s.sessionId)],
           );
+          const existingKeys = new Set(existingRuns.rows.map((row: { run_key: string }) => row.run_key));
+          const insertedRuns = await client.query(
+            `INSERT INTO run_starts (account_id, run_key)
+             VALUES ${runStartsRows}
+             ON CONFLICT (account_id, run_key) DO NOTHING
+             RETURNING run_key`,
+            [accountId, ...sessions.map((s) => s.sessionId)],
+          );
+          newRunStarts = insertedRuns.rows.filter((row: { run_key: string }) => !existingKeys.has(row.run_key)).length;
         }
       }
       await client.query("COMMIT");
@@ -888,6 +1030,57 @@ export class PostgresStore implements MeshStore {
     } finally {
       client.release();
     }
+    return newRunStarts;
+  }
+
+  async upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<boolean> {
+    const client = await this.pool.connect();
+    let runStarted = false;
+    try {
+      await client.query("BEGIN");
+      // Only touch the index if the node belongs to this account (mirrors
+      // replaceNodeSessions' ownership fence).
+      const owns = await client.query(`SELECT 1 FROM nodes WHERE id = $1 AND account_id = $2`, [nodeId, accountId]);
+      if (owns.rowCount) {
+        // Single-row upsert keyed by the (node_id, session_id) primary key: one
+        // fixed-cost write per status flip, independent of how many sessions the
+        // node has — unlike the wholesale DELETE+reinsert in replaceNodeSessions.
+        await client.query(
+          `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+           ON CONFLICT (node_id, session_id) DO UPDATE
+             SET status = EXCLUDED.status,
+                 source = EXCLUDED.source,
+                 title_enc = EXCLUDED.title_enc,
+                 branch = EXCLUDED.branch,
+                 agent_service_address = EXCLUDED.agent_service_address,
+                 updated_at = now()`,
+          [nodeId, session.sessionId, accountId, session.status, session.source ?? null, session.titleEnc ?? null, session.branch ?? null, session.agentServiceAddress ?? null],
+        );
+        // Count each run the first time its session is advertised — same funnel
+        // as replaceNodeSessions (keyed by (account, session), DO NOTHING, so a
+        // session only ever counts once).
+        const existingRun = await client.query(
+          `SELECT 1 FROM run_starts WHERE account_id = $1 AND run_key = $2`,
+          [accountId, session.sessionId],
+        );
+        const insertedRun = await client.query(
+          `INSERT INTO run_starts (account_id, run_key)
+           VALUES ($1, $2)
+           ON CONFLICT (account_id, run_key) DO NOTHING
+           RETURNING run_key`,
+          [accountId, session.sessionId],
+        );
+        runStarted = existingRun.rows.length === 0 && insertedRun.rows.length > 0;
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    return runStarted;
   }
 
   async listAccountSessions(accountId: string): Promise<SessionIndexEntry[]> {
@@ -1188,6 +1381,16 @@ export class PostgresStore implements MeshStore {
     return mapHook(rows[0]);
   }
 
+  async listInboundHooks(accountId: string, kind?: string): Promise<InboundHook[]> {
+    const { rows } = kind
+      ? await this.query(
+          `SELECT * FROM inbound_hooks WHERE account_id = $1 AND kind = $2 ORDER BY created_at DESC`,
+          [accountId, kind],
+        )
+      : await this.query(`SELECT * FROM inbound_hooks WHERE account_id = $1 ORDER BY created_at DESC`, [accountId]);
+    return rows.map(mapHook);
+  }
+
   async getInboundHook(id: string): Promise<InboundHook | undefined> {
     const { rows } = await this.query(`SELECT * FROM inbound_hooks WHERE id = $1`, [id]);
     return rows[0] ? mapHook(rows[0]) : undefined;
@@ -1195,8 +1398,34 @@ export class PostgresStore implements MeshStore {
 
   async setInboundHookSecret(accountId: string, id: string, secret: string): Promise<InboundHook | undefined> {
     const { rows } = await this.query(
-      `UPDATE inbound_hooks SET secret = $3 WHERE id = $2 AND account_id = $1 RETURNING *`,
+      `UPDATE inbound_hooks SET secret = $3, updated_at = now() WHERE id = $2 AND account_id = $1 RETURNING *`,
       [accountId, id, secret],
+    );
+    return rows[0] ? mapHook(rows[0]) : undefined;
+  }
+
+  async updateInboundHook(
+    accountId: string,
+    id: string,
+    patch: { enabled?: boolean; templateInstruction?: string; routingDefault?: string },
+  ): Promise<InboundHook | undefined> {
+    const { rows } = await this.query(
+      `UPDATE inbound_hooks
+       SET enabled = CASE WHEN $3 THEN $4 ELSE enabled END,
+           template_instruction = CASE WHEN $5 THEN $6 ELSE template_instruction END,
+           routing_default = CASE WHEN $7 THEN $8 ELSE routing_default END,
+           updated_at = now()
+       WHERE id = $2 AND account_id = $1 RETURNING *`,
+      [
+        accountId,
+        id,
+        patch.enabled !== undefined,
+        patch.enabled ?? null,
+        patch.templateInstruction !== undefined,
+        patch.templateInstruction?.trim() || null,
+        patch.routingDefault !== undefined,
+        patch.routingDefault?.trim() || null,
+      ],
     );
     return rows[0] ? mapHook(rows[0]) : undefined;
   }
@@ -1307,20 +1536,201 @@ export class PostgresStore implements MeshStore {
   }
 
   async enqueueWorkItem(accountId: string, input: WorkItemInput): Promise<WorkItem> {
+    const run = await this.enqueueAutomationRun(accountId, input);
+    const { rows } = await this.query(`SELECT * FROM work_items WHERE account_id = $1 AND id = $2`, [accountId, run.id]);
+    return mapWorkItem(rows[0]);
+  }
+
+  async createAutomationDefinition(
+    accountId: string,
+    input: Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt">,
+  ): Promise<AutomationDefinition> {
+    const { rows } = await this.query(
+      `INSERT INTO automation_definitions
+      (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
+       approval_mode, sandbox, enabled, schedule, next_run_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
+        input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
+        input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
+        JSON.stringify(input.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), input.nextRunAt ?? null],
+    );
+    return mapAutomationDefinition(rows[0]);
+  }
+
+  async getAutomationDefinition(accountId: string, id: string): Promise<AutomationDefinition | undefined> {
+    const { rows } = await this.query(
+      `SELECT * FROM automation_definitions WHERE account_id = $1 AND id = $2`,
+      [accountId, id],
+    );
+    return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
+  }
+
+  async updateAutomationDefinition(
+    accountId: string,
+    id: string,
+    input: Partial<Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt" | "lastScheduledAt">>,
+  ): Promise<AutomationDefinition | undefined> {
+    const current = await this.getAutomationDefinition(accountId, id);
+    if (!current) return undefined;
+    const next = { ...current, ...input };
+    const { rows } = await this.query(
+      `UPDATE automation_definitions SET name=$3, template_ciphertext=$4, runtime_id=$5,
+       model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
+       enabled=$11, schedule=$12, next_run_at=$13, updated_at=now()
+       WHERE account_id=$1 AND id=$2 RETURNING *`,
+      [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
+        next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
+        next.approvalMode ?? null, next.sandbox ?? null, next.enabled ?? false,
+        JSON.stringify(next.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), next.nextRunAt ?? null],
+    );
+    return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
+  }
+
+  async deleteAutomationDefinition(accountId: string, id: string): Promise<boolean> {
+    const { rowCount } = await this.query(
+      `DELETE FROM automation_definitions WHERE account_id=$1 AND id=$2`,
+      [accountId, id],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  async listAutomationDefinitions(accountId: string): Promise<AutomationDefinition[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM automation_definitions WHERE account_id = $1 ORDER BY created_at DESC`,
+      [accountId],
+    );
+    return rows.map(mapAutomationDefinition);
+  }
+
+  async listDueAutomationDefinitions(nowIso: string, limit = 100): Promise<AutomationDefinition[]> {
+    // Filter and bound in SQL so the partial index idx_automation_definitions_due
+    // is used and the scan is proportional to due rows, not total-enabled rows.
+    // `next_run_at <= $1` already excludes NULLs (NULL comparisons are never
+    // true), so no separate IS NOT NULL is needed.
+    const { rows } = await this.query(
+      `SELECT * FROM automation_definitions
+       WHERE enabled=true AND next_run_at <= $1
+       ORDER BY next_run_at ASC
+       LIMIT $2`,
+      [new Date(nowIso), Math.max(1, Math.min(500, limit))],
+    );
+    return rows.map(mapAutomationDefinition);
+  }
+
+  async enqueueScheduledOccurrence(
+    accountId: string,
+    definitionId: string,
+    occurrenceIso: string,
+    nextRunAt?: string,
+  ): Promise<AutomationRun | undefined> {
+    const definition = await this.getAutomationDefinition(accountId, definitionId);
+    if (!definition || !definition.enabled || definition.nextRunAt !== occurrenceIso) return undefined;
+    const run = await this.enqueueAutomationRun(accountId, {
+      source: "schedule",
+      title: definition.name,
+      body: definition.templateCiphertext,
+      definitionId,
+      triggerKind: "schedule",
+      dedupeKey: `schedule:${definitionId}:${occurrenceIso}`,
+      label: definition.nodeLabel,
+      runtimeId: definition.runtimeId,
+      model: definition.model,
+      approvalMode: definition.approvalMode,
+      sandbox: definition.sandbox,
+    });
+    // Optimistic advance is the scheduler lease: only one scheduler instance can
+    // move this exact occurrence. The unique dedupe key separately guarantees
+    // that a crash after INSERT but before UPDATE cannot duplicate the run.
+    const { rowCount } = await this.query(
+      `UPDATE automation_definitions SET last_scheduled_at=$4, next_run_at=$5,
+       enabled=CASE WHEN $5::text IS NULL THEN false ELSE enabled END, updated_at=now()
+       WHERE account_id=$1 AND id=$2 AND enabled=true AND next_run_at=$3`,
+      [accountId, definitionId, new Date(occurrenceIso), new Date(occurrenceIso), nextRunAt ? new Date(nextRunAt) : null],
+    );
+    return (rowCount ?? 0) > 0 ? run : undefined;
+  }
+
+  async listTriggerEvents(accountId: string, limit = 50): Promise<TriggerEvent[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM trigger_events WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [accountId, Math.max(1, Math.min(200, limit))],
+    );
+    return rows.map(mapTriggerEvent);
+  }
+
+  async getAutomationRunBySourceKey(accountId: string, sourceKey: string): Promise<AutomationRun | undefined> {
+    const { rows } = await this.query(
+      `SELECT w.* FROM work_items w
+       JOIN trigger_events t ON t.id = w.trigger_id
+       WHERE w.account_id = $1 AND t.account_id = $1 AND t.source_key = $2
+       LIMIT 1`,
+      [accountId, sourceKey],
+    );
+    return rows[0] ? mapAutomationRun(rows[0]) : undefined;
+  }
+
+  async enqueueAutomationRun(accountId: string, input: WorkItemInput): Promise<AutomationRun> {
+    return (await this.enqueueAutomationRunWithResult(accountId, input)).run;
+  }
+
+  async enqueueAutomationRunWithResult(
+    accountId: string,
+    input: WorkItemInput,
+  ): Promise<{ run: AutomationRun; created: boolean }> {
     const dedupeKey = input.dedupeKey ?? null;
     const collapseKey = input.collapseKey ?? null;
+    let definition: AutomationDefinition | undefined;
+    if (input.definitionId) {
+      const found = await this.query(
+        `SELECT * FROM automation_definitions WHERE account_id = $1 AND id = $2`,
+        [accountId, input.definitionId],
+      );
+      if (!found.rows[0]) throw Object.assign(new Error("Unknown automation definition"), { status: 404 });
+      definition = mapAutomationDefinition(found.rows[0]);
+    }
+    const triggerKind = triggerKindForSource(input.triggerKind, input.source);
+    const triggerId = `trigger_${randomUUID()}`;
+    const sourceRef = {
+      ...(input.repo ? { repo: input.repo } : {}),
+      ...(input.issueNumber !== undefined ? { issueNumber: input.issueNumber } : {}),
+      ...(input.url ? { url: input.url } : {}),
+      ...(input.externalId ? { externalId: input.externalId } : {}),
+    };
+    const trigger = await this.query(
+      `INSERT INTO trigger_events (id, account_id, kind, source_key, source_ref)
+       VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING id`,
+      [triggerId, accountId, triggerKind, dedupeKey, JSON.stringify(sourceRef)],
+    );
+    let canonicalTriggerId = trigger.rows[0]?.id as string | undefined;
+    if (!canonicalTriggerId && dedupeKey) {
+      const existing = await this.query(
+        `SELECT id FROM trigger_events WHERE account_id = $1 AND source_key = $2`,
+        [accountId, dedupeKey],
+      );
+      canonicalTriggerId = existing.rows[0]?.id;
+    }
+    canonicalTriggerId ??= triggerId;
+    const target = input.target ?? { kind: "new_session" as const };
     // Two partial-unique constraints can fire: the per-delivery dedupe key and the
     // per-issue collapse key (only against the still-pending row). ON CONFLICT DO
     // NOTHING covers both; on either conflict we return the existing item.
+    const triggeredEvent: RunEvidenceEvent = {
+      at: new Date().toISOString(),
+      kind: "triggered",
+      summary: "Automation run created.",
+      ref: input.repo && input.issueNumber !== undefined ? `${input.repo}#${input.issueNumber}` : undefined,
+      url: input.url,
+    };
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox, events)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::jsonb)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
         `work_${randomUUID()}`,
         accountId,
-        normalizeWorkLabel(input.label),
+        normalizeWorkLabel(input.label ?? definition?.nodeLabel),
         input.source,
         input.title,
         input.body ?? null,
@@ -1330,13 +1740,22 @@ export class PostgresStore implements MeshStore {
         dedupeKey,
         collapseKey,
         input.defaultRouted ?? null,
-        input.runtimeId ?? null,
-        input.model ?? null,
+        input.runtimeId ?? definition?.runtimeId ?? null,
+        input.model ?? definition?.model ?? null,
         input.installationId ?? null,
         input.appId ?? null,
+        input.definitionId ?? null,
+        canonicalTriggerId,
+        triggerKind,
+        target.kind,
+        target.kind === "existing_session" ? target.sessionId : null,
+        input.ephemeral ?? definition?.ephemeral ?? null,
+        input.approvalMode ?? definition?.approvalMode ?? null,
+        input.sandbox ?? definition?.sandbox ?? null,
+        JSON.stringify([triggeredEvent]),
       ],
     );
-    if (rows[0]) return mapWorkItem(rows[0]);
+    if (rows[0]) return { run: mapAutomationRun(rows[0]), created: true };
     // Conflict: a redelivery (dedupe key) or another delivery for an issue that
     // already has a pending item (collapse key). Return the existing one so the
     // caller stays idempotent and no duplicate lands in the queue.
@@ -1345,13 +1764,99 @@ export class PostgresStore implements MeshStore {
         `SELECT * FROM work_items WHERE account_id = $1 AND dedupe_key = $2 LIMIT 1`,
         [accountId, dedupeKey],
       );
-      if (existing.rows[0]) return mapWorkItem(existing.rows[0]);
+      if (existing.rows[0]) return { run: mapAutomationRun(existing.rows[0]), created: false };
     }
     const existingPending = await this.query(
       `SELECT * FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND status = 'pending' LIMIT 1`,
       [accountId, collapseKey],
     );
-    return mapWorkItem(existingPending.rows[0]);
+    return { run: mapAutomationRun(existingPending.rows[0]), created: false };
+  }
+
+  async getAutomationRun(accountId: string, id: string): Promise<AutomationRun | undefined> {
+    const { rows } = await this.query(`SELECT * FROM work_items WHERE account_id = $1 AND id = $2`, [accountId, id]);
+    return rows[0] ? mapAutomationRun(rows[0]) : undefined;
+  }
+
+  async listAutomationRuns(accountId: string, limit = 50): Promise<AutomationRun[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM work_items WHERE account_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [accountId, Math.max(1, Math.min(200, limit))],
+    );
+    return rows.map(mapAutomationRun);
+  }
+
+  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined> {
+    const from: Record<AutomationRunStatus, AutomationRunStatus[]> = {
+      pending: [],
+      claimed: [],
+      running: ["claimed"],
+      needs_attention: ["running"],
+      succeeded: ["running", "needs_attention"],
+      // Allow failure straight from "claimed": a node can throw before the
+      // best-effort /running transition lands, and the run must still terminate
+      // rather than get stuck claimed.
+      failed: ["claimed", "running", "needs_attention"],
+      cancelled: ["pending", "claimed", "running", "needs_attention"],
+    };
+    if (from[status].length === 0) return undefined;
+    const terminal = ["succeeded", "failed", "cancelled"].includes(status);
+    // A lifecycle transition is itself timeline-worthy (issue #153) — record it
+    // even when the node never calls the dedicated evidence endpoint, so every
+    // run has at least a baseline trigger→claim→attempt→outcome timeline.
+    const eventForStatus: Partial<Record<AutomationRunStatus, { kind: RunEvidenceEvent["kind"]; summary: string }>> = {
+      running: { kind: "attempt_started", summary: "Execution started on the assigned node." },
+      needs_attention: { kind: "needs_attention", summary: "Run needs manual attention." },
+      succeeded: { kind: "completed", summary: "Automation run completed successfully." },
+      failed: { kind: "completed", summary: "Automation run failed. Detailed diagnostics remain on the node." },
+      cancelled: { kind: "cancelled", summary: "Automation run cancelled." },
+    };
+    const event = eventForStatus[status];
+    // No jsonb `||` concatenation here (deliberately): pg-mem — the in-memory
+    // Postgres the whole test suite runs against — mis-evaluates the jsonb
+    // concatenation operator inside an UPDATE SET (confirmed against real
+    // Postgres semantics; see pg-mem issue tracker). A plain read-then-write
+    // is a two-query round trip instead of one atomic statement, but this event
+    // append is a best-effort timeline entry, not the transition's atomicity
+    // guard (the conditional `status = ANY(from[status])` above already is).
+    const { rows } = await this.query(
+      `UPDATE work_items SET status = $3,
+       started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
+       completed_at = CASE WHEN $4 THEN COALESCE(completed_at, now()) ELSE completed_at END,
+       output = COALESCE($5, output)
+       WHERE account_id = $1 AND id = $2 AND status = ANY($6) RETURNING *`,
+      [accountId, id, status, terminal, output ? JSON.stringify(output) : null, from[status]],
+    );
+    if (!rows[0]) return undefined;
+    if (!event) return mapAutomationRun(rows[0]);
+    const events = [...(rows[0].events ?? []), { at: new Date().toISOString(), ...event }].slice(-100);
+    const { rows: withEvent } = await this.query(
+      `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
+      [accountId, id, JSON.stringify(events)],
+    );
+    return mapAutomationRun(withEvent[0] ?? rows[0]);
+  }
+
+  /** Issue #153 — record a sanitized, node-reported evidence patch against a
+   *  run it claimed. `checks`/`events` are appended to existing history;
+   *  `routingReason`/`output` fields are merged, last-write-wins per field.
+   *  Read-then-write (not an atomic jsonb `||` UPDATE) — see the comment in
+   *  transitionAutomationRun for why; a lost update here just drops one
+   *  low-frequency evidence report, never the run's actual status. */
+  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch): Promise<AutomationRun | undefined> {
+    const { rows } = await this.query(`SELECT * FROM work_items WHERE account_id = $1 AND id = $2`, [accountId, id]);
+    if (!rows[0]) return undefined;
+    const current = rows[0];
+    const routingReason = patch.routingReason ?? current.routing_reason ?? undefined;
+    const output = patch.output ? { ...(current.output ?? {}), ...patch.output } : (current.output ?? {});
+    const checks = patch.checks ? [...(current.checks ?? []), ...patch.checks].slice(-50) : (current.checks ?? []);
+    const events = patch.events ? [...(current.events ?? []), ...patch.events].slice(-100) : (current.events ?? []);
+    const { rows: updated } = await this.query(
+      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb
+       WHERE account_id = $1 AND id = $2 RETURNING *`,
+      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(events)],
+    );
+    return updated[0] ? mapAutomationRun(updated[0]) : undefined;
   }
 
   async rerouteDefaultRoutedPending(accountId: string, label: string): Promise<WorkItem[]> {
@@ -1408,18 +1913,34 @@ export class PostgresStore implements MeshStore {
        RETURNING *`,
       [accountId, id, nodeId],
     );
-    return rows[0] ? mapWorkItem(rows[0]) : undefined;
+    if (!rows[0]) return undefined;
+    // Best-effort timeline entry (issue #153) — read-then-write, same rationale
+    // as transitionAutomationRun; the claim's atomicity is already guaranteed
+    // above and does not depend on this second query.
+    const claimedEvent: RunEvidenceEvent = { at: new Date().toISOString(), kind: "claimed", summary: "Run claimed by an eligible node.", ref: nodeId };
+    const events = [...(rows[0].events ?? []), claimedEvent].slice(-100);
+    const { rows: withEvent } = await this.query(
+      `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
+      [accountId, id, JSON.stringify(events)],
+    );
+    return mapWorkItem(withEvent[0] ?? rows[0]);
   }
 
-  async recordRunStart(accountId: string, runKey: string): Promise<void> {
+  async recordRunStart(accountId: string, runKey: string): Promise<boolean> {
     // Idempotent: PRIMARY KEY(account_id, run_key) + DO NOTHING means recording the
     // same run twice (reconnects, repeated advertises) leaves the original
     // started_at intact and never inflates the daily count.
-    await this.query(
-      `INSERT INTO run_starts (account_id, run_key) VALUES ($1, $2)
-       ON CONFLICT (account_id, run_key) DO NOTHING`,
+    const existing = await this.query(
+      `SELECT 1 FROM run_starts WHERE account_id = $1 AND run_key = $2`,
       [accountId, runKey],
     );
+    const { rows } = await this.query(
+      `INSERT INTO run_starts (account_id, run_key) VALUES ($1, $2)
+       ON CONFLICT (account_id, run_key) DO NOTHING
+       RETURNING run_key`,
+      [accountId, runKey],
+    );
+    return existing.rows.length === 0 && rows.length > 0;
   }
 
   async countRunStartsSince(accountId: string, sinceIso: string): Promise<number> {
@@ -1442,11 +1963,27 @@ export class PostgresStore implements MeshStore {
     return rowCount ?? 0;
   }
 
+  async pruneExpiredAuthTokens(nowIso: string): Promise<number> {
+    // Each of these tables is otherwise only deleted on successful single-use
+    // consumption (see consumeLoginToken, consumeRelayTicket, etc.) — an
+    // abandoned attempt just leaves an expired row sitting there forever.
+    // Sequential DELETEs on indexed expires_at columns; cheap even at scale, and
+    // there is no cross-table transaction requirement (each row is independently
+    // safe to drop once past its own expiry).
+    let total = 0;
+    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins"]) {
+      const { rowCount } = await this.query(`DELETE FROM ${table} WHERE expires_at < $1`, [nowIso]);
+      total += rowCount ?? 0;
+    }
+    return total;
+  }
+
   async completeWorkItem(accountId: string, id: string): Promise<void> {
-    await this.query(
-      `UPDATE work_items SET status = 'done', completed_at = now() WHERE id = $2 AND account_id = $1`,
-      [accountId, id],
-    );
+    // Older nodes only know claim → complete. Adapt that boundary onto the
+    // canonical lifecycle without preserving a second legacy transition path.
+    const current = await this.getAutomationRun(accountId, id);
+    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running");
+    await this.transitionAutomationRun(accountId, id, "succeeded");
   }
 
   async deleteWorkItem(accountId: string, id: string): Promise<boolean> {
@@ -1483,6 +2020,22 @@ function mapHook(row: any): InboundHook {
     defaultNode: row.default_node ?? undefined,
     servingNodeId: row.serving_node_id ?? undefined,
     servingNodeSeenAt: row.serving_node_seen_at ? new Date(row.serving_node_seen_at).toISOString() : undefined,
+    enabled: row.enabled ?? true,
+    templateInstruction: row.template_instruction ?? undefined,
+    routingDefault: row.routing_default ?? undefined,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
+  };
+}
+
+/** Shared evidence-field projection (issue #153) for both mapWorkItem and
+ *  mapAutomationRun. Defensively re-bounds on read (in addition to the bounds
+ *  already enforced at write time by run-evidence.ts) so a row written by an
+ *  older/looser server version can never balloon a response unbounded. */
+function mapEvidenceFields(row: any): { routingReason?: string; checks: RunCheck[]; events: RunEvidenceEvent[] } {
+  return {
+    routingReason: row.routing_reason ?? undefined,
+    checks: Array.isArray(row.checks) ? row.checks.slice(-50) : [],
+    events: Array.isArray(row.events) ? row.events.slice(-100) : [],
   };
 }
 
@@ -1510,6 +2063,96 @@ function mapWorkItem(row: any): WorkItem {
     installationId: row.installation_id ?? undefined,
     appId: row.app_id ?? undefined,
     ephemeral: row.ephemeral ?? undefined,
+    approvalMode: row.approval_mode ?? undefined,
+    sandbox: row.sandbox ?? undefined,
+    definitionId: row.definition_id ?? undefined,
+    triggerId: row.trigger_id ?? undefined,
+    triggerKind: row.trigger_kind ?? undefined,
+    attempt: Number(row.attempt ?? 1),
+    targetKind: row.target_kind ?? "new_session",
+    targetSessionId: row.target_session_id ?? undefined,
+    startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
+    output: row.output ?? undefined,
+    ...mapEvidenceFields(row),
+  };
+}
+
+function triggerKindForSource(explicit: AutomationTriggerKind | undefined, source: string): AutomationTriggerKind {
+  if (explicit) return explicit;
+  if (source.startsWith("github:")) return "github";
+  if (source === "slack") return "slack";
+  if (source === "manual") return "manual";
+  return "webhook";
+}
+
+function mapAutomationDefinition(row: any): AutomationDefinition {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    name: row.name,
+    templateCiphertext: row.template_ciphertext ?? undefined,
+    runtimeId: row.runtime_id ?? undefined,
+    model: row.model ?? undefined,
+    nodeLabel: row.node_label ?? undefined,
+    ephemeral: row.ephemeral ?? undefined,
+    approvalMode: row.approval_mode ?? undefined,
+    sandbox: row.sandbox ?? undefined,
+    enabled: Boolean(row.enabled),
+    schedule: row.schedule,
+    nextRunAt: row.next_run_at ? new Date(row.next_run_at).toISOString() : undefined,
+    lastScheduledAt: row.last_scheduled_at ? new Date(row.last_scheduled_at).toISOString() : undefined,
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
+function mapTriggerEvent(row: any): TriggerEvent {
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    kind: row.kind,
+    sourceKey: row.source_key ?? undefined,
+    sourceRef: row.source_ref ?? undefined,
+    createdAt: new Date(row.created_at).toISOString(),
+  };
+}
+
+function mapAutomationRun(row: any): AutomationRun {
+  const sourceRef = {
+    ...(row.repo ? { repo: row.repo } : {}),
+    ...(row.issue_number !== null && row.issue_number !== undefined ? { issueNumber: row.issue_number } : {}),
+    ...(row.url ? { url: row.url } : {}),
+  };
+  return {
+    id: row.id,
+    accountId: row.account_id,
+    definitionId: row.definition_id ?? undefined,
+    triggerId: row.trigger_id ?? `legacy:${row.id}`,
+    triggerKind: triggerKindForSource(row.trigger_kind ?? undefined, row.source),
+    status: row.status === "done" ? "succeeded" : row.status,
+    attempt: Number(row.attempt ?? 1),
+    target: row.target_kind === "existing_session"
+      ? { kind: "existing_session", sessionId: row.target_session_id }
+      : { kind: "new_session" },
+    routing: {
+      nodeLabel: row.label,
+      runtimeId: row.runtime_id ?? undefined,
+      model: row.model ?? undefined,
+      ephemeral: row.ephemeral ?? undefined,
+      approvalMode: row.approval_mode ?? undefined,
+      sandbox: row.sandbox ?? undefined,
+    },
+    output: row.output ?? undefined,
+    title: row.title,
+    body: row.body ?? undefined,
+    source: row.source,
+    sourceRef: Object.keys(sourceRef).length ? sourceRef : undefined,
+    createdAt: new Date(row.created_at).toISOString(),
+    claimedByNodeId: row.claimed_by_node_id ?? undefined,
+    claimedAt: row.claimed_at ? new Date(row.claimed_at).toISOString() : undefined,
+    startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
+    ...mapEvidenceFields(row),
   };
 }
 

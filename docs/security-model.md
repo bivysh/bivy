@@ -47,11 +47,43 @@ Two exceptions you should know about:
   vault snapshot locally and uploads only ciphertext, plus per-node wrapped keys
   (`model_auth_vaults`, `model_auth_wrapped_keys`). The control plane cannot
   unwrap them. See [`credential-sync.md`](credential-sync.md).
-- **GitHub work queue.** The `work_items` table stores issue `title`, `body`,
-  `repo`, and `url` in plaintext, because the control plane receives them from a
-  GitHub webhook and routes them to a node. If you use the work queue, issue
-  text transits and rests on the control plane. See
+- **GitHub work queue.** The `work_items` table stores source identifiers
+  (`repo`, issue number, and `url`) and routing metadata in plaintext. Issue/
+  comment title and body transit the GitHub webhook but are **not** persisted —
+  the claiming node fetches the live text directly from GitHub with its own
+  credentials, immediately before use. See
   [`github-work-queue.md`](github-work-queue.md).
+- **Generic automation webhooks.** Each account hook has a high-entropy signing
+  secret. The control plane verifies `X-Bivy-Signature-256` as an HMAC-SHA256
+  over the exact request bytes before parsing or persisting anything. Requests
+  are capped at 64 KiB, require an account-scoped idempotency key, and accept
+  only the versioned schema documented by the settings example. Metadata is
+  bounded, scalar, and explicitly treated as untrusted context. Events are
+  appended to a fixed instruction template; payloads cannot select runtimes,
+  models, shell commands, JavaScript, or executable templates. Hook secrets and
+  bodies are never logged. Rotation immediately invalidates the old secret, and
+  revocation retains only a disabled endpoint with a newly randomized secret.
+
+Automation events use this closed schema (unknown fields are rejected):
+
+```json
+{
+  "version": "1",
+  "instruction": "Run the test suite and investigate failures",
+  "title": "CI failed",
+  "sourceUrl": "https://ci.example/builds/123",
+  "externalId": "build-123",
+  "routing": "macbook",
+  "metadata": { "branch": "main", "attempt": 2 }
+}
+```
+
+`instruction` is required. The other event fields are optional; `metadata`
+accepts at most 20 bounded scalar values and must not contain secrets. Every
+request also requires `X-Bivy-Idempotency-Key` and
+`X-Bivy-Signature-256: sha256=<hex HMAC>`. Responses are stable:
+`202 accepted`, `200 duplicate`, `401 invalid_signature`, `410 disabled`,
+`413 payload_too_large`, and `429 quota_exhausted`.
 
 ### What the relay sees
 
@@ -106,8 +138,23 @@ key. Worst case it can make a pairing attempt fail; it cannot leak the room key.
 
 The node's HTTP/WebSocket API on `localhost:4317` can run shell commands and
 edit files. By default it authorizes any **loopback** caller without a token so
-the local UI works out of the box (`BIVY_REQUIRE_LOCAL_AUTH=1` forces token auth
-even on loopback).
+the local UI works out of the box — but only on a host it believes has a single
+human user. `loopbackAllowed()` in `src/auth.ts` calls `isMultiUserHost()` to
+make that call: on Linux it counts `/etc/passwd` accounts with a real login
+shell and a normal (non-system) UID, and on macOS it counts real accounts from
+`dscl . -list /Users UniqueID`; more than one means the bypass is off by
+default, because loopback is shared by every local account and is not
+isolation between them. Windows detection isn't implemented, so the bypass
+stays on there today. `BIVY_REQUIRE_LOCAL_AUTH=1` always forces token auth even
+on loopback (e.g. Windows, or if you don't trust the detection); `=0` always
+keeps the bypass on even if the host looks shared. `BIVY_MULTI_USER_HOST=1`/`=0`
+overrides just the detection, if it's guessing wrong for your box. Detection is
+deliberately conservative (biased toward false negatives, not false positives)
+so it never surprises a single-user machine into requiring a token it never
+needed before.
+
+When the bypass is off, every `/api` and `/ws` caller — including the CLI —
+must present a device token, which they get from the bootstrap endpoint below.
 
 That default would otherwise let any web page you visit drive your agent. The
 actionable surface (`/api`, `/ws`) therefore rejects requests whose browser
@@ -286,23 +333,30 @@ This is pattern-based. It does not catch a secret shape Bivy has no pattern for.
 
 ## Known limitations for 0.1
 
-Bivy 0.1 is an early public release. These are the things we would want a
-security-conscious user to know before trusting it with anything sensitive.
+Bivy 0.1 is an early public release. Know these before trusting it with anything
+sensitive.
 
 1. **No Bivy-owned OS sandbox.** As above: agents without a native sandbox run
    as your user with your permissions. Bivy's governance is effect-level and
    partial. Do not treat Bivy as an isolation boundary.
 2. **The hard-floor deny list is heuristic.** Regex over a shell command string.
    It stops accidents, not a determined agent.
-3. **Loopback is trusted by default.** Any process running as any user on the
-   machine can reach `localhost:4317`; only the bootstrap-secret gate protects
-   the token-minting endpoint. Set `BIVY_REQUIRE_LOCAL_AUTH=1` on shared hosts.
+3. **Loopback is trusted by default on hosts we believe are single-user.** On a
+   host `isMultiUserHost()` (`src/auth.ts`) recognizes as shared, token auth is
+   required automatically and any process on the machine — any user — can
+   otherwise only reach the token-minting endpoint, which is itself gated by
+   the bootstrap secret. Detection is heuristic (`/etc/passwd` on Linux, `dscl`
+   on macOS, not implemented on Windows) and errs toward *not* flagging a host
+   as shared, so it can be wrong in either direction. If in doubt, set
+   `BIVY_REQUIRE_LOCAL_AUTH=1` explicitly rather than relying on detection.
 4. **`BIVY_ALLOW_ANY_ORIGIN=1` fully disables the rebinding/cross-origin
    guard.** It exists as an escape hatch; using it re-opens the attack the guard
    was written to close.
-5. **The work queue stores issue text in plaintext on the control plane.**
-   `work_items.title`/`body` are not encrypted. If your issue bodies are
-   sensitive, do not use the hosted work queue.
+5. **Run evidence is metadata-only by design, not an audited compliance
+   artifact.** The sanitizer (`services/control-plane/src/run-evidence.ts`)
+   allowlists and bounds every field, but it is a code-level guard, not a
+   third-party certification — see
+   [Run evidence and outcome reports](automation-runs.md#run-evidence-and-outcome-reports).
 6. **The local vault's wrapping key sits next to the vault.**
    `.bivy/secrets.key` and `.bivy/secrets.json` are both on the same disk at
    mode `0600`. This protects against other local users, not against someone who

@@ -15,7 +15,19 @@ WORKDIR /app
 COPY services/control-plane/package.json ./
 RUN npm install
 COPY services/control-plane/ ./
+COPY deploy/healthcheck.sh /usr/local/bin/bivy-healthcheck
 # Bundle the built React client so the control plane serves it at the root.
 COPY --from=webbuild /repo/packages/web/dist ./public/react
+# Pin V8's old-space ceiling below the container's docker-compose mem_limit
+# (512m — see deploy/docker-compose.yml) instead of relying on Node's cgroup
+# auto-detection, which isn't guaranteed across every Docker/cgroup version and
+# only bounds the V8 heap anyway (RSS also carries connection buffers, the pg
+# client, the Stripe SDK, etc. outside it). Left unpinned, growth can walk right
+# up to the cgroup limit with no headroom for that non-heap RSS — and because
+# docker-compose doesn't cap container swap either, the container doesn't get a
+# fast OOM-kill + clean restart at that point, it drags the *host* into swap.
+# 384m leaves ~128m of headroom under the 512m cap. If mem_limit changes, update
+# this too.
+ENV NODE_OPTIONS="--max-old-space-size=384"
 EXPOSE 4400
 CMD ["npm", "start"]

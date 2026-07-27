@@ -437,7 +437,7 @@ export async function setEphemeralQueueDefault(
 export interface GithubQueueItem {
   id: string;
   source: string; // "github:issue" | "github:comment" | "slack"
-  status: "pending" | "claimed" | "done";
+  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
   label: string;
   title: string;
   repo?: string;
@@ -454,6 +454,128 @@ export interface GithubQueueItem {
   claimedAt?: string;
   claimedByNodeId?: string;
   completedAt?: string;
+  triggerId?: string;
+  triggerKind?: "github" | "slack" | "manual" | "webhook" | "schedule";
+  definitionId?: string;
+  attempt?: number;
+  targetKind?: "new_session" | "existing_session";
+  startedAt?: string;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  output?: {
+    sessionId?: string;
+    branch?: string;
+    prUrl?: string;
+    artifactUrl?: string;
+    failure?: string;
+    checkpoint?: string;
+    commit?: string;
+  };
+  /** Privacy-safe run evidence (issue #153) — see docs/automation-runs.md and
+   *  docs/security-model.md. Never a prompt, transcript, diff, file content,
+   *  secret, token, or raw command/tool output; only bounded summaries,
+   *  identifiers, and URLs. */
+  routingReason?: string;
+  checks?: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; exitCode?: number }>;
+  events?: Array<{
+    at: string;
+    kind: "triggered" | "routed" | "claimed" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
+      | "retry" | "fallback" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
+    summary: string;
+    attempt?: number;
+    ref?: string;
+    url?: string;
+    status?: "passed" | "failed" | "denied" | "approved";
+  }>;
+}
+
+export type AutomationSchedule =
+  | { kind: "once"; at: string }
+  | { kind: "cron"; expression: string; timezone: string };
+
+export interface AccountAutomation {
+  id: string;
+  name: string;
+  templateCiphertext?: string;
+  runtimeId?: string;
+  model?: string;
+  nodeLabel?: string;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  enabled: boolean;
+  schedule: AutomationSchedule;
+  nextRunAt?: string;
+  lastScheduledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AccountAutomationRun {
+  id: string;
+  definitionId?: string;
+  triggerKind: string;
+  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled";
+  title: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+}
+
+async function automationRequest<T>(
+  store: LocalStore,
+  path: string,
+  init: RequestInit = {},
+  fetchImpl: typeof fetch = fetch,
+): Promise<T> {
+  const res = await fetchImpl(`${cpBase(store)}${path}`, {
+    ...init,
+    headers: authHeaders(store),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `automation request failed: ${res.status}`);
+  return data as T;
+}
+
+export function fetchAutomations(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AccountAutomation[]> {
+  return automationRequest(store, "/account/automations", {}, fetchImpl);
+}
+
+export function createAutomation(
+  store: LocalStore,
+  input: Omit<AccountAutomation, "id" | "createdAt" | "updatedAt" | "lastScheduledAt">,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomation> {
+  return automationRequest(store, "/account/automations", { method: "POST", body: JSON.stringify(input) }, fetchImpl);
+}
+
+export function updateAutomation(
+  store: LocalStore,
+  id: string,
+  patch: Partial<AccountAutomation>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomation> {
+  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }, fetchImpl);
+}
+
+export async function deleteAutomation(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automations/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: authHeaders(store),
+  });
+  if (!res.ok) throw new Error(`delete automation failed: ${res.status}`);
+}
+
+export function runAutomationNow(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<AccountAutomationRun> {
+  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/run`, { method: "POST" }, fetchImpl);
+}
+
+export function fetchAutomationRuns(
+  store: LocalStore,
+  limit = 50,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun[]> {
+  return automationRequest(store, `/account/automation-runs?limit=${encodeURIComponent(String(limit))}`, {}, fetchImpl);
 }
 
 /** Recent incoming work items for the account, newest first (queue UI). */
@@ -517,6 +639,94 @@ export async function clearWorkQueue(store: LocalStore, fetchImpl: typeof fetch 
   const data: any = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `clear queue failed: ${res.status}`);
   return Number(data?.removed) || 0;
+}
+
+export interface AutomationHook {
+  id: string;
+  endpoint: string;
+  enabled: boolean;
+  templateInstruction: string;
+  routingDefault: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface AutomationOutcome {
+  id: string;
+  hookId: string;
+  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
+  title: string;
+  createdAt: string;
+  claimedAt?: string;
+  completedAt?: string;
+}
+
+export interface AutomationHooksInfo {
+  hooks: AutomationHook[];
+  outcomes: AutomationOutcome[];
+}
+
+export async function fetchAutomationHooks(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AutomationHooksInfo> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`automation hooks request failed: ${res.status}`);
+  const data: any = await res.json();
+  return {
+    hooks: Array.isArray(data?.hooks) ? data.hooks : [],
+    outcomes: Array.isArray(data?.outcomes) ? data.outcomes : [],
+  };
+}
+
+export async function createAutomationHook(
+  store: LocalStore,
+  input: { templateInstruction: string; routingDefault?: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<AutomationHook & { secret: string }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify(input),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `create automation hook failed: ${res.status}`);
+  return data;
+}
+
+export async function updateAutomationHook(
+  store: LocalStore,
+  id: string,
+  patch: Partial<Pick<AutomationHook, "enabled" | "templateInstruction" | "routingDefault">>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AutomationHook> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: authHeaders(store),
+    body: JSON.stringify(patch),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `update automation hook failed: ${res.status}`);
+  return data;
+}
+
+export async function rotateAutomationHookSecret(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AutomationHook & { secret: string }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks/${encodeURIComponent(id)}/rotate`, {
+    method: "POST",
+    headers: authHeaders(store),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `rotate automation secret failed: ${res.status}`);
+  return data;
+}
+
+export async function revokeAutomationHook(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: authHeaders(store),
+  });
+  if (!res.ok) throw new Error(`revoke automation hook failed: ${res.status}`);
 }
 
 /** List the account's paired devices (for the device manager). */

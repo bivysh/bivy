@@ -8,7 +8,7 @@ under Bivy (`opencode run`) with structured streaming and resume.
 ## Install
 
 ```bash
-npm install --global --prefix ~/.local opencode-ai/opencode
+npm install --global --prefix ~/.local opencode-ai
 ```
 
 ## Authentication

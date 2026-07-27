@@ -1,10 +1,9 @@
 # FAQ — what Bivy is not
 
-The facts below are all individually documented elsewhere in this repo, but
-scattered across docs most people don't read end to end. This page exists to
-put them in one place, stated plainly, before you build on an assumption
-that isn't true. Every claim links to where the behavior actually lives in
-source or in a longer doc.
+The facts below are all documented elsewhere in this repo, but scattered across
+several docs. This page collects them in one place, stated plainly, so you don't
+build on an assumption that isn't true. Every claim links to where the behavior
+lives in source or in a longer doc.
 
 ## Is Bivy production-ready / 1.0?
 
@@ -41,7 +40,7 @@ breaking changes between versions are likely. If you run it, you own
 operating it — TLS, backups, restores, secret rotation, monitoring, and
 abuse prevention are on you. GitHub issues are community best-effort, not a
 guarantee. **Bivy Cloud** is the supported, managed alternative. See
-[self-host.md § Maturity & support](self-host.md#maturity-support) and
+[self-host.md § Maturity and support](self-host.md#maturity-and-support) and
 [CLOUD.md](../CLOUD.md).
 
 (Bivy Core — the node + CLI running locally with no hosted account — is a
@@ -90,6 +89,5 @@ set `BIVY_APPROVAL_MODE=risky` or `always`. See
 
 ---
 
-Something on this list surprised you, or you found another Bivy-is-not-X
-assumption worth adding here? Open an issue — this page is meant to grow as
-gaps get found, not stay a fixed list.
+Found another Bivy-is-not-X assumption worth adding here? Open an issue so it
+can be added.

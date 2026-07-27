@@ -98,6 +98,17 @@ assert.equal(
   "clearing the override should restore modelSelection",
 );
 
+// streamingBehaviors must survive into the session-less runtimes.list catalog:
+// the composer reads steer support from there (AppController.supportsSteering),
+// so if the catalog constant drifts from the live runtime instance the client
+// never learns steering is available and force-queues every mid-turn message.
+// Guards against the two catalog constants (CLAUDE_CAPABILITIES / PI_CAPABILITIES
+// in src/runtime/index.ts) silently dropping what the runtimes actually advertise.
+const claudeCaps = listRuntimes().find((r) => r.id === "claude-code-sdk")!.capabilities as Record<string, unknown>;
+assert.deepEqual(claudeCaps.streamingBehaviors, ["steer"], "claude-code-sdk must advertise steer in the catalog");
+const piCaps = listRuntimes().find((r) => r.id === "pi")!.capabilities as Record<string, unknown>;
+assert.deepEqual(piCaps.streamingBehaviors, ["steer", "followUp"], "pi must advertise steer + followUp in the catalog");
+
 // Newly promoted agents are present with their display names.
 const byId = Object.fromEntries(RUNTIME_CATALOG.map((r) => [r.id, r]));
 assert.equal(byId.qwen.displayName, "Qwen Code");

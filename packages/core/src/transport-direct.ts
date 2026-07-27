@@ -72,7 +72,15 @@ export class DirectTransport implements Transport {
       headers: { ...this.directHeaders(), ...((opts.headers as Record<string, string>) || {}) },
     });
     const data: any = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || `Local request failed (${res.status})`);
+    if (!res.ok) {
+      const error = new Error(data?.error || `Local request failed (${res.status})`);
+      // Preserve any extra fields the node's error payload carried (e.g.
+      // session.import's `needsDisclosure`/`disclosure`) so a caller that needs
+      // more than the message can read them off the thrown Error, the same way
+      // it would off a `*.error` relay-mode event.
+      if (data && typeof data === "object") Object.assign(error, data);
+      throw error;
+    }
     return data as T;
   }
 
@@ -259,6 +267,34 @@ export class DirectTransport implements Transport {
           });
           break;
         }
+        case "session.discover": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const data: any = await this.directApi("/api/sessions/discover");
+            this.emit({ type: "session.discover.result", requestId, sessions: data?.sessions ?? [] });
+          } catch (error) {
+            this.emit({ type: "session.discover.error", requestId, error: (error as Error)?.message || String(error) });
+          }
+          break;
+        }
+        case "session.import": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const p: any = await this.directApi("/api/sessions/import", {
+              method: "POST",
+              body: JSON.stringify({ runtimeId: obj.runtimeId, ref: obj.ref, acceptDisclosure: obj.acceptDisclosure }),
+            });
+            this.emit({ type: "session.import.result", requestId, sessionId: p.sessionId, runtimeId: p.runtimeId, mode: p.mode, seedPrompt: p.seedPrompt });
+          } catch (error) {
+            // A "needs disclosure" refusal (see importNativeSession) rides the
+            // thrown Error's extra fields (attached by directApi above) rather
+            // than a generic message, so the caller can show the disclosure and
+            // retry with acceptDisclosure instead of treating this as a hard failure.
+            const e = error as { message?: unknown; needsDisclosure?: unknown; disclosure?: unknown };
+            this.emit({ type: "session.import.error", requestId, error: String(e?.message ?? error), needsDisclosure: e?.needsDisclosure, disclosure: e?.disclosure });
+          }
+          break;
+        }
         case "session.delete":
           await this.directApi("/api/sessions/delete", {
             method: "POST",
@@ -422,6 +458,29 @@ export class DirectTransport implements Transport {
           this.emitMerged(
             "models.custom.list",
             await this.directApi(`/api/models/custom/${encodeURIComponent(String((obj as any).id ?? obj.provider ?? ""))}`, { method: "DELETE" }),
+          );
+          break;
+        case "rulesets.list":
+          this.emitMerged("rulesets.list", await this.directApi("/api/rulesets"));
+          break;
+        case "rulesets.save": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            this.emitMerged(
+              "rulesets.list",
+              await this.directApi("/api/rulesets", { method: "POST", body: JSON.stringify(obj) }),
+            );
+            // Dedicated per-request ack, mirroring the relay path — see #140.
+            this.emit({ type: "rulesets.save.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "rulesets.save.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
+        case "rulesets.remove":
+          this.emitMerged(
+            "rulesets.list",
+            await this.directApi(`/api/rulesets/${encodeURIComponent(String((obj as any).name ?? ""))}`, { method: "DELETE" }),
           );
           break;
         case "repos.list":

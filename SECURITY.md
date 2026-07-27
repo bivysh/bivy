@@ -82,8 +82,12 @@ We follow coordinated disclosure.
 
 - Misconfiguration of a self-hosted deployment — weak or shared `RELAY_SECRET`,
   a database exposed to the internet, missing TLS in front of the relay, running
-  the daemon as root or on a shared host without
-  `BIVY_REQUIRE_LOCAL_AUTH=1`.
+  the daemon as root, or forcing the loopback auth bypass on a shared host with
+  `BIVY_REQUIRE_LOCAL_AUTH=0`. (The daemon auto-detects multi-user hosts on
+  Linux/macOS and requires a device token there by default — see
+  [`docs/security-model.md`](docs/security-model.md#local-daemon-exposure-cross-origin-and-dns-rebinding).
+  Windows detection isn't implemented, so treat any shared Windows host as
+  out of scope unless `BIVY_REQUIRE_LOCAL_AUTH=1` is set.)
 - Behaviour behind a documented, explicitly opt-in escape hatch:
   `BIVY_ALLOW_ANY_ORIGIN=1`, `BIVY_OPEN_BOOTSTRAP=1`, `approvalMode: never`,
   or the `danger-full-access` sandbox tier. These are documented as unsafe;

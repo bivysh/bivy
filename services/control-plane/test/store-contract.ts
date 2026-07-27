@@ -77,10 +77,10 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
   await test("session index merges a node's adverts and is account-scoped", async (store) => {
     const acct = await store.findOrCreateAccount("contract-index@example.com");
     const { node } = await store.enrollNode(acct.id, "node-idx", "Laptop");
-    await store.replaceNodeSessions(acct.id, node.id, [
+    assert.equal(await store.replaceNodeSessions(acct.id, node.id, [
       { sessionId: "s1", status: "working", source: "issue:#1", branch: "main", agentServiceAddress: "unix:/run/bivy-agent.sock" },
       { sessionId: "s2", status: "idle" },
-    ]);
+    ]), 2, "first advertise reports two new runs");
     const listed = await store.listAccountSessions(acct.id);
     assert.deepEqual(listed.map((s) => s.sessionId).sort(), ["s1", "s2"]);
     assert.equal(listed.every((s) => s.nodeId === node.id), true);
@@ -266,10 +266,139 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(blank.label, "bivy");
 
     const claimed = await store.claimWorkItem(acct.id, node.id, a.id);
+    const canonical = await store.getAutomationRun(acct.id, a.id);
+    assert.equal(canonical?.triggerKind, "github");
+    assert.equal(canonical?.routing.nodeLabel, "bivy");
+    assert.equal(canonical?.title, "A");
     assert.equal(claimed?.status, "claimed");
     assert.equal(await store.claimWorkItem(acct.id, node.id, a.id), undefined); // second claim loses
     await store.completeWorkItem(acct.id, a.id);
-    assert.equal((await store.listWorkItems(acct.id)).find((w) => w.id === a.id)?.status, "done");
+    assert.equal((await store.listWorkItems(acct.id)).find((w) => w.id === a.id)?.status, "succeeded");
+  });
+
+  // Issue #153: every run gets a readable trigger→claim→attempt→outcome
+  // timeline automatically (no node cooperation required), and a node can layer
+  // its own sanitized evidence (routing reason, output refs, checks) on top —
+  // including a retried/fallback run showing each attempt with its reason.
+  await test("run evidence: baseline timeline is automatic; a node can append routing/output/checks/retry-fallback events", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-evidence@example.com");
+    const { node } = await store.enrollNode(acct.id, "node-evidence", "Laptop");
+    const run = await store.enqueueWorkItem(acct.id, { label: "bivy", source: "github:issue", title: "Flaky", repo: "o/r", issueNumber: 42, url: "https://github.com/o/r/issues/42" });
+    assert.equal(run.events?.[0]?.kind, "triggered");
+
+    assert.ok(await store.claimWorkItem(acct.id, node.id, run.id));
+    const afterClaim = await store.getAutomationRun(acct.id, run.id);
+    assert.deepEqual(afterClaim?.events?.map((e) => e.kind), ["triggered", "claimed"]);
+
+    // The node reports why it chose this runtime, then hits a transient error
+    // and falls back to a different one (attempt 1 -> 2), each with its reason.
+    await store.appendRunEvidence(acct.id, run.id, {
+      routingReason: "queue label",
+      events: [{ at: "2026-07-27T00:00:00.000Z", kind: "retry", summary: "Primary model returned a rate-limit error; retrying.", attempt: 1, status: "failed" }],
+    });
+    await store.appendRunEvidence(acct.id, run.id, {
+      routingReason: "fallback after rate limit",
+      output: { branch: "bivy/issue-42" },
+      events: [{ at: "2026-07-27T00:00:05.000Z", kind: "fallback", summary: "Falling back to codex/gpt-5 after the rate limit.", attempt: 2 }],
+    });
+    await store.appendRunEvidence(acct.id, run.id, {
+      output: { prUrl: "https://github.com/o/r/pull/9", checkpoint: "abc123", commit: "def456" },
+      checks: [{ name: "unit tests", commandHash: "sha256:aaa", status: "passed", exitCode: 0 }],
+      events: [{ at: "2026-07-27T00:01:00.000Z", kind: "pull_request", summary: "Pull request opened.", attempt: 2 }],
+    });
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "running"))?.status, "running");
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "succeeded"))?.status, "succeeded");
+
+    const final = await store.getAutomationRun(acct.id, run.id);
+    // Routing reason: last report wins (the fallback explanation, not the stale
+    // original one) — merged, not clobbered by unrelated later patches.
+    assert.equal(final?.routing.nodeLabel, "bivy");
+    assert.equal(final?.routingReason, "fallback after rate limit");
+    assert.equal(final?.output?.branch, "bivy/issue-42");
+    assert.equal(final?.output?.prUrl, "https://github.com/o/r/pull/9");
+    assert.equal(final?.output?.checkpoint, "abc123");
+    assert.equal(final?.output?.commit, "def456");
+    assert.deepEqual(final?.checks?.map((c) => c.status), ["passed"]);
+    const kinds = final?.events?.map((e) => e.kind);
+    assert.deepEqual(kinds, ["triggered", "claimed", "retry", "fallback", "pull_request", "attempt_started", "completed"]);
+    const retryEvent = final?.events?.find((e) => e.kind === "retry");
+    assert.equal(retryEvent?.attempt, 1);
+    assert.match(retryEvent?.summary ?? "", /rate-limit/);
+    const fallbackEvent = final?.events?.find((e) => e.kind === "fallback");
+    assert.equal(fallbackEvent?.attempt, 2);
+    assert.match(fallbackEvent?.summary ?? "", /falling back/i);
+
+    // Same guarantee via the legacy work-item projection, and a control-plane
+    // row must never contain a prompt/transcript/diff/secret/token/raw-output
+    // field, no matter how it got there.
+    const asWorkItem = (await store.listWorkItems(acct.id)).find((w) => w.id === run.id);
+    assert.equal(asWorkItem?.events?.length, final?.events?.length);
+    const serialized = JSON.stringify(asWorkItem);
+    for (const forbidden of ["prompt", "transcript", "diff", "fileContent", "toolOutput", "secret", "token", "rawCommand", "stdout", "stderr"]) {
+      assert.doesNotMatch(serialized, new RegExp(`"${forbidden}"\\s*:`, "i"));
+    }
+
+    // An unknown run is a no-op, not an error.
+    assert.equal(await store.appendRunEvidence(acct.id, "work_nope", { routingReason: "x" }), undefined);
+  });
+
+  await test("automation runs: trigger-neutral lifecycle and concurrent claim", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-automation@example.com");
+    const { node: a } = await store.enrollNode(acct.id, "auto-a", "A");
+    const { node: b } = await store.enrollNode(acct.id, "auto-b", "B");
+    const definition = await store.createAutomationDefinition(acct.id, {
+      name: "Triage",
+      templateCiphertext: "encrypted-template",
+      runtimeId: "codex",
+      nodeLabel: "bivy",
+    });
+    const run = await store.enqueueAutomationRun(acct.id, {
+      source: "manual",
+      triggerKind: "manual",
+      definitionId: definition.id,
+      title: "Investigate",
+      dedupeKey: "manual:one",
+    });
+    assert.equal(run.status, "pending");
+    assert.equal(run.triggerKind, "manual");
+    assert.equal(run.target.kind, "new_session");
+    const [claimA, claimB] = await Promise.all([
+      store.claimWorkItem(acct.id, a.id, run.id),
+      store.claimWorkItem(acct.id, b.id, run.id),
+    ]);
+    assert.equal([claimA, claimB].filter(Boolean).length, 1);
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "running"))?.status, "running");
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "needs_attention"))?.status, "needs_attention");
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "failed", { failure: "operator stopped" }))?.output?.failure, "operator stopped");
+
+    const slack = await store.enqueueAutomationRun(acct.id, {
+      source: "slack",
+      title: "Ship it",
+      dedupeKey: "slack:event:1",
+    });
+    const redelivery = await store.enqueueAutomationRun(acct.id, {
+      source: "slack",
+      title: "duplicate",
+      dedupeKey: "slack:event:1",
+    });
+    assert.equal(slack.triggerKind, "slack");
+    assert.equal(redelivery.id, slack.id);
+
+    // A node can throw before its best-effort /running transition lands, so a
+    // failure must terminate a still-"claimed" run rather than get stuck.
+    const stuck = await store.enqueueAutomationRun(acct.id, {
+      source: "manual",
+      triggerKind: "manual",
+      title: "Claimed then threw",
+      dedupeKey: "manual:stuck",
+    });
+    assert.ok(await store.claimWorkItem(acct.id, a.id, stuck.id));
+    assert.equal((await store.getAutomationRun(acct.id, stuck.id))?.status, "claimed");
+    assert.equal((await store.transitionAutomationRun(acct.id, stuck.id, "failed"))?.status, "failed");
+
+    const triggers = await store.listTriggerEvents(acct.id);
+    assert.equal(triggers.some((event) => event.id === slack.triggerId && event.sourceKey === "slack:event:1"), true);
+    assert.equal((await store.listTriggerEvents((await store.findOrCreateAccount("contract-automation-other@example.com")).id)).length, 0);
   });
 
   await test("work queue: dedupeKey is idempotent per account", async (store) => {
@@ -279,6 +408,34 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(again.id, first.id);
     assert.equal(again.title, "Fix");
     assert.equal((await store.listWorkItems(acct.id)).length, 1);
+  });
+
+  await test("automation hooks configure safely and report replay deduplication", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-automation@example.com");
+    const hook = await store.createInboundHook(acct.id, "automation");
+    const configured = await store.updateInboundHook(acct.id, hook.id, {
+      templateInstruction: "Investigate this event.",
+      routingDefault: "runner",
+      enabled: true,
+    });
+    assert.equal(configured?.secret, hook.secret);
+    assert.equal(configured?.templateInstruction, "Investigate this event.");
+    assert.equal((await store.listInboundHooks(acct.id, "automation")).length, 1);
+    const first = await store.enqueueAutomationRunWithResult(acct.id, {
+      source: `automation:${hook.id}`,
+      triggerKind: "webhook",
+      title: "Alert",
+      dedupeKey: `automation:${hook.id}:delivery-1`,
+    });
+    const replay = await store.enqueueAutomationRunWithResult(acct.id, {
+      source: `automation:${hook.id}`,
+      triggerKind: "webhook",
+      title: "Changed",
+      dedupeKey: `automation:${hook.id}:delivery-1`,
+    });
+    assert.equal(first.created, true);
+    assert.equal(replay.created, false);
+    assert.equal(replay.run.id, first.run.id);
   });
 
   await test("work queue: reroute + assign only affect pending items", async (store) => {
@@ -355,7 +512,10 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
   // --- Entitlements & run metering ------------------------------------------
   await test("no node cap on any plan; a free account enrolls many nodes", async (store) => {
     const acct = await store.findOrCreateAccount("contract-limit@example.com");
-    assert.equal((await store.enrollNode(acct.id, "n1", "First")).node.id, "n1");
+    const first = await store.enrollNode(acct.id, "n1", "First");
+    assert.equal(first.node.id, "n1");
+    assert.equal(first.created, true);
+    assert.equal((await store.enrollNode(acct.id, "n1", "First again")).created, false, "re-enrollment is not a new funnel milestone");
     assert.equal((await store.enrollNode(acct.id, "n2", "Second")).node.id, "n2");
     assert.equal((await store.enrollNode(acct.id, "n3", "Third")).node.id, "n3");
   });
@@ -364,13 +524,14 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     const acct = await store.findOrCreateAccount("contract-runs@example.com");
     const before = new Date(Date.now() - 60_000).toISOString();
     assert.equal(await store.countRunStartsSince(acct.id, before), 0);
-    await store.recordRunStart(acct.id, "s1");
-    await store.recordRunStart(acct.id, "s2");
-    await store.recordRunStart(acct.id, "s1"); // duplicate — no double count
+    assert.equal(await store.recordRunStart(acct.id, "s1"), true);
+    assert.equal(await store.recordRunStart(acct.id, "s2"), true);
+    assert.equal(await store.recordRunStart(acct.id, "s1"), false); // duplicate — no funnel event / double count
     assert.equal(await store.countRunStartsSince(acct.id, before), 2);
     // A session advertise also records a run start (the all-sources funnel).
     const { node } = await store.enrollNode(acct.id, "run-node", "Runner");
-    await store.replaceNodeSessions(acct.id, node.id, [{ sessionId: "s3", status: "idle" }]);
+    assert.equal(await store.replaceNodeSessions(acct.id, node.id, [{ sessionId: "s3", status: "idle" }]), 1);
+    assert.equal(await store.replaceNodeSessions(acct.id, node.id, [{ sessionId: "s3", status: "working" }]), 0, "repeat advertise emits no new run");
     assert.equal(await store.countRunStartsSince(acct.id, before), 3, "advertised session counts once");
   });
 

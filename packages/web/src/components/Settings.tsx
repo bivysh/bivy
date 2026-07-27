@@ -2,14 +2,16 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
-import { StatsPanel } from "./StatsPanel.js";
+import { AutomationsPanel } from "./Automations.js";
+import { RulesetsPanel } from "./Rulesets.js";
+import { ImportSessionContent } from "./ImportSessionSheet.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
@@ -66,6 +68,10 @@ const IconServer = () => (
 const IconBolt = () => (
   <Glyph><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" /></Glyph>
 );
+// Branch/policy glyph for Rulesets — a decision splitting into fallback routes.
+const IconRules = () => (
+  <Glyph><circle cx="6" cy="6" r="2" /><circle cx="6" cy="18" r="2" /><circle cx="18" cy="12" r="2" /><path d="M8 6h4a4 4 0 0 1 4 4M8 18h4a4 4 0 0 0 4-4" /></Glyph>
+);
 const IconCpu = () => (
   <Glyph><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" /></Glyph>
 );
@@ -77,6 +83,11 @@ const IconMoon = () => (
 );
 const IconBell = () => (
   <Glyph><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></Glyph>
+);
+// Same download-into-tray glyph the sidebar header used to carry, so the
+// relocated action stays visually recognisable in its new Settings home.
+const IconImport = () => (
+  <Glyph><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 19h14" /></Glyph>
 );
 
 // Display name for a plan id — capitalization only, now that the internal ids
@@ -135,11 +146,14 @@ type NavGroup = { label: string; items: NavItem[] };
 const TITLES: Record<View, string> = {
   appearance: "Appearance",
   notifications: "Notifications",
+  import: "Import session",
   providers: "Keys & OAuth",
   models: "Local models",
   voice: "Voice input",
   github: "GitHub App",
   queue: "GitHub Queue",
+  automations: "Automations",
+  rulesets: "Rulesets",
   nodes: "Nodes",
   ephemeral: "Ephemeral machines",
   account: "Account & billing",
@@ -154,6 +168,7 @@ export function Settings({
   githubQueue,
   onRefreshGithubQueue,
   onPickSession,
+  onImported,
 }: {
   state: AppState;
   onClose: () => void;
@@ -166,6 +181,9 @@ export function Settings({
   githubQueue?: GithubQueueItem[] | null;
   onRefreshGithubQueue?: () => void;
   onPickSession?: (sessionId: string, path?: string, nodeId?: string) => void;
+  /** Fired when the Import-session panel adopts a session — the controller has
+   *  already opened/navigated to it, so the caller just dismisses Settings. */
+  onImported?: (sessionId: string) => void;
 }) {
   const hosted = !controller.direct;
   // Below the CSS breakpoint we behave like the Claude mobile settings: a root
@@ -205,6 +223,7 @@ export function Settings({
       items: [
         { id: "appearance", label: "Appearance", icon: <IconAppearance /> },
         { id: "notifications", label: "Notifications", icon: <IconBell /> },
+        { id: "import", label: "Import session", icon: <IconImport /> },
         { id: "providers", label: "Keys & OAuth", icon: <IconKey /> },
         { id: "models", label: "Local models", icon: <IconCpu /> },
         { id: "voice", label: "Voice input", icon: <IconMic /> },
@@ -215,6 +234,14 @@ export function Settings({
       items: [
         { id: "github", label: "GitHub App", icon: <IconGithub /> },
         { id: "queue", label: "GitHub Queue", icon: <IconQueue /> },
+        { id: "automations", label: "Automations", icon: <IconBolt /> },
+      ],
+    },
+    {
+      label: "Automation",
+      items: [
+        { id: "automations", label: "Webhooks", icon: <IconBolt /> },
+        { id: "rulesets", label: "Rulesets", icon: <IconRules /> },
       ],
     },
     {
@@ -304,6 +331,7 @@ export function Settings({
           <div className="settings-body">
             {activeView === "appearance" && <AppearancePanel />}
             {activeView === "notifications" && <NotificationsPanel />}
+            {activeView === "import" && <ImportPanel onImported={(id) => onImported?.(id)} />}
             {activeView === "providers" && <ProvidersPanel state={state} />}
             {activeView === "models" && <LocalModelsPanel state={state} />}
             {activeView === "voice" && <VoicePanel state={state} />}
@@ -316,6 +344,13 @@ export function Settings({
                 onOpenGithubSettings={() => onViewChange("github")}
               />
             )}
+            {activeView === "automations" && (
+              <>
+                <AutomationsPanel state={state} />
+                <WebhookTriggersPanel />
+              </>
+            )}
+            {activeView === "rulesets" && <RulesetsPanel state={state} />}
             {activeView === "nodes" && <NodesPanel state={state} />}
             {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
             {activeView === "account" && <AccountPanel />}
@@ -358,6 +393,20 @@ function AppearancePanel() {
         ))}
       </div>
       <p className="muted">Choose how Bivy looks. <strong>System</strong> follows your device's light/dark setting.</p>
+    </div>
+  );
+}
+
+// ---- Import session (relocated from the sidebar header) ----
+function ImportPanel({ onImported }: { onImported: (sessionId: string) => void }) {
+  return (
+    <div className="settings-form">
+      <p className="muted">
+        Adopt a Claude Code or Codex session that was started outside Bivy. Only
+        sessions this node (or another one you pick) can see and safely take over
+        are listed.
+      </p>
+      <ImportSessionContent onDone={onImported} />
     </div>
   );
 }
@@ -1089,6 +1138,231 @@ function VoicePanel({ state }: { state: AppState }) {
   );
 }
 
+// Node-label selector shared by the GitHub App "Default node" field and the
+// generic Automations webhook routing default (issue #166): a dropdown of the
+// account's known nodes, exactly like the GitHub issues flow, so a routing
+// default is picked rather than typed blind. Only falls back to free text when
+// the account has no known nodes yet (nothing to pick from).
+function NodeRouteSelect({
+  nodes,
+  value,
+  onChange,
+  disabled,
+}: {
+  nodes: AccountNode[];
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+}) {
+  if (nodes.length === 0) {
+    return (
+      <input
+        className="picker-search"
+        value={value}
+        placeholder="node label, e.g. macbook"
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+  return (
+    <select className="picker-search" value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
+      <option value="">Shared queue (any online node)</option>
+      {nodes.map((n) => (
+        <option key={n.id} value={n.name || n.id}>{n.name || n.id}</option>
+      ))}
+      {value && !nodes.some((n) => (n.name || n.id) === value) && <option value={value}>{value}</option>}
+    </select>
+  );
+}
+
+// Account-level "auto-provision an ephemeral server when nothing's online"
+// preference (issue #532), self-contained so both the GitHub App panel and the
+// generic Automations panel can offer it (issue #166) without each keeping a
+// separate copy of the fetch/save plumbing — it's one account setting either
+// way, and (per the trigger-neutral automation-run queue) already covers
+// webhook-triggered runs alongside GitHub ones once enabled.
+function EphemeralQueueDefaultSection({ hint }: { hint?: string }) {
+  const [ephemeralKeys, setEphemeralKeys] = useState<ProviderKeyInfo[]>([]);
+  const [ephemeralDefault, setEphemeralDefault] = useState<EphemeralQueueDefault | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
+    controller.getEphemeralQueueDefault().then(setEphemeralDefault).catch(() => setEphemeralDefault(null));
+  }, []);
+  const configuredProviders = ephemeralKeys.filter((k) => k.configured);
+  const defaultProviderConfigured = Boolean(
+    ephemeralDefault?.provider && ephemeralKeys.find((k) => k.id === ephemeralDefault.provider)?.configured,
+  );
+  const save = async (patch: Partial<EphemeralQueueDefault>) => {
+    setErr(null);
+    setBusy(true);
+    try {
+      setEphemeralDefault(await controller.setEphemeralQueueDefault(patch));
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <div className="settings-toggle-row">
+        <div className="settings-toggle-text">
+          <span className="settings-toggle-title">Auto-provision when nothing's online</span>
+          <span className="muted small">
+            {hint ||
+              "Spin up a short-lived server from your saved provider token to pick up queued work when nothing persistent is online, then tear it down."}
+          </span>
+        </div>
+        <Toggle
+          checked={Boolean(ephemeralDefault?.enabled)}
+          disabled={busy || configuredProviders.length === 0}
+          onChange={(v) => save({ enabled: v, provider: ephemeralDefault?.provider || configuredProviders[0]?.id })}
+          label="Auto-provision an ephemeral server when nothing's online"
+        />
+      </div>
+      {configuredProviders.length === 0 ? (
+        <p className="muted">Add a Fly.io or Hetzner token in Ephemeral settings to enable this.</p>
+      ) : (
+        ephemeralDefault?.enabled && (
+          <>
+            <select className="picker-search" value={ephemeralDefault.provider ?? ""} onChange={(e) => save({ provider: e.target.value })}>
+              {configuredProviders.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            {!defaultProviderConfigured && (
+              <p className="muted">This device has no saved token for {ephemeralDefault.provider} — add one in Ephemeral settings to actually help out.</p>
+            )}
+            {err && <span className="chip err">{err}</span>}
+          </>
+        )
+      )}
+    </>
+  );
+}
+
+// ---- Generic signed automation webhooks ----
+// Signed inbound webhook triggers (from the automation-webhooks feature). Lives
+// alongside the scheduled-automations panel (imported from ./Automations) under
+// the same "Automations" view — the two features arrived independently and both
+// belong here.
+function WebhookTriggersPanel() {
+  const [hooks, setHooks] = useState<AutomationHook[]>([]);
+  const [outcomes, setOutcomes] = useState<AutomationOutcome[]>([]);
+  const [template, setTemplate] = useState("Follow the incoming instruction in the current workspace.");
+  const [route, setRoute] = useState("");
+  const [nodes, setNodes] = useState<AccountNode[]>([]);
+  const [revealed, setRevealed] = useState<{ hook: AutomationHook; secret: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = async () => {
+    try {
+      const data = await fetchAutomationHooks(controller.local);
+      setHooks(data.hooks);
+      setOutcomes(data.outcomes);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load automation hooks.");
+    }
+  };
+  useEffect(() => {
+    void refresh();
+    controller.listNodes().then(setNodes).catch(() => {});
+  }, []);
+  const updateHookRoute = (hook: AutomationHook, next: string) => {
+    void updateAutomationHook(controller.local, hook.id, { routingDefault: next })
+      .then(refresh)
+      .catch((err) => setError(String(err)));
+  };
+  const create = async () => {
+    setBusy(true); setError("");
+    try {
+      const created = await createAutomationHook(controller.local, { templateInstruction: template, routingDefault: route });
+      setRevealed({ hook: created, secret: created.secret });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create hook.");
+    } finally { setBusy(false); }
+  };
+  const rotate = async (hook: AutomationHook) => {
+    setBusy(true); setError("");
+    try {
+      const rotated = await rotateAutomationHookSecret(controller.local, hook.id);
+      setRevealed({ hook: rotated, secret: rotated.secret });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not rotate secret.");
+    } finally { setBusy(false); }
+  };
+  const curl = revealed ? `body='{"version":"1","instruction":"Run the test suite","title":"CI follow-up","sourceUrl":"https://example.com/build/123","externalId":"build-123","metadata":{"environment":"staging"}}'
+signature=$(printf %s "$body" | openssl dgst -sha256 -hmac '${revealed.secret}' -hex | sed 's/^.* //')
+curl -X POST '${revealed.hook.endpoint}' \\
+  -H 'Content-Type: application/json' \\
+  -H "X-Bivy-Signature-256: sha256=$signature" \\
+  -H 'X-Bivy-Idempotency-Key: build-123' \\
+  --data-binary "$body"` : "";
+  return (
+    <div className="settings-form">
+      <p className="settings-lead">Create signed inbound endpoints that turn events from CI, monitoring, or internal tools into ordinary Bivy runs.</p>
+      {error && <div className="banner error inline">{error}</div>}
+      {revealed && (
+        <section className="settings-section">
+          <h3>Save this secret now</h3>
+          <p className="settings-hint">It is shown only after creation or rotation. Rotating immediately invalidates the previous secret.</p>
+          <code className="settings-code">{revealed.secret}</code>
+          <h4 className="settings-subhead">Example curl</h4>
+          <pre className="settings-code" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{curl}</pre>
+          <button className="btn" onClick={() => void navigator.clipboard.writeText(curl)}>Copy example</button>
+        </section>
+      )}
+      <section className="settings-section">
+        <h3>New webhook</h3>
+        <label className="field-label">Safe instruction template</label>
+        <textarea className="field-input" rows={3} value={template} maxLength={2000} onChange={(e) => setTemplate(e.target.value)} />
+        <p className="settings-hint">This fixed instruction is prepended to each event. Payloads cannot select commands, runtimes, models, or executable templates.</p>
+        <label className="field-label">Default node (optional)</label>
+        <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
+        <button className="btn primary" disabled={busy || !template.trim()} onClick={() => void create()}>Create webhook</button>
+      </section>
+      {EPHEMERAL_MACHINES_ENABLED && (
+        <section className="settings-section">
+          <h4 className="settings-subhead">Ephemeral fallback</h4>
+          <EphemeralQueueDefaultSection hint="Spin up a short-lived server from your saved provider token to pick up any queued run — including these webhooks — when nothing persistent is online, then tear it down. One account-wide setting; also shown in GitHub App settings." />
+        </section>
+      )}
+      {hooks.map((hook) => (
+        <section className="settings-section" key={hook.id}>
+          <div className="settings-row">
+            <div><h3>{hook.id}</h3><code className="settings-code">{hook.endpoint}</code></div>
+            <label><input type="checkbox" checked={hook.enabled} disabled={busy} onChange={(e) => {
+              void updateAutomationHook(controller.local, hook.id, { enabled: e.target.checked }).then(refresh).catch((err) => setError(String(err)));
+            }} /> Enabled</label>
+          </div>
+          <label className="field-label">Default node</label>
+          <NodeRouteSelect nodes={nodes} value={hook.routingDefault} onChange={(v) => updateHookRoute(hook, v)} disabled={busy} />
+          <p className="settings-hint">Routes to {hook.routingDefault ? `bivy/${hook.routingDefault}` : "the shared bivy queue"}.</p>
+          <div className="settings-actions">
+            <button className="btn" disabled={busy} onClick={() => void rotate(hook)}>Rotate secret</button>
+            <button className="btn danger" disabled={busy || !hook.enabled} onClick={() => {
+              if (confirm("Revoke this webhook? Its current secret will stop working immediately.")) {
+                void revokeAutomationHook(controller.local, hook.id).then(refresh).catch((err) => setError(String(err)));
+              }
+            }}>Revoke</button>
+          </div>
+        </section>
+      ))}
+      <section className="settings-section">
+        <h3>Recent trigger outcomes</h3>
+        {outcomes.length === 0
+          ? <p className="settings-hint">No accepted triggers yet.</p>
+          : outcomes.map((outcome) => <div className="settings-row" key={outcome.id}><span>{outcome.title}</span><span className="settings-hint">{outcome.status}</span></div>)}
+      </section>
+    </div>
+  );
+}
+
 // ---- GitHub App ----
 function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGithubQueue?: () => void }) {
   const [org, setOrg] = useState("");
@@ -1117,13 +1391,6 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   // collapse it behind a button instead of always showing the full form, so
   // the common case (you already have an app) isn't buried under it.
   const [addAppOpen, setAddAppOpen] = useState(false);
-  // Ephemeral-runner default: auto-provision a short-lived server to pick up
-  // queued work when nothing persistent is online. Moved here from the GitHub
-  // Queue panel — it's account-level GitHub-App config, not per-queue state.
-  const [ephemeralKeys, setEphemeralKeys] = useState<ProviderKeyInfo[]>([]);
-  const [ephemeralDefault, setEphemeralDefault] = useState<EphemeralQueueDefault | null>(null);
-  const [ephemeralBusy, setEphemeralBusy] = useState(false);
-  const [ephemeralErr, setEphemeralErr] = useState<string | null>(null);
   const app = state.githubApp;
   const phase = app?.phase ?? "idle";
   // Identity for list keys and per-row busy/error state. Hooks created before
@@ -1209,8 +1476,6 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
     if (!canQuery) return;
     controller.fetchGithubApp().then(setInfo).catch(() => setInfo(null));
     controller.listNodes().then(setNodes).catch(() => {});
-    controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
-    controller.getEphemeralQueueDefault().then(setEphemeralDefault).catch(() => setEphemeralDefault(null));
   };
   useEffect(refresh, []);
   // Re-pull once the create flow reports success, so "connected" appears without
@@ -1228,21 +1493,6 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
 
   // The apps share the same routing copy; show the first one's handle as the example.
   const primaryMention = apps.find((a) => a.mention)?.mention;
-  const configuredProviders = ephemeralKeys.filter((k) => k.configured);
-  const defaultProviderConfigured = Boolean(
-    ephemeralDefault?.provider && ephemeralKeys.find((k) => k.id === ephemeralDefault.provider)?.configured,
-  );
-  const saveEphemeralDefault = async (patch: Partial<EphemeralQueueDefault>) => {
-    setEphemeralErr(null);
-    setEphemeralBusy(true);
-    try {
-      setEphemeralDefault(await controller.setEphemeralQueueDefault(patch));
-    } catch (e) {
-      setEphemeralErr(String((e as Error)?.message || e));
-    } finally {
-      setEphemeralBusy(false);
-    }
-  };
   const saveDefaultNode = async () => {
     setDefaultNodeMsg(null);
     setSavingDefaultNode(true);
@@ -1283,46 +1533,6 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
       setDisconnectingId(null);
     }
   };
-  const renderEphemeral = () => (
-    <>
-      <div className="settings-toggle-row">
-        <div className="settings-toggle-text">
-          <span className="settings-toggle-title">Auto-provision when nothing's online</span>
-          <span className="muted small">
-            Spin up a short-lived server from your saved provider token to pick up queued work when nothing
-            persistent is online, then tear it down.
-          </span>
-        </div>
-        <Toggle
-          checked={Boolean(ephemeralDefault?.enabled)}
-          disabled={ephemeralBusy || configuredProviders.length === 0}
-          onChange={(v) => saveEphemeralDefault({ enabled: v, provider: ephemeralDefault?.provider || configuredProviders[0]?.id })}
-          label="Auto-provision an ephemeral server when nothing's online"
-        />
-      </div>
-      {configuredProviders.length === 0 ? (
-        <p className="muted">Add a Fly.io or Hetzner token in Ephemeral settings to enable this.</p>
-      ) : (
-        ephemeralDefault?.enabled && (
-          <>
-            <select
-              className="picker-search"
-              value={ephemeralDefault.provider ?? ""}
-              onChange={(e) => saveEphemeralDefault({ provider: e.target.value })}
-            >
-              {configuredProviders.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            {!defaultProviderConfigured && (
-              <p className="muted">This device has no saved token for {ephemeralDefault.provider} — add one in Ephemeral settings to actually help out.</p>
-            )}
-            {ephemeralErr && <span className="chip err">{ephemeralErr}</span>}
-          </>
-        )
-      )}
-    </>
-  );
   const renderApp = (entry: GithubAppEntry) => (
     <div className="gh-connected" key={appKey(entry)}>
       <div className="gh-connected-head">
@@ -1501,24 +1711,7 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
               match the label that node serves (its name below, or whatever it was started with via <code>--node-label</code>).
               One setting for the whole account: it applies to every app above.
             </p>
-            {nodes.length > 0 ? (
-              <select className="picker-search" value={defaultNode} onChange={(e) => setDefaultNode(e.target.value)}>
-                <option value="">Shared queue (any online node)</option>
-                {nodes.map((n) => (
-                  <option key={n.id} value={n.name || n.id}>{n.name || n.id}</option>
-                ))}
-                {defaultNode && !nodes.some((n) => (n.name || n.id) === defaultNode) && (
-                  <option value={defaultNode}>{defaultNode}</option>
-                )}
-              </select>
-            ) : (
-              <input
-                className="picker-search"
-                value={defaultNode}
-                placeholder="node label, e.g. macbook"
-                onChange={(e) => setDefaultNode(e.target.value)}
-              />
-            )}
+            <NodeRouteSelect nodes={nodes} value={defaultNode} onChange={setDefaultNode} />
             <div className="row-actions">
               <button className="btn primary" disabled={savingDefaultNode} onClick={saveDefaultNode}>
                 {savingDefaultNode ? "Saving…" : "Save"}
@@ -1540,7 +1733,7 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
           {EPHEMERAL_MACHINES_ENABLED && (
             <section className="settings-section">
               <h4 className="settings-subhead">Ephemeral runner</h4>
-              {renderEphemeral()}
+              <EphemeralQueueDefaultSection />
             </section>
           )}
         </>
@@ -1569,7 +1762,6 @@ function NodesPanel({ state }: { state: AppState }) {
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
-  const [statsOpen, setStatsOpen] = useState(false);
   const currentNodeId = controller.local.cur;
 
   const reload = () => {
@@ -1620,6 +1812,7 @@ function NodesPanel({ state }: { state: AppState }) {
         sessionSync: form.sessionSync,
         worktreeSync: form.worktreeSync,
         syncStandbyNodeId: form.syncStandbyNodeId ?? "",
+        sessionResumeMode: form.sessionResumeMode,
       });
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
@@ -1641,43 +1834,33 @@ function NodesPanel({ state }: { state: AppState }) {
 
   return (
     <div className="settings-form">
-      <p className="muted settings-intro">
-        Per-node defaults for new sessions plus a cap on how many GitHub-triggered sessions run at once.
-        {hosted ? " Settings apply to the node you're connected to — pick another below to edit it." : ""}
-      </p>
-
-      <div className="row-actions">
-        <button className="btn" onClick={() => setStatsOpen(true)}>
-          View node stats →
-        </button>
-      </div>
-      {statsOpen && <StatsPanel onClose={() => setStatsOpen(false)} />}
-
       {hosted && (
         <section className="settings-section">
-          <h4 className="settings-subhead">Node</h4>
-          <div className="picker-list">
-            {nodes.length === 0 && <div className="picker-empty">No nodes found.</div>}
+          <label className="field-label" htmlFor="node-settings-node">Node</label>
+          <select
+            id="node-settings-node"
+            className="picker-search"
+            value={currentNodeId ?? ""}
+            disabled={nodes.length === 0}
+            onChange={(e) => {
+              const nodeId = e.target.value;
+              if (!nodeId || nodeId === currentNodeId) return;
+              controller.switchNode(nodeId);
+              // Don't show the outgoing node's settings a moment longer than
+              // necessary. The effect above pulls the new node's settings
+              // once the transport actually confirms it's online — no fixed
+              // timeout guess, and no window where a picked *offline* node
+              // would keep displaying whatever was left over from before.
+              setForm(null);
+            }}
+          >
+            {nodes.length === 0 && <option value="">No nodes found</option>}
             {nodes.map((n) => (
-              <PickerItem
-                key={n.id}
-                active={n.id === currentNodeId}
-                title={n.name || n.id}
-                meta={n.online ? "Online" : "Offline"}
-                right={n.id === currentNodeId ? <span className="chip ok">Editing</span> : undefined}
-                onClick={() => {
-                  if (n.id === currentNodeId) return;
-                  controller.switchNode(n.id);
-                  // Don't show the outgoing node's settings a moment longer than
-                  // necessary. The effect above pulls the new node's settings
-                  // once the transport actually confirms it's online — no fixed
-                  // timeout guess, and no window where a picked *offline* node
-                  // would keep displaying whatever was left over from before.
-                  setForm(null);
-                }}
-              />
+              <option key={n.id} value={n.id}>
+                {n.name || n.id}{n.online ? "" : " (offline)"}
+              </option>
             ))}
-          </div>
+          </select>
         </section>
       )}
 
@@ -1790,6 +1973,32 @@ function NodesPanel({ state }: { state: AppState }) {
           </section>
 
           <section className="settings-section">
+            <h4 className="settings-subhead">Session resume</h4>
+            <label className="field-label">After a restart interrupts a session</label>
+            <div className="seg-row">
+              {([
+                { id: "auto", label: "Auto-resume", hint: "The agent automatically continues the interrupted turn when the node restarts." },
+                { id: "manual", label: "Manual", hint: "The interrupted session waits and offers a one-tap Resume when you open it." },
+              ] as const).map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  className={`seg-btn${form.sessionResumeMode === o.id ? " active" : ""}`}
+                  onClick={() => setForm({ ...form, sessionResumeMode: o.id })}
+                  title={o.hint}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <p className="muted small">
+              {form.sessionResumeMode === "manual"
+                ? "Interrupted sessions wait for you to tap Resume — nothing runs on its own. GitHub issue automation still resumes automatically."
+                : "The agent picks up an interrupted turn on its own after the node restarts."}
+            </p>
+          </section>
+
+          <section className="settings-section">
             <h4 className="settings-subhead">Session sync</h4>
             <div className="settings-toggle-row">
               <div className="settings-toggle-text">
@@ -1876,17 +2085,28 @@ const EPHEMERAL_TTL_OPTIONS = [
 
 function EphemeralPanel() {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
-  const [provider, setProvider] = useState<string | null>(null);
+  const [setups, setSetups] = useState<EphemeralSetup[]>([]);
+  // Which machine we've drilled into to edit. `setupId: null` = a fresh machine
+  // for that provider; a string = editing an existing one. `null` nav = the
+  // list view.
+  const [nav, setNav] = useState<{ provider: string; setupId: string | null } | null>(null);
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys).catch(() => {});
-  useEffect(() => { refreshKeys(); }, []);
+  const refreshSetups = () => controller.listEphemeralSetups().then(setSetups).catch(() => {});
+  useEffect(() => { refreshKeys(); refreshSetups(); }, []);
 
-  const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === provider);
-  if (catalog) {
+  const catalog = nav ? EPHEMERAL_PROVIDERS.find((p) => p.id === nav.provider) : undefined;
+  if (nav && catalog) {
     return (
       <div className="settings-form">
-        <button className="link-btn" onClick={() => setProvider(null)}>‹ All providers</button>
+        <button className="link-btn" onClick={() => { setNav(null); refreshSetups(); refreshKeys(); }}>‹ Ephemeral machines</button>
         <h3>{catalog.name}</h3>
-        <EphemeralProviderConfig providerId={catalog.id} onKeysChanged={refreshKeys} />
+        <EphemeralProviderConfig
+          providerId={catalog.id}
+          initialSetupId={nav.setupId}
+          onKeysChanged={refreshKeys}
+          onSetupsChanged={refreshSetups}
+          onBack={() => { setNav(null); refreshSetups(); refreshKeys(); }}
+        />
       </div>
     );
   }
@@ -1894,10 +2114,30 @@ function EphemeralPanel() {
   return (
     <div className="settings-form">
       <p className="muted settings-intro">
-        Bring your own cloud token to spin up temporary nodes that self-destruct at their TTL. Configure each provider
-        here — its token and the default region, size, and auto-destroy time — and the new-session “Ephemeral machine”
-        launcher pre-fills them.
+        Bring your own cloud token to spin up temporary nodes that self-destruct at their TTL. Each configured machine
+        below is a saved setup — its provider, region, server type and auto-destroy time — that the new-session node
+        picker offers to launch. The repo it works on comes from the composer, not from here. Tap one to edit it.
       </p>
+      {setups.length > 0 && (
+        <>
+          <label className="field-label">Configured machines</label>
+          <div className="picker-list">
+            {setups.map((setup) => {
+              const p = EPHEMERAL_PROVIDERS.find((x) => x.id === setup.provider);
+              return (
+                <PickerItem
+                  key={setup.id}
+                  title={setup.name}
+                  meta={[p?.name, setup.region, setup.size, setup.teardownOnAgentFinish ? "until agent finishes" : setup.ttlMinutes ? `${setup.ttlMinutes} min` : null].filter(Boolean).join(" · ")}
+                  right={<span className="chip">Edit</span>}
+                  onClick={() => setNav({ provider: setup.provider, setupId: setup.id })}
+                />
+              );
+            })}
+          </div>
+        </>
+      )}
+      <label className="field-label">{setups.length > 0 ? "Add a machine" : "Choose a provider"}</label>
       <div className="picker-list">
         {EPHEMERAL_PROVIDERS.map((p) => {
           const k = keys.find((x) => x.id === p.id);
@@ -1907,7 +2147,7 @@ function EphemeralPanel() {
               title={p.name}
               meta={p.blurb}
               right={k?.configured ? <span className="chip ok">Token saved</span> : <span className="chip">Not set up</span>}
-              onClick={() => setProvider(p.id)}
+              onClick={() => setNav({ provider: p.id, setupId: null })}
             />
           );
         })}
@@ -2013,7 +2253,7 @@ function EphemeralModelKeys() {
   );
 }
 
-function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: string; onKeysChanged: () => void }) {
+function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, onSetupsChanged, onBack }: { providerId: string; initialSetupId: string | null; onKeysChanged: () => void; onSetupsChanged: () => void; onBack: () => void }) {
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === providerId)!;
   const adapter = ephemeralAdapter(providerId)!;
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
@@ -2023,7 +2263,12 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
   const [sizes, setSizes] = useState<ProviderSize[]>(adapter.sizes);
   const [size, setSize] = useState(adapter.defaultSize);
   const [ttl, setTtl] = useState(60);
-  const [repo, setRepo] = useState("");
+  const [teardownOnAgentFinish, setTeardownOnAgentFinish] = useState(false);
+  // The single machine being edited: `null` = a brand-new one. The list of all
+  // configured machines lives one level up in EphemeralPanel, so this view is
+  // just the editor — never a mix of a list plus an always-open form.
+  const [setupId, setSetupId] = useState<string | null>(null);
+  const [setupName, setSetupName] = useState("");
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -2033,19 +2278,25 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
 
   const refreshMachines = () =>
     controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId))).catch(() => {});
+  const editSetup = (setup: EphemeralSetup | null) => {
+    setSetupId(setup?.id ?? null);
+    setSetupName(setup?.name ?? "");
+    setRegion(setup?.region || adapter.defaultRegion);
+    setSize(setup?.size || adapter.defaultSize);
+    setTtl(setup?.ttlMinutes ?? 60);
+    setTeardownOnAgentFinish(setup?.teardownOnAgentFinish === true);
+  };
 
-  // Seed the form from the saved token + preferences for this provider.
+  // Seed the form from the saved token + the machine we drilled in to edit (or a
+  // blank form when adding).
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
-    controller.getEphemeralPrefs(providerId).then((p: EphemeralPrefs) => {
-      if (p.region) setRegion(p.region);
-      if (p.size) setSize(p.size);
-      if (typeof p.ttlMinutes === "number") setTtl(p.ttlMinutes);
-      if (p.repo) setRepo(p.repo);
+    controller.listEphemeralSetups(providerId).then((rows) => {
+      editSetup(initialSetupId ? rows.find((s) => s.id === initialSetupId) ?? null : null);
     }).catch(() => {});
     refreshMachines();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerId]);
+  }, [providerId, initialSetupId]);
 
   // Once a token is saved, swap the static catalog for the provider's live,
   // non-deprecated sizes for the chosen region (mirrors the launch sheet).
@@ -2081,7 +2332,15 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
     if (busy) return;
     setBusy(true);
     try {
-      await controller.setEphemeralPrefs(providerId, { region, size, ttlMinutes: ttl, repo: repo.trim() || null });
+      // Repo isn't a machine setting — it comes from the new-session composer at
+      // launch time — so clear any legacy value rather than carry it here.
+      const values = { name: setupName.trim(), region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: null };
+      if (setupId) await controller.updateEphemeralSetup(setupId, values);
+      else {
+        const created = await controller.createEphemeralSetup(providerId, values);
+        setSetupId(created.id);
+      }
+      onSetupsChanged();
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
     } catch (e) {
@@ -2121,8 +2380,13 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
       ) : (
         <>
           <p className="muted">
-            Token saved on this device. Set the defaults new machines launch with — you can still change them per launch.
+            {setupId
+              ? "Edit this machine. It stays in the new-session launcher like an offline node even after its machine expires."
+              : "Name this machine and set its defaults. It'll stay in the new-session launcher like an offline node even after its machine expires."}
           </p>
+          <label className="field-label">Machine name</label>
+          <input className="picker-search" value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder="e.g. EU coding node" />
+
           <label className="field-label">Region</label>
           <select className="picker-search" value={region} onChange={(e) => setRegion(e.target.value)}>
             {adapter.regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
@@ -2133,17 +2397,30 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
             {sizes.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
 
-          <label className="field-label">Auto-destroy after</label>
+          <label className="field-label">Auto-destroy after (TTL)</label>
           <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
             {EPHEMERAL_TTL_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
           </select>
 
-          <label className="field-label">Repo (optional, owner/name)</label>
-          <input className="picker-search" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo" />
+          <label className="field-label">Work until finished</label>
+          <label className="checkbox-row">
+            <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
+            <span>Destroy the machine once the agent finishes its work <span className="muted small">(the TTL above stays a safety fallback; the launching device must be online)</span></span>
+          </label>
+
+          <p className="muted small">The repo this machine works on is whatever you pick in the new-session composer — it isn't set here.</p>
 
           <div className="row-actions">
-            <button className="btn primary" disabled={busy} onClick={savePrefs}>{busy ? "Saving…" : "Save preferences"}</button>
+            <button className="btn primary" disabled={busy || !setupName.trim()} onClick={savePrefs}>{busy ? "Saving…" : setupId ? "Save machine" : "Create machine"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
+            {setupId && (
+              <button className="btn danger-ghost" onClick={() => setConfirm({
+                title: "Remove machine?",
+                message: `Remove ${setupName}? Running machines are not affected.`,
+                label: "Remove",
+                action: () => controller.removeEphemeralSetup(setupId).then(() => { onSetupsChanged(); onBack(); }),
+              })}>Remove machine</button>
+            )}
             <button
               className="btn danger-ghost"
               onClick={() => setConfirm({

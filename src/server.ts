@@ -8,7 +8,12 @@ import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypt
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
-import { listRuntimes, catalogRuntimes, type AgentCommand, type AgentRuntime, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { listRuntimes, catalogRuntimes, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
+import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
+import { SessionRerouteController } from "./policy/session-reroute.js";
+import { listRulesetInfos, upsertRuleset, removeRuleset, activeRulesetFor } from "./runtime/ruleset-store.js";
+import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
 import { RemoteRuntime, RemoteRuntimeSession } from "./runtime/remote.js";
@@ -65,6 +70,7 @@ import {
   resolveGitHubTaskConfig,
   buildTaskPrompt,
   buildResumePrompt,
+  buildInteractiveResumePrompt,
   DEFAULT_ISSUE_INSTRUCTIONS,
   parseBivyDirectives,
   commitAll,
@@ -82,6 +88,7 @@ import {
   listOpenLabelledIssues,
   selectActionableIssues,
   getIssue,
+  getIssueCommentBody,
   addLabel,
   removeLabel,
   announcePickup,
@@ -96,6 +103,8 @@ import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
 import { buildForkBundle, materializeFork, type ForkBundle, type ForkRecord, type ForkPlan } from "./session/fork.js";
 import { captureDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
+import { normalizeMessages } from "./session/transcript-normal.js";
+import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog } from "./session/event-log.js";
 import { ReplicationService } from "./session/replication-service.js";
 import type { ReplWireFrame } from "./session/replicator.js";
@@ -137,6 +146,7 @@ import {
   ControlPlaneTaskPoller,
   resolveControlPlaneTaskConfig,
   type WorkItem as ControlPlaneWorkItem,
+  type EvidencePatch,
 } from "./control-plane-tasks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -343,6 +353,49 @@ async function persistLocalModelRemove(id: string): Promise<void> {
   void pushModelAuthToControlPlane().catch(() => {});
   await broadcastLocalModels();
 }
+
+// --- Rulesets (run-orchestration policy; docs/rulesets.md). --------------------
+// Bivy owns the ruleset registry (ruleset-store.ts); it is node-local, not
+// synced through the credential envelope, because policy is per-machine. One
+// ruleset may be ACTIVE — the work-queue effector consults it (activeQueueRuleset
+// below), falling back to the built-in DEFAULT_RULESET when none is active.
+const rulesetsDir = appDir;
+
+function rulesetInfos() {
+  return listRulesetInfos(rulesetsDir);
+}
+
+/** Re-emit the ruleset list to every connected client (relay + direct). */
+function broadcastRulesets(): void {
+  broadcast({ type: "rulesets.list", rulesets: rulesetInfos() });
+}
+
+/** Save (validate + store) a ruleset; `active` optionally (de)selects it as the
+ *  queue's active ruleset. Returns the stored name. */
+function persistRulesetSave(input: unknown, active?: boolean): { name: string } {
+  const result = upsertRuleset(rulesetsDir, input, active);
+  broadcastRulesets();
+  return result;
+}
+
+function persistRulesetRemove(name: string): void {
+  removeRuleset(rulesetsDir, name);
+  broadcastRulesets();
+}
+
+/** The ruleset the work queue should run under right now: the user's active
+ *  ruleset if it applies to the queue, else undefined (→ DEFAULT_RULESET). Read
+ *  lazily on each decision so edits in the UI take effect without a restart. */
+function activeQueueRuleset(): Ruleset | undefined {
+  return activeRulesetFor(rulesetsDir, "queue");
+}
+
+// The queue effector's policy. Thin wrapper so a freshly-saved active ruleset is
+// picked up on the next failed attempt — createRunPolicy is stateless/cheap and
+// failures are rare, so rebuilding per decision costs nothing meaningful.
+const queueRunPolicy: RunPolicy = {
+  decide: (ctx) => createRunPolicy({ context: "queue", ruleset: activeQueueRuleset() }).decide(ctx),
+};
 // Bivy is distributed on npm, so "is there a newer version?" is a registry
 // question. Overridable for self-hosted or mirrored registries.
 const updateRegistryUrl = process.env.BIVY_UPDATE_REGISTRY_URL ?? "https://registry.npmjs.org/bivy/latest";
@@ -359,7 +412,9 @@ const metadata = MetadataStore.load(appDir);
 // A fresh process has no live runtimes, so any persisted "working" status is
 // stale from a prior crash/kill. Clear it at boot; otherwise those sessions'
 // worktrees are permanently exempted from cleanup (an unbounded disk leak).
-metadata.resetStaleWorking();
+// The ids it returns are exactly the sessions cut off mid-turn by the death —
+// the resume reconciler (reconcileInterruptedSessions) picks them up.
+const interruptedSessionIds = metadata.resetStaleWorking();
 const defaultWorkspace = process.env.BIVY_WORKSPACE ?? repoRoot;
 // Where repo-backed sessions clone GitHub repos (one checkout per repo, reused).
 const reposRoot = process.env.BIVY_REPOS_DIR ?? path.join(appDir, "repos");
@@ -531,6 +586,40 @@ const terminals = new TerminalManager();
 // and fixed for that session's life; switching agents in the UI starts a new one.
 let defaultRuntimeId = (process.env.BIVY_RUNTIME ?? "pi").toLowerCase();
 const runtimeHost = new RuntimeHost({ credsDir, piDir, sessionsDir });
+
+// In-session model reroute (docs/rulesets.md). Opt-in: set
+// BIVY_SESSION_MODEL_FALLBACK to a comma-separated model list and a session that
+// hits an exhausted-credits / rate-limit turn error swaps down the list (via the
+// runtime's live setModel) and retries, instead of surfacing the error. Absent =
+// inert, session behavior unchanged.
+function sessionModelFallbackRuleset(): Ruleset | undefined {
+  const models = (process.env.BIVY_SESSION_MODEL_FALLBACK ?? "")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
+  if (!models.length) return undefined;
+  return {
+    version: 1,
+    name: "session-model-fallback",
+    appliesTo: ["session"],
+    rules: [
+      {
+        when: ["credits_exhausted", "rate_limited"],
+        action: "reroute",
+        maxAttempts: models.length + 1,
+        chain: models.map((model) => ({ model })),
+        onExhausted: "give_up",
+        backoff: DEFAULT_BACKOFF,
+      },
+    ],
+  };
+}
+const sessionRuleset = sessionModelFallbackRuleset();
+const sessionRunPolicy = sessionRuleset ? createRunPolicy({ ruleset: sessionRuleset, context: "session" }) : undefined;
+if (sessionRunPolicy) {
+  console.log(`[policy] in-session model reroute enabled: ${process.env.BIVY_SESSION_MODEL_FALLBACK}`);
+}
+
 let lastUpdateCheckAt = 0;
 let updateNoticeSentFor = "";
 
@@ -796,7 +885,7 @@ let relay: RelayConnector | undefined;
 const clients = new Set<WebSocket>();
 const commandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const oauthLogins = new Map<string, OAuthLoginState>();
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -810,6 +899,9 @@ type CreateSessionOptions = {
   runtimeId?: string;
   /** Per-session sandbox tier override; defaults to the node's configured tier. */
   sandbox?: SandboxTier;
+  /** Per-session approval-mode override (e.g. a scheduled automation's default);
+   *  defaults to the node's configured approval mode. */
+  approvalMode?: ApprovalMode;
   /** Throwaway session (e.g. the model-picker scratch): kept in memory for reuse
    *  but never persisted to metadata while it stays empty, so it can't leave an
    *  "untitled"/empty row behind. */
@@ -1182,6 +1274,10 @@ type NodeSettings = {
   sessionSync: boolean;
   worktreeSync: boolean;
   syncStandbyNodeId?: string;
+  /** How an interactive session whose turn was cut off by a restart recovers:
+   *  "auto" re-drives the interrupted turn on boot; "manual" leaves it for the
+   *  user to resume with one tap. Issue automation always auto-resumes regardless. */
+  sessionResumeMode: "auto" | "manual";
 };
 
 /** The node's default model for new sessions, or null (= use the runtime default). */
@@ -1190,6 +1286,24 @@ function nodeDefaultModel(): { provider: string; id: string } | null {
   const provider = String(m?.provider ?? "").trim();
   const id = String(m?.id ?? "").trim();
   return provider && id ? { provider, id } : null;
+}
+
+/** The agent GitHub-issue pickups should default to when the issue body carries
+ *  no `bivy-agent:` directive and no manual "Run…" override — i.e. the persisted
+ *  Settings → Nodes → "Default agent" value. Falls back to the boot-time
+ *  `defaultRuntimeId` when never configured. Crucially this reads the persisted
+ *  `settings.defaultAgent` rather than the mutable `defaultRuntimeId` global,
+ *  which the web UI overwrites with the *last used* agent on every
+ *  `runtime.select`. Mirrors `nodeSettingsSnapshot().defaultAgent`. */
+function nodeConfiguredDefaultAgent(): string {
+  const s = readSettings();
+  return typeof s.defaultAgent === "string" && s.defaultAgent.trim() ? s.defaultAgent.trim() : defaultRuntimeId;
+}
+
+/** How interactive sessions recover after a restart interrupted them mid-turn.
+ *  Defaults to "auto" (re-drive the turn); "manual" waits for a user tap. */
+function nodeSessionResumeMode(): "auto" | "manual" {
+  return readSettings().sessionResumeMode === "manual" ? "manual" : "auto";
 }
 
 /** Max concurrent GitHub-queue sessions this node runs at once (0 = unlimited). */
@@ -1222,6 +1336,7 @@ function nodeSettingsSnapshot(): NodeSettings {
       const v = readSettings().syncStandbyNodeId;
       return typeof v === "string" && v.trim() ? v.trim() : undefined;
     })(),
+    sessionResumeMode: nodeSessionResumeMode(),
   };
 }
 
@@ -1271,6 +1386,9 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   if ("syncStandbyNodeId" in patch) {
     const v = typeof patch.syncStandbyNodeId === "string" ? patch.syncStandbyNodeId.trim() : "";
     settings.syncStandbyNodeId = v || undefined;
+  }
+  if ("sessionResumeMode" in patch) {
+    settings.sessionResumeMode = patch.sessionResumeMode === "manual" ? "manual" : "auto";
   }
   writeSettings(settings);
   const snapshot = nodeSettingsSnapshot();
@@ -1560,6 +1678,8 @@ interface RunTerminalSpec {
   workspace?: string;
   cols?: number;
   rows?: number;
+  /** Stable id of the client launching/attaching, for per-client PTY sizing. */
+  clientId?: string;
   /** Session id pinned at launch (e.g. `claude --session-id <uuid>`), if any. */
   sessionId?: string;
 }
@@ -1585,7 +1705,7 @@ async function openRunTerminal(spec: RunTerminalSpec, emit: (event: unknown) => 
   if (spec.mux) {
     const existing = runTerminalForMux(spec.mux);
     if (existing) {
-      if (spec.cols !== undefined || spec.rows !== undefined) terminals.resize(existing, spec.cols || 80, spec.rows || 24);
+      if (spec.clientId && (spec.cols !== undefined || spec.rows !== undefined)) terminals.setClientSize(existing, spec.clientId, spec.cols || 80, spec.rows || 24);
       emit({ type: "terminal.attached", termId: existing, data: terminals.snapshot(existing) ?? "" });
       return existing;
     }
@@ -1626,6 +1746,7 @@ async function openRunTerminal(spec: RunTerminalSpec, emit: (event: unknown) => 
       env: { ...credentialEnv, ...(spec.agent === "pi" ? { BIVY_WORKSPACE: workspace } : {}) },
       cols: spec.cols,
       rows: spec.rows,
+      clientId: spec.clientId,
       meta: { kind: "run", agent: spec.agent, model: spec.model, label, name, autoName: !explicitName && !spec.mux, command: commandLine, mux: spec.mux, sessionId: spec.sessionId },
       onData: (data) => {
         // Raw bytes go only to the sockets attached to this run-terminal (+ the
@@ -1691,6 +1812,17 @@ const TAKEOVER_RUNTIME_BY_AGENT: Record<string, string> = {
 const RESUME_CLI_BY_AGENT: Record<string, (id: string) => string> = {
   claude: (id) => `claude --resume ${id}`,
   codex: (id) => `codex resume ${id}`,
+};
+
+// Same commands, keyed by runtime id instead of the short takeover agent alias
+// above — for native session discovery (issue #156), where a session with a
+// live external process can't be safely imported (no channel to take over a
+// process Bivy doesn't own) but is still "offered follow/read-only... per
+// provider capability": the exact command to attach to it themselves, in
+// their own terminal, without Bivy touching it.
+const NATIVE_RESUME_CLI_BY_RUNTIME: Record<string, (id: string) => string> = {
+  "claude-code-sdk": (id) => `claude --resume ${id}`,
+  "codex-approvals": (id) => `codex resume ${id}`,
 };
 
 // When no resumable session id can be found, why — and what to do about it.
@@ -1771,6 +1903,11 @@ function handleTerminalMessage(
   msg: { kind?: string; termId?: unknown; data?: unknown; cols?: unknown; rows?: unknown; workspace?: unknown; sessionId?: unknown; agent?: unknown; label?: unknown; name?: unknown; model?: unknown; command?: unknown; args?: unknown; mux?: unknown; standalone?: unknown },
   emit: (event: unknown) => void,
   owned: Set<string>,
+  // Stable id for the transport (socket/relay) this message arrived on. A shared
+  // PTY is sized to the min over all attached clients, keyed by this id, so a
+  // second client attaching at a different window size can't reflow the first
+  // client's TUI. See TerminalManager.setClientSize.
+  clientId: string,
   viewRun?: (termId: string) => void,
 ): boolean {
   switch (msg.kind) {
@@ -1815,6 +1952,7 @@ function handleTerminalMessage(
         workspace: typeof msg.workspace === "string" && msg.workspace ? msg.workspace : undefined,
         cols: Number(msg.cols) || undefined,
         rows: Number(msg.rows) || undefined,
+        clientId,
         sessionId: typeof msg.sessionId === "string" && msg.sessionId ? msg.sessionId : undefined,
       }, emit).then((runId) => { if (runId) viewRun?.(runId); });
       return true;
@@ -1836,6 +1974,7 @@ function handleTerminalMessage(
         mux: `${kind}:${name}`,
         cols: Number(msg.cols) || undefined,
         rows: Number(msg.rows) || undefined,
+        clientId,
       }, emit).then((muxId) => { if (muxId) viewRun?.(muxId); });
       return true;
     }
@@ -1858,6 +1997,7 @@ function handleTerminalMessage(
           workspace,
           cols: Number(msg.cols) || undefined,
           rows: Number(msg.rows) || undefined,
+          clientId,
           onData: (data) => emit({ type: "terminal.output", termId: id, data }),
           onBell: () => maybeNotifyBell(id),
           onExit: (code) => {
@@ -1891,7 +2031,7 @@ function handleTerminalMessage(
           if (snapshot != null) {
             owned.add(record.tuiTermId);
             if (typeof msg.cols !== "undefined" || typeof msg.rows !== "undefined") {
-              terminals.resize(record.tuiTermId, Number(msg.cols) || 80, Number(msg.rows) || 24);
+              terminals.setClientSize(record.tuiTermId, clientId, Number(msg.cols) || 80, Number(msg.rows) || 24);
             }
             emit({ type: "terminal.attached", termId: record.tuiTermId, data: snapshot });
             return;
@@ -1911,6 +2051,7 @@ function handleTerminalMessage(
             env: spec.env,
             cols: Number(msg.cols) || undefined,
             rows: Number(msg.rows) || undefined,
+            clientId,
             onData: (data) => emit({ type: "terminal.output", termId: id, data }),
             onExit: (code) => {
               owned.delete(id);
@@ -1971,7 +2112,7 @@ function handleTerminalMessage(
           if (viewRun && runTerminals.has(msg.termId)) viewRun(msg.termId);
           else owned.add(msg.termId);
           if (typeof msg.cols !== "undefined" || typeof msg.rows !== "undefined") {
-            terminals.resize(msg.termId, Number(msg.cols) || 80, Number(msg.rows) || 24);
+            terminals.setClientSize(msg.termId, clientId, Number(msg.cols) || 80, Number(msg.rows) || 24);
           }
           emit({ type: "terminal.attached", termId: msg.termId, data: snapshot });
         } else {
@@ -1986,7 +2127,13 @@ function handleTerminalMessage(
       if (typeof msg.termId === "string" && typeof msg.data === "string") terminals.write(msg.termId, msg.data);
       return true;
     case "terminal.resize":
-      if (typeof msg.termId === "string") terminals.resize(msg.termId, Number(msg.cols) || 80, Number(msg.rows) || 24);
+      if (typeof msg.termId === "string") terminals.setClientSize(msg.termId, clientId, Number(msg.cols) || 80, Number(msg.rows) || 24);
+      return true;
+    case "terminal.detach":
+      // A client stopped viewing this terminal but kept its transport open (e.g.
+      // navigated away from a shared run-terminal). Forget its size so the PTY
+      // grows back to the min of whoever is still attached.
+      if (typeof msg.termId === "string") terminals.dropClientSize(msg.termId, clientId);
       return true;
     case "terminal.close":
       if (typeof msg.termId === "string") {
@@ -2331,6 +2478,17 @@ const sessionNewDedupe = createSessionNewDedupe<SessionRecord>();
 const dedupeSessionNew = (requestId: string | undefined, create: () => Promise<SessionRecord>) =>
   sessionNewDedupe.run(requestId, create);
 
+// Idempotency for `prompt`, keyed by the client's clientMessageId (the same
+// generic key->promise cache as above, reused for a different key) — see
+// issue #154's queued follow-ups. A client that isn't sure whether a queued
+// item's send actually reached the node before the socket dropped (see
+// AppController.retryStuckFollowups) resends it verbatim after reconnecting;
+// this makes that safe by collapsing a retried clientMessageId onto the
+// original broadcast + turn instead of double-prompting the runtime.
+const promptDedupe = createSessionNewDedupe<void>();
+const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<void>) =>
+  promptDedupe.run(clientMessageId, run);
+
 const RELAY_COMMANDS: Record<string, Command> = {
   ping(msg, ctx) {
     ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
@@ -2659,6 +2817,51 @@ const RELAY_COMMANDS: Record<string, Command> = {
     // A reconnecting/opening client missed the one-shot card broadcast; put
     // any still-pending question/approval back so it can be answered.
     replayPendingInteractions(record.id);
+    // Manual resume mode: a turn this session was running when the node restarted
+    // was left for the user to continue. Offer a one-tap Resume next to the
+    // restored transcript (the marker is cleared once any turn completes).
+    if (metadata.getSession(record.id)?.resumePending) {
+      relay?.sendEvent({
+        type: "session.notice",
+        sessionId: record.id,
+        level: "info",
+        message: "This session was interrupted by a restart before its last turn finished.",
+        action: "/resume",
+      });
+    }
+  },
+  // Provider-native session discovery/adoption (issue #156) — the relay-mode
+  // twin of GET /api/sessions/discover / POST /api/sessions/import, so the
+  // hosted app (app.bivy.sh) gets the same capability-driven flow as a
+  // directly-connected node. Bounded metadata only — no transcript content
+  // rides either message.
+  async "session.discover"(msg, ctx) {
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+    try {
+      const sessions = await listDiscoverableSessions();
+      ctx.reply({ type: "session.discover.result", requestId, sessions });
+    } catch (error) {
+      ctx.reply({ type: "session.discover.error", requestId, error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async "session.import"(msg, ctx) {
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+    const runtimeId = String(msg.runtimeId ?? "").trim();
+    const ref = String(msg.ref ?? "").trim();
+    if (!runtimeId || !ref) {
+      ctx.reply({ type: "session.import.error", requestId, error: "runtimeId and ref are required" });
+      return;
+    }
+    try {
+      const result = await importNativeSession(runtimeId, ref, { acceptDisclosure: Boolean(msg.acceptDisclosure) });
+      if (!result.ok) {
+        ctx.reply({ type: "session.import.error", requestId, error: result.error, needsDisclosure: result.needsDisclosure, disclosure: result.disclosure });
+        return;
+      }
+      ctx.reply({ type: "session.import.result", requestId, sessionId: result.record.id, runtimeId: result.record.runtimeId, mode: result.plan.mode, seedPrompt: result.seedPrompt });
+    } catch (error) {
+      ctx.reply({ type: "session.import.error", requestId, error: error instanceof Error ? error.message : String(error) });
+    }
   },
   approval(msg, ctx) {
     const id = String(msg.id ?? "");
@@ -2870,6 +3073,28 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
+  // --- Rulesets (run-orchestration policy; Bivy-owned, node-local). ---
+  "rulesets.list"(_msg, ctx) {
+    ctx.reply({ type: "rulesets.list", rulesets: rulesetInfos() });
+  },
+  "rulesets.save"(msg, ctx) {
+    try {
+      const active = typeof (msg as any).active === "boolean" ? (msg as any).active : undefined;
+      persistRulesetSave((msg as any)?.ruleset ?? msg, active);
+      // Dedicated per-request ack — see the provider.apiKey/models.custom.save comments (#140).
+      ctx.reply({ type: "rulesets.save.ok", requestId: msg.requestId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.reply({ type: "rulesets.save.error", requestId: msg.requestId, error: message });
+    }
+  },
+  "rulesets.remove"(msg) {
+    try {
+      persistRulesetRemove(String((msg as any).name ?? ""));
+    } catch (error) {
+      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
   async "stt.config.get"() {
     try {
       relay?.sendEvent({ type: "stt.config", ...(await getSttConfig(appDir)) });
@@ -3042,10 +3267,18 @@ const RELAY_COMMANDS: Record<string, Command> = {
       [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
       (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
     const agentPrompt = promptForAgent(record, promptText);
-    broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: msg.clientMessageId });
-    void maybeNameSession(record, promptText);
-    harnessBeginTurn(record);
-    void record.session.prompt(agentPrompt, promptOptionsFor(record, msg.streamingBehavior, images)).catch((error) => {
+    const cmid = typeof msg.clientMessageId === "string" && msg.clientMessageId ? msg.clientMessageId : undefined;
+    void dedupePrompt(cmid, async () => {
+      broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: msg.clientMessageId });
+      void maybeNameSession(record, promptText);
+      harnessBeginTurn(record);
+      // Capture the turn's prompt so an in-session model reroute can re-drive it
+      // on a fallback model, and reset the per-turn reroute budget.
+      record.lastPrompt = agentPrompt;
+      record.lastPromptOptions = promptOptionsFor(record, msg.streamingBehavior, images);
+      record.reroute?.beginTurn();
+      await record.session.prompt(agentPrompt, record.lastPromptOptions);
+    }).catch((error) => {
       // Mirror the HTTP path (see the /prompt route): a rejected turn after
       // the runtime marked the session working emits no agent_end, so without
       // this the relay client (PWA) is stranded on "Working…" forever with
@@ -3117,7 +3350,10 @@ const RELAY_COMMANDS: Record<string, Command> = {
         targetRuntimeId: agentFrom(msg) ?? bundle.record.runtimeId,
         model: modelFrom(msg),
         transcriptUrl: typeof msg.transcriptUrl === "string" ? msg.transcriptUrl : undefined,
-        worktree: "adopt",
+        // Cross-agent forks can use this import handler without changing
+        // nodes. In that case the source branch is already checked out here,
+        // so cut an independent fork branch instead of trying to adopt it.
+        worktree: msg.sameNode === true ? "fresh" : "adopt",
         detectPrereqs: true,
       });
       if (!outcome.ok) {
@@ -3242,6 +3478,9 @@ const RELAY_COMMANDS: Record<string, Command> = {
 // encrypted relay channel; `broadcast` reaches all clients (local + relay).
 const relayCtx: CommandCtx = { reply: (event) => relay?.sendEvent(event), broadcast };
 
+// Shared per-client size slot for all relay-tunneled clients (see below).
+const RELAY_CLIENT_ID = "relay";
+
 async function handleRelayMessage(msg: ClientMessage) {
   try {
     const command = RELAY_COMMANDS[msg.kind];
@@ -3252,7 +3491,11 @@ async function handleRelayMessage(msg: ClientMessage) {
     // Fallthrough for kinds not in RELAY_COMMANDS: terminal.* frames go to the
     // PTY manager; anything else is an unknown client message.
     if (typeof msg.kind === "string" && msg.kind.startsWith("terminal.")) {
-      handleTerminalMessage(msg, (event) => relay?.sendEvent(event), relayTerminals);
+      // The relay is a single tunnel with no per-remote-client identity at this
+      // layer, so every relay-tunneled client shares one size slot. That still
+      // keeps them distinct from each local socket, so a PTY shared between a
+      // local terminal and a relay-attached app is sized to their min.
+      handleTerminalMessage(msg, (event) => relay?.sendEvent(event), relayTerminals, RELAY_CLIENT_ID);
       return;
     }
     console.warn("[relay] unknown client message kind:", msg.kind);
@@ -3265,6 +3508,9 @@ function startRelayIfConfigured() {
   const config = loadRelayConfig(appDir);
   if (!config) return false;
   relay?.stop();
+  // Reconnecting drops any remote clients the old tunnel carried; release the
+  // shared relay size slot so local PTYs it may have shrunk grow back.
+  terminals.dropClient(RELAY_CLIENT_ID);
   relay = new RelayConnector(config, (msg) => void handleRelayMessage(msg), {
     pairing: pairingStore,
     onWorkAvailable: () => controlPlanePoller?.poke(),
@@ -3982,6 +4228,10 @@ function withIssueLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 interface RunIssueOverrides {
   runtimeId?: string;
   model?: string;
+  /** Issue #153 — forward a sanitized evidence patch to the hosted control
+   *  plane's run-evidence endpoint. Only set for control-plane-dispatched runs
+   *  (self-hosted direct GitHub polling has no control-plane run to attach to). */
+  onEvidence?: (patch: Record<string, unknown>) => void | Promise<void>;
 }
 
 async function runIssueTask(cfg: GitHubTaskConfig, issue: GitHubIssue, overrides: RunIssueOverrides = {}) {
@@ -3993,6 +4243,23 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   const branch = issueBranchName(issue.number);
   const emit: IssueEmit = (record, stage, message, extra = {}) => {
     broadcast({ type: "session.github_issue_status", sessionId: record.id, issueNumber: issue.number, repo: `${cfg.owner}/${cfg.repo}`, branch, stage, message, ...extra });
+    // Issue #153: mirror a handful of stages onto the control plane's sanitized
+    // evidence trail — the branch/PR references and a bounded summary only,
+    // never file lists or error details (those stay in `message`/`extra`,
+    // which are broadcast to the live session but never sent to onEvidence).
+    const kind = stage === "pr_opened" ? "pull_request" : stage === "started" ? "branch" : stage === "failed" ? "completed" : undefined;
+    if (kind) {
+      void overrides.onEvidence?.({
+        output: { sessionId: record.id, branch, prUrl: typeof extra.prUrl === "string" ? extra.prUrl : undefined },
+        events: [{
+          at: new Date().toISOString(),
+          kind,
+          summary: stage === "pr_opened" ? "Pull request opened." : stage === "started" ? "Working branch and session created." : "Execution failed. Detailed diagnostics remain on the node.",
+          ref: branch,
+          url: typeof extra.prUrl === "string" ? extra.prUrl : undefined,
+        }],
+      });
+    }
   };
 
   // Follow-up: a later @-mention on an issue we still have an open session for
@@ -4037,10 +4304,15 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   await announcePickup(cfg, issue.number, identity.name);
 
   const parsed = parseBivyDirectives(issue.body);
-  // Manual "Run…" overrides win over in-body directives; fall back to directives,
-  // then to the node's defaults inside createSession/setModel.
+  // Manual "Run…" overrides win over in-body directives, then the node's
+  // *configured* default agent (Settings → Nodes → "Default agent"). We resolve
+  // the default explicitly here rather than leaving `runtimeId` undefined for
+  // `createSession` to fill in, because that fallback uses the mutable
+  // `defaultRuntimeId` global — which the web UI reassigns to the *last used*
+  // agent on every `runtime.select`. Issue pickups must honor the persisted
+  // default, not whatever agent a human last happened to click.
   const directives = {
-    runtimeId: overrides.runtimeId || parsed.runtimeId,
+    runtimeId: overrides.runtimeId || parsed.runtimeId || nodeConfiguredDefaultAgent(),
     model: overrides.model || parsed.model,
   };
   // `cfg.repoDir` is a long-lived shared clone reused across every pickup on this
@@ -4374,6 +4646,50 @@ async function reconcileOrphanedIssueWork(): Promise<void> {
   }
 }
 
+/**
+ * On startup, recover any *interactive* session whose turn was cut off mid-flight
+ * by a process death (crash, OOM-kill, unclean restart). `resetStaleWorking()`
+ * captured their ids at boot — a persisted "working" status can only be stale in a
+ * fresh process, and a turn the user stopped or that finished cleanly went through
+ * clearSessionWorking → "idle", so this set is exactly the genuinely-interrupted
+ * turns. Issue-sourced sessions are handled by reconcileOrphanedIssueWork (which
+ * also commits/pushes/reports), so they're skipped here.
+ *
+ * Behaviour follows the node's `sessionResumeMode`:
+ *   - "auto"   → re-drive the interrupted turn now with a generic resume prompt,
+ *                so the agent finishes what it was doing without a human nudge.
+ *   - "manual" → leave a durable `resumePending` marker so opening the session
+ *                offers a one-tap "Resume" instead of silently spending tokens.
+ *
+ * Best-effort and non-blocking: any session it can't resolve is skipped and
+ * logged, never thrown, so one bad row can't block the rest or crash startup.
+ */
+async function reconcileInterruptedSessions(): Promise<void> {
+  if (!interruptedSessionIds.length) return;
+  const mode = nodeSessionResumeMode();
+  for (const id of interruptedSessionIds) {
+    const meta = metadata.getSession(id);
+    if (!meta) continue;
+    // Issue automation resumes via reconcileOrphanedIssueWork (always auto).
+    if (meta.source && meta.source.startsWith("issue:")) continue;
+    if (openSessions.has(id)) continue; // already live this run (a client opened it during boot)
+    if (mode === "manual") {
+      metadata.setResumePending(id, true);
+      continue;
+    }
+    try {
+      console.log(`[resume] auto-resuming interactive session ${id} interrupted by a restart`);
+      const record = await resolveOrResumeSession(id, meta.path);
+      if (!record) continue; // transcript gone / unresolvable — nothing to resume
+      await runSessionTurn(record, buildInteractiveResumePrompt());
+    } catch (error) {
+      // Clear any marker so a persistently-failing session can't loop forever.
+      metadata.setResumePending(id, false);
+      console.warn(`[resume] could not auto-resume session ${id}`, error);
+    }
+  }
+}
+
 async function startGitHubTasksIfConfigured() {
   const cfg = await resolveGitHubTaskConfig();
   if (!cfg) return;
@@ -4493,11 +4809,26 @@ async function resolveTokenForRepo(owner: string, repo: string): Promise<string 
   return resolveGitHubToken();
 }
 
-async function runWorkItem(item: ControlPlaneWorkItem) {
+async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>) {
+  if ((item.source === "schedule" || item.source === "manual") && item.body?.startsWith("bivy-room-v1:")) {
+    const [, nodeId, ...payload] = item.body.split(":");
+    if (nodeId !== identity.nodeId || payload.length === 0) {
+      throw new Error("scheduled instructions were encrypted for a different node");
+    }
+    try {
+      item = { ...item, body: open(pairingStore.roomKey(), payload.join(":")) };
+    } catch {
+      throw new Error("could not decrypt scheduled instructions on this node");
+    }
+  }
   // A labelled issue ("github:issue") and an @-mention comment ("github:comment")
   // both run the same way: clone, work on a branch, open a PR, comment back. For
-  // a comment the instruction is item.body (bivy-agent:/bivy-model: directives in
-  // the comment are honoured by buildTaskPrompt/parseBivyDirectives downstream).
+  // a comment the instruction is the comment body (bivy-agent:/bivy-model:
+  // directives in it are honoured by buildTaskPrompt/parseBivyDirectives
+  // downstream). Issue #153: the control plane no longer retains issue/comment
+  // title or body at all (see the webhook handlers in
+  // services/control-plane/src/index.ts) — this node fetches the live content
+  // directly from GitHub with its own token, immediately before use.
   if ((item.source === "github:issue" || item.source === "github:comment") && item.repo && item.issueNumber) {
     const parsed = parseRepo(item.repo);
     if (!parsed) throw new Error(`work item ${item.id} has an invalid repo "${item.repo}"`);
@@ -4513,18 +4844,29 @@ async function runWorkItem(item: ControlPlaneWorkItem) {
       claimLabel: `${item.label}:in-progress`,
       pollMs: 60_000,
     };
-    await runIssueTask(cfg, {
-      number: item.issueNumber,
-      title: item.title,
-      body: item.body ?? "",
-      labels: [],
-      url: item.url ?? "",
-    }, { runtimeId: item.runtimeId, model: item.model });
+    const issue = await getIssue(cfg, item.issueNumber);
+    if (!issue) throw new Error(`GitHub issue #${item.issueNumber} is unavailable`);
+    if (item.source === "github:comment") {
+      const instruction = await getIssueCommentBody(cfg, item.url);
+      if (!instruction) throw new Error("the triggering GitHub comment is unavailable");
+      issue.body = instruction;
+      if (item.url) issue.url = item.url;
+    }
+    await runIssueTask(cfg, issue, { runtimeId: item.runtimeId, model: item.model, onEvidence: report });
     return;
   }
   // Generic prompt (Slack, or an issue with no repo): a background session in the
   // default workspace so it doesn't steal the user's focused session.
-  const record = await createSession(defaultWorkspace, undefined, { makeActive: false, source: `queue:${item.source}` });
+  const record = await createSession(defaultWorkspace, undefined, {
+    makeActive: false,
+    source: `queue:${item.source}`,
+    runtimeId: item.runtimeId,
+    sandbox: normalizeSandboxTier(item.sandbox),
+    approvalMode: approvalModeFrom(item.approvalMode),
+  });
+  if (item.model) {
+    try { await record.session.setModel("", item.model); } catch {}
+  }
   await record.session.prompt(item.body ? `${item.title}\n\n${item.body}` : item.title);
 }
 
@@ -4544,7 +4886,14 @@ function startControlPlaneTasksIfConfigured() {
   // with no manual BIVY_NODE_LABEL needed.
   const cfg = resolveControlPlaneTaskConfig(loadRelayConfig(appDir), process.env, identity.name);
   if (!cfg) return;
-  controlPlanePoller = new ControlPlaneTaskPoller(cfg, runWorkItem, nodeGithubMaxConcurrent);
+  // Policy-driven run orchestration: classify a failed queue attempt into a
+  // stable condition and decide retry / reroute / park instead of the historical
+  // "any throw → failed". The default ruleset is safe (retry transient/rate-
+  // limit, park quota/auth/context); user-authored rulesets can add fallback
+  // chains. Queue runs are unattended, so they act automatically within bounds.
+  controlPlanePoller = new ControlPlaneTaskPoller(cfg, runWorkItem, nodeGithubMaxConcurrent, {
+    policy: queueRunPolicy,
+  });
   controlPlanePoller.start();
 }
 
@@ -4872,8 +5221,15 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
   const repo = record?.source?.startsWith("repo:") ? record.source.slice("repo:".length) : undefined;
   const branch = record?.worktree?.branch;
   const policy = new PolicyEngine({
-    mode: approvalMode,
+    // A session created from a scheduled/manual automation may carry its own
+    // approval-mode default (item.approvalMode in runWorkItem); otherwise fall
+    // back to the node's globally configured mode.
+    mode: record?.approvalMode ?? approvalMode,
     isRiskyIntegration: (tool) => integrations.isRiskyTool(tool),
+    // Full access is an explicit opt-out from both the agent's native sandbox
+    // and Bivy's tool governance. Without this, Pi/Claude still surfaced Bivy
+    // approval cards even though the session was labelled unrestricted.
+    unrestricted: record?.sandbox === "danger-full-access",
   });
   let { decision, reason, risk } = policy.decideToolCall(workspace, toolName, input);
 
@@ -5270,6 +5626,116 @@ async function listAllSessions(): Promise<Array<SessionSummary & { agent: string
   }
   deduped.sort((a, b) => toMs(b.modified) - toMs(a.modified));
   return deduped.filter((s) => !isEmptyUntitledSummary(s));
+}
+
+// --- Native session discovery/adoption (issue #156) -------------------------
+// "Let a node advertise discoverable provider-native sessions and let the app
+// import/adopt one into Bivy" — capability-driven, not a per-provider UI
+// branch: any runtime advertising capabilities.nativeSessionDiscovery is asked
+// for its own discoveries (src/runtime/native-session-discovery.ts does the
+// aggregation/dedupe), and the result is bounded metadata only, never
+// transcript content, so nothing here risks leaking a conversation to a UI
+// that merely lists nodes/sessions.
+
+export interface DiscoveredSessionView extends DiscoveredNativeSession {
+  agentName: string;
+  plan: NativeAdoptionPlan;
+  /** The provider's own CLI command to attach to this session directly, when
+   *  known — the "follow/read-only" affordance for a live session Bivy can't
+   *  safely take over itself (plan.mode === "follow-only"). Present whenever
+   *  the runtime has a known native resume form, regardless of plan.mode, so
+   *  the UI can also offer it as a secondary "or continue in a terminal"
+   *  option on an adoptable session. */
+  resumeCommand?: string;
+}
+
+/** Every provider-native session discoverable on this node, minus ones Bivy
+ *  already manages (any runtime variant, any owning id — see
+ *  native-session-discovery.ts's identity-based dedupe). */
+async function listDiscoverableSessions(): Promise<DiscoveredSessionView[]> {
+  const managed = await listAllSessions();
+  const capableRuntimes = runtimeList()
+    .filter((info) => info.status === "available" && info.capabilities.nativeSessionDiscovery)
+    .map((info) => getRuntime(info.id));
+  const discovered = await collectDiscoveredSessions(
+    capableRuntimes,
+    managed.map((s) => ({ id: s.id, path: s.path })),
+  );
+  return discovered.map((session) => {
+    const rt = getRuntime(session.runtimeId);
+    return {
+      ...session,
+      agentName: rt.displayName,
+      plan: planNativeAdoption(session, rt.capabilities),
+      resumeCommand: NATIVE_RESUME_CLI_BY_RUNTIME[session.runtimeId]?.(session.ref),
+    };
+  });
+}
+
+type ImportNativeSessionResult =
+  | { ok: true; record: SessionRecord; plan: NativeAdoptionPlan; seedPrompt?: string }
+  | { ok: false; status: number; error: string; needsDisclosure?: boolean; disclosure?: string };
+
+/**
+ * Import a discovered provider-native session into Bivy. Re-validates the ref
+ * against a fresh discovery pass (rather than trusting the caller's cached
+ * list) so a stale/removed session, or one with a live external process,
+ * can't be imported out from under the safety checks — see planNativeAdoption:
+ *
+ *  - "native-resume": creates/binds the Bivy session via the ordinary resume
+ *    path (createSession → runtime.openSession) — never a rewrite or deletion
+ *    of the provider's own history.
+ *  - "seeded": native resume isn't available. Requires `opts.acceptDisclosure`
+ *    — the caller must have shown `plan.disclosure` to the user first (issue
+ *    #156: "fall back to a seeded continuation only with explicit user
+ *    disclosure"); without it this returns `needsDisclosure: true` instead of
+ *    importing, so a client can never silently fall through to a seeded
+ *    continuation. When accepted, a FRESH session is created (no resume ref)
+ *    and its first-turn seed prompt (a bounded summary of the discovered
+ *    session's recent turns, never the full transcript) is returned for the
+ *    caller to send — mirroring how a cross-runtime session fork seeds its
+ *    first turn client-side (session/fork.ts's ForkSeed).
+ *  - "follow-only": a live external process was detected; refused outright.
+ */
+async function importNativeSession(
+  runtimeId: string,
+  ref: string,
+  opts: { acceptDisclosure?: boolean } = {},
+): Promise<ImportNativeSessionResult> {
+  const rt = getRuntime(runtimeId);
+  if (!rt.capabilities.nativeSessionDiscovery || !rt.capabilities.nativeSessionAdoption) {
+    return { ok: false, status: 409, error: `${rt.displayName} does not support importing existing sessions.` };
+  }
+  const discovered = await runtimeHost.discoverNativeSessions(rt);
+  const match = discovered.find((s) => s.ref === ref);
+  if (!match) {
+    return { ok: false, status: 404, error: "That session is no longer discoverable — it may already be imported, or removed." };
+  }
+  const plan = planNativeAdoption(match, rt.capabilities);
+  if (plan.mode === "follow-only") {
+    return { ok: false, status: 409, error: plan.disclosure ?? "This session has a live process outside Bivy; close it before adopting." };
+  }
+  if (plan.mode === "seeded") {
+    if (!opts.acceptDisclosure) {
+      return {
+        ok: false,
+        status: 409,
+        needsDisclosure: true,
+        disclosure: plan.disclosure,
+        error: plan.disclosure ?? "This session can't be natively resumed; importing starts a seeded continuation instead.",
+      };
+    }
+    const normalized = normalizeMessages(runtimeHost.readMessages(rt, ref), {
+      sourceRuntimeId: rt.id,
+      title: match.title,
+      createdAt: new Date().toISOString(),
+    });
+    const seedPrompt = buildNativeImportSeedPrompt(normalized, { provider: rt.displayName, title: match.title, cwd: match.cwd });
+    const record = await createSession(match.cwd || defaultWorkspace, undefined, { runtimeId, source: "import-seeded" });
+    return { ok: true, record, plan, seedPrompt };
+  }
+  const record = await createSession(match.cwd || defaultWorkspace, ref, { runtimeId, source: "import" });
+  return { ok: true, record, plan };
 }
 
 function isEmptyUntitledTitle(value: unknown): boolean {
@@ -5823,6 +6289,9 @@ function clearSessionWorking(record: SessionRecord) {
   record.isWorking = false;
   record.lastActivity = undefined;
   record.workingStartedAt = undefined;
+  // A completed turn clears any pending manual-resume offer: the session has now
+  // moved on (whether it was the resume itself or an unrelated new message).
+  metadata.setResumePending(record.id, false);
   persistSessionMetadata(record, sessionStatus(record));
   scheduleAdvertise(); // working → idle transition
 }
@@ -5898,6 +6367,17 @@ function terminalTurnError(event: Record<string, unknown>): string | undefined {
 
 function attachSessionListeners(record: SessionRecord) {
   record.unsubscribe?.();
+  // In-session model reroute controller (inert unless BIVY_SESSION_MODEL_FALLBACK
+  // is set). One per session; its per-turn budget resets on each user prompt.
+  if (sessionRunPolicy && !record.reroute) {
+    record.reroute = new SessionRerouteController({
+      policy: sessionRunPolicy,
+      onNotice: (n) => broadcast({ type: "session.notice", sessionId: record.id, level: n.level, message: n.message }),
+      onModelChanged: () =>
+        broadcast({ type: "model.updated", sessionId: record.id, model: publicModel(record.session.getCurrentModel(), record.session.getCurrentModel()) }),
+      onFailed: (message) => broadcast({ type: "session.error", sessionId: record.id, error: message }),
+    });
+  }
   record.unsubscribe = record.session.subscribe((event) => {
     // Keep streamed assistant text ordered ahead of everything else: any event
     // that is not itself a superseding update must flush the session's pending
@@ -5980,7 +6460,23 @@ function attachSessionListeners(record: SessionRecord) {
       // no reply, no signal. Surface it as a session-scoped error so the client
       // can show it *inline in that chat*, and notify instead of "done".
       const turnError = terminalTurnError(event as Record<string, unknown>);
-      if (turnError) {
+      // Before surfacing a turn error, see if the session's run policy can recover
+      // it in place by swapping to a fallback model and retrying the same prompt.
+      // planReroute is synchronous, so we can atomically suppress the error toast
+      // here and drive the async swap + retry below.
+      const reroutePlan =
+        turnError && record.lastPrompt !== undefined
+          ? record.reroute?.planReroute(turnError, record.session.getCurrentModel()?.name) ?? null
+          : null;
+      if (reroutePlan) {
+        void record.reroute!.applyReroute(reroutePlan, {
+          getCurrentModelName: () => record.session.getCurrentModel()?.name,
+          setModel: (p, i) => record.session.setModel(p, i),
+          reprompt: async () => {
+            await record.session.prompt(record.lastPrompt!, record.lastPromptOptions);
+          },
+        });
+      } else if (turnError) {
         record.lastFailureAt = Date.now();
         metadata.touchSession(record.id, "failed");
         scheduleAdvertise();
@@ -6477,8 +6973,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // Pick the agent for this session (fixed for its life). Resuming a tagged
   // session passes its owning agent so it rebuilds on the right runtime.
   // A per-session sandbox override (fresh choice, else the one saved on resume)
-  // bakes into the runtime's launch flags; undefined = the node's default tier.
-  const sessionSandbox = normalizeSandboxTier(opts.sandbox ?? storedMeta?.sandbox);
+  // bakes into the runtime's launch flags. Resolve and persist the effective
+  // tier, including the node default. A session's sandbox is fixed for its
+  // lifetime; retaining `undefined` here
+  // made governance unable to tell that a defaulted session had full access and
+  // also let a later node-default change alter its tier on resume.
+  const sessionSandbox = sandboxTier(opts.sandbox ?? storedMeta?.sandbox);
   const rt = await ensureRuntimeAvailable(opts.runtimeId ?? storedMeta?.runtimeId, sessionSandbox);
 
   // Optional git-worktree isolation (fresh sessions only). The agent then runs in
@@ -6538,7 +7038,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // bump it to now (only real activity should reorder the sidebar). A brand-new
   // session legitimately starts "active now".
   const resumedLastActive = requestedSessionFile ? metaLastActiveMs(storedMeta) : undefined;
-  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral };
+  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: opts.approvalMode, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral };
   // Stage 2 slice 4: a re-attached session recovers its still-running TUI
   // terminal link (the PTY survives a detach) from the session→terminal registry.
   if (attached) {
@@ -7147,9 +7647,6 @@ app.get("/api/git-credential", async (req, res) => {
   }
 });
 
-// All /api routes require auth (loopback may bypass per config).
-app.use("/api", authMiddleware(identity));
-
 // Loopback-only bootstrap: a same-machine caller (the CLI, a direct-mode web
 // client, or the git-credential helper) mints itself a device token so it uses
 // the same auth path as remote clients (Step 0c). Rejected off-loopback.
@@ -7161,6 +7658,14 @@ app.use("/api", authMiddleware(identity));
 // to a 0600 file the owner can read). The caller reads that secret and presents
 // it here. Set BIVY_OPEN_BOOTSTRAP=1 to drop this requirement on trusted
 // single-user machines.
+//
+// Registered BEFORE the general `/api` auth middleware (below): this route is
+// how a loopback caller with no token gets one in the first place, so it can't
+// itself require the middleware's isAuthorized() to already be satisfied — on
+// a host where the general loopback bypass is off (multi-user detection,
+// BIVY_REQUIRE_LOCAL_AUTH=1), that would make bootstrap unreachable. It has its
+// own, stricter gate (loopback + secret) instead, exactly like /api/git-credential
+// above.
 function bootstrapSecretAccepted(req: express.Request): boolean {
   if (process.env.BIVY_OPEN_BOOTSTRAP === "1") return true;
   const headerValue = req.headers["x-bivy-bootstrap"];
@@ -7182,6 +7687,10 @@ app.post("/api/auth/bootstrap", (req, res) => {
   broadcast({ type: "device.created", device });
   res.json({ ok: true, device, token });
 });
+
+// All other /api routes require auth (loopback may bypass, per config and host
+// — see loopbackAllowed()/isMultiUserHost() in src/auth.ts).
+app.use("/api", authMiddleware(identity));
 
 // Reload relay.json without forcing the user to restart the whole node. This is
 // used by `bivy relay:setup` after it enrolls the node.
@@ -7637,6 +8146,44 @@ app.delete("/api/models/custom/:id", async (req, res, next) => {
   }
 });
 
+// --- Rulesets (run-orchestration policy; docs/rulesets.md) ---
+// Bivy's registry (ruleset-store.ts) is the source of truth. These REST routes
+// serve the same-origin (direct) transport; the relay transport uses the
+// rulesets.* WS commands. Validation (400) mirrors validateRuleset's message.
+app.get("/api/rulesets", (_req, res, next) => {
+  try {
+    res.json({ rulesets: rulesetInfos() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/rulesets", (req, res, next) => {
+  try {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const active = typeof body.active === "boolean" ? (body.active as boolean) : undefined;
+    const result = persistRulesetSave(body.ruleset ?? body, active);
+    res.json({ ok: true, name: result.name, rulesets: rulesetInfos() });
+  } catch (error) {
+    if (error instanceof Error && /^Invalid ruleset:|ruleset name required/.test(error.message)) {
+      return res.status(400).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+
+app.delete("/api/rulesets/:name", (req, res, next) => {
+  try {
+    persistRulesetRemove(String(req.params.name || ""));
+    res.json({ ok: true, rulesets: rulesetInfos() });
+  } catch (error) {
+    if (error instanceof Error && /ruleset name required/.test(error.message)) {
+      return res.status(400).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+
 // Built-in quick-add presets for common local inference servers.
 const LOCAL_MODEL_PRESETS = [
   { id: "ollama", name: "Ollama (default)", baseUrl: "http://localhost:11434/v1", api: "openai-completions", apiKey: "ollama", note: "Run: ollama serve + ollama pull llama3.1" },
@@ -8005,6 +8552,32 @@ app.get("/api/codex/sessions/:id/messages", (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ error: "session id is required" });
   res.json({ messages: loadCodexTranscript(id), readOnly: true, resumeCommand: `codex resume ${id}` });
+});
+
+// Provider-native session discovery/adoption (issue #156) — the runtime-agnostic
+// generalization of the Codex-only endpoints above. Bounded metadata only,
+// deduped against sessions Bivy already manages; see listDiscoverableSessions.
+app.get("/api/sessions/discover", async (_req, res, next) => {
+  try {
+    res.json({ sessions: await listDiscoverableSessions() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/sessions/import", async (req, res, next) => {
+  try {
+    const runtimeId = String(req.body?.runtimeId || "").trim();
+    const ref = String(req.body?.ref || "").trim();
+    if (!runtimeId || !ref) return res.status(400).json({ error: "runtimeId and ref are required" });
+    const result = await importNativeSession(runtimeId, ref, { acceptDisclosure: Boolean(req.body?.acceptDisclosure) });
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error, needsDisclosure: result.needsDisclosure, disclosure: result.disclosure });
+    }
+    res.json({ sessionId: result.record.id, runtimeId: result.record.runtimeId, workspace: result.record.workspace, mode: result.plan.mode, seedPrompt: result.seedPrompt });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/sessions", async (_req, res, next) => {
@@ -8738,12 +9311,15 @@ app.post("/api/session/prompt", async (req, res, next) => {
       [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
       (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
     const agentPrompt = promptForAgent(record, promptText);
-    broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
+    const cmid = typeof req.body?.clientMessageId === "string" && req.body.clientMessageId ? req.body.clientMessageId : undefined;
     markSessionWorking(record, { type: "agent_start" });
-    void maybeNameSession(record, promptText);
-    harnessBeginTurn(record);
     // Do not await completion; events stream over WebSocket.
-    void session.prompt(agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images)).catch((error) => {
+    void dedupePrompt(cmid, async () => {
+      broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
+      void maybeNameSession(record, promptText);
+      harnessBeginTurn(record);
+      await session.prompt(agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images));
+    }).catch((error) => {
       clearSessionWorking(record);
       broadcast({ type: "session.error", sessionId: record.id, error: String(error?.stack ?? error) });
     });
@@ -8965,6 +9541,9 @@ const server = app.listen(port, host, async () => {
   // restart interrupted before it could commit/push/open a PR. Never delays
   // startup and never throws (see reconcileOrphanedIssueWork).
   void reconcileOrphanedIssueWork().catch((error) => console.warn("[github-tasks] orphaned-issue reconciliation failed", error));
+  // Recover interactive sessions a restart interrupted mid-turn (auto-continue, or
+  // flag for a one-tap manual Resume) per the node's sessionResumeMode setting.
+  void reconcileInterruptedSessions().catch((error) => console.warn("[resume] interrupted-session reconciliation failed", error));
   // Universal Agent Harness — network effect boundary (opt-in via
   // BIVY_EGRESS_PROXY). Governs/logs outbound traffic of CLI agents, which
   // inherit the proxy env from process.ts.
@@ -8992,6 +9571,9 @@ wss.on("connection", (socket, req) => {
   // Terminals opened on this socket; closed when the socket disconnects so a
   // dropped browser tab doesn't leak shells. Output is unicast to this socket.
   const ownedTerminals = new Set<string>();
+  // Stable id for this socket, keying its per-terminal size so several clients
+  // sharing a PTY size it to their min (see TerminalManager.setClientSize).
+  const clientTerminalId = `sock-${randomUUID()}`;
   socket.send(JSON.stringify({ type: "hello", activeSessionId: active?.id, activeSession: active ? { id: active.id, isStreaming: sessionBusy(active), lastActivity: active.lastActivity, workingStartedAt: active.workingStartedAt } : null }));
   socket.on("message", (raw) => {
     let msg: { kind?: string };
@@ -9008,12 +9590,15 @@ wss.on("connection", (socket, req) => {
     if (typeof msg?.kind === "string" && msg.kind.startsWith("terminal.")) {
       handleTerminalMessage(msg, (event) => {
         if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
-      }, ownedTerminals, (termId) => addRunViewer(termId, socket));
+      }, ownedTerminals, clientTerminalId, (termId) => addRunViewer(termId, socket));
     }
   });
   socket.on("close", () => {
     clients.delete(socket);
     dropRunViewer(socket);
+    // Release this socket's size on every terminal it sized (owned or just
+    // viewed) so shared PTYs grow back to the min of whoever's left attached.
+    terminals.dropClient(clientTerminalId);
     for (const id of ownedTerminals) terminals.close(id);
   });
 });
@@ -9033,6 +9618,9 @@ function shutdown(signal: string) {
     try { closeSessionRecord(record, "shutdown"); } catch {}
   }
   eventLog.flushAll();
+  // Persist the tail of the debounced metadata writes (status/activity updates
+  // are coalesced on the hot path — see MetadataStore.save).
+  try { metadata.flushSync(); } catch {}
   terminals.disposeAll();
   // Drop persistent client/relay sockets so server.close() can actually drain;
   // otherwise a lingering WebSocket keeps the process alive until the supervisor

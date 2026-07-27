@@ -8,5 +8,17 @@ WORKDIR /app
 COPY services/relay/package.json services/relay/package-lock.json ./
 RUN npm ci
 COPY services/relay/ ./
+COPY deploy/healthcheck.sh /usr/local/bin/bivy-healthcheck
+# Pin V8's old-space ceiling below the container's docker-compose mem_limit
+# (512m — see deploy/docker-compose.yml) instead of relying on Node's cgroup
+# auto-detection, which isn't guaranteed across every Docker/cgroup version and
+# only bounds the V8 heap anyway (RSS also carries the per-connection websocket
+# buffers this service holds outside it). Left unpinned, growth can walk right
+# up to the cgroup limit with no headroom for that non-heap RSS — and because
+# docker-compose doesn't cap container swap either, the container doesn't get a
+# fast OOM-kill + clean restart at that point, it drags the *host* into swap.
+# 384m leaves ~128m of headroom under the 512m cap. If mem_limit changes, update
+# this too.
+ENV NODE_OPTIONS="--max-old-space-size=384"
 EXPOSE 4500
 CMD ["npm", "start"]

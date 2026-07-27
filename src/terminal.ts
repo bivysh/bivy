@@ -70,6 +70,14 @@ export interface TerminalOpenOptions {
   workspace: string;
   cols?: number;
   rows?: number;
+  /**
+   * Stable id of the client that opened this terminal. Registers the opener's
+   * initial dimensions as its per-client size so the shared PTY is sized to the
+   * minimum across every attached client (see `setClientSize`). Without it, a
+   * later, differently-sized client could resize the PTY out from under the
+   * opener and reflow its TUI.
+   */
+  clientId?: string;
   env?: Record<string, string>;
   /**
    * Program to run instead of the login shell (with `args`). Used to launch an
@@ -118,6 +126,15 @@ interface TerminalEntry {
    */
   lastInputAt: number;
   meta: TerminalMeta;
+  /**
+   * Per-client requested dimensions, keyed by a stable client id. A shared PTY
+   * has a single (cols, rows); when several clients attach at different window
+   * sizes we size the PTY to the *minimum* over this map (tmux-style) so no
+   * client's TUI is ever reflowed wider than its viewport. Entries are added on
+   * attach/resize and removed on detach, after which the PTY grows back to the
+   * min of whoever remains.
+   */
+  clientSizes: Map<string, { cols: number; rows: number }>;
   /** Rolling tail of raw (ANSI-preserved) output, replayed to reattaching clients. */
   buffer: string;
   /** Output accumulated since the last coalesced flush (see OUTPUT_FLUSH_MS). */
@@ -318,12 +335,21 @@ export class TerminalManager {
       lastActivityAt: now,
       lastInputAt: now,
       meta: options.meta ?? {},
+      clientSizes: new Map(),
       buffer: "",
       pending: "",
       flushTimer: null,
       closed: false,
       onData: options.onData,
     };
+    // Register the opener as a sized client so a later, smaller client shrinks
+    // the PTY to the min of the two rather than clobbering the opener's size.
+    if (options.clientId) {
+      entry.clientSizes.set(options.clientId, {
+        cols: clampDim(options.cols, 80),
+        rows: clampDim(options.rows, 24),
+      });
+    }
     this.terminals.set(id, entry);
 
     const flush = () => {
@@ -387,15 +413,62 @@ export class TerminalManager {
     return true;
   }
 
-  resize(id: string, cols: number, rows: number): boolean {
+  /**
+   * Record `clientId`'s desired size for terminal `id` and re-size the shared
+   * PTY to the minimum over all currently-attached clients. Called on both
+   * attach and resize. Using the min (rather than "last writer wins") means a
+   * second client attaching at a different window size can never reflow another
+   * client's TUI wider than its viewport — it only ever adds unused margin on
+   * the larger client, tmux-style.
+   */
+  setClientSize(id: string, clientId: string, cols: number, rows: number): boolean {
     const entry = this.terminals.get(id);
     if (!entry) return false;
+    entry.clientSizes.set(clientId, { cols: clampDim(cols, 80), rows: clampDim(rows, 24) });
+    this.applyMinSize(entry);
+    return true;
+  }
+
+  /**
+   * Forget `clientId`'s size for terminal `id` (it detached from this terminal)
+   * and re-size the PTY to the min of whoever remains, so the surviving clients
+   * grow back to their real dimensions. No-op if the client had no size here.
+   */
+  dropClientSize(id: string, clientId: string): boolean {
+    const entry = this.terminals.get(id);
+    if (!entry) return false;
+    if (entry.clientSizes.delete(clientId)) this.applyMinSize(entry);
+    return true;
+  }
+
+  /**
+   * Forget `clientId` across every terminal — called when a client's transport
+   * (socket/relay) drops, so terminals it viewed grow back for the clients that
+   * remain. A disconnecting client may have sized terminals it never `owned`
+   * (e.g. shared run-terminals), so this sweeps all of them.
+   */
+  dropClient(clientId: string): void {
+    for (const entry of this.terminals.values()) {
+      if (entry.clientSizes.delete(clientId)) this.applyMinSize(entry);
+    }
+  }
+
+  /** Size the PTY to the min cols/rows over all attached clients. */
+  private applyMinSize(entry: TerminalEntry): void {
+    // No sized clients (nobody attached, or an unsized opener): leave the PTY at
+    // its current size rather than snapping to the 80x24 clamp floor.
+    if (entry.clientSizes.size === 0) return;
+    let cols = Infinity;
+    let rows = Infinity;
+    for (const size of entry.clientSizes.values()) {
+      if (size.cols < cols) cols = size.cols;
+      if (size.rows < rows) rows = size.rows;
+    }
     try {
       entry.proc.resize(clampDim(cols, 80), clampDim(rows, 24));
     } catch {
       // resizing a dying pty can throw — harmless
     }
-    return true;
   }
 
   close(id: string): boolean {

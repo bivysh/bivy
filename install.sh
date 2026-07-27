@@ -76,6 +76,56 @@ install_ubuntu_node22() {
   run_sudo apt-get install -y nodejs
 }
 
+# Provider-agnostic fallback: install the official Node.js 22 binary straight
+# from nodejs.org into /usr/local. This is what keeps a headless/ephemeral
+# machine (Fly, or any minimal image) working when the nodesource apt path is
+# unavailable — as of this writing deb.nodesource.com/setup_22.x returns 403, so
+# apt otherwise falls back to the distro's Node 18, which is too old for Bivy.
+# The download is sha256-verified against the release's SHASUMS256.txt (same
+# integrity posture as the Bivy tarball fallback). Uses the .tar.gz build so no
+# xz-utils is needed on a bare image.
+install_node22_tarball() {
+  local os arch base shasums name want got tmp dir
+  case "$(uname -s)" in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    *) return 1 ;;
+  esac
+  case "$(uname -m)" in
+    x86_64 | amd64) arch=x64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    *) return 1 ;;
+  esac
+  command -v curl >/dev/null 2>&1 || return 1
+  command -v tar >/dev/null 2>&1 || return 1
+  info "Installing Node.js 22 from nodejs.org"
+  base="https://nodejs.org/dist/latest-v22.x"
+  shasums="$(curl -fsSL "$base/SHASUMS256.txt")" || return 1
+  name="$(printf '%s\n' "$shasums" | grep -oE "node-v22\.[0-9.]+-${os}-${arch}\.tar\.gz" | head -n1)"
+  [ -n "$name" ] || return 1
+  tmp="$(mktemp -d)" || return 1
+  curl -fsSL -o "$tmp/$name" "$base/$name" || { rm -rf "$tmp"; return 1; }
+  want="$(printf '%s\n' "$shasums" | awk -v n="$name" '$2==n{print $1}')"
+  if command -v sha256sum >/dev/null 2>&1; then
+    got="$(sha256sum "$tmp/$name" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    got="$(shasum -a 256 "$tmp/$name" | awk '{print $1}')"
+  fi
+  if [ -n "$want" ] && [ -n "$got" ] && [ "$want" != "$got" ]; then
+    rm -rf "$tmp"
+    die "Node.js download failed sha256 verification (expected $want, got $got)."
+  fi
+  run_sudo mkdir -p /usr/local/lib/nodejs
+  run_sudo tar -xzf "$tmp/$name" -C /usr/local/lib/nodejs || { rm -rf "$tmp"; return 1; }
+  rm -rf "$tmp"
+  dir="/usr/local/lib/nodejs/${name%.tar.gz}"
+  local b
+  for b in node npm npx; do
+    run_sudo ln -sf "$dir/bin/$b" "/usr/local/bin/$b"
+  done
+  command -v node >/dev/null 2>&1 || export PATH="/usr/local/bin:$PATH"
+}
+
 node_is_supported() {
   command -v node >/dev/null 2>&1 || return 1
   [ "$(node -p 'const [M,m]=process.versions.node.split(".").map(Number); +(M>22 || (M===22 && m>=19))' 2>/dev/null)" = "1" ]
@@ -86,6 +136,12 @@ command -v curl >/dev/null 2>&1 || die "curl is required. Install it and re-run.
 
 if ! node_is_supported; then
   install_ubuntu_node22 || true
+fi
+# When the distro path can't get us a supported Node (e.g. nodesource is
+# unreachable and apt only offers an old Node), pull the official binary.
+if ! node_is_supported; then
+  install_node22_tarball || true
+  hash -r 2>/dev/null || true
 fi
 if ! node_is_supported; then
   if command -v node >/dev/null 2>&1; then

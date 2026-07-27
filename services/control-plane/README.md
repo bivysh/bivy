@@ -1,8 +1,9 @@
-# Control Plane (skeleton)
+# Control Plane
 
-Hosted service for accounts, node registry, entitlements, and billing. This is
-the **control plane**. The **data plane** (node daemon) lives in the repo root
-and never sends session content here.
+Hosted service for accounts, node registry, vaults, session index, GitHub App
+connections, entitlements, and billing. This is the **control plane**. The
+**data plane** (node daemon) lives in the repo root and never sends session
+content here.
 
 See `../../CLOUD.md` for the open-core boundary and what the control plane does.
 
@@ -14,12 +15,10 @@ npm install
 npm run dev   # http://localhost:4400
 ```
 
-## Current status
+## Storage
 
-Runnable skeleton with **in-memory dev storage** or **Postgres when
-`DATABASE_URL` is set**, plus **stubbed auth/billing**. Implements the core
-shapes so the relay (Step 2) and node enrollment can be built against real
-endpoints.
+Uses **in-memory dev storage** by default, or **Postgres when `DATABASE_URL` is
+set**. The control plane auto-creates its tables on startup.
 
 ### Endpoints
 
@@ -30,11 +29,11 @@ endpoints.
 | GET | `/auth/magic-link/consume?token=…` | none | Browser login link; redirects to remote client with session payload. |
 | POST | `/auth/dev-login` | none | DEV/staging login by email. Disable for live beta with `DISABLE_DEV_LOGIN=1`. |
 | GET | `/me` | user | Account + entitlements. |
-| POST | `/nodes/enroll` | user | Enroll a node by its `nodeId`; returns one-time enrollment token. Enforces `maxNodes`. |
+| POST | `/nodes/enroll` | user | Enroll a node by its `nodeId`; returns one-time enrollment token. |
 | GET | `/nodes` | user | List the account's nodes. |
 | DELETE | `/nodes/:id` | user | Revoke a node. |
 | POST | `/node/heartbeat` | node | Mark node online. |
-| GET | `/node/entitlements` | node | Owner's entitlements (node self-gating, Step 6). |
+| GET | `/node/entitlements` | node | Owner's entitlements (for node self-gating). |
 | POST | `/billing/checkout` | user | Creates Stripe Checkout when Stripe env is configured; dev placeholder outside production. |
 | POST | `/billing/webhook` | Stripe signature | Verifies signed Stripe webhook and maps subscription events to plan. |
 
@@ -45,21 +44,15 @@ tokens** (`enr_…`). Both sent as `Authorization: Bearer …`.
 
 Defined in `src/store.ts` (`PLAN_ENTITLEMENTS`):
 
-- `free`: 1 node, 2 devices, no push, no hosted relay
-- `individual`: 5 nodes, 10 devices, push, relay
-- `team`: 50 nodes, 200 devices, push, relay
+- `free`: unlimited nodes and devices, push, hosted relay, work queue, and
+  ephemeral runners — capped only at 10 runs per rolling 7-day window.
+- `pro`: same features, no run cap.
+- `team`: same features, no run cap.
 
-## TODO before production (do not deploy the skeleton)
+Entitlements are only enforced when `ENFORCE_ENTITLEMENTS=1` (Bivy Cloud);
+self-hosted stacks leave it off, so every feature is on for every account.
 
-1. **Auth**: finish production auth UX around magic links/OAuth, configure
-   `RESEND_API_KEY`, and disable `/auth/dev-login` for live beta.
-2. **Billing**: configure Stripe products/prices/webhook in test mode,
-   verify end-to-end, add billing portal, and store full subscription status.
-3. **Node enrollment UX**: pair the node-side enrollment flow (the node posts
-   its `nodeId`, stores the returned `enr_` token in `.bivy/`).
-4. **Never** accept or store session content, files, prompts, or credentials.
-
-## How the node connects (next: Step 2 relay)
+## How the node connects
 
 1. User signs in (control plane) → `/nodes/enroll` with the node's `nodeId`.
 2. Node stores the `enr_` token locally (in `.bivy/`).

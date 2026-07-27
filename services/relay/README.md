@@ -1,8 +1,8 @@
 # Relay
 
 Routes frames between remote clients and nodes through NAT. The **node dials
-outbound**, so no inbound ports or port-forwarding are needed. This is a paid
-convenience feature (free tier is local/LAN only).
+outbound**, so no inbound ports or port-forwarding are needed. Remote access
+through the hosted relay is available on every plan, including the free tier.
 
 See `../../CLOUD.md` for the open-core boundary and how the relay fits in.
 
@@ -57,14 +57,15 @@ Spawns control plane + relay, enrolls a node, connects a mock node and client,
 and asserts: encrypted round-trip both directions, ciphertext-only on the wire,
 and account ownership enforcement.
 
-## TODO before production
+## Operational notes
 
-1. TLS termination (`wss://`) in front of the relay.
-2. Pairing-based E2E key exchange (currently the key is provisioned via
-   `.bivy/relay.json` / env on the node; the matching client key comes
-   from pairing). Wire a real X25519 handshake at pairing time.
-3. Per-account connection caps. Basic frame-size and per-socket message-rate
-   limits exist, but live beta should add account-aware quotas/metrics.
-4. Horizontal scale: rooms are in-process. For multiple relay instances, add a
-   shared pub/sub (e.g. Redis) keyed by `nodeId`, or use sticky routing.
-5. Add relay/node heartbeat monitoring beyond disconnect-based offline marking.
+- **TLS.** The relay speaks plain WebSocket; terminate `wss://` in front of it
+  with a reverse proxy. The self-host stack does this with Caddy (see
+  [`../../deploy/README.md`](../../deploy/README.md)).
+- **Rate limits.** Frame-size and per-socket message-rate limits are enforced;
+  per-account connection caps are not yet.
+- **Horizontal scale.** Rooms are in-process, so a single relay instance serves
+  all traffic. Running multiple instances needs a shared pub/sub (e.g. Redis)
+  keyed by `nodeId`, or sticky routing.
+- **Liveness.** Nodes are marked offline on disconnect; there is no separate
+  heartbeat monitor.

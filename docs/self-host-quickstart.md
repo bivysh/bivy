@@ -4,7 +4,7 @@ The fast, numbered path from an empty VPS to a running Bivy control plane +
 relay stack, tied to the actual files in [`deploy/`](../deploy). For the
 operational deep-dive — backups, restore drills, secret rotation, what the
 security boundary is — see [self-host.md](self-host.md). For "should I even do
-this," see [self-host.md § Maturity & support](self-host.md#maturity-support)
+this," see [self-host.md § Maturity and support](self-host.md#maturity-and-support)
 and [faq.md](faq.md): self-hosting the control plane + relay is source-available
 and unsupported — no SLA, community-only Q&A.
 
@@ -15,8 +15,7 @@ control-plane + relay stack instead of Bivy Cloud.
 
 ## Prerequisites
 
-- A Linux VPS (1 vCPU / 1 GB RAM is enough to start — this is what
-  [`deploy/README.md`](../deploy/README.md) staged on).
+- A Linux VPS (1 vCPU / 1 GB RAM is enough to start).
 - Docker + the Compose plugin installed on it.
 - Two DNS A/AAAA records pointing at the VPS's IP:
   - one for the control plane + web app, e.g. `app.example.com`
@@ -39,10 +38,9 @@ apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 ```
 
-(This is the same sequence [`deploy/README.md`](../deploy/README.md) uses for
-the GitHub-Actions-driven staging pipeline. This quickstart uses the simpler
-one-command path instead of that pipeline — use `deploy/README.md` if you want
-CI to deploy on every push to `main`.)
+([`deploy/README.md`](../deploy/README.md) is the shorter reference for the
+files in the `deploy/` directory; this quickstart is the fully numbered
+walkthrough.)
 
 ## 2. Get the repo onto the server
 

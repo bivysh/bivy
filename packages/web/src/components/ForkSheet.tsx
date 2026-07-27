@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ModelInfo } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
-import { Sheet, PickerItem } from "./Sheet.js";
+import { Sheet } from "./Sheet.js";
+
+/** Stable select value for a model; provider + id together identify it. */
+function modelKey(model: ModelInfo & { provider?: unknown }): string {
+  return JSON.stringify([String(model.provider), String(model.id)]);
+}
 
 /**
  * Fork a session (docs/session-fork-plan.md): continue it in a new session on
@@ -12,10 +17,16 @@ import { Sheet, PickerItem } from "./Sheet.js";
  * default is context-aware: move when the node changes, copy when it doesn't.
  */
 export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
-  const { nodes, currentNodeId, runtimes, models, currentModel, selectedAgentId } = useAppState();
+  const { nodes, currentNodeId, runtimes, models, currentModel, activeSessionId, activeRuntimeId, sessions } = useAppState();
+  // selectedAgentId is the node/global draft preference, not the owner of an
+  // existing session. Prefer the runtime from canonical history for the active
+  // session, with its session-list row only as an early open-paint fallback.
+  const sourceAgentId = activeSessionId === sessionId && activeRuntimeId
+    ? activeRuntimeId
+    : sessions.find((s) => s.sessionId === sessionId)?.runtimeId ?? null;
 
   const [destNodeId, setDestNodeId] = useState<string>(currentNodeId ?? "");
-  const [agentId, setAgentId] = useState<string | null>(selectedAgentId);
+  const [agentId, setAgentId] = useState<string | null>(sourceAgentId);
   const [model, setModel] = useState<ModelInfo | null>(currentModel);
   const [retireTouched, setRetireTouched] = useState(false);
   const [retire, setRetire] = useState(false);
@@ -23,12 +34,18 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [warnings, setWarnings] = useState<Array<{ label?: string; detail?: string }>>([]);
 
+  // A sheet can open while canonical history is still arriving. Adopt the
+  // session runtime once known, but never overwrite a choice the user made.
+  useEffect(() => {
+    if (agentId == null && sourceAgentId) setAgentId(sourceAgentId);
+  }, [agentId, sourceAgentId]);
+
   const crossNode = Boolean(currentNodeId) && destNodeId !== currentNodeId;
   // Context-aware default until the user picks: move across nodes, copy in place.
   const willRetire = retireTouched ? retire : crossNode;
   // A model only round-trips within one agent; only offer it when the agent is
   // unchanged (a different agent resolves its own model on the destination).
-  const agentUnchanged = !agentId || agentId === selectedAgentId;
+  const agentUnchanged = !agentId || agentId === sourceAgentId;
 
   const nodeList = useMemo(() => {
     const rows = [...nodes];
@@ -42,7 +59,11 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
     try {
       const result = await controller.forkSession(sessionId, {
         destNodeId: crossNode ? destNodeId : undefined,
-        agentId: agentId && agentId !== selectedAgentId ? agentId : undefined,
+        // Pass the selected target explicitly. The controller compares it with
+        // the source session's runtime; treating this as only an "agent change"
+        // made the target ambiguous and allowed forks to fall back to the source.
+        agentId: agentId ?? undefined,
+        sourceAgentId: sourceAgentId ?? undefined,
         model: agentUnchanged && model ? { provider: String(model.provider), id: String(model.id) } : undefined,
         retireSource: willRetire,
       });
@@ -66,56 +87,54 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
   return (
     <Sheet title={willRetire ? "Move session" : "Fork session"} onClose={onClose} autoFocusSearch={false}>
       {nodeList.length > 1 && (
-        <div className="picker-section">
-          <div className="picker-section-label">Destination node</div>
-          <div className="picker-list">
+        <div className="picker-section fork-select-field">
+          <label htmlFor="fork-destination-node">Destination node</label>
+          <select
+            id="fork-destination-node"
+            value={destNodeId}
+            disabled={busy}
+            onChange={(e) => {
+              const id = e.target.value;
+              setDestNodeId(id);
+              if (!retireTouched) setRetire(Boolean(currentNodeId) && id !== currentNodeId);
+            }}
+          >
             {nodeList.map((n) => (
-              <PickerItem
-                key={n.id}
-                active={n.id === destNodeId}
-                title={n.name || n.id}
-                meta={n.id === currentNodeId ? "current" : n.online ? "online" : "offline"}
-                disabled={busy}
-                onClick={() => {
-                  setDestNodeId(n.id);
-                  if (!retireTouched) setRetire(Boolean(currentNodeId) && n.id !== currentNodeId);
-                }}
-              />
+              <option key={n.id} value={n.id}>
+                {n.name || n.id} ({n.id === currentNodeId ? "current" : n.online ? "online" : "offline"})
+              </option>
             ))}
-          </div>
+          </select>
         </div>
       )}
 
-      <div className="picker-section">
-        <div className="picker-section-label">Agent</div>
-        <div className="picker-list">
+      <div className="picker-section fork-select-field">
+        <label htmlFor="fork-agent">Agent</label>
+        <select id="fork-agent" value={agentId ?? ""} disabled={busy} onChange={(e) => setAgentId(e.target.value)}>
           {runtimes.map((rt) => (
-            <PickerItem
-              key={rt.id}
-              active={(agentId ?? selectedAgentId) === rt.id}
-              title={rt.displayName || rt.name || rt.id}
-              meta={rt.id === selectedAgentId ? "current" : undefined}
-              disabled={busy}
-              onClick={() => setAgentId(rt.id)}
-            />
+            <option key={rt.id} value={rt.id}>
+              {rt.displayName || rt.name || rt.id}{rt.id === sourceAgentId ? " (current)" : ""}
+            </option>
           ))}
-        </div>
+        </select>
       </div>
 
       {agentUnchanged && models.length > 0 && (
-        <div className="picker-section">
-          <div className="picker-section-label">Model</div>
-          <div className="picker-list">
+        <div className="picker-section fork-select-field">
+          <label htmlFor="fork-model">Model</label>
+          <select
+            id="fork-model"
+            value={model ? modelKey(model) : ""}
+            disabled={busy}
+            onChange={(e) => {
+              const selected = models.find((m) => modelKey(m) === e.target.value);
+              if (selected) setModel(selected);
+            }}
+          >
             {models.map((m) => (
-              <PickerItem
-                key={`${m.provider}/${m.id}`}
-                active={model?.id === m.id && model?.provider === m.provider}
-                title={String(m.name || m.id)}
-                disabled={busy}
-                onClick={() => setModel(m)}
-              />
+              <option key={modelKey(m)} value={modelKey(m)}>{String(m.name || m.id)}</option>
             ))}
-          </div>
+          </select>
         </div>
       )}
 

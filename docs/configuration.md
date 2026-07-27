@@ -125,13 +125,15 @@ CLI flags always win over both, for the commands that have them
 (`bivy exec --agent`, `bivy relay:setup --control-plane`, `bivy prune
 --data-dir`, and so on).
 
-### A note on how values are parsed
+### How values are parsed
 
-This matters more than it should:
+Value parsing is not uniform across variables:
 
-- Strict `"1"` booleans (nothing else counts): `BIVY_REQUIRE_LOCAL_AUTH`,
-  `BIVY_ALLOW_ANY_ORIGIN`, `BIVY_OPEN_BOOTSTRAP`, `BIVY_GITHUB_TASKS`,
-  `BIVY_GITHUB_HOSTED_TASKS`, `BIVY_SKIP_AGENT_PREINSTALL`.
+- Strict `"1"` booleans (nothing else counts): `BIVY_ALLOW_ANY_ORIGIN`,
+  `BIVY_OPEN_BOOTSTRAP`, `BIVY_GITHUB_TASKS`, `BIVY_GITHUB_HOSTED_TASKS`,
+  `BIVY_SKIP_AGENT_PREINSTALL`.
+- Tri-state overrides (`"1"` forces on, `"0"` forces off, unset auto-detects):
+  `BIVY_REQUIRE_LOCAL_AUTH`, `BIVY_MULTI_USER_HOST`.
 - Plain truthiness (**any** non-empty value enables, including `"0"` and
   `"false"`): `BIVY_EGRESS_PROXY`, `BIVY_MCP_PROXY`, `BIVY_WORKTREE_COW_CLONE`,
   `BIVY_DEBUG`.
@@ -168,7 +170,8 @@ unless noted.
 | `BIVY_HOST` | address | `127.0.0.1` | Supported | Bind address. `HOST` is accepted as a fallback. **This port grants full control of the node with no TLS** — only widen it on a network you trust |
 | `HOST` | address | — | Supported | Second choice for `BIVY_HOST` |
 | `BIVY_PUBLIC_URL` | URL | request-derived, else `http://localhost:<port>` | Supported | External base URL used to build integration OAuth redirect URIs. Set this behind a reverse proxy |
-| `BIVY_REQUIRE_LOCAL_AUTH` | `1` | unset | Supported (hardening) | By default any loopback caller is authorized without a token. `1` requires a device token even on `127.0.0.1` |
+| `BIVY_REQUIRE_LOCAL_AUTH` | `1` \| `0` | unset (auto) | Supported (hardening) | By default a loopback caller is authorized without a token, *unless* the host looks multi-user (see `BIVY_MULTI_USER_HOST`), in which case a device token is required. `1` always requires a token even on `127.0.0.1`; `0` always allows the loopback bypass |
+| `BIVY_MULTI_USER_HOST` | `1` \| `0` | unset (auto-detect) | Supported (hardening) | Overrides the auto-detection `BIVY_REQUIRE_LOCAL_AUTH` uses to decide whether loopback needs a token. Detection reads `/etc/passwd` (Linux) or `dscl` (macOS) for more than one human account; not implemented on Windows. Set this if detection is wrong for your box |
 | `BIVY_ALLOWED_HOSTS` | comma list | empty | Supported | Extra hostnames accepted in `Host`/`Origin`, e.g. a reverse-proxy domain. Only local/private hostnames are accepted otherwise |
 | `BIVY_ALLOW_ANY_ORIGIN` | `1` | unset | **Escape hatch** | Disables the DNS-rebinding and cross-site guard entirely. Any web page you visit could then drive your agent |
 | `BIVY_OPEN_BOOTSTRAP` | `1` | unset | **Escape hatch** | Accepts any bootstrap request on loopback without the per-process bootstrap secret |
@@ -553,5 +556,5 @@ For operators running the self-hosted stack on a box.
 | `BIVY_PRUNE_DOCKER` | `prune.sh` | `0` disables | `1` |
 | `BIVY_PRUNE_DOCKER_ALL` | `prune.sh` | `1` runs `docker system prune -af` | `0` |
 | `BIVY_PRUNE` | `self-host.sh` | `0` \| `1` \| unset | unset = prune only when a stack already exists |
-| `APP_DIR` | `staging-deploy.sh` | path | `/opt/bivy` |
-| `CP_DOMAIN`, `RELAY_DOMAIN` | `self-host.sh` | hostname | prompted |
+| `DATABASE_URL` | `self-host.sh` | postgres URL | unset = bundled Postgres container |
+| `CP_DOMAIN`, `RELAY_DOMAIN` | `self-host.sh` | hostname | positional args (`<app-domain> <relay-domain>`) |

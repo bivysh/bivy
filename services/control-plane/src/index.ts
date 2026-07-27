@@ -10,10 +10,12 @@ import webpush from "web-push";
 import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
+import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
-import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector } from "./metrics.js";
+import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent } from "./metrics.js";
 import { initSentry } from "./instrument.js";
+import { sanitizeEvidencePatch } from "./run-evidence.js";
 import {
   verifyGithubSignature,
   parseGithubIssueEvent,
@@ -24,6 +26,9 @@ import {
   verifySlackSignature,
   parseSlackCommand,
   applyDefaultNode,
+  verifyAutomationSignature,
+  parseAutomationEvent,
+  renderAutomationInstruction,
 } from "./webhooks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -101,6 +106,11 @@ try {
   );
   process.exit(1);
 }
+const automationScheduler = new AutomationScheduler(
+  store,
+  Math.max(1_000, Number(process.env.AUTOMATION_SCHEDULER_INTERVAL_MS) || 15_000),
+);
+automationScheduler.start();
 
 // Optional error reporting. Resolves to no-ops unless SENTRY_DSN is set, and only
 // then is @sentry/node loaded (see instrument.ts).
@@ -254,6 +264,23 @@ async function pruneOldRunStarts() {
 void pruneOldRunStarts();
 setInterval(pruneOldRunStarts, 6 * 60 * 60_000).unref();
 
+// Housekeeping: periodically drop expired rows from the short-lived, single-use
+// auth tables (login tokens, sessions, link grants, relay tickets, device
+// logins). Each is normally deleted on successful consumption, but an
+// abandoned attempt (closed tab, retried client, a node that never finishes
+// introspection) otherwise leaves a dead row behind forever — see
+// pruneExpiredAuthTokens in postgres-store.ts. Same unref'd-interval shape as
+// pruneOldRunStarts above; also swept once at boot.
+async function pruneExpiredAuthTokens() {
+  try {
+    await store.pruneExpiredAuthTokens(new Date().toISOString());
+  } catch (error) {
+    console.error("[auth-tokens] prune failed:", error);
+  }
+}
+void pruneExpiredAuthTokens();
+setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
+
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
@@ -290,6 +317,7 @@ app.use("/billing/webhook", express.raw({ type: "application/json", limit: "1mb"
 // Inbound third-party webhooks need the RAW body to verify their HMAC signature,
 // so capture it before the JSON parser runs (GitHub sends JSON, Slack sends
 // urlencoded — match any content-type).
+app.use("/webhooks/automation", express.raw({ type: () => true, limit: "64kb" }));
 app.use("/webhooks", express.raw({ type: () => true, limit: "1mb" }));
 app.use(express.json({ limit: "1mb" }));
 // Time every request under its matched route pattern for the /metrics
@@ -633,10 +661,24 @@ const githubConfigured = Boolean(githubClientId && githubClientSecret);
 
 // Short-lived CSRF/login state. In-memory is fine for a single instance; a
 // multi-instance deployment should move this to the store (follow-up).
+//
+// GET /auth/github/start is unauthenticated and (unlike magic-link start)
+// previously had no rate limit, so every hit — including bots/scanners that
+// never complete the flow — minted an entry here with no cleanup path other
+// than a matching callback (takeOauthState). That is an unbounded, trivially
+// triggerable memory leak: on staging it presented as steadily growing
+// resident memory (pushing the container into swap) and rising CPU from GC
+// working harder to reclaim a heap that keeps growing. Bound it the same way
+// rateBuckets bounds itself below (self-sweep once the map gets large) and
+// rate-limit the endpoint like every other unauthenticated auth-start route.
 const githubOauthStates = new Map<string, { deviceId?: string; returnPath?: string; expiresAt: number }>();
 function rememberOauthState(deviceId?: string, returnPath?: string): string {
+  const now = Date.now();
+  if (githubOauthStates.size > 10_000) {
+    for (const [k, v] of githubOauthStates) if (now >= v.expiresAt) githubOauthStates.delete(k);
+  }
   const state = randomBytes(24).toString("base64url");
-  githubOauthStates.set(state, { deviceId, returnPath, expiresAt: Date.now() + 10 * 60_000 });
+  githubOauthStates.set(state, { deviceId, returnPath, expiresAt: now + 10 * 60_000 });
   return state;
 }
 function takeOauthState(state: string): { deviceId?: string; returnPath?: string } | undefined {
@@ -740,6 +782,7 @@ app.post("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const account = await store.consumeLoginToken(loginToken);
   if (!account) return res.status(401).json({ error: "Invalid or expired login token" });
   const token = await store.createSession(account.id);
+  recordFunnelEvent("sign_in_completed", "email_api", account.plan);
   res.json({ ok: true, token, account: { id: account.id, email: account.email, plan: account.plan } });
 }));
 
@@ -753,9 +796,11 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   // embedded here — the CLI mints it when it polls.
   if (deviceId) {
     await store.completeDeviceLogin(deviceId, account.id);
+    recordFunnelEvent("sign_in_completed", "email_device", account.plan);
     return sendDeviceSignedIn(res, account.email);
   }
   const session = await store.createSession(account.id);
+  recordFunnelEvent("sign_in_completed", "email_browser", account.plan);
   const payload = b64urlJson({ session, controlPlane: baseUrl(req), relay: relayPublicUrl });
   res.redirect(`/#${payload}`);
 }));
@@ -808,6 +853,12 @@ app.post("/auth/device/poll", asyncHandler(async (req, res) => {
 // (CLI / app) created via createDeviceLogin; otherwise it's a browser sign-in.
 app.get("/auth/github/start", (req, res) => {
   if (!githubConfigured) return res.status(501).type("html").send("<h1>GitHub sign-in is not configured</h1><p>Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.</p>");
+  // Unauthenticated and side-effecting (mints a githubOauthStates entry below),
+  // same shape as /auth/magic-link/start — cap it the same way so a bot can't
+  // mint entries faster than the map's self-sweep can reclaim them.
+  if (rateLimited("oauth-github-start-ip", clientIp(req), 20, 60_000)) {
+    return res.status(429).type("html").send("<h1>Too many requests</h1><p>Please wait a minute and try again.</p>");
+  }
   const deviceId = String(req.query.device ?? "").trim() || undefined;
   // Land back on the path the sign-in started from (for a client served under a
   // sub-path) instead of always dumping to root. Ignored for the device flow,
@@ -857,9 +908,11 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   const account = await store.findOrCreateAccount(email);
   if (stored.deviceId) {
     await store.completeDeviceLogin(stored.deviceId, account.id);
+    recordFunnelEvent("sign_in_completed", "github_device", account.plan);
     return sendDeviceSignedIn(res, account.email);
   }
   const session = await store.createSession(account.id);
+  recordFunnelEvent("sign_in_completed", "github_browser", account.plan);
   const payload = b64urlJson({ session, controlPlane: baseUrl(req), relay: relayPublicUrl });
   // Re-sanitize on the way out (defense in depth): the return path was validated
   // at /start, but never trust a stored value verbatim when building a redirect.
@@ -885,6 +938,7 @@ app.post("/auth/dev-login", asyncHandler(async (req, res) => {
   if (!validEmail(email)) return res.status(400).json({ error: "Invalid email" });
   const account = await store.findOrCreateAccount(email);
   const token = await store.createSession(account.id);
+  recordFunnelEvent("sign_in_completed", "dev", account.plan);
   res.json({ ok: true, token, account: { id: account.id, email: account.email, plan: account.plan } });
 }));
 
@@ -968,6 +1022,7 @@ app.post("/nodes/enroll", requireUser, asyncHandler(async (req, res) => {
   const nodeId = String(req.body?.nodeId ?? "").trim();
   if (!nodeId) return res.status(400).json({ error: "Missing nodeId" });
   const result = await store.enrollNode(account.id, nodeId, String(req.body?.name ?? "Node"));
+  if (result.created) recordFunnelEvent("node_enrolled", "api", account.plan);
   res.json({ ok: true, ...result });
 }));
 
@@ -1096,7 +1151,8 @@ function sessionAdvertsFrom(raw: unknown) {
 app.post("/node/sessions", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const sessions = sessionAdvertsFrom(req.body?.sessions);
-  await store.replaceNodeSessions(node.accountId, node.id, sessions);
+  const newRuns = await store.replaceNodeSessions(node.accountId, node.id, sessions);
+  if (newRuns > 0) recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
   res.json({ ok: true, count: sessions.length });
 }));
 
@@ -1125,11 +1181,16 @@ app.post("/internal/nodes/:nodeId/capabilities", requireNode, asyncHandler(async
 app.put("/internal/nodes/:nodeId/sessions/:sessionId", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   if (String(req.params.nodeId) !== node.id) return res.status(403).json({ error: "Forbidden" });
+  // Incremental single-session upsert. This used to read the node's ENTIRE
+  // session index and rewrite it wholesale on every call; since a session's
+  // status flips constantly, that was O(sessions) work per flip (O(sessions²)
+  // in aggregate) and a wholesale DELETE+reinsert per event — a primary cause
+  // of the control plane pegging a core under load. Removals are still handled
+  // by the periodic full advertise via POST /node/sessions.
   const advert = sessionAdvertsFrom([{ ...req.body, sessionId: req.params.sessionId }]);
-  const existing = (await store.listAccountSessions(node.accountId))
-    .filter((s) => s.nodeId === node.id && s.sessionId !== String(req.params.sessionId))
-    .map(({ nodeId: _nodeId, updatedAt: _updatedAt, ...s }) => s);
-  await store.replaceNodeSessions(node.accountId, node.id, [...existing, ...advert]);
+  let newRuns = 0;
+  for (const s of advert) if (await store.upsertNodeSession(node.accountId, node.id, s)) newRuns += 1;
+  if (newRuns > 0) recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
   res.json({ ok: true, count: advert.length });
 }));
 
@@ -1297,6 +1358,7 @@ app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
   }
   const allowance = await runAllowance(account.id);
   if (allowance.exhausted) {
+    recordFunnelEvent("quota_blocked", "ephemeral", account.plan);
     return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
   }
   const url = String(req.body?.url ?? "");
@@ -1468,6 +1530,98 @@ app.post("/account/hooks", requireUser, asyncHandler(async (req, res) => {
   const hook = await store.createInboundHook(account.id, kind);
   const url = `${baseUrl(req)}/webhooks/${kind}/${hook.id}`;
   res.json({ ok: true, id: hook.id, kind, secret: hook.secret, url });
+}));
+
+function publicAutomationHook(req: Request, hook: Awaited<ReturnType<typeof store.getInboundHook>>) {
+  if (!hook) return undefined;
+  return {
+    id: hook.id,
+    endpoint: `${baseUrl(req)}/webhooks/automation/${hook.id}`,
+    enabled: hook.enabled !== false,
+    templateInstruction: hook.templateInstruction || "",
+    routingDefault: hook.routingDefault || "",
+    createdAt: hook.createdAt,
+    updatedAt: hook.updatedAt,
+  };
+}
+
+// Generic automations are managed separately from provider hooks. Secrets are
+// intentionally omitted from list/update responses and disclosed exactly once
+// on create or rotation.
+app.get("/account/automation-hooks", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const hooks = await store.listInboundHooks(account.id, "automation");
+  const work = (await store.listAutomationRuns(account.id, 100))
+    .filter((run) => run.source.startsWith("automation:"))
+    .slice(0, 20)
+    .map((run) => ({
+      id: run.id,
+      hookId: run.source.slice("automation:".length),
+      status: run.status,
+      title: run.title,
+      createdAt: run.createdAt,
+      claimedAt: run.claimedAt,
+      completedAt: run.completedAt,
+    }));
+  res.json({ hooks: hooks.map((hook) => publicAutomationHook(req, hook)), outcomes: work });
+}));
+
+app.post("/account/automation-hooks", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const templateInstruction = String(req.body?.templateInstruction ?? "").trim();
+  const routingDefault = String(req.body?.routingDefault ?? "").trim();
+  if (!templateInstruction || templateInstruction.length > 2_000) {
+    return res.status(400).json({ code: "invalid_request", error: "Template instruction must be 1–2000 characters." });
+  }
+  if (routingDefault && !/^[A-Za-z0-9._-]+$/.test(routingDefault)) {
+    return res.status(400).json({ code: "invalid_request", error: "Routing default contains invalid characters." });
+  }
+  let hook = await store.createInboundHook(account.id, "automation");
+  hook = (await store.updateInboundHook(account.id, hook.id, { templateInstruction, routingDefault })) ?? hook;
+  res.status(201).json({ ...publicAutomationHook(req, hook), secret: hook.secret });
+}));
+
+app.patch("/account/automation-hooks/:id", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const patch: { enabled?: boolean; templateInstruction?: string; routingDefault?: string } = {};
+  if (typeof req.body?.enabled === "boolean") patch.enabled = req.body.enabled;
+  if (typeof req.body?.templateInstruction === "string") {
+    const value = req.body.templateInstruction.trim();
+    if (!value || value.length > 2_000) return res.status(400).json({ code: "invalid_request", error: "Invalid template instruction." });
+    patch.templateInstruction = value;
+  }
+  if (typeof req.body?.routingDefault === "string") {
+    const value = req.body.routingDefault.trim();
+    if (value && !/^[A-Za-z0-9._-]+$/.test(value)) return res.status(400).json({ code: "invalid_request", error: "Invalid routing default." });
+    patch.routingDefault = value;
+  }
+  const hook = await store.updateInboundHook(account.id, String(req.params.id), patch);
+  if (!hook || hook.kind !== "automation") return res.status(404).json({ code: "not_found", error: "Unknown automation hook." });
+  res.json(publicAutomationHook(req, hook));
+}));
+
+app.post("/account/automation-hooks/:id/rotate", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const existing = await store.getInboundHook(String(req.params.id));
+  if (!existing || existing.accountId !== account.id || existing.kind !== "automation") {
+    return res.status(404).json({ code: "not_found", error: "Unknown automation hook." });
+  }
+  const secret = randomBytes(32).toString("base64url");
+  const hook = await store.setInboundHookSecret(account.id, existing.id, secret);
+  res.json({ ...publicAutomationHook(req, hook), secret });
+}));
+
+// Revoke invalidates the secret and leaves a disabled tombstone so callers get
+// the stable `disabled` result rather than an ambiguous 404.
+app.delete("/account/automation-hooks/:id", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const existing = await store.getInboundHook(String(req.params.id));
+  if (!existing || existing.accountId !== account.id || existing.kind !== "automation") {
+    return res.status(404).json({ code: "not_found", error: "Unknown automation hook." });
+  }
+  await store.setInboundHookSecret(account.id, existing.id, randomBytes(32).toString("base64url"));
+  await store.updateInboundHook(account.id, existing.id, { enabled: false });
+  res.json({ ok: true });
 }));
 
 // Node-side setup helper. The CLI only has a node enrollment token after
@@ -1692,7 +1846,158 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     claimedAt: w.claimedAt,
     claimedByNodeId: w.claimedByNodeId,
     completedAt: w.completedAt,
+    triggerId: w.triggerId,
+    triggerKind: w.triggerKind,
+    definitionId: w.definitionId,
+    attempt: w.attempt,
+    targetKind: w.targetKind,
+    startedAt: w.startedAt,
+    output: w.output,
+    approvalMode: w.approvalMode,
+    sandbox: w.sandbox,
+    // Privacy-safe run evidence (issue #153): why this node/runtime was picked,
+    // declared-check pass/fail/exit status, and a bounded event timeline. Never
+    // a prompt, transcript, diff, file content, secret, token, or raw command/
+    // tool output — see run-evidence.ts, which is the only thing that ever
+    // writes to these three fields.
+    routingReason: w.routingReason,
+    checks: w.checks,
+    events: w.events,
   })));
+}));
+
+// Trigger-neutral automation API. The work-item endpoints below remain
+// compatibility adapters over these same rows.
+app.get("/account/automations", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listAutomationDefinitions(client.accountId));
+}));
+
+app.post("/account/automations", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name) return res.status(400).json({ error: "name is required" });
+  let schedule;
+  try {
+    schedule = normalizeSchedule(req.body?.schedule);
+  } catch (error) {
+    return res.status(400).json({ error: (error as Error).message });
+  }
+  const enabled = req.body?.enabled !== false;
+  const nextRunAt = enabled ? nextOccurrence(schedule, new Date(Date.now() - 1)) : undefined;
+  if (enabled && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
+  const definition = await store.createAutomationDefinition(client.accountId, {
+    name,
+    templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : undefined,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined,
+    model: typeof req.body?.model === "string" ? req.body.model : undefined,
+    nodeLabel: typeof req.body?.nodeLabel === "string" ? req.body.nodeLabel : undefined,
+    ephemeral: typeof req.body?.ephemeral === "boolean" ? req.body.ephemeral : undefined,
+    approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : undefined,
+    sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined,
+    enabled,
+    schedule,
+    nextRunAt,
+  });
+  res.status(201).json(definition);
+}));
+
+app.put("/account/automations/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
+  if (!current) return res.status(404).json({ error: "Automation not found" });
+  let schedule = current.schedule;
+  if (req.body?.schedule !== undefined) {
+    try {
+      schedule = normalizeSchedule(req.body.schedule);
+    } catch (error) {
+      return res.status(400).json({ error: (error as Error).message });
+    }
+  }
+  if (!schedule) return res.status(400).json({ error: "schedule is required" });
+  const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : current.enabled;
+  const scheduleChanged = req.body?.schedule !== undefined;
+  // Recompute the occurrence when (re-)enabling or when the schedule changed;
+  // otherwise keep the current occurrence (or clear it while disabled).
+  const recompute = enabled && (scheduleChanged || !current.enabled);
+  const nextRunAt = recompute
+    ? nextOccurrence(schedule, new Date(Date.now() - 1))
+    : enabled ? current.nextRunAt : undefined;
+  // Mirror the create-time guard: an enabled definition whose only occurrence is
+  // in the past would sit enabled but never run.
+  if (recompute && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
+  const patch = {
+    name: typeof req.body?.name === "string" ? req.body.name.trim() || current.name : current.name,
+    templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : current.templateCiphertext,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() || undefined : current.runtimeId,
+    model: typeof req.body?.model === "string" ? req.body.model.trim() || undefined : current.model,
+    nodeLabel: typeof req.body?.nodeLabel === "string" ? req.body.nodeLabel.trim() || undefined : current.nodeLabel,
+    approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : current.approvalMode,
+    sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : current.sandbox,
+    enabled,
+    schedule,
+    nextRunAt,
+  };
+  res.json(await store.updateAutomationDefinition(client.accountId, current.id, patch));
+}));
+
+app.delete("/account/automations/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  if (!(await store.deleteAutomationDefinition(client.accountId, String(req.params.id)))) {
+    return res.status(404).json({ error: "Automation not found" });
+  }
+  res.status(204).end();
+}));
+
+app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const definition = await store.getAutomationDefinition(client.accountId, String(req.params.id));
+  if (!definition) return res.status(404).json({ error: "Automation not found" });
+  const run = await store.enqueueAutomationRun(client.accountId, {
+    source: "manual",
+    triggerKind: "manual",
+    title: definition.name,
+    body: definition.templateCiphertext,
+    definitionId: definition.id,
+    label: definition.nodeLabel,
+  });
+  void notifyRelaysWorkAvailable(client.accountId, { id: run.id, label: run.routing.nodeLabel });
+  res.status(201).json(run);
+}));
+
+app.get("/account/automation-runs", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listAutomationRuns(client.accountId, Number(req.query.limit) || 50));
+}));
+
+app.get("/account/automation-triggers", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listTriggerEvents(client.accountId, Number(req.query.limit) || 50));
+}));
+
+app.post("/account/automation-runs", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
+  if (!title) return res.status(400).json({ error: "title is required" });
+  const run = await store.enqueueAutomationRun(client.accountId, {
+    source: "manual",
+    triggerKind: "manual",
+    title,
+    label: typeof req.body?.label === "string" ? req.body.label : undefined,
+    definitionId: typeof req.body?.definitionId === "string" ? req.body.definitionId : undefined,
+    dedupeKey: typeof req.body?.sourceKey === "string" ? req.body.sourceKey : undefined,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined,
+    model: typeof req.body?.model === "string" ? req.body.model : undefined,
+  });
+  res.status(201).json(run);
 }));
 
 // Manually dispatch a *pending* queue item to a chosen node + agent (the queue
@@ -1779,6 +2084,78 @@ app.delete("/account/work-items/:id", asyncHandler(async (req, res) => {
 // `/webhooks/github_app/<id>`. Registering only the `github` path made every
 // GitHub App delivery hit a non-existent route and 404 before reaching this
 // handler — so no app-driven issue/comment ever enqueued.
+const automationRateWindows = new Map<string, { startedAt: number; count: number }>();
+function consumeAutomationRate(key: string, limit: number, now = Date.now()): boolean {
+  const current = automationRateWindows.get(key);
+  if (!current || now - current.startedAt >= 60_000) {
+    automationRateWindows.set(key, { startedAt: now, count: 1 });
+    return true;
+  }
+  current.count += 1;
+  return current.count <= limit;
+}
+
+app.post("/webhooks/automation/:id", asyncHandler(async (req, res) => {
+  const hook = await store.getInboundHook(String(req.params.id));
+  if (!hook || hook.kind !== "automation") return res.status(404).json({ code: "not_found" });
+  if (hook.enabled === false) return res.status(410).json({ code: "disabled" });
+  if (!consumeAutomationRate(`hook:${hook.id}`, 60)) {
+    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
+  }
+  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!verifyAutomationSignature(hook.secret, raw, req.headers["x-bivy-signature-256"] as string | undefined)) {
+    return res.status(401).json({ code: "invalid_signature" });
+  }
+  if (!consumeAutomationRate(`account:${hook.accountId}`, 300)) {
+    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
+  }
+  const idempotencyKey = String(req.headers["x-bivy-idempotency-key"] ?? "").trim();
+  if (!idempotencyKey || idempotencyKey.length > 200 || /[^\x21-\x7e]/.test(idempotencyKey)) {
+    return res.status(400).json({ code: "invalid_request", error: "A valid X-Bivy-Idempotency-Key header is required." });
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw.toString("utf8"));
+  } catch {
+    return res.status(400).json({ code: "invalid_request", error: "Invalid JSON." });
+  }
+  const event = parseAutomationEvent(payload);
+  if (!event || !hook.templateInstruction) {
+    return res.status(400).json({ code: "invalid_request", error: "Event does not match automation schema version 1." });
+  }
+  const dedupeKey = `automation:${hook.id}:${idempotencyKey}`;
+  const replay = await store.getAutomationRunBySourceKey(hook.accountId, dedupeKey);
+  if (replay) return res.status(200).json({ code: "duplicate", id: replay.id });
+  const entitlements = await store.entitlements(hook.accountId);
+  if (!entitlements.workQueueEnabled) return res.status(429).json({ code: "quota_exhausted" });
+  const allowance = await runAllowance(hook.accountId);
+  if (allowance.exhausted) {
+    recordFunnelEvent("quota_blocked", "automation", entitlements.plan);
+    return res.status(429).json({ code: "quota_exhausted", limit: allowance.limit, used: allowance.used });
+  }
+  const route = event.routing || hook.routingDefault;
+  const label = route ? `bivy/${route}` : "bivy";
+  const result = await store.enqueueAutomationRunWithResult(hook.accountId, {
+    label,
+    source: `automation:${hook.id}`,
+    triggerKind: "webhook",
+    title: event.title || event.instruction.slice(0, 200),
+    body: renderAutomationInstruction(hook.templateInstruction, event),
+    url: event.sourceUrl,
+    externalId: event.externalId,
+    dedupeKey,
+    defaultRouted: !route,
+  });
+  if (!result.created) {
+    return res.status(200).json({ code: "duplicate", id: result.run.id });
+  }
+  void notifyRelaysWorkAvailable(hook.accountId, {
+    id: result.run.id,
+    label: result.run.routing.nodeLabel,
+  });
+  res.status(202).json({ code: "accepted", id: result.run.id, label });
+}));
+
 app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(async (req, res) => {
   const hook = await store.getInboundHook(String(req.params.id));
   if (!hook || (hook.kind !== "github" && hook.kind !== "github_app")) return res.status(404).json({ error: "Unknown hook" });
@@ -1823,8 +2200,10 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     const item = await store.enqueueWorkItem(hook.accountId, {
       label,
       source: "github:comment",
-      title: comment.title,
-      body: comment.instruction,
+      // Issue #153: the control plane no longer retains issue/comment title or
+      // body — the claiming node fetches the live comment directly from GitHub
+      // (see getIssueCommentBody in src/github-tasks.ts) immediately before use.
+      title: `GitHub issue #${comment.issueNumber}`,
       repo: comment.repo,
       issueNumber: comment.issueNumber,
       url: comment.url,
@@ -1850,8 +2229,10 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   const item = await store.enqueueWorkItem(hook.accountId, {
     label,
     source: "github:issue",
-    title: issue.title,
-    body: issue.body,
+    // Issue #153: the control plane no longer retains issue title/body — the
+    // claiming node fetches the live issue directly from GitHub (getIssue in
+    // src/github-tasks.ts) immediately before use.
+    title: `GitHub issue #${issue.issueNumber}`,
     repo: issue.repo,
     issueNumber: issue.issueNumber,
     url: issue.url,
@@ -1919,6 +2300,7 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   // this item". Only bites under ENFORCE_ENTITLEMENTS; self-host is unlimited.
   const allowance = await runAllowance(node.accountId);
   if (allowance.exhausted) {
+    recordFunnelEvent("quota_blocked", "work_queue", (await store.entitlements(node.accountId)).plan);
     return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
   }
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
@@ -1928,8 +2310,84 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
 
 app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  await store.completeWorkItem(node.accountId, String(req.params.id));
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id) {
+    return res.status(409).json({ error: "Run is not owned by this node" });
+  }
+  await store.completeWorkItem(node.accountId, id);
+  // Compatibility for older nodes that skip the explicit /running transition.
+  const started = await store.recordRunStart(node.accountId, `automation:${id}`);
+  if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
   res.json({ ok: true });
+}));
+
+app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id || current.status !== "claimed") {
+    return res.status(409).json({ error: "Run is not claimed by this node" });
+  }
+  const run = await store.transitionAutomationRun(node.accountId, id, "running");
+  const started = await store.recordRunStart(node.accountId, `automation:${id}`);
+  if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
+  res.json({ ok: true, run });
+}));
+
+app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id) {
+    return res.status(409).json({ error: "Run is not owned by this node" });
+  }
+  const run = await store.transitionAutomationRun(node.accountId, id, "failed");
+  if (!run) return res.status(404).json({ error: "Unknown run" });
+  res.json({ ok: true, run });
+}));
+
+// Park a claimed run for a human: the node's run policy exhausted its automatic
+// recovery (quota/auth/context, or a drained fallback chain) and wants the run
+// surfaced rather than silently failed. Transitions running/claimed →
+// needs_attention (which auto-stamps a `needs_attention` timeline event). The
+// node should first POST the reason as a bounded evidence event.
+app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id) {
+    return res.status(409).json({ error: "Run is not owned by this node" });
+  }
+  const run = await store.transitionAutomationRun(node.accountId, id, "needs_attention");
+  if (!run) return res.status(404).json({ error: "Unknown run" });
+  res.json({ ok: true, run });
+}));
+
+// Privacy-safe run evidence (issue #153): the node that claimed a run may
+// report why it routed the way it did, output references (branch/PR/
+// checkpoint/commit/...), declared-check results, and new timeline events
+// (routing changes, retries/fallback, approvals, policy denials, ...).
+// sanitizeEvidencePatch is the ONLY thing standing between an arbitrary node
+// payload and storage — it allowlists every field and rejects anything that
+// looks like a prompt, transcript, diff, file content, secret, token, or raw
+// command/tool output outright (400, not a silent drop).
+app.post("/node/work/:id/evidence", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id) {
+    return res.status(409).json({ error: "Run is not owned by this node" });
+  }
+  let patch;
+  try {
+    patch = sanitizeEvidencePatch(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: (error as Error).message });
+  }
+  const run = await store.appendRunEvidence(node.accountId, id, patch);
+  if (!run) return res.status(404).json({ error: "Unknown run" });
+  res.json({ ok: true, run });
 }));
 
 // The node mints a short-lived, node-scoped client grant to link a remote
@@ -2121,6 +2579,7 @@ app.post("/billing/checkout", requireUser, asyncHandler(async (req, res) => {
 
   if (!stripe) {
     if (process.env.NODE_ENV === "production") throw new Error("STRIPE_SECRET_KEY is required for production checkout");
+    recordFunnelEvent("checkout_started", plan, account.plan);
     return res.json({ ok: true, checkoutUrl: `https://billing.example/checkout?plan=${plan}`, plan, dev: true });
   }
 
@@ -2150,6 +2609,7 @@ app.post("/billing/checkout", requireUser, asyncHandler(async (req, res) => {
 
   const checkoutUrl = checkout.url;
   if (!checkoutUrl) throw new Error("Stripe did not return a checkout URL");
+  recordFunnelEvent("checkout_started", plan, account.plan);
   res.json({ ok: true, checkoutUrl, plan });
 }));
 
@@ -2180,7 +2640,11 @@ app.post("/billing/webhook", asyncHandler(async (req, res) => {
     const body = Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString("utf8")) : req.body;
     const accountId = String(body?.accountId ?? "");
     const plan = normalizePlan(String(body?.plan ?? "")) as Plan;
-    if (accountId && ["free", "pro", "team"].includes(plan)) await store.setPlan(accountId, plan, body?.stripeCustomerId);
+    if (accountId && ["free", "pro", "team"].includes(plan)) {
+      const previous = await store.getAccount(accountId);
+      await store.setPlan(accountId, plan, body?.stripeCustomerId);
+      if (previous && previous.plan !== plan) recordFunnelEvent("plan_changed", "dev_webhook", plan);
+    }
     return res.json({ received: true, dev: true });
   }
 
@@ -2209,6 +2673,7 @@ app.post("/billing/webhook", asyncHandler(async (req, res) => {
         stripeSubscriptionId: subscription.id,
         subscriptionStatus: subscription.status,
       });
+      if (account.plan !== nextPlan) recordFunnelEvent("plan_changed", "stripe_subscription", nextPlan);
     }
   } else if (event.type === "customer.subscription.deleted") {
     const subscription = event.data.object as Stripe.Subscription;
@@ -2222,6 +2687,7 @@ app.post("/billing/webhook", asyncHandler(async (req, res) => {
         stripeSubscriptionId: null,
         subscriptionStatus: subscription.status,
       });
+      if (account.plan !== "free") recordFunnelEvent("plan_changed", "stripe_deleted", "free");
     }
   }
 
@@ -2279,6 +2745,9 @@ app.post("/internal/node-status", requireRelay, asyncHandler(async (req, res) =>
 
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   const status = (error as { status?: number })?.status ?? 500;
+  if (status === 413 && req.path.startsWith("/webhooks/automation/")) {
+    return res.status(413).json({ code: "payload_too_large" });
+  }
   const message = String(error instanceof Error ? error.message : error);
   // Deliberate client errors (4xx) carry an explicit status and a message meant
   // for the caller (e.g. "Node limit reached"). Anything else is an unexpected

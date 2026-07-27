@@ -17,6 +17,8 @@
  * here; the actual run is injected so the daemon keeps the agent wiring.
  */
 
+import type { RunDecision, RunPolicy } from "./policy/run-policy.js";
+
 export interface ControlPlaneTaskConfig {
   controlPlaneUrl: string;
   enrollmentToken: string;
@@ -36,9 +38,15 @@ export interface WorkItem {
   url?: string;
   runtimeId?: string; // agent/runtime override chosen via the queue "Run…" action
   model?: string; // model override chosen via the queue "Run…" action
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)
 }
+
+/** Sanitized-on-arrival at the control plane (services/control-plane/src/run-evidence.ts);
+ *  the node just needs to shape a plain object — routingReason/output/checks/events. */
+export type EvidencePatch = Record<string, unknown>;
 
 /**
  * Build config from the relay enrollment + node label. Returns null if disabled.
@@ -84,6 +92,10 @@ async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string): Pr
   });
 }
 
+async function transitionWork(cfg: ControlPlaneTaskConfig, id: string, action: string): Promise<void> {
+  await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/${action}`).catch(() => {});
+}
+
 export async function fetchPendingWork(cfg: ControlPlaneTaskConfig): Promise<WorkItem[]> {
   const res = await cp(cfg, "GET", `/node/work?labels=${encodeURIComponent(cfg.labels.join(","))}`);
   if (!res.ok) return [];
@@ -98,20 +110,58 @@ export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promis
 }
 
 export async function completeWork(cfg: ControlPlaneTaskConfig, id: string): Promise<void> {
-  await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/complete`).catch(() => {});
+  await transitionWork(cfg, id, "complete");
 }
+
+export async function failWork(cfg: ControlPlaneTaskConfig, id: string): Promise<void> {
+  await transitionWork(cfg, id, "fail");
+}
+
+/** Park a run for a human (dormant `needs_attention` status). Best-effort. */
+export async function needsAttentionWork(cfg: ControlPlaneTaskConfig, id: string): Promise<void> {
+  await transitionWork(cfg, id, "needs-attention");
+}
+
+/** Report privacy-safe run evidence (issue #153) — routing reason, output refs
+ *  (branch/PR/checkpoint/commit/...), check results, and new timeline events.
+ *  Best-effort: a dropped report loses one evidence update, never the run
+ *  itself, so failures here are swallowed like the other transition calls. */
+export async function reportEvidence(cfg: ControlPlaneTaskConfig, id: string, patch: EvidencePatch): Promise<void> {
+  await fetch(`${cfg.controlPlaneUrl}/node/work/${encodeURIComponent(id)}/evidence`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${cfg.enrollmentToken}`, "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  }).catch(() => {});
+}
+
+/** Optional policy hooks — when omitted the poller keeps its historical behavior
+ *  (any thrown error fails the run immediately). */
+export interface ControlPlaneTaskPollerOptions {
+  /** Decides retry/reroute/park/give_up when an attempt throws. */
+  policy?: RunPolicy;
+  /** Injectable sleep for backoff waits (deterministic in tests). */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export class ControlPlaneTaskPoller {
   private timer?: NodeJS.Timeout;
   private inFlight = new Set<string>();
+  private readonly policy?: RunPolicy;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(
     private readonly cfg: ControlPlaneTaskConfig,
-    private readonly runItem: (item: WorkItem) => Promise<void>,
+    private readonly runItem: (item: WorkItem, report: (patch: EvidencePatch) => Promise<void>) => Promise<void>,
     /** Node's cap on concurrently-running queue sessions (0/undefined = unlimited).
      *  Read fresh each tick so the Settings → Nodes value takes effect live. */
     private readonly maxConcurrent?: () => number,
-  ) {}
+    options: ControlPlaneTaskPollerOptions = {},
+  ) {
+    this.policy = options.policy;
+    this.sleep = options.sleep ?? defaultSleep;
+  }
 
   start(): void {
     void this.tick();
@@ -162,18 +212,81 @@ export class ControlPlaneTaskPoller {
       // Claim first so only one node runs it; skip if another node won (no
       // claim → not ours → don't run or complete it).
       if (!(await claimWork(this.cfg, item.id))) return;
-      try {
-        console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
-        await this.runItem(item);
-      } catch (error) {
-        console.warn(`[control-plane-tasks] item ${item.id} failed:`, error);
-      } finally {
-        // Mark done so it leaves the queue even if the run threw — a failed
-        // item shouldn't be retried forever (it's recorded on the issue/PR).
-        await completeWork(this.cfg, item.id);
-      }
+      const report = (patch: EvidencePatch) => reportEvidence(this.cfg, item.id, patch);
+      await transitionWork(this.cfg, item.id, "running");
+      console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
+      // routingReason is a coarse baseline — a manual "Run…" override picked
+      // this agent/model explicitly; otherwise it's whatever the queue label
+      // routed to. runWorkItem/runIssueTask may layer a more specific reason
+      // (e.g. a fallback after an error) on top via the same `report` hook.
+      await report({ routingReason: item.runtimeId || item.model ? "manual override" : "queue label" });
+      await this.runWithPolicy(item, report);
     } finally {
       this.inFlight.delete(item.id);
+    }
+  }
+
+  /**
+   * Run one item under the run policy: on failure, classify → decide → retry /
+   * reroute (rewrite routing for the next attempt) / park (needs_attention) /
+   * give_up (fail). Reroute happens only at ATTEMPT BOUNDARIES — the failed
+   * attempt is fully unwound before the next one starts — so there's no partial-
+   * work/idempotency hazard. Every decision is recorded as a bounded, privacy-
+   * safe evidence event. With no policy injected this is the historical path:
+   * one attempt, any throw fails the run.
+   */
+  private async runWithPolicy(item: WorkItem, report: (patch: EvidencePatch) => Promise<void>): Promise<void> {
+    let current = item;
+    let attempt = 1;
+    let rerouteCount = 0;
+    for (;;) {
+      try {
+        await this.runItem(current, report);
+        await completeWork(this.cfg, item.id);
+        return;
+      } catch (error) {
+        const decision: RunDecision = this.policy?.decide({
+          routing: { runtimeId: current.runtimeId, model: current.model },
+          error,
+          attempt,
+          rerouteCount,
+        }) ?? { action: "give_up", condition: "unknown" };
+
+        if (decision.action === "retry" || decision.action === "reroute") {
+          attempt += 1;
+          const kind = decision.action === "retry" ? "retry" : "fallback";
+          console.warn(`[control-plane-tasks] item ${item.id} ${kind} (${decision.condition}): ${decision.summary}`);
+          await report({
+            events: [
+              {
+                at: new Date().toISOString(),
+                kind,
+                summary: decision.summary,
+                attempt,
+                ...(decision.action === "reroute" ? { ref: decision.ref } : {}),
+              },
+            ],
+          });
+          if (decision.action === "reroute") {
+            current = { ...current, runtimeId: decision.routing.runtimeId, model: decision.routing.model };
+            rerouteCount = decision.rerouteCount;
+            await report({ routingReason: `fallback: ${decision.ref}` });
+          }
+          if (decision.delayMs > 0) await this.sleep(decision.delayMs);
+          continue;
+        }
+
+        if (decision.action === "park") {
+          console.warn(`[control-plane-tasks] item ${item.id} needs attention (${decision.condition}): ${decision.summary}`);
+          await report({ events: [{ at: new Date().toISOString(), kind: "needs_attention", summary: decision.summary }] });
+          await needsAttentionWork(this.cfg, item.id);
+          return;
+        }
+
+        console.warn(`[control-plane-tasks] item ${item.id} failed:`, error);
+        await failWork(this.cfg, item.id);
+        return;
+      }
     }
   }
 }

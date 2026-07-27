@@ -9,13 +9,14 @@ installer or a doc link can't leave the site stale.
 ## Layout
 
 ```text
-index.html        landing page
-contact.html      contact
-privacy.html      privacy policy
-terms.html        terms
-legal.css         shared styling for the legal pages
-icon.svg tent.png brand marks
-screenshots/      product screenshots used by the landing page
+index.html               landing page
+compare-cloud-agents.html  cloud-agent comparison page
+contact.html             contact
+privacy.html             privacy policy
+terms.html               terms
+legal.css                shared styling for the legal pages
+icon.svg logo.svg tent.png oauth-logo.svg oauth-logo.png   brand marks
+screenshots/             product screenshots used by the landing page
 ```
 
 `site/install.sh` is **generated** and gitignored. The canonical installer is
@@ -36,7 +37,13 @@ python3 -m http.server 8080 --directory site
 
 Render picks up [`render.yaml`](../render.yaml) at the repo root and publishes
 this directory. The only build step is the `install.sh` copy. No environment
-variables, no secrets.
+variables or site secrets are required.
+
+The landing and comparison pages load Plausible's cookie-free script for the
+`bivy.sh` site (the domain is registered in the Bivy Plausible account). The
+pages record aggregate page views plus fixed-name `CTA` and
+`Install Copy` events; they send no account/session identifiers or content.
+The Render CSP explicitly permits only Plausible's script and event endpoint.
 
 Bivy is distributed on [npm](https://www.npmjs.com/package/bivy), so this site
 hosts no release tarball or manifest. See [`docs/releasing.md`](../docs/releasing.md).

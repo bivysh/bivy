@@ -76,4 +76,40 @@ await test("merges across multiple nodes; removeNode clears the index", async ()
   assert.deepEqual(list.map((s) => s.sessionId), ["s1"]);
 });
 
+await test("upsert updates one session in place without touching the rest", async () => {
+  const { store, accountId, nodeId } = await setup();
+  await store.replaceNodeSessions(accountId, nodeId, [
+    { sessionId: "s1", status: "idle", titleEnc: "T1" },
+    { sessionId: "s2", status: "idle", titleEnc: "T2" },
+  ]);
+  // Flip s1's status incrementally — s2 must survive untouched (the old code
+  // read + rewrote the whole index; the upsert path must preserve it).
+  await store.upsertNodeSession(accountId, nodeId, { sessionId: "s1", status: "working", titleEnc: "T1" });
+  const list = await store.listAccountSessions(accountId);
+  assert.deepEqual([...list.map((s) => s.sessionId)].sort(), ["s1", "s2"]);
+  const s1 = list.find((s) => s.sessionId === "s1")!;
+  const s2 = list.find((s) => s.sessionId === "s2")!;
+  assert.equal(s1.status, "working");
+  assert.equal(s2.status, "idle", "sibling session is left untouched");
+  assert.equal(s2.titleEnc, "T2");
+});
+
+await test("upsert inserts a brand-new session", async () => {
+  const { store, accountId, nodeId } = await setup();
+  await store.upsertNodeSession(accountId, nodeId, { sessionId: "new", status: "working", branch: "bivy/x" });
+  const list = await store.listAccountSessions(accountId);
+  assert.deepEqual(list.map((s) => s.sessionId), ["new"]);
+  assert.equal(list[0].status, "working");
+  assert.equal(list[0].branch, "bivy/x");
+});
+
+await test("upsert ignores foreign / unknown nodes", async () => {
+  const { store, accountId } = await setup();
+  const other = await store.findOrCreateAccount("b@example.com");
+  await store.upsertNodeSession(other.id, "node-a", { sessionId: "x", status: "idle" });
+  await store.upsertNodeSession(accountId, "ghost", { sessionId: "y", status: "idle" });
+  assert.equal((await store.listAccountSessions(accountId)).length, 0);
+  assert.equal((await store.listAccountSessions(other.id)).length, 0);
+});
+
 console.log(`\nsession-index: ${passed} tests passed`);

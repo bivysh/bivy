@@ -31,7 +31,7 @@ Credential sources can be manual entry, Bivy vault, 1Password/Secrets Automation
 
 ## UI flow: provider key quick guides
 
-Implemented now: the remote UI's node selector has an **⚡ Ephemeral session** entry. Choosing it opens a provider picker (Fly.io, Hetzner Cloud, AWS EC2); picking a provider shows the inline quick guide below plus a token field. Saving stores the token **on the device** — in the PWA's IndexedDB (`bivy-ephemeral` DB, `provider-keys` store) via the shared `BivyEphemeralKeys` module — end to end. The token never touches the control plane or any node, and it isn't tied to a node, so a user can add it from their phone before they own any computer/server (the first machine they run can itself be ephemeral). Machine provisioning/teardown consumes this device-held token and is the next step; see "Provisioning path" below.
+Implemented now: the remote UI's node selector has an **⚡ Ephemeral machine** entry. Users can save multiple named setups per provider, each with its own region, size, TTL, repository, and optional **destroy when the agent finishes** policy. Finish-triggered teardown runs from the launching web device after `agent_end` (including turns that create a PR); the TTL always remains a safety fallback if that device goes offline. These setups appear in the node selector like offline persistent nodes; selecting one opens a pre-filled launch view, and the setup remains after each short-lived machine expires. The provider token is shared by that provider's setups and stored **on the device** — in the PWA's IndexedDB (`bivy-ephemeral` DB, `provider-keys` store). Saved setups use the device-local `setups` store. Neither tokens nor setups touch the control plane, so a user can configure them from a phone before owning a computer/server.
 
 The token field is a single opaque string as far as the store/UI are concerned — Fly and Hetzner treat it as a bearer token, while AWS's adapter parses it as `accessKeyId:secretAccessKey[:sessionToken]`. Nothing outside the adapter needs to know which shape a given provider uses.
 
@@ -50,9 +50,11 @@ Launch flow (browser):
 
 1. Enroll a fresh `nodeId` with the control plane (`POST /nodes/enroll`, account session) → enrollment token.
 2. Mint a 32-byte room key; keep it on the device (for reach) and bake it into the machine's `relay.json`. On the node-broker path the relay/control plane never see it.
-3. Build cloud-init user-data that installs Bivy, writes `/etc/bivy/relay.json`, and arms a **self-shutdown at TTL** so a forgotten machine can't bill forever.
+3. Build the bootstrap that installs Bivy, writes `/etc/bivy/relay.json` + `/etc/bivy/start.sh`, **starts the daemon**, and arms a **self-shutdown at TTL** so a forgotten machine can't bill forever. The installer only *installs* Bivy — a headless, pre-enrolled machine has no TTY for `bivy setup`, so `start.sh` (`exec bivy start`, reading the baked `relay.json`) is what actually brings the node online. This is one intent in two forms: `buildBootstrapUserData()` emits cloud-init for VM providers; `bootstrap: BootstrapOpts` is handed to the adapter for providers that can't run cloud-init (see Fly below).
 4. `provision()` via the chosen transport; store the machine record on the device (`bivy-ephemeral` → `machines`) so it can be listed/destroyed later.
 5. The node boots, pairs over the relay, and appears in the node list; the browser already holds its room key, so sessions are reachable.
+
+**VM vs. container bootstrap.** Hetzner and EC2 boot a full cloud image: cloud-init runs the `#cloud-config`, and the daemon is launched as a transient `systemd-run` unit that outlives cloud-init's own unit. Fly is different — a Fly Machine is an OCI image (`ubuntu:24.04`) in a Firecracker microVM, not a cloud-init VM. It runs neither cloud-init *nor* the image's would-be default `/bin/bash` for more than an instant, and the bare image ships no `curl`. So the Fly adapter (`flyInit`) writes `relay.json` + `start.sh` as machine `files`, installs `curl` then Bivy, and runs `bivy start` as a **blocking foreground init process** under a TTL `timeout`. `auto_destroy` then means "destroy when the agent finishes" literally: the machine is reaped only once that foreground daemon exits. (Skipping the foreground process was the original bug — the machine self-destructed on boot before Bivy ever installed.)
 
 Teardown: a **Destroy now** button runs `destroy()` via the same transport and deregisters the node. TTL self-shutdown is the backstop when the device is gone. Machine records are device-local only — the control plane holds none.
 
@@ -183,10 +185,10 @@ For defense in depth, consider adding a `Condition` on `TerminateInstances` scop
 Known limitations for the first cut: launches into your account's **default VPC/subnet** (no `SubnetId`/`SecurityGroupId` params yet) — accounts without a default VPC will need that added before EC2 works; regions are a curated list of six (`us-east-1`, `us-west-2`, `eu-west-1`, `eu-central-1`, `ap-southeast-1`, `ap-northeast-1`) rather than all AWS regions, each needing its EC2 + SSM hosts allowlisted; instance types are a curated x86_64 "T"-family subset (Graviton/ARM64 is a natural follow-up, paired with the arm64 SSM AMI parameter).
 
 UI safety notes:
-- Tell users the token should be scoped to a disposable project/org where possible.
-- Show the planned region, size, max TTL, and estimated cost before provisioning.
-- Include a **Destroy machine now** button and a visible teardown status.
-- Store provider tokens in the same secret path as other user-provided keys; never in session transcripts.
+- The token should be scoped to a disposable project/org where possible.
+- The planned region, size, max TTL, and estimated cost are shown before provisioning.
+- A **Destroy machine now** button and a visible teardown status are always available.
+- Provider tokens are stored in the same secret path as other user-provided keys, never in session transcripts.
 
 ## Minimum implementation
 

@@ -34,6 +34,11 @@ export function ConnectRunner({
     if (copyTimer.current) clearTimeout(copyTimer.current);
   }, []);
 
+  // Ephemeral machines (id `eph-…`) live in their own launcher, not the
+  // persistent node list — mirror the node switcher so a booted ephemeral runner
+  // isn't offered here as if it were a regular enrolled node.
+  const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
+
   const copyCommand = async () => {
     const ok = await writeClipboard(INSTALL_CMD);
     if (!ok) return;
@@ -126,11 +131,11 @@ export function ConnectRunner({
         )}
       </div>
 
-      {nodes.length > 0 && (
+      {persistentNodes.length > 0 && (
         <div className="connect-nodes">
           <div className="connect-nodes-head">Your nodes</div>
           <div className="connect-nodes-list">
-            {nodes.map((n) => (
+            {persistentNodes.map((n) => (
               <button
                 key={n.id}
                 type="button"
@@ -155,7 +160,7 @@ export function ConnectRunner({
       <div className="connect-waiting">
         <span className="onboarding-spinner" aria-hidden />
         <span className="connect-waiting-text">
-          {nodes.length > 0 ? "Or wait for another runner to connect…" : "Waiting for a runner to connect…"}
+          {persistentNodes.length > 0 ? "Or wait for another runner to connect…" : "Waiting for a runner to connect…"}
         </span>
         <button type="button" className="connect-refresh" onClick={onRefresh}>
           Refresh now

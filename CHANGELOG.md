@@ -9,6 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Privacy-safe run evidence and outcome reports** — every automation run
+  (GitHub issue/comment, Slack, manual, or scheduled) now carries a structured,
+  allowlisted evidence record on top of its routing/status: why this node/
+  runtime/model was chosen, declared-check pass/fail/exit status, and a
+  capped, ordered event timeline (claimed, attempts, retries/fallback with a
+  reason, branch, pull request, completion) — most of it stamped automatically
+  by the control plane, with a node able to layer richer events on top through
+  a new `POST /node/work/:id/evidence` endpoint. The GitHub queue view renders
+  it as a per-run "Outcome reports" timeline with a **Copy sanitized report**
+  export. The sanitizer (`services/control-plane/src/run-evidence.ts`) rejects
+  prompt, transcript, diff, file-content, secret, token, and raw command/tool-
+  output fields outright — no server-side transcript indexing, ever. GitHub
+  issue/comment title and body are also no longer retained on the control
+  plane at all: the claiming node now fetches them directly from GitHub,
+  immediately before use. (#153)
+- **Discover and adopt existing Claude Code / Codex sessions** — a node now
+  advertises provider-native sessions its Claude Code or Codex adapters can
+  see (a bare `claude`/`codex` run started outside Bivy), and the app can
+  import one via a new "Import existing session" sheet, filterable by node,
+  provider, repository, and recency. Discovery is capability-driven
+  (`capabilities.nativeSessionDiscovery`/`nativeSessionAdoption`) and returns
+  bounded metadata only — id/ref, cwd, updated time, a truncated first-prompt
+  title, and an active/resumable flag — never transcript content, and never
+  duplicates a session Bivy already manages. Importing resumes the session
+  natively through the ordinary open/resume path without rewriting or
+  deleting the provider's own history whenever the runtime supports it (the
+  case for every Claude Code / Codex session today); a runtime that can only
+  discover but not natively resume a session instead falls back to a fresh,
+  seeded continuation — and the node refuses that fallback until the app
+  shows the disclosure and the user explicitly confirms "Import anyway". A
+  session with a live external process is never importable — Bivy has no safe
+  way to take over a process it doesn't own — and instead surfaces the
+  provider's own resume command (`claude --resume <id>` / `codex resume <id>`)
+  so it can be followed read-only in a terminal. Other runtimes stay hidden
+  from the discovery UI until their adapter earns the capability. (#156)
+
+- **Scheduled automations** — Settings → Automations lets you create a
+  recurring (cron, with an explicit IANA timezone) or one-time schedule that
+  runs an end-to-end encrypted instruction template on an assigned node, with
+  its own runtime/model/approval/sandbox defaults, run-now, enable/disable,
+  next-run preview, and recent results. Schedules generate runs through the
+  same automation-run lifecycle as GitHub/Slack/manual triggers — an offline
+  node's due occurrence stays pending until it reconnects, restarting the
+  control plane or running several instances can't duplicate an occurrence,
+  and hosted entitlement checks happen at run admission, not schedule
+  creation. The control plane only ever holds routing metadata plus the
+  ciphertext; it cannot read the instructions. (#148)
+
 - **GitHub App key sync across nodes** — `bivy github:app-sync on` opts a node
   into pulling/pushing a connected GitHub App's private key E2E-encrypted
   through the control plane, so connecting an app on one node makes it usable
@@ -19,6 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Automations panel: node selector instead of free text, plus an ephemeral
+  fallback toggle** — the generic webhook automations panel's "Default node"
+  field used to be a plain text box you had to type a node's label into
+  correctly, unlike the GitHub App panel's dropdown of known nodes; it's now
+  the same dropdown (falling back to text only when the account has no known
+  nodes yet), for both creating a webhook and editing an existing one's
+  routing. The account-wide "auto-provision an ephemeral server when nothing's
+  online" toggle — previously only visible in GitHub App settings — is also
+  now shown here, since the shared automation-run queue already picks up
+  webhook-triggered work the same way it picks up GitHub work. (#166)
 - **Nodes settings panel: fields grouped into labeled sections** — the panel
   used to list a dozen unrelated fields (node name, default agent/model,
   sandbox mode, GitHub session limit, GitHub issue prompt, session sync) as
@@ -28,8 +86,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with divider lines between them, matching the grouping already used by the
   GitHub App and GitHub Queue panels. (#74)
 
+### Security
+
+- The node no longer authorizes bare loopback callers (no token) by default on
+  a host it detects as multi-user — every local account shares `127.0.0.1`, so
+  loopback alone let any other OS user on a shared host drive the agent (shell
+  + file edits) without a token. Detection (`isMultiUserHost` in `src/auth.ts`)
+  counts real login accounts via `/etc/passwd` on Linux or `dscl` on macOS;
+  single-user hosts (the common case) keep today's zero-friction loopback
+  bypass unchanged. Override with `BIVY_REQUIRE_LOCAL_AUTH=1`/`=0` or
+  `BIVY_MULTI_USER_HOST=1`/`=0` if detection guesses wrong for your box. The
+  CLI transparently bootstraps a device token when the daemon requires one, so
+  `bivy status`/`bivy doctor`/etc. keep working unchanged. (#111)
+
 ### Fixed
 
+- **Ephemeral machines now actually come online.** The bootstrap installed
+  Bivy but never *started* the node on a headless, pre-enrolled machine (no TTY
+  → the installer just prints "run `bivy setup`"), so the node never dialed the
+  relay and stayed offline. The bootstrap now writes `/etc/bivy/start.sh` and
+  launches the daemon (`bivy start`, reading the baked `relay.json`) — via a
+  transient `systemd-run` unit on VM providers (Hetzner/EC2). **Fly.io was doubly
+  broken:** a Fly Machine is an OCI image in a microVM, not a cloud-init VM, so
+  the `#cloud-config` user-data was never executed and the bare `ubuntu:24.04`
+  ran `/bin/bash`, which exits instantly — with `restart: no` + `auto_destroy`
+  the machine self-destructed on boot ("this app has no machines" / node
+  offline). Fly now boots from machine `files` + a **foreground** init process
+  that installs `curl` (absent from the bare image) and Bivy, then runs the
+  daemon under a TTL `timeout`. Also added an official-nodejs.org Node 22
+  fallback to `install.sh` since `deb.nodesource.com/setup_22.x` now returns
+  `403` (apt otherwise falls back to Node 18, which is too old for Bivy).
 - **Transient CLI/relay clients no longer clutter "Signed-in devices".**
   `bivy run --node` bridges and sibling-node replicas paired with a node via
   the same `pair.account` handshake a phone/browser uses, so the control plane

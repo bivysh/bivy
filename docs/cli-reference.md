@@ -295,7 +295,8 @@ interactively whether to sign in with GitHub.
 | `--client <url>` | `$BIVY_CLIENT_BASE_URL`, else the baked-in hosted endpoint | Where the web app is served |
 | `--emit-session <path>` | — | Internal. Write the account session to a `0600` file for `bivy setup` to consume |
 
-If the account is at its node limit, it offers to remove an existing node first.
+On plans that cap the number of nodes, if you are at the limit it offers to
+remove an existing node first.
 
 After success it restarts the background service, or hot-reloads a running node
 via `/api/relay/reload`.
@@ -636,8 +637,9 @@ What it actually does depends on how Bivy was installed:
   the installer.
 
 Inside a Bivy web/PWA terminal (`BIVY_TERMINAL=1`) the update re-execs itself
-detached, logging to `<data-dir>/update.log`, and returns immediately — the
-restart would otherwise kill the terminal you are watching.
+detached, logs to `<data-dir>/update.log`, and mirrors live progress into the
+terminal until the node restarts. The web terminal reconnects automatically;
+the detached process survives the restart and finishes the update.
 
 ```bash
 bivy update

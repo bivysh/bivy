@@ -22,4 +22,4 @@ Cloud must not require uploading workspace files, transcripts, prompts, tool out
 
 Paid entitlement checks belong in hosted/account features. They must not prevent local-only Core usage or self-hosted deployments from operating.
 
-Repository split guidance: keep Bivy Core plus the baseline self-hostable relay/control-plane source-available under FSL-1.1-ALv2; keep Bivy-operated production infrastructure, secrets, support tooling, private commercial overlays, and any future managed compute/inference service in a separate private Cloud repository.
+Repository boundary: Bivy Core, plus the baseline self-hostable relay and control plane, are source-available under FSL-1.1-ALv2 in this repository. Bivy-operated production infrastructure, secrets, support tooling, private commercial overlays, and any managed compute/inference service live in a separate private Cloud repository.

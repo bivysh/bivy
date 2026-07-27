@@ -8,7 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntime, claudeRuntimeFromEnv, claudeSdkInstalled } from "./claude-code.js";
-import { deleteCodexSession, loadCodexTranscript } from "./codex-sessions.js";
+import { deleteCodexSession, discoverNativeCodexSessions, loadCodexTranscript } from "./codex-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 
 // Args that continue an existing Codex session each prompt. Codex assigns its own
@@ -86,6 +86,11 @@ const PI_CAPABILITIES: RuntimeCapabilities = {
   interactiveTui: true,
   usageReporting: true,
   sessionDiscovery: true,
+  // Must match PiRuntime.capabilities (src/runtime/pi.ts) — the composer reads
+  // steer support from the session-less runtimes.list catalog, so if this drifts
+  // from the live runtime the client never learns steering is available and
+  // force-queues every mid-turn message instead of offering an immediate send.
+  streamingBehaviors: ["steer", "followUp"],
 };
 
 const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
@@ -95,6 +100,17 @@ const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
   resume: true,
   fork: true,
   usageReporting: true,
+  // Sessions started outside Bivy (a bare `claude` in a terminal) are
+  // discoverable and adoptable with a true native resume — see issue #156 and
+  // ClaudeCodeRuntime.discoverNativeSessions.
+  nativeSessionDiscovery: true,
+  nativeSessionAdoption: true,
+  // Must match ClaudeCodeRuntime.capabilities (src/runtime/claude-code.ts): a
+  // mid-turn prompt re-enters the SDK streaming-input queue and behaves as an
+  // immediate steer. Advertised here too so the composer offers "send now"
+  // straight from runtimes.list — before any session-capabilities merge, which
+  // won't fire on a reconnect to an already-running session (the mobile case).
+  streamingBehaviors: ["steer"],
 };
 
 function claudeCodeInfo(): RuntimeInfo {
@@ -620,7 +636,20 @@ function codexApprovalsInfo(): RuntimeInfo {
     status: installed ? "available" : "external",
     packageName: "codex",
     language: "Process",
-    capabilities: { toolInterception: true, modelSelection: true, resume: true, packages: false, fork: false, sessionDiscovery: true },
+    capabilities: {
+      toolInterception: true,
+      modelSelection: true,
+      resume: true,
+      packages: false,
+      fork: false,
+      sessionDiscovery: true,
+      // The governed/resumable Codex variant is the one that owns native
+      // discovery+adoption (issue #156) — not the plain exec runtime below —
+      // so an adopted session gets per-tool approvals from the moment it's
+      // imported rather than the ungoverned exec jail.
+      nativeSessionDiscovery: true,
+      nativeSessionAdoption: true,
+    },
     supportTier: "beta",
     authOwner: "agent",
     notes: installed
@@ -715,7 +744,7 @@ function codexAppServerRuntime(credsDir: string, tier?: SandboxTier): AgentRunti
         ],
       },
     ],
-    capabilities: { toolInterception: true, modelSelection: true, resume: true },
+    capabilities: { toolInterception: true, modelSelection: true, resume: true, nativeSessionDiscovery: true, nativeSessionAdoption: true },
     // Resume: the shim reconnects a prior thread via thread/resume by its rollout
     // id, and history preloads from the same on-disk rollout the exec path reads —
     // so takeover/reopen continues a governed session. (Validated on codex-cli
@@ -724,6 +753,10 @@ function codexAppServerRuntime(credsDir: string, tier?: SandboxTier): AgentRunti
     loadHistory: (sessionId) => loadCodexTranscript(sessionId),
     deleteHistory: (sessionId) => void deleteCodexSession(sessionId),
     suggestName: suggestCodexSessionName,
+    // Native discovery (issue #156): enumerate Codex rollouts on this node that
+    // Bivy didn't start, so a pre-existing `codex` session can be adopted here
+    // (the governed variant), never the plain exec runtime below.
+    discoverNativeSessions: () => discoverNativeCodexSessions(),
   });
 }
 

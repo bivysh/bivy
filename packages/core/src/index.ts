@@ -22,5 +22,6 @@ export * from "./pairing.js";
 export * from "./transport-direct.js";
 export * from "./transport-relay.js";
 export * from "./store.js";
+export * from "./followups.js";
 export * from "./transcript-cache.js";
 export * from "./slash.js";

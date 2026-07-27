@@ -39,6 +39,7 @@ import {
   createEphemeralKeyStore,
   createEphemeralModelKeyStore,
   createEphemeralPrefsStore,
+  createEphemeralSetupStore,
   createMachineStore,
   createGithubTaskTokenStore,
   createTranscriptCache,
@@ -53,6 +54,8 @@ import {
   type EphemeralModelKeyInfo,
   type EphemeralPrefsStore,
   type EphemeralPrefs,
+  type EphemeralSetupStore,
+  type EphemeralSetup,
   type EphemeralMachine,
   type GithubTaskTokenStore,
   type EphemeralQueueDefault,
@@ -67,10 +70,17 @@ import {
   type PairedDevice,
   type Command,
   type ConnectionStatus,
+  type FollowupEditResult,
+  mustQueueFollowup,
   type ModelInfo,
+  nextQueuedFollowup,
+  type PendingFollowup,
   type PromptAttachment,
+  type Ruleset,
   type RuntimeInfo,
   type ServerEvent,
+  type StreamingBehavior,
+  supportsSteering as runtimeSupportsSteering,
   type Transport,
   importRoomKey,
   open as openSealed,
@@ -78,6 +88,43 @@ import {
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+
+/**
+ * Bounded discovery metadata for a provider-native session Bivy did not start
+ * (see src/runtime/types.ts's DiscoveredNativeSession, issue #156). Never
+ * carries transcript content — safe to render in a list straight off the wire.
+ */
+export interface DiscoveredNativeSessionDto {
+  runtimeId: string;
+  agentName: string;
+  ref: string;
+  cwd?: string;
+  updatedAt?: number;
+  title?: string;
+  active: boolean;
+  resumable: boolean;
+  plan: {
+    mode: "native-resume" | "seeded" | "follow-only";
+    disclosure?: string;
+  };
+  /** The provider's own CLI command to attach to this session directly, when
+   *  known — the "follow/read-only" affordance for a session whose plan is
+   *  "follow-only" (a live external process Bivy can't safely take over). */
+  resumeCommand?: string;
+}
+
+/**
+ * Thrown by `importNativeSession` when the node refuses to fall back to a
+ * seeded continuation without explicit user disclosure (issue #156). Callers
+ * MUST show `disclosure` and only retry with `{ acceptDisclosure: true }` on
+ * the user's explicit confirmation — never automatically.
+ */
+export class NeedsDisclosureError extends Error {
+  constructor(public readonly disclosure: string) {
+    super(disclosure);
+    this.name = "NeedsDisclosureError";
+  }
+}
 
 function requestId(): string {
   return `r${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -163,7 +210,20 @@ export class AppController {
     // node after the one-shot refresh in maybeFlushPendingPrompt already ran —
     // that race left it invisible in the sidebar until the next reconnect.
     // Re-pull the list once the turn actually settles as a self-healing backstop.
-    this.store.onSessionSettled = () => this.refreshSessions();
+    // The turn settling is also the drain point for any queued follow-ups (see
+    // drainFollowups) — sending the next one only once the current turn is
+    // fully done, never mid-stream (that would silently steer instead of
+    // queueing) — and a durable-enough signal to clear a "sending" item whose
+    // own delivery ack (session.user_message) never arrived (settleSendingFollowups).
+    this.store.onSessionSettled = () => {
+      this.refreshSessions();
+      const sid = this.store.getState().activeSessionId;
+      if (sid) {
+        this.store.settleSendingFollowups(sid);
+        this.drainFollowups(sid);
+        void this.maybeTeardownFinishedEphemeral(sid);
+      }
+    };
     // Live convergence: refresh the moment the node tells us a session was
     // created (ours or another client's), instead of only on this session's
     // own eventual agent_end.
@@ -354,6 +414,7 @@ export class AppController {
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
         this.maybeFlushPendingPrompt(appliedEvent);
+        this.maybeConfirmFollowup(appliedEvent);
         this.maybeRestoreDraftAgent(appliedEvent);
         this.maybeRefreshModelsForRuntime(appliedEvent);
         this.reconcileSessionList(appliedEvent);
@@ -776,10 +837,75 @@ export class AppController {
     clearTimeout(pending.timer);
     this.pendingAcks.delete(rid);
     if (String(event.type || "").endsWith(".error")) {
-      pending.reject(new Error(String((event as { error?: unknown }).error || "Save failed")));
+      const error = new Error(String((event as { error?: unknown }).error || "Save failed"));
+      // Preserve any extra fields the error event carried (e.g. session.import's
+      // `needsDisclosure`/`disclosure`) so a caller that needs more than the
+      // message can read them off the thrown Error.
+      Object.assign(error, event);
+      pending.reject(error);
     } else {
       pending.resolve(event);
     }
+  }
+
+  // --- Native session discovery/adoption (issue #156) -------------------------
+  // "Browse, follow, and take over" provider-native sessions (a bare `claude` or
+  // `codex` run outside Bivy) that the current node can see. Capability-driven:
+  // the node decides per-runtime whether a session is discoverable/adoptable
+  // (see src/runtime/native-session-discovery.ts) — this is just the transport.
+
+  /** Every provider-native session the current node can discover, bounded
+   *  metadata only (never transcript content). Throws on a transport/node error. */
+  async discoverNativeSessions(): Promise<DiscoveredNativeSessionDto[]> {
+    const event = await this.awaitAck({ kind: "session.discover" }, 20000);
+    const sessions = (event as { sessions?: unknown }).sessions;
+    return Array.isArray(sessions) ? (sessions as DiscoveredNativeSessionDto[]) : [];
+  }
+
+  /**
+   * Import a discovered session into Bivy and switch the view to it. The node
+   * re-validates the ref against a fresh discovery pass (so a stale/removed
+   * session, or one with a live external process, is rejected server-side even
+   * if this client's cached list is out of date).
+   *
+   * Two outcomes:
+   *  - native resume (the common case for Claude Code / Codex): reopens
+   *    through the ordinary path/id resume, same as clicking any saved
+   *    session — the provider's own history is never touched.
+   *  - seeded continuation (a runtime that can discover but not natively
+   *    resume this session): the node refuses on the first call with a
+   *    NeedsDisclosureError carrying the disclosure text — callers MUST show
+   *    that to the user and only retry with `acceptDisclosure: true` on
+   *    explicit confirmation (issue #156: never fall back to a seeded
+   *    continuation silently). On acceptance a fresh session is created and
+   *    its seed prompt is sent as the first turn, mirroring how a
+   *    cross-runtime session fork seeds its first turn (see forkSession below).
+   */
+  async importNativeSession(runtimeId: string, ref: string, opts: { acceptDisclosure?: boolean } = {}): Promise<string> {
+    let event: ServerEvent;
+    try {
+      event = await this.awaitAck({ kind: "session.import", runtimeId, ref, acceptDisclosure: opts.acceptDisclosure ?? false }, 60000);
+    } catch (error) {
+      const e = error as { needsDisclosure?: unknown; disclosure?: unknown; message?: unknown };
+      if (e?.needsDisclosure) throw new NeedsDisclosureError(String(e.disclosure ?? e.message ?? "This import needs your confirmation."));
+      throw error;
+    }
+    const sessionId = String((event as { sessionId?: unknown }).sessionId || "");
+    if (!sessionId) throw new Error("Import did not return a session id");
+    const seedPrompt = (event as { seedPrompt?: unknown }).seedPrompt;
+    if (typeof seedPrompt === "string" && seedPrompt.trim()) {
+      // Seeded continuation: a FRESH session with no native resume ref, so open
+      // by id alone (never pass the old provider ref as a resume path here —
+      // it isn't this new session's resume token) and seed its first turn the
+      // same way forkSession does for a cross-runtime fork.
+      this.openSession(sessionId);
+      const cmid = clientMessageId();
+      this.store.addUserMessage(seedPrompt, cmid);
+      this.send({ kind: "prompt", sessionId, text: seedPrompt, clientMessageId: cmid });
+    } else {
+      this.openSession(sessionId, ref);
+    }
+    return sessionId;
   }
 
   // --- Session fork (docs/session-fork-plan.md) --------------------------------
@@ -844,23 +970,30 @@ export class AppController {
 
   /**
    * Fork `sourceSessionId` onto `destNodeId` (default: same node), optionally on a
-   * different agent/model, keeping (copy) or retiring (move) the source. Returns
+   * different agent/model, keeping (copy) or retiring (move) the source. `agentId`
+   * is the selected TARGET agent (not merely an "agent changed" flag). Returns
    * the new session id + fidelity ("full" | "seeded"). Throws on any step so the
    * caller can surface it and — critically — NOT retire the source.
    */
   async forkSession(
     sourceSessionId: string,
-    opts: { destNodeId?: string; agentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
+    opts: { destNodeId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
   ): Promise<{ sessionId: string; fidelity: string; missing: Array<{ label?: string; detail?: string }> }> {
     const sourceNodeId = this.local.cur;
     const destNodeId = opts.destNodeId ?? sourceNodeId;
     const crossNode = !this.direct && Boolean(destNodeId) && destNodeId !== sourceNodeId;
+    const state = this.store.getState();
+    const sourceAgentId = opts.sourceAgentId ?? state.sessions.find((session) => session.sessionId === sourceSessionId)?.runtimeId;
+    const targetAgentId = opts.agentId ?? sourceAgentId;
+    // If the source runtime is absent from a stale session summary, prefer the
+    // explicit target path over silently assuming the source/default runtime.
+    const crossAgent = Boolean(targetAgentId && (!sourceAgentId || targetAgentId !== sourceAgentId));
 
-    // Fast path: a same-node fork with no agent change is done entirely on the
-    // node — the transcript never round-trips out to the client and back. The
-    // model may still change (applied cheaply on the new session). Any node or
-    // agent change falls through to the export/import path below.
-    if (!crossNode && !opts.agentId) {
+    // Fast path: a same-node, same-agent fork is done entirely on the node — the
+    // transcript never round-trips out to the client and back. The model may
+    // still change (applied cheaply on the new session). An explicitly selected
+    // different target agent falls through to export/import.
+    if (!crossNode && !crossAgent) {
       const doneEvent = await this.forkRequest(
         { kind: "session.fork.local", sessionId: sourceSessionId, ...(opts.model ? { model: opts.model } : {}) },
         180000,
@@ -880,7 +1013,7 @@ export class AppController {
     //    chosen agent so the source can drop the native transcript payload when
     //    the fork targets a different runtime that could never replay it.
     const exportEvent = await this.forkRequest(
-      { kind: "session.fork.export", sessionId: sourceSessionId, ...(opts.agentId ? { agent: opts.agentId } : {}) },
+      { kind: "session.fork.export", sessionId: sourceSessionId, ...(targetAgentId ? { agent: targetAgentId } : {}) },
       60000,
     );
     const bundle = (exportEvent as { bundle?: unknown }).bundle;
@@ -898,10 +1031,18 @@ export class AppController {
       kind: "session.fork.import",
       bundle,
       transcriptUrl,
-      ...(opts.agentId ? { agent: opts.agentId } : {}),
+      // A same-node cross-agent fork still shares the source repository. It
+      // needs a fresh branch/worktree; adopting the checked-out source branch
+      // makes git fail with “already used by worktree”.
+      sameNode: !crossNode,
+      ...(targetAgentId ? { agent: targetAgentId } : {}),
       ...(opts.model ? { model: opts.model } : {}),
     }, 180000);
     const newSessionId = String((doneEvent as { sessionId?: unknown }).sessionId || "");
+    const actualAgentId = String((doneEvent as { runtimeId?: unknown }).runtimeId || "");
+    if (targetAgentId && actualAgentId && actualAgentId !== targetAgentId) {
+      throw new Error(`Fork requested agent ${targetAgentId}, but the destination used ${actualAgentId}`);
+    }
     const fidelity = String((doneEvent as { fidelity?: unknown }).fidelity || "seeded");
     const seedPrompt = (doneEvent as { seedPrompt?: unknown }).seedPrompt;
     const missingRaw = (doneEvent as { missing?: unknown }).missing;
@@ -1154,7 +1295,10 @@ export class AppController {
     // refresh. A cross-node selection was already opened just above.
     if (!openedAfterNodeSwitch) this.applyInitialRoute();
     const sid = this.store.getState().activeSessionId;
-    if (sid && !openedAfterNodeSwitch) this.requestHistory(sid);
+    if (sid && !openedAfterNodeSwitch) {
+      this.requestHistory(sid);
+      this.retryStuckFollowups(sid);
+    }
     // No active session but a session.new is still pending → its session.history
     // was lost to the drop. Re-fire it (idempotent on the node by requestId) so the
     // draft that wedged on the opening spinner finally binds and flushes its prompt.
@@ -1320,7 +1464,14 @@ export class AppController {
     this.chooseAgent(target);
   }
 
-  /** Send a prompt, creating a session first if there isn't an active one. */
+  /**
+   * Send a prompt, creating a session first if there isn't an active one. A
+   * prompt for an already-active session is either sent right away or held in
+   * the visible follow-up queue (AppState.followupsBySession) — see mustQueue.
+   * Queued items are edit/reorder/removable (see editFollowup etc.) and drain
+   * out one at a time as each turn settles (drainFollowups), or can be pushed
+   * through early via sendFollowupNow/steerNow.
+   */
   sendPrompt(text: string, attachments?: PromptAttachment[]): void {
     const trimmed = text.trim();
     const files = attachments && attachments.length ? attachments : undefined;
@@ -1328,6 +1479,10 @@ export class AppController {
     const cmid = clientMessageId();
     const active = this.store.getState().activeSessionId;
     if (active) {
+      if (this.mustQueue(active)) {
+        this.store.enqueueFollowup(active, { id: cmid, text: trimmed, attachments: files }, Date.now());
+        return;
+      }
       this.store.addUserMessage(trimmed, cmid, files);
       this.send({ kind: "prompt", sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files });
       return;
@@ -1451,20 +1606,24 @@ export class AppController {
       this.installAgent(rt.id);
       return;
     }
-    // Changing the agent never creates a session — a live session's runtime
-    // can't be swapped in place, so we drop back to a fresh local draft. The
-    // real session (bound to this agent) is created by the next sendPrompt.
-    // Reset *before* selecting so resetActiveSession() (which clears
-    // selectedAgentId) can't wipe the pick we're about to apply.
-    const activeBeforeSwitch = this.store.getState().activeSessionId;
-    if (activeBeforeSwitch) {
-      this.seedAgentHandoffDraft(rt);
+    const state = this.store.getState();
+    const activeSessionId = state.activeSessionId;
+    if (activeSessionId) {
+      // Agent handoff is a real cross-runtime fork, not a client-side summary in
+      // a blank draft. The shared fork path carries normalized history, repo and
+      // dirty files, creates the target runtime session, and opens it.
+      const sourceAgentId = state.activeRuntimeId
+        ?? state.sessions.find((session) => session.sessionId === activeSessionId)?.runtimeId;
       this.pendingPrompt = null;
       this.pendingFollowups = [];
-      this.store.resetActiveSession();
-      // The live session is gone; we're on a fresh draft now — keep the URL honest.
-      navigate({ kind: "new" });
+      void this.forkSession(activeSessionId, {
+        agentId: rt.id,
+        sourceAgentId,
+        retireSource: false,
+      }).catch((error) => this.store.setError(error instanceof Error ? error.message : String(error)));
+      return;
     }
+
     this.store.setSelectedAgentLocal(rt.id);
     this.local.setLastChoice({ agentId: rt.id });
     // Tell the node to switch its default runtime. Do NOT request models here:
@@ -1474,60 +1633,6 @@ export class AppController {
     // The node broadcasts `runtime.updated` once the switch actually lands, and
     // that event drives the fresh models.list (see maybeRefreshModelsForRuntime).
     this.send({ kind: "runtime.select", id: rt.id });
-  }
-
-  private seedAgentHandoffDraft(target: RuntimeInfo): void {
-    const s = this.store.getState();
-    const sessionId = s.activeSessionId;
-    if (!sessionId) return;
-    const summary = this.sessionHandoffSummary(target);
-    try {
-      localStorage.setItem("bivy.composer.new", summary);
-    } catch {
-      // Draft persistence is best-effort; the agent switch still works.
-    }
-  }
-
-  private sessionHandoffSummary(target: RuntimeInfo): string {
-    const s = this.store.getState();
-    const sessionId = s.activeSessionId || "unknown";
-    const session = s.sessions.find((x) => x.sessionId === sessionId);
-    const title = session?.name || s.activeTitle || "Untitled session";
-    const sourceAgent = session?.agentName || s.currentAgentName || s.selectedAgentId || "previous agent";
-    const targetAgent = String(target.displayName || target.name || target.id || "new agent");
-    const model = s.currentModel?.label || s.currentModel?.id;
-    const transcriptUrl = `${location.origin}${routePath({ kind: "session", id: sessionId })}`;
-    const maybeUnavailable = s.transcript.some((e) =>
-      e.role === "error" || /\b(usage limit|rate limit|quota|429|limit exceeded|authentication|unauthori[sz]ed)\b/i.test(e.text || ""),
-    );
-    const recent = s.transcript
-      .filter((e) => (e.role === "user" || e.role === "assistant" || e.role === "error") && !e.tool && (e.text || "").trim())
-      .slice(-10)
-      .map((e) => `- ${e.role}: ${this.truncateForHandoff(e.text, 700)}`)
-      .join("\n");
-    const context = [
-      `I am handing off/cloning an active Bivy session from ${sourceAgent} to ${targetAgent}.`,
-      `Original session: ${title} (${sessionId})`,
-      `Original transcript: ${transcriptUrl}`,
-      model ? `Current model before handoff: ${model}` : null,
-      s.draftRepo ? `Repository: ${s.draftRepo}` : null,
-      session?.branch ? `Branch: ${session.branch}` : null,
-      session?.prUrl ? `PR: ${session.prUrl}` : null,
-      maybeUnavailable
-        ? "The previous agent may be unavailable (limit/auth/quota/transport issue). Use the original transcript link above if you need more context."
-        : "Use the original transcript link above if this summary is missing anything.",
-      "",
-      "Recent transcript summary:",
-      recent || "- No transcript content was loaded in this client yet.",
-      "",
-      "Please continue from here in a new cloned session.",
-    ].filter((line): line is string => line != null);
-    return context.join("\n");
-  }
-
-  private truncateForHandoff(text: string, max: number): string {
-    const compact = String(text || "").replace(/\s+/g, " ").trim();
-    return compact.length > max ? `${compact.slice(0, Math.max(0, max - 1))}…` : compact;
   }
 
   installAgent(id: string): void {
@@ -1578,6 +1683,22 @@ export class AppController {
   }
   removeLocalModel(id: string): void {
     this.send({ kind: "models.custom.remove", id });
+  }
+
+  // --- Settings: rulesets (run-orchestration policy) ----------------------
+
+  /** Pull the ruleset list into state (each with its `active` flag). */
+  listRulesets(): void {
+    this.send({ kind: "rulesets.list" });
+  }
+  /** Save (create or update) a ruleset. `active` optionally (de)selects it as the
+   *  queue's active ruleset. Resolves once the node acks (validation passes) or
+   *  rejects with the node's validation error. */
+  saveRuleset(ruleset: Ruleset, active?: boolean): Promise<void> {
+    return this.awaitAck({ kind: "rulesets.save", ruleset, active }).then(() => undefined);
+  }
+  removeRuleset(name: string): void {
+    this.send({ kind: "rulesets.remove", name });
   }
 
   // --- Settings: voice input (speech-to-text) ----------------------------
@@ -1734,11 +1855,14 @@ export class AppController {
   private ephemeralKeys: EphemeralKeyStore = createEphemeralKeyStore();
   private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
+  private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
   private ephemeralMachines: MachineStore = createMachineStore();
   /** Ephemeral node ids we've already seeded with device-held model keys this
    *  session, so a reconnect doesn't re-push (the node write is idempotent
    *  regardless). See `seedEphemeralNodeIfNeeded`. */
   private seededEphemeralNodes = new Set<string>();
+  /** Machines already scheduled for finish-triggered teardown. */
+  private finishingEphemeralMachines = new Set<string>();
 
   listEphemeralKeys(): Promise<ProviderKeyInfo[]> {
     return this.ephemeralKeys.list();
@@ -1771,6 +1895,18 @@ export class AppController {
   }
   setEphemeralPrefs(id: string, patch: Partial<EphemeralPrefs>): Promise<EphemeralPrefs> {
     return this.ephemeralPrefs.set(id, patch);
+  }
+  listEphemeralSetups(provider?: string): Promise<EphemeralSetup[]> {
+    return this.ephemeralSetups.list(provider);
+  }
+  createEphemeralSetup(provider: string, input: { name: string } & Partial<EphemeralPrefs>): Promise<EphemeralSetup> {
+    return this.ephemeralSetups.create(provider, input);
+  }
+  updateEphemeralSetup(id: string, patch: Partial<Pick<EphemeralSetup, "name" | keyof EphemeralPrefs>>): Promise<EphemeralSetup> {
+    return this.ephemeralSetups.update(id, patch);
+  }
+  removeEphemeralSetup(id: string): Promise<void> {
+    return this.ephemeralSetups.remove(id);
   }
   listEphemeralMachines(): Promise<EphemeralMachine[]> {
     return this.ephemeralMachines.list();
@@ -1820,12 +1956,43 @@ export class AppController {
       this.send({ kind: "provider.apiKey", provider, key });
     }
   }
+  /** Destroy a configured ephemeral machine shortly after agent_end. The short
+   * grace period lets final transcript/PR metadata flush first. A queued
+   * follow-up suppresses teardown; its eventual agent_end will try again. This
+   * is device-driven, so the machine's TTL remains the safety fallback when the
+   * browser goes offline. */
+  private async maybeTeardownFinishedEphemeral(sessionId: string): Promise<void> {
+    if (this.direct || this.store.getFollowups(sessionId).length > 0) return;
+    const nodeId = this.local.cur;
+    if (!nodeId) return;
+    const machine = (await this.ephemeralMachines.list().catch(() => []))
+      .find((m) => m.nodeId === nodeId && m.teardownOnAgentFinish);
+    if (!machine || this.finishingEphemeralMachines.has(machine.id)) return;
+    this.finishingEphemeralMachines.add(machine.id);
+    setTimeout(() => {
+      // A follow-up may have been queued during the grace period.
+      if (this.store.getFollowups(sessionId).length > 0 || this.local.cur !== nodeId) {
+        this.finishingEphemeralMachines.delete(machine.id);
+        return;
+      }
+      void this.destroyEphemeral(machine).catch((e) => {
+        this.finishingEphemeralMachines.delete(machine.id);
+        this.store.setError(e instanceof Error ? e.message : String(e));
+      });
+    }, 3000);
+  }
+
   listEphemeralSizes(providerId: string, region?: string): Promise<ProviderSize[]> {
     return listEphemeralSizes(providerId, { exec: cloudExec(this.local), keys: this.ephemeralKeys }, region);
   }
   async launchEphemeral(opts: LaunchOpts): Promise<EphemeralMachine> {
     if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
-    const machine = await launchEphemeralMachine(opts, {
+    // The repo a freshly-booted machine pre-clones is the new-session composer's
+    // repo selection, not a per-machine setting — so a configured machine works
+    // on whatever repo the draft targets. An explicit opts.repo (e.g. a queue
+    // caller) still wins.
+    const repo = opts.repo ?? (this.store.getState().draftRepo || undefined);
+    const machine = await launchEphemeralMachine({ ...opts, repo }, {
       store: this.local,
       exec: cloudExec(this.local),
       keys: this.ephemeralKeys,
@@ -2040,6 +2207,172 @@ export class AppController {
   abort(): void {
     const active = this.store.getState().activeSessionId;
     if (active) this.send({ kind: "abort", sessionId: active });
+  }
+
+  // --- Queued follow-ups (issue #154) -------------------------------------
+  //
+  // A prompt sent to an already-busy session used to go straight over the
+  // wire and rely on the node/runtime to sort out ordering (its default is to
+  // "steer" the running turn — see src/server.ts's promptOptionsFor). That left
+  // a follow-up invisible and uneditable the instant it was sent. Now it's
+  // held in AppState.followupsBySession (visible, editable, reorderable) until
+  // either the current turn settles (auto-drain, one at a time, in display
+  // order) or the user explicitly pushes it through early (sendFollowupNow /
+  // steerNow). See SessionStore's queued-follow-ups CRUD for the data-shape
+  // invariants; everything here is about *when* to call it.
+
+  /** A new prompt for this session must be held in the visible queue rather
+   *  than sent immediately: the session is mid-turn, or earlier queued items
+   *  are still waiting (sending straight through would silently jump the
+   *  queue and reorder ahead of them — see the reordering acceptance test).
+   *  See packages/core/src/followups.ts's mustQueueFollowup for the (unit
+   *  tested) decision itself. */
+  private mustQueue(sessionId: string): boolean {
+    return mustQueueFollowup(this.store.getFollowups(sessionId).length, this.store.getState().working);
+  }
+
+  /** Whether the active runtime has advertised it can safely accept an
+   *  explicit mid-turn interrupt (`streamingBehavior: "steer"`). Read from the
+   *  live capabilities merged onto the selected runtime row (session.created /
+   *  session.capabilities — see SessionStore.mergeRuntimeCapabilities and
+   *  src/runtime/types.ts's RuntimeCapabilities.streamingBehaviors on the
+   *  node). The composer/queue UI use this to decide whether "Steer current
+   *  turn" is even offered; when false, a busy session only ever queues —
+   *  never attempts an interrupt the runtime hasn't promised to honor. See
+   *  packages/core/src/followups.ts's supportsSteering for the (unit tested)
+   *  capability check itself. */
+  supportsSteering(): boolean {
+    const s = this.store.getState();
+    const runtime = s.runtimes.find((r) => r.id === s.selectedAgentId);
+    return runtimeSupportsSteering(runtime?.capabilities as { streamingBehaviors?: unknown } | undefined);
+  }
+
+  /** The queue for a session, in delivery order. */
+  getFollowups(sessionId: string): PendingFollowup[] {
+    return this.store.getFollowups(sessionId);
+  }
+
+  /** Edit a still-queued item. `expectedVersion` must match the version the
+   *  caller last read (see PendingFollowup.version) — a mismatch means it
+   *  changed underneath the editor (another tab, or it started sending while
+   *  the edit was open) and is rejected rather than silently overwritten; the
+   *  caller should show the current (already-reactive) state and let the user
+   *  retry instead of reapplying their edit over it. */
+  editFollowup(sessionId: string, id: string, patch: { text: string; attachments?: PromptAttachment[] }, expectedVersion: number): FollowupEditResult {
+    return this.store.editFollowup(sessionId, id, patch, expectedVersion, Date.now());
+  }
+
+  /** Remove a still-queued item. No-op once it's already dispatched. */
+  removeFollowup(sessionId: string, id: string): boolean {
+    return this.store.removeFollowup(sessionId, id);
+  }
+
+  /** Reorder a still-queued item to `toIndex` among the queue. No-op once it's
+   *  already dispatched. */
+  reorderFollowup(sessionId: string, id: string, toIndex: number): boolean {
+    return this.store.reorderFollowup(sessionId, id, toIndex);
+  }
+
+  /**
+   * Force a still-queued item to the front and deliver it as soon as possible:
+   * immediately if the session has gone idle since it was queued, as an
+   * explicit steer if it's busy and the runtime supports one (see
+   * supportsSteering), or otherwise just promoted to the front — sending it
+   * into a busy runtime with no real steer semantics would silently interrupt
+   * it, so it stays queued for the normal turn-end drain instead. No-op for an
+   * item that isn't (or is no longer) queued.
+   */
+  sendFollowupNow(sessionId: string, id: string): void {
+    const item = this.store.getFollowups(sessionId).find((f) => f.id === id);
+    if (!item || item.status !== "queued") return;
+    this.store.reorderFollowup(sessionId, id, 0);
+    if (!this.store.getState().working) {
+      this.drainFollowups(sessionId);
+      return;
+    }
+    if (this.supportsSteering()) this.dispatchFollowup(sessionId, item, "steer");
+  }
+
+  /**
+   * The explicit "Steer current turn" action: inject `text` into the running
+   * turn right now, bypassing the queue entirely (it never becomes a queued
+   * item). No-op unless the session is actually busy and the runtime
+   * advertised steer support — the composer only offers this action when both
+   * hold, but a stale click (the turn just ended, or the runtime changed) must
+   * not fall back to silently queueing something the user asked to inject NOW
+   * — so this returns whether it actually sent, and the caller (the composer)
+   * only clears the draft on a true send, never discarding unsent text.
+   */
+  steerNow(text: string, attachments?: PromptAttachment[]): boolean {
+    const trimmed = text.trim();
+    const files = attachments && attachments.length ? attachments : undefined;
+    if (!trimmed && !files) return false;
+    const active = this.store.getState().activeSessionId;
+    if (!active || !this.store.getState().working || !this.supportsSteering()) return false;
+    const cmid = clientMessageId();
+    this.store.addUserMessage(trimmed, cmid, files);
+    this.send({ kind: "prompt", sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files, streamingBehavior: "steer" });
+    return true;
+  }
+
+  /** Send the front queued item now. Called once a turn settles (agent_end),
+   *  and defensively whenever the session might have gone idle between an
+   *  enqueue and this check. No-op while busy or with nothing queued — the
+   *  queue only ever has one item in flight ("sending") at a time. */
+  private drainFollowups(sessionId: string): void {
+    if (sessionId !== this.store.getState().activeSessionId) return;
+    if (this.store.getState().working) return;
+    const next = nextQueuedFollowup(this.store.getFollowups(sessionId));
+    if (!next) return;
+    this.dispatchFollowup(sessionId, next);
+  }
+
+  /** Actually send a queued item: mark it "sending" (so it can't be double-
+   *  dispatched or edited mid-flight), fold it into the transcript exactly
+   *  like any other sent prompt, and put it on the wire. Confirmed sent — and
+   *  dropped from the queue — by maybeConfirmFollowup once the node echoes it
+   *  back (or, failing that, once the turn it started settles regardless —
+   *  see settleSendingFollowups). */
+  private dispatchFollowup(sessionId: string, item: PendingFollowup, streamingBehavior?: StreamingBehavior): void {
+    this.store.markFollowupSending(sessionId, item.id, Date.now());
+    this.store.addUserMessage(item.text, item.id, item.attachments);
+    this.send({
+      kind: "prompt",
+      sessionId,
+      text: item.text,
+      clientMessageId: item.id,
+      attachments: item.attachments,
+      ...(streamingBehavior ? { streamingBehavior } : {}),
+    });
+  }
+
+  /** The node's echo of a prompt (session.user_message) is the protocol
+   *  acknowledgement that a dispatched follow-up actually reached it —
+   *  matched by clientMessageId. Drop it from the visible queue; it's a normal
+   *  transcript message now (deduped against the optimistic bubble exactly
+   *  like any other send — see SessionStore's `pending` map). This never fires
+   *  for a plain (non-queued) send: confirmFollowupSent no-ops when the id
+   *  isn't in the queue. */
+  private maybeConfirmFollowup(event: { type?: string; sessionId?: string; clientMessageId?: unknown }): void {
+    if (event.type !== "session.user_message") return;
+    const sid = event.sessionId || this.store.getState().activeSessionId;
+    const cmid = typeof event.clientMessageId === "string" ? event.clientMessageId : undefined;
+    if (!sid || !cmid) return;
+    this.store.confirmFollowupSent(sid, cmid);
+  }
+
+  /** A follow-up left "sending" when the socket dropped before its delivery
+   *  could be confirmed is retried verbatim (same clientMessageId) once
+   *  reconnected — see onReconnected. Safe to resend even if it DID land: the
+   *  node dedupes `prompt` by clientMessageId (mirroring session.new's
+   *  requestId dedupe — see src/session/session-new-dedupe.ts and its prompt
+   *  reuse in src/server.ts), so a prompt that already landed is a no-op
+   *  rather than a duplicate turn. */
+  private retryStuckFollowups(sessionId: string): void {
+    for (const item of this.store.getFollowups(sessionId)) {
+      if (item.status !== "sending") continue;
+      this.send({ kind: "prompt", sessionId, text: item.text, clientMessageId: item.id, attachments: item.attachments });
+    }
   }
 
   // --- Session lifecycle actions -----------------------------------------

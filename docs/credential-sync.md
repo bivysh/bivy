@@ -1,6 +1,6 @@
 # Credential and key sync model
 
-Bivy has four different credential classes. They should not be described as one generic "keys sync everywhere" feature.
+Bivy has four different credential classes, each with its own sync behavior. They are not one generic "keys sync everywhere" feature.
 
 ## 1. Relay/session keys
 
@@ -21,13 +21,11 @@ Current model:
 - When hosted model-auth sync is enabled, the node encrypts a model-auth vault snapshot locally before uploading it to the control plane.
 - The control plane stores ciphertext plus node public-key wrapping metadata.
 - Another enrolled node requests a wrapped vault key; an existing node wraps the key to the requesting node public key.
-- Bivy Cloud should never receive plaintext model credentials.
+- Bivy Cloud never receives plaintext model credentials.
 
-Production requirement before marketing this broadly:
-
-- Add tests that prove the control-plane store only sees ciphertext/wrapped keys.
-- Add a user-visible explanation of which providers/runtimes use Bivy-managed auth.
-- Add a recovery story for losing all nodes/devices that can unwrap the vault.
+If you lose every node and device that can unwrap the vault, the stored
+ciphertext can no longer be decrypted — sign in to each provider again on a new
+node.
 
 ## 3. GitHub App private keys
 
@@ -66,12 +64,6 @@ Current model:
   covers the webhook secret; the app's private key is rotated from GitHub's
   own app settings page).
 
-Production requirement before marketing this broadly: same three items listed
-under model/provider credentials above (tests proving ciphertext-only storage,
-user-visible copy, and a lost-all-nodes recovery story) — this feature adds a
-fourth: UI surfacing which nodes currently hold which app's key, not just
-whether sync is on.
-
 ## 4. Agent-native credentials
 
 Purpose: credentials owned by a third-party CLI/runtime, e.g. Claude Code, Codex, Gemini CLI.
@@ -84,9 +76,7 @@ Examples:
 
 These are **not automatically synced across all nodes** unless Bivy explicitly imports and re-emits them as Bivy-managed credentials. Treat them as per-node native logins.
 
-User-facing copy should say:
-
-> Bivy can sync Bivy-managed provider credentials E2E for supported runtimes. Agent-native CLI logins may need to be performed once per node.
+In short: Bivy syncs Bivy-managed provider credentials end-to-end for supported runtimes. Agent-native CLI logins may need to be performed once per node.
 
 ## Runtime mapping
 
@@ -100,8 +90,7 @@ User-facing copy should say:
 | Aider | Mixed | Depends on whether launched with Bivy-managed env/API key or native config |
 | Generic CLI / OpenCode / Goose / OpenClaw | Agent-native | Per-node native configuration |
 
-## Support guidance
+## Troubleshooting
 
-- Never ask users to paste provider keys into support chat.
-- If a key may have been exposed, rotate it at the provider.
-- If a second node cannot use a model, first determine whether that runtime uses Bivy-managed auth or agent-native auth.
+- If a key may have been exposed, rotate it at the provider — never paste a provider key into a support channel.
+- If a second node cannot use a model, check the table above to see whether that runtime uses Bivy-managed auth (which syncs) or agent-native auth (which needs a per-node login).

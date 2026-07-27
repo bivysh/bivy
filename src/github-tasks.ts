@@ -218,6 +218,18 @@ export function buildResumePrompt(issue: GitHubIssue): string {
   ].join("\n");
 }
 
+/** The nudge sent to a non-issue (interactive/chat) session whose turn was cut
+ *  off by a process restart. Unlike the issue prompt it makes no assumptions
+ *  about a git worktree or a task to report on — it just tells the agent it was
+ *  interrupted and to finish what it was doing, so it works for any session. */
+export function buildInteractiveResumePrompt(): string {
+  return [
+    "Your previous turn was interrupted by a restart before it finished — not because you completed the task or were told to stop.",
+    "",
+    "Pick up exactly where you left off and finish what you were doing. Review the recent conversation to recall your plan; if you're in a code workspace, check `git status` and `git diff` to see the work already in progress before continuing.",
+  ].join("\n");
+}
+
 /** Parse optional bivy directives from issue body for agent/model selection.
  *  Supports lines like:
  *    bivy-agent: pi
@@ -266,6 +278,19 @@ export async function getIssue(cfg: GitHubTaskConfig, issueNumber: number): Prom
   const raw = (await res.json().catch(() => undefined)) as (Record<string, unknown> | undefined);
   if (!raw || raw.pull_request) return undefined;
   return parseIssue(raw);
+}
+
+/** Fetch a triggering issue comment's body directly from GitHub (issue #153) —
+ *  the control plane no longer retains it, only the comment URL, whose stable
+ *  `issuecomment-<id>` anchor is enough for the authorized, claiming node to
+ *  retrieve the live text just in time. */
+export async function getIssueCommentBody(cfg: GitHubTaskConfig, url: string | undefined): Promise<string | undefined> {
+  const id = url?.match(/#issuecomment-(\d+)$/)?.[1];
+  if (!id) return undefined;
+  const res = await gh(cfg, "GET", `/issues/comments/${id}`);
+  if (!res.ok) return undefined;
+  const raw = (await res.json().catch(() => undefined)) as { body?: unknown } | undefined;
+  return typeof raw?.body === "string" ? raw.body : undefined;
 }
 
 export async function addLabel(cfg: GitHubTaskConfig, issueNumber: number, label: string): Promise<void> {

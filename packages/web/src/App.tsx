@@ -151,6 +151,13 @@ export function App() {
   const runCommand = useCallback((name: string, _args?: string) => {
     switch (name) {
       case "/new": controller.newSession(); break;
+      case "/resume":
+        // Manual resume: continue the turn a restart interrupted. Sent as a normal
+        // prompt to the active session so it streams and re-arms the turn state.
+        controller.sendPrompt(
+          "Please continue — your previous turn was interrupted by a restart before it finished. Pick up exactly where you left off and finish what you were doing.",
+        );
+        break;
     }
   }, []);
 
@@ -273,6 +280,11 @@ export function App() {
 
   const closeDrawer = () => setDrawerOpen(false);
   const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId);
+  const activeSessionNodeId = activeSession?.nodeId || state.currentNodeId || undefined;
+  const activeSessionNode = state.nodes.find((node) => node.id === activeSessionNodeId);
+  const activeSessionNodeLabel = activeSessionNode
+    ? `${activeSessionNode.name || activeSessionNode.id} (${activeSessionNode.id})`
+    : activeSessionNodeId;
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
   // "Continue in terminal" is offered only when this session's runtime can hand
   // itself to its native TUI on the node (capability `interactiveTui`) — the
@@ -338,6 +350,10 @@ export function App() {
                 <path d="M13 15h4" />
               </svg>
             </button>
+            {/* Discover/adopt a provider-native session (Claude Code, Codex, …)
+                started outside Bivy — issue #156. This used to be a header icon,
+                but a rarely-used discovery/adopt flow didn't belong crammed next
+                to "+ New"; it now lives in Settings → Import session. */}
             <button
               className="ghost-btn"
               onClick={() => {
@@ -429,7 +445,12 @@ export function App() {
                 sessionId={state.activeSessionId}
                 name={state.activeTitle}
                 isRepo={isRepoSession}
-                prs={activeSession?.prs}
+                node={activeSessionNodeLabel}
+                agent={activeSession?.agentName || activeSession?.runtimeId}
+                workspace={activeSession?.workspace}
+                worktree={activeSession?.worktree}
+                branch={activeSession?.branch}
+                sessionFile={activeSession?.path}
                 collapsed={collapsed}
                 onToggleCollapsed={toggleCollapsed}
                 onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
@@ -548,6 +569,12 @@ export function App() {
             controller.openSessionOnNode(id, path, nodeId);
             // openSessionOnNode already navigates to `/sessions/:id` itself;
             // this just resolves Settings back to that same route.
+            closeSettings({ kind: "session", id });
+            closeDrawer();
+          }}
+          onImported={(id) => {
+            // importNativeSession already opened + navigated to the new session
+            // (with its resume ref); just dismiss Settings onto that route.
             closeSettings({ kind: "session", id });
             closeDrawer();
           }}

@@ -760,6 +760,13 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .composer-btn.send:disabled { opacity: 0.35; cursor: default; }
 .composer-btn.stop { background: var(--danger); color: #fff; }
 .composer-btn.stop:active { transform: scale(0.92); }
+/* "Steer current turn": an explicit interrupt, distinct from the default Send
+   (which queues while busy — see FollowupQueue). --accent is already a warm
+   orange (the Send button), so this borrows --unseen's blue instead — a color
+   used nowhere else in the composer — to read as clearly "not a normal send." */
+.composer-btn.steer { background: var(--unseen); color: #fff; }
+.composer-btn.steer:hover { filter: brightness(1.1); }
+.composer-btn.steer:active { transform: scale(0.92); }
 .attach-pill, .pause-pill { padding: 4px 8px; }
 
 /* Voice-input trigger: a circular icon button seated just left of Send. */
@@ -808,6 +815,25 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .voice-provider { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .voice-provider-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .small { font-size: 12px; }
+
+/* --- Rulesets (Settings → Rulesets) --- */
+.btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+.ruleset-rule-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-top: 8px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-2); }
+.ruleset-rule-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ruleset-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.ruleset-chip {
+  border: 1px solid var(--line-strong); background: var(--surface); color: var(--muted);
+  border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.ruleset-chip:hover { border-color: var(--accent); color: var(--ink); }
+.ruleset-chip.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--surface)); color: var(--accent); }
+.ruleset-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.ruleset-field-grid .field-label { margin-top: 0; }
+.ruleset-chain { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
+.ruleset-chain-row { display: flex; gap: 6px; align-items: center; }
+.ruleset-chain-row .picker-search { flex: 1; min-width: 0; }
+.ruleset-collapsible { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
+.ruleset-collapsible-body { margin-top: 8px; }
 .attach-chips { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 2px; }
 .attach-chip {
   display: inline-flex; align-items: center; gap: 6px; max-width: 200px;
@@ -828,6 +854,45 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .attach-chip.has-thumb { padding-left: 3px; }
 .attach-thumb-btn { flex: none; border: 0; padding: 0; background: none; cursor: zoom-in; line-height: 0; border-radius: 5px; overflow: hidden; }
 .attach-thumb { display: block; width: 28px; height: 28px; object-fit: cover; border-radius: 5px; }
+
+/* Queued follow-ups (issue #154) — a panel just above the composer showing
+   prompts held back while the session is busy, with their order and delivery
+   state. Reuses .queue-action-btn (GithubQueue's button look) for edit/
+   remove/reorder/send-next so this reads as the same "manage a queue"
+   pattern already established there, rather than inventing a new one. */
+.followup-queue { margin: 8px 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.followup-queue-head { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 2px; }
+.followup-list { display: flex; flex-direction: column; gap: 6px; }
+.followup-card {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+  overflow: hidden;
+}
+.followup-card.locked { opacity: 0.75; }
+.followup-card-row {
+  display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
+}
+.followup-card-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 10px; }
+.followup-reorder { display: flex; flex-direction: column; gap: 2px; flex: none; }
+.followup-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.followup-status { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; }
+.followup-card.locked .followup-status { color: var(--accent); }
+.followup-text { font-size: 14px; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.followup-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.followup-card-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+.followup-edit { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; }
+.followup-edit-input {
+  width: 100%; resize: vertical; min-height: 44px; font: inherit; font-size: 14px;
+  border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--ink);
+  padding: 6px 8px;
+}
+.followup-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* Bigger tap targets for the reorder/edit/remove icon buttons specifically —
+   the shared .queue-action-btn.icon sizing (from GithubQueue) is a bit tight
+   for a control someone taps repeatedly on a phone to walk an item up a queue. */
+.followup-reorder .queue-action-btn.icon,
+.followup-card-actions .queue-action-btn.icon {
+  min-width: 32px; min-height: 32px;
+}
 
 /* Drag-and-drop drop zone over the composer card. */
 .composer-card.dragging { border-color: var(--accent); }
@@ -948,12 +1013,27 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 
 /* ---- Fork sheet ---- */
 .picker-section { padding: 4px 0; }
+.fork-select-field { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
+.fork-select-field label { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.fork-select-field select { width: 100%; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); color: var(--ink); }
 .fork-toggle { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-size: 13px; color: var(--ink); }
 .fork-toggle input { width: 16px; height: 16px; }
 .fork-error { margin: 4px 12px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); color: var(--danger, #d33); font-size: 12px; }
 .fork-warn { margin: 4px 12px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 12px; }
 .fork-submit { width: calc(100% - 24px); margin: 8px 12px; padding: 11px 14px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; font-weight: 700; font-size: 14px; }
 .fork-submit:disabled { opacity: 0.6; }
+
+/* ---- Import session sheet (issue #156: discover/adopt provider-native sessions) ---- */
+.import-session-hint { margin: 4px 12px; padding: 10px; color: var(--muted); font-size: 12px; }
+/* A live external process was detected — read-only badge, no adopt action
+   (Bivy has no safe way to take over a process it doesn't own). */
+.import-session-badge { display: inline-block; padding: 5px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.import-session-action { padding: 7px 12px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 700; font-size: 12px; white-space: nowrap; }
+.import-session-action:disabled { opacity: 0.6; }
+/* The "follow/read-only" affordance for a live-elsewhere session: the badge
+   plus the exact command to attach to it themselves, in their own terminal. */
+.import-session-follow { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.import-session-resume-cmd { font-size: 10px; color: var(--muted); background: var(--surface-2); border-radius: 6px; padding: 2px 6px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- Settings ---- */
 .sheet-back { border: 0; background: transparent; color: var(--muted); font-size: 24px; line-height: 1; padding: 0 4px; }
@@ -985,6 +1065,18 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
    session list (.session-row/.session-item etc.), just its own <ul> reset. */
 .queue-session-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .field-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+/* Automations panel (Automations.tsx): each field stacks its label above a
+   full-width control, and the intro/help text, list rows, row actions and
+   error message get proper styling (these classes had no rules before, so the
+   form controls rendered at intrinsic width and overflowed narrow screens). */
+.settings-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.settings-field .field-label { margin-top: 0; }
+.settings-field .picker-search { margin-bottom: 0; }
+.settings-hint { font-size: 13px; color: var(--muted); margin: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface-2); }
+.settings-row > * { min-width: 0; overflow-wrap: anywhere; }
+.settings-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
+.settings-error { color: var(--danger); font-size: 13px; margin: 4px 0 0; overflow-wrap: anywhere; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .link-btn { align-self: flex-start; border: 0; background: transparent; color: var(--accent); font-size: 13px; padding: 0; }
 .chip { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 8px; border: 1px solid var(--line); color: var(--muted); }
@@ -1019,6 +1111,16 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .queue-run-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .queue-run-field select, .queue-run-field input { font-size: 13px; }
 .queue-run-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Run evidence / outcome reports (issue #153). */
+.evidence-list { display: flex; flex-direction: column; gap: 8px; }
+.evidence-report { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--surface-2); }
+.evidence-report summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 650; list-style: none; }
+.evidence-report summary::-webkit-details-marker { display: none; }
+.evidence-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0; color: var(--muted); font-size: 12px; }
+.evidence-timeline { margin: 8px 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
+.evidence-timeline li { display: grid; grid-template-columns: minmax(125px, auto) 1fr auto; gap: 8px; font-size: 12px; }
+.evidence-timeline time, .evidence-timeline small { color: var(--muted); }
+.evidence-checks { margin: 0 0 10px; padding-left: 18px; font-size: 12px; color: var(--muted); }
 /* "Connect existing GitHub App" form (Settings → GitHub App). */
 .ce-form { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--surface-2); margin-top: 8px; }
 .ce-pem { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; resize: vertical; }
@@ -1287,10 +1389,21 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .term-continue-chat { font-weight: 700; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
 .term-out { flex: 1; min-height: 0; overflow: hidden; padding: 6px 8px; position: relative; }
 /* Suppress the iOS long-press callout / native text-selection UI over the
-   canvas — we drive touch selection ourselves (long-press + drag). */
-.term-out { -webkit-touch-callout: none; }
+   canvas — we drive touch selection ourselves (long-press + drag). We also own
+   scrolling (see Terminal.tsx touch handlers): `touch-action: none` stops the
+   browser from also panning the canvas, which is what made scroll jump or run
+   backwards; `overscroll-behavior: contain` keeps a scroll past the top/bottom
+   from bouncing the page or triggering pull-to-refresh; and pinning the text
+   size stops iOS from silently inflating the monospace glyphs. */
+.term-out {
+  -webkit-touch-callout: none;
+  touch-action: none;
+  overscroll-behavior: contain;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 .term-out .xterm { height: 100%; }
-.term-out .xterm-viewport { overflow-y: auto; }
+.term-out .xterm-viewport { overflow-y: auto; overscroll-behavior: contain; }
 /* Smooth momentum scrolling for the terminal viewport on touch devices. */
 .term-out .xterm-viewport { -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
 
@@ -1355,6 +1468,9 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .term-selhandle-start { transform: translate(-50%, -100%); }
 .term-selhandle-end { transform: translate(-50%, 0); }
 .term-selhandle:active { background: var(--accent); filter: brightness(1.15); }
+/* A finger is far bigger than the 22px dot — extend an invisible hit area around
+   each handle so grabbing one to adjust a selection doesn't demand precision. */
+.term-selhandle::after { content: ""; position: absolute; inset: -12px; border-radius: 50%; }
 
 /* Snippets / recent-command chip bar (touch keyboard-avoider). Sits just above
    the key accessory bar; tap a chip to insert, long-press to run. */

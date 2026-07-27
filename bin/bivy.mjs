@@ -28,6 +28,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
+import { StringDecoder } from "node:string_decoder";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createCipheriv, createDecipheriv, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -2792,6 +2793,20 @@ async function localApi(config, pathName, init = {}) {
   try {
     const headers = new Headers(init.headers || {});
     if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+    // Opportunistically attach a device token when the caller didn't set one.
+    // Needed once the daemon requires auth even on loopback (multi-user host
+    // detection, BIVY_REQUIRE_LOCAL_AUTH=1 — see src/auth.ts); a harmless
+    // extra Authorization header otherwise, since the daemon still accepts
+    // bare loopback there. Skip for the bootstrap call itself (it authenticates
+    // with the bootstrap secret, not a token) to avoid recursing.
+    if (!headers.has("authorization") && pathName !== "/api/auth/bootstrap") {
+      try {
+        headers.set("authorization", `Bearer ${await localDeviceToken(config)}`);
+      } catch {
+        // No bootstrap secret on disk, node unreachable for bootstrap, etc. —
+        // fall back to an unauthenticated call, same as before this existed.
+      }
+    }
     res = await fetch(`${url(config)}${pathName}`, { ...init, headers });
   } catch (error) {
     throw new Error(`Could not reach the local node at ${url(config)}. Start it with 'bivy start' or 'bivy service install'.`);
@@ -2810,7 +2825,15 @@ function readBootstrapSecret() {
   }
 }
 
+// Cached for the lifetime of this CLI process: localApi() above now fetches a
+// token opportunistically for every unauthenticated call, and without caching
+// that would mint (and register) a brand-new "Bivy CLI" device on each one —
+// e.g. once per poll iteration in waitForIdleSessions(). One token is reused
+// for the whole invocation.
+let cachedDeviceToken = null;
+
 async function localDeviceToken(config) {
+  if (cachedDeviceToken) return cachedDeviceToken;
   const secret = readBootstrapSecret();
   if (!secret) throw new Error("The node is running but no bootstrap secret was found. Restart it with 'bivy restart' or 'bivy start'.");
   const data = await localApi(config, "/api/auth/bootstrap", {
@@ -2819,7 +2842,8 @@ async function localDeviceToken(config) {
     body: JSON.stringify({ name: "Bivy CLI" }),
   });
   if (!data?.token) throw new Error("Local node did not return a device token.");
-  return data.token;
+  cachedDeviceToken = data.token;
+  return cachedDeviceToken;
 }
 
 function loadRelayConfig() {
@@ -3282,6 +3306,46 @@ async function tailFiles(files, lines, follow) {
   if (follow) console.log(c.dim("(install 'tail' to follow logs live)"));
 }
 
+// Stream only this update's portion of update.log while the detached process is
+// alive. Keeping stdout pointed directly at the log lets the update survive the
+// node restart; polling it here still gives the web terminal live progress up to
+// the moment its PTY disappears.
+async function showDetachedUpdateProgress(child, start) {
+  let offset = start;
+  let finished = false;
+  let spawnError = null;
+  const decoder = new StringDecoder("utf8");
+  child.once("exit", () => { finished = true; });
+  child.once("error", (error) => {
+    spawnError = error;
+    finished = true;
+  });
+
+  const copyNewOutput = () => {
+    const fd = fs.openSync(updateLogPath, "r");
+    try {
+      const size = fs.fstatSync(fd).size;
+      if (size < offset) offset = 0;
+      if (size === offset) return;
+      const buf = Buffer.alloc(size - offset);
+      fs.readSync(fd, buf, 0, buf.length, offset);
+      offset = size;
+      process.stdout.write(decoder.write(buf));
+    } finally {
+      fs.closeSync(fd);
+    }
+  };
+
+  while (!finished) {
+    copyNewOutput();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  copyNewOutput();
+  const remainder = decoder.end();
+  if (remainder) process.stdout.write(remainder);
+  if (spawnError) console.error(c.red(`Could not start update: ${spawnError.message}`));
+}
+
 async function cmdUpdate(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
     console.log("Usage: bivy update [--force|--no-wait]\n\nUpdate Bivy + install deps + restart service. Waits for active sessions to finish a turn first; --force/--no-wait skips the wait. See 'bivy update:log' for the last run's output.");
@@ -3291,12 +3355,15 @@ async function cmdUpdate(args = []) {
   // process, so `restartService()` — the final step of an update — tears down
   // this very terminal. Run inline and you lose all output the moment it lands.
   // Instead, re-exec the update as a detached background process that outlives
-  // the restart, logging to update.log, and return immediately. Reconnect and
-  // `bivy update:log` to see how it finished. Outside a Bivy terminal (a normal
-  // shell, where the restart can't kill us) we keep the simple inline flow.
+  // the restart, logging to update.log. Mirror that log into this terminal while
+  // the node is still alive; the web client reconnects automatically after the
+  // restart, and `bivy update:log` remains available for the final output.
+  // Outside a Bivy terminal (a normal shell, where the restart can't kill us) we
+  // keep the simple inline flow.
   if (process.env.BIVY_TERMINAL === "1" && process.env.BIVY_UPDATE_DETACHED !== "1") {
     fs.mkdirSync(appDir, { recursive: true });
     const logFd = fs.openSync(updateLogPath, "a");
+    const logStart = fs.fstatSync(logFd).size;
     fs.writeSync(logFd, `\n=== bivy update started ${new Date().toISOString()} ===\n`);
     const child = spawn(nodeBin, [selfScript, "update", ...args], {
       cwd: repoRoot,
@@ -3306,9 +3373,9 @@ async function cmdUpdate(args = []) {
     });
     child.unref();
     fs.closeSync(logFd);
-    console.log(c.green("Update started in the background."));
-    console.log(c.dim("This terminal will disconnect when the node restarts — that's expected."));
-    console.log(`Reconnect, then run ${c.cyan("bivy update:log")} to see how it finished.`);
+    console.log(c.green("Update started in the background. Showing progress until the node restarts…"));
+    console.log(c.dim(`The terminal will reconnect automatically. Run ${c.cyan("bivy update:log")} afterward for the final output.`));
+    await showDetachedUpdateProgress(child, logStart);
     return;
   }
   await runUpdate(args);

@@ -12,6 +12,7 @@ import {
   GitHubTaskPoller,
   buildTaskPrompt,
   buildResumePrompt,
+  buildInteractiveResumePrompt,
   DEFAULT_ISSUE_INSTRUCTIONS,
   ensureLabel,
   ensureTaskLabels,
@@ -273,6 +274,14 @@ check("buildResumePrompt: handles a missing title", () => {
   const prompt = buildResumePrompt({ number: 4, title: "", body: "", labels: [], url: "" });
   assert.ok(prompt.includes("#4"));
   assert.ok(!prompt.includes("#4:"));
+});
+
+check("buildInteractiveResumePrompt: says restart (not finished/stopped) and makes no issue/worktree assumptions", () => {
+  const prompt = buildInteractiveResumePrompt();
+  assert.ok(/interrupted by a restart/i.test(prompt));
+  assert.ok(/not because you completed the task or were told to stop/i.test(prompt));
+  assert.ok(/pick up exactly where you left off/i.test(prompt));
+  assert.ok(!/#\d/.test(prompt), "carries no issue number");
 });
 
 checkAsync("ensureLabel: treats 201 created and 422 exists as success", async () => {
