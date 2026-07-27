@@ -262,6 +262,30 @@ await test("pruneRunStartsBefore drops old run rows, leaving recent ones countab
   assert.equal(await store.countRunStartsSince(account.id, before), 0, "table cleared");
 });
 
+await test("pruneExpiredAuthTokens drops expired rows across every short-lived auth table, leaving live ones alone", async () => {
+  const store = await makeStore();
+  const account = await store.findOrCreateAccount("prune-auth@example.com");
+
+  // Mint one row in each of the five short-lived tables pruneExpiredAuthTokens
+  // covers. All default to a future expires_at (none is expired yet).
+  await store.createLoginToken(account.email);
+  await store.createSession(account.id);
+  await store.createLinkGrant(account.id, "node-1");
+  await store.createRelayTicket({ role: "node", accountId: account.id, nodeId: "node-1" });
+  await store.createDeviceLogin();
+
+  // A "now" cutoff removes nothing — every row above is still within its TTL.
+  assert.equal(await store.pruneExpiredAuthTokens(new Date().toISOString()), 0, "nothing expired yet");
+
+  // A cutoff past every table's TTL (sessions' 30-day TTL is the longest) removes
+  // all five rows in one call.
+  const wayInTheFuture = new Date(Date.now() + 31 * 24 * 60 * 60_000).toISOString();
+  assert.equal(await store.pruneExpiredAuthTokens(wayInTheFuture), 5, "one expired row from each of the five tables");
+
+  // Idempotent: nothing left to prune the second time.
+  assert.equal(await store.pruneExpiredAuthTokens(wayInTheFuture), 0, "already-pruned rows aren't double-counted");
+});
+
 await test("inbound hooks: create + resolve by id with a per-account secret", async () => {
   const store = await makeStore();
   const account = await store.findOrCreateAccount("h@example.com");

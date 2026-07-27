@@ -831,6 +831,14 @@ export interface MeshStore {
   // can never be counted again, so this is pure housekeeping to keep the table lean;
   // called on an interval by the control plane. Returns how many rows were removed.
   pruneRunStartsBefore(beforeIso: string): Promise<number>;
+  // Delete expired rows from every short-lived, single-use auth artifact table
+  // (login_tokens, sessions, link_grants, relay_tickets, device_logins). Each of
+  // these is normally deleted on successful single-use consumption, but an
+  // abandoned attempt (closed tab, retried client, a node that never completes
+  // introspection) leaves its row behind with no other cleanup path — called on
+  // an interval by the control plane, mirroring pruneRunStartsBefore. Returns
+  // how many rows were removed in total.
+  pruneExpiredAuthTokens(nowIso: string): Promise<number>;
   completeWorkItem(accountId: string, id: string): Promise<void>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node
