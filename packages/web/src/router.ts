@@ -22,6 +22,7 @@
 export type SettingsView =
   | "appearance"
   | "notifications"
+  | "import"
   | "providers"
   | "models"
   | "voice"
@@ -36,6 +37,7 @@ export type SettingsView =
 const SETTINGS_VIEWS: readonly SettingsView[] = [
   "appearance",
   "notifications",
+  "import",
   "providers",
   "models",
   "voice",

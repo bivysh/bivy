@@ -20,7 +20,6 @@ import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Settings } from "./components/Settings.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
-import { ImportSessionSheet } from "./components/ImportSessionSheet.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
@@ -48,7 +47,6 @@ export function App() {
     if (githubAppReturning) openSettings("github");
   }, [githubAppReturning]);
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
-  const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
    * ordinary shell terminal for the active chat/node. */
@@ -314,23 +312,9 @@ export function App() {
               </svg>
             </button>
             {/* Discover/adopt a provider-native session (Claude Code, Codex, …)
-                started outside Bivy — issue #156. Always shown; the sheet itself
-                is capability-driven (an unsupported provider or a node with
-                nothing to discover just shows an empty state, never a
-                misleading action). */}
-            <button
-              className="icon-btn"
-              onClick={() => setImportSessionOpen(true)}
-              disabled={!online}
-              title="Import existing session"
-              aria-label="Import existing session"
-            >
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 3v12" />
-                <path d="m7 10 5 5 5-5" />
-                <path d="M5 19h14" />
-              </svg>
-            </button>
+                started outside Bivy — issue #156. This used to be a header icon,
+                but a rarely-used discovery/adopt flow didn't belong crammed next
+                to "+ New"; it now lives in Settings → Import session. */}
             <button
               className="ghost-btn"
               onClick={() => {
@@ -542,6 +526,12 @@ export function App() {
             closeSettings({ kind: "session", id });
             closeDrawer();
           }}
+          onImported={(id) => {
+            // importNativeSession already opened + navigated to the new session
+            // (with its resume ref); just dismiss Settings onto that route.
+            closeSettings({ kind: "session", id });
+            closeDrawer();
+          }}
           onClose={() =>
             closeSettings(
               state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
@@ -550,7 +540,6 @@ export function App() {
         />
       )}
       {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} />}
-      {importSessionOpen && <ImportSessionSheet onClose={() => setImportSessionOpen(false)} />}
       {terminalNodePicker && (
         <NodePicker
           state={state}

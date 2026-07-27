@@ -10,6 +10,7 @@ import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { AutomationsPanel } from "./Automations.js";
+import { ImportSessionContent } from "./ImportSessionSheet.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
@@ -78,6 +79,11 @@ const IconMoon = () => (
 const IconBell = () => (
   <Glyph><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></Glyph>
 );
+// Same download-into-tray glyph the sidebar header used to carry, so the
+// relocated action stays visually recognisable in its new Settings home.
+const IconImport = () => (
+  <Glyph><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 19h14" /></Glyph>
+);
 
 // Display name for a plan id — capitalization only, now that the internal ids
 // ("free" | "pro" | "team") match what the marketing site sells. `individual` is
@@ -135,6 +141,7 @@ type NavGroup = { label: string; items: NavItem[] };
 const TITLES: Record<View, string> = {
   appearance: "Appearance",
   notifications: "Notifications",
+  import: "Import session",
   providers: "Keys & OAuth",
   models: "Local models",
   voice: "Voice input",
@@ -155,6 +162,7 @@ export function Settings({
   githubQueue,
   onRefreshGithubQueue,
   onPickSession,
+  onImported,
 }: {
   state: AppState;
   onClose: () => void;
@@ -167,6 +175,9 @@ export function Settings({
   githubQueue?: GithubQueueItem[] | null;
   onRefreshGithubQueue?: () => void;
   onPickSession?: (sessionId: string, path?: string, nodeId?: string) => void;
+  /** Fired when the Import-session panel adopts a session — the controller has
+   *  already opened/navigated to it, so the caller just dismisses Settings. */
+  onImported?: (sessionId: string) => void;
 }) {
   const hosted = !controller.direct;
   // Below the CSS breakpoint we behave like the Claude mobile settings: a root
@@ -206,6 +217,7 @@ export function Settings({
       items: [
         { id: "appearance", label: "Appearance", icon: <IconAppearance /> },
         { id: "notifications", label: "Notifications", icon: <IconBell /> },
+        { id: "import", label: "Import session", icon: <IconImport /> },
         { id: "providers", label: "Keys & OAuth", icon: <IconKey /> },
         { id: "models", label: "Local models", icon: <IconCpu /> },
         { id: "voice", label: "Voice input", icon: <IconMic /> },
@@ -312,6 +324,7 @@ export function Settings({
           <div className="settings-body">
             {activeView === "appearance" && <AppearancePanel />}
             {activeView === "notifications" && <NotificationsPanel />}
+            {activeView === "import" && <ImportPanel onImported={(id) => onImported?.(id)} />}
             {activeView === "providers" && <ProvidersPanel state={state} />}
             {activeView === "models" && <LocalModelsPanel state={state} />}
             {activeView === "voice" && <VoicePanel state={state} />}
@@ -372,6 +385,20 @@ function AppearancePanel() {
         ))}
       </div>
       <p className="muted">Choose how Bivy looks. <strong>System</strong> follows your device's light/dark setting.</p>
+    </div>
+  );
+}
+
+// ---- Import session (relocated from the sidebar header) ----
+function ImportPanel({ onImported }: { onImported: (sessionId: string) => void }) {
+  return (
+    <div className="settings-form">
+      <p className="muted">
+        Adopt a Claude Code or Codex session that was started outside Bivy. Only
+        sessions this node (or another one you pick) can see and safely take over
+        are listed.
+      </p>
+      <ImportSessionContent onDone={onImported} />
     </div>
   );
 }

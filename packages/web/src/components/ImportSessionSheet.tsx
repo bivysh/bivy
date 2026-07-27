@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useState } from "react";
 import { controller, useAppState } from "../store/useStore.js";
-import { Sheet, PickerItem } from "./Sheet.js";
+import { PickerItem } from "./Sheet.js";
 import { NeedsDisclosureError, type DiscoveredNativeSessionDto } from "../store/controller.js";
 
 /** Last path segment of a cwd as a readable "repository" label — the same
@@ -37,8 +37,13 @@ const ALL = "__all__";
  * confirmation (this component) before falling back to a seeded continuation —
  * the node itself also refuses a seeded import without that acknowledgement,
  * so this isn't just a UI nicety.
+ *
+ * Rendered as a Settings panel ("Import session"), not a header sheet — the
+ * discovery/adopt flow was relocated out of the cramped sidebar header into a
+ * proper settings section. `onDone` fires with the new session id once an import
+ * succeeds, so the caller can dismiss Settings onto the freshly-opened session.
  */
-export function ImportSessionSheet({ onClose }: { onClose: () => void }) {
+export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) => void }) {
   const { nodes, currentNodeId } = useAppState();
 
   const [nodeId, setNodeId] = useState(currentNodeId ?? "");
@@ -101,8 +106,8 @@ export function ImportSessionSheet({ onClose }: { onClose: () => void }) {
     setImportingRef(session.ref);
     setImportError("");
     try {
-      await controller.importNativeSession(session.runtimeId, session.ref, { acceptDisclosure });
-      onClose();
+      const sessionId = await controller.importNativeSession(session.runtimeId, session.ref, { acceptDisclosure });
+      onDone(sessionId);
     } catch (err) {
       if (err instanceof NeedsDisclosureError) {
         // Never fall back to a seeded continuation silently — surface the
@@ -125,9 +130,10 @@ export function ImportSessionSheet({ onClose }: { onClose: () => void }) {
   if (pendingDisclosure) {
     const { session, text } = pendingDisclosure;
     return (
-      <Sheet title="Confirm seeded import" onClose={onClose} autoFocusSearch={false}>
+      <>
         <div className="picker-section">
-          <div className="picker-section-label">{session.title || "Untitled session"}</div>
+          <div className="picker-section-label">Confirm seeded import</div>
+          <div className="import-session-hint">{session.title || "Untitled session"}</div>
           <div className="import-session-hint">{text}</div>
         </div>
         <div className="picker-section">
@@ -145,12 +151,12 @@ export function ImportSessionSheet({ onClose }: { onClose: () => void }) {
             {importingRef === session.ref ? "Importing…" : "Import anyway"}
           </button>
         </div>
-      </Sheet>
+      </>
     );
   }
 
   return (
-    <Sheet title="Import existing session" onClose={onClose} autoFocusSearch={false}>
+    <>
       {nodeList.length > 1 && (
         <div className="picker-section">
           <div className="picker-section-label">Node</div>
@@ -240,6 +246,6 @@ export function ImportSessionSheet({ onClose }: { onClose: () => void }) {
         </div>
         {importError && <div className="fork-error" role="alert">{importError}</div>}
       </div>
-    </Sheet>
+    </>
   );
 }
