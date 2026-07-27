@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import {
   EPHEMERAL_PROVIDERS,
   ephemeralAdapter,
-  type AccountMe,
   type EphemeralMachine,
   type ProviderKeyInfo,
   type ProviderSize,
@@ -23,48 +22,28 @@ const TTL_OPTIONS = [
 export function EphemeralSheet({ onClose }: { onClose: () => void }) {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
   const [provider, setProvider] = useState<string | null>(null);
-  const [me, setMe] = useState<AccountMe | null>(null);
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys);
   useEffect(() => {
     refreshKeys();
-    controller.fetchMe().then(setMe).catch(() => {});
   }, []);
 
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === provider);
-  // undefined (self-host / still loading) reads as allowed; only a definite
-  // `false` from the control plane gates the feature. The server enforces this
-  // too (POST /api/ephemeral/exec) — this is UX so free users see the upsell
-  // instead of a failed launch.
-  const ephemeralAllowed = me?.entitlements?.ephemeralEnabled !== false;
 
+  // Ephemeral cloud runners are included on every plan (each launch draws from
+  // the shared weekly run cap), so there's no upgrade gate here.
   return (
     <Sheet
       title={catalog ? catalog.name : "Ephemeral machine"}
       onClose={onClose}
       headExtra={
-        provider && ephemeralAllowed ? (
+        provider ? (
           <button className="sheet-back" onClick={() => setProvider(null)} aria-label="Back">
             ‹
           </button>
         ) : undefined
       }
     >
-      {me && !ephemeralAllowed ? (
-        <div className="picker-list">
-          <p className="muted settings-intro">
-            Quick ephemeral servers are a Pro feature. Upgrade to spin up a temporary cloud runner from your
-            phone — or install Bivy on your own Mac or Linux machine, free forever.
-          </p>
-          <div className="row-actions">
-            <button className="btn primary" onClick={() => controller.startCheckout().catch(() => {})}>
-              Upgrade to Pro
-            </button>
-            <a className="btn ghost" href="/install.sh">
-              Download installer
-            </a>
-          </div>
-        </div>
-      ) : !provider ? (
+      {!provider ? (
         <div className="picker-list">
           <p className="muted settings-intro">Bring your own cloud token to spin up a temporary node that self-destructs at its TTL.</p>
           {EPHEMERAL_PROVIDERS.map((p) => {
@@ -100,10 +79,24 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
   const [repo, setRepo] = useState("");
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // Split from the old single `msg`, which rendered a launch failure and a
+  // launch success in the same muted <p> — a failure read like a neutral
+  // status line (#140). `err` gets the queue panel's `chip err` treatment.
   const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   const refreshMachines = () =>
     controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId)));
+  // Poll while a machine is still booting so its status/IP update without the
+  // user having to close and reopen the sheet (#140) — stops once nothing is
+  // in a transitional state.
+  useEffect(() => {
+    if (!machines.some((m) => m.status === "starting")) return;
+    const t = setInterval(refreshMachines, 5000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [machines]);
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t)));
     // Pre-fill from the preferences the user saved in Settings → Ephemeral
@@ -146,6 +139,11 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
   }, [hasToken, providerId, region]);
 
   const saveToken = async () => {
+    // token isn't cleared until the await resolves, so without this guard a
+    // second click before then fires another save (#140).
+    if (saving) return;
+    setSaving(true);
+    setErr(null);
     try {
       await controller.setEphemeralToken(providerId, token.trim());
       setToken("");
@@ -153,19 +151,22 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
       onKeysChanged();
       setMsg("Token saved on this device.");
     } catch (e) {
-      setMsg(String((e as Error).message || e));
+      setErr(String((e as Error).message || e));
+    } finally {
+      setSaving(false);
     }
   };
 
   const launch = async () => {
     setBusy(true);
     setMsg(null);
+    setErr(null);
     try {
       await controller.launchEphemeral({ provider: providerId, region, size, ttlMinutes: ttl, repo: repo.trim() || undefined });
       setMsg("Launching — it will appear in the node list once it boots.");
       refreshMachines();
     } catch (e) {
-      setMsg(String((e as Error).message || e));
+      setErr(String((e as Error).message || e));
     } finally {
       setBusy(false);
     }
@@ -190,8 +191,8 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
           </div>
           <label className="field-label">{catalog.tokenLabel}</label>
           <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste token" />
-          <button className="btn primary" disabled={!token.trim()} onClick={saveToken}>
-            Save token
+          <button className="btn primary" disabled={!token.trim() || saving} onClick={saveToken}>
+            {saving ? "Saving…" : "Save token"}
           </button>
         </>
       ) : (
@@ -258,10 +259,14 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
           onConfirm={() => { confirm.action(); setConfirm(null); }}
         />
       )}
+      {err && <span className="chip err">{err}</span>}
       {msg && <p className="muted">{msg}</p>}
       {machines.length > 0 && (
         <>
-          <label className="field-label">Launched machines</label>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <label className="field-label">Launched machines</label>
+            <button type="button" className="link-btn" onClick={refreshMachines}>Refresh</button>
+          </div>
           <div className="picker-list">
             {machines.map((m) => (
               <PickerItem

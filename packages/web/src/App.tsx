@@ -17,9 +17,13 @@ import { GithubPill } from "./components/GithubPill.js";
 import { UsageBar } from "./components/UsageBar.js";
 import { ChangesCard } from "./components/ChangesCard.js";
 import { ErrorToast } from "./components/ErrorToast.js";
+import { NoticeToast } from "./components/NoticeToast.js";
 import { Settings } from "./components/Settings.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
+import { ImportSessionSheet } from "./components/ImportSessionSheet.js";
 import { NodePicker } from "./components/Pickers.js";
+import { ConnectRunner } from "./components/ConnectRunner.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
 // bundle). It's an on-demand overlay, so load it lazily to keep the initial app
 // paint fast; the chunk is fetched the first time the user opens a terminal.
@@ -44,6 +48,7 @@ export function App() {
     if (githubAppReturning) openSettings("github");
   }, [githubAppReturning]);
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
+  const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
    * ordinary shell terminal for the active chat/node. */
@@ -52,6 +57,9 @@ export function App() {
    *  one — always the selected node's default workspace, never the active
    *  chat's cwd. See #460. */
   const [terminalStandalone, setTerminalStandalone] = useState(false);
+  /** "Continue in terminal": the overlay hands the active chat session off to
+   *  the runtime's interactive TUI (the reverse of "continue in chat"). */
+  const [terminalTui, setTerminalTui] = useState(false);
   // Node picker for the standalone terminal button — only shown when there's
   // more than one node to choose from (see openStandaloneTerminal).
   const [terminalNodePicker, setTerminalNodePicker] = useState(false);
@@ -71,6 +79,18 @@ export function App() {
     }, 30000);
     return () => clearInterval(id);
   }, [refreshGithubQueue]);
+  // Signed in on the hosted app but no node yet: poll for a newly-installed
+  // machine so the empty state advances to the live app the moment the node
+  // dials in — the user shouldn't have to hit "Refresh nodes" after running the
+  // installer. Stops as soon as a node is selected (the card disappears).
+  const awaitingNode = !controller.direct && state.signedIn && !state.currentNodeId;
+  useEffect(() => {
+    if (!awaitingNode) return;
+    const id = setInterval(() => {
+      if (document.visibilityState !== "hidden") void controller.refreshNodes();
+    }, 4000);
+    return () => clearInterval(id);
+  }, [awaitingNode]);
   // Focus view: collapse interim messages (thinking, tool cards, intermediate
   // assistant prose) down to just the conversation. Persisted so the choice
   // sticks across reloads and session switches.
@@ -114,7 +134,12 @@ export function App() {
     state.status === "reconnecting" ||
     (everConnectedRef.current &&
       (state.status === "connecting" || state.status === "linking" || state.status === "pairing"));
-  const canCompose = online || transientReconnect;
+  // The active session is being driven by its interactive TUI (single writer):
+  // chat sends are refused by the node until the TUI exits. Rather than let a
+  // send fail with an error, lock the composer and show a banner offering to
+  // jump to the terminal or take the session back into chat.
+  const activeTuiLocked = Boolean(state.activeSessionId && state.tuiSessions.includes(state.activeSessionId));
+  const canCompose = (online || transientReconnect) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
   useEdgeSwipe({ isOpen: drawerOpen, onOpen: () => setDrawerOpen(true), onClose: () => setDrawerOpen(false) });
@@ -126,6 +151,13 @@ export function App() {
   const runCommand = useCallback((name: string, _args?: string) => {
     switch (name) {
       case "/new": controller.newSession(); break;
+      case "/resume":
+        // Manual resume: continue the turn a restart interrupted. Sent as a normal
+        // prompt to the active session so it streams and re-arms the turn state.
+        controller.sendPrompt(
+          "Please continue — your previous turn was interrupted by a restart before it finished. Pick up exactly where you left off and finish what you were doing.",
+        );
+        break;
     }
   }, []);
 
@@ -145,6 +177,7 @@ export function App() {
     if (controller.direct || state.nodes.length <= 1) {
       setTerminalTarget(null);
       setTerminalStandalone(true);
+      setTerminalTui(false);
       setTerminalOpen(true);
       return;
     }
@@ -157,6 +190,7 @@ export function App() {
       if (!controller.direct && nodeId !== state.currentNodeId) controller.switchNode(nodeId);
       setTerminalTarget(null);
       setTerminalStandalone(true);
+      setTerminalTui(false);
       setTerminalOpen(true);
       setDrawerOpen(false);
     },
@@ -175,6 +209,7 @@ export function App() {
       const open = () => {
         setTerminalTarget(termId);
         setTerminalStandalone(false);
+        setTerminalTui(false);
         setTerminalOpen(true);
       };
       setDrawerOpen(false);
@@ -188,6 +223,25 @@ export function App() {
     },
     [state.currentNodeId],
   );
+
+  // "Continue in terminal": open the overlay bound to the active chat session in
+  // interactive-TUI mode. The overlay sends `terminal.open.tui`, which resumes
+  // this same conversation in the runtime's native CLI — the reverse of the
+  // terminal's "continue in chat" (takeover). Gated on the session runtime's
+  // `interactiveTui` capability at the call site (SessionMenu).
+  const continueInTerminal = useCallback(() => {
+    setTerminalTarget(null);
+    setTerminalStandalone(false);
+    setTerminalTui(true);
+    setTerminalOpen(true);
+  }, []);
+
+  // "Take over in chat" from the TUI lock banner: ask the node to stop the TUI
+  // that owns the active session; it rebuilds the session from disk and
+  // broadcasts `terminal.tui {active:false}`, which unlocks the composer.
+  const takeoverInChat = useCallback(() => {
+    if (state.activeSessionId) controller.closeSessionTui(state.activeSessionId);
+  }, [state.activeSessionId]);
 
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
@@ -205,6 +259,7 @@ export function App() {
       <>
         <SetupNotice />
         <div className="toast-stack">
+          <NoticeToast />
           <UpdatePrompt />
         </div>
       </>
@@ -214,6 +269,14 @@ export function App() {
   const closeDrawer = () => setDrawerOpen(false);
   const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId);
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
+  // "Continue in terminal" is offered only when this session's runtime can hand
+  // itself to its native TUI on the node (capability `interactiveTui`) — the
+  // analog of the terminal's capability-gated "continue in chat". Absent caps
+  // (older node / runtime not yet loaded) default to hidden.
+  const activeRuntimeCaps = state.runtimes.find((r) => r.id === activeSession?.runtimeId)?.capabilities as
+    | { interactiveTui?: boolean }
+    | undefined;
+  const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
 
   // Approval/question cards render inline in the active session's chat scroll, so
   // only show the ones that belong to that session. Items are still kept globally
@@ -243,6 +306,24 @@ export function App() {
                 <rect x="3" y="4" width="18" height="16" rx="2" />
                 <path d="m7 9 3 3-3 3" />
                 <path d="M13 15h4" />
+              </svg>
+            </button>
+            {/* Discover/adopt a provider-native session (Claude Code, Codex, …)
+                started outside Bivy — issue #156. Always shown; the sheet itself
+                is capability-driven (an unsupported provider or a node with
+                nothing to discover just shows an empty state, never a
+                misleading action). */}
+            <button
+              className="icon-btn"
+              onClick={() => setImportSessionOpen(true)}
+              disabled={!online}
+              title="Import existing session"
+              aria-label="Import existing session"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3v12" />
+                <path d="m7 10 5 5 5-5" />
+                <path d="M5 19h14" />
               </svg>
             </button>
             <button
@@ -316,7 +397,7 @@ export function App() {
           </div>
           <div className="topbar-actions">
             {online && (
-              <button className="icon-btn term-btn" onClick={() => { setTerminalTarget(null); setTerminalStandalone(false); setTerminalOpen(true); }} title="Terminal" aria-label="Open terminal">
+              <button className="icon-btn term-btn" onClick={() => { setTerminalTarget(null); setTerminalStandalone(false); setTerminalTui(false); setTerminalOpen(true); }} title="Terminal" aria-label="Open terminal">
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <rect x="3" y="4" width="18" height="16" rx="2" />
                   <path d="m7 9 3 3-3 3" />
@@ -332,6 +413,7 @@ export function App() {
                 prs={activeSession?.prs}
                 collapsed={collapsed}
                 onToggleCollapsed={toggleCollapsed}
+                onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
               />
             )}
           </div>
@@ -351,27 +433,13 @@ export function App() {
         )}
 
         {needsNode && (
-          <div className="onboarding-card" role="status">
-            <div>
-              <div className="kicker">No runner connected yet</div>
-              <h2>Connect a computer or launch a quick server</h2>
-              <p>Bivy runs agents on machines you control. Pick either option to get going:</p>
-              <ul className="onboarding-steps">
-                <li>
-                  <strong>Install on your own machine</strong> — run this on your Mac or Linux computer for persistent work:
-                  <pre className="code-snippet"><code>curl -fsSL https://bivy.sh/install.sh | bash</code></pre>
-                </li>
-                <li>
-                  <strong>No machine handy?</strong> Launch an ephemeral server below (<strong>Pro</strong>) — it spins up in the cloud and self-destructs after its TTL.
-                </li>
-              </ul>
-            </div>
-            <div className="onboarding-actions">
-              <a className="btn primary" href="/install.sh">Download installer</a>
-              <button className="btn" onClick={() => setEphemeralOpen(true)}>Quick ephemeral server</button>
-              <button className="btn" onClick={() => controller.refreshNodes()}>Refresh nodes</button>
-            </div>
-          </div>
+          <ConnectRunner
+            nodes={state.nodes}
+            ephemeralEnabled={EPHEMERAL_MACHINES_ENABLED}
+            onPickNode={(nodeId) => controller.switchNode(nodeId)}
+            onEphemeral={() => setEphemeralOpen(true)}
+            onRefresh={() => controller.refreshNodes()}
+          />
         )}
 
         <UsageBar usage={state.usage} sessionKey={state.activeSessionId} />
@@ -425,10 +493,24 @@ export function App() {
           )}
         </div>
 
+        {activeTuiLocked && (
+          <div className="composer-tui-lock" role="status">
+            <span className="composer-tui-lock-text">This session is open in the terminal (TUI).</span>
+            <div className="composer-tui-lock-actions">
+              <button type="button" className="ghost-btn" onClick={continueInTerminal}>
+                Go to terminal
+              </button>
+              <button type="button" className="btn primary" onClick={takeoverInChat}>
+                Take over in chat
+              </button>
+            </div>
+          </div>
+        )}
+
         <Composer
           state={state}
           disabled={!canCompose}
-          disabledHint={state.status === "offline" ? "Not connected" : "Connecting…"}
+          disabledHint={activeTuiLocked ? "Open in the terminal — take over to chat here" : state.status === "offline" ? "Not connected" : "Connecting…"}
           working={state.working}
           onSend={(text, attachments) => controller.sendPrompt(text, attachments)}
           onAbort={() => controller.abort()}
@@ -458,6 +540,7 @@ export function App() {
         />
       )}
       {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} />}
+      {importSessionOpen && <ImportSessionSheet onClose={() => setImportSessionOpen(false)} />}
       {terminalNodePicker && (
         <NodePicker
           state={state}
@@ -472,10 +555,12 @@ export function App() {
             sessionId={terminalStandalone ? null : state.activeSessionId}
             attachTermId={terminalTarget}
             standalone={terminalStandalone}
+            tui={terminalTui}
             onClose={() => {
               setTerminalOpen(false);
               setTerminalTarget(null);
               setTerminalStandalone(false);
+              setTerminalTui(false);
             }}
           />
         </Suspense>
@@ -487,6 +572,7 @@ export function App() {
           time meant overlapping, illegible toasts. This wrapper stacks them
           instead. */}
       <div className="toast-stack">
+        <NoticeToast />
         <ErrorToast />
         <UpdatePrompt />
       </div>

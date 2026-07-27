@@ -126,6 +126,47 @@ export async function startGithubDeviceLogin(store: LocalStore, fetchImpl: typeo
   };
 }
 
+export interface EmailDeviceLogin {
+  deviceId: string;
+  deviceSecret: string;
+  /** How often to poll, ms. */
+  intervalMs: number;
+  /** How long the login stays valid, ms. */
+  expiresInMs: number;
+  /** Whether the email was actually sent (false in dev with no mailer). */
+  sent: boolean;
+  /** Dev-only: the magic link, surfaced when no mailer is configured. */
+  devLink?: string;
+}
+
+/**
+ * Begin a hands-free email magic-link sign-in for an installed app. The control
+ * plane emails a link the user opens in whatever browser their mail client hands
+ * it to; the app window itself never navigates and instead polls
+ * `/auth/device/poll` for completion. This is what makes magic-link sign-in work
+ * in an installed/standalone PWA: an emailed link opens in the system browser,
+ * not the installed window, so the redirect-based flow would strand the finished
+ * session in that browser tab — the same reason GitHub sign-in uses the device
+ * flow when standalone (see startGithubDeviceLogin / isStandaloneDisplay).
+ */
+export async function startEmailDeviceLogin(store: LocalStore, email: string, fetchImpl: typeof fetch = fetch): Promise<EmailDeviceLogin> {
+  const res = await fetchImpl(`${cpBase(store)}/auth/device/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  const data = (await res.json().catch(() => ({}))) as Partial<EmailDeviceLogin> & { error?: string };
+  if (!res.ok || !data.deviceId) throw new Error(data.error || "Could not send sign-in link.");
+  return {
+    deviceId: String(data.deviceId),
+    deviceSecret: String(data.deviceSecret),
+    intervalMs: Number(data.intervalMs) || 2000,
+    expiresInMs: Number(data.expiresInMs) || 15 * 60_000,
+    sent: Boolean(data.sent),
+    ...(data.devLink ? { devLink: String(data.devLink) } : {}),
+  };
+}
+
 export type DevicePollResult =
   | { status: "pending" }
   | { status: "complete"; token: string }
@@ -394,7 +435,7 @@ export async function setEphemeralQueueDefault(
 export interface GithubQueueItem {
   id: string;
   source: string; // "github:issue" | "github:comment" | "slack"
-  status: "pending" | "claimed" | "done";
+  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
   label: string;
   title: string;
   repo?: string;
@@ -411,6 +452,101 @@ export interface GithubQueueItem {
   claimedAt?: string;
   claimedByNodeId?: string;
   completedAt?: string;
+  triggerId?: string;
+  triggerKind?: "github" | "slack" | "manual" | "webhook" | "schedule";
+  definitionId?: string;
+  attempt?: number;
+  targetKind?: "new_session" | "existing_session";
+  startedAt?: string;
+}
+
+export type AutomationSchedule =
+  | { kind: "once"; at: string }
+  | { kind: "cron"; expression: string; timezone: string };
+
+export interface AccountAutomation {
+  id: string;
+  name: string;
+  templateCiphertext?: string;
+  runtimeId?: string;
+  model?: string;
+  nodeLabel?: string;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  enabled: boolean;
+  schedule: AutomationSchedule;
+  nextRunAt?: string;
+  lastScheduledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AccountAutomationRun {
+  id: string;
+  definitionId?: string;
+  triggerKind: string;
+  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled";
+  title: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+}
+
+async function automationRequest<T>(
+  store: LocalStore,
+  path: string,
+  init: RequestInit = {},
+  fetchImpl: typeof fetch = fetch,
+): Promise<T> {
+  const res = await fetchImpl(`${cpBase(store)}${path}`, {
+    ...init,
+    headers: authHeaders(store),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `automation request failed: ${res.status}`);
+  return data as T;
+}
+
+export function fetchAutomations(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AccountAutomation[]> {
+  return automationRequest(store, "/account/automations", {}, fetchImpl);
+}
+
+export function createAutomation(
+  store: LocalStore,
+  input: Omit<AccountAutomation, "id" | "createdAt" | "updatedAt" | "lastScheduledAt">,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomation> {
+  return automationRequest(store, "/account/automations", { method: "POST", body: JSON.stringify(input) }, fetchImpl);
+}
+
+export function updateAutomation(
+  store: LocalStore,
+  id: string,
+  patch: Partial<AccountAutomation>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomation> {
+  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }, fetchImpl);
+}
+
+export async function deleteAutomation(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automations/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: authHeaders(store),
+  });
+  if (!res.ok) throw new Error(`delete automation failed: ${res.status}`);
+}
+
+export function runAutomationNow(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<AccountAutomationRun> {
+  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/run`, { method: "POST" }, fetchImpl);
+}
+
+export function fetchAutomationRuns(
+  store: LocalStore,
+  limit = 50,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun[]> {
+  return automationRequest(store, `/account/automation-runs?limit=${encodeURIComponent(String(limit))}`, {}, fetchImpl);
 }
 
 /** Recent incoming work items for the account, newest first (queue UI). */
@@ -476,6 +612,94 @@ export async function clearWorkQueue(store: LocalStore, fetchImpl: typeof fetch 
   return Number(data?.removed) || 0;
 }
 
+export interface AutomationHook {
+  id: string;
+  endpoint: string;
+  enabled: boolean;
+  templateInstruction: string;
+  routingDefault: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface AutomationOutcome {
+  id: string;
+  hookId: string;
+  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
+  title: string;
+  createdAt: string;
+  claimedAt?: string;
+  completedAt?: string;
+}
+
+export interface AutomationHooksInfo {
+  hooks: AutomationHook[];
+  outcomes: AutomationOutcome[];
+}
+
+export async function fetchAutomationHooks(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AutomationHooksInfo> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`automation hooks request failed: ${res.status}`);
+  const data: any = await res.json();
+  return {
+    hooks: Array.isArray(data?.hooks) ? data.hooks : [],
+    outcomes: Array.isArray(data?.outcomes) ? data.outcomes : [],
+  };
+}
+
+export async function createAutomationHook(
+  store: LocalStore,
+  input: { templateInstruction: string; routingDefault?: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<AutomationHook & { secret: string }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify(input),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `create automation hook failed: ${res.status}`);
+  return data;
+}
+
+export async function updateAutomationHook(
+  store: LocalStore,
+  id: string,
+  patch: Partial<Pick<AutomationHook, "enabled" | "templateInstruction" | "routingDefault">>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AutomationHook> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: authHeaders(store),
+    body: JSON.stringify(patch),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `update automation hook failed: ${res.status}`);
+  return data;
+}
+
+export async function rotateAutomationHookSecret(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AutomationHook & { secret: string }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks/${encodeURIComponent(id)}/rotate`, {
+    method: "POST",
+    headers: authHeaders(store),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `rotate automation secret failed: ${res.status}`);
+  return data;
+}
+
+export async function revokeAutomationHook(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/automation-hooks/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: authHeaders(store),
+  });
+  if (!res.ok) throw new Error(`revoke automation hook failed: ${res.status}`);
+}
+
 /** List the account's paired devices (for the device manager). */
 export async function fetchPairedDevices(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<PairedDevice[]> {
   const res = await fetchImpl(`${cpBase(store)}/devices`, { headers: authHeaders(store) });
@@ -505,6 +729,12 @@ export async function logout(store: LocalStore, devicePublicKeyB64?: string, fet
     body: JSON.stringify(devicePublicKeyB64 ? { devicePublicKeyB64 } : {}),
   });
 }
+
+/** Display price for the Pro plan. The authoritative amount lives in Stripe
+ *  (env STRIPE_PRICE_PRO on the control plane); this is the marketing label
+ *  shown on in-app upgrade CTAs so users see the cost before the redirect.
+ *  Keep it in sync with the pricing section on the marketing site. */
+export const PRO_PRICE_LABEL = "$15/mo";
 
 /** Start a Stripe checkout; returns the URL to redirect to. */
 export async function billingCheckout(store: LocalStore, plan = "pro", fetchImpl: typeof fetch = fetch): Promise<string> {

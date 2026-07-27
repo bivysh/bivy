@@ -48,8 +48,16 @@ export interface PromptImage {
   mimeType: string;
 }
 
+/**
+ * How a prompt sent while the session is already streaming should be handled:
+ * `"steer"` injects it into the current turn immediately; `"followUp"` defers
+ * it until the current turn ends. Not every runtime honors both — see
+ * RuntimeCapabilities.streamingBehaviors.
+ */
+export type StreamingBehavior = "steer" | "followUp";
+
 export interface PromptOptions {
-  streamingBehavior?: "steer" | "followUp";
+  streamingBehavior?: StreamingBehavior;
   images?: PromptImage[];
 }
 
@@ -170,6 +178,35 @@ export interface SessionSummary {
   modified?: unknown;
   messageCount?: number;
   firstMessage?: string;
+}
+
+/**
+ * Bounded metadata for a provider-native session Bivy did not start — e.g. a
+ * bare `claude` or `codex` run outside Bivy (see issue #156, "discover and
+ * adopt existing provider-native sessions"). Deliberately NOT a transcript: no
+ * message content ever rides this shape, so it's safe to list in the UI and
+ * (if a node ever advertises discoveries upstream) safe to hand to the control
+ * plane. Produced by `AgentRuntime.discoverNativeSessions` and consumed by the
+ * discovery/import flow in src/runtime/native-session-discovery.ts.
+ */
+export interface DiscoveredNativeSession {
+  /** The producing runtime's id (e.g. "claude-code-sdk", "codex-approvals"). */
+  runtimeId: string;
+  /** The provider's own session id/ref — the exact token `openSession` resumes by. */
+  ref: string;
+  /** Absolute path of the on-disk transcript backing this session, when known
+   *  (used only for same-conversation dedupe; never read for its content here). */
+  file?: string;
+  /** Working directory the session ran in, when the provider recorded one. */
+  cwd?: string;
+  /** Epoch ms the session was last updated (mtime or a recorded timestamp). */
+  updatedAt?: number;
+  /** First user prompt, truncated — a readable list label. Never the full transcript. */
+  title?: string;
+  /** True when a live external process for this session was detected (best-effort). */
+  active: boolean;
+  /** True when the provider can resume this exact session with native context. */
+  resumable: boolean;
 }
 
 /** A live agent session, runtime-agnostic. */
@@ -382,6 +419,40 @@ export interface RuntimeCapabilities {
    * absent/empty = none advertised.
    */
   commands?: AgentCommand[];
+  /**
+   * Which streamingBehavior hints (see PromptOptions.streamingBehavior) this
+   * runtime actually honors when prompted mid-turn, so the client (issue #154's
+   * queued-follow-ups UI) knows whether an explicit "Steer current turn"
+   * action is safe to offer at all. Absent/empty means the client should never
+   * attempt a mid-turn prompt for this runtime — hold everything in its own
+   * queue and only ever send into an idle session. Advertised statically here
+   * for a built-in runtime (Pi, Claude Code); a protocol/RPC shim can instead
+   * declare it in its `hello` (see capabilitiesFromHello in
+   * src/runtime/protocol.ts), which defaults to none when omitted — an
+   * arbitrary shim must opt in before the client will ever try to interrupt it.
+   */
+  streamingBehaviors?: StreamingBehavior[];
+  /**
+   * The runtime can enumerate its own provider-native sessions that exist on
+   * this node's filesystem but that Bivy did not start (see issue #156) —
+   * backed by `AgentRuntime.discoverNativeSessions`. Discovery returns only
+   * bounded metadata (DiscoveredNativeSession), never transcript content.
+   * Optional; absent/false = the UI must not show a discovery affordance for
+   * this runtime (an unsupported provider must never show a misleading action).
+   */
+  nativeSessionDiscovery?: boolean;
+  /**
+   * The runtime can adopt/import one of its own discovered native sessions
+   * (capabilities.nativeSessionDiscovery) into a Bivy-managed session — via the
+   * ordinary `openSession`/resume path — without rewriting or deleting the
+   * provider's original history. When the discovered session is resumable this
+   * is a native resume; when it isn't, adoption falls back to a seeded
+   * continuation and the caller must disclose that to the user before
+   * importing (see native-session-discovery.ts's planNativeAdoption). Optional;
+   * absent/false = discovered sessions (if any) are informational only, with no
+   * import action offered.
+   */
+  nativeSessionAdoption?: boolean;
 }
 
 /**
@@ -497,6 +568,19 @@ export interface AgentRuntime {
    * Bivy's sessionsDir, which deleteSessionFile unlinks directly).
    */
   deleteSession?(sessionId: string, sessionFile?: string): Promise<boolean>;
+
+  /**
+   * Enumerate this runtime's own provider-native sessions on this node that
+   * Bivy did not start (see issue #156 and capabilities.nativeSessionDiscovery).
+   * Must return only bounded metadata — never transcript content — and must
+   * confine its search to this provider's own known store(s) (e.g. Claude's
+   * `~/.claude`/`CLAUDE_CONFIG_DIR`, Codex's `~/.codex`/`CODEX_HOME`), honoring
+   * a non-default home/config dir when the provider is configured to use one.
+   * Best-effort: a missing/unreadable store returns an empty list, never throws.
+   * Only meaningful when capabilities.nativeSessionDiscovery is true. Optional;
+   * absent = the runtime advertises no native sessions to discover.
+   */
+  discoverNativeSessions?(): Promise<DiscoveredNativeSession[]> | DiscoveredNativeSession[];
 
   /**
    * The providers + models this agent supports, WITHOUT starting a session — so

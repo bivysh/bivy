@@ -232,6 +232,86 @@ export function createEphemeralKeyStore(backend: KvBackend = defaultBackend("pro
   };
 }
 
+export interface EphemeralModelKeyInfo {
+  provider: string;
+  configured: boolean;
+  updatedAt: string | null;
+}
+
+export interface EphemeralModelKeyEntry {
+  provider: string;
+  key: string;
+}
+
+/**
+ * Device-local store for the model **API keys** used to seed a freshly-launched
+ * ephemeral machine's vault over the paired E2E channel — closing the cold-start
+ * gap where a first-ever node has no peer to sync the model-auth vault from (see
+ * docs/ephemeral-sessions.md, "Closing the cold-start gap").
+ *
+ * Same privacy model as the cloud provider tokens above: IndexedDB on THIS
+ * device, never sent to the control plane, never baked into user-data. Keyed by
+ * model-provider id (e.g. "anthropic", "openai") — an opaque, lower-cased string
+ * this store doesn't validate, since the model-provider set is open-ended and
+ * lives on the node, not here. API keys only; agent-native OAuth logins are out
+ * of scope (fragile to replay onto disposable machines — see credential-sync.md).
+ */
+export interface EphemeralModelKeyStore {
+  /** Metadata for the UI — provider id + whether a key is saved. No secrets. */
+  list(): Promise<EphemeralModelKeyInfo[]>;
+  /** The stored keys, for seeding a node. Secrets — never surface in the UI. */
+  entries(): Promise<EphemeralModelKeyEntry[]>;
+  get(provider: string): Promise<string>;
+  set(provider: string, key: string): Promise<void>;
+  remove(provider: string): Promise<void>;
+}
+
+export function createEphemeralModelKeyStore(
+  backend: KvBackend = defaultBackend("model-keys", "provider"),
+): EphemeralModelKeyStore {
+  const norm = (p: string) => String(p || "").trim().toLowerCase();
+  const all = async (): Promise<any[]> => {
+    try {
+      return await backend.getAll();
+    } catch {
+      return [];
+    }
+  };
+  return {
+    async list() {
+      const stored = await all();
+      return stored
+        .filter((r) => r && r.provider)
+        .map((r) => ({ provider: String(r.provider), configured: Boolean(r.key), updatedAt: r.updatedAt ?? null }))
+        .sort((a, b) => a.provider.localeCompare(b.provider));
+    },
+    async entries() {
+      const stored = await all();
+      return stored
+        .filter((r) => r && r.provider && r.key)
+        .map((r) => ({ provider: String(r.provider), key: String(r.key) }));
+    },
+    async get(provider) {
+      const id = norm(provider);
+      if (!id) return "";
+      const rec = (await all()).find((r) => r.provider === id);
+      return rec && rec.key ? rec.key : "";
+    },
+    async set(provider, key) {
+      const id = norm(provider);
+      if (!id) throw new Error("Provider is required");
+      const value = String(key || "").trim();
+      if (!value) throw new Error("API key cannot be empty");
+      await backend.put(id, { provider: id, key: value, updatedAt: nowIso() });
+    },
+    async remove(provider) {
+      const id = norm(provider);
+      if (!id) return;
+      await backend.delete(id);
+    },
+  };
+}
+
 /**
  * Device-local store for the GitHub token an ephemeral node uses to run
  * queued issue work (issue #532) — same privacy model as the provider keys

@@ -9,6 +9,7 @@ import type {
   AgentRuntime,
   AgentCredentialStore,
   CatalogProvider,
+  DiscoveredNativeSession,
   ModelInfo,
   OpenSessionOptions,
   OpenSessionResult,
@@ -18,6 +19,7 @@ import type {
   RuntimeMessage,
   RuntimeSession,
   SessionSummary,
+  StreamingBehavior,
   ToolInterceptor,
   UsageSnapshot,
 } from "./types.js";
@@ -83,6 +85,13 @@ export interface ProtocolRuntimeOptions {
   deleteHistory?: (runtimeSessionRef: string) => void;
   /** Runtime-specific, side-effect-free title request (for example `codex exec --ephemeral`). */
   suggestName?: (firstPrompt: string, context: { cwd: string; model?: string }) => Promise<string | undefined>;
+  /**
+   * Enumerate this agent's own provider-native sessions on this node that Bivy
+   * did not start (issue #156's discovery/adoption flow — for Codex this is
+   * `discoverNativeCodexSessions`). Pair with `capabilities.nativeSessionDiscovery`
+   * (seeded via `capabilities` above); absent = no discovery for this agent.
+   */
+  discoverNativeSessions?: () => Promise<DiscoveredNativeSession[]> | DiscoveredNativeSession[];
 }
 
 type Pending = { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
@@ -134,8 +143,22 @@ export function protocolCommandsFromEnv(): AgentCommand[] | undefined {
   }
 }
 
+/**
+ * Validate a `streamingBehaviors` array from a hello (e.g.
+ * `["steer","followUp"]`). A shim must explicitly opt in before the client
+ * will ever attempt a mid-turn prompt against it — see RuntimeCapabilities.
+ * streamingBehaviors — so anything malformed/absent is dropped rather than
+ * defaulted to some assumed support.
+ */
+function parseStreamingBehaviors(raw: unknown): StreamingBehavior[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = Array.from(new Set(raw.filter((v): v is StreamingBehavior => v === "steer" || v === "followUp")));
+  return out.length ? out : undefined;
+}
+
 function capabilitiesFromHello(raw: unknown): RuntimeCapabilities {
   const c = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const streamingBehaviors = parseStreamingBehaviors(c.streamingBehaviors);
   return {
     toolInterception: c.toolInterception === true,
     modelSelection: c.modelSelection === true,
@@ -143,6 +166,7 @@ function capabilitiesFromHello(raw: unknown): RuntimeCapabilities {
     resume: c.resume === true,
     fork: false,
     commands: parseAgentCommands(c.commands),
+    ...(streamingBehaviors ? { streamingBehaviors } : {}),
   };
 }
 
@@ -604,6 +628,15 @@ export class ProtocolRuntime implements AgentRuntime {
   // hydrating history on reopen), when the runtime knows how to read them.
   readMessages(sessionFile: string): RuntimeMessage[] | undefined {
     return this.options.loadHistory?.(sessionFile);
+  }
+
+  /** See ProtocolRuntimeOptions.discoverNativeSessions (issue #156). */
+  async discoverNativeSessions(): Promise<DiscoveredNativeSession[]> {
+    try {
+      return (await this.options.discoverNativeSessions?.()) ?? [];
+    } catch {
+      return [];
+    }
   }
 
   async listSessions(): Promise<SessionSummary[]> {

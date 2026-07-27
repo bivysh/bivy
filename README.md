@@ -174,7 +174,7 @@ GitHub App in a comment. A node you own claims the work, runs the agent in an
 isolated worktree, and the agent opens the pull request itself.
 
 Available on every plan: free accounts get 10 runs per rolling 7-day window
-(shared across every source — manual, app, work queue, ephemeral), paid plans are
+(shared across every source — manual, app, work queue), paid plans are
 unlimited. Self-hosted stacks run unlimited.
 
 A private GitHub App only installs on the account that owns it, so connect one

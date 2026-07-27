@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
 import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
+import { FollowupQueue } from "./FollowupQueue.js";
 import { SANDBOX_TIERS } from "./Settings.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
@@ -162,6 +163,13 @@ export function Composer({
   const sessionCommands = state.activeSessionId ? state.commandsBySession[state.activeSessionId] : undefined;
   const runtimeCommands: SlashCommand[] = Array.isArray(currentCaps?.commands) ? currentCaps.commands : [];
   const agentCommands: SlashCommand[] = sessionCommands ?? (state.activeSessionId ? [] : runtimeCommands);
+  // Follow-ups held back while this session is busy (or while earlier ones are
+  // still waiting) — see AppController.sendPrompt/mustQueue. Only ever
+  // populated for a real (non-draft) session.
+  const followups = state.activeSessionId ? state.followupsBySession[state.activeSessionId] ?? [] : [];
+  // Whether the active runtime has advertised it can safely take an explicit
+  // mid-turn interrupt — gates the "Steer current turn" affordance below.
+  const canSteer = controller.supportsSteering();
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -475,6 +483,15 @@ export function Composer({
           </button>
         </div>
       )}
+      {state.activeSessionId && (
+        <FollowupQueue
+          sessionId={state.activeSessionId}
+          items={followups}
+          canSteer={canSteer}
+          busy={working}
+          onError={onError}
+        />
+      )}
       <form
         ref={formRef}
         className="composer"
@@ -515,13 +532,15 @@ export function Composer({
           )}
           {slashMenu.length > 0 && (
             <div className="slash-menu" role="listbox" aria-label="Commands">
-              {slashMenu.map((cmd, i) => (
+              {slashMenu.map((cmd, i) => {
+                const activeIndex = Math.min(menuIndex, slashMenu.length - 1);
+                return (
                 <button
                   type="button"
                   key={cmd.name}
-                  className={`slash-item${i === Math.min(menuIndex, slashMenu.length - 1) ? " active" : ""}`}
+                  className={`slash-item${i === activeIndex ? " active" : ""}`}
                   role="option"
-                  aria-selected={i === menuIndex}
+                  aria-selected={i === activeIndex}
                   // onMouseDown (not onClick) so the textarea doesn't blur and
                   // swallow the tap before the handler runs.
                   onMouseDown={(e) => { e.preventDefault(); chooseFromMenu(cmd); }}
@@ -529,7 +548,8 @@ export function Composer({
                   <span className="slash-name">{cmd.name}</span>
                   <span className="slash-desc">{cmd.description}</span>
                 </button>
-              ))}
+                );
+              })}
             </div>
           )}
           {(attachments.length > 0 || readingCount > 0) && (
@@ -670,18 +690,41 @@ export function Composer({
               <MicGlyph />
             </button>
 
+            {/* While busy with something typed AND the active runtime has
+                advertised real steer support, offer an explicit way to inject
+                it into the running turn right now — bypassing the queue
+                entirely — alongside the default Send, which queues it (see
+                AppController.sendPrompt/mustQueue) rather than assuming an
+                interrupt is safe for runtimes that never promised one. */}
+            {working && canSend && canSteer && (
+              <button
+                type="button"
+                className="composer-btn steer"
+                onClick={() => {
+                  // A stale click (the turn just ended, or the runtime lost
+                  // steer support) reports back rather than silently sending
+                  // — only clear the draft once it actually went out.
+                  if (controller.steerNow(text, attachments.length ? attachments : undefined)) clearComposer();
+                }}
+                title="Steer current turn — inject this now instead of queueing it"
+                aria-label="Steer current turn"
+              >
+                ⚡
+              </button>
+            )}
             {/* One button toggles by input state: while the agent is working,
                 an empty composer shows Stop (a hard kill of the current turn),
                 but the moment you type something it becomes Send — a follow-up
-                message is a normal thing to want, and the node queues a prompt
-                behind the runtime's current turn. When not working, it's always
-                Send (disabled until there's something to send). */}
+                message is a normal thing to want. It's held in the visible
+                queue (see FollowupQueue above) until the current turn settles,
+                rather than sent straight through. When not working, it's
+                always Send (disabled until there's something to send). */}
             {working && !canSend ? (
               <button type="button" className="composer-btn stop" onClick={onAbort} title="Stop">
                 ■
               </button>
             ) : (
-              <button type="submit" className="composer-btn send" disabled={!canSend} title={working ? "Send follow-up" : "Send"}>
+              <button type="submit" className="composer-btn send" disabled={!canSend} title={working ? "Queue follow-up" : "Send"}>
                 ↑
               </button>
             )}

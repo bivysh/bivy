@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Discover and adopt existing Claude Code / Codex sessions** — a node now
+  advertises provider-native sessions its Claude Code or Codex adapters can
+  see (a bare `claude`/`codex` run started outside Bivy), and the app can
+  import one via a new "Import existing session" sheet, filterable by node,
+  provider, repository, and recency. Discovery is capability-driven
+  (`capabilities.nativeSessionDiscovery`/`nativeSessionAdoption`) and returns
+  bounded metadata only — id/ref, cwd, updated time, a truncated first-prompt
+  title, and an active/resumable flag — never transcript content, and never
+  duplicates a session Bivy already manages. Importing resumes the session
+  natively through the ordinary open/resume path without rewriting or
+  deleting the provider's own history; a session with a live external process
+  is offered read-only instead of an adopt action, since Bivy has no safe way
+  to take over a process it doesn't own. Other runtimes stay hidden from the
+  discovery UI until their adapter earns the capability. (#156)
+
+- **Scheduled automations** — Settings → Automations lets you create a
+  recurring (cron, with an explicit IANA timezone) or one-time schedule that
+  runs an end-to-end encrypted instruction template on an assigned node, with
+  its own runtime/model/approval/sandbox defaults, run-now, enable/disable,
+  next-run preview, and recent results. Schedules generate runs through the
+  same automation-run lifecycle as GitHub/Slack/manual triggers — an offline
+  node's due occurrence stays pending until it reconnects, restarting the
+  control plane or running several instances can't duplicate an occurrence,
+  and hosted entitlement checks happen at run admission, not schedule
+  creation. The control plane only ever holds routing metadata plus the
+  ciphertext; it cannot read the instructions. (#148)
+
 - **GitHub App key sync across nodes** — `bivy github:app-sync on` opts a node
   into pulling/pushing a connected GitHub App's private key E2E-encrypted
   through the control plane, so connecting an app on one node makes it usable
@@ -16,6 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by default and per node; the control plane never holds a plaintext key.
   Removing a node from the account flags its apps for rotation, so a
   surviving node mints a fresh vault key on its next sync. (#88)
+
+### Changed
+
+- **Nodes settings panel: fields grouped into labeled sections** — the panel
+  used to list a dozen unrelated fields (node name, default agent/model,
+  sandbox mode, GitHub session limit, GitHub issue prompt, session sync) as
+  one continuous flat list with no visual separation, which read as a wall of
+  text, especially in the mobile drill-in view. Fields are now grouped under
+  labeled sections (Node, Identity, Session defaults, GitHub, Session sync)
+  with divider lines between them, matching the grouping already used by the
+  GitHub App and GitHub Queue panels. (#74)
 
 ### Security
 
@@ -32,6 +70,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Transient CLI/relay clients no longer clutter "Signed-in devices".**
+  `bivy run --node` bridges and sibling-node replicas paired with a node via
+  the same `pair.account` handshake a phone/browser uses, so the control plane
+  recorded each one as a durable paired device. Because these tools can mint a
+  fresh device keypair per invocation (probes, tests, one-off runs), the
+  account's Account & billing → Signed-in devices list filled up with rows
+  like "Bivy CLI probe" and "Bivy CLI (run --node)" that never got cleaned up.
+  These transient connections now mark their pairing `ephemeral`: the node
+  still authorizes them and hands over the room key, but the control plane
+  skips the paired-device record, so only real user devices are listed (and
+  the account's device count stays accurate). Genuine app/QR devices are
+  unaffected.
 - The GitHub issue queue's per-node concurrency cap now actually lets issues
   run in parallel up to the configured limit. `GitHubTaskPoller` (and the
   hosted work-queue's `ControlPlaneTaskPoller`) used to `await` each claimed

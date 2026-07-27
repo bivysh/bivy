@@ -37,6 +37,7 @@ import {
   getNotificationPreferences,
   setNotificationPreferences,
   createEphemeralKeyStore,
+  createEphemeralModelKeyStore,
   createEphemeralPrefsStore,
   createMachineStore,
   createGithubTaskTokenStore,
@@ -48,6 +49,8 @@ import {
   ephemeralNodeLabel,
   type TranscriptCache,
   type EphemeralKeyStore,
+  type EphemeralModelKeyStore,
+  type EphemeralModelKeyInfo,
   type EphemeralPrefsStore,
   type EphemeralPrefs,
   type EphemeralMachine,
@@ -64,16 +67,43 @@ import {
   type PairedDevice,
   type Command,
   type ConnectionStatus,
+  type FollowupEditResult,
+  mustQueueFollowup,
   type ModelInfo,
+  nextQueuedFollowup,
+  type PendingFollowup,
   type PromptAttachment,
   type RuntimeInfo,
   type ServerEvent,
+  type StreamingBehavior,
+  supportsSteering as runtimeSupportsSteering,
   type Transport,
   importRoomKey,
   open as openSealed,
   unb64url,
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+
+/**
+ * Bounded discovery metadata for a provider-native session Bivy did not start
+ * (see src/runtime/types.ts's DiscoveredNativeSession, issue #156). Never
+ * carries transcript content — safe to render in a list straight off the wire.
+ */
+export interface DiscoveredNativeSessionDto {
+  runtimeId: string;
+  agentName: string;
+  ref: string;
+  cwd?: string;
+  updatedAt?: number;
+  title?: string;
+  active: boolean;
+  resumable: boolean;
+  plan: {
+    mode: "native-resume" | "seeded" | "follow-only";
+    disclosure?: string;
+  };
+}
 
 function requestId(): string {
   return `r${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -121,6 +151,12 @@ export class AppController {
   private pendingTranscriptions = new Map<string, { resolve: (text: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight session-fork requests (export → bundle, import → done), by requestId. */
   private pendingForks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  /** In-flight saves awaiting a node ack (node.settings, provider.apiKey,
+   *  models.custom.save, stt.config.set), by requestId — see awaitAck/resolveAck.
+   *  These commands had no protocol-level ack before #140: the UI would show
+   *  "Saved" the instant the command was sent, regardless of whether the node
+   *  actually accepted it. */
+  private pendingAcks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** Persistent transcript cache (IndexedDB) for instant paint + incremental backfill. */
   private transcriptCache: TranscriptCache = createTranscriptCache({ maxSessions: 50 });
   /** A GitHub App manifest `code` captured from a redirect, sent once connected. */
@@ -153,7 +189,19 @@ export class AppController {
     // node after the one-shot refresh in maybeFlushPendingPrompt already ran —
     // that race left it invisible in the sidebar until the next reconnect.
     // Re-pull the list once the turn actually settles as a self-healing backstop.
-    this.store.onSessionSettled = () => this.refreshSessions();
+    // The turn settling is also the drain point for any queued follow-ups (see
+    // drainFollowups) — sending the next one only once the current turn is
+    // fully done, never mid-stream (that would silently steer instead of
+    // queueing) — and a durable-enough signal to clear a "sending" item whose
+    // own delivery ack (session.user_message) never arrived (settleSendingFollowups).
+    this.store.onSessionSettled = () => {
+      this.refreshSessions();
+      const sid = this.store.getState().activeSessionId;
+      if (sid) {
+        this.store.settleSendingFollowups(sid);
+        this.drainFollowups(sid);
+      }
+    };
     // Live convergence: refresh the moment the node tells us a session was
     // created (ours or another client's), instead of only on this session's
     // own eventual agent_end.
@@ -187,6 +235,11 @@ export class AppController {
     // Seed the reactive auth flag from the token we may have just consumed above,
     // so the very first render lands on the right surface (sign-in vs. shell).
     this.store.setSignedIn(this.signedIn);
+    // Handle a return from Stripe checkout (?checkout=success|cancel) and a
+    // "Go Pro" deep link from the marketing site (?intent=upgrade). Runs after
+    // the auth flag is seeded so the upgrade intent can resume the moment the
+    // user is signed in (a fresh sign-in redirect lands here already signed in).
+    this.handleBillingReturn();
     // Remember the route we booted on (a `/sessions/:id` deep link, `/sessions/new`,
     // or root). It's replayed once we're first online — see applyInitialRoute.
     this.pendingRoute = parseRoute();
@@ -216,10 +269,83 @@ export class AppController {
     }
   }
 
+  /** localStorage key marking a pending "Go Pro" intent that must survive the
+   *  full-page sign-in redirect (which drops the query string). */
+  private static readonly UPGRADE_INTENT_KEY = "bivy_upgrade_intent";
+
+  /**
+   * React to a Stripe checkout return and to a "Go Pro" deep link:
+   *   - `?checkout=success` → confirmation banner (the plan flips via webhook,
+   *     which the Account panel picks up on its next /me fetch).
+   *   - `?checkout=cancel`  → neutral "still on free" banner, no dead-end.
+   *   - `?intent=upgrade`   → resume checkout. If signed in, redirect straight to
+   *     Stripe; if not, remember the intent so it fires once sign-in completes.
+   * Consumed params are stripped so they neither linger nor re-fire on reload.
+   */
+  private handleBillingReturn(): void {
+    let checkout = "";
+    let intent = "";
+    try {
+      const params = new URLSearchParams(location.search);
+      checkout = (params.get("checkout") || "").trim();
+      intent = (params.get("intent") || "").trim();
+      if (checkout || intent) {
+        params.delete("checkout");
+        params.delete("intent");
+        const qs = params.toString();
+        history.replaceState(null, "", location.pathname + (qs ? `?${qs}` : "") + location.hash);
+      }
+    } catch {
+      /* ignore malformed query */
+    }
+
+    if (checkout === "success") {
+      // A completed checkout supersedes any remembered intent.
+      this.clearUpgradeIntent();
+      this.store.setNotice("You're on Pro — thanks! Unlimited runs are unlocked. It may take a few seconds to show in Settings.");
+      return;
+    }
+    if (checkout === "cancel") {
+      this.clearUpgradeIntent();
+      this.store.setNotice("Checkout canceled — you're still on the free plan. Upgrade any time from Settings.");
+      return;
+    }
+
+    if (intent === "upgrade") {
+      if (this.signedIn) {
+        void this.startCheckout().catch((e) => this.store.setError(e instanceof Error ? e.message : String(e)));
+      } else {
+        // Persist across the sign-in redirect; resumed below on the next load.
+        try { localStorage.setItem(AppController.UPGRADE_INTENT_KEY, "1"); } catch { /* ignore */ }
+      }
+      return;
+    }
+
+    // No billing params this load: resume a remembered "Go Pro" intent once the
+    // user has signed in (e.g. right after the OAuth/magic-link redirect).
+    if (this.signedIn && this.hasUpgradeIntent()) {
+      this.clearUpgradeIntent();
+      void this.startCheckout().catch((e) => this.store.setError(e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  private hasUpgradeIntent(): boolean {
+    try { return localStorage.getItem(AppController.UPGRADE_INTENT_KEY) === "1"; } catch { return false; }
+  }
+
+  private clearUpgradeIntent(): void {
+    try { localStorage.removeItem(AppController.UPGRADE_INTENT_KEY); } catch { /* ignore */ }
+  }
+
   private buildTransport(): Transport {
     const handlers = {
       onEvent: (event: ServerEvent) => {
         const type = String(event.type || "");
+        // Settle any save() awaiting this reply (see awaitAck) before anything
+        // else — harmless no-op when the requestId doesn't match a pending save
+        // (e.g. a plain .get(), or an event from an unrelated flow that happens
+        // to carry its own requestId).
+        this.resolveAck(event);
         if (type === "pong") {
           const rid = String(event.requestId || "");
           if (rid) this.pendingLivenessPings.delete(rid);
@@ -236,6 +362,10 @@ export class AppController {
         if (type.startsWith("terminal.") || type.startsWith("multiplexer.")) {
           if (["terminal.list", "terminal.created", "terminal.activity", "terminal.closed", "terminal.exit"].includes(type)) {
             this.store.apply(this.eventWithNodeScope(event));
+          } else if (type === "terminal.tui") {
+            // Composer single-writer lock — keyed by (raw) session id, so no node
+            // scoping needed; the store folds it into `tuiSessions`.
+            this.store.apply(event);
           }
           for (const fn of this.terminalListeners) fn(event);
           return;
@@ -262,6 +392,7 @@ export class AppController {
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
         this.maybeFlushPendingPrompt(appliedEvent);
+        this.maybeConfirmFollowup(appliedEvent);
         this.maybeRestoreDraftAgent(appliedEvent);
         this.maybeRefreshModelsForRuntime(appliedEvent);
         this.reconcileSessionList(appliedEvent);
@@ -523,11 +654,42 @@ export class AppController {
     if (this.direct || !this.signedIn) return;
     this.lastNodeRefreshAt = Date.now();
     try {
-      this.store.setNodes(await this.listNodes());
+      const nodes = await this.listNodes();
+      this.store.setNodes(nodes);
+      // A persisted current node the account no longer has — removed, or a
+      // never-completed enrollment left behind by a sign-in/QR link — can never
+      // be reached: the relay dials it forever and eventually surfaces the node's
+      // "Forbidden" pairing rejection while the header spins on a raw node id.
+      // Drop the stale selection so the app falls back to the graceful "No runner
+      // connected" empty state instead. Guarded to a successfully fetched list
+      // (the catch below leaves a transient fetch failure alone); an enrolled but
+      // merely offline node still appears in the list, so this only clears nodes
+      // that are genuinely gone.
+      if (this.local.cur && !nodes.some((n) => n.id === this.local.cur)) {
+        this.clearCurrentNode();
+      }
       void this.refreshAccountSessions();
     } catch {
       /* non-fatal; header just shows the current node */
     }
+  }
+
+  /**
+   * Drop the current node selection and stop dialing it. Returns the hosted app
+   * to the "connect a node" empty state (needsNode) instead of spinning forever
+   * on a node that isn't there. Closes the transport so the relay reconnect loop
+   * halts, clears the persisted id, and resets the session pane.
+   */
+  private clearCurrentNode(): void {
+    try {
+      this.transport.close();
+    } catch {
+      /* noop */
+    }
+    this.local.cur = "";
+    this.store.setCurrentNode(null);
+    this.store.resetSession();
+    this.store.setStatus("offline");
   }
 
   private lastNodeRefreshAt = 0;
@@ -622,6 +784,74 @@ export class AppController {
 
   private send(command: Command): void {
     void this.transport.send(command);
+  }
+
+  /**
+   * Send a command and await its correlated reply instead of assuming success
+   * the moment it was handed to the transport. A handful of node-settings-style
+   * saves (node.settings.set, provider.apiKey, models.custom.save,
+   * stt.config.set) used to be fire-and-forget with no ack at all — the UI
+   * showed "Saved" immediately regardless of whether the node accepted the
+   * change (#140). The node now echoes our requestId back on both success and
+   * failure (a `*.error`-suffixed type rejects; anything else resolves).
+   */
+  private awaitAck(command: Command, timeoutMs = 10000): Promise<ServerEvent> {
+    const rid = requestId();
+    return new Promise<ServerEvent>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingAcks.delete(rid);
+        reject(new Error("Timed out waiting for the node to respond."));
+      }, timeoutMs);
+      this.pendingAcks.set(rid, { resolve, reject, timer });
+      void this.transport.send({ ...command, requestId: rid });
+    });
+  }
+
+  /** Resolve/reject an in-flight awaitAck() call from its matching reply. */
+  private resolveAck(event: ServerEvent): void {
+    const rid = String(event.requestId || "");
+    const pending = rid ? this.pendingAcks.get(rid) : undefined;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingAcks.delete(rid);
+    if (String(event.type || "").endsWith(".error")) {
+      pending.reject(new Error(String((event as { error?: unknown }).error || "Save failed")));
+    } else {
+      pending.resolve(event);
+    }
+  }
+
+  // --- Native session discovery/adoption (issue #156) -------------------------
+  // "Browse, follow, and take over" provider-native sessions (a bare `claude` or
+  // `codex` run outside Bivy) that the current node can see. Capability-driven:
+  // the node decides per-runtime whether a session is discoverable/adoptable
+  // (see src/runtime/native-session-discovery.ts) — this is just the transport.
+
+  /** Every provider-native session the current node can discover, bounded
+   *  metadata only (never transcript content). Throws on a transport/node error. */
+  async discoverNativeSessions(): Promise<DiscoveredNativeSessionDto[]> {
+    const event = await this.awaitAck({ kind: "session.discover" }, 20000);
+    const sessions = (event as { sessions?: unknown }).sessions;
+    return Array.isArray(sessions) ? (sessions as DiscoveredNativeSessionDto[]) : [];
+  }
+
+  /**
+   * Import a discovered session into Bivy and switch the view to it. The node
+   * re-validates the ref against a fresh discovery pass (so a stale/removed
+   * session, or one with a live external process, is rejected server-side even
+   * if this client's cached list is out of date) and resumes it natively when
+   * the runtime supports that; the provider's own history is never touched.
+   */
+  async importNativeSession(runtimeId: string, ref: string): Promise<string> {
+    const event = await this.awaitAck({ kind: "session.import", runtimeId, ref }, 60000);
+    const sessionId = String((event as { sessionId?: unknown }).sessionId || "");
+    if (!sessionId) throw new Error("Import did not return a session id");
+    // Reopen through the ordinary path/id resume (same as clicking any saved
+    // session) rather than trusting a synthetic event shape, so this works
+    // identically whether the node created a brand-new record or reused one
+    // already open in memory.
+    this.openSession(sessionId, ref);
+    return sessionId;
   }
 
   // --- Session fork (docs/session-fork-plan.md) --------------------------------
@@ -987,12 +1217,18 @@ export class AppController {
       openedAfterNodeSwitch = true;
     }
     void this.refreshAccountSessions();
+    // If this is a machine we just launched, seed its vault with the model API
+    // keys held on this device (closes the cold-start gap — see the method doc).
+    void this.seedEphemeralNodeIfNeeded();
     // Replay a `/sessions/:id` deep link now that a live transport exists — must
     // run before the requestHistory below so the session it opens is the one we
     // refresh. A cross-node selection was already opened just above.
     if (!openedAfterNodeSwitch) this.applyInitialRoute();
     const sid = this.store.getState().activeSessionId;
-    if (sid && !openedAfterNodeSwitch) this.requestHistory(sid);
+    if (sid && !openedAfterNodeSwitch) {
+      this.requestHistory(sid);
+      this.retryStuckFollowups(sid);
+    }
     // No active session but a session.new is still pending → its session.history
     // was lost to the drop. Re-fire it (idempotent on the node by requestId) so the
     // draft that wedged on the opening spinner finally binds and flushes its prompt.
@@ -1071,8 +1307,10 @@ export class AppController {
   getNodeSettings(): void {
     this.send({ kind: "node.settings.get" });
   }
-  setNodeSettings(patch: Record<string, unknown>): void {
-    this.send({ kind: "node.settings.set", settings: patch });
+  /** Save node settings and resolve once the node acks the change (or reject
+   *  with its error) instead of assuming success the moment it was sent. */
+  setNodeSettings(patch: Record<string, unknown>): Promise<void> {
+    return this.awaitAck({ kind: "node.settings.set", settings: patch }).then(() => undefined);
   }
 
   /** Sandbox tier for the next new session (null = use the node default). */
@@ -1156,7 +1394,14 @@ export class AppController {
     this.chooseAgent(target);
   }
 
-  /** Send a prompt, creating a session first if there isn't an active one. */
+  /**
+   * Send a prompt, creating a session first if there isn't an active one. A
+   * prompt for an already-active session is either sent right away or held in
+   * the visible follow-up queue (AppState.followupsBySession) — see mustQueue.
+   * Queued items are edit/reorder/removable (see editFollowup etc.) and drain
+   * out one at a time as each turn settles (drainFollowups), or can be pushed
+   * through early via sendFollowupNow/steerNow.
+   */
   sendPrompt(text: string, attachments?: PromptAttachment[]): void {
     const trimmed = text.trim();
     const files = attachments && attachments.length ? attachments : undefined;
@@ -1164,6 +1409,10 @@ export class AppController {
     const cmid = clientMessageId();
     const active = this.store.getState().activeSessionId;
     if (active) {
+      if (this.mustQueue(active)) {
+        this.store.enqueueFollowup(active, { id: cmid, text: trimmed, attachments: files }, Date.now());
+        return;
+      }
       this.store.addUserMessage(trimmed, cmid, files);
       this.send({ kind: "prompt", sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files });
       return;
@@ -1379,8 +1628,10 @@ export class AppController {
   getProviderAuth(provider: string): void {
     this.send({ kind: "provider.auth.get", provider });
   }
-  saveApiKey(provider: string, key: string): void {
-    this.send({ kind: "provider.apiKey", provider, key });
+  /** Save an API key and resolve once the node acks it (or reject with its
+   *  error) instead of assuming success the moment it was sent. */
+  saveApiKey(provider: string, key: string): Promise<void> {
+    return this.awaitAck({ kind: "provider.apiKey", provider, key }).then(() => undefined);
   }
   removeProvider(provider: string): void {
     this.send({ kind: "provider.remove", provider });
@@ -1404,9 +1655,11 @@ export class AppController {
     this.send({ kind: "models.custom.presets" });
   }
   /** Save (create or update) a local/custom provider. `spec` matches the node's
-   *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }. */
-  saveLocalModel(spec: Record<string, unknown>): void {
-    this.send({ kind: "models.custom.save", spec });
+   *  save shape: { providerId, name?, baseUrl, api?, apiKey?, compat?, models[] }.
+   *  Resolves once the node acks the save (or rejects with its error) instead
+   *  of assuming success the moment it was sent. */
+  saveLocalModel(spec: Record<string, unknown>): Promise<void> {
+    return this.awaitAck({ kind: "models.custom.save", spec }).then(() => undefined);
   }
   removeLocalModel(id: string): void {
     this.send({ kind: "models.custom.remove", id });
@@ -1421,8 +1674,10 @@ export class AppController {
   setSttProvider(provider: string): void {
     this.send({ kind: "stt.config.set", provider });
   }
-  saveSttKey(provider: string, value: string): void {
-    this.send({ kind: "stt.config.set", setKey: { provider, value } });
+  /** Save a speech-to-text provider key and resolve once the node acks it (or
+   *  reject with its error) instead of assuming success the moment it was sent. */
+  saveSttKey(provider: string, value: string): Promise<void> {
+    return this.awaitAck({ kind: "stt.config.set", setKey: { provider, value } }).then(() => undefined);
   }
   removeSttKey(provider: string): void {
     this.send({ kind: "stt.config.set", removeKey: provider });
@@ -1562,11 +1817,28 @@ export class AppController {
   // --- Ephemeral machines ------------------------------------------------
 
   private ephemeralKeys: EphemeralKeyStore = createEphemeralKeyStore();
+  private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
   private ephemeralMachines: MachineStore = createMachineStore();
+  /** Ephemeral node ids we've already seeded with device-held model keys this
+   *  session, so a reconnect doesn't re-push (the node write is idempotent
+   *  regardless). See `seedEphemeralNodeIfNeeded`. */
+  private seededEphemeralNodes = new Set<string>();
 
   listEphemeralKeys(): Promise<ProviderKeyInfo[]> {
     return this.ephemeralKeys.list();
+  }
+  /** Device-held model **API keys** used to seed a freshly-launched machine's
+   *  vault over the E2E channel (closes the cold-start gap — see
+   *  docs/ephemeral-sessions.md, "Closing the cold-start gap"). API keys only. */
+  listEphemeralModelKeys(): Promise<EphemeralModelKeyInfo[]> {
+    return this.ephemeralModelKeys.list();
+  }
+  setEphemeralModelKey(provider: string, key: string): Promise<void> {
+    return this.ephemeralModelKeys.set(provider, key);
+  }
+  removeEphemeralModelKey(provider: string): Promise<void> {
+    return this.ephemeralModelKeys.remove(provider);
   }
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralKeys.getToken(id);
@@ -1587,6 +1859,51 @@ export class AppController {
   }
   listEphemeralMachines(): Promise<EphemeralMachine[]> {
     return this.ephemeralMachines.list();
+  }
+  /**
+   * When we come online on a node WE launched (a device-local `MachineStore`
+   * record), push the model API keys held on THIS device into its vault so a
+   * brand-new machine has model credentials even when it's the account's only
+   * node and there's no peer to sync the model-auth vault from — the cold-start
+   * gap (docs/ephemeral-sessions.md, "Closing the cold-start gap").
+   *
+   * Uses the ordinary `provider.apiKey` frame over the already-paired E2E
+   * channel — the same path Settings → Keys uses — so the relay/control plane
+   * only ever see ciphertext and nothing lands in the machine's user-data. API
+   * keys only; agent-native OAuth logins are out of scope. Guarded per session
+   * (the node write is idempotent regardless).
+   */
+  private async seedEphemeralNodeIfNeeded(): Promise<void> {
+    if (!EPHEMERAL_MACHINES_ENABLED || this.direct) return;
+    const nodeId = this.local.cur;
+    if (!nodeId || this.seededEphemeralNodes.has(nodeId)) return;
+    let machines: EphemeralMachine[];
+    try {
+      machines = await this.ephemeralMachines.list();
+    } catch {
+      return;
+    }
+    // Only seed nodes this device provisioned — never a normal, persistent one.
+    if (!machines.some((m) => m.nodeId === nodeId)) return;
+    let entries: { provider: string; key: string }[];
+    try {
+      entries = await this.ephemeralModelKeys.entries();
+    } catch {
+      return;
+    }
+    // Mark seeded regardless of whether there were keys — an empty device just
+    // has nothing to contribute, and re-checking on every reconnect is wasteful.
+    this.seededEphemeralNodes.add(nodeId);
+    if (!entries.length) return;
+    // Push only while the transport is still live on this same node — an async
+    // hop above could have switched it out from under us.
+    if (this.store.getState().status !== "online" || this.local.cur !== nodeId) {
+      this.seededEphemeralNodes.delete(nodeId); // let a later online retry
+      return;
+    }
+    for (const { provider, key } of entries) {
+      this.send({ kind: "provider.apiKey", provider, key });
+    }
   }
   listEphemeralSizes(providerId: string, region?: string): Promise<ProviderSize[]> {
     return listEphemeralSizes(providerId, { exec: cloudExec(this.local), keys: this.ephemeralKeys }, region);
@@ -1699,6 +2016,14 @@ export class AppController {
     this.send(cmd);
   }
 
+  /** "Take over in chat": stop the interactive TUI that currently owns a session
+   *  and return it to governed chat. The node closes the PTY, rebuilds the
+   *  session from disk, and broadcasts `terminal.tui {active:false}` to unlock
+   *  the composer everywhere. */
+  closeSessionTui(sessionId: string): void {
+    this.send({ kind: "terminal.close.tui", sessionId });
+  }
+
   /** Apply a pasted device-link payload (QR text) and reconnect. */
   applyLinkPayload(text: string): boolean {
     if (!consumeLinkPayload(this.local, text)) return false;
@@ -1800,6 +2125,172 @@ export class AppController {
   abort(): void {
     const active = this.store.getState().activeSessionId;
     if (active) this.send({ kind: "abort", sessionId: active });
+  }
+
+  // --- Queued follow-ups (issue #154) -------------------------------------
+  //
+  // A prompt sent to an already-busy session used to go straight over the
+  // wire and rely on the node/runtime to sort out ordering (its default is to
+  // "steer" the running turn — see src/server.ts's promptOptionsFor). That left
+  // a follow-up invisible and uneditable the instant it was sent. Now it's
+  // held in AppState.followupsBySession (visible, editable, reorderable) until
+  // either the current turn settles (auto-drain, one at a time, in display
+  // order) or the user explicitly pushes it through early (sendFollowupNow /
+  // steerNow). See SessionStore's queued-follow-ups CRUD for the data-shape
+  // invariants; everything here is about *when* to call it.
+
+  /** A new prompt for this session must be held in the visible queue rather
+   *  than sent immediately: the session is mid-turn, or earlier queued items
+   *  are still waiting (sending straight through would silently jump the
+   *  queue and reorder ahead of them — see the reordering acceptance test).
+   *  See packages/core/src/followups.ts's mustQueueFollowup for the (unit
+   *  tested) decision itself. */
+  private mustQueue(sessionId: string): boolean {
+    return mustQueueFollowup(this.store.getFollowups(sessionId).length, this.store.getState().working);
+  }
+
+  /** Whether the active runtime has advertised it can safely accept an
+   *  explicit mid-turn interrupt (`streamingBehavior: "steer"`). Read from the
+   *  live capabilities merged onto the selected runtime row (session.created /
+   *  session.capabilities — see SessionStore.mergeRuntimeCapabilities and
+   *  src/runtime/types.ts's RuntimeCapabilities.streamingBehaviors on the
+   *  node). The composer/queue UI use this to decide whether "Steer current
+   *  turn" is even offered; when false, a busy session only ever queues —
+   *  never attempts an interrupt the runtime hasn't promised to honor. See
+   *  packages/core/src/followups.ts's supportsSteering for the (unit tested)
+   *  capability check itself. */
+  supportsSteering(): boolean {
+    const s = this.store.getState();
+    const runtime = s.runtimes.find((r) => r.id === s.selectedAgentId);
+    return runtimeSupportsSteering(runtime?.capabilities as { streamingBehaviors?: unknown } | undefined);
+  }
+
+  /** The queue for a session, in delivery order. */
+  getFollowups(sessionId: string): PendingFollowup[] {
+    return this.store.getFollowups(sessionId);
+  }
+
+  /** Edit a still-queued item. `expectedVersion` must match the version the
+   *  caller last read (see PendingFollowup.version) — a mismatch means it
+   *  changed underneath the editor (another tab, or it started sending while
+   *  the edit was open) and is rejected rather than silently overwritten; the
+   *  caller should show the current (already-reactive) state and let the user
+   *  retry instead of reapplying their edit over it. */
+  editFollowup(sessionId: string, id: string, patch: { text: string; attachments?: PromptAttachment[] }, expectedVersion: number): FollowupEditResult {
+    return this.store.editFollowup(sessionId, id, patch, expectedVersion, Date.now());
+  }
+
+  /** Remove a still-queued item. No-op once it's already dispatched. */
+  removeFollowup(sessionId: string, id: string): boolean {
+    return this.store.removeFollowup(sessionId, id);
+  }
+
+  /** Reorder a still-queued item to `toIndex` among the queue. No-op once it's
+   *  already dispatched. */
+  reorderFollowup(sessionId: string, id: string, toIndex: number): boolean {
+    return this.store.reorderFollowup(sessionId, id, toIndex);
+  }
+
+  /**
+   * Force a still-queued item to the front and deliver it as soon as possible:
+   * immediately if the session has gone idle since it was queued, as an
+   * explicit steer if it's busy and the runtime supports one (see
+   * supportsSteering), or otherwise just promoted to the front — sending it
+   * into a busy runtime with no real steer semantics would silently interrupt
+   * it, so it stays queued for the normal turn-end drain instead. No-op for an
+   * item that isn't (or is no longer) queued.
+   */
+  sendFollowupNow(sessionId: string, id: string): void {
+    const item = this.store.getFollowups(sessionId).find((f) => f.id === id);
+    if (!item || item.status !== "queued") return;
+    this.store.reorderFollowup(sessionId, id, 0);
+    if (!this.store.getState().working) {
+      this.drainFollowups(sessionId);
+      return;
+    }
+    if (this.supportsSteering()) this.dispatchFollowup(sessionId, item, "steer");
+  }
+
+  /**
+   * The explicit "Steer current turn" action: inject `text` into the running
+   * turn right now, bypassing the queue entirely (it never becomes a queued
+   * item). No-op unless the session is actually busy and the runtime
+   * advertised steer support — the composer only offers this action when both
+   * hold, but a stale click (the turn just ended, or the runtime changed) must
+   * not fall back to silently queueing something the user asked to inject NOW
+   * — so this returns whether it actually sent, and the caller (the composer)
+   * only clears the draft on a true send, never discarding unsent text.
+   */
+  steerNow(text: string, attachments?: PromptAttachment[]): boolean {
+    const trimmed = text.trim();
+    const files = attachments && attachments.length ? attachments : undefined;
+    if (!trimmed && !files) return false;
+    const active = this.store.getState().activeSessionId;
+    if (!active || !this.store.getState().working || !this.supportsSteering()) return false;
+    const cmid = clientMessageId();
+    this.store.addUserMessage(trimmed, cmid, files);
+    this.send({ kind: "prompt", sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files, streamingBehavior: "steer" });
+    return true;
+  }
+
+  /** Send the front queued item now. Called once a turn settles (agent_end),
+   *  and defensively whenever the session might have gone idle between an
+   *  enqueue and this check. No-op while busy or with nothing queued — the
+   *  queue only ever has one item in flight ("sending") at a time. */
+  private drainFollowups(sessionId: string): void {
+    if (sessionId !== this.store.getState().activeSessionId) return;
+    if (this.store.getState().working) return;
+    const next = nextQueuedFollowup(this.store.getFollowups(sessionId));
+    if (!next) return;
+    this.dispatchFollowup(sessionId, next);
+  }
+
+  /** Actually send a queued item: mark it "sending" (so it can't be double-
+   *  dispatched or edited mid-flight), fold it into the transcript exactly
+   *  like any other sent prompt, and put it on the wire. Confirmed sent — and
+   *  dropped from the queue — by maybeConfirmFollowup once the node echoes it
+   *  back (or, failing that, once the turn it started settles regardless —
+   *  see settleSendingFollowups). */
+  private dispatchFollowup(sessionId: string, item: PendingFollowup, streamingBehavior?: StreamingBehavior): void {
+    this.store.markFollowupSending(sessionId, item.id, Date.now());
+    this.store.addUserMessage(item.text, item.id, item.attachments);
+    this.send({
+      kind: "prompt",
+      sessionId,
+      text: item.text,
+      clientMessageId: item.id,
+      attachments: item.attachments,
+      ...(streamingBehavior ? { streamingBehavior } : {}),
+    });
+  }
+
+  /** The node's echo of a prompt (session.user_message) is the protocol
+   *  acknowledgement that a dispatched follow-up actually reached it —
+   *  matched by clientMessageId. Drop it from the visible queue; it's a normal
+   *  transcript message now (deduped against the optimistic bubble exactly
+   *  like any other send — see SessionStore's `pending` map). This never fires
+   *  for a plain (non-queued) send: confirmFollowupSent no-ops when the id
+   *  isn't in the queue. */
+  private maybeConfirmFollowup(event: { type?: string; sessionId?: string; clientMessageId?: unknown }): void {
+    if (event.type !== "session.user_message") return;
+    const sid = event.sessionId || this.store.getState().activeSessionId;
+    const cmid = typeof event.clientMessageId === "string" ? event.clientMessageId : undefined;
+    if (!sid || !cmid) return;
+    this.store.confirmFollowupSent(sid, cmid);
+  }
+
+  /** A follow-up left "sending" when the socket dropped before its delivery
+   *  could be confirmed is retried verbatim (same clientMessageId) once
+   *  reconnected — see onReconnected. Safe to resend even if it DID land: the
+   *  node dedupes `prompt` by clientMessageId (mirroring session.new's
+   *  requestId dedupe — see src/session/session-new-dedupe.ts and its prompt
+   *  reuse in src/server.ts), so a prompt that already landed is a no-op
+   *  rather than a duplicate turn. */
+  private retryStuckFollowups(sessionId: string): void {
+    for (const item of this.store.getFollowups(sessionId)) {
+      if (item.status !== "sending") continue;
+      this.send({ kind: "prompt", sessionId, text: item.text, clientMessageId: item.id, attachments: item.attachments });
+    }
   }
 
   // --- Session lifecycle actions -----------------------------------------

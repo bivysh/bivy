@@ -218,6 +218,18 @@ export function buildResumePrompt(issue: GitHubIssue): string {
   ].join("\n");
 }
 
+/** The nudge sent to a non-issue (interactive/chat) session whose turn was cut
+ *  off by a process restart. Unlike the issue prompt it makes no assumptions
+ *  about a git worktree or a task to report on — it just tells the agent it was
+ *  interrupted and to finish what it was doing, so it works for any session. */
+export function buildInteractiveResumePrompt(): string {
+  return [
+    "Your previous turn was interrupted by a restart before it finished — not because you completed the task or were told to stop.",
+    "",
+    "Pick up exactly where you left off and finish what you were doing. Review the recent conversation to recall your plan; if you're in a code workspace, check `git status` and `git diff` to see the work already in progress before continuing.",
+  ].join("\n");
+}
+
 /** Parse optional bivy directives from issue body for agent/model selection.
  *  Supports lines like:
  *    bivy-agent: pi

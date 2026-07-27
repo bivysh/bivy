@@ -651,6 +651,18 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .composer-gh:empty { display: none; }
 .pill-gh { flex: none; }
 
+/* TUI single-writer lock banner: shown in place of a usable composer while the
+   active session is driven by its interactive terminal. Offers to jump to that
+   terminal or take the session back into chat. */
+.composer-tui-lock {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 8px 10px 0; padding: 8px 12px;
+  border: 1px solid var(--accent); border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+}
+.composer-tui-lock-text { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--ink); }
+.composer-tui-lock-actions { flex: none; display: flex; gap: 8px; }
+
 /* "/" slash-command pill: opens the composer's command menu. `margin-left: auto`
    parks it on the right edge of the band (top-right over the composer) whether or
    not a GitHub pill shares the row. Sized/round like the GitHub pill for a matched
@@ -729,6 +741,13 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .composer-btn.send:disabled { opacity: 0.35; cursor: default; }
 .composer-btn.stop { background: var(--danger); color: #fff; }
 .composer-btn.stop:active { transform: scale(0.92); }
+/* "Steer current turn": an explicit interrupt, distinct from the default Send
+   (which queues while busy — see FollowupQueue). --accent is already a warm
+   orange (the Send button), so this borrows --unseen's blue instead — a color
+   used nowhere else in the composer — to read as clearly "not a normal send." */
+.composer-btn.steer { background: var(--unseen); color: #fff; }
+.composer-btn.steer:hover { filter: brightness(1.1); }
+.composer-btn.steer:active { transform: scale(0.92); }
 .attach-pill, .pause-pill { padding: 4px 8px; }
 
 /* Voice-input trigger: a circular icon button seated just left of Send. */
@@ -797,6 +816,45 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .attach-chip.has-thumb { padding-left: 3px; }
 .attach-thumb-btn { flex: none; border: 0; padding: 0; background: none; cursor: zoom-in; line-height: 0; border-radius: 5px; overflow: hidden; }
 .attach-thumb { display: block; width: 28px; height: 28px; object-fit: cover; border-radius: 5px; }
+
+/* Queued follow-ups (issue #154) — a panel just above the composer showing
+   prompts held back while the session is busy, with their order and delivery
+   state. Reuses .queue-action-btn (GithubQueue's button look) for edit/
+   remove/reorder/send-next so this reads as the same "manage a queue"
+   pattern already established there, rather than inventing a new one. */
+.followup-queue { margin: 8px 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.followup-queue-head { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 2px; }
+.followup-list { display: flex; flex-direction: column; gap: 6px; }
+.followup-card {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2);
+  overflow: hidden;
+}
+.followup-card.locked { opacity: 0.75; }
+.followup-card-row {
+  display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
+}
+.followup-card-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 10px; }
+.followup-reorder { display: flex; flex-direction: column; gap: 2px; flex: none; }
+.followup-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.followup-status { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; }
+.followup-card.locked .followup-status { color: var(--accent); }
+.followup-text { font-size: 14px; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.followup-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.followup-card-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+.followup-edit { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; }
+.followup-edit-input {
+  width: 100%; resize: vertical; min-height: 44px; font: inherit; font-size: 14px;
+  border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--ink);
+  padding: 6px 8px;
+}
+.followup-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* Bigger tap targets for the reorder/edit/remove icon buttons specifically —
+   the shared .queue-action-btn.icon sizing (from GithubQueue) is a bit tight
+   for a control someone taps repeatedly on a phone to walk an item up a queue. */
+.followup-reorder .queue-action-btn.icon,
+.followup-card-actions .queue-action-btn.icon {
+  min-width: 32px; min-height: 32px;
+}
 
 /* Drag-and-drop drop zone over the composer card. */
 .composer-card.dragging { border-color: var(--accent); }
@@ -923,6 +981,14 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .fork-warn { margin: 4px 12px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 12px; }
 .fork-submit { width: calc(100% - 24px); margin: 8px 12px; padding: 11px 14px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; font-weight: 700; font-size: 14px; }
 .fork-submit:disabled { opacity: 0.6; }
+
+/* ---- Import session sheet (issue #156: discover/adopt provider-native sessions) ---- */
+.import-session-hint { margin: 4px 12px; padding: 10px; color: var(--muted); font-size: 12px; }
+/* A live external process was detected — read-only badge, no adopt action
+   (Bivy has no safe way to take over a process it doesn't own). */
+.import-session-badge { display: inline-block; padding: 5px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.import-session-action { padding: 7px 12px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 700; font-size: 12px; white-space: nowrap; }
+.import-session-action:disabled { opacity: 0.6; }
 
 /* ---- Settings ---- */
 .sheet-back { border: 0; background: transparent; color: var(--muted); font-size: 24px; line-height: 1; padding: 0 4px; }
@@ -1112,14 +1178,91 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
      leaving this visible doesn't introduce a second × there. */
 }
 
-.onboarding-card { margin: 10px 12px 0; border: 1px solid var(--line); border-radius: 18px; background: var(--surface-2); padding: 16px; display: flex; gap: 14px; justify-content: space-between; align-items: flex-start; }
-.onboarding-card .kicker { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-.onboarding-card h2 { margin: 3px 0 6px; font-size: 18px; }
-.onboarding-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
-.onboarding-steps { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.45; display: grid; gap: 10px; }
-.onboarding-steps strong { color: var(--ink); }
-.onboarding-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-@media (max-width: 720px) { .onboarding-card { flex-direction: column; } .onboarding-actions { justify-content: flex-start; } }
+/* ---- Connect-a-runner onboarding screen ---- */
+.connect-runner { width: min(560px, 100%); margin: 4px auto 0; padding: 20px 16px 8px; display: flex; flex-direction: column; gap: 20px; }
+.connect-hero { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.connect-hero-icon {
+  width: 56px; height: 56px; margin-bottom: 6px; display: grid; place-items: center;
+  border-radius: 16px; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+.connect-kicker { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
+.connect-title { margin: 0; font-size: 22px; line-height: 1.2; letter-spacing: -0.01em; }
+.connect-sub { margin: 2px 0 0; max-width: 42ch; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+
+.connect-options { display: flex; flex-direction: column; gap: 12px; }
+.connect-option {
+  border: 1px solid var(--line); border-radius: 16px; background: var(--surface-2);
+  padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.connect-option:hover { border-color: var(--line-strong); box-shadow: 0 6px 24px rgba(0,0,0,0.10); }
+.connect-option-head { display: flex; align-items: flex-start; gap: 12px; }
+.connect-option-badge {
+  flex: none; width: 36px; height: 36px; display: grid; place-items: center;
+  border-radius: 10px; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.connect-option-copy { min-width: 0; }
+.connect-option-copy h3 { margin: 1px 0 3px; font-size: 15px; }
+.connect-option-copy p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+
+.connect-command {
+  display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+.connect-command code {
+  flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--ink);
+  scrollbar-width: none;
+}
+.connect-command code::-webkit-scrollbar { display: none; }
+.connect-copy {
+  flex: none; display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  padding: 7px 11px; border-radius: 8px; border: 1px solid var(--line-strong);
+  background: var(--surface-2); color: var(--ink); font: inherit; font-size: 12px; font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.connect-copy:hover { background: var(--surface-3); }
+.connect-copy.is-copied { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line-strong)); }
+.connect-copy svg { display: block; }
+
+.connect-option-link { align-self: flex-start; color: var(--accent); font-size: 12.5px; font-weight: 600; text-decoration: none; }
+.connect-option-link:hover { text-decoration: underline; }
+.connect-option-cta { align-self: flex-start; }
+
+.connect-nodes { display: flex; flex-direction: column; gap: 8px; }
+.connect-nodes-head { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; padding: 0 2px; }
+.connect-nodes-list { display: flex; flex-direction: column; gap: 8px; }
+.connect-node {
+  display: flex; align-items: center; gap: 10px; width: 100%; cursor: pointer; text-align: left;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface-2); color: var(--ink); font: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.connect-node:hover { border-color: var(--line-strong); background: var(--surface-3); box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
+.connect-node .node-dot { width: 10px; height: 10px; }
+.connect-node-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
+.connect-node-status { flex: none; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.connect-node-status.is-online { color: var(--ok); }
+.connect-node-caret { flex: none; color: var(--muted); }
+.connect-node:hover .connect-node-caret { color: var(--ink); }
+
+.connect-waiting {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 14px; border: 1px dashed var(--line-strong); border-radius: 12px;
+  color: var(--muted); font-size: 12.5px;
+}
+.connect-waiting-text { flex: 1; min-width: 0; }
+.connect-refresh {
+  flex: none; cursor: pointer; padding: 5px 10px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: transparent; color: var(--ink);
+  font: inherit; font-size: 12px; font-weight: 600;
+}
+.connect-refresh:hover { background: var(--surface-2); }
+.onboarding-spinner { flex: none; width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; }
+@media (max-width: 480px) { .connect-runner { gap: 16px; } .connect-title { font-size: 20px; } }
 .app-dialog { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 18px; }
 .app-dialog-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.42); backdrop-filter: blur(3px); }
 .app-dialog-body { position: relative; width: min(420px, 100%); border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface); box-shadow: 0 24px 80px rgba(0,0,0,0.36); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
@@ -1402,19 +1545,54 @@ select.picker-search { appearance: auto; }
 .error-toast-text { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .error-toast-close { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; position: sticky; top: 0; }
 
+/* Success/confirmation toast — same shape as the error toast, positive accent. */
+.notice-toast {
+  display: flex; align-items: flex-start; gap: 10px; max-width: min(92vw, 560px);
+  max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--ok); border-left-width: 3px;
+  border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.28);
+  animation: sheet-up 0.16s ease;
+}
+.notice-toast-icon { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; background: var(--ok); color: #fff; font-weight: 700; font-size: 12px; display: grid; place-items: center; }
+.notice-toast-text { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.notice-toast-close { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; position: sticky; top: 0; }
+
 /* ---- Setup / sign-in ---- */
 /* Center within the *visual* viewport (--app-h from viewport.ts), not the
    layout viewport: `100%` includes the area behind the mobile browser chrome,
    which pulls the card off-center. Safe-area padding keeps a tall card clear of
-   the notch and home indicator. */
-/* grid-template-columns: minmax(0, 1fr) bounds the single column to the
-   container. Without it the auto track grows to the card's 380px max-content and,
-   on a viewport narrower than 380px + padding (any phone), overflows the right
-   edge — the card looks shoved off-centre with its right side clipped. The card
-   then takes width:100% to fill that bounded track and its max-width caps it on
-   wide screens. */
-.setup { min-height: var(--app-h, 100dvh); display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom)); }
-.setup-card { width: 100%; max-width: 380px; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; }
+   the notch and home indicator.
+
+   position:fixed + top:--app-top + height:--app-h pins the screen to the visual
+   viewport, exactly like the signed-in `.app` shell (see viewport.ts). This is
+   the part that was missing: a plain in-flow `height:--app-h` block still lets
+   iOS scroll the *layout* viewport to reveal the focused email field, which drags
+   the whole card up — clipping the top off-screen and stranding it above the
+   keyboard with a large dead gap below. Pinned to the visual viewport with
+   nothing outside it scrollable, iOS has nothing to drift, so the box stays
+   locked to the region above the keyboard.
+
+   Inside that box the container scrolls (overflow-y:auto) and the card centers
+   via `margin: auto`: auto margins center it when it fits and collapse to keep
+   the top edge reachable when a short viewport (keyboard up) makes the card
+   taller than the box — unlike justify-content: center, which strands overflow
+   above the scrollport on iOS Safari. align-items keeps the
+   width:100%/max-width:380px card centered horizontally and bounded on any phone,
+   so it never overflows the right edge. */
+.setup {
+  position: fixed;
+  top: var(--app-top, 0px);
+  left: 0;
+  width: 100%;
+  height: var(--app-h, 100dvh);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+}
+.setup-card { width: 100%; max-width: 380px; margin: auto; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; }
 .setup-glyph { font-size: 44px; }
 .setup-card h1 { margin: 6px 0 12px; }
 .setup-card p { color: var(--ink); margin: 8px 0; }
@@ -1426,6 +1604,7 @@ select.picker-search { appearance: auto; }
 .setup-email input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); color: var(--ink); font: inherit; font-size: 16px; }
 .setup-email .btn { flex: none; white-space: nowrap; }
 .setup-note { margin-top: 10px; word-break: break-word; }
+.setup-error { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--danger); border-left-width: 3px; border-radius: 10px; background: var(--danger-soft, transparent); color: var(--ink); font-size: 13px; line-height: 1.4; text-align: left; }
 .banner.inline { border-radius: 8px; margin: 8px 0; }
 
 /* GitHub App — connected status card */

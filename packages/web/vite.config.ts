@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { defineConfig } from "vite";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
@@ -8,6 +10,11 @@ import { VitePWA } from "vite-plugin-pwa";
 // this build at the root; the legacy vanilla client it replaced has been
 // removed, so there is no longer a `/next` migration base.
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@bivy/core": path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../core/src/index.ts"),
+    },
+  },
   base: "/",
   plugins: [
     react(),

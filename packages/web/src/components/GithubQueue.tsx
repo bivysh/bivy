@@ -5,6 +5,7 @@ import {
   githubIssueRefFromSource,
   isGithubQueueSource,
   ephemeralAdapter,
+  PRO_PRICE_LABEL,
   type AccountNode,
   type EphemeralQueueDefault,
   type GithubAppInfo,
@@ -16,6 +17,8 @@ import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { PrBadge, relTime, toMs } from "./SessionList.js";
 import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
+import { ConfirmDialog } from "./AppDialog.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
 // Cap on the GitHub queue "Sessions" list before a "Show more" link appears
 // (issue #531) — with many queue sessions the list otherwise grows unbounded
@@ -107,6 +110,8 @@ export function GithubQueuePanel({
   // Removing a single item / clearing the whole queue.
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
+  const [queueActionErr, setQueueActionErr] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
   // Global "refresh GitHub status" scan (issue #530): reconciles every session
   // this node has tracked that carries PR state, not just the ones listed here
   // — a session that finished or was never reattached keeps whatever PR state
@@ -262,25 +267,28 @@ export function GithubQueuePanel({
 
   const removeItem = async (id: string) => {
     setDeletingId(id);
+    setQueueActionErr(null);
     try {
       await controller.deleteWorkItem(id);
       if (assignOpenId === id) setAssignOpenId(null);
       onRefresh();
-    } catch {
-      /* leave it in place; a Refresh will reconcile */
+    } catch (e) {
+      // The button reverting with no message read as if nothing happened —
+      // surface why the item is still there instead of failing silently (#140).
+      setQueueActionErr(String((e as Error)?.message || e));
     } finally {
       setDeletingId(null);
     }
   };
   const clearAll = async () => {
-    if (!window.confirm("Remove all waiting items from the queue? Items already picked up keep running.")) return;
     setClearing(true);
+    setQueueActionErr(null);
     try {
       await controller.clearWorkQueue();
       setAssignOpenId(null);
       onRefresh();
-    } catch {
-      /* ignore; Refresh reconciles */
+    } catch (e) {
+      setQueueActionErr(String((e as Error)?.message || e));
     } finally {
       setClearing(false);
     }
@@ -335,6 +343,7 @@ export function GithubQueuePanel({
   // the guard so a later render (e.g. after the user fixes a missing token)
   // can retry rather than wedging silently for the rest of the session.
   useEffect(() => {
+    if (!EPHEMERAL_MACHINES_ENABLED) return;
     if (!canQuery || !workQueueEnabled) return;
     if (!ephemeralDefault || !ephemeralDefault.enabled || !ephemeralDefault.provider || !defaultProviderConfigured) return;
     if (anyNodeOnline || !waiting || waiting.length === 0) return;
@@ -356,18 +365,10 @@ export function GithubQueuePanel({
 
   return (
       <div className="settings-form">
-        {canQuery && workQueueEnabled === false && (
-          <div className="banner info inline">
-            The GitHub work queue — label an issue and get a PR back from your own node — is a Pro feature.{" "}
-            <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
-              Upgrade to enable →
-            </button>
-          </div>
-        )}
-
-        {/* Free tier is metered by a shared rolling 7-day run cap that spans every
-            source (manual, app, queue, ephemeral). Show remaining runs, and prompt an
-            upgrade once the window's allowance is spent. */}
+        {/* The GitHub work queue is included on every plan. The only limit is the
+            shared rolling 7-day run cap that spans every source (manual, app,
+            queue, ephemeral) — show remaining runs, and prompt an upgrade once the
+            window's allowance is spent. */}
         {canQuery && workQueueEnabled !== false && typeof runLimit === "number" && (
           <div className={`banner ${runsUsed >= runLimit ? "warn" : "info"} inline`}>
             {runsUsed >= runLimit ? (
@@ -375,14 +376,14 @@ export function GithubQueuePanel({
                 Free plan — you've used your {runLimit} free runs this week. Extra runs still
                 work for now; capacity returns as your older runs pass 7 days.{" "}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
-                  Upgrade for unlimited →
+                  Upgrade to Pro ({PRO_PRICE_LABEL}) for unlimited →
                 </button>
               </>
             ) : (
               <>
                 Free plan — {Math.max(0, runLimit - runsUsed)} of {runLimit} runs left this week.{" "}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
-                  Upgrade for unlimited →
+                  Upgrade to Pro ({PRO_PRICE_LABEL}) for unlimited →
                 </button>
               </>
             )}
@@ -477,7 +478,7 @@ export function GithubQueuePanel({
               </h4>
               <div className="queue-head-actions">
                 {waiting && waiting.length > 0 && (
-                  <button className="link-btn danger" onClick={clearAll} disabled={clearing}>
+                  <button className="link-btn danger" onClick={() => setConfirmClear(true)} disabled={clearing}>
                     {clearing ? "Clearing…" : "Clear queue"}
                   </button>
                 )}
@@ -487,7 +488,20 @@ export function GithubQueuePanel({
               </div>
             </div>
 
-            {autoLaunching && (
+            {confirmClear && (
+              <ConfirmDialog
+                title="Clear the queue?"
+                message="Remove all waiting items from the queue? Items already picked up keep running."
+                confirmLabel="Clear queue"
+                danger
+                onCancel={() => setConfirmClear(false)}
+                onConfirm={() => { setConfirmClear(false); clearAll(); }}
+              />
+            )}
+
+            {queueActionErr && <div className="banner error inline">{queueActionErr}</div>}
+
+            {EPHEMERAL_MACHINES_ENABLED && autoLaunching && (
               <p className="muted" style={{ marginBottom: 10 }}>⚡ Provisioning an ephemeral runner to pick these up…</p>
             )}
 
@@ -508,7 +522,7 @@ export function GithubQueuePanel({
                           <a className="queue-item-main link" href={w.url} target="_blank" rel="noopener noreferrer" title={title}>
                             <span className="queue-item-title">
                               {title}
-                              {w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
+                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
                           </a>
@@ -516,7 +530,7 @@ export function GithubQueuePanel({
                           <div className="queue-item-main" title={title}>
                             <span className="queue-item-title">
                               {title}
-                              {w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
+                              {EPHEMERAL_MACHINES_ENABLED && w.ephemeral && <span className="chip" title="Dispatched to an ephemeral server">⚡ ephemeral</span>}
                             </span>
                             <span className="queue-item-meta">{meta}</span>
                           </div>
@@ -542,16 +556,18 @@ export function GithubQueuePanel({
                       </div>
                       {open && (
                         <div className="queue-run">
-                          <label className="queue-run-field">
-                            <span>Target</span>
-                            <select value={assignTarget} onChange={(e) => setAssignTarget(e.target.value as "node" | "ephemeral")}>
-                              <option value="node">A running node</option>
-                              <option value="ephemeral" disabled={configuredProviders.length === 0}>
-                                Ephemeral server{configuredProviders.length === 0 ? " (add a provider token first)" : ""}
-                              </option>
-                            </select>
-                          </label>
-                          {assignTarget === "node" ? (
+                          {EPHEMERAL_MACHINES_ENABLED && (
+                            <label className="queue-run-field">
+                              <span>Target</span>
+                              <select value={assignTarget} onChange={(e) => setAssignTarget(e.target.value as "node" | "ephemeral")}>
+                                <option value="node">A running node</option>
+                                <option value="ephemeral" disabled={configuredProviders.length === 0}>
+                                  Ephemeral server{configuredProviders.length === 0 ? " (add a provider token first)" : ""}
+                                </option>
+                              </select>
+                            </label>
+                          )}
+                          {assignTarget === "node" || !EPHEMERAL_MACHINES_ENABLED ? (
                             <label className="queue-run-field">
                               <span>Node</span>
                               <select value={assignNode} onChange={(e) => setAssignNode(e.target.value)}>

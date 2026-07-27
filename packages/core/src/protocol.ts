@@ -27,6 +27,8 @@ export interface Command extends CommandBase {
     | "sessions.list"
     | "session.open"
     | "session.new"
+    | "session.discover"
+    | "session.import"
     | "session.delete"
     | "session.rename"
     | "session.pr.refresh"
@@ -72,6 +74,8 @@ export interface Command extends CommandBase {
     | "terminal.list"
     | "terminal.multiplexers"
     | "terminal.takeover"
+    | "terminal.open.tui"
+    | "terminal.close.tui"
     | "node.stats"
     | (string & {});
 }
@@ -103,6 +107,18 @@ export interface PromptAttachment {
   truncated?: boolean;
   omitted?: boolean;
 }
+
+/**
+ * How a prompt sent to an already-busy (streaming) session should be handled by
+ * the runtime: `"steer"` injects it into the current turn immediately (an
+ * explicit interrupt); `"followUp"` defers it until the current turn ends. Not
+ * every runtime honors both — see RuntimeCapabilities.streamingBehaviors on the
+ * node — so the client only ever sends `"steer"` explicitly (see
+ * AppController.steerNow/sendFollowupNow) and otherwise holds a busy session's
+ * prompts in its own visible queue (AppState.followupsBySession) rather than
+ * relying on a runtime-specific "followUp" to queue them invisibly.
+ */
+export type StreamingBehavior = "steer" | "followUp";
 
 /** Connection lifecycle surfaced by a Transport, independent of the node's own events. */
 export type ConnectionStatus =

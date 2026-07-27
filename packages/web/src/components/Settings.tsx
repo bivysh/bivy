@@ -2,16 +2,19 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
+import { AutomationsPanel } from "./Automations.js";
 import { StatsPanel } from "./StatsPanel.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
+import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
 // The view enumeration lives in router.ts (as `SettingsView`) so the router can
 // validate a `/settings/:view` path without importing this component module;
@@ -138,6 +141,7 @@ const TITLES: Record<View, string> = {
   voice: "Voice input",
   github: "GitHub App",
   queue: "GitHub Queue",
+  automations: "Automations",
   nodes: "Nodes",
   ephemeral: "Ephemeral machines",
   account: "Account & billing",
@@ -186,16 +190,15 @@ export function Settings({
   // close (parity with the Sheet primitive this replaced).
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  // Escape closes the modal — but only when Settings is the topmost layer.
+  // A confirm dialog or sheet opened from within a panel registers above this,
+  // so its Escape cancels *it* and leaves Settings open (it used to tear the
+  // whole modal down in one press).
+  useModalEscape(() => onCloseRef.current());
+  // Restore focus to whatever opened Settings when it closes.
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCloseRef.current();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      opener?.focus?.();
-    };
+    return () => { opener?.focus?.(); };
   }, []);
 
   const groups: NavGroup[] = [
@@ -214,13 +217,22 @@ export function Settings({
       items: [
         { id: "github", label: "GitHub App", icon: <IconGithub /> },
         { id: "queue", label: "GitHub Queue", icon: <IconQueue /> },
+        { id: "automations", label: "Automations", icon: <IconBolt /> },
+      ],
+    },
+    {
+      label: "Automation",
+      items: [
+        { id: "automations", label: "Webhooks", icon: <IconBolt /> },
       ],
     },
     {
       label: "Infrastructure",
       items: [
         { id: "nodes", label: "Nodes", icon: <IconServer /> },
-        { id: "ephemeral", label: "Ephemeral machines", icon: <IconBolt /> },
+        ...(EPHEMERAL_MACHINES_ENABLED
+          ? [{ id: "ephemeral" as View, label: "Ephemeral machines", icon: <IconBolt /> }]
+          : []),
       ],
     },
   ];
@@ -236,6 +248,9 @@ export function Settings({
 
   const q = query.trim().toLowerCase();
   const matches = (label: string) => !q || label.toLowerCase().includes(q);
+  // A query matching nothing used to hide every group and leave the sidebar
+  // blank — looked broken rather than "no results" (#140).
+  const hasVisibleNavItem = groups.some((group) => group.items.some((it) => matches(it.label)));
 
   const title = activeView ? TITLES[activeView] : "Settings";
 
@@ -261,6 +276,7 @@ export function Settings({
             />
           </div>
           <nav className="settings-nav-groups">
+            {!hasVisibleNavItem && <div className="picker-empty">No settings match "{query.trim()}"</div>}
             {groups.map((group) => {
               const visible = group.items.filter((it) => matches(it.label));
               if (visible.length === 0) return null;
@@ -309,8 +325,14 @@ export function Settings({
                 onOpenGithubSettings={() => onViewChange("github")}
               />
             )}
+            {activeView === "automations" && (
+              <>
+                <AutomationsPanel state={state} />
+                <WebhookTriggersPanel />
+              </>
+            )}
             {activeView === "nodes" && <NodesPanel state={state} />}
-            {activeView === "ephemeral" && <EphemeralPanel />}
+            {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
             {activeView === "account" && <AccountPanel />}
             {activeView === "link" && <LinkPanel onDone={onClose} />}
           </div>
@@ -374,7 +396,6 @@ function Toggle({ checked, onChange, disabled, label }: { checked: boolean; onCh
 
 // ---- Notifications (push on/off + per-event choices) ----
 function NotificationsPanel() {
-  const [me, setMe] = useState<AccountMe | null>(null);
   const [status, setStatus] = useState<{ supported: boolean; subscribed: boolean; permission: string } | null>(null);
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -382,13 +403,19 @@ function NotificationsPanel() {
 
   const reloadStatus = () => controller.pushStatus().then(setStatus).catch(() => {});
   useEffect(() => {
-    controller.fetchMe().then(setMe).catch(() => {});
     reloadStatus();
     controller.getNotificationPreferences().then(setPrefs).catch(() => {});
   }, []);
 
-  const ent = me?.entitlements;
-  const pushAllowed = ent?.pushEnabled !== false; // undefined (self-host/loading) = allowed
+  // The enable/disable result (or a save error) used to sit there forever —
+  // auto-dismiss it like every other transient status message in Settings (#140).
+  useEffect(() => {
+    if (!msg) return;
+    const t = setTimeout(() => setMsg(null), 5000);
+    return () => clearTimeout(t);
+  }, [msg]);
+
+  // Push notifications are included on every plan, so there's no upgrade gate.
   const on = Boolean(status?.subscribed);
 
   const setMaster = async (next: boolean) => {
@@ -418,20 +445,6 @@ function NotificationsPanel() {
     return (
       <div className="settings-form">
         <p className="muted">Push notifications aren't supported on this device or browser.</p>
-      </div>
-    );
-  }
-
-  if (me && !pushAllowed) {
-    return (
-      <div className="settings-form">
-        <label className="field-label">Push notifications</label>
-        <p className="muted">Push notifications are a Pro feature.</p>
-        <div className="row-actions">
-          <button className="btn primary" onClick={() => controller.startCheckout().catch((e) => setMsg(String(e.message || e)))}>
-            Upgrade
-          </button>
-        </div>
       </div>
     );
   }
@@ -500,11 +513,10 @@ function nodeProviderSummary(n: AccountNode): { text: string; expired: boolean }
 function ProvidersPanel({ state }: { state: AppState }) {
   // Holds just the id, not a snapshot of the ProviderInfo object: `managing`
   // below is re-derived from live `state.providers` every render instead, so
-  // a save/remove — which have no direct ack, only an eventual refreshed
-  // providers.list — actually shows up in this detail view (e.g. the
-  // "Connected" chip) instead of the view staying frozen on the object as it
-  // looked when the user first tapped in, unrelated to whether the save
-  // actually landed.
+  // a remove (whose only signal is an eventual refreshed providers.list —
+  // save now awaits a direct ack, see saveApiKey) actually shows up in this
+  // detail view (e.g. the "Connected" chip) instead of the view staying
+  // frozen on the object as it looked when the user first tapped in.
   // In hosted (relay) mode the account can have several nodes, each with its
   // own provider logins/keys. `state.providers` only ever reflects the node the
   // app is currently connected to, so managing another node's keys used to mean
@@ -518,6 +530,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [keyErr, setKeyErr] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   useEffect(() => {
     controller.listProviders();
@@ -604,22 +617,25 @@ function ProvidersPanel({ state }: { state: AppState }) {
                   <button
                     className="btn primary"
                     disabled={!key.trim() || busy}
-                    onClick={() => {
+                    onClick={async () => {
                       setBusy(true);
-                      controller.saveApiKey(managing.id, key.trim());
-                      setKey("");
-                      // provider.apiKey has no direct ack — re-list so the
-                      // "Connected" chip (managing is now derived live from
-                      // state.providers, see above) reflects the node's real
-                      // outcome instead of a blind timer that looked saved
-                      // either way.
-                      setTimeout(() => {
+                      setKeyErr(null);
+                      try {
+                        // Awaits the node's real ack instead of a blind timer
+                        // that looked saved either way — see #140.
+                        await controller.saveApiKey(managing.id, key.trim());
+                        setKey("");
+                        // Re-list so the "Connected" chip (managing is derived
+                        // live from state.providers, see above) reflects it.
                         controller.listProviders();
+                      } catch (e) {
+                        setKeyErr(String((e as Error)?.message || e));
+                      } finally {
                         setBusy(false);
-                      }, 500);
+                      }
                     }}
                   >
-                    Save key
+                    {busy ? "Saving…" : "Save key"}
                   </button>
                   {managing.configured && (
                     <button
@@ -639,6 +655,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
                     </button>
                   )}
                 </div>
+                {keyErr && <div className="banner error inline">{keyErr}</div>}
               </>
             )}
           </>
@@ -782,6 +799,7 @@ function draftFromPreset(p: LocalModelPreset): LocalModelDraft {
 function LocalModelsPanel({ state }: { state: AppState }) {
   const [draft, setDraft] = useState<LocalModelDraft | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
 
   useEffect(() => {
@@ -790,37 +808,53 @@ function LocalModelsPanel({ state }: { state: AppState }) {
   }, []);
 
   const set = (patch: Partial<LocalModelDraft>) => setDraft((d) => ({ ...(d ?? EMPTY_DRAFT), ...patch }));
+  // Opening a (possibly different) draft always clears a stale error from a
+  // previous attempt, so it can't linger on an unrelated endpoint.
+  const openDraft = (d: LocalModelDraft | null) => {
+    setSaveErr(null);
+    setDraft(d);
+  };
 
   if (draft) {
     const canSave = draft.baseUrl.trim().length > 0 && !busy;
     const apiIsKnown = KNOWN_APIS.some((o) => o.value === draft.api);
     const isAzure = draft.api.toLowerCase().startsWith("azure");
-    const save = () => {
+    const save = async () => {
       setBusy(true);
-      controller.saveLocalModel({
-        providerId: (draft.providerId || draft.name || "local").trim(),
-        name: draft.name.trim() || undefined,
-        baseUrl: draft.baseUrl.trim(),
-        api: draft.api.trim() || "openai-completions",
-        // Only send a key when the user typed one, so editing without retyping
-        // it doesn't wipe the stored key (the node merges onto the previous spec).
-        ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
-        models: parseModelLines(draft.models),
-      });
-      // models.custom.save has no direct ack beyond the refreshed list; re-list
-      // so the panel reflects the node's real outcome, then close the form.
-      setTimeout(() => {
+      setSaveErr(null);
+      try {
+        // Awaits the node's real ack instead of a blind timer that closed the
+        // form (looking saved) even when the node rejected it — see #140.
+        await controller.saveLocalModel({
+          providerId: (draft.providerId || draft.name || "local").trim(),
+          name: draft.name.trim() || undefined,
+          baseUrl: draft.baseUrl.trim(),
+          api: draft.api.trim() || "openai-completions",
+          // Only send a key when the user typed one, so editing without retyping
+          // it doesn't wipe the stored key (the node merges onto the previous spec).
+          ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+          models: parseModelLines(draft.models),
+        });
         controller.listLocalModels();
-        setBusy(false);
         setDraft(null);
-      }, 400);
+      } catch (e) {
+        setSaveErr(String((e as Error)?.message || e));
+      } finally {
+        setBusy(false);
+      }
     };
     return (
       <div className="settings-form">
-        <button className="link-btn" onClick={() => setDraft(null)}>‹ All endpoints</button>
+        <button className="link-btn" onClick={() => openDraft(null)}>‹ All endpoints</button>
         <h3>{draft.editing ? draft.name || draft.providerId : "Add endpoint"}</h3>
         <p className="muted">
           Any OpenAI-compatible server — Ollama, LM Studio, vLLM, SGLang, or a self-hosted / Azure endpoint.
+        </p>
+        <p className="muted small">
+          This endpoint is account-wide, not just this node: it syncs (encrypted) to every node signed in to your
+          account, the same way provider keys do. A <code>localhost</code> base URL only resolves on the machine
+          that has it — another node can use it only if it also runs the same server at that address locally. If
+          the server is reachable over the network, point the base URL at that machine's address instead.
         </p>
 
         <label className="field-label">Display name</label>
@@ -842,6 +876,13 @@ function LocalModelsPanel({ state }: { state: AppState }) {
           placeholder={isAzure ? "https://YOUR-RESOURCE.openai.azure.com" : "http://localhost:11434/v1"}
           onChange={(e) => set({ baseUrl: e.target.value })}
         />
+        {/localhost|127\.0\.0\.1/i.test(draft.baseUrl) && (
+          <p className="muted small">
+            ⚠ This points at the current node's own machine. Once synced, other nodes will only reach it if they
+            also run a server at <code>{draft.baseUrl.match(/localhost|127\.0\.0\.1/i)?.[0] ?? "localhost"}</code>
+            {" "}themselves.
+          </p>
+        )}
 
         <label className="field-label">API type</label>
         <select
@@ -875,9 +916,12 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         )}
 
         <div className="row-actions">
-          <button className="btn primary" disabled={!canSave} onClick={save}>{draft.editing ? "Save changes" : "Add endpoint"}</button>
-          <button className="btn" onClick={() => setDraft(null)}>Cancel</button>
+          <button className="btn primary" disabled={!canSave} onClick={save}>
+            {busy ? "Saving…" : draft.editing ? "Save changes" : "Add endpoint"}
+          </button>
+          <button className="btn" onClick={() => openDraft(null)}>Cancel</button>
         </div>
+        {saveErr && <div className="banner error inline">{saveErr}</div>}
       </div>
     );
   }
@@ -894,6 +938,12 @@ function LocalModelsPanel({ state }: { state: AppState }) {
           onConfirm={() => { confirm.action(); setConfirm(null); }}
         />
       )}
+
+      <p className="muted settings-intro">
+        Endpoints here sync to every node signed in to your account, the same as provider keys — they aren't scoped
+        to just this node. A <code>localhost</code> base URL is only reachable from the machine that has it, so an
+        endpoint like Ollama's default needs that same server running on each node that should use it.
+      </p>
 
       <div className="picker-list">
         {state.localModels.length === 0 && <div className="picker-empty">No local or custom endpoints yet.</div>}
@@ -920,19 +970,19 @@ function LocalModelsPanel({ state }: { state: AppState }) {
                 Remove
               </button>
             }
-            onClick={() => setDraft(draftFromProvider(p))}
+            onClick={() => openDraft(draftFromProvider(p))}
           />
         ))}
       </div>
 
-      <button className="btn primary block" onClick={() => setDraft({ ...EMPTY_DRAFT })}>+ Add endpoint</button>
+      <button className="btn primary block" onClick={() => openDraft({ ...EMPTY_DRAFT })}>+ Add endpoint</button>
 
       {state.localModelPresets.length > 0 && (
         <>
           <label className="field-label">Quick add</label>
           <div className="row-actions" style={{ flexWrap: "wrap" }}>
             {state.localModelPresets.map((preset) => (
-              <button key={preset.id} className="btn" title={preset.note} onClick={() => setDraft(draftFromPreset(preset))}>
+              <button key={preset.id} className="btn" title={preset.note} onClick={() => openDraft(draftFromPreset(preset))}>
                 {preset.name}
               </button>
             ))}
@@ -946,7 +996,10 @@ function LocalModelsPanel({ state }: { state: AppState }) {
 // ---- Voice input (speech-to-text) ----
 function VoicePanel({ state }: { state: AppState }) {
   const [keys, setKeys] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
+  // Keyed by provider id, not a single shared flag — saving one provider's key
+  // used to disable Save for every other row too (#140).
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [errById, setErrById] = useState<Record<string, string>>({});
   const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
   useEffect(() => {
     controller.getSttConfig();
@@ -956,17 +1009,17 @@ function VoicePanel({ state }: { state: AppState }) {
 
   return (
     <div className="settings-form">
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          message={confirm.message}
+          confirmLabel="Remove"
+          danger
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => { confirm.action(); setConfirm(null); }}
+        />
+      )}
       <p className="muted settings-intro">
-        {confirm && (
-          <ConfirmDialog
-            title={confirm.title}
-            message={confirm.message}
-            confirmLabel="Remove"
-            danger
-            onCancel={() => setConfirm(null)}
-            onConfirm={() => { confirm.action(); setConfirm(null); }}
-          />
-        )}
         Dictate into the composer with the mic button. With a key set, recordings are transcribed by your chosen
         provider using the key stored on this node. With no key, voice falls back to your browser's built-in dictation
         (no key needed, but lower accuracy). Note: <strong>Groq</strong> (fast Whisper hosting, key from console.groq.com)
@@ -1007,21 +1060,24 @@ function VoicePanel({ state }: { state: AppState }) {
           <div className="row-actions">
             <button
               className="btn primary"
-              disabled={!(keys[p.id] || "").trim() || busy}
-              onClick={() => {
-                setBusy(true);
-                controller.saveSttKey(p.id, (keys[p.id] || "").trim());
-                setKeys((k) => ({ ...k, [p.id]: "" }));
-                // stt.config.set has no direct ack — re-fetch so the "Key
-                // set" chip (already reactive off state.sttConfig) reflects
-                // the node's real outcome instead of a blind timer.
-                setTimeout(() => {
+              disabled={!(keys[p.id] || "").trim() || busyId === p.id}
+              onClick={async () => {
+                setBusyId(p.id);
+                setErrById((e) => ({ ...e, [p.id]: "" }));
+                try {
+                  // Awaits the node's real ack instead of a blind timer — see #140.
+                  await controller.saveSttKey(p.id, (keys[p.id] || "").trim());
+                  setKeys((k) => ({ ...k, [p.id]: "" }));
+                  // "Key set" chip is reactive off state.sttConfig — refresh it.
                   controller.getSttConfig();
-                  setBusy(false);
-                }, 500);
+                } catch (e) {
+                  setErrById((cur) => ({ ...cur, [p.id]: String((e as Error)?.message || e) }));
+                } finally {
+                  setBusyId(null);
+                }
               }}
             >
-              Save key
+              {busyId === p.id ? "Saving…" : "Save key"}
             </button>
             {p.configured && (
               <button
@@ -1031,8 +1087,8 @@ function VoicePanel({ state }: { state: AppState }) {
                   message: `Remove the stored ${p.label} key?`,
                   action: () => {
                     controller.removeSttKey(p.id);
-                    // stt.config.set has no direct ack — re-fetch so the "Key
-                    // set" chip reflects the node's real outcome.
+                    // stt.config.set (remove) has no direct ack — re-fetch so
+                    // the "Key set" chip reflects the node's real outcome.
                     setTimeout(() => controller.getSttConfig(), 500);
                   },
                 })}
@@ -1041,8 +1097,111 @@ function VoicePanel({ state }: { state: AppState }) {
               </button>
             )}
           </div>
+          {errById[p.id] && <div className="banner error inline">{errById[p.id]}</div>}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ---- Generic signed automation webhooks ----
+// Signed inbound webhook triggers (from the automation-webhooks feature). Lives
+// alongside the scheduled-automations panel (imported from ./Automations) under
+// the same "Automations" view — the two features arrived independently and both
+// belong here.
+function WebhookTriggersPanel() {
+  const [hooks, setHooks] = useState<AutomationHook[]>([]);
+  const [outcomes, setOutcomes] = useState<AutomationOutcome[]>([]);
+  const [template, setTemplate] = useState("Follow the incoming instruction in the current workspace.");
+  const [route, setRoute] = useState("");
+  const [revealed, setRevealed] = useState<{ hook: AutomationHook; secret: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = async () => {
+    try {
+      const data = await fetchAutomationHooks(controller.local);
+      setHooks(data.hooks);
+      setOutcomes(data.outcomes);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load automation hooks.");
+    }
+  };
+  useEffect(() => { void refresh(); }, []);
+  const create = async () => {
+    setBusy(true); setError("");
+    try {
+      const created = await createAutomationHook(controller.local, { templateInstruction: template, routingDefault: route });
+      setRevealed({ hook: created, secret: created.secret });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create hook.");
+    } finally { setBusy(false); }
+  };
+  const rotate = async (hook: AutomationHook) => {
+    setBusy(true); setError("");
+    try {
+      const rotated = await rotateAutomationHookSecret(controller.local, hook.id);
+      setRevealed({ hook: rotated, secret: rotated.secret });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not rotate secret.");
+    } finally { setBusy(false); }
+  };
+  const curl = revealed ? `body='{"version":"1","instruction":"Run the test suite","title":"CI follow-up","sourceUrl":"https://example.com/build/123","externalId":"build-123","metadata":{"environment":"staging"}}'
+signature=$(printf %s "$body" | openssl dgst -sha256 -hmac '${revealed.secret}' -hex | sed 's/^.* //')
+curl -X POST '${revealed.hook.endpoint}' \\
+  -H 'Content-Type: application/json' \\
+  -H "X-Bivy-Signature-256: sha256=$signature" \\
+  -H 'X-Bivy-Idempotency-Key: build-123' \\
+  --data-binary "$body"` : "";
+  return (
+    <div className="settings-form">
+      <p className="settings-lead">Create signed inbound endpoints that turn events from CI, monitoring, or internal tools into ordinary Bivy runs.</p>
+      {error && <div className="banner error inline">{error}</div>}
+      {revealed && (
+        <section className="settings-section">
+          <h3>Save this secret now</h3>
+          <p className="settings-hint">It is shown only after creation or rotation. Rotating immediately invalidates the previous secret.</p>
+          <code className="settings-code">{revealed.secret}</code>
+          <h4 className="settings-subhead">Example curl</h4>
+          <pre className="settings-code" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{curl}</pre>
+          <button className="btn" onClick={() => void navigator.clipboard.writeText(curl)}>Copy example</button>
+        </section>
+      )}
+      <section className="settings-section">
+        <h3>New webhook</h3>
+        <label className="field-label">Safe instruction template</label>
+        <textarea className="field-input" rows={3} value={template} maxLength={2000} onChange={(e) => setTemplate(e.target.value)} />
+        <p className="settings-hint">This fixed instruction is prepended to each event. Payloads cannot select commands, runtimes, models, or executable templates.</p>
+        <label className="field-label">Default node (optional)</label>
+        <input className="field-input" value={route} maxLength={80} placeholder="macbook" onChange={(e) => setRoute(e.target.value)} />
+        <button className="btn primary" disabled={busy || !template.trim()} onClick={() => void create()}>Create webhook</button>
+      </section>
+      {hooks.map((hook) => (
+        <section className="settings-section" key={hook.id}>
+          <div className="settings-row">
+            <div><h3>{hook.id}</h3><code className="settings-code">{hook.endpoint}</code></div>
+            <label><input type="checkbox" checked={hook.enabled} disabled={busy} onChange={(e) => {
+              void updateAutomationHook(controller.local, hook.id, { enabled: e.target.checked }).then(refresh).catch((err) => setError(String(err)));
+            }} /> Enabled</label>
+          </div>
+          <p className="settings-hint">Routes to {hook.routingDefault ? `bivy/${hook.routingDefault}` : "the shared bivy queue"}.</p>
+          <div className="settings-actions">
+            <button className="btn" disabled={busy} onClick={() => void rotate(hook)}>Rotate secret</button>
+            <button className="btn danger" disabled={busy || !hook.enabled} onClick={() => {
+              if (confirm("Revoke this webhook? Its current secret will stop working immediately.")) {
+                void revokeAutomationHook(controller.local, hook.id).then(refresh).catch((err) => setError(String(err)));
+              }
+            }}>Revoke</button>
+          </div>
+        </section>
+      ))}
+      <section className="settings-section">
+        <h3>Recent trigger outcomes</h3>
+        {outcomes.length === 0
+          ? <p className="settings-hint">No accepted triggers yet.</p>
+          : outcomes.map((outcome) => <div className="settings-row" key={outcome.id}><span>{outcome.title}</span><span className="settings-hint">{outcome.status}</span></div>)}
+      </section>
     </div>
   );
 }
@@ -1495,10 +1654,12 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
             </ul>
           </section>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">Ephemeral runner</h4>
-            {renderEphemeral()}
-          </section>
+          {EPHEMERAL_MACHINES_ENABLED && (
+            <section className="settings-section">
+              <h4 className="settings-subhead">Ephemeral runner</h4>
+              {renderEphemeral()}
+            </section>
+          )}
         </>
       )}
 
@@ -1523,6 +1684,8 @@ function NodesPanel({ state }: { state: AppState }) {
   const [nodes, setNodes] = useState<Awaited<ReturnType<typeof controller.listNodes>>>([]);
   const [form, setForm] = useState<NodeSettings | null>(null);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const currentNodeId = controller.local.cur;
 
@@ -1555,28 +1718,43 @@ function NodesPanel({ state }: { state: AppState }) {
   const modelSelectable = agentCaps?.modelSelection !== false;
   const models = state.models;
 
-  const save = () => {
-    if (!form) return;
-    controller.setNodeSettings({
-      name: form.name,
-      defaultAgent: form.defaultAgent,
-      defaultModel: modelSelectable ? form.defaultModel : null,
-      defaultSandbox: form.defaultSandbox,
-      githubMaxConcurrent: form.githubMaxConcurrent,
-      githubIssuePrompt: form.githubIssuePrompt,
-      sessionSync: form.sessionSync,
-      worktreeSync: form.worktreeSync,
-      syncStandbyNodeId: form.syncStandbyNodeId ?? "",
-    });
-    setSavedMsg("Saved");
-    setTimeout(() => setSavedMsg(null), 1500);
+  const save = async () => {
+    if (!form || saving) return;
+    setSaving(true);
+    setSaveErr(null);
+    setSavedMsg(null);
+    try {
+      // setNodeSettings now resolves once the node actually acks the change
+      // (or rejects with its error) instead of assuming success the moment
+      // the command was sent — see #140.
+      await controller.setNodeSettings({
+        name: form.name,
+        defaultAgent: form.defaultAgent,
+        defaultModel: modelSelectable ? form.defaultModel : null,
+        defaultSandbox: form.defaultSandbox,
+        githubMaxConcurrent: form.githubMaxConcurrent,
+        githubIssuePrompt: form.githubIssuePrompt,
+        sessionSync: form.sessionSync,
+        worktreeSync: form.worktreeSync,
+        syncStandbyNodeId: form.syncStandbyNodeId ?? "",
+        sessionResumeMode: form.sessionResumeMode,
+      });
+      setSavedMsg("Saved");
+      setTimeout(() => setSavedMsg(null), 1500);
+    } catch (e) {
+      setSaveErr(String((e as Error)?.message || e));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const resetIssuePrompt = () => {
     if (!form || !settings) return;
-    controller.setNodeSettings({ githubIssuePrompt: "" });
-    // Re-seed from the node once it echoes back the restored default.
-    setTimeout(reload, 300);
+    setSaveErr(null);
+    controller
+      .setNodeSettings({ githubIssuePrompt: "" })
+      .then(reload)
+      .catch((e) => setSaveErr(String((e as Error)?.message || e)));
   };
 
   return (
@@ -1594,8 +1772,8 @@ function NodesPanel({ state }: { state: AppState }) {
       {statsOpen && <StatsPanel onClose={() => setStatsOpen(false)} />}
 
       {hosted && (
-        <>
-          <label className="field-label">Node</label>
+        <section className="settings-section">
+          <h4 className="settings-subhead">Node</h4>
           <div className="picker-list">
             {nodes.length === 0 && <div className="picker-empty">No nodes found.</div>}
             {nodes.map((n) => (
@@ -1618,7 +1796,7 @@ function NodesPanel({ state }: { state: AppState }) {
               />
             ))}
           </div>
-        </>
+        </section>
       )}
 
       {!nodeOnline ? (
@@ -1631,157 +1809,195 @@ function NodesPanel({ state }: { state: AppState }) {
         <p className="muted">Loading node settings…</p>
       ) : (
         <>
-          <label className="field-label">Node name</label>
-          <input
-            className="picker-search"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="My Mac"
-          />
+          <section className="settings-section">
+            <h4 className="settings-subhead">Identity</h4>
+            <label className="field-label">Node name</label>
+            <input
+              className="picker-search"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="My Mac"
+            />
+          </section>
 
-          <label className="field-label">Default agent</label>
-          <select
-            className="picker-search"
-            value={form.defaultAgent}
-            onChange={(e) => setForm({ ...form, defaultAgent: e.target.value })}
-          >
-            {runtimes.map((r) => (
-              <option key={r.id} value={r.id}>{r.displayName || r.name || r.id}</option>
-            ))}
-            {!runtimes.some((r) => r.id === form.defaultAgent) && (
-              <option value={form.defaultAgent}>{form.defaultAgent}</option>
-            )}
-          </select>
-
-          <label className="field-label">Default model</label>
-          {modelSelectable ? (
+          <section className="settings-section">
+            <h4 className="settings-subhead">Session defaults</h4>
+            <label className="field-label">Default agent</label>
             <select
               className="picker-search"
-              value={form.defaultModel ? form.defaultModel.id : ""}
-              onChange={(e) => {
-                const m = models.find((x) => x.id === e.target.value);
-                setForm({
-                  ...form,
-                  defaultModel: m ? { provider: String((m as { provider?: unknown }).provider ?? ""), id: m.id } : null,
-                });
-              }}
+              value={form.defaultAgent}
+              onChange={(e) => setForm({ ...form, defaultAgent: e.target.value })}
             >
-              <option value="">Default (agent decides)</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>{m.label || m.id}</option>
+              {runtimes.map((r) => (
+                <option key={r.id} value={r.id}>{r.displayName || r.name || r.id}</option>
               ))}
-              {form.defaultModel && !models.some((m) => m.id === form.defaultModel!.id) && (
-                <option value={form.defaultModel.id}>{form.defaultModel.id}</option>
+              {!runtimes.some((r) => r.id === form.defaultAgent) && (
+                <option value={form.defaultAgent}>{form.defaultAgent}</option>
               )}
             </select>
-          ) : (
-            <p className="muted">This agent selects its own model — nothing to set.</p>
-          )}
 
-          <label className="field-label">Default sandbox mode</label>
-          <div className="seg-row">
-            {SANDBOX_TIERS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={`seg-btn${form.defaultSandbox === t.id ? " active" : ""}`}
-                onClick={() => setForm({ ...form, defaultSandbox: t.id })}
-                title={t.hint}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          <p className="muted small">{SANDBOX_TIERS.find((t) => t.id === form.defaultSandbox)?.hint}</p>
-
-          <label className="field-label">GitHub session limit</label>
-          <input
-            className="picker-search"
-            type="number"
-            min={0}
-            value={form.githubMaxConcurrent}
-            onChange={(e) => setForm({ ...form, githubMaxConcurrent: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
-          />
-          <p className="muted small">Max GitHub-triggered sessions this node runs at once; the rest queue until a slot frees. 0 = unlimited.</p>
-
-          <label className="field-label">GitHub issue prompt</label>
-          <textarea
-            className="picker-search"
-            rows={8}
-            value={form.githubIssuePrompt}
-            onChange={(e) => setForm({ ...form, githubIssuePrompt: e.target.value })}
-          />
-          <p className="muted small">
-            The instructions sent to the agent as its first message when it picks up a GitHub issue (after the issue's own
-            title/description/link). The default asks it to understand the issue, do thorough work, run tests/linter/type-checks,
-            and open its own pull request when done — edit freely, or clear and save to restore the default.
-          </p>
-          <div className="row-actions">
-            <button className="btn" onClick={resetIssuePrompt}>Reset to default</button>
-          </div>
-
-          <label className="field-label">Session sync</label>
-          <div className="settings-toggle-row">
-            <div className="settings-toggle-text">
-              <span className="settings-toggle-title">Keep sessions synced to a standby node</span>
-              <span className="muted small">
-                Warm-replicate each session's transcript to another of your nodes over the encrypted
-                relay, so a session can be picked up elsewhere if this node goes offline. Data stays
-                node-to-node; the control plane never sees it.
-              </span>
-            </div>
-            <Toggle
-              checked={form.sessionSync}
-              onChange={(v) => setForm({ ...form, sessionSync: v, worktreeSync: v ? form.worktreeSync : false })}
-              label="Enable session sync"
-            />
-          </div>
-          <div className={`settings-toggle-row${form.sessionSync ? "" : " disabled"}`}>
-            <div className="settings-toggle-text">
-              <span className="settings-toggle-title">Also sync the workspace (git checkpoints)</span>
-              <span className="muted small">
-                Ship each turn's git checkpoint too, so the promoted session keeps its working tree and
-                can continue coding — not just show history. Needs session sync; ignored for non-git workspaces.
-              </span>
-            </div>
-            <Toggle
-              checked={form.worktreeSync}
-              disabled={!form.sessionSync}
-              onChange={(v) => setForm({ ...form, worktreeSync: v })}
-              label="Enable worktree sync"
-            />
-          </div>
-          {form.sessionSync && (
-            <>
-              <label className="field-label">Standby node</label>
+            <label className="field-label">Default model</label>
+            {modelSelectable ? (
               <select
                 className="picker-search"
-                value={form.syncStandbyNodeId ?? ""}
-                onChange={(e) => setForm({ ...form, syncStandbyNodeId: e.target.value || undefined })}
+                value={form.defaultModel ? form.defaultModel.id : ""}
+                onChange={(e) => {
+                  const m = models.find((x) => x.id === e.target.value);
+                  setForm({
+                    ...form,
+                    defaultModel: m ? { provider: String((m as { provider?: unknown }).provider ?? ""), id: m.id } : null,
+                  });
+                }}
               >
-                <option value="">Choose a node to replicate to…</option>
-                {nodes
-                  .filter((n) => n.id !== currentNodeId)
-                  .map((n) => (
-                    <option key={n.id} value={n.id}>
-                      {(n.name || n.id) + (n.online ? "" : " (offline)")}
-                    </option>
-                  ))}
-                {form.syncStandbyNodeId && !nodes.some((n) => n.id === form.syncStandbyNodeId) && (
-                  <option value={form.syncStandbyNodeId}>{form.syncStandbyNodeId}</option>
+                <option value="">Default (agent decides)</option>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label || m.id}</option>
+                ))}
+                {form.defaultModel && !models.some((m) => m.id === form.defaultModel!.id) && (
+                  <option value={form.defaultModel.id}>{form.defaultModel.id}</option>
                 )}
               </select>
-              <p className="muted small">
-                Sessions on this node warm-replicate to the standby over the encrypted relay. If this
-                node goes offline, open the session on the standby and choose “Continue here”.
-                {nodes.filter((n) => n.id !== currentNodeId).length === 0 && " Add a second node to enable this."}
-              </p>
-            </>
-          )}
+            ) : (
+              <p className="muted">This agent selects its own model — nothing to set.</p>
+            )}
+
+            <label className="field-label">Default sandbox mode</label>
+            <div className="seg-row">
+              {SANDBOX_TIERS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`seg-btn${form.defaultSandbox === t.id ? " active" : ""}`}
+                  onClick={() => setForm({ ...form, defaultSandbox: t.id })}
+                  title={t.hint}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <p className="muted small">{SANDBOX_TIERS.find((t) => t.id === form.defaultSandbox)?.hint}</p>
+          </section>
+
+          <section className="settings-section">
+            <h4 className="settings-subhead">GitHub</h4>
+            <label className="field-label">GitHub session limit</label>
+            <input
+              className="picker-search"
+              type="number"
+              min={0}
+              value={form.githubMaxConcurrent}
+              onChange={(e) => setForm({ ...form, githubMaxConcurrent: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
+            />
+            <p className="muted small">Max GitHub-triggered sessions this node runs at once; the rest queue until a slot frees. 0 = unlimited.</p>
+
+            <label className="field-label">GitHub issue prompt</label>
+            <textarea
+              className="picker-search"
+              rows={8}
+              value={form.githubIssuePrompt}
+              onChange={(e) => setForm({ ...form, githubIssuePrompt: e.target.value })}
+            />
+            <p className="muted small">
+              The instructions sent to the agent as its first message when it picks up a GitHub issue (after the issue's own
+              title/description/link). The default asks it to understand the issue, do thorough work, run tests/linter/type-checks,
+              and open its own pull request when done — edit freely, or clear and save to restore the default.
+            </p>
+            <div className="row-actions">
+              <button className="btn" onClick={resetIssuePrompt}>Reset to default</button>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h4 className="settings-subhead">Session resume</h4>
+            <label className="field-label">After a restart interrupts a session</label>
+            <div className="seg-row">
+              {([
+                { id: "auto", label: "Auto-resume", hint: "The agent automatically continues the interrupted turn when the node restarts." },
+                { id: "manual", label: "Manual", hint: "The interrupted session waits and offers a one-tap Resume when you open it." },
+              ] as const).map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  className={`seg-btn${form.sessionResumeMode === o.id ? " active" : ""}`}
+                  onClick={() => setForm({ ...form, sessionResumeMode: o.id })}
+                  title={o.hint}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <p className="muted small">
+              {form.sessionResumeMode === "manual"
+                ? "Interrupted sessions wait for you to tap Resume — nothing runs on its own. GitHub issue automation still resumes automatically."
+                : "The agent picks up an interrupted turn on its own after the node restarts."}
+            </p>
+          </section>
+
+          <section className="settings-section">
+            <h4 className="settings-subhead">Session sync</h4>
+            <div className="settings-toggle-row">
+              <div className="settings-toggle-text">
+                <span className="settings-toggle-title">Keep sessions synced to a standby node</span>
+                <span className="muted small">
+                  Warm-replicate each session's transcript to another of your nodes over the encrypted
+                  relay, so a session can be picked up elsewhere if this node goes offline. Data stays
+                  node-to-node; the control plane never sees it.
+                </span>
+              </div>
+              <Toggle
+                checked={form.sessionSync}
+                onChange={(v) => setForm({ ...form, sessionSync: v, worktreeSync: v ? form.worktreeSync : false })}
+                label="Enable session sync"
+              />
+            </div>
+            <div className={`settings-toggle-row${form.sessionSync ? "" : " disabled"}`}>
+              <div className="settings-toggle-text">
+                <span className="settings-toggle-title">Also sync the workspace (git checkpoints)</span>
+                <span className="muted small">
+                  Ship each turn's git checkpoint too, so the promoted session keeps its working tree and
+                  can continue coding — not just show history. Needs session sync; ignored for non-git workspaces.
+                </span>
+              </div>
+              <Toggle
+                checked={form.worktreeSync}
+                disabled={!form.sessionSync}
+                onChange={(v) => setForm({ ...form, worktreeSync: v })}
+                label="Enable worktree sync"
+              />
+            </div>
+            {form.sessionSync && (
+              <>
+                <label className="field-label">Standby node</label>
+                <select
+                  className="picker-search"
+                  value={form.syncStandbyNodeId ?? ""}
+                  onChange={(e) => setForm({ ...form, syncStandbyNodeId: e.target.value || undefined })}
+                >
+                  <option value="">Choose a node to replicate to…</option>
+                  {nodes
+                    .filter((n) => n.id !== currentNodeId)
+                    .map((n) => (
+                      <option key={n.id} value={n.id}>
+                        {(n.name || n.id) + (n.online ? "" : " (offline)")}
+                      </option>
+                    ))}
+                  {form.syncStandbyNodeId && !nodes.some((n) => n.id === form.syncStandbyNodeId) && (
+                    <option value={form.syncStandbyNodeId}>{form.syncStandbyNodeId}</option>
+                  )}
+                </select>
+                <p className="muted small">
+                  Sessions on this node warm-replicate to the standby over the encrypted relay. If this
+                  node goes offline, open the session on the standby and choose “Continue here”.
+                  {nodes.filter((n) => n.id !== currentNodeId).length === 0 && " Add a second node to enable this."}
+                </p>
+              </>
+            )}
+          </section>
 
           <div className="row-actions">
-            <button className="btn primary" onClick={save}>Save</button>
+            <button className="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
+            {saveErr && <span className="chip err">{saveErr}</span>}
           </div>
         </>
       )}
@@ -1840,7 +2056,104 @@ function EphemeralPanel() {
           );
         })}
       </div>
+      <EphemeralModelKeys />
     </div>
+  );
+}
+
+// Model API keys held on THIS device to seed a freshly-launched machine's vault
+// over its encrypted channel — so a brand-new runner has model credentials even
+// when it's the account's only node and there's no peer to sync the model-auth
+// vault from (the cold-start gap; see docs/ephemeral-sessions.md). API keys
+// only; agent subscription/OAuth logins can't be replayed onto disposable
+// machines. Same device-local privacy model as the cloud provider tokens above.
+const COMMON_MODEL_PROVIDERS = [
+  "anthropic", "openai", "google", "groq", "mistral",
+  "openrouter", "deepseek", "xai", "together", "fireworks", "cohere",
+];
+
+function EphemeralModelKeys() {
+  const [keys, setKeys] = useState<EphemeralModelKeyInfo[]>([]);
+  const [provider, setProvider] = useState("");
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const refresh = () => controller.listEphemeralModelKeys().then(setKeys).catch(() => {});
+  useEffect(() => { refresh(); }, []);
+
+  const save = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await controller.setEphemeralModelKey(provider, key);
+      setProvider("");
+      setKey("");
+      setMsg("Saved on this device.");
+      refresh();
+    } catch (e) {
+      setMsg(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section">
+      <h4 className="settings-subhead">Model keys for new machines</h4>
+      <p className="muted small">
+        API keys kept on this device and pushed into a freshly-launched machine over its encrypted channel, so a
+        brand-new runner has model credentials even when it's your only node. Never sent to our servers or baked into
+        the machine image. API keys only — agent subscription logins can't be seeded this way.
+      </p>
+      {keys.length > 0 && (
+        <div className="picker-list">
+          {keys.map((k) => (
+            <PickerItem
+              key={k.provider}
+              title={k.provider}
+              meta={k.configured ? "Key saved on this device" : "Not set"}
+              right={
+                <button
+                  type="button"
+                  className="picker-action danger"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    controller.removeEphemeralModelKey(k.provider).then(refresh);
+                  }}
+                >
+                  Remove
+                </button>
+              }
+            />
+          ))}
+        </div>
+      )}
+      <datalist id="eph-model-providers">
+        {COMMON_MODEL_PROVIDERS.map((p) => (
+          <option key={p} value={p} />
+        ))}
+      </datalist>
+      <label className="field-label">Provider</label>
+      <input
+        className="picker-search"
+        list="eph-model-providers"
+        value={provider}
+        placeholder="e.g. anthropic"
+        onChange={(e) => setProvider(e.target.value)}
+      />
+      <label className="field-label">API key</label>
+      <input
+        className="picker-search"
+        type="password"
+        value={key}
+        placeholder="Paste key"
+        onChange={(e) => setKey(e.target.value)}
+      />
+      <button className="btn primary" disabled={busy || !provider.trim() || !key.trim()} onClick={save}>
+        {busy ? "Saving…" : "Save key"}
+      </button>
+      {msg && <p className="muted">{msg}</p>}
+    </section>
   );
 }
 
@@ -1858,6 +2171,9 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // Both saveToken and savePrefs are already real awaited requests — the
+  // missing piece was an in-flight guard against a double-submit (#140).
+  const [busy, setBusy] = useState(false);
 
   const refreshMachines = () =>
     controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId))).catch(() => {});
@@ -1890,6 +2206,8 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
   }, [hasToken, providerId, region]);
 
   const saveToken = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
       await controller.setEphemeralToken(providerId, token.trim());
       setToken("");
@@ -1898,16 +2216,22 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
       setMsg("Token saved on this device.");
     } catch (e) {
       setMsg(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
     }
   };
 
   const savePrefs = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
       await controller.setEphemeralPrefs(providerId, { region, size, ttlMinutes: ttl, repo: repo.trim() || null });
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
     } catch (e) {
       setMsg(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -1936,7 +2260,7 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
           </div>
           <label className="field-label">{catalog.tokenLabel}</label>
           <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste token" />
-          <button className="btn primary" disabled={!token.trim()} onClick={saveToken}>Save token</button>
+          <button className="btn primary" disabled={!token.trim() || busy} onClick={saveToken}>{busy ? "Saving…" : "Save token"}</button>
         </>
       ) : (
         <>
@@ -1962,7 +2286,7 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
           <input className="picker-search" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo" />
 
           <div className="row-actions">
-            <button className="btn primary" onClick={savePrefs}>Save preferences</button>
+            <button className="btn primary" disabled={busy} onClick={savePrefs}>{busy ? "Saving…" : "Save preferences"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
             <button
               className="btn danger-ghost"
@@ -2022,6 +2346,7 @@ function AccountPanel() {
   const [nodes, setNodes] = useState<Awaited<ReturnType<typeof controller.listNodes>>>([]);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   const reloadMe = () => controller.fetchMe().then(setMe).catch(() => {});
   const reloadDevices = () => controller.listDevices().then(setDevices).catch(() => {});
@@ -2033,9 +2358,6 @@ function AccountPanel() {
   const ent = me?.entitlements;
   const counts = me?.counts;
   const free = (ent?.plan || me?.account?.plan) === "free";
-  // Undefined maxNodes = unlimited (no node cap on any plan). Show a placeholder
-  // until `me` loads so it never briefly reads "∞" mid-fetch.
-  const nodeCap = ent ? (ent.maxNodes ?? "∞") : "—";
   // Free's one cap: runs per rolling 7-day window across every source. Undefined = unlimited (paid).
   const runCap = ent ? (ent.weeklyRunLimit ?? "∞") : "—";
   return (
@@ -2054,18 +2376,41 @@ function AccountPanel() {
       <div className="stat-grid">
         <Stat label="Plan" value={planLabel(ent?.plan || me?.account?.plan)} />
         <Stat label="Runs / week" value={`${counts?.runsThisWeek ?? "—"} / ${runCap}`} />
-        <Stat label="Nodes" value={`${counts?.nodes ?? "—"} / ${nodeCap}`} />
-        <Stat label="Sessions" value={`${counts?.sessions ?? "—"}`} />
-        <Stat label="Devices" value={`${counts?.devices ?? "—"}`} />
       </div>
+      {free && (
+        <p className="muted settings-intro">
+          You're on the free plan — everything's included, capped at {runCap} runs per rolling 7 days across
+          every source (manual, app, GitHub queue, ephemeral). Pro removes the cap for {PRO_PRICE_LABEL}.
+        </p>
+      )}
       <div className="row-actions">
         {free ? (
-          <button className="btn primary" onClick={() => controller.startCheckout().catch((e) => setErr(String(e.message || e)))}>
-            Upgrade
+          <button
+            className="btn primary"
+            disabled={opening}
+            onClick={() => {
+              setOpening(true);
+              setErr(null);
+              // Both buttons fetch a redirect URL before navigating away — with
+              // no busy state the button just looked dead in that gap (#140).
+              // `finally` only fires on a failure to redirect; success replaces
+              // this page before it can run.
+              controller.startCheckout().catch((e) => setErr(String(e.message || e))).finally(() => setOpening(false));
+            }}
+          >
+            {opening ? "Opening…" : `Upgrade to Pro — ${PRO_PRICE_LABEL}`}
           </button>
         ) : (
-          <button className="btn" onClick={() => controller.openBillingPortal().catch((e) => setErr(String(e.message || e)))}>
-            Manage billing
+          <button
+            className="btn"
+            disabled={opening}
+            onClick={() => {
+              setOpening(true);
+              setErr(null);
+              controller.openBillingPortal().catch((e) => setErr(String(e.message || e))).finally(() => setOpening(false));
+            }}
+          >
+            {opening ? "Opening…" : "Manage billing"}
           </button>
         )}
       </div>
@@ -2175,7 +2520,19 @@ function LinkPanel({ onDone }: { onDone: () => void }) {
   return (
     <div className="settings-form">
       <p className="muted">Paste a device-link URL or code from another Bivy client to add its node here.</p>
-      <textarea className="picker-search" rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="https://…#… or code" />
+      <textarea
+        className="picker-search"
+        rows={4}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          // Clear the stale error as soon as the user edits — otherwise a
+          // failed link keeps showing "didn't look like a valid device link"
+          // through a correction and retry, until the next success (#140).
+          setErr(null);
+        }}
+        placeholder="https://…#… or code"
+      />
       <button
         className="btn primary"
         disabled={!text.trim()}

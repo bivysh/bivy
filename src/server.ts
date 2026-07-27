@@ -8,7 +8,8 @@ import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypt
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
-import { listRuntimes, catalogRuntimes, type AgentCommand, type AgentRuntime, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { listRuntimes, catalogRuntimes, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
 import { RemoteRuntime, RemoteRuntimeSession } from "./runtime/remote.js";
@@ -65,6 +66,7 @@ import {
   resolveGitHubTaskConfig,
   buildTaskPrompt,
   buildResumePrompt,
+  buildInteractiveResumePrompt,
   DEFAULT_ISSUE_INSTRUCTIONS,
   parseBivyDirectives,
   commitAll,
@@ -359,7 +361,9 @@ const metadata = MetadataStore.load(appDir);
 // A fresh process has no live runtimes, so any persisted "working" status is
 // stale from a prior crash/kill. Clear it at boot; otherwise those sessions'
 // worktrees are permanently exempted from cleanup (an unbounded disk leak).
-metadata.resetStaleWorking();
+// The ids it returns are exactly the sessions cut off mid-turn by the death —
+// the resume reconciler (reconcileInterruptedSessions) picks them up.
+const interruptedSessionIds = metadata.resetStaleWorking();
 const defaultWorkspace = process.env.BIVY_WORKSPACE ?? repoRoot;
 // Where repo-backed sessions clone GitHub repos (one checkout per repo, reused).
 const reposRoot = process.env.BIVY_REPOS_DIR ?? path.join(appDir, "repos");
@@ -795,7 +799,7 @@ let relay: RelayConnector | undefined;
 const clients = new Set<WebSocket>();
 const commandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const oauthLogins = new Map<string, OAuthLoginState>();
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -809,6 +813,9 @@ type CreateSessionOptions = {
   runtimeId?: string;
   /** Per-session sandbox tier override; defaults to the node's configured tier. */
   sandbox?: SandboxTier;
+  /** Per-session approval-mode override (e.g. a scheduled automation's default);
+   *  defaults to the node's configured approval mode. */
+  approvalMode?: ApprovalMode;
   /** Throwaway session (e.g. the model-picker scratch): kept in memory for reuse
    *  but never persisted to metadata while it stays empty, so it can't leave an
    *  "untitled"/empty row behind. */
@@ -1181,6 +1188,10 @@ type NodeSettings = {
   sessionSync: boolean;
   worktreeSync: boolean;
   syncStandbyNodeId?: string;
+  /** How an interactive session whose turn was cut off by a restart recovers:
+   *  "auto" re-drives the interrupted turn on boot; "manual" leaves it for the
+   *  user to resume with one tap. Issue automation always auto-resumes regardless. */
+  sessionResumeMode: "auto" | "manual";
 };
 
 /** The node's default model for new sessions, or null (= use the runtime default). */
@@ -1189,6 +1200,24 @@ function nodeDefaultModel(): { provider: string; id: string } | null {
   const provider = String(m?.provider ?? "").trim();
   const id = String(m?.id ?? "").trim();
   return provider && id ? { provider, id } : null;
+}
+
+/** The agent GitHub-issue pickups should default to when the issue body carries
+ *  no `bivy-agent:` directive and no manual "Run…" override — i.e. the persisted
+ *  Settings → Nodes → "Default agent" value. Falls back to the boot-time
+ *  `defaultRuntimeId` when never configured. Crucially this reads the persisted
+ *  `settings.defaultAgent` rather than the mutable `defaultRuntimeId` global,
+ *  which the web UI overwrites with the *last used* agent on every
+ *  `runtime.select`. Mirrors `nodeSettingsSnapshot().defaultAgent`. */
+function nodeConfiguredDefaultAgent(): string {
+  const s = readSettings();
+  return typeof s.defaultAgent === "string" && s.defaultAgent.trim() ? s.defaultAgent.trim() : defaultRuntimeId;
+}
+
+/** How interactive sessions recover after a restart interrupted them mid-turn.
+ *  Defaults to "auto" (re-drive the turn); "manual" waits for a user tap. */
+function nodeSessionResumeMode(): "auto" | "manual" {
+  return readSettings().sessionResumeMode === "manual" ? "manual" : "auto";
 }
 
 /** Max concurrent GitHub-queue sessions this node runs at once (0 = unlimited). */
@@ -1221,6 +1250,7 @@ function nodeSettingsSnapshot(): NodeSettings {
       const v = readSettings().syncStandbyNodeId;
       return typeof v === "string" && v.trim() ? v.trim() : undefined;
     })(),
+    sessionResumeMode: nodeSessionResumeMode(),
   };
 }
 
@@ -1270,6 +1300,9 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   if ("syncStandbyNodeId" in patch) {
     const v = typeof patch.syncStandbyNodeId === "string" ? patch.syncStandbyNodeId.trim() : "";
     settings.syncStandbyNodeId = v || undefined;
+  }
+  if ("sessionResumeMode" in patch) {
+    settings.sessionResumeMode = patch.sessionResumeMode === "manual" ? "manual" : "auto";
   }
   writeSettings(settings);
   const snapshot = nodeSettingsSnapshot();
@@ -1879,6 +1912,23 @@ function handleTerminalMessage(
       void (async () => {
         const record = resolveSession(msg.sessionId);
         if (!record) { emit({ type: "terminal.error", error: "Session not found for TUI." }); return; }
+        // Idempotent "go to terminal": a TUI is already live for this session
+        // (opened here, on another device, or before a reload). Re-attach the
+        // caller to that same PTY — replaying its scrollback — instead of
+        // spawning a second CLI that would fight over the one session file and
+        // orphan the first. A stale id (PTY already gone) falls through to a
+        // fresh launch below.
+        if (record.tuiTermId) {
+          const snapshot = terminals.snapshot(record.tuiTermId);
+          if (snapshot != null) {
+            owned.add(record.tuiTermId);
+            if (typeof msg.cols !== "undefined" || typeof msg.rows !== "undefined") {
+              terminals.resize(record.tuiTermId, Number(msg.cols) || 80, Number(msg.rows) || 24);
+            }
+            emit({ type: "terminal.attached", termId: record.tuiTermId, data: snapshot });
+            return;
+          }
+        }
         if (sessionBusy(record)) { emit({ type: "terminal.error", sessionId: record.id, error: "Finish or stop the current turn before opening the TUI." }); return; }
         let spec;
         try { spec = record.session.interactiveTuiCommand ? await record.session.interactiveTuiCommand() : null; }
@@ -1915,6 +1965,27 @@ function handleTerminalMessage(
           emit({ type: "terminal.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) });
         }
       })();
+      return true;
+    }
+    case "terminal.close.tui": {
+      // "Take over in chat": stop the interactive TUI that owns this session and
+      // hand it back to governed chat. Closing the PTY runs the same onExit path
+      // as the user quitting the CLI — it clears tuiTermId, flips tuiRefreshing,
+      // rebuilds the in-process session from disk (refreshRecordAfterTui), and
+      // broadcasts `terminal.tui {active:false}` — so the composer unlocks with
+      // whatever the TUI wrote. Resolve the PTY server-side from the session so a
+      // client that never held the termId (another device, post-reload) can do it.
+      const record = resolveSession(msg.sessionId);
+      const termId = record?.tuiTermId;
+      if (termId) {
+        terminals.close(termId);
+        owned.delete(termId);
+        clearBellNotify(termId);
+      } else if (record) {
+        // No live TUI to close — make sure the client isn't left locked on a
+        // stale flag by re-asserting the unlocked state for this session.
+        broadcastTuiState(record.id, false);
+      }
       return true;
     }
     case "terminal.attach": {
@@ -2292,6 +2363,17 @@ const sessionNewDedupe = createSessionNewDedupe<SessionRecord>();
 const dedupeSessionNew = (requestId: string | undefined, create: () => Promise<SessionRecord>) =>
   sessionNewDedupe.run(requestId, create);
 
+// Idempotency for `prompt`, keyed by the client's clientMessageId (the same
+// generic key->promise cache as above, reused for a different key) — see
+// issue #154's queued follow-ups. A client that isn't sure whether a queued
+// item's send actually reached the node before the socket dropped (see
+// AppController.retryStuckFollowups) resends it verbatim after reconnecting;
+// this makes that safe by collapsing a retried clientMessageId onto the
+// original broadcast + turn instead of double-prompting the runtime.
+const promptDedupe = createSessionNewDedupe<void>();
+const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<void>) =>
+  promptDedupe.run(clientMessageId, run);
+
 const RELAY_COMMANDS: Record<string, Command> = {
   ping(msg, ctx) {
     ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
@@ -2363,15 +2445,17 @@ const RELAY_COMMANDS: Record<string, Command> = {
     ctx.broadcast({ type: "node.updated", name });
     ctx.reply({ type: "node.updated", name });
   },
-  "node.settings.get"(_msg, ctx) {
-    ctx.reply({ type: "node.settings", settings: nodeSettingsSnapshot() });
+  "node.settings.get"(msg, ctx) {
+    ctx.reply({ type: "node.settings", requestId: msg.requestId, settings: nodeSettingsSnapshot() });
   },
   async "node.settings.set"(msg, ctx) {
     try {
       const settings = await applyNodeSettings((msg.settings as Record<string, unknown>) ?? msg);
-      ctx.reply({ type: "node.settings", settings });
+      // requestId round-trips so the caller (setNodeSettings) can tell its own
+      // save landed apart from an unrelated node.settings.get reply — see #140.
+      ctx.reply({ type: "node.settings", requestId: msg.requestId, settings });
     } catch (error) {
-      ctx.reply({ type: "node.settings.error", error: error instanceof Error ? error.message : String(error) });
+      ctx.reply({ type: "node.settings.error", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
     }
   },
   async "node.stats"(msg, ctx) {
@@ -2618,6 +2702,47 @@ const RELAY_COMMANDS: Record<string, Command> = {
     // A reconnecting/opening client missed the one-shot card broadcast; put
     // any still-pending question/approval back so it can be answered.
     replayPendingInteractions(record.id);
+    // Manual resume mode: a turn this session was running when the node restarted
+    // was left for the user to continue. Offer a one-tap Resume next to the
+    // restored transcript (the marker is cleared once any turn completes).
+    if (metadata.getSession(record.id)?.resumePending) {
+      relay?.sendEvent({
+        type: "session.notice",
+        sessionId: record.id,
+        level: "info",
+        message: "This session was interrupted by a restart before its last turn finished.",
+        action: "/resume",
+      });
+    }
+  },
+  // Provider-native session discovery/adoption (issue #156) — the relay-mode
+  // twin of GET /api/sessions/discover / POST /api/sessions/import, so the
+  // hosted app (app.bivy.sh) gets the same capability-driven flow as a
+  // directly-connected node. Bounded metadata only — no transcript content
+  // rides either message.
+  async "session.discover"(msg, ctx) {
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+    try {
+      const sessions = await listDiscoverableSessions();
+      ctx.reply({ type: "session.discover.result", requestId, sessions });
+    } catch (error) {
+      ctx.reply({ type: "session.discover.error", requestId, error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async "session.import"(msg, ctx) {
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+    const runtimeId = String(msg.runtimeId ?? "").trim();
+    const ref = String(msg.ref ?? "").trim();
+    if (!runtimeId || !ref) {
+      ctx.reply({ type: "session.import.error", requestId, error: "runtimeId and ref are required" });
+      return;
+    }
+    try {
+      const record = await importNativeSession(runtimeId, ref);
+      ctx.reply({ type: "session.import.result", requestId, sessionId: record.id, runtimeId: record.runtimeId });
+    } catch (error) {
+      ctx.reply({ type: "session.import.error", requestId, error: error instanceof Error ? error.message : String(error) });
+    }
   },
   approval(msg, ctx) {
     const id = String(msg.id ?? "");
@@ -2754,14 +2879,20 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "provider.apiKey"(msg) {
+  async "provider.apiKey"(msg, ctx) {
     try {
       await setProviderApiKey(credsDir, String(msg.provider ?? msg.id ?? ""), String(msg.key ?? ""));
       await pushModelAuthToControlPlane();
       await refreshSessionAfterAuth();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
+      // Dedicated per-request ack (separate from the list broadcast above, which
+      // every client gets) so the saving client can tell its own save landed
+      // instead of assuming success the moment the command was sent — see #140.
+      ctx.reply({ type: "provider.apiKey.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "provider.apiKey.error", requestId: msg.requestId, error: message });
     }
   },
   async "provider.oauth.reset"(msg) {
@@ -2802,14 +2933,18 @@ const RELAY_COMMANDS: Record<string, Command> = {
   async "models.custom.presets"() {
     relay?.sendEvent({ type: "models.custom.presets", presets: await localModelPresets() });
   },
-  async "models.custom.save"(msg) {
+  async "models.custom.save"(msg, ctx) {
     try {
       // The client sends the same field set as the REST body (baseUrl, api,
       // apiKey, models[], compat, name, providerId). persistLocalModelSave
       // broadcasts the refreshed list to every client, requester included.
       await persistLocalModelSave((msg as any)?.spec ?? msg);
+      // Dedicated per-request ack — see the provider.apiKey comment above (#140).
+      ctx.reply({ type: "models.custom.save.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "models.custom.save.error", requestId: msg.requestId, error: message });
     }
   },
   async "models.custom.remove"(msg) {
@@ -2826,12 +2961,16 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
-  async "stt.config.set"(msg) {
+  async "stt.config.set"(msg, ctx) {
     try {
       const config = await applySttConfigChange(msg as Record<string, unknown>);
       broadcast({ type: "stt.config", ...config });
+      // Dedicated per-request ack — see the provider.apiKey comment above (#140).
+      ctx.reply({ type: "stt.config.set.ok", requestId: msg.requestId });
     } catch (error) {
-      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "stt.config.set.error", requestId: msg.requestId, error: message });
     }
   },
   async transcribe(msg) {
@@ -2987,10 +3126,13 @@ const RELAY_COMMANDS: Record<string, Command> = {
       [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
       (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
     const agentPrompt = promptForAgent(record, promptText);
-    broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: msg.clientMessageId });
-    void maybeNameSession(record, promptText);
-    harnessBeginTurn(record);
-    void record.session.prompt(agentPrompt, promptOptionsFor(record, msg.streamingBehavior, images)).catch((error) => {
+    const cmid = typeof msg.clientMessageId === "string" && msg.clientMessageId ? msg.clientMessageId : undefined;
+    void dedupePrompt(cmid, async () => {
+      broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: msg.clientMessageId });
+      void maybeNameSession(record, promptText);
+      harnessBeginTurn(record);
+      await record.session.prompt(agentPrompt, promptOptionsFor(record, msg.streamingBehavior, images));
+    }).catch((error) => {
       // Mirror the HTTP path (see the /prompt route): a rejected turn after
       // the runtime marked the session working emits no agent_end, so without
       // this the relay client (PWA) is stranded on "Working…" forever with
@@ -3961,10 +4103,15 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   await announcePickup(cfg, issue.number, identity.name);
 
   const parsed = parseBivyDirectives(issue.body);
-  // Manual "Run…" overrides win over in-body directives; fall back to directives,
-  // then to the node's defaults inside createSession/setModel.
+  // Manual "Run…" overrides win over in-body directives, then the node's
+  // *configured* default agent (Settings → Nodes → "Default agent"). We resolve
+  // the default explicitly here rather than leaving `runtimeId` undefined for
+  // `createSession` to fill in, because that fallback uses the mutable
+  // `defaultRuntimeId` global — which the web UI reassigns to the *last used*
+  // agent on every `runtime.select`. Issue pickups must honor the persisted
+  // default, not whatever agent a human last happened to click.
   const directives = {
-    runtimeId: overrides.runtimeId || parsed.runtimeId,
+    runtimeId: overrides.runtimeId || parsed.runtimeId || nodeConfiguredDefaultAgent(),
     model: overrides.model || parsed.model,
   };
   // `cfg.repoDir` is a long-lived shared clone reused across every pickup on this
@@ -4298,6 +4445,50 @@ async function reconcileOrphanedIssueWork(): Promise<void> {
   }
 }
 
+/**
+ * On startup, recover any *interactive* session whose turn was cut off mid-flight
+ * by a process death (crash, OOM-kill, unclean restart). `resetStaleWorking()`
+ * captured their ids at boot — a persisted "working" status can only be stale in a
+ * fresh process, and a turn the user stopped or that finished cleanly went through
+ * clearSessionWorking → "idle", so this set is exactly the genuinely-interrupted
+ * turns. Issue-sourced sessions are handled by reconcileOrphanedIssueWork (which
+ * also commits/pushes/reports), so they're skipped here.
+ *
+ * Behaviour follows the node's `sessionResumeMode`:
+ *   - "auto"   → re-drive the interrupted turn now with a generic resume prompt,
+ *                so the agent finishes what it was doing without a human nudge.
+ *   - "manual" → leave a durable `resumePending` marker so opening the session
+ *                offers a one-tap "Resume" instead of silently spending tokens.
+ *
+ * Best-effort and non-blocking: any session it can't resolve is skipped and
+ * logged, never thrown, so one bad row can't block the rest or crash startup.
+ */
+async function reconcileInterruptedSessions(): Promise<void> {
+  if (!interruptedSessionIds.length) return;
+  const mode = nodeSessionResumeMode();
+  for (const id of interruptedSessionIds) {
+    const meta = metadata.getSession(id);
+    if (!meta) continue;
+    // Issue automation resumes via reconcileOrphanedIssueWork (always auto).
+    if (meta.source && meta.source.startsWith("issue:")) continue;
+    if (openSessions.has(id)) continue; // already live this run (a client opened it during boot)
+    if (mode === "manual") {
+      metadata.setResumePending(id, true);
+      continue;
+    }
+    try {
+      console.log(`[resume] auto-resuming interactive session ${id} interrupted by a restart`);
+      const record = await resolveOrResumeSession(id, meta.path);
+      if (!record) continue; // transcript gone / unresolvable — nothing to resume
+      await runSessionTurn(record, buildInteractiveResumePrompt());
+    } catch (error) {
+      // Clear any marker so a persistently-failing session can't loop forever.
+      metadata.setResumePending(id, false);
+      console.warn(`[resume] could not auto-resume session ${id}`, error);
+    }
+  }
+}
+
 async function startGitHubTasksIfConfigured() {
   const cfg = await resolveGitHubTaskConfig();
   if (!cfg) return;
@@ -4418,6 +4609,17 @@ async function resolveTokenForRepo(owner: string, repo: string): Promise<string 
 }
 
 async function runWorkItem(item: ControlPlaneWorkItem) {
+  if ((item.source === "schedule" || item.source === "manual") && item.body?.startsWith("bivy-room-v1:")) {
+    const [, nodeId, ...payload] = item.body.split(":");
+    if (nodeId !== identity.nodeId || payload.length === 0) {
+      throw new Error("scheduled instructions were encrypted for a different node");
+    }
+    try {
+      item = { ...item, body: open(pairingStore.roomKey(), payload.join(":")) };
+    } catch {
+      throw new Error("could not decrypt scheduled instructions on this node");
+    }
+  }
   // A labelled issue ("github:issue") and an @-mention comment ("github:comment")
   // both run the same way: clone, work on a branch, open a PR, comment back. For
   // a comment the instruction is item.body (bivy-agent:/bivy-model: directives in
@@ -4448,7 +4650,16 @@ async function runWorkItem(item: ControlPlaneWorkItem) {
   }
   // Generic prompt (Slack, or an issue with no repo): a background session in the
   // default workspace so it doesn't steal the user's focused session.
-  const record = await createSession(defaultWorkspace, undefined, { makeActive: false, source: `queue:${item.source}` });
+  const record = await createSession(defaultWorkspace, undefined, {
+    makeActive: false,
+    source: `queue:${item.source}`,
+    runtimeId: item.runtimeId,
+    sandbox: normalizeSandboxTier(item.sandbox),
+    approvalMode: approvalModeFrom(item.approvalMode),
+  });
+  if (item.model) {
+    try { await record.session.setModel("", item.model); } catch {}
+  }
   await record.session.prompt(item.body ? `${item.title}\n\n${item.body}` : item.title);
 }
 
@@ -4796,7 +5007,10 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
   const repo = record?.source?.startsWith("repo:") ? record.source.slice("repo:".length) : undefined;
   const branch = record?.worktree?.branch;
   const policy = new PolicyEngine({
-    mode: approvalMode,
+    // A session created from a scheduled/manual automation may carry its own
+    // approval-mode default (item.approvalMode in runWorkItem); otherwise fall
+    // back to the node's globally configured mode.
+    mode: record?.approvalMode ?? approvalMode,
     isRiskyIntegration: (tool) => integrations.isRiskyTool(tool),
   });
   let { decision, reason, risk } = policy.decideToolCall(workspace, toolName, input);
@@ -5194,6 +5408,60 @@ async function listAllSessions(): Promise<Array<SessionSummary & { agent: string
   }
   deduped.sort((a, b) => toMs(b.modified) - toMs(a.modified));
   return deduped.filter((s) => !isEmptyUntitledSummary(s));
+}
+
+// --- Native session discovery/adoption (issue #156) -------------------------
+// "Let a node advertise discoverable provider-native sessions and let the app
+// import/adopt one into Bivy" — capability-driven, not a per-provider UI
+// branch: any runtime advertising capabilities.nativeSessionDiscovery is asked
+// for its own discoveries (src/runtime/native-session-discovery.ts does the
+// aggregation/dedupe), and the result is bounded metadata only, never
+// transcript content, so nothing here risks leaking a conversation to a UI
+// that merely lists nodes/sessions.
+
+export interface DiscoveredSessionView extends DiscoveredNativeSession {
+  agentName: string;
+  plan: NativeAdoptionPlan;
+}
+
+/** Every provider-native session discoverable on this node, minus ones Bivy
+ *  already manages (any runtime variant, any owning id — see
+ *  native-session-discovery.ts's identity-based dedupe). */
+async function listDiscoverableSessions(): Promise<DiscoveredSessionView[]> {
+  const managed = await listAllSessions();
+  const capableRuntimes = runtimeList()
+    .filter((info) => info.status === "available" && info.capabilities.nativeSessionDiscovery)
+    .map((info) => getRuntime(info.id));
+  const discovered = await collectDiscoveredSessions(
+    capableRuntimes,
+    managed.map((s) => ({ id: s.id, path: s.path })),
+  );
+  return discovered.map((session) => {
+    const rt = getRuntime(session.runtimeId);
+    return { ...session, agentName: rt.displayName, plan: planNativeAdoption(session, rt.capabilities) };
+  });
+}
+
+/**
+ * Import a discovered provider-native session into Bivy: creates or binds a
+ * Bivy session via the ordinary resume path (createSession → runtime.openSession),
+ * so it's a native resume whenever the runtime supports one — never a rewrite
+ * or deletion of the provider's own history. Re-validates the ref against a
+ * fresh discovery pass (rather than trusting the caller's cached list) so a
+ * stale/removed session, or one with a live external process, can't be
+ * imported out from under the safety checks.
+ */
+async function importNativeSession(runtimeId: string, ref: string): Promise<SessionRecord> {
+  const rt = getRuntime(runtimeId);
+  if (!rt.capabilities.nativeSessionDiscovery || !rt.capabilities.nativeSessionAdoption) {
+    throw new Error(`${rt.displayName} does not support importing existing sessions.`);
+  }
+  const discovered = await runtimeHost.discoverNativeSessions(rt);
+  const match = discovered.find((s) => s.ref === ref);
+  if (!match) throw new Error("That session is no longer discoverable — it may already be imported, or removed.");
+  const plan = planNativeAdoption(match, rt.capabilities);
+  if (plan.mode === "follow-only") throw new Error(plan.disclosure ?? "This session has a live process outside Bivy; close it before adopting.");
+  return createSession(match.cwd || defaultWorkspace, ref, { runtimeId, source: "import" });
 }
 
 function isEmptyUntitledTitle(value: unknown): boolean {
@@ -5745,6 +6013,9 @@ function clearSessionWorking(record: SessionRecord) {
   record.isWorking = false;
   record.lastActivity = undefined;
   record.workingStartedAt = undefined;
+  // A completed turn clears any pending manual-resume offer: the session has now
+  // moved on (whether it was the resume itself or an unrelated new message).
+  metadata.setResumePending(record.id, false);
   persistSessionMetadata(record, sessionStatus(record));
   scheduleAdvertise(); // working → idle transition
 }
@@ -6457,7 +6728,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // bump it to now (only real activity should reorder the sidebar). A brand-new
   // session legitimately starts "active now".
   const resumedLastActive = requestedSessionFile ? metaLastActiveMs(storedMeta) : undefined;
-  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral };
+  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: opts.approvalMode, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral };
   // Stage 2 slice 4: a re-attached session recovers its still-running TUI
   // terminal link (the PTY survives a detach) from the session→terminal registry.
   if (attached) {
@@ -7934,6 +8205,29 @@ app.get("/api/codex/sessions/:id/messages", (req, res) => {
   res.json({ messages: loadCodexTranscript(id), readOnly: true, resumeCommand: `codex resume ${id}` });
 });
 
+// Provider-native session discovery/adoption (issue #156) — the runtime-agnostic
+// generalization of the Codex-only endpoints above. Bounded metadata only,
+// deduped against sessions Bivy already manages; see listDiscoverableSessions.
+app.get("/api/sessions/discover", async (_req, res, next) => {
+  try {
+    res.json({ sessions: await listDiscoverableSessions() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/sessions/import", async (req, res, next) => {
+  try {
+    const runtimeId = String(req.body?.runtimeId || "").trim();
+    const ref = String(req.body?.ref || "").trim();
+    if (!runtimeId || !ref) return res.status(400).json({ error: "runtimeId and ref are required" });
+    const record = await importNativeSession(runtimeId, ref);
+    res.json({ sessionId: record.id, runtimeId: record.runtimeId, workspace: record.workspace });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/sessions", async (_req, res, next) => {
   try {
     const sessions = await listAllSessions();
@@ -8665,12 +8959,15 @@ app.post("/api/session/prompt", async (req, res, next) => {
       [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
       (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
     const agentPrompt = promptForAgent(record, promptText);
-    broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
+    const cmid = typeof req.body?.clientMessageId === "string" && req.body.clientMessageId ? req.body.clientMessageId : undefined;
     markSessionWorking(record, { type: "agent_start" });
-    void maybeNameSession(record, promptText);
-    harnessBeginTurn(record);
     // Do not await completion; events stream over WebSocket.
-    void session.prompt(agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images)).catch((error) => {
+    void dedupePrompt(cmid, async () => {
+      broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
+      void maybeNameSession(record, promptText);
+      harnessBeginTurn(record);
+      await session.prompt(agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images));
+    }).catch((error) => {
       clearSessionWorking(record);
       broadcast({ type: "session.error", sessionId: record.id, error: String(error?.stack ?? error) });
     });
@@ -8892,6 +9189,9 @@ const server = app.listen(port, host, async () => {
   // restart interrupted before it could commit/push/open a PR. Never delays
   // startup and never throws (see reconcileOrphanedIssueWork).
   void reconcileOrphanedIssueWork().catch((error) => console.warn("[github-tasks] orphaned-issue reconciliation failed", error));
+  // Recover interactive sessions a restart interrupted mid-turn (auto-continue, or
+  // flag for a one-tap manual Resume) per the node's sessionResumeMode setting.
+  void reconcileInterruptedSessions().catch((error) => console.warn("[resume] interrupted-session reconciliation failed", error));
   // Universal Agent Harness — network effect boundary (opt-in via
   // BIVY_EGRESS_PROXY). Governs/logs outbound traffic of CLI agents, which
   // inherit the proxy env from process.ts.

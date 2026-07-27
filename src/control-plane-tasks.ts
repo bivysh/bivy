@@ -36,6 +36,8 @@ export interface WorkItem {
   url?: string;
   runtimeId?: string; // agent/runtime override chosen via the queue "Run…" action
   model?: string; // model override chosen via the queue "Run…" action
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)
 }
@@ -84,6 +86,10 @@ async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string): Pr
   });
 }
 
+async function transitionWork(cfg: ControlPlaneTaskConfig, id: string, action: string): Promise<void> {
+  await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/${action}`).catch(() => {});
+}
+
 export async function fetchPendingWork(cfg: ControlPlaneTaskConfig): Promise<WorkItem[]> {
   const res = await cp(cfg, "GET", `/node/work?labels=${encodeURIComponent(cfg.labels.join(","))}`);
   if (!res.ok) return [];
@@ -98,7 +104,11 @@ export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promis
 }
 
 export async function completeWork(cfg: ControlPlaneTaskConfig, id: string): Promise<void> {
-  await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/complete`).catch(() => {});
+  await transitionWork(cfg, id, "complete");
+}
+
+export async function failWork(cfg: ControlPlaneTaskConfig, id: string): Promise<void> {
+  await transitionWork(cfg, id, "fail");
 }
 
 export class ControlPlaneTaskPoller {
@@ -163,14 +173,13 @@ export class ControlPlaneTaskPoller {
       // claim → not ours → don't run or complete it).
       if (!(await claimWork(this.cfg, item.id))) return;
       try {
+        await transitionWork(this.cfg, item.id, "running");
         console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
         await this.runItem(item);
+        await completeWork(this.cfg, item.id);
       } catch (error) {
         console.warn(`[control-plane-tasks] item ${item.id} failed:`, error);
-      } finally {
-        // Mark done so it leaves the queue even if the run threw — a failed
-        // item shouldn't be retried forever (it's recorded on the issue/PR).
-        await completeWork(this.cfg, item.id);
+        await failWork(this.cfg, item.id);
       }
     } finally {
       this.inFlight.delete(item.id);

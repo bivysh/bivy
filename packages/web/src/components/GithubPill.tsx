@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useState } from "react";
 import { primaryPr, type GithubContext, type PrRef } from "@bivy/core";
+import { useModalEscape } from "../modalStack.js";
 
 // Ports the stranded GitHub UX (PRs #219 context menu + #220 status pill/action
 // sheet) into the React client. Shows a pill for the active session's GitHub
@@ -40,6 +41,7 @@ function GhIcon() {
 
 export function GithubPill({ gh }: { gh: GithubContext }) {
   const [open, setOpen] = useState(false);
+  useModalEscape(() => setOpen(false), open);
   const actions = actionsFor(gh);
   if (actions.length === 0) return null;
 

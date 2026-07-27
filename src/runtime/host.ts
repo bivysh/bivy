@@ -3,7 +3,7 @@
 import { listRuntimes, makeRuntime, type AgentRuntime, type RuntimeFactoryOptions, type RuntimeInfo } from "./index.js";
 import { RemoteRuntime, connectSocketTransport } from "./remote.js";
 import type { SandboxTier } from "../harness/sandbox.js";
-import type { OpenSessionOptions, OpenSessionResult, RuntimeCapabilities, RuntimeMessage, SessionSummary } from "./types.js";
+import type { DiscoveredNativeSession, OpenSessionOptions, OpenSessionResult, RuntimeCapabilities, RuntimeMessage, SessionSummary } from "./types.js";
 
 export type EnforcementLevel = "strong" | "boundary" | "observe_only";
 
@@ -167,5 +167,16 @@ export class RuntimeHost {
   /** Fast, build-free transcript read for opening a session (see AgentRuntime.readMessages). */
   readMessages(runtime: AgentRuntime, sessionFile: string): RuntimeMessage[] | undefined {
     return runtime.readMessages?.(sessionFile);
+  }
+
+  /** Enumerate a runtime's own provider-native sessions this node didn't start
+   *  (see AgentRuntime.discoverNativeSessions, issue #156). Empty for a runtime
+   *  that doesn't support discovery, or on any adapter-level failure. */
+  async discoverNativeSessions(runtime: AgentRuntime): Promise<DiscoveredNativeSession[]> {
+    try {
+      return (await runtime.discoverNativeSessions?.()) ?? [];
+    } catch {
+      return [];
+    }
   }
 }

@@ -10,6 +10,7 @@ import webpush from "web-push";
 import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
+import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
 import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector } from "./metrics.js";
@@ -24,6 +25,9 @@ import {
   verifySlackSignature,
   parseSlackCommand,
   applyDefaultNode,
+  verifyAutomationSignature,
+  parseAutomationEvent,
+  renderAutomationInstruction,
 } from "./webhooks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -101,6 +105,11 @@ try {
   );
   process.exit(1);
 }
+const automationScheduler = new AutomationScheduler(
+  store,
+  Math.max(1_000, Number(process.env.AUTOMATION_SCHEDULER_INTERVAL_MS) || 15_000),
+);
+automationScheduler.start();
 
 // Optional error reporting. Resolves to no-ops unless SENTRY_DSN is set, and only
 // then is @sentry/node loaded (see instrument.ts).
@@ -290,6 +299,7 @@ app.use("/billing/webhook", express.raw({ type: "application/json", limit: "1mb"
 // Inbound third-party webhooks need the RAW body to verify their HMAC signature,
 // so capture it before the JSON parser runs (GitHub sends JSON, Slack sends
 // urlencoded — match any content-type).
+app.use("/webhooks/automation", express.raw({ type: () => true, limit: "64kb" }));
 app.use("/webhooks", express.raw({ type: () => true, limit: "1mb" }));
 app.use(express.json({ limit: "1mb" }));
 // Time every request under its matched route pattern for the /metrics
@@ -489,6 +499,48 @@ function sendDeviceSignedIn(res: Response, email: string): void {
   res.type("html").send(deviceSignedInHtml(email));
 }
 
+// The device-flow OAuth/magic-link tab that fails must not be a dead end: give
+// it a way back. "Back to sign in" is a plain same-origin link (always works,
+// even for a tab opened from an email/QR link that can't self-close). "Close
+// this tab" wires window.close() for the app-opened tab — whitelisted by hash
+// like signedInCloseScript, since the global script-src is 'self' only.
+const closeTabScript = `var b=document.getElementById('close-tab');if(b){b.addEventListener('click',function(){try{window.close();}catch(e){/* not closable */}});}`;
+const closeTabScriptHash = `sha256-${createHash("sha256").update(closeTabScript).digest("base64")}`;
+
+function signInFailedHtml(detail: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign-in failed</title>
+<style>body{font-family:system-ui,sans-serif;background:#0a0f20;color:#eef2ff;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;box-sizing:border-box}
+.card{background:#0f1530;border:1px solid #233056;border-radius:16px;padding:32px 40px;text-align:center;max-width:360px}
+h1{font-size:20px;margin:0 0 8px}p{color:#9aa6cf;margin:6px 0;line-height:1.45}
+.actions{display:flex;flex-direction:column;gap:10px;margin-top:20px}
+.btn{display:block;padding:11px 16px;border-radius:10px;border:1px solid #2b3a66;background:#1b2545;color:#eef2ff;font:inherit;font-size:15px;text-decoration:none;cursor:pointer}
+.btn.ghost{background:transparent}</style></head>
+<body><div class="card"><h1>Sign-in failed</h1><p>${escapeHtml(detail)}</p>
+<div class="actions"><a class="btn" href="/">Back to sign in</a><button id="close-tab" class="btn ghost" type="button">Close this tab</button></div></div>
+<script>${closeTabScript}</script>
+</body></html>`;
+}
+
+// Send the device sign-in failure page, relaxing this one response's CSP just
+// enough to run the close-button snippet (whitelisted by hash) and its inline
+// styles; the global script-src stays 'self'-only for every other route.
+function sendSignInFailed(res: Response, status: number, detail: string): void {
+  res.setHeader(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      `script-src 'self' '${closeTabScriptHash}'`,
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join("; "),
+  );
+  res.status(status).type("html").send(signInFailedHtml(detail));
+}
+
 function stripePriceToPlan(priceId: string | null | undefined): Plan | undefined {
   if (priceId && stripePrices.pro && priceId === stripePrices.pro) return "pro";
   if (priceId && stripePrices.team && priceId === stripePrices.team) return "team";
@@ -577,8 +629,16 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
 // same address land on the SAME account. Minimal scope at login (read:user,
 // user:email); repo scope is requested later, only when a repo is connected to
 // the work queue. See docs/product-definition.md and docs/DEVELOPMENT_PLAN.md C1.
-const githubClientId = process.env.GITHUB_OAUTH_CLIENT_ID;
-const githubClientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET;
+// Accept the BIVY_-prefixed names as a fallback. GitHub reserves the `GITHUB_`
+// prefix for Actions secrets, so the canonical secrets are stored as
+// BIVY_GITHUB_OAUTH_CLIENT_ID / _SECRET (see scripts/sync-github-env.sh). A
+// deployment that forwards its Actions secrets into the runtime environment
+// verbatim ends up with the BIVY_-prefixed names set but the plain ones empty —
+// which silently disables GitHub sign-in and surfaces as "the authorization code
+// could not be exchanged" (an empty client secret) at token-exchange time.
+// Reading either name removes that entire class of misconfiguration.
+const githubClientId = process.env.GITHUB_OAUTH_CLIENT_ID || process.env.BIVY_GITHUB_OAUTH_CLIENT_ID;
+const githubClientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET || process.env.BIVY_GITHUB_OAUTH_CLIENT_SECRET;
 const githubConfigured = Boolean(githubClientId && githubClientSecret);
 
 // Short-lived CSRF/login state. In-memory is fine for a single instance; a
@@ -697,7 +757,7 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const loginToken = String(req.query?.token ?? "").trim();
   const deviceId = String(req.query?.device ?? "").trim();
   const account = await store.consumeLoginToken(loginToken);
-  if (!account) return res.status(401).type("html").send("<h1>Invalid or expired login link</h1>");
+  if (!account) return sendSignInFailed(res, 401, "This sign-in link is invalid or has expired. Request a new one from the sign-in screen.");
   // Device-login flow (hands-free CLI sign-in): mark the pending device login
   // complete and tell the user to return to their terminal. No session is
   // embedded here — the CLI mints it when it polls.
@@ -779,17 +839,29 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   const state = String(req.query.state ?? "").trim();
   const stored = takeOauthState(state);
   if (!code || !stored) {
-    return res.status(400).type("html").send("<h1>Sign-in failed</h1><p>Invalid or expired request. Please try again.</p>");
+    // No usable state means no trustworthy return path, so land on root — but
+    // still return the user to the sign-in card (with a reason) rather than a
+    // dead-end error page they'd have to navigate away from by hand.
+    return res.redirect(`/?authError=expired`);
   }
   const { email, reason } = await githubPrimaryEmail(code, `${baseUrl(req)}/auth/github/callback`);
   if (!email || !validEmail(email)) {
-    // Distinct copy per failure mode so the browser hints at the real cause; the
-    // server logs (see githubPrimaryEmail) carry the operator-facing detail.
-    const detail =
-      reason === "token-exchange"
-        ? "Couldn't complete GitHub sign-in — the authorization code could not be exchanged. This is a server configuration issue; please try again in a moment."
-        : "GitHub didn't return a verified email. Make sure your GitHub account has a verified email address and that you granted the email permission, then try again.";
-    return res.status(400).type("html").send(`<h1>Sign-in failed</h1><p>${detail}</p>`);
+    const errCode = reason === "token-exchange" ? "github-config" : "github-email";
+    // The device (CLI/app) flow finishes in a throwaway browser tab that never
+    // returns to the client, so an HTML page is the only feedback available
+    // there — but not a dead end: it offers "Back to sign in" and "Close this
+    // tab" so the user can recover without hand-editing the URL. The browser flow
+    // instead bounces back to the sign-in card with a reason code, landing the
+    // user somewhere they can immediately retry or switch to email sign-in.
+    if (stored.deviceId) {
+      const detail =
+        reason === "token-exchange"
+          ? "Couldn't complete GitHub sign-in — the authorization code could not be exchanged. This is a server configuration issue; please try again in a moment."
+          : "GitHub didn't return a verified email. Make sure your GitHub account has a verified email address and that you granted the email permission, then try again.";
+      return sendSignInFailed(res, 400, detail);
+    }
+    const path = safeReturnPath(stored.returnPath, "/");
+    return res.redirect(`${path}${path.includes("?") ? "&" : "?"}authError=${errCode}`);
   }
   // Resolve by verified email → links GitHub and magic-link to one account.
   const account = await store.findOrCreateAccount(email);
@@ -1383,6 +1455,98 @@ app.post("/account/hooks", requireUser, asyncHandler(async (req, res) => {
   res.json({ ok: true, id: hook.id, kind, secret: hook.secret, url });
 }));
 
+function publicAutomationHook(req: Request, hook: Awaited<ReturnType<typeof store.getInboundHook>>) {
+  if (!hook) return undefined;
+  return {
+    id: hook.id,
+    endpoint: `${baseUrl(req)}/webhooks/automation/${hook.id}`,
+    enabled: hook.enabled !== false,
+    templateInstruction: hook.templateInstruction || "",
+    routingDefault: hook.routingDefault || "",
+    createdAt: hook.createdAt,
+    updatedAt: hook.updatedAt,
+  };
+}
+
+// Generic automations are managed separately from provider hooks. Secrets are
+// intentionally omitted from list/update responses and disclosed exactly once
+// on create or rotation.
+app.get("/account/automation-hooks", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const hooks = await store.listInboundHooks(account.id, "automation");
+  const work = (await store.listAutomationRuns(account.id, 100))
+    .filter((run) => run.source.startsWith("automation:"))
+    .slice(0, 20)
+    .map((run) => ({
+      id: run.id,
+      hookId: run.source.slice("automation:".length),
+      status: run.status,
+      title: run.title,
+      createdAt: run.createdAt,
+      claimedAt: run.claimedAt,
+      completedAt: run.completedAt,
+    }));
+  res.json({ hooks: hooks.map((hook) => publicAutomationHook(req, hook)), outcomes: work });
+}));
+
+app.post("/account/automation-hooks", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const templateInstruction = String(req.body?.templateInstruction ?? "").trim();
+  const routingDefault = String(req.body?.routingDefault ?? "").trim();
+  if (!templateInstruction || templateInstruction.length > 2_000) {
+    return res.status(400).json({ code: "invalid_request", error: "Template instruction must be 1–2000 characters." });
+  }
+  if (routingDefault && !/^[A-Za-z0-9._-]+$/.test(routingDefault)) {
+    return res.status(400).json({ code: "invalid_request", error: "Routing default contains invalid characters." });
+  }
+  let hook = await store.createInboundHook(account.id, "automation");
+  hook = (await store.updateInboundHook(account.id, hook.id, { templateInstruction, routingDefault })) ?? hook;
+  res.status(201).json({ ...publicAutomationHook(req, hook), secret: hook.secret });
+}));
+
+app.patch("/account/automation-hooks/:id", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const patch: { enabled?: boolean; templateInstruction?: string; routingDefault?: string } = {};
+  if (typeof req.body?.enabled === "boolean") patch.enabled = req.body.enabled;
+  if (typeof req.body?.templateInstruction === "string") {
+    const value = req.body.templateInstruction.trim();
+    if (!value || value.length > 2_000) return res.status(400).json({ code: "invalid_request", error: "Invalid template instruction." });
+    patch.templateInstruction = value;
+  }
+  if (typeof req.body?.routingDefault === "string") {
+    const value = req.body.routingDefault.trim();
+    if (value && !/^[A-Za-z0-9._-]+$/.test(value)) return res.status(400).json({ code: "invalid_request", error: "Invalid routing default." });
+    patch.routingDefault = value;
+  }
+  const hook = await store.updateInboundHook(account.id, String(req.params.id), patch);
+  if (!hook || hook.kind !== "automation") return res.status(404).json({ code: "not_found", error: "Unknown automation hook." });
+  res.json(publicAutomationHook(req, hook));
+}));
+
+app.post("/account/automation-hooks/:id/rotate", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const existing = await store.getInboundHook(String(req.params.id));
+  if (!existing || existing.accountId !== account.id || existing.kind !== "automation") {
+    return res.status(404).json({ code: "not_found", error: "Unknown automation hook." });
+  }
+  const secret = randomBytes(32).toString("base64url");
+  const hook = await store.setInboundHookSecret(account.id, existing.id, secret);
+  res.json({ ...publicAutomationHook(req, hook), secret });
+}));
+
+// Revoke invalidates the secret and leaves a disabled tombstone so callers get
+// the stable `disabled` result rather than an ambiguous 404.
+app.delete("/account/automation-hooks/:id", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const existing = await store.getInboundHook(String(req.params.id));
+  if (!existing || existing.accountId !== account.id || existing.kind !== "automation") {
+    return res.status(404).json({ code: "not_found", error: "Unknown automation hook." });
+  }
+  await store.setInboundHookSecret(account.id, existing.id, randomBytes(32).toString("base64url"));
+  await store.updateInboundHook(account.id, existing.id, { enabled: false });
+  res.json({ ok: true });
+}));
+
 // Node-side setup helper. The CLI only has a node enrollment token after
 // `bivy relay:setup`; let that node create an account-scoped inbound hook so
 // GitHub issue setup can be completed from the machine that will run the work,
@@ -1605,7 +1769,148 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     claimedAt: w.claimedAt,
     claimedByNodeId: w.claimedByNodeId,
     completedAt: w.completedAt,
+    triggerId: w.triggerId,
+    triggerKind: w.triggerKind,
+    definitionId: w.definitionId,
+    attempt: w.attempt,
+    targetKind: w.targetKind,
+    startedAt: w.startedAt,
+    output: w.output,
   })));
+}));
+
+// Trigger-neutral automation API. The work-item endpoints below remain
+// compatibility adapters over these same rows.
+app.get("/account/automations", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listAutomationDefinitions(client.accountId));
+}));
+
+app.post("/account/automations", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name) return res.status(400).json({ error: "name is required" });
+  let schedule;
+  try {
+    schedule = normalizeSchedule(req.body?.schedule);
+  } catch (error) {
+    return res.status(400).json({ error: (error as Error).message });
+  }
+  const enabled = req.body?.enabled !== false;
+  const nextRunAt = enabled ? nextOccurrence(schedule, new Date(Date.now() - 1)) : undefined;
+  if (enabled && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
+  const definition = await store.createAutomationDefinition(client.accountId, {
+    name,
+    templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : undefined,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined,
+    model: typeof req.body?.model === "string" ? req.body.model : undefined,
+    nodeLabel: typeof req.body?.nodeLabel === "string" ? req.body.nodeLabel : undefined,
+    ephemeral: typeof req.body?.ephemeral === "boolean" ? req.body.ephemeral : undefined,
+    approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : undefined,
+    sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined,
+    enabled,
+    schedule,
+    nextRunAt,
+  });
+  res.status(201).json(definition);
+}));
+
+app.put("/account/automations/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
+  if (!current) return res.status(404).json({ error: "Automation not found" });
+  let schedule = current.schedule;
+  if (req.body?.schedule !== undefined) {
+    try {
+      schedule = normalizeSchedule(req.body.schedule);
+    } catch (error) {
+      return res.status(400).json({ error: (error as Error).message });
+    }
+  }
+  if (!schedule) return res.status(400).json({ error: "schedule is required" });
+  const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : current.enabled;
+  const scheduleChanged = req.body?.schedule !== undefined;
+  // Recompute the occurrence when (re-)enabling or when the schedule changed;
+  // otherwise keep the current occurrence (or clear it while disabled).
+  const recompute = enabled && (scheduleChanged || !current.enabled);
+  const nextRunAt = recompute
+    ? nextOccurrence(schedule, new Date(Date.now() - 1))
+    : enabled ? current.nextRunAt : undefined;
+  // Mirror the create-time guard: an enabled definition whose only occurrence is
+  // in the past would sit enabled but never run.
+  if (recompute && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
+  const patch = {
+    name: typeof req.body?.name === "string" ? req.body.name.trim() || current.name : current.name,
+    templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : current.templateCiphertext,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() || undefined : current.runtimeId,
+    model: typeof req.body?.model === "string" ? req.body.model.trim() || undefined : current.model,
+    nodeLabel: typeof req.body?.nodeLabel === "string" ? req.body.nodeLabel.trim() || undefined : current.nodeLabel,
+    approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : current.approvalMode,
+    sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : current.sandbox,
+    enabled,
+    schedule,
+    nextRunAt,
+  };
+  res.json(await store.updateAutomationDefinition(client.accountId, current.id, patch));
+}));
+
+app.delete("/account/automations/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  if (!(await store.deleteAutomationDefinition(client.accountId, String(req.params.id)))) {
+    return res.status(404).json({ error: "Automation not found" });
+  }
+  res.status(204).end();
+}));
+
+app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const definition = await store.getAutomationDefinition(client.accountId, String(req.params.id));
+  if (!definition) return res.status(404).json({ error: "Automation not found" });
+  const run = await store.enqueueAutomationRun(client.accountId, {
+    source: "manual",
+    triggerKind: "manual",
+    title: definition.name,
+    body: definition.templateCiphertext,
+    definitionId: definition.id,
+    label: definition.nodeLabel,
+  });
+  void notifyRelaysWorkAvailable(client.accountId, { id: run.id, label: run.routing.nodeLabel });
+  res.status(201).json(run);
+}));
+
+app.get("/account/automation-runs", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listAutomationRuns(client.accountId, Number(req.query.limit) || 50));
+}));
+
+app.get("/account/automation-triggers", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listTriggerEvents(client.accountId, Number(req.query.limit) || 50));
+}));
+
+app.post("/account/automation-runs", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
+  if (!title) return res.status(400).json({ error: "title is required" });
+  const run = await store.enqueueAutomationRun(client.accountId, {
+    source: "manual",
+    triggerKind: "manual",
+    title,
+    label: typeof req.body?.label === "string" ? req.body.label : undefined,
+    definitionId: typeof req.body?.definitionId === "string" ? req.body.definitionId : undefined,
+    dedupeKey: typeof req.body?.sourceKey === "string" ? req.body.sourceKey : undefined,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined,
+    model: typeof req.body?.model === "string" ? req.body.model : undefined,
+  });
+  res.status(201).json(run);
 }));
 
 // Manually dispatch a *pending* queue item to a chosen node + agent (the queue
@@ -1692,6 +1997,77 @@ app.delete("/account/work-items/:id", asyncHandler(async (req, res) => {
 // `/webhooks/github_app/<id>`. Registering only the `github` path made every
 // GitHub App delivery hit a non-existent route and 404 before reaching this
 // handler — so no app-driven issue/comment ever enqueued.
+const automationRateWindows = new Map<string, { startedAt: number; count: number }>();
+function consumeAutomationRate(key: string, limit: number, now = Date.now()): boolean {
+  const current = automationRateWindows.get(key);
+  if (!current || now - current.startedAt >= 60_000) {
+    automationRateWindows.set(key, { startedAt: now, count: 1 });
+    return true;
+  }
+  current.count += 1;
+  return current.count <= limit;
+}
+
+app.post("/webhooks/automation/:id", asyncHandler(async (req, res) => {
+  const hook = await store.getInboundHook(String(req.params.id));
+  if (!hook || hook.kind !== "automation") return res.status(404).json({ code: "not_found" });
+  if (hook.enabled === false) return res.status(410).json({ code: "disabled" });
+  if (!consumeAutomationRate(`hook:${hook.id}`, 60)) {
+    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
+  }
+  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!verifyAutomationSignature(hook.secret, raw, req.headers["x-bivy-signature-256"] as string | undefined)) {
+    return res.status(401).json({ code: "invalid_signature" });
+  }
+  if (!consumeAutomationRate(`account:${hook.accountId}`, 300)) {
+    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
+  }
+  const idempotencyKey = String(req.headers["x-bivy-idempotency-key"] ?? "").trim();
+  if (!idempotencyKey || idempotencyKey.length > 200 || /[^\x21-\x7e]/.test(idempotencyKey)) {
+    return res.status(400).json({ code: "invalid_request", error: "A valid X-Bivy-Idempotency-Key header is required." });
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw.toString("utf8"));
+  } catch {
+    return res.status(400).json({ code: "invalid_request", error: "Invalid JSON." });
+  }
+  const event = parseAutomationEvent(payload);
+  if (!event || !hook.templateInstruction) {
+    return res.status(400).json({ code: "invalid_request", error: "Event does not match automation schema version 1." });
+  }
+  const dedupeKey = `automation:${hook.id}:${idempotencyKey}`;
+  const replay = await store.getAutomationRunBySourceKey(hook.accountId, dedupeKey);
+  if (replay) return res.status(200).json({ code: "duplicate", id: replay.id });
+  const entitlements = await store.entitlements(hook.accountId);
+  if (!entitlements.workQueueEnabled) return res.status(429).json({ code: "quota_exhausted" });
+  const allowance = await runAllowance(hook.accountId);
+  if (allowance.exhausted) {
+    return res.status(429).json({ code: "quota_exhausted", limit: allowance.limit, used: allowance.used });
+  }
+  const route = event.routing || hook.routingDefault;
+  const label = route ? `bivy/${route}` : "bivy";
+  const result = await store.enqueueAutomationRunWithResult(hook.accountId, {
+    label,
+    source: `automation:${hook.id}`,
+    triggerKind: "webhook",
+    title: event.title || event.instruction.slice(0, 200),
+    body: renderAutomationInstruction(hook.templateInstruction, event),
+    url: event.sourceUrl,
+    externalId: event.externalId,
+    dedupeKey,
+    defaultRouted: !route,
+  });
+  if (!result.created) {
+    return res.status(200).json({ code: "duplicate", id: result.run.id });
+  }
+  void notifyRelaysWorkAvailable(hook.accountId, {
+    id: result.run.id,
+    label: result.run.routing.nodeLabel,
+  });
+  res.status(202).json({ code: "accepted", id: result.run.id, label });
+}));
+
 app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(async (req, res) => {
   const hook = await store.getInboundHook(String(req.params.id));
   if (!hook || (hook.kind !== "github" && hook.kind !== "github_app")) return res.status(404).json({ error: "Unknown hook" });
@@ -1841,8 +2217,39 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
 
 app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  await store.completeWorkItem(node.accountId, String(req.params.id));
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id) {
+    return res.status(409).json({ error: "Run is not owned by this node" });
+  }
+  await store.completeWorkItem(node.accountId, id);
+  // Compatibility for older nodes that skip the explicit /running transition.
+  await store.recordRunStart(node.accountId, `automation:${id}`);
   res.json({ ok: true });
+}));
+
+app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id || current.status !== "claimed") {
+    return res.status(409).json({ error: "Run is not claimed by this node" });
+  }
+  const run = await store.transitionAutomationRun(node.accountId, id, "running");
+  await store.recordRunStart(node.accountId, `automation:${id}`);
+  res.json({ ok: true, run });
+}));
+
+app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id) {
+    return res.status(409).json({ error: "Run is not owned by this node" });
+  }
+  const run = await store.transitionAutomationRun(node.accountId, id, "failed");
+  if (!run) return res.status(404).json({ error: "Unknown run" });
+  res.json({ ok: true, run });
 }));
 
 // The node mints a short-lived, node-scoped client grant to link a remote
@@ -1980,8 +2387,15 @@ app.post("/node/authorize-client", requireNode, asyncHandler(async (req, res) =>
   const client = await store.resolveClient(token);
   if (!client || client.accountId !== node.accountId || (client.nodeId && client.nodeId !== node.id))
     return res.status(403).json({ ok: false, error: "This device isn't authorized for this node." });
+  // Transient CLI/relay clients (`bivy run --node`, sibling replicas, probes)
+  // pair the same way a phone/browser does, but they are short-lived tool
+  // connections — not user devices. Registering them as paired devices spams
+  // the account's "Signed-in devices" list (each fresh keypair = a new row) and
+  // never gets cleaned up. When the node marks the pairing ephemeral, authorize
+  // it (deliver the room key) but skip the durable device record.
+  const ephemeral = req.body?.ephemeral === true;
   const devicePublicKeyB64 = String(req.body?.devicePublicKeyB64 ?? "").trim();
-  if (devicePublicKeyB64) {
+  if (devicePublicKeyB64 && !ephemeral) {
     try {
       await store.registerPairedDevice(node.accountId, devicePublicKeyB64, String(req.body?.label ?? "Device"));
     } catch (err) {
@@ -2185,6 +2599,9 @@ app.post("/internal/node-status", requireRelay, asyncHandler(async (req, res) =>
 
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   const status = (error as { status?: number })?.status ?? 500;
+  if (status === 413 && req.path.startsWith("/webhooks/automation/")) {
+    return res.status(413).json({ code: "payload_too_large" });
+  }
   const message = String(error instanceof Error ? error.message : error);
   // Deliberate client errors (4xx) carry an explicit status and a message meant
   // for the caller (e.g. "Node limit reached"). Anything else is an unexpected
