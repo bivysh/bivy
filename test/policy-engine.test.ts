@@ -34,6 +34,13 @@ check("autonomous mode allows plain bash", () => {
   assert.equal(policy.decideToolCall("/ws", "bash", { command: "npm test" }).decision, "allow");
 });
 
+check("unrestricted mode bypasses approvals and the hard floor", () => {
+  const policy = new PolicyEngine({ mode: "always", unrestricted: true, isRiskyIntegration: () => true });
+  assert.equal(policy.decideToolCall("/ws", "bash", { command: "curl http://x" }).decision, "allow");
+  assert.equal(policy.decideToolCall("/ws", "bash", { command: "rm -rf /" }).decision, "allow");
+  assert.equal(policy.decideToolCall("/ws", "write", { path: "../../etc/passwd" }).decision, "allow");
+});
+
 check("attaches a risk category to every decision", () => {
   const policy = new PolicyEngine({ mode: "autonomous", isRiskyIntegration: noRisky });
   assert.ok(typeof policy.decideToolCall("/ws", "bash", { command: "ls" }).risk === "string");

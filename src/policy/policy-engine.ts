@@ -12,6 +12,10 @@ export interface PolicyDecision {
 export interface PolicyEngineOptions {
   mode: ApprovalMode;
   isRiskyIntegration?: (toolName: string) => boolean;
+  /** Explicit full-access opt-out: allow every tool without applying Bivy's
+   * approval or containment policy. Interaction tools are handled before the
+   * policy engine, and a paused session may still ask at the caller. */
+  unrestricted?: boolean;
 }
 
 /** Runtime-agnostic policy decision layer. Strong runtimes call this before tools.
@@ -21,6 +25,9 @@ export class PolicyEngine {
   constructor(private readonly options: PolicyEngineOptions) {}
 
   decideToolCall(workspace: string, toolName: string, input: unknown): PolicyDecision {
+    const risk = riskCategoryForTool(toolName);
+    if (this.options.unrestricted) return { decision: "allow", risk };
+
     const base = guardToolCall(
       workspace,
       toolName,
@@ -28,7 +35,6 @@ export class PolicyEngine {
       this.options.mode,
       this.options.isRiskyIntegration ?? (() => false),
     );
-    const risk = riskCategoryForTool(toolName);
     return { ...base, risk };
   }
 }
