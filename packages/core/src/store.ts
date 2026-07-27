@@ -465,6 +465,9 @@ export interface AppState {
   /** Live `bivy run` PTYs on the selected node. */
   runTerminals: RunTerminalSummary[];
   activeSessionId: string | null;
+  /** Runtime that actually owns the active session. Unlike selectedAgentId,
+   *  this is session-scoped and comes from canonical session history. */
+  activeRuntimeId: string | null;
   activeTitle: string;
   /** Sessions currently driven by their interactive TUI (single-writer): chat
    *  for these is locked until the TUI exits. Fed by `terminal.tui` broadcasts
@@ -621,6 +624,7 @@ export function initialState(): AppState {
     sessions: [],
     runTerminals: [],
     activeSessionId: null,
+    activeRuntimeId: null,
     activeTitle: "New session",
     tuiSessions: [],
     github: { issueUrl: null, prUrl: null, branch: null, repo: null, prs: [] },
@@ -1034,6 +1038,7 @@ export class SessionStore {
     const known = this.state.sessions.find((s) => s.sessionId === sessionId);
     this.set({
       activeSessionId: sessionId,
+      activeRuntimeId: known?.runtimeId ?? null,
       // Opening a row is how the user "sees" it — stamp lastSeenAt right away
       // so a finished-but-unseen row's indicator clears the instant they look,
       // rather than waiting on a node round-trip to confirm anything.
@@ -1349,6 +1354,7 @@ export class SessionStore {
     this.usersBeforePending = 0;
     this.set({
       activeSessionId: null,
+      activeRuntimeId: null,
       activeTitle: "New session",
       github: { issueUrl: null, prUrl: null, branch: null, repo: null, prs: [] },
       transcript: [],
@@ -1541,6 +1547,7 @@ export class SessionStore {
     this.usersBeforePending = 0;
     this.set({
       activeSessionId: null,
+      activeRuntimeId: null,
       activeTitle: "New session",
       github: { issueUrl: null, prUrl: null, branch: null, repo: null, prs: [] },
       transcript: [],
@@ -2430,6 +2437,7 @@ export class SessionStore {
     // sent. They're cleared as the node echoes each one (session.user_message).
     this.set({
       activeSessionId: sessionId,
+      activeRuntimeId: e.runtimeId ? String(e.runtimeId) : this.state.activeRuntimeId,
       activeTitle: e.name || this.state.activeTitle,
       currentAgentName: e.agentName || this.state.currentAgentName,
       github: githubContext(e),

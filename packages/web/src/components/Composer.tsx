@@ -146,7 +146,7 @@ export function Composer({
   // never opens a picker that can only ever say "No models available." Anything
   // not explicitly false (including runtimes that haven't loaded yet) stays
   // interactive, so we never disable it for a capable agent.
-  const currentRuntime = state.runtimes.find((r) => r.id === state.selectedAgentId);
+  const currentRuntime = state.runtimes.find((r) => r.id === (state.activeRuntimeId ?? state.selectedAgentId));
   const currentCaps = currentRuntime?.capabilities as
     | { modelSelection?: boolean; commands?: SlashCommand[] }
     | undefined;

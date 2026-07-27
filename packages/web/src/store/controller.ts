@@ -1600,20 +1600,24 @@ export class AppController {
       this.installAgent(rt.id);
       return;
     }
-    // Changing the agent never creates a session — a live session's runtime
-    // can't be swapped in place, so we drop back to a fresh local draft. The
-    // real session (bound to this agent) is created by the next sendPrompt.
-    // Reset *before* selecting so resetActiveSession() (which clears
-    // selectedAgentId) can't wipe the pick we're about to apply.
-    const activeBeforeSwitch = this.store.getState().activeSessionId;
-    if (activeBeforeSwitch) {
-      this.seedAgentHandoffDraft(rt);
+    const state = this.store.getState();
+    const activeSessionId = state.activeSessionId;
+    if (activeSessionId) {
+      // Agent handoff is a real cross-runtime fork, not a client-side summary in
+      // a blank draft. The shared fork path carries normalized history, repo and
+      // dirty files, creates the target runtime session, and opens it.
+      const sourceAgentId = state.activeRuntimeId
+        ?? state.sessions.find((session) => session.sessionId === activeSessionId)?.runtimeId;
       this.pendingPrompt = null;
       this.pendingFollowups = [];
-      this.store.resetActiveSession();
-      // The live session is gone; we're on a fresh draft now — keep the URL honest.
-      navigate({ kind: "new" });
+      void this.forkSession(activeSessionId, {
+        agentId: rt.id,
+        sourceAgentId,
+        retireSource: false,
+      }).catch((error) => this.store.setError(error instanceof Error ? error.message : String(error)));
+      return;
     }
+
     this.store.setSelectedAgentLocal(rt.id);
     this.local.setLastChoice({ agentId: rt.id });
     // Tell the node to switch its default runtime. Do NOT request models here:
@@ -1623,60 +1627,6 @@ export class AppController {
     // The node broadcasts `runtime.updated` once the switch actually lands, and
     // that event drives the fresh models.list (see maybeRefreshModelsForRuntime).
     this.send({ kind: "runtime.select", id: rt.id });
-  }
-
-  private seedAgentHandoffDraft(target: RuntimeInfo): void {
-    const s = this.store.getState();
-    const sessionId = s.activeSessionId;
-    if (!sessionId) return;
-    const summary = this.sessionHandoffSummary(target);
-    try {
-      localStorage.setItem("bivy.composer.new", summary);
-    } catch {
-      // Draft persistence is best-effort; the agent switch still works.
-    }
-  }
-
-  private sessionHandoffSummary(target: RuntimeInfo): string {
-    const s = this.store.getState();
-    const sessionId = s.activeSessionId || "unknown";
-    const session = s.sessions.find((x) => x.sessionId === sessionId);
-    const title = session?.name || s.activeTitle || "Untitled session";
-    const sourceAgent = session?.agentName || s.currentAgentName || s.selectedAgentId || "previous agent";
-    const targetAgent = String(target.displayName || target.name || target.id || "new agent");
-    const model = s.currentModel?.label || s.currentModel?.id;
-    const transcriptUrl = `${location.origin}${routePath({ kind: "session", id: sessionId })}`;
-    const maybeUnavailable = s.transcript.some((e) =>
-      e.role === "error" || /\b(usage limit|rate limit|quota|429|limit exceeded|authentication|unauthori[sz]ed)\b/i.test(e.text || ""),
-    );
-    const recent = s.transcript
-      .filter((e) => (e.role === "user" || e.role === "assistant" || e.role === "error") && !e.tool && (e.text || "").trim())
-      .slice(-10)
-      .map((e) => `- ${e.role}: ${this.truncateForHandoff(e.text, 700)}`)
-      .join("\n");
-    const context = [
-      `I am handing off/cloning an active Bivy session from ${sourceAgent} to ${targetAgent}.`,
-      `Original session: ${title} (${sessionId})`,
-      `Original transcript: ${transcriptUrl}`,
-      model ? `Current model before handoff: ${model}` : null,
-      s.draftRepo ? `Repository: ${s.draftRepo}` : null,
-      session?.branch ? `Branch: ${session.branch}` : null,
-      session?.prUrl ? `PR: ${session.prUrl}` : null,
-      maybeUnavailable
-        ? "The previous agent may be unavailable (limit/auth/quota/transport issue). Use the original transcript link above if you need more context."
-        : "Use the original transcript link above if this summary is missing anything.",
-      "",
-      "Recent transcript summary:",
-      recent || "- No transcript content was loaded in this client yet.",
-      "",
-      "Please continue from here in a new cloned session.",
-    ].filter((line): line is string => line != null);
-    return context.join("\n");
-  }
-
-  private truncateForHandoff(text: string, max: number): string {
-    const compact = String(text || "").replace(/\s+/g, " ").trim();
-    return compact.length > max ? `${compact.slice(0, Math.max(0, max - 1))}…` : compact;
   }
 
   installAgent(id: string): void {

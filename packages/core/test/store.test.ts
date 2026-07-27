@@ -972,6 +972,22 @@ describe("SessionStore", () => {
     expect(store.getState().activeTitle).toBe("Ship the PR");
   });
 
+  it("tracks the active session runtime independently from the global agent selection", () => {
+    const store = new SessionStore();
+    store.setSelectedAgentLocal("pi");
+    store.apply({ type: "sessions.list", sessions: [{ id: "s2", name: "Claude session", runtimeId: "pi" }] });
+    store.beginOpen("s2");
+    expect(store.getState().activeRuntimeId).toBe("pi");
+
+    // Canonical history wins over a stale list row/global last-used agent.
+    store.apply({ type: "session.history", sessionId: "s2", runtimeId: "claude-code-sdk", agentName: "Claude Code SDK", messages: [] });
+    expect(store.getState().activeRuntimeId).toBe("claude-code-sdk");
+    expect(store.getState().selectedAgentId).toBe("pi");
+
+    store.resetActiveSession();
+    expect(store.getState().activeRuntimeId).toBeNull();
+  });
+
   it("beginOpen primes the GitHub pill from the known row so it shows without waiting on history", () => {
     const store = new SessionStore();
     store.apply({
