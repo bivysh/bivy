@@ -280,6 +280,19 @@ export async function getIssue(cfg: GitHubTaskConfig, issueNumber: number): Prom
   return parseIssue(raw);
 }
 
+/** Fetch a triggering issue comment's body directly from GitHub (issue #153) —
+ *  the control plane no longer retains it, only the comment URL, whose stable
+ *  `issuecomment-<id>` anchor is enough for the authorized, claiming node to
+ *  retrieve the live text just in time. */
+export async function getIssueCommentBody(cfg: GitHubTaskConfig, url: string | undefined): Promise<string | undefined> {
+  const id = url?.match(/#issuecomment-(\d+)$/)?.[1];
+  if (!id) return undefined;
+  const res = await gh(cfg, "GET", `/issues/comments/${id}`);
+  if (!res.ok) return undefined;
+  const raw = (await res.json().catch(() => undefined)) as { body?: unknown } | undefined;
+  return typeof raw?.body === "string" ? raw.body : undefined;
+}
+
 export async function addLabel(cfg: GitHubTaskConfig, issueNumber: number, label: string): Promise<void> {
   await gh(cfg, "POST", `/issues/${issueNumber}/labels`, { labels: [label] });
 }

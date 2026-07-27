@@ -276,6 +276,72 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal((await store.listWorkItems(acct.id)).find((w) => w.id === a.id)?.status, "succeeded");
   });
 
+  // Issue #153: every run gets a readable trigger→claim→attempt→outcome
+  // timeline automatically (no node cooperation required), and a node can layer
+  // its own sanitized evidence (routing reason, output refs, checks) on top —
+  // including a retried/fallback run showing each attempt with its reason.
+  await test("run evidence: baseline timeline is automatic; a node can append routing/output/checks/retry-fallback events", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-evidence@example.com");
+    const { node } = await store.enrollNode(acct.id, "node-evidence", "Laptop");
+    const run = await store.enqueueWorkItem(acct.id, { label: "bivy", source: "github:issue", title: "Flaky", repo: "o/r", issueNumber: 42, url: "https://github.com/o/r/issues/42" });
+    assert.equal(run.events?.[0]?.kind, "triggered");
+
+    assert.ok(await store.claimWorkItem(acct.id, node.id, run.id));
+    const afterClaim = await store.getAutomationRun(acct.id, run.id);
+    assert.deepEqual(afterClaim?.events?.map((e) => e.kind), ["triggered", "claimed"]);
+
+    // The node reports why it chose this runtime, then hits a transient error
+    // and falls back to a different one (attempt 1 -> 2), each with its reason.
+    await store.appendRunEvidence(acct.id, run.id, {
+      routingReason: "queue label",
+      events: [{ at: "2026-07-27T00:00:00.000Z", kind: "retry", summary: "Primary model returned a rate-limit error; retrying.", attempt: 1, status: "failed" }],
+    });
+    await store.appendRunEvidence(acct.id, run.id, {
+      routingReason: "fallback after rate limit",
+      output: { branch: "bivy/issue-42" },
+      events: [{ at: "2026-07-27T00:00:05.000Z", kind: "fallback", summary: "Falling back to codex/gpt-5 after the rate limit.", attempt: 2 }],
+    });
+    await store.appendRunEvidence(acct.id, run.id, {
+      output: { prUrl: "https://github.com/o/r/pull/9", checkpoint: "abc123", commit: "def456" },
+      checks: [{ name: "unit tests", commandHash: "sha256:aaa", status: "passed", exitCode: 0 }],
+      events: [{ at: "2026-07-27T00:01:00.000Z", kind: "pull_request", summary: "Pull request opened.", attempt: 2 }],
+    });
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "running"))?.status, "running");
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "succeeded"))?.status, "succeeded");
+
+    const final = await store.getAutomationRun(acct.id, run.id);
+    // Routing reason: last report wins (the fallback explanation, not the stale
+    // original one) — merged, not clobbered by unrelated later patches.
+    assert.equal(final?.routing.nodeLabel, "bivy");
+    assert.equal(final?.routingReason, "fallback after rate limit");
+    assert.equal(final?.output?.branch, "bivy/issue-42");
+    assert.equal(final?.output?.prUrl, "https://github.com/o/r/pull/9");
+    assert.equal(final?.output?.checkpoint, "abc123");
+    assert.equal(final?.output?.commit, "def456");
+    assert.deepEqual(final?.checks?.map((c) => c.status), ["passed"]);
+    const kinds = final?.events?.map((e) => e.kind);
+    assert.deepEqual(kinds, ["triggered", "claimed", "retry", "fallback", "pull_request", "attempt_started", "completed"]);
+    const retryEvent = final?.events?.find((e) => e.kind === "retry");
+    assert.equal(retryEvent?.attempt, 1);
+    assert.match(retryEvent?.summary ?? "", /rate-limit/);
+    const fallbackEvent = final?.events?.find((e) => e.kind === "fallback");
+    assert.equal(fallbackEvent?.attempt, 2);
+    assert.match(fallbackEvent?.summary ?? "", /falling back/i);
+
+    // Same guarantee via the legacy work-item projection, and a control-plane
+    // row must never contain a prompt/transcript/diff/secret/token/raw-output
+    // field, no matter how it got there.
+    const asWorkItem = (await store.listWorkItems(acct.id)).find((w) => w.id === run.id);
+    assert.equal(asWorkItem?.events?.length, final?.events?.length);
+    const serialized = JSON.stringify(asWorkItem);
+    for (const forbidden of ["prompt", "transcript", "diff", "fileContent", "toolOutput", "secret", "token", "rawCommand", "stdout", "stderr"]) {
+      assert.doesNotMatch(serialized, new RegExp(`"${forbidden}"\\s*:`, "i"));
+    }
+
+    // An unknown run is a no-op, not an error.
+    assert.equal(await store.appendRunEvidence(acct.id, "work_nope", { routingReason: "x" }), undefined);
+  });
+
   await test("automation runs: trigger-neutral lifecycle and concurrent claim", async (store) => {
     const acct = await store.findOrCreateAccount("contract-automation@example.com");
     const { node: a } = await store.enrollNode(acct.id, "auto-a", "A");

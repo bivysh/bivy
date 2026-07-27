@@ -38,6 +38,9 @@ import {
   type AutomationRunStatus,
   type AutomationTriggerKind,
   type TriggerEvent,
+  type RunEvidenceEvent,
+  type RunCheck,
+  type RunEvidencePatch,
   entitlementsForPlan,
   hashToken,
   disambiguateNodeName,
@@ -449,6 +452,16 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS output JSONB;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS approval_mode TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sandbox TEXT;
+      -- Privacy-safe run evidence (issue #153): why this node/runtime was chosen,
+      -- declared-check results, and an ordered event timeline. All three are
+      -- allowlisted/bounded by run-evidence.ts before they ever reach here.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS routing_reason TEXT;
+      -- Explicit ::jsonb cast on the default (not just relying on the column
+      -- type): without it, pg-mem — the in-memory Postgres the test suite runs
+      -- against — stores the literal two-character text "[]" instead of an
+      -- empty JSON array, which then silently corrupts every array spread.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS checks JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS events JSONB NOT NULL DEFAULT '[]'::jsonb;
       INSERT INTO trigger_events (id, account_id, kind, created_at)
         SELECT 'legacy:' || id, account_id,
           CASE WHEN source LIKE 'github:%' THEN 'github'
@@ -1606,9 +1619,16 @@ export class PostgresStore implements MeshStore {
     // Two partial-unique constraints can fire: the per-delivery dedupe key and the
     // per-issue collapse key (only against the still-pending row). ON CONFLICT DO
     // NOTHING covers both; on either conflict we return the existing item.
+    const triggeredEvent: RunEvidenceEvent = {
+      at: new Date().toISOString(),
+      kind: "triggered",
+      summary: "Automation run created.",
+      ref: input.repo && input.issueNumber !== undefined ? `${input.repo}#${input.issueNumber}` : undefined,
+      url: input.url,
+    };
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox, events)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::jsonb)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -1636,6 +1656,7 @@ export class PostgresStore implements MeshStore {
         input.ephemeral ?? definition?.ephemeral ?? null,
         input.approvalMode ?? definition?.approvalMode ?? null,
         input.sandbox ?? definition?.sandbox ?? null,
+        JSON.stringify([triggeredEvent]),
       ],
     );
     if (rows[0]) return { run: mapAutomationRun(rows[0]), created: true };
@@ -1684,6 +1705,24 @@ export class PostgresStore implements MeshStore {
     };
     if (from[status].length === 0) return undefined;
     const terminal = ["succeeded", "failed", "cancelled"].includes(status);
+    // A lifecycle transition is itself timeline-worthy (issue #153) — record it
+    // even when the node never calls the dedicated evidence endpoint, so every
+    // run has at least a baseline trigger→claim→attempt→outcome timeline.
+    const eventForStatus: Partial<Record<AutomationRunStatus, { kind: RunEvidenceEvent["kind"]; summary: string }>> = {
+      running: { kind: "attempt_started", summary: "Execution started on the assigned node." },
+      needs_attention: { kind: "needs_attention", summary: "Run needs manual attention." },
+      succeeded: { kind: "completed", summary: "Automation run completed successfully." },
+      failed: { kind: "completed", summary: "Automation run failed. Detailed diagnostics remain on the node." },
+      cancelled: { kind: "cancelled", summary: "Automation run cancelled." },
+    };
+    const event = eventForStatus[status];
+    // No jsonb `||` concatenation here (deliberately): pg-mem — the in-memory
+    // Postgres the whole test suite runs against — mis-evaluates the jsonb
+    // concatenation operator inside an UPDATE SET (confirmed against real
+    // Postgres semantics; see pg-mem issue tracker). A plain read-then-write
+    // is a two-query round trip instead of one atomic statement, but this event
+    // append is a best-effort timeline entry, not the transition's atomicity
+    // guard (the conditional `status = ANY(from[status])` above already is).
     const { rows } = await this.query(
       `UPDATE work_items SET status = $3,
        started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
@@ -1692,7 +1731,36 @@ export class PostgresStore implements MeshStore {
        WHERE account_id = $1 AND id = $2 AND status = ANY($6) RETURNING *`,
       [accountId, id, status, terminal, output ? JSON.stringify(output) : null, from[status]],
     );
-    return rows[0] ? mapAutomationRun(rows[0]) : undefined;
+    if (!rows[0]) return undefined;
+    if (!event) return mapAutomationRun(rows[0]);
+    const events = [...(rows[0].events ?? []), { at: new Date().toISOString(), ...event }].slice(-100);
+    const { rows: withEvent } = await this.query(
+      `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
+      [accountId, id, JSON.stringify(events)],
+    );
+    return mapAutomationRun(withEvent[0] ?? rows[0]);
+  }
+
+  /** Issue #153 — record a sanitized, node-reported evidence patch against a
+   *  run it claimed. `checks`/`events` are appended to existing history;
+   *  `routingReason`/`output` fields are merged, last-write-wins per field.
+   *  Read-then-write (not an atomic jsonb `||` UPDATE) — see the comment in
+   *  transitionAutomationRun for why; a lost update here just drops one
+   *  low-frequency evidence report, never the run's actual status. */
+  async appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch): Promise<AutomationRun | undefined> {
+    const { rows } = await this.query(`SELECT * FROM work_items WHERE account_id = $1 AND id = $2`, [accountId, id]);
+    if (!rows[0]) return undefined;
+    const current = rows[0];
+    const routingReason = patch.routingReason ?? current.routing_reason ?? undefined;
+    const output = patch.output ? { ...(current.output ?? {}), ...patch.output } : (current.output ?? {});
+    const checks = patch.checks ? [...(current.checks ?? []), ...patch.checks].slice(-50) : (current.checks ?? []);
+    const events = patch.events ? [...(current.events ?? []), ...patch.events].slice(-100) : (current.events ?? []);
+    const { rows: updated } = await this.query(
+      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb
+       WHERE account_id = $1 AND id = $2 RETURNING *`,
+      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(events)],
+    );
+    return updated[0] ? mapAutomationRun(updated[0]) : undefined;
   }
 
   async rerouteDefaultRoutedPending(accountId: string, label: string): Promise<WorkItem[]> {
@@ -1749,7 +1817,17 @@ export class PostgresStore implements MeshStore {
        RETURNING *`,
       [accountId, id, nodeId],
     );
-    return rows[0] ? mapWorkItem(rows[0]) : undefined;
+    if (!rows[0]) return undefined;
+    // Best-effort timeline entry (issue #153) — read-then-write, same rationale
+    // as transitionAutomationRun; the claim's atomicity is already guaranteed
+    // above and does not depend on this second query.
+    const claimedEvent: RunEvidenceEvent = { at: new Date().toISOString(), kind: "claimed", summary: "Run claimed by an eligible node.", ref: nodeId };
+    const events = [...(rows[0].events ?? []), claimedEvent].slice(-100);
+    const { rows: withEvent } = await this.query(
+      `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
+      [accountId, id, JSON.stringify(events)],
+    );
+    return mapWorkItem(withEvent[0] ?? rows[0]);
   }
 
   async recordRunStart(accountId: string, runKey: string): Promise<void> {
@@ -1832,6 +1910,18 @@ function mapHook(row: any): InboundHook {
   };
 }
 
+/** Shared evidence-field projection (issue #153) for both mapWorkItem and
+ *  mapAutomationRun. Defensively re-bounds on read (in addition to the bounds
+ *  already enforced at write time by run-evidence.ts) so a row written by an
+ *  older/looser server version can never balloon a response unbounded. */
+function mapEvidenceFields(row: any): { routingReason?: string; checks: RunCheck[]; events: RunEvidenceEvent[] } {
+  return {
+    routingReason: row.routing_reason ?? undefined,
+    checks: Array.isArray(row.checks) ? row.checks.slice(-50) : [],
+    events: Array.isArray(row.events) ? row.events.slice(-100) : [],
+  };
+}
+
 function mapWorkItem(row: any): WorkItem {
   return {
     id: row.id,
@@ -1866,6 +1956,7 @@ function mapWorkItem(row: any): WorkItem {
     targetSessionId: row.target_session_id ?? undefined,
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
     output: row.output ?? undefined,
+    ...mapEvidenceFields(row),
   };
 }
 
@@ -1944,6 +2035,7 @@ function mapAutomationRun(row: any): AutomationRun {
     claimedAt: row.claimed_at ? new Date(row.claimed_at).toISOString() : undefined,
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
     completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
+    ...mapEvidenceFields(row),
   };
 }
 

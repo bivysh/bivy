@@ -15,6 +15,7 @@ import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
 import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector } from "./metrics.js";
 import { initSentry } from "./instrument.js";
+import { sanitizeEvidencePatch } from "./run-evidence.js";
 import {
   verifyGithubSignature,
   parseGithubIssueEvent,
@@ -1776,6 +1777,16 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     targetKind: w.targetKind,
     startedAt: w.startedAt,
     output: w.output,
+    approvalMode: w.approvalMode,
+    sandbox: w.sandbox,
+    // Privacy-safe run evidence (issue #153): why this node/runtime was picked,
+    // declared-check pass/fail/exit status, and a bounded event timeline. Never
+    // a prompt, transcript, diff, file content, secret, token, or raw command/
+    // tool output — see run-evidence.ts, which is the only thing that ever
+    // writes to these three fields.
+    routingReason: w.routingReason,
+    checks: w.checks,
+    events: w.events,
   })));
 }));
 
@@ -2112,8 +2123,10 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     const item = await store.enqueueWorkItem(hook.accountId, {
       label,
       source: "github:comment",
-      title: comment.title,
-      body: comment.instruction,
+      // Issue #153: the control plane no longer retains issue/comment title or
+      // body — the claiming node fetches the live comment directly from GitHub
+      // (see getIssueCommentBody in src/github-tasks.ts) immediately before use.
+      title: `GitHub issue #${comment.issueNumber}`,
       repo: comment.repo,
       issueNumber: comment.issueNumber,
       url: comment.url,
@@ -2139,8 +2152,10 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   const item = await store.enqueueWorkItem(hook.accountId, {
     label,
     source: "github:issue",
-    title: issue.title,
-    body: issue.body,
+    // Issue #153: the control plane no longer retains issue title/body — the
+    // claiming node fetches the live issue directly from GitHub (getIssue in
+    // src/github-tasks.ts) immediately before use.
+    title: `GitHub issue #${issue.issueNumber}`,
     repo: issue.repo,
     issueNumber: issue.issueNumber,
     url: issue.url,
@@ -2248,6 +2263,32 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
   const run = await store.transitionAutomationRun(node.accountId, id, "failed");
+  if (!run) return res.status(404).json({ error: "Unknown run" });
+  res.json({ ok: true, run });
+}));
+
+// Privacy-safe run evidence (issue #153): the node that claimed a run may
+// report why it routed the way it did, output references (branch/PR/
+// checkpoint/commit/...), declared-check results, and new timeline events
+// (routing changes, retries/fallback, approvals, policy denials, ...).
+// sanitizeEvidencePatch is the ONLY thing standing between an arbitrary node
+// payload and storage — it allowlists every field and rejects anything that
+// looks like a prompt, transcript, diff, file content, secret, token, or raw
+// command/tool output outright (400, not a silent drop).
+app.post("/node/work/:id/evidence", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id) {
+    return res.status(409).json({ error: "Run is not owned by this node" });
+  }
+  let patch;
+  try {
+    patch = sanitizeEvidencePatch(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: (error as Error).message });
+  }
+  const run = await store.appendRunEvidence(node.accountId, id, patch);
   if (!run) return res.status(404).json({ error: "Unknown run" });
   res.json({ ok: true, run });
 }));

@@ -84,6 +84,7 @@ import {
   listOpenLabelledIssues,
   selectActionableIssues,
   getIssue,
+  getIssueCommentBody,
   addLabel,
   removeLabel,
   announcePickup,
@@ -139,6 +140,7 @@ import {
   ControlPlaneTaskPoller,
   resolveControlPlaneTaskConfig,
   type WorkItem as ControlPlaneWorkItem,
+  type EvidencePatch,
 } from "./control-plane-tasks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -4048,6 +4050,10 @@ function withIssueLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 interface RunIssueOverrides {
   runtimeId?: string;
   model?: string;
+  /** Issue #153 — forward a sanitized evidence patch to the hosted control
+   *  plane's run-evidence endpoint. Only set for control-plane-dispatched runs
+   *  (self-hosted direct GitHub polling has no control-plane run to attach to). */
+  onEvidence?: (patch: Record<string, unknown>) => void | Promise<void>;
 }
 
 async function runIssueTask(cfg: GitHubTaskConfig, issue: GitHubIssue, overrides: RunIssueOverrides = {}) {
@@ -4059,6 +4065,23 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   const branch = issueBranchName(issue.number);
   const emit: IssueEmit = (record, stage, message, extra = {}) => {
     broadcast({ type: "session.github_issue_status", sessionId: record.id, issueNumber: issue.number, repo: `${cfg.owner}/${cfg.repo}`, branch, stage, message, ...extra });
+    // Issue #153: mirror a handful of stages onto the control plane's sanitized
+    // evidence trail — the branch/PR references and a bounded summary only,
+    // never file lists or error details (those stay in `message`/`extra`,
+    // which are broadcast to the live session but never sent to onEvidence).
+    const kind = stage === "pr_opened" ? "pull_request" : stage === "started" ? "branch" : stage === "failed" ? "completed" : undefined;
+    if (kind) {
+      void overrides.onEvidence?.({
+        output: { sessionId: record.id, branch, prUrl: typeof extra.prUrl === "string" ? extra.prUrl : undefined },
+        events: [{
+          at: new Date().toISOString(),
+          kind,
+          summary: stage === "pr_opened" ? "Pull request opened." : stage === "started" ? "Working branch and session created." : "Execution failed. Detailed diagnostics remain on the node.",
+          ref: branch,
+          url: typeof extra.prUrl === "string" ? extra.prUrl : undefined,
+        }],
+      });
+    }
   };
 
   // Follow-up: a later @-mention on an issue we still have an open session for
@@ -4608,7 +4631,7 @@ async function resolveTokenForRepo(owner: string, repo: string): Promise<string 
   return resolveGitHubToken();
 }
 
-async function runWorkItem(item: ControlPlaneWorkItem) {
+async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>) {
   if ((item.source === "schedule" || item.source === "manual") && item.body?.startsWith("bivy-room-v1:")) {
     const [, nodeId, ...payload] = item.body.split(":");
     if (nodeId !== identity.nodeId || payload.length === 0) {
@@ -4622,8 +4645,12 @@ async function runWorkItem(item: ControlPlaneWorkItem) {
   }
   // A labelled issue ("github:issue") and an @-mention comment ("github:comment")
   // both run the same way: clone, work on a branch, open a PR, comment back. For
-  // a comment the instruction is item.body (bivy-agent:/bivy-model: directives in
-  // the comment are honoured by buildTaskPrompt/parseBivyDirectives downstream).
+  // a comment the instruction is the comment body (bivy-agent:/bivy-model:
+  // directives in it are honoured by buildTaskPrompt/parseBivyDirectives
+  // downstream). Issue #153: the control plane no longer retains issue/comment
+  // title or body at all (see the webhook handlers in
+  // services/control-plane/src/index.ts) — this node fetches the live content
+  // directly from GitHub with its own token, immediately before use.
   if ((item.source === "github:issue" || item.source === "github:comment") && item.repo && item.issueNumber) {
     const parsed = parseRepo(item.repo);
     if (!parsed) throw new Error(`work item ${item.id} has an invalid repo "${item.repo}"`);
@@ -4639,13 +4666,15 @@ async function runWorkItem(item: ControlPlaneWorkItem) {
       claimLabel: `${item.label}:in-progress`,
       pollMs: 60_000,
     };
-    await runIssueTask(cfg, {
-      number: item.issueNumber,
-      title: item.title,
-      body: item.body ?? "",
-      labels: [],
-      url: item.url ?? "",
-    }, { runtimeId: item.runtimeId, model: item.model });
+    const issue = await getIssue(cfg, item.issueNumber);
+    if (!issue) throw new Error(`GitHub issue #${item.issueNumber} is unavailable`);
+    if (item.source === "github:comment") {
+      const instruction = await getIssueCommentBody(cfg, item.url);
+      if (!instruction) throw new Error("the triggering GitHub comment is unavailable");
+      issue.body = instruction;
+      if (item.url) issue.url = item.url;
+    }
+    await runIssueTask(cfg, issue, { runtimeId: item.runtimeId, model: item.model, onEvidence: report });
     return;
   }
   // Generic prompt (Slack, or an issue with no repo): a background session in the

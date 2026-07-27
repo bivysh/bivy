@@ -19,6 +19,13 @@ import { PrBadge, relTime, toMs } from "./SessionList.js";
 import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { writeClipboard } from "../clipboard.js";
+
+// Issue #153: a queue item is worth an "Outcome report" once it has left
+// "pending" and picked up at least one timeline event (the control plane
+// always stamps a "triggered" event at creation, so this is really "has this
+// item been claimed yet").
+type EvidenceQueueItem = GithubQueueItem & { events: NonNullable<GithubQueueItem["events"]> };
 
 // Cap on the GitHub queue "Sessions" list before a "Show more" link appears
 // (issue #531) — with many queue sessions the list otherwise grows unbounded
@@ -139,6 +146,45 @@ export function GithubQueuePanel({
   // The queue-sessions list is capped at MAX_VISIBLE_SESSIONS by default (issue
   // #531) — this expands it to the full, still updatedAt-desc-sorted list.
   const [showAllSessions, setShowAllSessions] = useState(false);
+
+  // Transient "Copied" confirmation for the outcome-report export button
+  // (issue #153) — mirrors ConnectRunner/ChatView's copy-feedback convention.
+  const [copiedReportId, setCopiedReportId] = useState<string | null>(null);
+  const copyReportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copyReportTimer.current) clearTimeout(copyReportTimer.current);
+  }, []);
+  const copyReport = async (item: EvidenceQueueItem) => {
+    // Export exactly the sanitized fields the control plane stores — not the
+    // whole item object, which also carries queue-routing bookkeeping (label,
+    // dedupe keys, ...) that isn't part of the outcome report.
+    const report = {
+      id: item.id,
+      source: item.source,
+      status: item.status,
+      repo: item.repo,
+      issueNumber: item.issueNumber,
+      url: item.url,
+      createdAt: item.createdAt,
+      claimedAt: item.claimedAt,
+      startedAt: item.startedAt,
+      completedAt: item.completedAt,
+      attempt: item.attempt,
+      runtimeId: item.runtimeId,
+      model: item.model,
+      routingReason: item.routingReason,
+      approvalMode: item.approvalMode,
+      sandbox: item.sandbox,
+      output: item.output,
+      checks: item.checks,
+      events: item.events,
+    };
+    const ok = await writeClipboard(JSON.stringify(report, null, 2));
+    if (!ok) return;
+    setCopiedReportId(item.id);
+    if (copyReportTimer.current) clearTimeout(copyReportTimer.current);
+    copyReportTimer.current = setTimeout(() => setCopiedReportId(null), 1800);
+  };
 
   // Populate the agent picker from the node's runtime registry (works in direct
   // mode too, so it's not gated on the hosted-account query).
@@ -323,6 +369,15 @@ export function GithubQueuePanel({
       return true;
     });
   }, [queue, claimedRefs]);
+
+  // Issue #153: run detail/outcome reports — every item that has left "pending"
+  // (i.e. has a timeline beyond the initial "triggered" event), newest first.
+  const reports = useMemo(
+    () => (queue ?? [])
+      .filter((item): item is EvidenceQueueItem => item.status !== "pending" && Boolean(item.events?.length))
+      .sort((a, b) => toMs(b.startedAt ?? b.claimedAt ?? b.createdAt) - toMs(a.startedAt ?? a.claimedAt ?? a.createdAt)),
+    [queue],
+  );
 
   // Connected apps with no live node holding their key → nothing will pull their
   // work. An account can have several apps (one per GitHub owner), and they're
@@ -659,6 +714,58 @@ export function GithubQueuePanel({
                 })}
               </div>
             )}
+          </>
+        )}
+
+        {canQuery && reports.length > 0 && (
+          <>
+            <div className="queue-head"><h4 className="settings-subhead">Outcome reports</h4></div>
+            <div className="evidence-list">
+              {reports.map((item) => {
+                const outcomeClass = item.status === "failed" ? "err" : item.status === "succeeded" ? "ok" : item.status === "needs_attention" ? "warn" : "";
+                return (
+                  <details className="evidence-report" key={item.id}>
+                    <summary>
+                      <span>{item.repo}{item.issueNumber ? ` #${item.issueNumber}` : ""} · {queueItemSourceLabel(item.source)}</span>
+                      <span className={`chip ${outcomeClass}`}>{item.status.replace(/_/g, " ")}</span>
+                    </summary>
+                    <div className="evidence-meta">
+                      <span>Trigger: {item.triggerKind ?? item.source}</span>
+                      {item.attempt !== undefined && item.attempt > 1 && <span>Attempt {item.attempt}</span>}
+                      {item.runtimeId && <span>Agent: {item.runtimeId}</span>}
+                      {item.model && <span>Model: {item.model}</span>}
+                      {item.routingReason && <span>Routing: {item.routingReason}</span>}
+                      {item.sandbox && <span>Sandbox: {item.sandbox}</span>}
+                      {item.approvalMode && <span>Approval: {item.approvalMode}</span>}
+                      {item.output?.branch && <span>Branch: <code>{item.output.branch}</code></span>}
+                      {item.output?.commit && <span>Commit: <code>{item.output.commit.slice(0, 12)}</code></span>}
+                      {item.output?.prUrl && <a href={item.output.prUrl} target="_blank" rel="noreferrer">Pull request</a>}
+                      {item.output?.artifactUrl && <a href={item.output.artifactUrl} target="_blank" rel="noreferrer">Artifact</a>}
+                    </div>
+                    {item.output?.failure && <p className="muted">{item.output.failure}</p>}
+                    <ol className="evidence-timeline">
+                      {item.events.map((event, index) => (
+                        <li key={`${event.at}-${index}`}>
+                          <time>{new Date(event.at).toLocaleString()}</time>
+                          <span>{event.summary}</span>
+                          {event.attempt !== undefined && <small>Attempt {event.attempt}</small>}
+                        </li>
+                      ))}
+                    </ol>
+                    {item.checks && item.checks.length > 0 && (
+                      <ul className="evidence-checks">
+                        {item.checks.map((check, index) => (
+                          <li key={`${check.name}-${index}`}>{check.name}: {check.status}{check.exitCode !== undefined ? ` (exit ${check.exitCode})` : ""}</li>
+                        ))}
+                      </ul>
+                    )}
+                    <button className="link-btn" onClick={() => void copyReport(item)}>
+                      {copiedReportId === item.id ? "Copied!" : "Copy sanitized report"}
+                    </button>
+                  </details>
+                );
+              })}
+            </div>
           </>
         )}
 
