@@ -58,6 +58,9 @@ services:
     restart: unless-stopped
 
   control-plane:
+    # Hosted deploys set this to an immutable GHCR tag and use `up --no-build`;
+    # self-hosted installs keep building locally via the build block below.
+    image: "${CONTROL_PLANE_IMAGE:-bivy-control-plane:local}"
     build:
       context: ..
       dockerfile: deploy/Dockerfile.control-plane
@@ -126,6 +129,8 @@ services:
     restart: unless-stopped
 
   relay:
+    # See control-plane.image above. Both variables are optional for self-hosts.
+    image: "${RELAY_IMAGE:-bivy-relay:local}"
     build:
       context: ..
       dockerfile: deploy/Dockerfile.relay
