@@ -113,7 +113,9 @@ services:
     # unreachable — a DB outage shows up in `docker compose ps` instead of a green
     # light over a control plane that 500s every request.
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4400/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      # Avoid starting V8 every 10s: `node -e fetch(...)` briefly used most of a
+      # core on 1-vCPU hosts. This probe uses bash's built-in TCP support.
+      test: ["CMD", "bash", "/usr/local/bin/bivy-healthcheck", "4400", "/readyz"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -155,7 +157,9 @@ services:
     expose:
       - "4500"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4500/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      # Same lightweight probe as the control plane; do not start V8 merely to
+      # check an HTTP endpoint.
+      test: ["CMD", "bash", "/usr/local/bin/bivy-healthcheck", "4500", "/healthz"]
       interval: 10s
       timeout: 5s
       retries: 12

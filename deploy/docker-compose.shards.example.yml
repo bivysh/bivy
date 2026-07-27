@@ -49,7 +49,7 @@ services:
     expose:
       - "4500"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4500/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "bash", "/usr/local/bin/bivy-healthcheck", "4500", "/healthz"]
       interval: 10s
       timeout: 5s
       retries: 12
