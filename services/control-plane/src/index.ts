@@ -263,6 +263,23 @@ async function pruneOldRunStarts() {
 void pruneOldRunStarts();
 setInterval(pruneOldRunStarts, 6 * 60 * 60_000).unref();
 
+// Housekeeping: periodically drop expired rows from the short-lived, single-use
+// auth tables (login tokens, sessions, link grants, relay tickets, device
+// logins). Each is normally deleted on successful consumption, but an
+// abandoned attempt (closed tab, retried client, a node that never finishes
+// introspection) otherwise leaves a dead row behind forever — see
+// pruneExpiredAuthTokens in postgres-store.ts. Same unref'd-interval shape as
+// pruneOldRunStarts above; also swept once at boot.
+async function pruneExpiredAuthTokens() {
+  try {
+    await store.pruneExpiredAuthTokens(new Date().toISOString());
+  } catch (error) {
+    console.error("[auth-tokens] prune failed:", error);
+  }
+}
+void pruneExpiredAuthTokens();
+setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
+
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
@@ -643,10 +660,24 @@ const githubConfigured = Boolean(githubClientId && githubClientSecret);
 
 // Short-lived CSRF/login state. In-memory is fine for a single instance; a
 // multi-instance deployment should move this to the store (follow-up).
+//
+// GET /auth/github/start is unauthenticated and (unlike magic-link start)
+// previously had no rate limit, so every hit — including bots/scanners that
+// never complete the flow — minted an entry here with no cleanup path other
+// than a matching callback (takeOauthState). That is an unbounded, trivially
+// triggerable memory leak: on staging it presented as steadily growing
+// resident memory (pushing the container into swap) and rising CPU from GC
+// working harder to reclaim a heap that keeps growing. Bound it the same way
+// rateBuckets bounds itself below (self-sweep once the map gets large) and
+// rate-limit the endpoint like every other unauthenticated auth-start route.
 const githubOauthStates = new Map<string, { deviceId?: string; returnPath?: string; expiresAt: number }>();
 function rememberOauthState(deviceId?: string, returnPath?: string): string {
+  const now = Date.now();
+  if (githubOauthStates.size > 10_000) {
+    for (const [k, v] of githubOauthStates) if (now >= v.expiresAt) githubOauthStates.delete(k);
+  }
   const state = randomBytes(24).toString("base64url");
-  githubOauthStates.set(state, { deviceId, returnPath, expiresAt: Date.now() + 10 * 60_000 });
+  githubOauthStates.set(state, { deviceId, returnPath, expiresAt: now + 10 * 60_000 });
   return state;
 }
 function takeOauthState(state: string): { deviceId?: string; returnPath?: string } | undefined {
@@ -818,6 +849,12 @@ app.post("/auth/device/poll", asyncHandler(async (req, res) => {
 // (CLI / app) created via createDeviceLogin; otherwise it's a browser sign-in.
 app.get("/auth/github/start", (req, res) => {
   if (!githubConfigured) return res.status(501).type("html").send("<h1>GitHub sign-in is not configured</h1><p>Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.</p>");
+  // Unauthenticated and side-effecting (mints a githubOauthStates entry below),
+  // same shape as /auth/magic-link/start — cap it the same way so a bot can't
+  // mint entries faster than the map's self-sweep can reclaim them.
+  if (rateLimited("oauth-github-start-ip", clientIp(req), 20, 60_000)) {
+    return res.status(429).type("html").send("<h1>Too many requests</h1><p>Please wait a minute and try again.</p>");
+  }
   const deviceId = String(req.query.device ?? "").trim() || undefined;
   // Land back on the path the sign-in started from (for a client served under a
   // sub-path) instead of always dumping to root. Ignored for the device flow,

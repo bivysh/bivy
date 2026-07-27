@@ -948,22 +948,52 @@ export class PostgresStore implements MeshStore {
       const owns = await client.query(`SELECT 1 FROM nodes WHERE id = $1 AND account_id = $2`, [nodeId, accountId]);
       if (owns.rowCount) {
         await client.query(`DELETE FROM session_index WHERE node_id = $1`, [nodeId]);
-        for (const s of sessions) {
+        // Batched via a multi-row VALUES insert instead of one round trip per
+        // session: every node advertise (1s-debounced, plus a 60s full resync
+        // per node — see src/server.ts) used to cost 2 sequential awaited
+        // queries PER session (insert into session_index, insert into
+        // run_starts) on one held pooled connection. That's fine at 1-2
+        // sessions but scales linearly with concurrent nodes × sessions ×
+        // advertise frequency; batching drops it to a fixed 2 queries no
+        // matter how many sessions are in the advert. (Plain multi-row VALUES,
+        // not unnest($1::text[], ...) — pg-mem, which the whole store is
+        // deliberately tested against, doesn't support multi-array unnest.)
+        if (sessions.length > 0) {
+          const sessionIndexCols = 8;
+          const sessionIndexValues: unknown[] = [];
+          const sessionIndexRows = sessions
+            .map((s, i) => {
+              const base = i * sessionIndexCols;
+              sessionIndexValues.push(
+                nodeId,
+                s.sessionId,
+                accountId,
+                s.status,
+                s.source ?? null,
+                s.titleEnc ?? null,
+                s.branch ?? null,
+                s.agentServiceAddress ?? null,
+              );
+              return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, now())`;
+            })
+            .join(", ");
           await client.query(
             `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
-            [nodeId, s.sessionId, accountId, s.status, s.source ?? null, s.titleEnc ?? null, s.branch ?? null, s.agentServiceAddress ?? null],
+             VALUES ${sessionIndexRows}`,
+            sessionIndexValues,
           );
-          // Count this run the first time its session is advertised. The session
+          // Count each run the first time its session is advertised. The session
           // index is rewritten wholesale on every advertise, but run_starts is
           // keyed by (account, session) with DO NOTHING, so a session only ever
           // counts once — the day it first appears. This is the single funnel
           // through which EVERY source (manual, app, work queue, ephemeral) lands
           // in the daily counter, since every run eventually advertises a session.
+          const runStartsRows = sessions.map((_, i) => `($1, $${i + 2})`).join(", ");
           await client.query(
-            `INSERT INTO run_starts (account_id, run_key) VALUES ($1, $2)
+            `INSERT INTO run_starts (account_id, run_key)
+             VALUES ${runStartsRows}
              ON CONFLICT (account_id, run_key) DO NOTHING`,
-            [accountId, s.sessionId],
+            [accountId, ...sessions.map((s) => s.sessionId)],
           );
         }
       }
@@ -1781,6 +1811,21 @@ export class PostgresStore implements MeshStore {
       [beforeIso],
     );
     return rowCount ?? 0;
+  }
+
+  async pruneExpiredAuthTokens(nowIso: string): Promise<number> {
+    // Each of these tables is otherwise only deleted on successful single-use
+    // consumption (see consumeLoginToken, consumeRelayTicket, etc.) — an
+    // abandoned attempt just leaves an expired row sitting there forever.
+    // Sequential DELETEs on indexed expires_at columns; cheap even at scale, and
+    // there is no cross-table transaction requirement (each row is independently
+    // safe to drop once past its own expiry).
+    let total = 0;
+    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins"]) {
+      const { rowCount } = await this.query(`DELETE FROM ${table} WHERE expires_at < $1`, [nowIso]);
+      total += rowCount ?? 0;
+    }
+    return total;
   }
 
   async completeWorkItem(accountId: string, id: string): Promise<void> {
