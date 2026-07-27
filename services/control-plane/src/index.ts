@@ -405,17 +405,20 @@ function bearer(req: Request): string | null {
   return m ? m[1].trim() : null;
 }
 
-/** Issue #155: defense in depth for a node-reported policy-evidence blob —
- *  the node already bounds/sanitizes it (never raw command output, diffs, or
- *  file contents), but cap what a misbehaving/future node could grow this
- *  table with too. Oversized evidence is dropped, not truncated in place —
- *  JSON truncated mid-structure wouldn't parse back cleanly, and a missing
- *  evidence blob is a far safer failure mode than a corrupt one. */
-const MAX_POLICY_EVIDENCE_BYTES = 32 * 1024;
-function boundPolicyEvidence(raw: unknown): unknown {
+/** Issue #155: defense in depth for the two opaque JSON blobs this feature
+ *  moves through the control plane — a definition/run's `policy` config and a
+ *  node-reported `policyEvidence` result. Both sides already bound/sanitize
+ *  their own input (parseExecutionPolicy on the policy side; the node never
+ *  sends raw command output, diffs, or file contents in evidence), but cap
+ *  what a misbehaving/future caller could grow this table with too. Oversized
+ *  input is dropped, not truncated in place — JSON truncated mid-structure
+ *  wouldn't parse back cleanly, and a missing blob is a far safer failure
+ *  mode than a corrupt one. */
+const MAX_POLICY_JSON_BYTES = 32 * 1024;
+function boundPolicyJson(raw: unknown): unknown {
   if (raw === undefined || raw === null) return undefined;
   const serialized = JSON.stringify(raw);
-  if (!serialized || serialized.length > MAX_POLICY_EVIDENCE_BYTES) return undefined;
+  if (!serialized || serialized.length > MAX_POLICY_JSON_BYTES) return undefined;
   return raw;
 }
 
@@ -1838,7 +1841,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     // Issue #155: opaque execution policy — the control plane only bounds its
     // size (defense in depth; the node's own parseExecutionPolicy is the real
     // validation) and stores/routes it, never interpreting it.
-    policy: boundPolicyEvidence(req.body?.policy),
+    policy: boundPolicyJson(req.body?.policy),
   });
   res.status(201).json(definition);
 }));
@@ -1882,7 +1885,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     // Issue #155: same opaque, size-bounded policy handling as POST above.
     // "policy" in the body (even `null`) replaces the stored policy; omitting
     // the key entirely keeps whatever is already there.
-    policy: "policy" in (req.body ?? {}) ? boundPolicyEvidence(req.body.policy) : current.policy,
+    policy: "policy" in (req.body ?? {}) ? boundPolicyJson(req.body.policy) : current.policy,
   };
   res.json(await store.updateAutomationDefinition(client.accountId, current.id, patch));
 }));
@@ -2292,7 +2295,7 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
   const body = (req.body ?? {}) as { evidence?: unknown };
-  const evidence = boundPolicyEvidence(body.evidence);
+  const evidence = boundPolicyJson(body.evidence);
   const output = evidence !== undefined ? { ...(current.output ?? {}), policyEvidence: evidence } : current.output;
   const run = await store.transitionAutomationRun(node.accountId, id, "failed", output);
   if (!run) return res.status(404).json({ error: "Unknown run" });
