@@ -13,7 +13,7 @@ import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
-import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector } from "./metrics.js";
+import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
 import {
@@ -782,6 +782,7 @@ app.post("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const account = await store.consumeLoginToken(loginToken);
   if (!account) return res.status(401).json({ error: "Invalid or expired login token" });
   const token = await store.createSession(account.id);
+  recordFunnelEvent("sign_in_completed", "email_api", account.plan);
   res.json({ ok: true, token, account: { id: account.id, email: account.email, plan: account.plan } });
 }));
 
@@ -795,9 +796,11 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   // embedded here — the CLI mints it when it polls.
   if (deviceId) {
     await store.completeDeviceLogin(deviceId, account.id);
+    recordFunnelEvent("sign_in_completed", "email_device", account.plan);
     return sendDeviceSignedIn(res, account.email);
   }
   const session = await store.createSession(account.id);
+  recordFunnelEvent("sign_in_completed", "email_browser", account.plan);
   const payload = b64urlJson({ session, controlPlane: baseUrl(req), relay: relayPublicUrl });
   res.redirect(`/#${payload}`);
 }));
@@ -905,9 +908,11 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   const account = await store.findOrCreateAccount(email);
   if (stored.deviceId) {
     await store.completeDeviceLogin(stored.deviceId, account.id);
+    recordFunnelEvent("sign_in_completed", "github_device", account.plan);
     return sendDeviceSignedIn(res, account.email);
   }
   const session = await store.createSession(account.id);
+  recordFunnelEvent("sign_in_completed", "github_browser", account.plan);
   const payload = b64urlJson({ session, controlPlane: baseUrl(req), relay: relayPublicUrl });
   // Re-sanitize on the way out (defense in depth): the return path was validated
   // at /start, but never trust a stored value verbatim when building a redirect.
@@ -933,6 +938,7 @@ app.post("/auth/dev-login", asyncHandler(async (req, res) => {
   if (!validEmail(email)) return res.status(400).json({ error: "Invalid email" });
   const account = await store.findOrCreateAccount(email);
   const token = await store.createSession(account.id);
+  recordFunnelEvent("sign_in_completed", "dev", account.plan);
   res.json({ ok: true, token, account: { id: account.id, email: account.email, plan: account.plan } });
 }));
 
@@ -1016,6 +1022,7 @@ app.post("/nodes/enroll", requireUser, asyncHandler(async (req, res) => {
   const nodeId = String(req.body?.nodeId ?? "").trim();
   if (!nodeId) return res.status(400).json({ error: "Missing nodeId" });
   const result = await store.enrollNode(account.id, nodeId, String(req.body?.name ?? "Node"));
+  if (result.created) recordFunnelEvent("node_enrolled", "api", account.plan);
   res.json({ ok: true, ...result });
 }));
 
@@ -1122,7 +1129,8 @@ function sessionAdvertsFrom(raw: unknown) {
 app.post("/node/sessions", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const sessions = sessionAdvertsFrom(req.body?.sessions);
-  await store.replaceNodeSessions(node.accountId, node.id, sessions);
+  const newRuns = await store.replaceNodeSessions(node.accountId, node.id, sessions);
+  if (newRuns > 0) recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
   res.json({ ok: true, count: sessions.length });
 }));
 
@@ -1158,7 +1166,9 @@ app.put("/internal/nodes/:nodeId/sessions/:sessionId", requireNode, asyncHandler
   // of the control plane pegging a core under load. Removals are still handled
   // by the periodic full advertise via POST /node/sessions.
   const advert = sessionAdvertsFrom([{ ...req.body, sessionId: req.params.sessionId }]);
-  for (const s of advert) await store.upsertNodeSession(node.accountId, node.id, s);
+  let newRuns = 0;
+  for (const s of advert) if (await store.upsertNodeSession(node.accountId, node.id, s)) newRuns += 1;
+  if (newRuns > 0) recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
   res.json({ ok: true, count: advert.length });
 }));
 
@@ -1323,6 +1333,7 @@ app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
   }
   const allowance = await runAllowance(account.id);
   if (allowance.exhausted) {
+    recordFunnelEvent("quota_blocked", "ephemeral", account.plan);
     return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
   }
   const url = String(req.body?.url ?? "");
@@ -2094,6 +2105,7 @@ app.post("/webhooks/automation/:id", asyncHandler(async (req, res) => {
   if (!entitlements.workQueueEnabled) return res.status(429).json({ code: "quota_exhausted" });
   const allowance = await runAllowance(hook.accountId);
   if (allowance.exhausted) {
+    recordFunnelEvent("quota_blocked", "automation", entitlements.plan);
     return res.status(429).json({ code: "quota_exhausted", limit: allowance.limit, used: allowance.used });
   }
   const route = event.routing || hook.routingDefault;
@@ -2263,6 +2275,7 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   // this item". Only bites under ENFORCE_ENTITLEMENTS; self-host is unlimited.
   const allowance = await runAllowance(node.accountId);
   if (allowance.exhausted) {
+    recordFunnelEvent("quota_blocked", "work_queue", (await store.entitlements(node.accountId)).plan);
     return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
   }
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
@@ -2279,7 +2292,8 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
   }
   await store.completeWorkItem(node.accountId, id);
   // Compatibility for older nodes that skip the explicit /running transition.
-  await store.recordRunStart(node.accountId, `automation:${id}`);
+  const started = await store.recordRunStart(node.accountId, `automation:${id}`);
+  if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
   res.json({ ok: true });
 }));
 
@@ -2291,7 +2305,8 @@ app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) =>
     return res.status(409).json({ error: "Run is not claimed by this node" });
   }
   const run = await store.transitionAutomationRun(node.accountId, id, "running");
-  await store.recordRunStart(node.accountId, `automation:${id}`);
+  const started = await store.recordRunStart(node.accountId, `automation:${id}`);
+  if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
   res.json({ ok: true, run });
 }));
 
@@ -2539,6 +2554,7 @@ app.post("/billing/checkout", requireUser, asyncHandler(async (req, res) => {
 
   if (!stripe) {
     if (process.env.NODE_ENV === "production") throw new Error("STRIPE_SECRET_KEY is required for production checkout");
+    recordFunnelEvent("checkout_started", plan, account.plan);
     return res.json({ ok: true, checkoutUrl: `https://billing.example/checkout?plan=${plan}`, plan, dev: true });
   }
 
@@ -2568,6 +2584,7 @@ app.post("/billing/checkout", requireUser, asyncHandler(async (req, res) => {
 
   const checkoutUrl = checkout.url;
   if (!checkoutUrl) throw new Error("Stripe did not return a checkout URL");
+  recordFunnelEvent("checkout_started", plan, account.plan);
   res.json({ ok: true, checkoutUrl, plan });
 }));
 
@@ -2598,7 +2615,11 @@ app.post("/billing/webhook", asyncHandler(async (req, res) => {
     const body = Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString("utf8")) : req.body;
     const accountId = String(body?.accountId ?? "");
     const plan = normalizePlan(String(body?.plan ?? "")) as Plan;
-    if (accountId && ["free", "pro", "team"].includes(plan)) await store.setPlan(accountId, plan, body?.stripeCustomerId);
+    if (accountId && ["free", "pro", "team"].includes(plan)) {
+      const previous = await store.getAccount(accountId);
+      await store.setPlan(accountId, plan, body?.stripeCustomerId);
+      if (previous && previous.plan !== plan) recordFunnelEvent("plan_changed", "dev_webhook", plan);
+    }
     return res.json({ received: true, dev: true });
   }
 
@@ -2627,6 +2648,7 @@ app.post("/billing/webhook", asyncHandler(async (req, res) => {
         stripeSubscriptionId: subscription.id,
         subscriptionStatus: subscription.status,
       });
+      if (account.plan !== nextPlan) recordFunnelEvent("plan_changed", "stripe_subscription", nextPlan);
     }
   } else if (event.type === "customer.subscription.deleted") {
     const subscription = event.data.object as Stripe.Subscription;
@@ -2640,6 +2662,7 @@ app.post("/billing/webhook", asyncHandler(async (req, res) => {
         stripeSubscriptionId: null,
         subscriptionStatus: subscription.status,
       });
+      if (account.plan !== "free") recordFunnelEvent("plan_changed", "stripe_deleted", "free");
     }
   }
 

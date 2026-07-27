@@ -726,7 +726,7 @@ export interface MeshStore {
     accountId: string,
     nodeId: string,
     name: string,
-  ): Promise<{ node: Omit<NodeRecord, "enrollmentTokenHash">; enrollmentToken: string }>;
+  ): Promise<{ node: Omit<NodeRecord, "enrollmentTokenHash">; enrollmentToken: string; created: boolean }>;
   nodeFromEnrollmentToken(token: string | null): Promise<NodeRecord | undefined>;
   setNodeOnline(nodeId: string, online: boolean): Promise<void>;
   setNodeName(nodeId: string, name: string): Promise<NodeRecord | undefined>;
@@ -737,12 +737,16 @@ export interface MeshStore {
 
   // Session index (cross-node unified view). A node replaces its full current
   // session list; clients read the merged list for the account.
-  replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<void>;
+  // Returns how many session ids were first observed (and therefore became new
+  // run starts). This preserves idempotency while letting the control plane emit
+  // an accurate run-start funnel event rather than counting every status update.
+  replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<number>;
   // Incremental single-session advertise. A session's status flips constantly
   // (idle→working→needs_action); routing that through `replaceNodeSessions`
   // means reading and rewriting the node's ENTIRE index per flip — O(sessions)
   // work per event, O(sessions²) in aggregate. This upserts just the one row.
-  upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<void>;
+  // True only when this session produced a new run-start row.
+  upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<boolean>;
   listAccountSessions(accountId: string): Promise<SessionIndexEntry[]>;
   // A single node reads back its OWN sessions, including the node-only
   // `agentServiceAddress` routing metadata (Stage 3: a restarting daemon adopts
@@ -908,7 +912,8 @@ export interface MeshStore {
   // session advertises never double-count). `runKey` is the distinct-run identifier
   // — normally the session id; every source (manual/app/work-queue/ephemeral) funnels
   // through here once the run surfaces as a session. Powers the free-tier run cap.
-  recordRunStart(accountId: string, runKey: string): Promise<void>;
+  // True only when the idempotent insert created a new run-start row.
+  recordRunStart(accountId: string, runKey: string): Promise<boolean>;
   // How many DISTINCT runs the account has STARTED at/after `sinceIso` (recorded via
   // recordRunStart). Powers the free-tier rolling run quota — one distinct run key = one run.
   countRunStartsSince(accountId: string, sinceIso: string): Promise<number>;

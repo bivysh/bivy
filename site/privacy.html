@@ -17,7 +17,7 @@
 
     <main class="wrap">
       <h1>Privacy Policy</h1>
-      <p class="updated">Last updated: 23 June 2026</p>
+      <p class="updated">Last updated: 27 July 2026</p>
 
       <p>
         Bivy is a local-first, source-available AI agent workspace that runs on your
@@ -45,7 +45,8 @@
         <tr><td>Node registry metadata</td><td>The identifier and display name you give each node, plus online/offline status and last-seen time, so you can manage your nodes.</td></tr>
         <tr><td>Session/work metadata</td><td>Optional cross-node session and webhook/work-queue metadata such as node id, session id, status, repo slug, issue number, and timestamps. This is routing metadata, not transcript content.</td></tr>
         <tr><td>Encrypted credential sync blobs</td><td>If enabled, nodes may upload encrypted model-auth vault ciphertext and per-node wrapped keys so another enrolled node can sync credentials. Bivy Cloud cannot decrypt these blobs.</td></tr>
-        <tr><td>Operational logs</td><td>Connection counts, timestamps, and error events used to keep the service running and detect abuse. These never contain session payloads.</td></tr>
+        <tr><td>Operational logs</td><td>Connection counts, timestamps, and privacy-safe product milestones used to keep the service running, understand activation, and detect abuse. These never contain session payloads, prompts, account identifiers, or email addresses.</td></tr>
+        <tr><td>Aggregate website usage</td><td>Cookie-free page views and actions such as clicking Start free or copying the install command, collected through Plausible Analytics. We use this to understand whether the website helps visitors get started; it is not joined to product accounts or session activity.</td></tr>
       </table>
 
       <h2>What we never collect</h2>
@@ -61,6 +62,7 @@
       <ul>
         <li><strong>Stripe</strong> — payment processing and subscription management (<a href="https://stripe.com/privacy">privacy policy</a>).</li>
         <li><strong>Resend</strong> — delivery of sign-in and account emails (<a href="https://resend.com/legal/privacy-policy">privacy policy</a>).</li>
+        <li><strong>Plausible Analytics</strong> — cookie-free, aggregate marketing-site analytics (<a href="https://plausible.io/privacy">privacy policy</a>).</li>
         <li><strong>Our hosting provider</strong> — runs the control plane and relay servers.</li>
       </ul>
       <p class="muted">We do not sell your personal data.</p>
@@ -68,8 +70,9 @@
       <h2>Cookies and local storage</h2>
       <p>
         The web and remote-control interfaces store a session token in your
-        browser's local storage to keep you signed in. We do not use third-party
-        advertising or tracking cookies.
+        browser's local storage to keep you signed in. The marketing site uses
+        cookie-free Plausible Analytics. We do not use third-party advertising or
+        tracking cookies, and Plausible events are not linked to your Bivy account.
       </p>
 
       <h2>Data retention</h2>

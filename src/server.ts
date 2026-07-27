@@ -10,6 +10,8 @@ import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import { listRuntimes, catalogRuntimes, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
 import { createRunPolicy } from "./policy/run-policy.js";
+import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
+import { SessionRerouteController } from "./policy/session-reroute.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
@@ -539,6 +541,40 @@ const terminals = new TerminalManager();
 // and fixed for that session's life; switching agents in the UI starts a new one.
 let defaultRuntimeId = (process.env.BIVY_RUNTIME ?? "pi").toLowerCase();
 const runtimeHost = new RuntimeHost({ credsDir, piDir, sessionsDir });
+
+// In-session model reroute (docs/rulesets.md). Opt-in: set
+// BIVY_SESSION_MODEL_FALLBACK to a comma-separated model list and a session that
+// hits an exhausted-credits / rate-limit turn error swaps down the list (via the
+// runtime's live setModel) and retries, instead of surfacing the error. Absent =
+// inert, session behavior unchanged.
+function sessionModelFallbackRuleset(): Ruleset | undefined {
+  const models = (process.env.BIVY_SESSION_MODEL_FALLBACK ?? "")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
+  if (!models.length) return undefined;
+  return {
+    version: 1,
+    name: "session-model-fallback",
+    appliesTo: ["session"],
+    rules: [
+      {
+        when: ["credits_exhausted", "rate_limited"],
+        action: "reroute",
+        maxAttempts: models.length + 1,
+        chain: models.map((model) => ({ model })),
+        onExhausted: "give_up",
+        backoff: DEFAULT_BACKOFF,
+      },
+    ],
+  };
+}
+const sessionRuleset = sessionModelFallbackRuleset();
+const sessionRunPolicy = sessionRuleset ? createRunPolicy({ ruleset: sessionRuleset, context: "session" }) : undefined;
+if (sessionRunPolicy) {
+  console.log(`[policy] in-session model reroute enabled: ${process.env.BIVY_SESSION_MODEL_FALLBACK}`);
+}
+
 let lastUpdateCheckAt = 0;
 let updateNoticeSentFor = "";
 
@@ -804,7 +840,7 @@ let relay: RelayConnector | undefined;
 const clients = new Set<WebSocket>();
 const commandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const oauthLogins = new Map<string, OAuthLoginState>();
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -3169,7 +3205,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
       broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: msg.clientMessageId });
       void maybeNameSession(record, promptText);
       harnessBeginTurn(record);
-      await record.session.prompt(agentPrompt, promptOptionsFor(record, msg.streamingBehavior, images));
+      // Capture the turn's prompt so an in-session model reroute can re-drive it
+      // on a fallback model, and reset the per-turn reroute budget.
+      record.lastPrompt = agentPrompt;
+      record.lastPromptOptions = promptOptionsFor(record, msg.streamingBehavior, images);
+      record.reroute?.beginTurn();
+      await record.session.prompt(agentPrompt, record.lastPromptOptions);
     }).catch((error) => {
       // Mirror the HTTP path (see the /prompt route): a rejected turn after
       // the runtime marked the session working emits no agent_end, so without
@@ -6236,6 +6277,17 @@ function terminalTurnError(event: Record<string, unknown>): string | undefined {
 
 function attachSessionListeners(record: SessionRecord) {
   record.unsubscribe?.();
+  // In-session model reroute controller (inert unless BIVY_SESSION_MODEL_FALLBACK
+  // is set). One per session; its per-turn budget resets on each user prompt.
+  if (sessionRunPolicy && !record.reroute) {
+    record.reroute = new SessionRerouteController({
+      policy: sessionRunPolicy,
+      onNotice: (n) => broadcast({ type: "session.notice", sessionId: record.id, level: n.level, message: n.message }),
+      onModelChanged: () =>
+        broadcast({ type: "model.updated", sessionId: record.id, model: publicModel(record.session.getCurrentModel(), record.session.getCurrentModel()) }),
+      onFailed: (message) => broadcast({ type: "session.error", sessionId: record.id, error: message }),
+    });
+  }
   record.unsubscribe = record.session.subscribe((event) => {
     // Keep streamed assistant text ordered ahead of everything else: any event
     // that is not itself a superseding update must flush the session's pending
@@ -6318,7 +6370,23 @@ function attachSessionListeners(record: SessionRecord) {
       // no reply, no signal. Surface it as a session-scoped error so the client
       // can show it *inline in that chat*, and notify instead of "done".
       const turnError = terminalTurnError(event as Record<string, unknown>);
-      if (turnError) {
+      // Before surfacing a turn error, see if the session's run policy can recover
+      // it in place by swapping to a fallback model and retrying the same prompt.
+      // planReroute is synchronous, so we can atomically suppress the error toast
+      // here and drive the async swap + retry below.
+      const reroutePlan =
+        turnError && record.lastPrompt !== undefined
+          ? record.reroute?.planReroute(turnError, record.session.getCurrentModel()?.name) ?? null
+          : null;
+      if (reroutePlan) {
+        void record.reroute!.applyReroute(reroutePlan, {
+          getCurrentModelName: () => record.session.getCurrentModel()?.name,
+          setModel: (p, i) => record.session.setModel(p, i),
+          reprompt: async () => {
+            await record.session.prompt(record.lastPrompt!, record.lastPromptOptions);
+          },
+        });
+      } else if (turnError) {
         broadcast({ type: "session.error", sessionId: record.id, error: turnError });
         void sendNotificationHint({
           kind: "session_error",

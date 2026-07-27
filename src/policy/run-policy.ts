@@ -134,10 +134,13 @@ export function createRunPolicy(deps: RunPolicyDeps = {}): RunPolicy {
       }
 
       // action === "reroute": walk the chain from the current cursor, skipping
-      // any candidate we can prove lacks credentials on this node.
+      // any candidate we can prove lacks credentials on this node, or that is a
+      // no-op (a pure model change equal to the model we're already on).
       const chain = rule.chain ?? [];
+      const isNoop = (c: RoutingCandidate): boolean =>
+        c.model !== undefined && c.model === ctx.routing.model && c.runtimeId === undefined && c.account === undefined;
       let cursor = ctx.rerouteCount;
-      while (cursor < chain.length && !hasCredential(chain[cursor]!)) cursor += 1;
+      while (cursor < chain.length && (!hasCredential(chain[cursor]!) || isNoop(chain[cursor]!))) cursor += 1;
       if (exhausted || cursor >= chain.length) return onExhausted();
 
       const candidate = chain[cursor]!;

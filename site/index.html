@@ -3,21 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bivy — Run coding agents on machines you own</title>
-  <meta name="description" content="Bivy runs Claude Code, Codex, Gemini CLI, Aider and other coding agents on your own hardware, with your own keys — then gives you a real chat app for every session, reachable from anywhere: transcript, diffs, approvals, and a terminal when you need one. Free, 10 runs a week. Source-available and self-hostable.">
+  <title>Bivy — Agent operations on infrastructure you own</title>
+  <meta name="description" content="Route GitHub issues and webhook work to the machine and coding agent you choose. Run Claude Code, Codex, Gemini CLI and more on your infrastructure, launch ephemeral runners in your cloud, and steer everything from phone or browser.">
   <meta name="theme-color" content="#fbfaf8">
-  <meta property="og:title" content="Bivy — Run coding agents on machines you own">
-  <meta property="og:description" content="Coding agents on your hardware, with your keys — a real chat app for every session, reachable anywhere: diffs, approvals, a terminal when you need it. Free, 10 runs a week, no repo upload.">
+  <meta property="og:title" content="Bivy — Agent operations on infrastructure you own">
+  <meta property="og:description" content="Route issue-to-PR work to your machines and your choice of coding agent. BYO-cloud runners, webhooks, fleet session mobility, and an E2E-connected app.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://bivy.sh">
   <meta property="og:image" content="https://bivy.sh/screenshots/app-session.png">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Bivy — Run coding agents on machines you own">
-  <meta name="twitter:description" content="Coding agents on your hardware, with your keys — a real chat app for every session, reachable anywhere: diffs, approvals, a terminal when you need it. Free, 10 runs a week, no repo upload.">
+  <meta name="twitter:title" content="Bivy — Agent operations on infrastructure you own">
+  <meta name="twitter:description" content="Route issue-to-PR work to your machines and your choice of coding agent. BYO-cloud runners, webhooks, fleet session mobility, and an E2E-connected app.">
   <meta name="twitter:image" content="https://bivy.sh/screenshots/app-session.png">
   <link rel="icon" href="./tent.svg">
   <link rel="icon" type="image/png" href="./tent.png">
   <link rel="apple-touch-icon" href="./tent.png">
+  <!-- Plausible is cookie-free and records aggregate site usage only. Product
+       milestones are measured separately by the privacy-safe control-plane
+       counters; no session content or account identifiers are sent here. -->
+  <script defer data-domain="bivy.sh" src="https://plausible.io/js/script.js"></script>
+  <script>window.plausible=window.plausible||function(){(window.plausible.q=window.plausible.q||[]).push(arguments)}</script>
   <style>
     :root {
       --bg:      #fbfaf8;
@@ -427,14 +432,17 @@
   <div class="wrap inner">
     <a class="brand" href="./index.html"><img src="./tent.png" alt="" width="22" height="22"> Bivy</a>
     <nav class="top">
+      <a href="#github">Work queue</a>
       <a href="#app">The app</a>
+      <a href="#rulesets" class="hide-sm">Rulesets</a>
       <a href="#how" class="hide-sm">How it works</a>
       <a href="#trust" class="hide-sm">Security</a>
       <a href="#docs">Docs</a>
+      <a href="./compare-cloud-agents.html" class="hide-sm">Compare</a>
       <a href="#pricing" class="hide-sm">Pricing</a>
       <a href="https://github.com/bivysh/bivy" class="hide-sm">GitHub</a>
       <a href="https://app.bivy.sh" class="hide-sm">Log in</a>
-      <a href="https://app.bivy.sh" class="btn btn-primary btn-sm">Start free</a>
+      <a href="https://app.bivy.sh" class="btn btn-primary btn-sm" data-plausible="start-free-nav">Start free</a>
     </nav>
   </div>
 </header>
@@ -444,14 +452,12 @@
   <!-- HERO -->
   <section class="hero">
     <div class="wrap">
-      <h1>The Claude Code experience — for any agent, on hardware you own.</h1>
+      <h1>Route coding-agent work to infrastructure you own.</h1>
       <p class="lede">
-        The terminal-and-app experience of a hosted coding agent — but for <em>any</em>
-        agent (Claude Code, Codex, Gemini CLI or nine others), running on your own laptop
-        or server, with your keys, your sign-ins and your repo, and none of the run caps,
-        token markup, or repo uploads the cloud providers make you accept. Every session
-        also lands in a real chat app on your phone: the full transcript, the diffs, the
-        approval it's waiting on, and a terminal only when you want one.
+        Label a GitHub issue or send a webhook. Bivy routes the job to the machine you
+        choose and the agent you choose, runs it in an isolated worktree, and brings back
+        the pull request. No idle machine? Launch a short-lived runner in <em>your</em>
+        cloud account. Watch, steer, attach context, and approve from phone or browser.
       </p>
 
       <div class="install">
@@ -468,16 +474,15 @@
       </p>
 
       <div class="hero-cta">
-        <a href="https://app.bivy.sh" class="btn btn-primary">Start free</a>
-        <a href="#app" class="btn btn-ghost">See the app</a>
+        <a href="https://app.bivy.sh" class="btn btn-primary" data-plausible="start-free-hero">Start free</a>
+        <a href="#github" class="btn btn-ghost">See issue → PR</a>
       </div>
 
       <p class="sub" style="margin:22px 0 0">
-        You own the machine, the keys, and the code — no vendor sandbox, no repository
-        upload, no token markup. Agents run in real terminals on hardware you control,
-        and Bivy adds the session layer, approvals, and remote access around them.
-        Free, 10 runs a week, forever: no credit card, no trial clock. Setup is one command
-        and a guided wizard, and uninstall is one command too.
+        Agent-agnostic, end-to-end encrypted, source-available, and self-hostable. Your
+        machine, model credentials, repository, and cloud bill stay yours—no vendor
+        sandbox, repository upload, token markup, or single-agent lock-in. Free for 10
+        runs a week, forever; no credit card or trial clock.
       </p>
 
       <p class="runs-on">
@@ -495,6 +500,36 @@
     </div>
   </section>
 
+  <!-- AGENT OPERATIONS -->
+  <section aria-labelledby="agent-ops-title">
+    <div class="wrap">
+      <p class="kicker">The own-infrastructure agent loop</p>
+      <h2 id="agent-ops-title">From incoming work to reviewed pull request.</h2>
+      <p class="prose">Bivy is the coordination layer above the agent CLIs—not another
+      model vendor and not merely a phone remote.</p>
+      <div class="pillars">
+        <div class="pillar">
+          <p class="eyebrow">Route</p>
+          <h3>Choose the node and the agent</h3>
+          <p>Send a GitHub issue or generic webhook to a persistent machine, a specific
+          agent, and the model you want. Set defaults, then override them per job.</p>
+        </div>
+        <div class="pillar">
+          <p class="eyebrow">Run</p>
+          <h3>Use your hardware—or your cloud</h3>
+          <p>Work runs in an isolated worktree with your keys and toolchain. For burst
+          capacity, launch an ephemeral Fly.io, Hetzner, or AWS runner you pay for directly.</p>
+        </div>
+        <div class="pillar">
+          <p class="eyebrow">Control</p>
+          <h3>Steer the whole fleet from anywhere</h3>
+          <p>Review diffs, answer questions, approve risky actions, and fork or move a
+          session to another node from the mobile app, browser, or terminal.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- THE APP -->
   <section id="app">
     <div class="wrap">
@@ -502,7 +537,7 @@
       <h2>The app a hosted agent keeps for itself — for any agent, on your hardware.</h2>
       <p class="prose">
         This is the mobile companion most agent CLIs don't ship on their own: whichever
-        agent and model you're running — Claude Code, Codex, or nine others — on machines
+        agent and model you're running — Claude Code, Codex, or any other supported agent — on machines
         you own, with your own keys, reachable from anywhere. Not a PTY squeezed onto a
         small screen, but a real chat client — read the transcript, scan the diffs,
         approve the one thing it's waiting on, and steer the run from a composer built for
@@ -671,6 +706,69 @@
     </div>
   </section>
 
+  <!-- RULESETS -->
+  <section id="rulesets">
+    <div class="wrap">
+      <p class="kicker">New — resilience</p>
+      <h2>Runs that recover themselves.</h2>
+      <p class="prose">A rate limit, an exhausted subscription, a full context window, a
+      node that drops — the failures that normally kill an unattended run. A <b>ruleset</b>
+      is a small policy that says what should happen instead: retry, switch to another
+      model or account, or hand it back to you. One policy, applied to both your live
+      sessions and the work queue.</p>
+
+      <div class="pillars">
+        <div class="pillar">
+          <p class="eyebrow">Classify, don't guess</p>
+          <h3>Matches stable conditions, not error strings</h3>
+          <p>Raw provider errors are sorted into stable codes — <code>rate_limited</code>,
+          <code>credits_exhausted</code>, <code>context_overflow</code>,
+          <code>auth_failed</code> — so a rule reads like intent, never a brittle regex on
+          someone's error text.</p>
+        </div>
+        <div class="pillar">
+          <p class="eyebrow">Retry · reroute · park</p>
+          <h3>Fall back across models, accounts and providers</h3>
+          <p>Retry transient blips with backoff. Reroute an exhausted subscription down a
+          chain — a backup account, a cheaper model, a different provider — skipping any
+          route the node has no key for. Park anything risky for a human.</p>
+        </div>
+        <div class="pillar">
+          <p class="eyebrow">Safe by default</p>
+          <h3>Unattended runs stay in the lines</h3>
+          <p>Max attempts and backoff caps keep an automated run from spinning or spending
+          without limit; when a policy runs out it surfaces as <em>needs attention</em>
+          instead of failing silently. Every decision lands on the run's timeline.</p>
+        </div>
+      </div>
+
+      <p class="features-label">A rule reads like this</p>
+      <pre class="block">rules:
+  <span class="c"># a transient blip or a node dropping → just retry, backing off</span>
+  - when: [transport_error, node_offline]
+    action: retry
+    maxAttempts: 3
+    backoff: { baseMs: 2000, factor: 2, capMs: 60000 }
+
+  <span class="c"># subscription ran dry → walk a fallback chain; first with valid creds wins</span>
+  - when: [credits_exhausted, rate_limited]
+    action: reroute
+    chain:
+      - { account: work-secondary }         <span class="c"># same model, backup account</span>
+      - { model: claude-sonnet }            <span class="c"># cheaper model, same provider</span>
+      - { runtimeId: codex, model: gpt-5 }  <span class="c"># cross-provider last resort</span>
+    onExhausted: park
+
+  <span class="c"># needs a human → surface it, never fail quietly</span>
+  - when: [auth_failed, context_overflow]
+    action: park</pre>
+
+      <p class="prose" style="margin-top:20px">Live now: the work queue retries and reroutes
+      automatically, and a session can switch to a fallback model mid-conversation and pick
+      up right where it left off. <a href="https://github.com/bivysh/bivy/blob/main/docs/rulesets.md" style="color:var(--accent);text-decoration:none">Read the rulesets guide →</a></p>
+    </div>
+  </section>
+
   <!-- WHAT IT IS -->
   <section id="how">
     <div class="wrap">
@@ -735,7 +833,7 @@
             <li>Community support</li>
           </ul>
           <div class="cta-row">
-            <a href="https://app.bivy.sh" class="btn btn-ghost btn-block">Start free</a>
+            <a href="https://app.bivy.sh" class="btn btn-ghost btn-block" data-plausible="start-free-pricing">Start free</a>
           </div>
         </div>
         <div class="plan featured">
@@ -755,7 +853,23 @@
             <li class="hl">Email support</li>
           </ul>
           <div class="cta-row">
-            <a href="https://app.bivy.sh/?intent=upgrade" class="btn btn-primary btn-block">Go Pro — $15/mo</a>
+            <a href="https://app.bivy.sh/?intent=upgrade" class="btn btn-primary btn-block" data-plausible="upgrade-pro">Go Pro — $15/mo</a>
+          </div>
+        </div>
+        <div class="plan">
+          <span class="badge">Early access</span>
+          <h3>Team</h3>
+          <div class="price">Let's talk</div>
+          <p class="tagline">For teams standardizing agent work across their own fleet.</p>
+          <ul>
+            <li>Everything in Pro</li>
+            <li>Agent and node routing across a shared workflow</li>
+            <li>Deployment and onboarding review</li>
+            <li>Priority support</li>
+            <li>Help shape SSO, audit, and supported self-hosting</li>
+          </ul>
+          <div class="cta-row">
+            <a href="mailto:support@bivy.sh?subject=Bivy%20Team%20early%20access" class="btn btn-ghost btn-block" data-plausible="team-contact">Contact us</a>
           </div>
         </div>
       </div>
@@ -774,16 +888,16 @@
       <h2>Label an issue. Get a pull request back.</h2>
       <p class="prose">
         Work happens on a machine you own, with your local toolchain and your
-        credentials. Bivy's control plane sees the issue title, body, and routing
-        label — never your repository contents.
+        credentials. Bivy's control plane retains routing metadata such as the repository,
+        issue number, node, agent, and status—not the issue body or repository contents.
       </p>
 
       <ol class="steps">
         <li>
           <b>Trigger it in GitHub</b>
           <span>Add the <code>bivy</code> label to route to your default node, or
-          <code>bivy/mac-mini</code> to target one. Or mention the Bivy GitHub App in
-          a comment.</span>
+          <code>bivy/mac-mini</code> to target one. Mention the Bivy GitHub App in a
+          comment, and choose or default the agent that should take the job.</span>
         </li>
         <li>
           <b>Bivy queues the work</b>
@@ -946,6 +1060,7 @@
           <ul>
             <li><a href="https://github.com/bivysh/bivy/blob/main/docs/remote-access.md">Remote access &amp; PWA</a></li>
             <li><a href="https://github.com/bivysh/bivy/blob/main/docs/github-work-queue.md">GitHub work queue</a></li>
+            <li><a href="https://github.com/bivysh/bivy/blob/main/docs/webhook-recipes.md">Automation webhook recipes</a></li>
           </ul>
         </div>
         <div>
@@ -1062,7 +1177,7 @@
         <button id="copy2" type="button" aria-label="Copy install command">Copy</button>
       </div>
       <div class="hero-cta">
-        <a href="https://app.bivy.sh" class="btn btn-primary">Start free</a>
+        <a href="https://app.bivy.sh" class="btn btn-primary" data-plausible="start-free-footer">Start free</a>
         <a href="#pricing" class="btn btn-ghost">Compare plans</a>
       </div>
     </div>
@@ -1080,6 +1195,7 @@
       <a href="#docs">Docs</a>
       <a href="https://github.com/bivysh/bivy">GitHub</a>
       <a href="#pricing">Pricing</a>
+      <a href="./compare-cloud-agents.html">Compare cloud agents</a>
       <a href="./contact.html">Contact</a>
       <a href="./privacy.html">Privacy</a>
       <a href="./terms.html">Terms</a>
@@ -1120,6 +1236,17 @@
     }
     wire("copy");
     wire("copy2");
+
+    document.addEventListener("click", function (event) {
+      var target = event.target.closest("[data-plausible]");
+      if (target) plausible("CTA", { props: { placement: target.getAttribute("data-plausible") } });
+    });
+    ["copy", "copy2"].forEach(function (id) {
+      var button = document.getElementById(id);
+      if (button) button.addEventListener("click", function () {
+        plausible("Install Copy", { props: { placement: id === "copy" ? "hero" : "footer" } });
+      });
+    });
   })();
 </script>
 
