@@ -103,6 +103,23 @@ export interface DiscoveredNativeSessionDto {
     mode: "native-resume" | "seeded" | "follow-only";
     disclosure?: string;
   };
+  /** The provider's own CLI command to attach to this session directly, when
+   *  known — the "follow/read-only" affordance for a session whose plan is
+   *  "follow-only" (a live external process Bivy can't safely take over). */
+  resumeCommand?: string;
+}
+
+/**
+ * Thrown by `importNativeSession` when the node refuses to fall back to a
+ * seeded continuation without explicit user disclosure (issue #156). Callers
+ * MUST show `disclosure` and only retry with `{ acceptDisclosure: true }` on
+ * the user's explicit confirmation — never automatically.
+ */
+export class NeedsDisclosureError extends Error {
+  constructor(public readonly disclosure: string) {
+    super(disclosure);
+    this.name = "NeedsDisclosureError";
+  }
 }
 
 function requestId(): string {
@@ -815,7 +832,12 @@ export class AppController {
     clearTimeout(pending.timer);
     this.pendingAcks.delete(rid);
     if (String(event.type || "").endsWith(".error")) {
-      pending.reject(new Error(String((event as { error?: unknown }).error || "Save failed")));
+      const error = new Error(String((event as { error?: unknown }).error || "Save failed"));
+      // Preserve any extra fields the error event carried (e.g. session.import's
+      // `needsDisclosure`/`disclosure`) so a caller that needs more than the
+      // message can read them off the thrown Error.
+      Object.assign(error, event);
+      pending.reject(error);
     } else {
       pending.resolve(event);
     }
@@ -839,18 +861,45 @@ export class AppController {
    * Import a discovered session into Bivy and switch the view to it. The node
    * re-validates the ref against a fresh discovery pass (so a stale/removed
    * session, or one with a live external process, is rejected server-side even
-   * if this client's cached list is out of date) and resumes it natively when
-   * the runtime supports that; the provider's own history is never touched.
+   * if this client's cached list is out of date).
+   *
+   * Two outcomes:
+   *  - native resume (the common case for Claude Code / Codex): reopens
+   *    through the ordinary path/id resume, same as clicking any saved
+   *    session — the provider's own history is never touched.
+   *  - seeded continuation (a runtime that can discover but not natively
+   *    resume this session): the node refuses on the first call with a
+   *    NeedsDisclosureError carrying the disclosure text — callers MUST show
+   *    that to the user and only retry with `acceptDisclosure: true` on
+   *    explicit confirmation (issue #156: never fall back to a seeded
+   *    continuation silently). On acceptance a fresh session is created and
+   *    its seed prompt is sent as the first turn, mirroring how a
+   *    cross-runtime session fork seeds its first turn (see forkSession below).
    */
-  async importNativeSession(runtimeId: string, ref: string): Promise<string> {
-    const event = await this.awaitAck({ kind: "session.import", runtimeId, ref }, 60000);
+  async importNativeSession(runtimeId: string, ref: string, opts: { acceptDisclosure?: boolean } = {}): Promise<string> {
+    let event: ServerEvent;
+    try {
+      event = await this.awaitAck({ kind: "session.import", runtimeId, ref, acceptDisclosure: opts.acceptDisclosure ?? false }, 60000);
+    } catch (error) {
+      const e = error as { needsDisclosure?: unknown; disclosure?: unknown; message?: unknown };
+      if (e?.needsDisclosure) throw new NeedsDisclosureError(String(e.disclosure ?? e.message ?? "This import needs your confirmation."));
+      throw error;
+    }
     const sessionId = String((event as { sessionId?: unknown }).sessionId || "");
     if (!sessionId) throw new Error("Import did not return a session id");
-    // Reopen through the ordinary path/id resume (same as clicking any saved
-    // session) rather than trusting a synthetic event shape, so this works
-    // identically whether the node created a brand-new record or reused one
-    // already open in memory.
-    this.openSession(sessionId, ref);
+    const seedPrompt = (event as { seedPrompt?: unknown }).seedPrompt;
+    if (typeof seedPrompt === "string" && seedPrompt.trim()) {
+      // Seeded continuation: a FRESH session with no native resume ref, so open
+      // by id alone (never pass the old provider ref as a resume path here —
+      // it isn't this new session's resume token) and seed its first turn the
+      // same way forkSession does for a cross-runtime fork.
+      this.openSession(sessionId);
+      const cmid = clientMessageId();
+      this.store.addUserMessage(seedPrompt, cmid);
+      this.send({ kind: "prompt", sessionId, text: seedPrompt, clientMessageId: cmid });
+    } else {
+      this.openSession(sessionId, ref);
+    }
     return sessionId;
   }
 

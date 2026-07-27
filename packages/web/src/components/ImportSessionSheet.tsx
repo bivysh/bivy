@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { controller, useAppState } from "../store/useStore.js";
 import { Sheet, PickerItem } from "./Sheet.js";
-import type { DiscoveredNativeSessionDto } from "../store/controller.js";
+import { NeedsDisclosureError, type DiscoveredNativeSessionDto } from "../store/controller.js";
 
 /** Last path segment of a cwd as a readable "repository" label — the same
  *  best-effort heuristic used for filtering/grouping, not a git lookup. */
@@ -32,6 +32,11 @@ const ALL = "__all__";
  * advertised adoption AND the session isn't seen as still-live elsewhere
  * (see planNativeAdoption on the node) — so an unsupported provider, or a
  * session with a live external process, never shows a misleading action here.
+ *
+ * A session that can't be natively resumed goes through an explicit two-step
+ * confirmation (this component) before falling back to a seeded continuation —
+ * the node itself also refuses a seeded import without that acknowledgement,
+ * so this isn't just a UI nicety.
  */
 export function ImportSessionSheet({ onClose }: { onClose: () => void }) {
   const { nodes, currentNodeId } = useAppState();
@@ -44,6 +49,10 @@ export function ImportSessionSheet({ onClose }: { onClose: () => void }) {
   const [loadError, setLoadError] = useState("");
   const [importingRef, setImportingRef] = useState<string | null>(null);
   const [importError, setImportError] = useState("");
+  // Set when the node refused a seeded import pending explicit confirmation
+  // (NeedsDisclosureError) — replaces the list with a confirm/cancel prompt
+  // until the user decides, rather than a passive tooltip anyone could miss.
+  const [pendingDisclosure, setPendingDisclosure] = useState<{ session: DiscoveredNativeSessionDto; text: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,13 +97,19 @@ export function ImportSessionSheet({ onClose }: { onClose: () => void }) {
     [sessions, providerFilter, repoFilter],
   );
 
-  async function doImport(session: DiscoveredNativeSessionDto) {
+  async function doImport(session: DiscoveredNativeSessionDto, acceptDisclosure = false) {
     setImportingRef(session.ref);
     setImportError("");
     try {
-      await controller.importNativeSession(session.runtimeId, session.ref);
+      await controller.importNativeSession(session.runtimeId, session.ref, { acceptDisclosure });
       onClose();
     } catch (err) {
+      if (err instanceof NeedsDisclosureError) {
+        // Never fall back to a seeded continuation silently — surface the
+        // node's disclosure and wait for an explicit "Import anyway".
+        setPendingDisclosure({ session, text: err.disclosure });
+        return;
+      }
       setImportError(err instanceof Error ? err.message : String(err));
     } finally {
       setImportingRef(null);
@@ -106,6 +121,33 @@ export function ImportSessionSheet({ onClose }: { onClose: () => void }) {
     if (currentNodeId && !rows.some((n) => n.id === currentNodeId)) rows.unshift({ id: currentNodeId, name: "This node", online: true });
     return rows;
   }, [nodes, currentNodeId]);
+
+  if (pendingDisclosure) {
+    const { session, text } = pendingDisclosure;
+    return (
+      <Sheet title="Confirm seeded import" onClose={onClose} autoFocusSearch={false}>
+        <div className="picker-section">
+          <div className="picker-section-label">{session.title || "Untitled session"}</div>
+          <div className="import-session-hint">{text}</div>
+        </div>
+        <div className="picker-section">
+          <button className="fork-submit" disabled={importingRef === session.ref} onClick={() => setPendingDisclosure(null)}>
+            Cancel
+          </button>
+          <button
+            className="fork-submit"
+            disabled={importingRef === session.ref}
+            onClick={() => {
+              setPendingDisclosure(null);
+              void doImport(session, true);
+            }}
+          >
+            {importingRef === session.ref ? "Importing…" : "Import anyway"}
+          </button>
+        </div>
+      </Sheet>
+    );
+  }
 
   return (
     <Sheet title="Import existing session" onClose={onClose} autoFocusSearch={false}>
@@ -169,17 +211,27 @@ export function ImportSessionSheet({ onClose }: { onClose: () => void }) {
               meta={`${s.agentName} · ${repoOf(s.cwd) || s.cwd || "unknown directory"} · ${relTime(s.updatedAt)}`}
               right={
                 s.plan.mode === "follow-only" ? (
-                  <span className="import-session-badge" title={s.plan.disclosure}>
-                    Live elsewhere
+                  <span className="import-session-follow">
+                    <span className="import-session-badge" title={s.plan.disclosure}>
+                      Live elsewhere
+                    </span>
+                    {s.resumeCommand && (
+                      // Bivy has no safe way to take over a process it doesn't
+                      // own, so this is the "follow/read-only" affordance the
+                      // issue calls for: the exact command to attach to it
+                      // themselves, in their own terminal.
+                      <code className="import-session-resume-cmd" title="Run this in a terminal to follow the live session">
+                        {s.resumeCommand}
+                      </code>
+                    )}
                   </span>
                 ) : (
                   <button
                     className="import-session-action"
                     disabled={importingRef === s.ref}
                     onClick={() => doImport(s)}
-                    title={s.plan.disclosure}
                   >
-                    {importingRef === s.ref ? "Importing…" : s.plan.mode === "seeded" ? "Import (seeded)" : "Adopt"}
+                    {importingRef === s.ref ? "Importing…" : s.plan.mode === "seeded" ? "Import…" : "Adopt"}
                   </button>
                 )
               }

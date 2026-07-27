@@ -19,10 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   title, and an active/resumable flag — never transcript content, and never
   duplicates a session Bivy already manages. Importing resumes the session
   natively through the ordinary open/resume path without rewriting or
-  deleting the provider's own history; a session with a live external process
-  is offered read-only instead of an adopt action, since Bivy has no safe way
-  to take over a process it doesn't own. Other runtimes stay hidden from the
-  discovery UI until their adapter earns the capability. (#156)
+  deleting the provider's own history whenever the runtime supports it (the
+  case for every Claude Code / Codex session today); a runtime that can only
+  discover but not natively resume a session instead falls back to a fresh,
+  seeded continuation — and the node refuses that fallback until the app
+  shows the disclosure and the user explicitly confirms "Import anyway". A
+  session with a live external process is never importable — Bivy has no safe
+  way to take over a process it doesn't own — and instead surfaces the
+  provider's own resume command (`claude --resume <id>` / `codex resume <id>`)
+  so it can be followed read-only in a terminal. Other runtimes stay hidden
+  from the discovery UI until their adapter earns the capability. (#156)
 
 - **Scheduled automations** — Settings → Automations lets you create a
   recurring (cron, with an explicit IANA timezone) or one-time schedule that

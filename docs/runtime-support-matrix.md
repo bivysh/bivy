@@ -70,14 +70,25 @@ truncated first-prompt title, and an active/resumable flag) — never transcript
 content — and a session Bivy already manages is filtered out (deduped by its
 on-disk transcript path or provider session id, whichever the runtime uses).
 Importing resumes the session natively through the ordinary open/resume path
-without rewriting or deleting the provider's original history; a live external
-process for that session is detected best-effort and blocks adoption in favor
-of a read-only "Live elsewhere" state, since Bivy has no safe way to take over
-a process it doesn't own. Only Claude Code SDK and Codex (via the governed
-`codex-approvals` shim, not the plain exec runtime) advertise it today — every
-other runtime stays hidden from the discovery UI until its adapter earns the
-capability, per the capability-driven design in
-`src/runtime/native-session-discovery.ts`.
+without rewriting or deleting the provider's original history whenever the
+runtime can (`planNativeAdoption`'s "native-resume" mode — the case for every
+Claude Code / Codex session today, since both assign a stable, resumable id).
+A runtime that can discover a session but not natively resume it falls back to
+a "seeded" continuation — a brand-new session whose first turn is a bounded
+summary of the prior conversation (never the full transcript) — and the node
+refuses that fallback outright until the caller explicitly acknowledges the
+disclosure it returns (`needsDisclosure`/`disclosure` on the `session.import`
+response); the app's "Import existing session" sheet shows that disclosure and
+requires an explicit "Import anyway" before retrying with acceptance. A live
+external process for a session is detected best-effort and blocks adoption
+entirely (`"follow-only"` mode) in favor of surfacing the provider's own
+resume command (e.g. `claude --resume <id>` / `codex resume <id>`) so the user
+can follow it themselves in a terminal, since Bivy has no safe way to take
+over a process it doesn't own. Only Claude Code SDK and Codex (via the
+governed `codex-approvals` shim, not the plain exec runtime) advertise
+discovery today — every other runtime stays hidden from the discovery UI
+until its adapter earns the capability, per the capability-driven design in
+`src/runtime/native-session-discovery.ts` and `src/session/native-import.ts`.
 
 Definitions:
 

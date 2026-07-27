@@ -98,6 +98,8 @@ import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
 import { buildForkBundle, materializeFork, type ForkBundle, type ForkRecord, type ForkPlan } from "./session/fork.js";
 import { captureDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
+import { normalizeMessages } from "./session/transcript-normal.js";
+import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog } from "./session/event-log.js";
 import { ReplicationService } from "./session/replication-service.js";
 import type { ReplWireFrame } from "./session/replicator.js";
@@ -1725,6 +1727,17 @@ const RESUME_CLI_BY_AGENT: Record<string, (id: string) => string> = {
   codex: (id) => `codex resume ${id}`,
 };
 
+// Same commands, keyed by runtime id instead of the short takeover agent alias
+// above — for native session discovery (issue #156), where a session with a
+// live external process can't be safely imported (no channel to take over a
+// process Bivy doesn't own) but is still "offered follow/read-only... per
+// provider capability": the exact command to attach to it themselves, in
+// their own terminal, without Bivy touching it.
+const NATIVE_RESUME_CLI_BY_RUNTIME: Record<string, (id: string) => string> = {
+  "claude-code-sdk": (id) => `claude --resume ${id}`,
+  "codex-approvals": (id) => `codex resume ${id}`,
+};
+
 // When no resumable session id can be found, why — and what to do about it.
 // These agents assign their id lazily (Codex/Pi write a session only once a turn
 // starts), so an idle run-terminal simply has nothing to adopt yet.
@@ -2738,8 +2751,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
       return;
     }
     try {
-      const record = await importNativeSession(runtimeId, ref);
-      ctx.reply({ type: "session.import.result", requestId, sessionId: record.id, runtimeId: record.runtimeId });
+      const result = await importNativeSession(runtimeId, ref, { acceptDisclosure: Boolean(msg.acceptDisclosure) });
+      if (!result.ok) {
+        ctx.reply({ type: "session.import.error", requestId, error: result.error, needsDisclosure: result.needsDisclosure, disclosure: result.disclosure });
+        return;
+      }
+      ctx.reply({ type: "session.import.result", requestId, sessionId: result.record.id, runtimeId: result.record.runtimeId, mode: result.plan.mode, seedPrompt: result.seedPrompt });
     } catch (error) {
       ctx.reply({ type: "session.import.error", requestId, error: error instanceof Error ? error.message : String(error) });
     }
@@ -5422,6 +5439,13 @@ async function listAllSessions(): Promise<Array<SessionSummary & { agent: string
 export interface DiscoveredSessionView extends DiscoveredNativeSession {
   agentName: string;
   plan: NativeAdoptionPlan;
+  /** The provider's own CLI command to attach to this session directly, when
+   *  known — the "follow/read-only" affordance for a live session Bivy can't
+   *  safely take over itself (plan.mode === "follow-only"). Present whenever
+   *  the runtime has a known native resume form, regardless of plan.mode, so
+   *  the UI can also offer it as a secondary "or continue in a terminal"
+   *  option on an adoptable session. */
+  resumeCommand?: string;
 }
 
 /** Every provider-native session discoverable on this node, minus ones Bivy
@@ -5438,30 +5462,79 @@ async function listDiscoverableSessions(): Promise<DiscoveredSessionView[]> {
   );
   return discovered.map((session) => {
     const rt = getRuntime(session.runtimeId);
-    return { ...session, agentName: rt.displayName, plan: planNativeAdoption(session, rt.capabilities) };
+    return {
+      ...session,
+      agentName: rt.displayName,
+      plan: planNativeAdoption(session, rt.capabilities),
+      resumeCommand: NATIVE_RESUME_CLI_BY_RUNTIME[session.runtimeId]?.(session.ref),
+    };
   });
 }
 
+type ImportNativeSessionResult =
+  | { ok: true; record: SessionRecord; plan: NativeAdoptionPlan; seedPrompt?: string }
+  | { ok: false; status: number; error: string; needsDisclosure?: boolean; disclosure?: string };
+
 /**
- * Import a discovered provider-native session into Bivy: creates or binds a
- * Bivy session via the ordinary resume path (createSession → runtime.openSession),
- * so it's a native resume whenever the runtime supports one — never a rewrite
- * or deletion of the provider's own history. Re-validates the ref against a
- * fresh discovery pass (rather than trusting the caller's cached list) so a
- * stale/removed session, or one with a live external process, can't be
- * imported out from under the safety checks.
+ * Import a discovered provider-native session into Bivy. Re-validates the ref
+ * against a fresh discovery pass (rather than trusting the caller's cached
+ * list) so a stale/removed session, or one with a live external process,
+ * can't be imported out from under the safety checks — see planNativeAdoption:
+ *
+ *  - "native-resume": creates/binds the Bivy session via the ordinary resume
+ *    path (createSession → runtime.openSession) — never a rewrite or deletion
+ *    of the provider's own history.
+ *  - "seeded": native resume isn't available. Requires `opts.acceptDisclosure`
+ *    — the caller must have shown `plan.disclosure` to the user first (issue
+ *    #156: "fall back to a seeded continuation only with explicit user
+ *    disclosure"); without it this returns `needsDisclosure: true` instead of
+ *    importing, so a client can never silently fall through to a seeded
+ *    continuation. When accepted, a FRESH session is created (no resume ref)
+ *    and its first-turn seed prompt (a bounded summary of the discovered
+ *    session's recent turns, never the full transcript) is returned for the
+ *    caller to send — mirroring how a cross-runtime session fork seeds its
+ *    first turn client-side (session/fork.ts's ForkSeed).
+ *  - "follow-only": a live external process was detected; refused outright.
  */
-async function importNativeSession(runtimeId: string, ref: string): Promise<SessionRecord> {
+async function importNativeSession(
+  runtimeId: string,
+  ref: string,
+  opts: { acceptDisclosure?: boolean } = {},
+): Promise<ImportNativeSessionResult> {
   const rt = getRuntime(runtimeId);
   if (!rt.capabilities.nativeSessionDiscovery || !rt.capabilities.nativeSessionAdoption) {
-    throw new Error(`${rt.displayName} does not support importing existing sessions.`);
+    return { ok: false, status: 409, error: `${rt.displayName} does not support importing existing sessions.` };
   }
   const discovered = await runtimeHost.discoverNativeSessions(rt);
   const match = discovered.find((s) => s.ref === ref);
-  if (!match) throw new Error("That session is no longer discoverable — it may already be imported, or removed.");
+  if (!match) {
+    return { ok: false, status: 404, error: "That session is no longer discoverable — it may already be imported, or removed." };
+  }
   const plan = planNativeAdoption(match, rt.capabilities);
-  if (plan.mode === "follow-only") throw new Error(plan.disclosure ?? "This session has a live process outside Bivy; close it before adopting.");
-  return createSession(match.cwd || defaultWorkspace, ref, { runtimeId, source: "import" });
+  if (plan.mode === "follow-only") {
+    return { ok: false, status: 409, error: plan.disclosure ?? "This session has a live process outside Bivy; close it before adopting." };
+  }
+  if (plan.mode === "seeded") {
+    if (!opts.acceptDisclosure) {
+      return {
+        ok: false,
+        status: 409,
+        needsDisclosure: true,
+        disclosure: plan.disclosure,
+        error: plan.disclosure ?? "This session can't be natively resumed; importing starts a seeded continuation instead.",
+      };
+    }
+    const normalized = normalizeMessages(runtimeHost.readMessages(rt, ref), {
+      sourceRuntimeId: rt.id,
+      title: match.title,
+      createdAt: new Date().toISOString(),
+    });
+    const seedPrompt = buildNativeImportSeedPrompt(normalized, { provider: rt.displayName, title: match.title, cwd: match.cwd });
+    const record = await createSession(match.cwd || defaultWorkspace, undefined, { runtimeId, source: "import-seeded" });
+    return { ok: true, record, plan, seedPrompt };
+  }
+  const record = await createSession(match.cwd || defaultWorkspace, ref, { runtimeId, source: "import" });
+  return { ok: true, record, plan };
 }
 
 function isEmptyUntitledTitle(value: unknown): boolean {
@@ -8221,8 +8294,11 @@ app.post("/api/sessions/import", async (req, res, next) => {
     const runtimeId = String(req.body?.runtimeId || "").trim();
     const ref = String(req.body?.ref || "").trim();
     if (!runtimeId || !ref) return res.status(400).json({ error: "runtimeId and ref are required" });
-    const record = await importNativeSession(runtimeId, ref);
-    res.json({ sessionId: record.id, runtimeId: record.runtimeId, workspace: record.workspace });
+    const result = await importNativeSession(runtimeId, ref, { acceptDisclosure: Boolean(req.body?.acceptDisclosure) });
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error, needsDisclosure: result.needsDisclosure, disclosure: result.disclosure });
+    }
+    res.json({ sessionId: result.record.id, runtimeId: result.record.runtimeId, workspace: result.record.workspace, mode: result.plan.mode, seedPrompt: result.seedPrompt });
   } catch (error) {
     next(error);
   }
