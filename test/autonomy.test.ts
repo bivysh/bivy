@@ -69,6 +69,19 @@ check("floor applies even in never mode", () => {
   assert.equal(guardToolCall("/ws", "bash", { command: "anything" }, "never", noRisky).decision, "allow");
 });
 
+check("floor is case-insensitive (claude-code sends Bash/Write/Edit)", () => {
+  // The Claude Code SDK passes tool names verbatim as Bash/Write/Edit. The hard
+  // floor must still fire — a case-sensitive compare silently disabled it.
+  assert.equal(guardToolCall("/ws", "Bash", { command: "rm -rf /" }, "never", noRisky).decision, "deny");
+  assert.equal(guardToolCall("/ws", "Write", { file_path: "../../etc/passwd" }, "autonomous", noRisky).decision, "deny");
+  assert.equal(guardToolCall("/ws", "Edit", { file_path: "/etc/passwd" }, "always", noRisky).decision, "deny");
+  // MultiEdit/NotebookEdit also write via file_path and must respect the boundary.
+  assert.equal(guardToolCall("/ws", "MultiEdit", { file_path: "../secret" }, "autonomous", noRisky).decision, "deny");
+  assert.equal(guardToolCall("/ws", "NotebookEdit", { file_path: "/etc/hosts" }, "never", noRisky).decision, "deny");
+  // In-workspace writes with SDK casing still run without prompting.
+  assert.equal(guardToolCall("/ws", "Write", { file_path: "src/a.ts" }, "autonomous", noRisky).decision, "allow");
+});
+
 check("risky mode keeps prompting on risky bash", () => {
   assert.equal(guardToolCall("/ws", "bash", { command: "curl http://x" }, "risky", noRisky).decision, "ask");
   assert.equal(guardToolCall("/ws", "bash", { command: "ls" }, "risky", noRisky).decision, "allow");

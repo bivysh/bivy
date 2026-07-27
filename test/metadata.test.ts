@@ -12,7 +12,9 @@ function run() {
     store.upsertSession({ id: "b", status: "idle" });
     store.upsertSession({ id: "c", status: "working" });
 
-    // save() (fsync path) actually persisted a well-formed file.
+    // Writes are coalesced/debounced now; flushSync() forces the pending write
+    // so we can assert the fsync path produced a well-formed file on disk.
+    store.flushSync();
     const onDisk = JSON.parse(fs.readFileSync(path.join(dir, "metadata.json"), "utf8"));
     assert.equal(onDisk.sessions.a.status, "working", "round-trips through fsync save");
 
@@ -21,6 +23,7 @@ function run() {
     const reset = store.resetStaleWorking();
     assert.deepEqual([...reset].sort(), ["a", "c"], "reports both working ids");
 
+    store.flushSync();
     const reloaded = MetadataStore.load(dir);
     const byId = Object.fromEntries(reloaded.listSessions().map((s) => [s.id, s.status]));
     assert.equal(byId.a, "idle", "a reset to idle");
@@ -34,10 +37,12 @@ function run() {
     // no-ops when already in the requested state.
     reloaded.setResumePending("a", true);
     reloaded.setResumePending("missing", true); // no row → no-op, no throw
+    reloaded.flushSync();
     const afterPending = MetadataStore.load(dir);
     assert.equal(afterPending.getSession("a")?.resumePending, true, "resumePending persisted");
     assert.equal(afterPending.getSession("missing"), undefined, "no phantom row created");
     afterPending.setResumePending("a", false);
+    afterPending.flushSync();
     assert.equal(MetadataStore.load(dir).getSession("a")?.resumePending, false, "resumePending cleared");
 
     console.log("metadata: all tests passed");

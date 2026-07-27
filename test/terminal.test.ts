@@ -24,7 +24,7 @@ async function main() {
           settled = true;
           clearTimeout(timeout);
           assert.equal(mgr.size, 1, "one terminal should be live");
-          assert.equal(mgr.resize(id, 100, 40), true, "resize should succeed");
+          assert.equal(mgr.setClientSize(id, "client-a", 100, 40), true, "resize should succeed");
           mgr.close(id);
           assert.equal(mgr.has(id), false, "terminal should be gone after close");
           resolve();

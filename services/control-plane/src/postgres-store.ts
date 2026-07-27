@@ -1019,6 +1019,48 @@ export class PostgresStore implements MeshStore {
     }
   }
 
+  async upsertNodeSession(accountId: string, nodeId: string, session: SessionAdvert): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Only touch the index if the node belongs to this account (mirrors
+      // replaceNodeSessions' ownership fence).
+      const owns = await client.query(`SELECT 1 FROM nodes WHERE id = $1 AND account_id = $2`, [nodeId, accountId]);
+      if (owns.rowCount) {
+        // Single-row upsert keyed by the (node_id, session_id) primary key: one
+        // fixed-cost write per status flip, independent of how many sessions the
+        // node has — unlike the wholesale DELETE+reinsert in replaceNodeSessions.
+        await client.query(
+          `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+           ON CONFLICT (node_id, session_id) DO UPDATE
+             SET status = EXCLUDED.status,
+                 source = EXCLUDED.source,
+                 title_enc = EXCLUDED.title_enc,
+                 branch = EXCLUDED.branch,
+                 agent_service_address = EXCLUDED.agent_service_address,
+                 updated_at = now()`,
+          [nodeId, session.sessionId, accountId, session.status, session.source ?? null, session.titleEnc ?? null, session.branch ?? null, session.agentServiceAddress ?? null],
+        );
+        // Count each run the first time its session is advertised — same funnel
+        // as replaceNodeSessions (keyed by (account, session), DO NOTHING, so a
+        // session only ever counts once).
+        await client.query(
+          `INSERT INTO run_starts (account_id, run_key)
+           VALUES ($1, $2)
+           ON CONFLICT (account_id, run_key) DO NOTHING`,
+          [accountId, session.sessionId],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async listAccountSessions(accountId: string): Promise<SessionIndexEntry[]> {
     const { rows } = await this.query(
       `SELECT * FROM session_index WHERE account_id = $1 ORDER BY updated_at DESC`,

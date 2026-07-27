@@ -98,11 +98,21 @@ export function guardToolCall(
   mode: ApprovalMode,
   isRiskyIntegration: (tool: string) => boolean,
 ): { decision: GuardDecision; reason?: string } {
+  // Built-in tool names arrive with runtime-specific casing: the Claude Code SDK
+  // sends `Bash`/`Write`/`Edit` verbatim, while Pi/others send lowercase. Match
+  // case-insensitively so the hard floor below fires for every runtime — a
+  // case-sensitive compare silently disabled it for claude-code. Integration
+  // tool names (MCP, etc.) keep their original casing via `isRiskyIntegration`.
+  const tool = toolName.toLowerCase();
+  // Tools that write to the filesystem and so must respect the workspace
+  // boundary. MultiEdit/NotebookEdit also take a `file_path` (see toolPath).
+  const isWrite = tool === "write" || tool === "edit" || tool === "multiedit" || tool === "notebookedit";
+
   // --- Hard floor: blocked in every mode ---
-  if (toolName === "bash" && looksCatastrophic(bashCommand(input))) {
+  if (tool === "bash" && looksCatastrophic(bashCommand(input))) {
     return { decision: "deny", reason: "Blocked: catastrophic command (outside the safety boundary)" };
   }
-  if (toolName === "write" || toolName === "edit") {
+  if (isWrite) {
     const p = toolPath(input);
     if (p && pathEscapesWorkspace(workspace, p)) {
       return { decision: "deny", reason: "Blocked: write outside the workspace boundary" };
@@ -115,13 +125,13 @@ export function guardToolCall(
   if (isRiskyIntegration(toolName)) return { decision: "ask" };
 
   if (mode === "autonomous") {
-    if (toolName === "bash" && looksBackstop(bashCommand(input))) return { decision: "ask" };
+    if (tool === "bash" && looksBackstop(bashCommand(input))) return { decision: "ask" };
     return { decision: "allow" };
   }
   if (mode === "always") {
-    return { decision: ["bash", "write", "edit"].includes(toolName) ? "ask" : "allow" };
+    return { decision: tool === "bash" || isWrite ? "ask" : "allow" };
   }
   // "risky"
-  if (toolName === "bash") return { decision: looksRiskyBash(bashCommand(input)) ? "ask" : "allow" };
-  return { decision: ["write", "edit"].includes(toolName) ? "ask" : "allow" };
+  if (tool === "bash") return { decision: looksRiskyBash(bashCommand(input)) ? "ask" : "allow" };
+  return { decision: isWrite ? "ask" : "allow" };
 }

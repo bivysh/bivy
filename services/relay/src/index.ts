@@ -141,10 +141,21 @@ async function setNodeStatus(nodeId: string, online: boolean) {
  * passed straight through as the original JSON text — never inspected.
  */
 function isForwardable(text: string): boolean {
-  // Cheap routing check without parsing the payload: we forward opaque data
-  // frames (t === "frame") and pairing-handshake control frames (t === "pair").
-  // The `p` payload is never inspected — pairing frames carry only public keys
-  // and an ECDH-wrapped room key, never the room key in the clear.
+  // We forward opaque data frames (t === "frame") and pairing-handshake control
+  // frames (t === "pair"). The `p` payload is never inspected — pairing frames
+  // carry only public keys and an ECDH-wrapped room key, never the room key in
+  // the clear.
+  //
+  // Fast path: every frame is serialized as `JSON.stringify({ t: "frame"|"pair",
+  // ... })` on both ends (see packages/core/src/relay-frame.ts and
+  // src/relay-client.ts), so `t` is always the first key and the compact
+  // envelope begins with this exact prefix. Checking the prefix avoids
+  // JSON.parse-ing the whole frame — up to the max frame size — on the hot
+  // forward path just to read one field; at streaming rates that parse (and its
+  // per-call AST build) was a primary relay CPU cost. Fall back to a full parse
+  // only when the prefix doesn't match, so a serializer change can never
+  // silently drop frames.
+  if (text.startsWith('{"t":"frame"') || text.startsWith('{"t":"pair"')) return true;
   try {
     const env = JSON.parse(text) as { t?: unknown };
     return env.t === "frame" || env.t === "pair";

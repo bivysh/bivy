@@ -95,9 +95,23 @@ function iso(value: unknown, fallback = Date.now()) {
 }
 function empty(): MetadataFile { return { version: 1, sessions: {}, workspaces: {}, approvals: {}, devices: {} }; }
 
+// Coalescing window for the metadata file. A streaming agent fires a metadata
+// mutation (touchSession/upsertSession) per output line; without debouncing,
+// each did a synchronous whole-file fsync rewrite whose cost is O(all sessions).
+// At many writes/sec × many sessions that is O(sessions²) of blocking work on
+// the single event loop — enough to peg a core. Coalescing collapses a burst
+// into at most one fsync per window. Durability is bounded to this window: a
+// clean shutdown calls flushSync(), and any 'working' row left stale by a hard
+// crash is reconciled on restart (resetStaleWorking), so the trade is safe.
+const SAVE_DEBOUNCE_MS = 150;
+
 export class MetadataStore {
   private filePath: string;
   private data: MetadataFile;
+  /** True when an in-memory mutation has not yet been persisted to disk. */
+  private dirty = false;
+  /** Pending coalesced-write timer, or null when nothing is queued. */
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor(filePath: string, data: MetadataFile) {
     this.filePath = filePath;
@@ -117,12 +131,48 @@ export class MetadataStore {
       });
     } catch {
       const store = new MetadataStore(filePath, empty());
-      store.save();
+      store.persistNow();
       return store;
     }
   }
 
+  /**
+   * Request a persist. Coalesces a burst of mutations into at most one fsync
+   * per SAVE_DEBOUNCE_MS instead of a synchronous whole-file fsync per call —
+   * the hot-path cost that pegged the event loop. The mutation is already live
+   * in memory (the store is the source of truth); only the disk write is
+   * deferred. A clean shutdown must call flushSync() to persist the tail.
+   */
   private save() {
+    this.dirty = true;
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      if (this.dirty) this.persistNow();
+    }, SAVE_DEBOUNCE_MS);
+    // Don't keep the process alive just to flush metadata — a pending write is
+    // flushed synchronously on shutdown via flushSync().
+    this.saveTimer.unref?.();
+  }
+
+  /**
+   * Synchronously flush any pending debounced write. Call on shutdown so an
+   * in-flight coalesced change isn't lost, or when a caller needs the on-disk
+   * file to immediately reflect a just-made mutation.
+   */
+  flushSync() {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (this.dirty) this.persistNow();
+  }
+
+  /** Atomically write the metadata blob (temp file, fsync, rename). Synchronous
+   *  and O(all sessions) — reached only through the debounced `save()` or an
+   *  explicit `flushSync()`, never once per hot-path mutation. */
+  private persistNow() {
+    this.dirty = false;
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
     const tmp = `${this.filePath}.tmp`;
     // fsync the temp file before the atomic rename. Without it the rename can be
