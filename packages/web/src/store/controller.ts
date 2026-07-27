@@ -1969,7 +1969,12 @@ export class AppController {
   }
   async launchEphemeral(opts: LaunchOpts): Promise<EphemeralMachine> {
     if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
-    const machine = await launchEphemeralMachine(opts, {
+    // The repo a freshly-booted machine pre-clones is the new-session composer's
+    // repo selection, not a per-machine setting — so a configured machine works
+    // on whatever repo the draft targets. An explicit opts.repo (e.g. a queue
+    // caller) still wins.
+    const repo = opts.repo ?? (this.store.getState().draftRepo || undefined);
+    const machine = await launchEphemeralMachine({ ...opts, repo }, {
       store: this.local,
       exec: cloudExec(this.local),
       keys: this.ephemeralKeys,

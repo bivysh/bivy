@@ -513,6 +513,11 @@ export interface EphemeralMachine {
   teardownOnAgentFinish?: boolean;
   app?: string;
   nodeId?: string;
+  /** The device-local `EphemeralSetup` this machine was launched from, when it
+   *  came from a saved setup rather than an ad-hoc launch. Lets the UI tie a
+   *  running machine back to its configured node (e.g. so the node switcher can
+   *  show a setup as online and switch to it instead of re-launching). */
+  setupId?: string;
   repo?: string;
   /** The GitHub work-queue item this machine was provisioned to run, when
    *  launched from the queue's per-item "Run on ephemeral server" action
@@ -1538,6 +1543,10 @@ export interface LaunchOpts {
   ttlMinutes?: number;
   repo?: string;
   name?: string;
+  /** The device-local `EphemeralSetup` id this launch came from, stamped onto
+   *  the resulting `EphemeralMachine` for later correlation (see
+   *  `EphemeralMachine.setupId`). */
+  setupId?: string;
   /** Destroy this machine when the agent emits agent_end. */
   teardownOnAgentFinish?: boolean;
   /** Opt the machine into the hosted GitHub work queue on boot (see
@@ -1636,6 +1645,14 @@ export async function launchEphemeralMachine(
     config: { slug: ephemeralNodeLabel(nodeId), region: opts.region || adapter.defaultRegion, size, ttlMinutes: opts.ttlMinutes },
   });
   machine.nodeId = nodeId;
+  // Persist the user-chosen name (from a saved setup) onto the machine record.
+  // Without this the record kept the provider-generated name (e.g. Fly's
+  // `bivy-<slug>`), so a machine launched from a setup called "EU node" showed
+  // up as `bivy-…` in every machine list — the configured name was silently
+  // dropped even though the enrolled node itself carried it.
+  const chosenName = String(opts.name || "").trim();
+  if (chosenName) machine.name = chosenName;
+  if (opts.setupId) machine.setupId = opts.setupId;
   if (opts.repo) machine.repo = opts.repo;
   if (opts.teardownOnAgentFinish) machine.teardownOnAgentFinish = true;
   if (opts.workItemId) machine.workItemId = opts.workItemId;
