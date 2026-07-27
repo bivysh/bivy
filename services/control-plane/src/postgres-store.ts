@@ -418,6 +418,19 @@ export class PostgresStore implements MeshStore {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      -- automation_definitions predates scheduling (#147 created it without these
+      -- columns). On an already-deployed database the CREATE TABLE above is a
+      -- no-op, so the scheduling columns must be added explicitly or every query
+      -- and the idx_automation_definitions_due index below fail with
+      -- "column enabled does not exist". Fresh databases already have them from
+      -- the CREATE TABLE, so these ADD COLUMN IF NOT EXISTS statements are no-ops
+      -- there.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS approval_mode TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS sandbox TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS schedule JSONB NOT NULL DEFAULT '{"kind":"once","at":"9999-12-31T00:00:00.000Z"}';
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS last_scheduled_at TIMESTAMPTZ;
       CREATE TABLE IF NOT EXISTS trigger_events (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
