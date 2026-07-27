@@ -5,6 +5,7 @@ import {
   EPHEMERAL_PROVIDERS,
   ephemeralAdapter,
   type EphemeralMachine,
+  type EphemeralSetup,
   type ProviderKeyInfo,
   type ProviderSize,
 } from "@bivy/core";
@@ -19,13 +20,23 @@ const TTL_OPTIONS = [
   { v: 480, label: "8 hours" },
 ];
 
-export function EphemeralSheet({ onClose }: { onClose: () => void }) {
+export function EphemeralSheet({ onClose, setupId }: { onClose: () => void; setupId?: string }) {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
+  const [setups, setSetups] = useState<EphemeralSetup[]>([]);
+  const [selectedSetup, setSelectedSetup] = useState<EphemeralSetup | null>(null);
   const [provider, setProvider] = useState<string | null>(null);
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys);
   useEffect(() => {
     refreshKeys();
-  }, []);
+    controller.listEphemeralSetups().then((rows) => {
+      setSetups(rows);
+      const selected = setupId ? rows.find((s) => s.id === setupId) : undefined;
+      if (selected) {
+        setSelectedSetup(selected);
+        setProvider(selected.provider);
+      }
+    });
+  }, [setupId]);
 
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === provider);
 
@@ -37,7 +48,7 @@ export function EphemeralSheet({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       headExtra={
         provider ? (
-          <button className="sheet-back" onClick={() => setProvider(null)} aria-label="Back">
+          <button className="sheet-back" onClick={() => { setProvider(null); setSelectedSetup(null); }} aria-label="Back">
             ‹
           </button>
         ) : undefined
@@ -45,7 +56,21 @@ export function EphemeralSheet({ onClose }: { onClose: () => void }) {
     >
       {!provider ? (
         <div className="picker-list">
-          <p className="muted settings-intro">Bring your own cloud token to spin up a temporary node that self-destructs at its TTL.</p>
+          <p className="muted settings-intro">Launch a saved node setup, or configure an ad-hoc temporary node that self-destructs at its TTL.</p>
+          {setups.length > 0 && <div className="node-menu-head">Saved setups</div>}
+          {setups.map((setup) => {
+            const p = EPHEMERAL_PROVIDERS.find((item) => item.id === setup.provider);
+            return (
+              <PickerItem
+                key={setup.id}
+                title={setup.name}
+                meta={[p?.name, setup.region, setup.size, setup.teardownOnAgentFinish ? "until agent finishes" : setup.ttlMinutes ? `${setup.ttlMinutes} min` : null].filter(Boolean).join(" · ")}
+                right={<span className="chip">Offline</span>}
+                onClick={() => { setSelectedSetup(setup); setProvider(setup.provider); }}
+              />
+            );
+          })}
+          {setups.length > 0 && <div className="node-menu-head">Providers</div>}
           {EPHEMERAL_PROVIDERS.map((p) => {
             const k = keys.find((x) => x.id === p.id);
             return (
@@ -54,19 +79,19 @@ export function EphemeralSheet({ onClose }: { onClose: () => void }) {
                 title={p.name}
                 meta={p.blurb}
                 right={k?.configured ? <span className="chip ok">Token saved</span> : undefined}
-                onClick={() => setProvider(p.id)}
+                onClick={() => { setSelectedSetup(null); setProvider(p.id); }}
               />
             );
           })}
         </div>
       ) : (
-        <ProviderPanel providerId={provider} onKeysChanged={refreshKeys} />
+        <ProviderPanel providerId={provider} setup={selectedSetup} onKeysChanged={refreshKeys} />
       )}
     </Sheet>
   );
 }
 
-function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKeysChanged: () => void }) {
+function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: string; setup: EphemeralSetup | null; onKeysChanged: () => void }) {
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === providerId)!;
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   const adapter = ephemeralAdapter(providerId)!;
@@ -76,6 +101,7 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
   const [sizes, setSizes] = useState<ProviderSize[]>(adapter.sizes);
   const [size, setSize] = useState(adapter.defaultSize);
   const [ttl, setTtl] = useState(60);
+  const [teardownOnAgentFinish, setTeardownOnAgentFinish] = useState(false);
   const [repo, setRepo] = useState("");
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
   const [busy, setBusy] = useState(false);
@@ -102,15 +128,17 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
     // Pre-fill from the preferences the user saved in Settings → Ephemeral
     // machines. Additive: everything stays editable per launch; a missing
     // preference just leaves the adapter default in place.
-    controller.getEphemeralPrefs(providerId).then((p) => {
+    const loadPrefs = setup ? Promise.resolve(setup) : controller.getEphemeralPrefs(providerId);
+    loadPrefs.then((p) => {
       if (p.region) setRegion(p.region);
       if (p.size) setSize(p.size);
       if (typeof p.ttlMinutes === "number") setTtl(p.ttlMinutes);
+      setTeardownOnAgentFinish(p.teardownOnAgentFinish === true);
       if (p.repo) setRepo(p.repo);
     }).catch(() => {});
     refreshMachines();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerId]);
+  }, [providerId, setup]);
 
   // Once a token is saved, replace the static catalog with the provider's live,
   // non-deprecated sizes for the chosen region so neither a retired plan nor one
@@ -162,7 +190,7 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
     setMsg(null);
     setErr(null);
     try {
-      await controller.launchEphemeral({ provider: providerId, region, size, ttlMinutes: ttl, repo: repo.trim() || undefined });
+      await controller.launchEphemeral({ provider: providerId, region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: repo.trim() || undefined, name: setup?.name });
       setMsg("Launching — it will appear in the node list once it boots.");
       refreshMachines();
     } catch (e) {
@@ -227,6 +255,11 @@ function ProviderPanel({ providerId, onKeysChanged }: { providerId: string; onKe
               ))}
             </select>
           </div>
+          <label className="field-label">Teardown</label>
+          <label className="checkbox-row">
+            <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
+            <span>Destroy when the agent finishes <span className="muted small">(TTL remains a safety fallback; requires this device to stay online)</span></span>
+          </label>
           <label className="field-label">Repo (optional, owner/name)</label>
           <input className="picker-search" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo" />
           <div className="row-actions">
