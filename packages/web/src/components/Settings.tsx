@@ -2107,8 +2107,8 @@ function EphemeralPanel() {
     <div className="settings-form">
       <p className="muted settings-intro">
         Bring your own cloud token to spin up temporary nodes that self-destruct at their TTL. Each configured machine
-        below is a saved setup — its provider, region, server type, auto-destroy time and repo — that the new-session
-        node picker offers to launch. Tap one to edit it.
+        below is a saved setup — its provider, region, server type and auto-destroy time — that the new-session node
+        picker offers to launch. The repo it works on comes from the composer, not from here. Tap one to edit it.
       </p>
       {setups.length > 0 && (
         <>
@@ -2256,7 +2256,6 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   const [size, setSize] = useState(adapter.defaultSize);
   const [ttl, setTtl] = useState(60);
   const [teardownOnAgentFinish, setTeardownOnAgentFinish] = useState(false);
-  const [repo, setRepo] = useState("");
   // The single machine being edited: `null` = a brand-new one. The list of all
   // configured machines lives one level up in EphemeralPanel, so this view is
   // just the editor — never a mix of a list plus an always-open form.
@@ -2278,7 +2277,6 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
     setSize(setup?.size || adapter.defaultSize);
     setTtl(setup?.ttlMinutes ?? 60);
     setTeardownOnAgentFinish(setup?.teardownOnAgentFinish === true);
-    setRepo(setup?.repo || "");
   };
 
   // Seed the form from the saved token + the machine we drilled in to edit (or a
@@ -2326,7 +2324,9 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
     if (busy) return;
     setBusy(true);
     try {
-      const values = { name: setupName.trim(), region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: repo.trim() || null };
+      // Repo isn't a machine setting — it comes from the new-session composer at
+      // launch time — so clear any legacy value rather than carry it here.
+      const values = { name: setupName.trim(), region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: null };
       if (setupId) await controller.updateEphemeralSetup(setupId, values);
       else {
         const created = await controller.createEphemeralSetup(providerId, values);
@@ -2400,8 +2400,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
             <span>Destroy the machine once the agent finishes its work <span className="muted small">(the TTL above stays a safety fallback; the launching device must be online)</span></span>
           </label>
 
-          <label className="field-label">Repo (optional, owner/name)</label>
-          <input className="picker-search" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo" />
+          <p className="muted small">The repo this machine works on is whatever you pick in the new-session composer — it isn't set here.</p>
 
           <div className="row-actions">
             <button className="btn primary" disabled={busy || !setupName.trim()} onClick={savePrefs}>{busy ? "Saving…" : setupId ? "Save machine" : "Create machine"}</button>

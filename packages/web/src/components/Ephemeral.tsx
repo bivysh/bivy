@@ -102,7 +102,6 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
   const [size, setSize] = useState(adapter.defaultSize);
   const [ttl, setTtl] = useState(60);
   const [teardownOnAgentFinish, setTeardownOnAgentFinish] = useState(false);
-  const [repo, setRepo] = useState("");
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -134,7 +133,6 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
       if (p.size) setSize(p.size);
       if (typeof p.ttlMinutes === "number") setTtl(p.ttlMinutes);
       setTeardownOnAgentFinish(p.teardownOnAgentFinish === true);
-      if (p.repo) setRepo(p.repo);
     }).catch(() => {});
     refreshMachines();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -190,7 +188,7 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
     setMsg(null);
     setErr(null);
     try {
-      await controller.launchEphemeral({ provider: providerId, region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: repo.trim() || undefined, name: setup?.name, setupId: setup?.id });
+      await controller.launchEphemeral({ provider: providerId, region, size, ttlMinutes: ttl, teardownOnAgentFinish, name: setup?.name, setupId: setup?.id });
       setMsg("Launching — it will appear in the node list once it boots.");
       refreshMachines();
     } catch (e) {
@@ -260,8 +258,7 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
             <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
             <span>Destroy when the agent finishes <span className="muted small">(TTL remains a safety fallback; requires this device to stay online)</span></span>
           </label>
-          <label className="field-label">Repo (optional, owner/name)</label>
-          <input className="picker-search" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo" />
+          <p className="muted small">The machine pre-clones the repo you pick in the new-session composer.</p>
           <div className="row-actions">
             <button className="btn primary" disabled={busy} onClick={launch}>
               {busy ? "Launching…" : "Launch machine"}
