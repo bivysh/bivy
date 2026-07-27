@@ -2077,17 +2077,28 @@ const EPHEMERAL_TTL_OPTIONS = [
 
 function EphemeralPanel() {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
-  const [provider, setProvider] = useState<string | null>(null);
+  const [setups, setSetups] = useState<EphemeralSetup[]>([]);
+  // Which machine we've drilled into to edit. `setupId: null` = a fresh machine
+  // for that provider; a string = editing an existing one. `null` nav = the
+  // list view.
+  const [nav, setNav] = useState<{ provider: string; setupId: string | null } | null>(null);
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys).catch(() => {});
-  useEffect(() => { refreshKeys(); }, []);
+  const refreshSetups = () => controller.listEphemeralSetups().then(setSetups).catch(() => {});
+  useEffect(() => { refreshKeys(); refreshSetups(); }, []);
 
-  const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === provider);
-  if (catalog) {
+  const catalog = nav ? EPHEMERAL_PROVIDERS.find((p) => p.id === nav.provider) : undefined;
+  if (nav && catalog) {
     return (
       <div className="settings-form">
-        <button className="link-btn" onClick={() => setProvider(null)}>‹ All providers</button>
+        <button className="link-btn" onClick={() => { setNav(null); refreshSetups(); refreshKeys(); }}>‹ Ephemeral machines</button>
         <h3>{catalog.name}</h3>
-        <EphemeralProviderConfig providerId={catalog.id} onKeysChanged={refreshKeys} />
+        <EphemeralProviderConfig
+          providerId={catalog.id}
+          initialSetupId={nav.setupId}
+          onKeysChanged={refreshKeys}
+          onSetupsChanged={refreshSetups}
+          onBack={() => { setNav(null); refreshSetups(); refreshKeys(); }}
+        />
       </div>
     );
   }
@@ -2095,10 +2106,30 @@ function EphemeralPanel() {
   return (
     <div className="settings-form">
       <p className="muted settings-intro">
-        Bring your own cloud token to spin up temporary nodes that self-destruct at their TTL. Configure each provider
-        here — its token and the default region, size, and auto-destroy time — and the new-session “Ephemeral machine”
-        launcher pre-fills them.
+        Bring your own cloud token to spin up temporary nodes that self-destruct at their TTL. Each configured machine
+        below is a saved setup — its provider, region, server type, auto-destroy time and repo — that the new-session
+        node picker offers to launch. Tap one to edit it.
       </p>
+      {setups.length > 0 && (
+        <>
+          <label className="field-label">Configured machines</label>
+          <div className="picker-list">
+            {setups.map((setup) => {
+              const p = EPHEMERAL_PROVIDERS.find((x) => x.id === setup.provider);
+              return (
+                <PickerItem
+                  key={setup.id}
+                  title={setup.name}
+                  meta={[p?.name, setup.region, setup.size, setup.teardownOnAgentFinish ? "until agent finishes" : setup.ttlMinutes ? `${setup.ttlMinutes} min` : null].filter(Boolean).join(" · ")}
+                  right={<span className="chip">Edit</span>}
+                  onClick={() => setNav({ provider: setup.provider, setupId: setup.id })}
+                />
+              );
+            })}
+          </div>
+        </>
+      )}
+      <label className="field-label">{setups.length > 0 ? "Add a machine" : "Choose a provider"}</label>
       <div className="picker-list">
         {EPHEMERAL_PROVIDERS.map((p) => {
           const k = keys.find((x) => x.id === p.id);
@@ -2108,7 +2139,7 @@ function EphemeralPanel() {
               title={p.name}
               meta={p.blurb}
               right={k?.configured ? <span className="chip ok">Token saved</span> : <span className="chip">Not set up</span>}
-              onClick={() => setProvider(p.id)}
+              onClick={() => setNav({ provider: p.id, setupId: null })}
             />
           );
         })}
@@ -2214,7 +2245,7 @@ function EphemeralModelKeys() {
   );
 }
 
-function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: string; onKeysChanged: () => void }) {
+function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, onSetupsChanged, onBack }: { providerId: string; initialSetupId: string | null; onKeysChanged: () => void; onSetupsChanged: () => void; onBack: () => void }) {
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === providerId)!;
   const adapter = ephemeralAdapter(providerId)!;
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
@@ -2226,7 +2257,9 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
   const [ttl, setTtl] = useState(60);
   const [teardownOnAgentFinish, setTeardownOnAgentFinish] = useState(false);
   const [repo, setRepo] = useState("");
-  const [setups, setSetups] = useState<EphemeralSetup[]>([]);
+  // The single machine being edited: `null` = a brand-new one. The list of all
+  // configured machines lives one level up in EphemeralPanel, so this view is
+  // just the editor — never a mix of a list plus an always-open form.
   const [setupId, setSetupId] = useState<string | null>(null);
   const [setupName, setSetupName] = useState("");
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
@@ -2238,7 +2271,6 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
 
   const refreshMachines = () =>
     controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId))).catch(() => {});
-  const refreshSetups = () => controller.listEphemeralSetups(providerId).then(setSetups).catch(() => {});
   const editSetup = (setup: EphemeralSetup | null) => {
     setSetupId(setup?.id ?? null);
     setSetupName(setup?.name ?? "");
@@ -2249,13 +2281,16 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
     setRepo(setup?.repo || "");
   };
 
-  // Seed the form from the saved token + preferences for this provider.
+  // Seed the form from the saved token + the machine we drilled in to edit (or a
+  // blank form when adding).
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
-    refreshSetups();
+    controller.listEphemeralSetups(providerId).then((rows) => {
+      editSetup(initialSetupId ? rows.find((s) => s.id === initialSetupId) ?? null : null);
+    }).catch(() => {});
     refreshMachines();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerId]);
+  }, [providerId, initialSetupId]);
 
   // Once a token is saved, swap the static catalog for the provider's live,
   // non-deprecated sizes for the chosen region (mirrors the launch sheet).
@@ -2291,13 +2326,13 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
     if (busy) return;
     setBusy(true);
     try {
-      const values = { name: setupName, region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: repo.trim() || null };
+      const values = { name: setupName.trim(), region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: repo.trim() || null };
       if (setupId) await controller.updateEphemeralSetup(setupId, values);
       else {
         const created = await controller.createEphemeralSetup(providerId, values);
         setSetupId(created.id);
       }
-      await refreshSetups();
+      onSetupsChanged();
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
     } catch (e) {
@@ -2337,23 +2372,11 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
       ) : (
         <>
           <p className="muted">
-            Token saved on this device. Create multiple named setups; each remains in the launcher like an offline node after its machine expires.
+            {setupId
+              ? "Edit this machine. It stays in the new-session launcher like an offline node even after its machine expires."
+              : "Name this machine and set its defaults. It'll stay in the new-session launcher like an offline node even after its machine expires."}
           </p>
-          {setups.length > 0 && (
-            <div className="picker-list">
-              {setups.map((setup) => (
-                <PickerItem
-                  key={setup.id}
-                  title={setup.name}
-                  meta={[setup.region, setup.size, setup.teardownOnAgentFinish ? "until agent finishes" : setup.ttlMinutes ? `${setup.ttlMinutes} min` : null].filter(Boolean).join(" · ")}
-                  right={<span className="chip">Setup</span>}
-                  onClick={() => editSetup(setup)}
-                />
-              ))}
-            </div>
-          )}
-          <button className="btn ghost" onClick={() => editSetup(null)}>+ New setup</button>
-          <label className="field-label">Setup name</label>
+          <label className="field-label">Machine name</label>
           <input className="picker-search" value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder="e.g. EU coding node" />
 
           <label className="field-label">Region</label>
@@ -2366,29 +2389,30 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
             {sizes.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
 
-          <label className="field-label">Auto-destroy after</label>
+          <label className="field-label">Auto-destroy after (TTL)</label>
           <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
             {EPHEMERAL_TTL_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
           </select>
 
-          <label className="field-label">Teardown</label>
+          <label className="field-label">Work until finished</label>
           <label className="checkbox-row">
             <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
-            <span>Destroy when the agent finishes <span className="muted small">(TTL remains a safety fallback; the launching device must be online)</span></span>
+            <span>Destroy the machine once the agent finishes its work <span className="muted small">(the TTL above stays a safety fallback; the launching device must be online)</span></span>
           </label>
 
           <label className="field-label">Repo (optional, owner/name)</label>
           <input className="picker-search" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo" />
 
           <div className="row-actions">
-            <button className="btn primary" disabled={busy || !setupName.trim()} onClick={savePrefs}>{busy ? "Saving…" : setupId ? "Save setup" : "Create setup"}</button>
+            <button className="btn primary" disabled={busy || !setupName.trim()} onClick={savePrefs}>{busy ? "Saving…" : setupId ? "Save machine" : "Create machine"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
             {setupId && (
               <button className="btn danger-ghost" onClick={() => setConfirm({
-                title: "Remove setup?",
+                title: "Remove machine?",
                 message: `Remove ${setupName}? Running machines are not affected.`,
-                action: () => controller.removeEphemeralSetup(setupId).then(() => { editSetup(null); refreshSetups(); }),
-              })}>Remove setup</button>
+                label: "Remove",
+                action: () => controller.removeEphemeralSetup(setupId).then(() => { onSetupsChanged(); onBack(); }),
+              })}>Remove machine</button>
             )}
             <button
               className="btn danger-ghost"

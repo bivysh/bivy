@@ -190,7 +190,7 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
     setMsg(null);
     setErr(null);
     try {
-      await controller.launchEphemeral({ provider: providerId, region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: repo.trim() || undefined, name: setup?.name });
+      await controller.launchEphemeral({ provider: providerId, region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: repo.trim() || undefined, name: setup?.name, setupId: setup?.id });
       setMsg("Launching — it will appear in the node list once it boots.");
       refreshMachines();
     } catch (e) {
