@@ -79,7 +79,7 @@ const CLASSIFIERS: { condition: RuntimeCondition; test: (raw: string) => boolean
   {
     condition: "credits_exhausted",
     test: (r) =>
-      /\b402\b|payment required|insufficient\s+(?:credit|quota|balance|funds)|credit balance (?:is )?too low|quota (?:exceeded|exhausted)|billing|usage limit reached|out of credits|plan (?:limit|allowance)/i.test(
+      /\b402\b|payment required|insufficient\s+(?:credit|quota|balance|funds)|credit balance (?:is )?too low|quota (?:exceeded|exhausted)|billing|(?:usage|session) limit (?:reached|hit)|(?:you(?:'ve| have)\s+)?hit your limit|out of credits|plan (?:limit|allowance)/i.test(
         r,
       ),
   },

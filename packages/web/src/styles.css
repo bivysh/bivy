@@ -811,8 +811,11 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .ruleset-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
 .ruleset-field-grid .field-label { margin-top: 0; }
 .ruleset-chain { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
-.ruleset-chain-row { display: flex; gap: 6px; align-items: center; }
-.ruleset-chain-row .picker-search { flex: 1; min-width: 0; }
+.ruleset-chain-row { display: flex; gap: 8px; align-items: flex-end; }
+.ruleset-chain-fields { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.ruleset-chain-field { min-width: 0; display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.ruleset-chain-field .picker-search { min-width: 0; margin: 0; }
+.ruleset-chain-remove { flex: none; margin-bottom: 1px; }
 .ruleset-collapsible { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
 .ruleset-collapsible-body { margin-top: 8px; }
 .attach-chips { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 2px; }
@@ -1214,6 +1217,27 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .settings-nav-chevron { display: inline-flex; }
   .settings-content { padding-top: max(0px, env(safe-area-inset-top)); }
   .settings-back { display: inline-flex; }
+  .settings-body { padding: 14px 12px max(28px, env(safe-area-inset-bottom)); }
+
+  /* Ruleset editing is input-heavy: use the full mobile width, predictable
+     button grids, and stacked fields instead of squeezing desktop rows until
+     their labels/placeholders are unreadable. */
+  .ruleset-rule-card { padding: 14px 12px; gap: 12px; }
+  .ruleset-rule-card .muted, .ruleset-rule-card .field-label, .ruleset-chain-field { color: color-mix(in srgb, var(--ink) 72%, var(--muted)); }
+  .ruleset-rule-head .btn { min-height: 40px; }
+  .ruleset-chip-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .ruleset-chip { min-height: 44px; padding: 8px; line-height: 1.2; color: color-mix(in srgb, var(--ink) 72%, var(--muted)); }
+  .ruleset-rule-card > .seg-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .ruleset-rule-card > .seg-row .seg-btn { min-width: 0; min-height: 44px; padding: 8px 4px; }
+  .ruleset-field-grid { grid-template-columns: 1fr; gap: 12px; }
+  .ruleset-chain { gap: 10px; }
+  .ruleset-chain-row { align-items: stretch; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); flex-direction: column; }
+  .ruleset-chain-fields { grid-template-columns: 1fr; gap: 10px; }
+  .ruleset-chain-field { font-size: 12px; }
+  .ruleset-chain-field .picker-search { min-height: 44px; }
+  .ruleset-chain-remove { align-self: flex-end; min-height: 40px; margin: 0; }
+  .ruleset-chain > .btn { min-height: 44px; }
+  .ruleset-collapsible .link-btn { min-height: 44px; display: flex; align-items: center; }
   .settings-head-title { text-align: center; font-size: 17px; }
   .settings-panel[data-mode="menu"] .settings-content { display: none; }
   .settings-panel[data-mode="panel"] .settings-nav { display: none; }

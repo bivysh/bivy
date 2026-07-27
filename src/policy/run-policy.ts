@@ -71,6 +71,8 @@ export interface RunPolicyDeps {
   hasCredential?: (candidate: RoutingCandidate) => boolean;
   /** Injectable RNG for deterministic jitter in tests. Defaults to Math.random. */
   random?: () => number;
+  /** Injectable wall clock for turning a provider reset timestamp into a wait. */
+  now?: () => number;
 }
 
 /** `min(cap, base·factor^n)` spread by ±jitter/2 — the reconnect-layer formula. */
@@ -95,6 +97,7 @@ export function createRunPolicy(deps: RunPolicyDeps = {}): RunPolicy {
   const context = deps.context ?? "queue";
   const hasCredential = deps.hasCredential ?? (() => true);
   const random = deps.random ?? Math.random;
+  const now = deps.now ?? Date.now;
 
   return {
     decide(ctx: RunFailureContext): RunDecision {
@@ -106,8 +109,15 @@ export function createRunPolicy(deps: RunPolicyDeps = {}): RunPolicy {
       const exhausted = ctx.attempt >= rule.maxAttempts;
       const nextAttempt = ctx.attempt + 1;
       const backoff = rule.backoff ?? DEFAULT_BACKOFF;
-      // A provider-supplied wait always wins over computed backoff.
-      const delayMs = classified.retryAfterMs ?? computeBackoffMs(backoff, ctx.attempt - 1, random);
+      // A provider-supplied reset is the most precise recovery time. This is
+      // especially important for session/usage limits: retrying with ordinary
+      // backoff before the window resets only burns attempts. A relative
+      // Retry-After is the next-best hint; otherwise use authored backoff.
+      const resetAtMs = classified.resetsAt === undefined ? undefined : Date.parse(classified.resetsAt);
+      const resetDelayMs = resetAtMs !== undefined && Number.isFinite(resetAtMs)
+        ? Math.max(0, resetAtMs - now())
+        : undefined;
+      const delayMs = resetDelayMs ?? classified.retryAfterMs ?? computeBackoffMs(backoff, ctx.attempt - 1, random);
 
       const onExhausted = (): RunDecision =>
         rule.onExhausted === "give_up"
@@ -125,11 +135,14 @@ export function createRunPolicy(deps: RunPolicyDeps = {}): RunPolicy {
       if (rule.action === "retry") {
         if (exhausted) return onExhausted();
         const wait = Math.round(delayMs / 1000);
+        const timing = resetDelayMs !== undefined && classified.resetsAt
+          ? ` when the limit resets at ${classified.resetsAt}`
+          : wait ? ` in ~${wait}s` : "";
         return {
           action: "retry",
           delayMs,
           condition,
-          summary: `${condition}: transient — retrying (attempt ${nextAttempt}/${rule.maxAttempts})${wait ? ` in ~${wait}s` : ""}.`,
+          summary: `${condition}: transient — retrying (attempt ${nextAttempt}/${rule.maxAttempts})${timing}.`,
         };
       }
 

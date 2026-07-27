@@ -40,7 +40,7 @@ failures are classified exactly once (`src/policy/conditions.ts`):
 | Condition | Example raw failure | Default handling |
 |---|---|---|
 | `rate_limited` | `429`, `overloaded`, `retry-after: 30` | retry with backoff (honors `retry-after`) |
-| `credits_exhausted` | `credit balance too low`, `402`, `quota exceeded` | park (needs attention) |
+| `credits_exhausted` | `credit balance too low`, `402`, `session limit reached` | park (needs attention) |
 | `context_overflow` | `maximum context length`, `prompt is too long` | park |
 | `auth_failed` | `401 Unauthorized`, `invalid x-api-key` | park |
 | `node_offline` | `ECONNREFUSED`, `host unreachable` | retry with backoff |
@@ -51,7 +51,11 @@ failures are classified exactly once (`src/policy/conditions.ts`):
 Classification also recovers metadata where the provider supplied it: a
 `retryAfterMs` (from a `retry-after` header or a "try again in N minutes"
 phrase) and a `resetsAt` ISO timestamp. A provider-supplied wait always wins over
-computed backoff.
+computed backoff. In particular, a **Retry** rule matching `credits_exhausted`
+waits until `resetsAt` before resuming, rather than consuming its remaining
+attempts before the session/usage window reopens. If the reset has already
+passed, it retries immediately; without recovery metadata, the rule uses its
+configured backoff as usual.
 
 ## The ruleset schema
 

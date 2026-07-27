@@ -30,7 +30,7 @@ import { ConfirmDialog } from "./AppDialog.js";
 // the editor never asks the user to know the raw code taxonomy by heart.
 const CONDITIONS: Array<{ id: RuleCondition; label: string; hint: string }> = [
   { id: "rate_limited", label: "Rate limited", hint: "429 / overloaded / retry-after" },
-  { id: "credits_exhausted", label: "Credits exhausted", hint: "quota or credit balance too low" },
+  { id: "credits_exhausted", label: "Session / credits", hint: "quota, credit balance, or session usage limit; Retry waits for a supplied reset time" },
   { id: "context_overflow", label: "Context overflow", hint: "prompt exceeds the context window" },
   { id: "auth_failed", label: "Auth failed", hint: "401 / invalid key" },
   { id: "node_offline", label: "Node offline", hint: "connection refused / unreachable" },
@@ -40,7 +40,7 @@ const CONDITIONS: Array<{ id: RuleCondition; label: string; hint: string }> = [
 ];
 
 const ACTIONS: Array<{ id: RulesetRule["action"]; label: string; hint: string }> = [
-  { id: "retry", label: "Retry", hint: "Re-run with backoff, up to the attempt limit." },
+  { id: "retry", label: "Retry", hint: "Resume at the provider's reset/retry time when supplied; otherwise use backoff, up to the attempt limit." },
   { id: "reroute", label: "Reroute", hint: "Fall back down a chain of routes, then park/give up." },
   { id: "park", label: "Park", hint: "Stop and flag for a human — no automatic recovery." },
 ];
@@ -438,10 +438,21 @@ function ChainEditor({ chain, onChange }: { chain: RulesetRoutingCandidate[]; on
       </p>
       {chain.map((cand, i) => (
         <div className="ruleset-chain-row" key={i}>
-          <input className="picker-search" placeholder="model (e.g. claude-sonnet)" value={cand.model ?? ""} onChange={(e) => setAt(i, { model: e.target.value })} />
-          <input className="picker-search" placeholder="runtime (e.g. codex)" value={cand.runtimeId ?? ""} onChange={(e) => setAt(i, { runtimeId: e.target.value })} />
-          <input className="picker-search" placeholder="account" value={cand.account ?? ""} onChange={(e) => setAt(i, { account: e.target.value })} />
-          <button className="btn danger-ghost sm" onClick={() => onChange(chain.filter((_, j) => j !== i))} aria-label={`Remove candidate ${i + 1}`}>×</button>
+          <div className="ruleset-chain-fields">
+            <label className="ruleset-chain-field">
+              <span>Model</span>
+              <input className="picker-search" placeholder="e.g. claude-sonnet" value={cand.model ?? ""} onChange={(e) => setAt(i, { model: e.target.value })} />
+            </label>
+            <label className="ruleset-chain-field">
+              <span>Runtime</span>
+              <input className="picker-search" placeholder="e.g. codex" value={cand.runtimeId ?? ""} onChange={(e) => setAt(i, { runtimeId: e.target.value })} />
+            </label>
+            <label className="ruleset-chain-field">
+              <span>Account</span>
+              <input className="picker-search" placeholder="Keep current" value={cand.account ?? ""} onChange={(e) => setAt(i, { account: e.target.value })} />
+            </label>
+          </div>
+          <button className="btn danger-ghost sm ruleset-chain-remove" onClick={() => onChange(chain.filter((_, j) => j !== i))} aria-label={`Remove candidate ${i + 1}`}>Remove</button>
         </div>
       ))}
       <button className="btn sm" onClick={() => onChange([...chain, {}])}>+ Add candidate</button>
