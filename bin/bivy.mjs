@@ -2792,6 +2792,20 @@ async function localApi(config, pathName, init = {}) {
   try {
     const headers = new Headers(init.headers || {});
     if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+    // Opportunistically attach a device token when the caller didn't set one.
+    // Needed once the daemon requires auth even on loopback (multi-user host
+    // detection, BIVY_REQUIRE_LOCAL_AUTH=1 — see src/auth.ts); a harmless
+    // extra Authorization header otherwise, since the daemon still accepts
+    // bare loopback there. Skip for the bootstrap call itself (it authenticates
+    // with the bootstrap secret, not a token) to avoid recursing.
+    if (!headers.has("authorization") && pathName !== "/api/auth/bootstrap") {
+      try {
+        headers.set("authorization", `Bearer ${await localDeviceToken(config)}`);
+      } catch {
+        // No bootstrap secret on disk, node unreachable for bootstrap, etc. —
+        // fall back to an unauthenticated call, same as before this existed.
+      }
+    }
     res = await fetch(`${url(config)}${pathName}`, { ...init, headers });
   } catch (error) {
     throw new Error(`Could not reach the local node at ${url(config)}. Start it with 'bivy start' or 'bivy service install'.`);
@@ -2810,7 +2824,15 @@ function readBootstrapSecret() {
   }
 }
 
+// Cached for the lifetime of this CLI process: localApi() above now fetches a
+// token opportunistically for every unauthenticated call, and without caching
+// that would mint (and register) a brand-new "Bivy CLI" device on each one —
+// e.g. once per poll iteration in waitForIdleSessions(). One token is reused
+// for the whole invocation.
+let cachedDeviceToken = null;
+
 async function localDeviceToken(config) {
+  if (cachedDeviceToken) return cachedDeviceToken;
   const secret = readBootstrapSecret();
   if (!secret) throw new Error("The node is running but no bootstrap secret was found. Restart it with 'bivy restart' or 'bivy start'.");
   const data = await localApi(config, "/api/auth/bootstrap", {
@@ -2819,7 +2841,8 @@ async function localDeviceToken(config) {
     body: JSON.stringify({ name: "Bivy CLI" }),
   });
   if (!data?.token) throw new Error("Local node did not return a device token.");
-  return data.token;
+  cachedDeviceToken = data.token;
+  return cachedDeviceToken;
 }
 
 function loadRelayConfig() {

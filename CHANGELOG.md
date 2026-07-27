@@ -55,6 +55,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with divider lines between them, matching the grouping already used by the
   GitHub App and GitHub Queue panels. (#74)
 
+### Security
+
+- The node no longer authorizes bare loopback callers (no token) by default on
+  a host it detects as multi-user — every local account shares `127.0.0.1`, so
+  loopback alone let any other OS user on a shared host drive the agent (shell
+  + file edits) without a token. Detection (`isMultiUserHost` in `src/auth.ts`)
+  counts real login accounts via `/etc/passwd` on Linux or `dscl` on macOS;
+  single-user hosts (the common case) keep today's zero-friction loopback
+  bypass unchanged. Override with `BIVY_REQUIRE_LOCAL_AUTH=1`/`=0` or
+  `BIVY_MULTI_USER_HOST=1`/`=0` if detection guesses wrong for your box. The
+  CLI transparently bootstraps a device token when the daemon requires one, so
+  `bivy status`/`bivy doctor`/etc. keep working unchanged. (#111)
+
 ### Fixed
 
 - **Transient CLI/relay clients no longer clutter "Signed-in devices".**
