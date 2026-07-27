@@ -9,6 +9,7 @@ import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
+import { AutomationsPanel } from "./Automations.js";
 import { StatsPanel } from "./StatsPanel.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
@@ -216,6 +217,7 @@ export function Settings({
       items: [
         { id: "github", label: "GitHub App", icon: <IconGithub /> },
         { id: "queue", label: "GitHub Queue", icon: <IconQueue /> },
+        { id: "automations", label: "Automations", icon: <IconBolt /> },
       ],
     },
     {
@@ -323,7 +325,12 @@ export function Settings({
                 onOpenGithubSettings={() => onViewChange("github")}
               />
             )}
-            {activeView === "automations" && <AutomationsPanel />}
+            {activeView === "automations" && (
+              <>
+                <AutomationsPanel state={state} />
+                <WebhookTriggersPanel />
+              </>
+            )}
             {activeView === "nodes" && <NodesPanel state={state} />}
             {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
             {activeView === "account" && <AccountPanel />}
@@ -1098,7 +1105,11 @@ function VoicePanel({ state }: { state: AppState }) {
 }
 
 // ---- Generic signed automation webhooks ----
-function AutomationsPanel() {
+// Signed inbound webhook triggers (from the automation-webhooks feature). Lives
+// alongside the scheduled-automations panel (imported from ./Automations) under
+// the same "Automations" view — the two features arrived independently and both
+// belong here.
+function WebhookTriggersPanel() {
   const [hooks, setHooks] = useState<AutomationHook[]>([]);
   const [outcomes, setOutcomes] = useState<AutomationOutcome[]>([]);
   const [template, setTemplate] = useState("Follow the incoming instruction in the current workspace.");

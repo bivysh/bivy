@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Scheduled automations** — Settings → Automations lets you create a
+  recurring (cron, with an explicit IANA timezone) or one-time schedule that
+  runs an end-to-end encrypted instruction template on an assigned node, with
+  its own runtime/model/approval/sandbox defaults, run-now, enable/disable,
+  next-run preview, and recent results. Schedules generate runs through the
+  same automation-run lifecycle as GitHub/Slack/manual triggers — an offline
+  node's due occurrence stays pending until it reconnects, restarting the
+  control plane or running several instances can't duplicate an occurrence,
+  and hosted entitlement checks happen at run admission, not schedule
+  creation. The control plane only ever holds routing metadata plus the
+  ciphertext; it cannot read the instructions. (#148)
+
 - **GitHub App key sync across nodes** — `bivy github:app-sync on` opts a node
   into pulling/pushing a connected GitHub App's private key E2E-encrypted
   through the control plane, so connecting an app on one node makes it usable

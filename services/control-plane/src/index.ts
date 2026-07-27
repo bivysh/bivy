@@ -10,6 +10,7 @@ import webpush from "web-push";
 import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
+import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
 import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector } from "./metrics.js";
@@ -104,6 +105,11 @@ try {
   );
   process.exit(1);
 }
+const automationScheduler = new AutomationScheduler(
+  store,
+  Math.max(1_000, Number(process.env.AUTOMATION_SCHEDULER_INTERVAL_MS) || 15_000),
+);
+automationScheduler.start();
 
 // Optional error reporting. Resolves to no-ops unless SENTRY_DSN is set, and only
 // then is @sentry/node loaded (see instrument.ts).
@@ -1786,6 +1792,15 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
   if (!name) return res.status(400).json({ error: "name is required" });
+  let schedule;
+  try {
+    schedule = normalizeSchedule(req.body?.schedule);
+  } catch (error) {
+    return res.status(400).json({ error: (error as Error).message });
+  }
+  const enabled = req.body?.enabled !== false;
+  const nextRunAt = enabled ? nextOccurrence(schedule, new Date(Date.now() - 1)) : undefined;
+  if (enabled && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
   const definition = await store.createAutomationDefinition(client.accountId, {
     name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : undefined,
@@ -1793,8 +1808,79 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     model: typeof req.body?.model === "string" ? req.body.model : undefined,
     nodeLabel: typeof req.body?.nodeLabel === "string" ? req.body.nodeLabel : undefined,
     ephemeral: typeof req.body?.ephemeral === "boolean" ? req.body.ephemeral : undefined,
+    approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : undefined,
+    sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined,
+    enabled,
+    schedule,
+    nextRunAt,
   });
   res.status(201).json(definition);
+}));
+
+app.put("/account/automations/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
+  if (!current) return res.status(404).json({ error: "Automation not found" });
+  let schedule = current.schedule;
+  if (req.body?.schedule !== undefined) {
+    try {
+      schedule = normalizeSchedule(req.body.schedule);
+    } catch (error) {
+      return res.status(400).json({ error: (error as Error).message });
+    }
+  }
+  if (!schedule) return res.status(400).json({ error: "schedule is required" });
+  const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : current.enabled;
+  const scheduleChanged = req.body?.schedule !== undefined;
+  // Recompute the occurrence when (re-)enabling or when the schedule changed;
+  // otherwise keep the current occurrence (or clear it while disabled).
+  const recompute = enabled && (scheduleChanged || !current.enabled);
+  const nextRunAt = recompute
+    ? nextOccurrence(schedule, new Date(Date.now() - 1))
+    : enabled ? current.nextRunAt : undefined;
+  // Mirror the create-time guard: an enabled definition whose only occurrence is
+  // in the past would sit enabled but never run.
+  if (recompute && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
+  const patch = {
+    name: typeof req.body?.name === "string" ? req.body.name.trim() || current.name : current.name,
+    templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : current.templateCiphertext,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() || undefined : current.runtimeId,
+    model: typeof req.body?.model === "string" ? req.body.model.trim() || undefined : current.model,
+    nodeLabel: typeof req.body?.nodeLabel === "string" ? req.body.nodeLabel.trim() || undefined : current.nodeLabel,
+    approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : current.approvalMode,
+    sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : current.sandbox,
+    enabled,
+    schedule,
+    nextRunAt,
+  };
+  res.json(await store.updateAutomationDefinition(client.accountId, current.id, patch));
+}));
+
+app.delete("/account/automations/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  if (!(await store.deleteAutomationDefinition(client.accountId, String(req.params.id)))) {
+    return res.status(404).json({ error: "Automation not found" });
+  }
+  res.status(204).end();
+}));
+
+app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const definition = await store.getAutomationDefinition(client.accountId, String(req.params.id));
+  if (!definition) return res.status(404).json({ error: "Automation not found" });
+  const run = await store.enqueueAutomationRun(client.accountId, {
+    source: "manual",
+    triggerKind: "manual",
+    title: definition.name,
+    body: definition.templateCiphertext,
+    definitionId: definition.id,
+    label: definition.nodeLabel,
+  });
+  void notifyRelaysWorkAvailable(client.accountId, { id: run.id, label: run.routing.nodeLabel });
+  res.status(201).json(run);
 }));
 
 app.get("/account/automation-runs", asyncHandler(async (req, res) => {

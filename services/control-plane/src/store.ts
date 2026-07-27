@@ -308,6 +308,14 @@ export interface AutomationDefinition {
   model?: string;
   nodeLabel?: string;
   ephemeral?: boolean;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  enabled?: boolean;
+  schedule?:
+    | { kind: "once"; at: string }
+    | { kind: "cron"; expression: string; timezone: string };
+  nextRunAt?: string;
+  lastScheduledAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -328,7 +336,14 @@ export interface AutomationRun {
   status: AutomationRunStatus;
   attempt: number;
   target: { kind: "new_session" } | { kind: "existing_session"; sessionId: string };
-  routing: { nodeLabel: string; runtimeId?: string; model?: string; ephemeral?: boolean };
+  routing: {
+    nodeLabel: string;
+    runtimeId?: string;
+    model?: string;
+    ephemeral?: boolean;
+    approvalMode?: AutomationDefinition["approvalMode"];
+    sandbox?: AutomationDefinition["sandbox"];
+  };
   output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
   title: string;
   body?: string;
@@ -369,6 +384,8 @@ export interface WorkItem {
   defaultRouted?: boolean;
   runtimeId?: string; // agent/runtime override (manual trigger); node default when unset
   model?: string; // model override (manual trigger); node default when unset
+  approvalMode?: AutomationDefinition["approvalMode"];
+  sandbox?: AutomationDefinition["sandbox"];
   installationId?: string; // GitHub App installation id — the node mints a token for it
   appId?: string; // which GitHub App that installation belongs to (a node may serve several)
   // True when a device dispatched this item to a freshly-provisioned ephemeral
@@ -406,6 +423,8 @@ export type WorkItemInput = {
   defaultRouted?: boolean;
   runtimeId?: string;
   model?: string;
+  approvalMode?: AutomationDefinition["approvalMode"];
+  sandbox?: AutomationDefinition["sandbox"];
   ephemeral?: boolean;
   installationId?: string;
   appId?: string;
@@ -780,7 +799,12 @@ export interface MeshStore {
   deleteGithubAppHooksForApp(accountId: string, appId: string): Promise<number>;
   enqueueWorkItem(accountId: string, input: WorkItemInput): Promise<WorkItem>;
   createAutomationDefinition(accountId: string, input: Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt">): Promise<AutomationDefinition>;
+  updateAutomationDefinition(accountId: string, id: string, input: Partial<Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt" | "lastScheduledAt">>): Promise<AutomationDefinition | undefined>;
+  deleteAutomationDefinition(accountId: string, id: string): Promise<boolean>;
+  getAutomationDefinition(accountId: string, id: string): Promise<AutomationDefinition | undefined>;
   listAutomationDefinitions(accountId: string): Promise<AutomationDefinition[]>;
+  listDueAutomationDefinitions(nowIso: string, limit?: number): Promise<AutomationDefinition[]>;
+  enqueueScheduledOccurrence(accountId: string, definitionId: string, occurrenceIso: string, nextRunAt?: string): Promise<AutomationRun | undefined>;
   listTriggerEvents(accountId: string, limit?: number): Promise<TriggerEvent[]>;
   enqueueAutomationRun(accountId: string, input: WorkItemInput): Promise<AutomationRun>;
   enqueueAutomationRunWithResult(accountId: string, input: WorkItemInput): Promise<{ run: AutomationRun; created: boolean }>;
