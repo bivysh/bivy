@@ -5089,6 +5089,10 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
     // back to the node's globally configured mode.
     mode: record?.approvalMode ?? approvalMode,
     isRiskyIntegration: (tool) => integrations.isRiskyTool(tool),
+    // Full access is an explicit opt-out from both the agent's native sandbox
+    // and Bivy's tool governance. Without this, Pi/Claude still surfaced Bivy
+    // approval cards even though the session was labelled unrestricted.
+    unrestricted: record?.sandbox === "danger-full-access",
   });
   let { decision, reason, risk } = policy.decideToolCall(workspace, toolName, input);
 
@@ -6800,8 +6804,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // Pick the agent for this session (fixed for its life). Resuming a tagged
   // session passes its owning agent so it rebuilds on the right runtime.
   // A per-session sandbox override (fresh choice, else the one saved on resume)
-  // bakes into the runtime's launch flags; undefined = the node's default tier.
-  const sessionSandbox = normalizeSandboxTier(opts.sandbox ?? storedMeta?.sandbox);
+  // bakes into the runtime's launch flags. Resolve and persist the effective
+  // tier, including the node default. A session's sandbox is fixed for its
+  // lifetime; retaining `undefined` here
+  // made governance unable to tell that a defaulted session had full access and
+  // also let a later node-default change alter its tier on resume.
+  const sessionSandbox = sandboxTier(opts.sandbox ?? storedMeta?.sandbox);
   const rt = await ensureRuntimeAvailable(opts.runtimeId ?? storedMeta?.runtimeId, sessionSandbox);
 
   // Optional git-worktree isolation (fresh sessions only). The agent then runs in
