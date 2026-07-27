@@ -1027,6 +1027,18 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
    session list (.session-row/.session-item etc.), just its own <ul> reset. */
 .queue-session-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .field-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+/* Automations panel (Automations.tsx): each field stacks its label above a
+   full-width control, and the intro/help text, list rows, row actions and
+   error message get proper styling (these classes had no rules before, so the
+   form controls rendered at intrinsic width and overflowed narrow screens). */
+.settings-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.settings-field .field-label { margin-top: 0; }
+.settings-field .picker-search { margin-bottom: 0; }
+.settings-hint { font-size: 13px; color: var(--muted); margin: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface-2); }
+.settings-row > * { min-width: 0; overflow-wrap: anywhere; }
+.settings-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
+.settings-error { color: var(--danger); font-size: 13px; margin: 4px 0 0; overflow-wrap: anywhere; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .link-btn { align-self: flex-start; border: 0; background: transparent; color: var(--accent); font-size: 13px; padding: 0; }
 .chip { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 8px; border: 1px solid var(--line); color: var(--muted); }
