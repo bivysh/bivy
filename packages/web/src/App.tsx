@@ -268,6 +268,11 @@ export function App() {
 
   const closeDrawer = () => setDrawerOpen(false);
   const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId);
+  const activeSessionNodeId = activeSession?.nodeId || state.currentNodeId || undefined;
+  const activeSessionNode = state.nodes.find((node) => node.id === activeSessionNodeId);
+  const activeSessionNodeLabel = activeSessionNode
+    ? `${activeSessionNode.name || activeSessionNode.id} (${activeSessionNode.id})`
+    : activeSessionNodeId;
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
   // "Continue in terminal" is offered only when this session's runtime can hand
   // itself to its native TUI on the node (capability `interactiveTui`) — the
@@ -410,6 +415,12 @@ export function App() {
                 sessionId={state.activeSessionId}
                 name={state.activeTitle}
                 isRepo={isRepoSession}
+                node={activeSessionNodeLabel}
+                agent={activeSession?.agentName || activeSession?.runtimeId}
+                workspace={activeSession?.workspace}
+                worktree={activeSession?.worktree}
+                branch={activeSession?.branch}
+                sessionFile={activeSession?.path}
                 collapsed={collapsed}
                 onToggleCollapsed={toggleCollapsed}
                 onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
