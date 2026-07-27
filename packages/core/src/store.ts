@@ -297,6 +297,65 @@ export interface LocalModelPreset {
   note?: string;
 }
 
+// --- Rulesets (run-orchestration policy; docs/rulesets.md) --------------------
+// Client-side mirror of the node's ruleset schema (src/policy/ruleset.ts). The
+// node validates authoritatively with typebox on save; these shapes just let the
+// Settings editor build and render a ruleset. Kept structurally identical so a
+// ruleset round-trips through save/list unchanged.
+
+/** The stable failure conditions a rule can match (never raw provider strings). */
+export type RuleCondition =
+  | "rate_limited"
+  | "credits_exhausted"
+  | "context_overflow"
+  | "auth_failed"
+  | "node_offline"
+  | "transport_error"
+  | "task_failed"
+  | "unknown";
+
+/** Where a ruleset may fire. */
+export type RuleContext = "session" | "queue";
+
+/** One ordered fallback candidate for a `reroute` action's chain. */
+export interface RulesetRoutingCandidate {
+  runtimeId?: string;
+  model?: string;
+  account?: string;
+  label?: string;
+}
+
+/** Retry/reroute backoff (min(cap, base·factor^n) ± jitter). */
+export interface RulesetBackoff {
+  baseMs: number;
+  factor: number;
+  capMs: number;
+  jitter: number;
+}
+
+/** A single rule: match `when` conditions → take `action` within bounds. */
+export interface RulesetRule {
+  when: RuleCondition[];
+  action: "retry" | "reroute" | "park";
+  chain?: RulesetRoutingCandidate[];
+  onExhausted?: "park" | "give_up";
+  maxAttempts: number;
+  backoff?: RulesetBackoff;
+}
+
+/** A user-authored ruleset (the node's validated in-memory shape). */
+export interface Ruleset {
+  version: 1;
+  name: string;
+  appliesTo: RuleContext[];
+  rules: RulesetRule[];
+}
+
+/** A ruleset plus whether it's the active queue policy — what the UI lists. */
+export interface RulesetInfo extends Ruleset {
+  active: boolean;
+}
+
 /** Speech-to-text (voice input) provider + which keys the node has stored. */
 export type SttProviderId = "groq" | "openai";
 export interface SttProviderStatus {
@@ -534,6 +593,8 @@ export interface AppState {
   localModels: LocalModelProvider[];
   /** Quick-add presets for common local inference servers. */
   localModelPresets: LocalModelPreset[];
+  /** User-authored run-orchestration rulesets (Settings → Rulesets). */
+  rulesets: RulesetInfo[];
   /** Voice-input config (preferred provider + stored keys), or null until fetched. */
   sttConfig: SttConfig | null;
   oauth: OauthState | null;
@@ -664,6 +725,7 @@ export function initialState(): AppState {
     providerAuth: null,
     localModels: [],
     localModelPresets: [],
+    rulesets: [],
     sttConfig: null,
     oauth: null,
     githubApp: null,
@@ -2144,6 +2206,11 @@ export class SessionStore {
       case "models.custom.presets": {
         const e = event as any;
         if (Array.isArray(e.presets)) this.set({ localModelPresets: e.presets as LocalModelPreset[] });
+        return;
+      }
+      case "rulesets.list": {
+        const e = event as any;
+        if (Array.isArray(e.rulesets)) this.set({ rulesets: e.rulesets as RulesetInfo[] });
         return;
       }
       case "stt.config": {

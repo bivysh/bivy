@@ -10,6 +10,7 @@ import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { AutomationsPanel } from "./Automations.js";
+import { RulesetsPanel } from "./Rulesets.js";
 import { ImportSessionContent } from "./ImportSessionSheet.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
@@ -66,6 +67,10 @@ const IconServer = () => (
 );
 const IconBolt = () => (
   <Glyph><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" /></Glyph>
+);
+// Branch/policy glyph for Rulesets — a decision splitting into fallback routes.
+const IconRules = () => (
+  <Glyph><circle cx="6" cy="6" r="2" /><circle cx="6" cy="18" r="2" /><circle cx="18" cy="12" r="2" /><path d="M8 6h4a4 4 0 0 1 4 4M8 18h4a4 4 0 0 0 4-4" /></Glyph>
 );
 const IconCpu = () => (
   <Glyph><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" /></Glyph>
@@ -148,6 +153,7 @@ const TITLES: Record<View, string> = {
   github: "GitHub App",
   queue: "GitHub Queue",
   automations: "Automations",
+  rulesets: "Rulesets",
   nodes: "Nodes",
   ephemeral: "Ephemeral machines",
   account: "Account & billing",
@@ -235,6 +241,7 @@ export function Settings({
       label: "Automation",
       items: [
         { id: "automations", label: "Webhooks", icon: <IconBolt /> },
+        { id: "rulesets", label: "Rulesets", icon: <IconRules /> },
       ],
     },
     {
@@ -343,6 +350,7 @@ export function Settings({
                 <WebhookTriggersPanel />
               </>
             )}
+            {activeView === "rulesets" && <RulesetsPanel state={state} />}
             {activeView === "nodes" && <NodesPanel state={state} />}
             {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
             {activeView === "account" && <AccountPanel />}

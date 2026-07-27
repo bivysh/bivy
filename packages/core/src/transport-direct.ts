@@ -460,6 +460,29 @@ export class DirectTransport implements Transport {
             await this.directApi(`/api/models/custom/${encodeURIComponent(String((obj as any).id ?? obj.provider ?? ""))}`, { method: "DELETE" }),
           );
           break;
+        case "rulesets.list":
+          this.emitMerged("rulesets.list", await this.directApi("/api/rulesets"));
+          break;
+        case "rulesets.save": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            this.emitMerged(
+              "rulesets.list",
+              await this.directApi("/api/rulesets", { method: "POST", body: JSON.stringify(obj) }),
+            );
+            // Dedicated per-request ack, mirroring the relay path — see #140.
+            this.emit({ type: "rulesets.save.ok", requestId });
+          } catch (error) {
+            this.emit({ type: "rulesets.save.error", requestId, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
+        case "rulesets.remove":
+          this.emitMerged(
+            "rulesets.list",
+            await this.directApi(`/api/rulesets/${encodeURIComponent(String((obj as any).name ?? ""))}`, { method: "DELETE" }),
+          );
+          break;
         case "repos.list":
           this.emitMerged("repos.list", await this.directApi("/api/repos"));
           break;

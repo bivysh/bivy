@@ -29,6 +29,7 @@ export type SettingsView =
   | "github"
   | "queue"
   | "automations"
+  | "rulesets"
   | "nodes"
   | "ephemeral"
   | "account"
@@ -44,6 +45,7 @@ const SETTINGS_VIEWS: readonly SettingsView[] = [
   "github",
   "queue",
   "automations",
+  "rulesets",
   "nodes",
   "ephemeral",
   "account",
