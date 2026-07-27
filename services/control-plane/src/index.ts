@@ -2307,6 +2307,23 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
   res.json({ ok: true, run });
 }));
 
+// Park a claimed run for a human: the node's run policy exhausted its automatic
+// recovery (quota/auth/context, or a drained fallback chain) and wants the run
+// surfaced rather than silently failed. Transitions running/claimed →
+// needs_attention (which auto-stamps a `needs_attention` timeline event). The
+// node should first POST the reason as a bounded evidence event.
+app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const id = String(req.params.id);
+  const current = await store.getAutomationRun(node.accountId, id);
+  if (!current || current.claimedByNodeId !== node.id) {
+    return res.status(409).json({ error: "Run is not owned by this node" });
+  }
+  const run = await store.transitionAutomationRun(node.accountId, id, "needs_attention");
+  if (!run) return res.status(404).json({ error: "Unknown run" });
+  res.json({ ok: true, run });
+}));
+
 // Privacy-safe run evidence (issue #153): the node that claimed a run may
 // report why it routed the way it did, output references (branch/PR/
 // checkpoint/commit/...), declared-check results, and new timeline events
