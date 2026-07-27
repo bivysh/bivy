@@ -133,18 +133,65 @@ export function AutomationsPanel({ state }: { state: AppState }) {
           plaintext prompts, repository contents, transcripts, credentials, or tool output.
         </p>
         <form onSubmit={submit} className="settings-form">
-          <label className="field-label">Name<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
-          <label className="field-label">Instructions<textarea value={ciphertext} onChange={(e) => setCiphertext(e.target.value)} required rows={4} /></label>
-          <label className="field-label">Schedule<select value={kind} onChange={(e) => setKind(e.target.value as "cron" | "once")}><option value="cron">Recurring cron</option><option value="once">One time</option></select></label>
+          <div className="settings-field">
+            <label className="field-label" htmlFor="automation-name">Name</label>
+            <input id="automation-name" className="picker-search" value={name} onChange={(e) => setName(e.target.value)} required />
+          </div>
+          <div className="settings-field">
+            <label className="field-label" htmlFor="automation-instructions">Instructions</label>
+            <textarea id="automation-instructions" className="picker-search" value={ciphertext} onChange={(e) => setCiphertext(e.target.value)} required rows={4} />
+          </div>
+          <div className="settings-field">
+            <label className="field-label" htmlFor="automation-schedule">Schedule</label>
+            <select id="automation-schedule" className="picker-search" value={kind} onChange={(e) => setKind(e.target.value as "cron" | "once")}>
+              <option value="cron">Recurring cron</option>
+              <option value="once">One time</option>
+            </select>
+          </div>
           {kind === "cron" ? <>
-            <label className="field-label">Cron expression<input value={cron} onChange={(e) => setCron(e.target.value)} required /></label>
-            <label className="field-label">Timezone<input value={timezone} onChange={(e) => setTimezone(e.target.value)} required /></label>
-          </> : <label className="field-label">Run at<input type="datetime-local" value={onceAt} onChange={(e) => setOnceAt(e.target.value)} required /></label>}
-          <label className="field-label">Node label (optional)<input value={nodeLabel} onChange={(e) => setNodeLabel(e.target.value)} placeholder="bivy/laptop" /></label>
-          <label className="field-label">Runtime (optional)<input value={runtimeId} onChange={(e) => setRuntimeId(e.target.value)} /></label>
-          <label className="field-label">Model (optional)<input value={model} onChange={(e) => setModel(e.target.value)} /></label>
-          <label className="field-label">Approvals<select value={approvalMode} onChange={(e) => setApprovalMode(e.target.value as typeof approvalMode)}><option value="autonomous">Autonomous (default; pauses only for high-risk actions)</option><option value="risky">Ask before risky actions</option><option value="always">Ask before every action</option><option value="never">Never ask</option></select></label>
-          <label className="field-label">Sandbox<select value={sandbox} onChange={(e) => setSandbox(e.target.value as typeof sandbox)}><option value="read-only">Read only</option><option value="workspace-write">Workspace write</option><option value="danger-full-access">Full access</option></select></label>
+            <div className="settings-field">
+              <label className="field-label" htmlFor="automation-cron">Cron expression</label>
+              <input id="automation-cron" className="picker-search" value={cron} onChange={(e) => setCron(e.target.value)} required />
+            </div>
+            <div className="settings-field">
+              <label className="field-label" htmlFor="automation-timezone">Timezone</label>
+              <input id="automation-timezone" className="picker-search" value={timezone} onChange={(e) => setTimezone(e.target.value)} required />
+            </div>
+          </> : (
+            <div className="settings-field">
+              <label className="field-label" htmlFor="automation-once-at">Run at</label>
+              <input id="automation-once-at" className="picker-search" type="datetime-local" value={onceAt} onChange={(e) => setOnceAt(e.target.value)} required />
+            </div>
+          )}
+          <div className="settings-field">
+            <label className="field-label" htmlFor="automation-node-label">Node label (optional)</label>
+            <input id="automation-node-label" className="picker-search" value={nodeLabel} onChange={(e) => setNodeLabel(e.target.value)} placeholder="bivy/laptop" />
+          </div>
+          <div className="settings-field">
+            <label className="field-label" htmlFor="automation-runtime">Runtime (optional)</label>
+            <input id="automation-runtime" className="picker-search" value={runtimeId} onChange={(e) => setRuntimeId(e.target.value)} />
+          </div>
+          <div className="settings-field">
+            <label className="field-label" htmlFor="automation-model">Model (optional)</label>
+            <input id="automation-model" className="picker-search" value={model} onChange={(e) => setModel(e.target.value)} />
+          </div>
+          <div className="settings-field">
+            <label className="field-label" htmlFor="automation-approvals">Approvals</label>
+            <select id="automation-approvals" className="picker-search" value={approvalMode} onChange={(e) => setApprovalMode(e.target.value as typeof approvalMode)}>
+              <option value="autonomous">Autonomous (default; pauses only for high-risk actions)</option>
+              <option value="risky">Ask before risky actions</option>
+              <option value="always">Ask before every action</option>
+              <option value="never">Never ask</option>
+            </select>
+          </div>
+          <div className="settings-field">
+            <label className="field-label" htmlFor="automation-sandbox">Sandbox</label>
+            <select id="automation-sandbox" className="picker-search" value={sandbox} onChange={(e) => setSandbox(e.target.value as typeof sandbox)}>
+              <option value="read-only">Read only</option>
+              <option value="workspace-write">Workspace write</option>
+              <option value="danger-full-access">Full access</option>
+            </select>
+          </div>
           <button className="btn primary" disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "Create schedule"}</button>
         </form>
         {error && <p className="settings-error">{error}</p>}
