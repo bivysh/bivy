@@ -425,6 +425,17 @@ export class PostgresStore implements MeshStore {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      -- CREATE TABLE IF NOT EXISTS is a no-op on a pre-existing table, so a DB
+      -- created before these columns existed never gets them — and init() then
+      -- crashes the whole control plane on the idx_automation_definitions_due
+      -- index below (which references next_run_at/enabled). Backfill them the
+      -- same way work_items does, before any statement that reads them.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS approval_mode TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS sandbox TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS schedule JSONB NOT NULL DEFAULT '{"kind":"once","at":"9999-12-31T00:00:00.000Z"}';
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS last_scheduled_at TIMESTAMPTZ;
       CREATE TABLE IF NOT EXISTS trigger_events (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
