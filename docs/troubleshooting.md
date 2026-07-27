@@ -344,9 +344,10 @@ bivy doctor
 
 **Notes and fixes.**
 
-- Running `bivy update` from inside a Bivy web terminal detaches on purpose: the
-  update restarts the node, which kills that terminal. Reconnect and run
-  `bivy update:log`.
+- Running `bivy update` from inside a Bivy web terminal detaches on purpose so
+  it can survive the node restart. Progress is shown until the restart; the web
+  terminal reconnects automatically. Run `bivy update:log` afterward to see any
+  output produced during the restart.
 - `bivy update` waits for active sessions to finish a turn. Use
   `bivy update --force` to skip the wait.
 - The installer stages the new release and restores the previous one if anything
