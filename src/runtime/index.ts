@@ -86,6 +86,11 @@ const PI_CAPABILITIES: RuntimeCapabilities = {
   interactiveTui: true,
   usageReporting: true,
   sessionDiscovery: true,
+  // Must match PiRuntime.capabilities (src/runtime/pi.ts) — the composer reads
+  // steer support from the session-less runtimes.list catalog, so if this drifts
+  // from the live runtime the client never learns steering is available and
+  // force-queues every mid-turn message instead of offering an immediate send.
+  streamingBehaviors: ["steer", "followUp"],
 };
 
 const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
@@ -100,6 +105,12 @@ const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
   // ClaudeCodeRuntime.discoverNativeSessions.
   nativeSessionDiscovery: true,
   nativeSessionAdoption: true,
+  // Must match ClaudeCodeRuntime.capabilities (src/runtime/claude-code.ts): a
+  // mid-turn prompt re-enters the SDK streaming-input queue and behaves as an
+  // immediate steer. Advertised here too so the composer offers "send now"
+  // straight from runtimes.list — before any session-capabilities merge, which
+  // won't fire on a reconnect to an already-running session (the mobile case).
+  streamingBehaviors: ["steer"],
 };
 
 function claudeCodeInfo(): RuntimeInfo {
