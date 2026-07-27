@@ -476,7 +476,16 @@
     .plan .tagline { font-size: 13.5px; color: var(--muted); margin: -8px 0 16px; line-height: 1.4; }
     .plan li.hl { color: var(--accent); font-weight: 600; }
     .plan li.hl::before { background: var(--accent); }
-    .plan .cta-row { margin: 20px 0 0; }
+    .plan .cta-row { margin: 22px 0 0; }
+    .plan .icon-badge { width: 34px; height: 34px; margin-bottom: 14px; }
+    .plan .icon-badge .ico { width: 18px; height: 18px; }
+    .plan .price-sub { font-size: 12.5px; color: var(--muted); margin: -12px 0 16px; }
+    .plan .plus-label {
+      font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--faint); font-weight: 600; margin: 2px 0 9px;
+    }
+    .plans .plan { display: flex; flex-direction: column; }
+    .plans .plan ul { flex: 1; }
 
     /* ---------- buttons ---------- */
     .btn {
@@ -1345,24 +1354,27 @@
     <div class="wrap">
       <p class="kicker"><svg class="ico"><use href="#i-dollar"/></svg> Pricing</p>
       <h2>We charge for the coordination layer, never for your tokens.</h2>
-      <p class="prose">Every run — from the CLI, the app, a GitHub issue, or a webhook —
-      draws from one weekly count. The free plan is the whole product; Pro just removes the
-      cap. Self-hosting removes it too.</p>
+      <p class="prose">One number gates everything: <b>runs</b>. A run is one agent session
+      you start — from the CLI, the app, a GitHub issue, or a webhook — and they all draw
+      from a single weekly count. Free is the whole product with 10 runs a week; Pro lifts
+      the cap; self-hosting has no cap at all. No token markup, ever.</p>
 
       <div class="plans">
         <div class="plan">
+          <span class="icon-badge"><svg class="ico"><use href="#i-terminal"/></svg></span>
           <h3>Free</h3>
           <div class="price">$0</div>
-          <p class="tagline">The whole product. One limit: 10 runs a week.</p>
+          <p class="price-sub">No credit card, no trial clock.</p>
+          <p class="tagline">The whole product — every feature, capped only on volume.</p>
           <ul>
-            <li>Any local agent — 10 supported, plus your own</li>
-            <li>Durable sessions and worktrees</li>
-            <li>Rulesets, approvals and sandbox tiers</li>
-            <li>Unlimited relay-connected nodes</li>
+            <li>Any of 10+ coding agents — or your own</li>
+            <li>Route GitHub issues &amp; webhooks to your machines</li>
+            <li>Durable sessions, worktrees &amp; rulesets</li>
             <li>Ephemeral runners in your own cloud</li>
-            <li>Push notifications and webhooks</li>
-            <li>10 runs / week — any source</li>
-            <li>The full phone and browser app</li>
+            <li>Phone, browser &amp; terminal app — all included</li>
+            <li>Push notifications, approvals &amp; sandboxes</li>
+            <li>Unlimited machines and devices</li>
+            <li class="hl">10 runs / week — from any source</li>
             <li>Community support</li>
           </ul>
           <div class="cta-row">
@@ -1371,18 +1383,16 @@
         </div>
         <div class="plan featured">
           <span class="badge">Most popular</span>
+          <span class="icon-badge"><svg class="ico"><use href="#i-bolt"/></svg></span>
           <h3>Pro</h3>
           <div class="price">$15 <span>/ month</span></div>
-          <p class="tagline">For when Bivy is part of your day — uncapped, plus a human to email.</p>
+          <p class="price-sub">Billed monthly · cancel anytime.</p>
+          <p class="tagline">For when Bivy is part of your day.</p>
+          <p class="plus-label">Everything in Free, plus</p>
           <ul>
-            <li>Everything in Free</li>
-            <li>Durable sessions and worktrees</li>
-            <li>Rulesets, approvals and sandbox tiers</li>
-            <li>Unlimited relay-connected nodes</li>
-            <li>Ephemeral runners in your own cloud</li>
-            <li>Push notifications and webhooks</li>
             <li class="hl">Unlimited runs — no weekly cap</li>
-            <li>The full phone and browser app</li>
+            <li>Uncapped GitHub-issue &amp; webhook automation</li>
+            <li>Uncapped ephemeral runners</li>
             <li class="hl">Email support</li>
           </ul>
           <div class="cta-row">
@@ -1391,16 +1401,18 @@
         </div>
         <div class="plan">
           <span class="badge">Early access</span>
+          <span class="icon-badge"><svg class="ico"><use href="#i-users"/></svg></span>
           <h3>Team</h3>
           <div class="price">Let's talk</div>
-          <p class="tagline">For teams standardizing agent work across their own fleet.</p>
+          <p class="price-sub">Per seat · onboarding included.</p>
+          <p class="tagline">Standardize agent work across your own fleet.</p>
+          <p class="plus-label">Everything in Pro, plus</p>
           <ul>
-            <li>Everything in Pro</li>
-            <li>Agent and node routing across a shared workflow</li>
-            <li>Shared rulesets and fallback routes</li>
-            <li>Deployment and onboarding review</li>
+            <li>Shared routing across your team's nodes</li>
+            <li>Shared rulesets &amp; fallback routes</li>
+            <li>SSO &amp; audit <span style="color:var(--faint)">(early access)</span></li>
+            <li>Onboarding &amp; deployment review</li>
             <li>Priority support</li>
-            <li>Help shape SSO, audit, and supported self-hosting</li>
           </ul>
           <div class="cta-row">
             <a href="mailto:support@bivy.sh?subject=Bivy%20Team%20early%20access" class="btn btn-ghost btn-block" data-plausible="team-contact">Contact us</a>
