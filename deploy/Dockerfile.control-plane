@@ -15,6 +15,7 @@ WORKDIR /app
 COPY services/control-plane/package.json ./
 RUN npm install
 COPY services/control-plane/ ./
+COPY deploy/healthcheck.sh /usr/local/bin/bivy-healthcheck
 # Bundle the built React client so the control plane serves it at the root.
 COPY --from=webbuild /repo/packages/web/dist ./public/react
 # Pin V8's old-space ceiling below the container's docker-compose mem_limit
