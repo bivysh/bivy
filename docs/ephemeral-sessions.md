@@ -50,9 +50,11 @@ Launch flow (browser):
 
 1. Enroll a fresh `nodeId` with the control plane (`POST /nodes/enroll`, account session) → enrollment token.
 2. Mint a 32-byte room key; keep it on the device (for reach) and bake it into the machine's `relay.json`. On the node-broker path the relay/control plane never see it.
-3. Build cloud-init user-data that installs Bivy, writes `/etc/bivy/relay.json`, and arms a **self-shutdown at TTL** so a forgotten machine can't bill forever.
+3. Build the bootstrap that installs Bivy, writes `/etc/bivy/relay.json` + `/etc/bivy/start.sh`, **starts the daemon**, and arms a **self-shutdown at TTL** so a forgotten machine can't bill forever. The installer only *installs* Bivy — a headless, pre-enrolled machine has no TTY for `bivy setup`, so `start.sh` (`exec bivy start`, reading the baked `relay.json`) is what actually brings the node online. This is one intent in two forms: `buildBootstrapUserData()` emits cloud-init for VM providers; `bootstrap: BootstrapOpts` is handed to the adapter for providers that can't run cloud-init (see Fly below).
 4. `provision()` via the chosen transport; store the machine record on the device (`bivy-ephemeral` → `machines`) so it can be listed/destroyed later.
 5. The node boots, pairs over the relay, and appears in the node list; the browser already holds its room key, so sessions are reachable.
+
+**VM vs. container bootstrap.** Hetzner and EC2 boot a full cloud image: cloud-init runs the `#cloud-config`, and the daemon is launched as a transient `systemd-run` unit that outlives cloud-init's own unit. Fly is different — a Fly Machine is an OCI image (`ubuntu:24.04`) in a Firecracker microVM, not a cloud-init VM. It runs neither cloud-init *nor* the image's would-be default `/bin/bash` for more than an instant, and the bare image ships no `curl`. So the Fly adapter (`flyInit`) writes `relay.json` + `start.sh` as machine `files`, installs `curl` then Bivy, and runs `bivy start` as a **blocking foreground init process** under a TTL `timeout`. `auto_destroy` then means "destroy when the agent finishes" literally: the machine is reaped only once that foreground daemon exits. (Skipping the foreground process was the original bug — the machine self-destructed on boot before Bivy ever installed.)
 
 Teardown: a **Destroy now** button runs `destroy()` via the same transport and deregisters the node. TTL self-shutdown is the backstop when the device is gone. Machine records are device-local only — the control plane holds none.
 

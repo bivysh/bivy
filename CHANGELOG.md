@@ -101,6 +101,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Ephemeral machines now actually come online.** The bootstrap installed
+  Bivy but never *started* the node on a headless, pre-enrolled machine (no TTY
+  → the installer just prints "run `bivy setup`"), so the node never dialed the
+  relay and stayed offline. The bootstrap now writes `/etc/bivy/start.sh` and
+  launches the daemon (`bivy start`, reading the baked `relay.json`) — via a
+  transient `systemd-run` unit on VM providers (Hetzner/EC2). **Fly.io was doubly
+  broken:** a Fly Machine is an OCI image in a microVM, not a cloud-init VM, so
+  the `#cloud-config` user-data was never executed and the bare `ubuntu:24.04`
+  ran `/bin/bash`, which exits instantly — with `restart: no` + `auto_destroy`
+  the machine self-destructed on boot ("this app has no machines" / node
+  offline). Fly now boots from machine `files` + a **foreground** init process
+  that installs `curl` (absent from the bare image) and Bivy, then runs the
+  daemon under a TTL `timeout`. Also added an official-nodejs.org Node 22
+  fallback to `install.sh` since `deb.nodesource.com/setup_22.x` now returns
+  `403` (apt otherwise falls back to Node 18, which is too old for Bivy).
 - **Transient CLI/relay clients no longer clutter "Signed-in devices".**
   `bivy run --node` bridges and sibling-node replicas paired with a node via
   the same `pair.account` handshake a phone/browser uses, so the control plane

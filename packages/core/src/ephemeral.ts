@@ -659,28 +659,67 @@ export interface BootstrapOpts {
   githubToken?: string;
 }
 
-export function buildBootstrapUserData(opts: BootstrapOpts): string {
-  const relay = JSON.stringify({
+/** Clamp a requested TTL into a sane 5-minute…24-hour window (default 60). A
+ *  forgotten machine can't bill forever, and a too-short TTL can't kill a node
+ *  before it finishes booting. */
+export function clampTtlMinutes(ttlMinutes?: number): number {
+  return Math.max(5, Math.min(24 * 60, Number(ttlMinutes) || 60));
+}
+
+/** The relay enrollment blob written to `/etc/bivy/relay.json`. The daemon reads
+ *  it on boot (`startRelayIfConfigured` in src/server.ts) and dials the relay
+ *  with no interactive `bivy setup` — the node was already enrolled by the
+ *  launching device. */
+function bivyRelayJson(opts: BootstrapOpts): string {
+  return JSON.stringify({
     url: opts.relayUrl,
     enrollmentToken: opts.enrollmentToken,
     e2eKey: opts.e2eKeyB64,
     controlPlaneUrl: opts.controlPlaneUrl,
     clientBaseUrl: opts.controlPlaneUrl,
   });
-  const ttl = Math.max(5, Math.min(24 * 60, Number(opts.ttlMinutes) || 60));
-  const installUrl = opts.installUrl || "https://bivy.sh/install.sh";
-  // Extra `export`s spliced into the same `bash -lc` invocation that runs the
-  // installer, so they land in the daemon's env exactly like BIVY_REPO already
-  // does. Order doesn't matter; each is independently optional.
-  const exports = [
+}
+
+/** The `export`s the daemon needs in its runtime env. `BIVY_DATA_DIR` points at
+ *  the pre-baked `/etc/bivy` (relay.json + state); the rest are independently
+ *  optional (repo, hosted-queue opt-in, routing label, GitHub token). Shared by
+ *  the cloud-init (Hetzner/EC2) and Fly bootstraps so a node's env is identical
+ *  however it was launched. */
+function bivyBootstrapExports(opts: BootstrapOpts): string[] {
+  return [
+    "export BIVY_DATA_DIR=/etc/bivy",
     opts.repo ? `export BIVY_REPO=${shq(opts.repo)}` : "",
     opts.hostedTasks ? `export BIVY_GITHUB_HOSTED_TASKS=1` : "",
     opts.nodeLabel ? `export BIVY_NODE_LABEL=${shq(opts.nodeLabel)}` : "",
     opts.githubToken ? `export BIVY_GITHUB_TOKEN=${shq(opts.githubToken)}` : "",
-  ]
-    .filter(Boolean)
-    .map((line) => `${line} && `)
+  ].filter(Boolean);
+}
+
+/** `/etc/bivy/start.sh` — exports the runtime env then runs the daemon in the
+ *  FOREGROUND (`exec bivy start`). This is the piece that was missing: the
+ *  installer only *installs* Bivy, it never starts the node when there's no TTY
+ *  (a headless, pre-enrolled machine). cloud-init runs this under `systemd-run`
+ *  (a VM stays up on its own); Fly runs it as the machine's init process (a
+ *  container needs a blocking foreground process or it exits and is destroyed).
+ *  PATH is set explicitly because a non-login `systemd-run`/container shell
+ *  doesn't source the rc file the installer appends BIN_DIR to. */
+function bivyStartScript(opts: BootstrapOpts): string {
+  const exports = bivyBootstrapExports(opts)
+    .map((line) => `${line}\n`)
     .join("");
+  return (
+    "#!/bin/bash\n" +
+    'export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin:$PATH"\n' +
+    exports +
+    "exec bivy start\n"
+  );
+}
+
+export function buildBootstrapUserData(opts: BootstrapOpts): string {
+  const relay = bivyRelayJson(opts);
+  const ttl = clampTtlMinutes(opts.ttlMinutes);
+  const installUrl = opts.installUrl || "https://bivy.sh/install.sh";
+  const startScript = bivyStartScript(opts);
   return (
     [
       "#cloud-config",
@@ -689,8 +728,19 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
       "    permissions: '0600'",
       "    content: |",
       indentJson(relay, "      "),
+      "  - path: /etc/bivy/start.sh",
+      "    permissions: '0755'",
+      "    content: |",
+      indentJson(startScript, "      "),
       "runcmd:",
-      `  - [ bash, -lc, "mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && ${exports}curl -fsSL ${shq(installUrl)} | bash" ]`,
+      // 1. Install Bivy (state lands in /etc/bivy via BIVY_DATA_DIR).
+      `  - [ bash, -lc, "mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && curl -fsSL ${shq(installUrl)} | bash" ]`,
+      // 2. Start the daemon. On a systemd VM a transient system unit keeps it
+      //    running after cloud-init's own unit exits (a bare backgrounded process
+      //    would be cleaned up with cloud-final's cgroup); the setsid fallback
+      //    covers a rare image without systemd-run.
+      `  - [ bash, -lc, "systemd-run --unit=bivy --collect --property=Restart=on-failure /etc/bivy/start.sh || setsid bash /etc/bivy/start.sh </dev/null >/var/log/bivy.log 2>&1 &" ]`,
+      // 3. TTL backstop: halt the VM so a forgotten machine can't bill forever.
       `  - [ bash, -lc, "echo 'shutdown -h now' | at now + ${ttl} minutes || (sleep ${ttl * 60} && shutdown -h now) &" ]`,
     ].join("\n") + "\n"
   );
@@ -715,7 +765,11 @@ export interface ProviderAdapter {
    *  deprecated). When a region is given, results are narrowed to what that
    *  region can actually order. Falls back to `sizes` when absent or on error. */
   listSizes?(args: { exec: ExecFn; token: string; region?: string }): Promise<ProviderSize[]>;
-  provision(args: { exec: ExecFn; token: string; config: any; userData: string }): Promise<EphemeralMachine>;
+  /** `userData` is the ready-made cloud-init payload (used by VM providers).
+   *  `bootstrap` is the same intent in structured form, for providers that can't
+   *  run cloud-init and must assemble their own boot config (Fly — see its
+   *  adapter). Both describe one node; an adapter uses whichever it needs. */
+  provision(args: { exec: ExecFn; token: string; config: any; userData: string; bootstrap?: BootstrapOpts }): Promise<EphemeralMachine>;
   status(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<string>;
   destroy(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
 }
@@ -943,6 +997,48 @@ const FLY_GUEST: Record<string, { cpus: number; memoryMb: number }> = {
   "shared-4x-8gb": { cpus: 4, memoryMb: 8192 },
 };
 
+/** Build the Fly Machine `config` fragment (`files` + `init.exec`) that boots a
+ *  headless, pre-enrolled Bivy node. Fly can't run the shared cloud-init
+ *  user_data (see the note in `fly.provision`), so the relay.json + start.sh are
+ *  written as `files` and the daemon is launched as a blocking foreground init
+ *  process. `raw_value` is base64 per the Machines API; `start.sh` is invoked via
+ *  `bash <path>` so it needs no execute bit. */
+function flyInit(opts: BootstrapOpts): {
+  files: { guest_path: string; raw_value: string }[];
+  init: { exec: string[] };
+} {
+  const installUrl = opts.installUrl || "https://bivy.sh/install.sh";
+  const ttlSeconds = clampTtlMinutes(opts.ttlMinutes) * 60;
+  const b64text = (s: string) => b64(utf8.encode(s));
+  // Unlike the VM providers' cloud images, Fly's bare `ubuntu:24.04` OCI image
+  // ships neither cloud-init NOR curl — so we install curl/ca-certificates
+  // ourselves before fetching the installer (otherwise `curl | bash` fails with
+  // "curl: command not found"). `set -euo pipefail` makes any step failing abort
+  // the whole boot loudly instead of silently limping on to a doomed
+  // `bivy start` — a failed boot then exits, and `auto_destroy` reaps the
+  // machine so it's visible as gone rather than a silent zombie.
+  const initScript = [
+    "set -euo pipefail",
+    "export DEBIAN_FRONTEND=noninteractive",
+    "mkdir -p /etc/bivy",
+    "export BIVY_DATA_DIR=/etc/bivy",
+    "apt-get update -qq",
+    "apt-get install -y -qq curl ca-certificates",
+    `curl -fsSL ${shq(installUrl)} | bash`,
+    // Hand the foreground to the daemon under a TTL `timeout` — the backstop
+    // that replaces the VM's `shutdown -h now`. When it fires (or the agent
+    // finishes) the process exits and `auto_destroy` removes the machine.
+    `exec timeout ${ttlSeconds} bash /etc/bivy/start.sh`,
+  ].join("\n");
+  return {
+    files: [
+      { guest_path: "/etc/bivy/relay.json", raw_value: b64text(bivyRelayJson(opts)) },
+      { guest_path: "/etc/bivy/start.sh", raw_value: b64text(bivyStartScript(opts)) },
+    ],
+    init: { exec: ["/bin/bash", "-lc", initScript] },
+  };
+}
+
 const fly: ProviderAdapter = {
   id: "fly",
   name: "Fly.io",
@@ -962,7 +1058,7 @@ const fly: ProviderAdapter = {
     { id: "shared-4x-8gb", label: "shared · 4 vCPU · 8 GB" },
   ],
   defaultSize: "shared-1x-2gb",
-  async provision({ exec, token, config, userData }) {
+  async provision({ exec, token, config, userData, bootstrap }) {
     const app = `bivy-${config.slug}`;
     const org = config.org || "personal";
     const guest = FLY_GUEST[config.size as string] || FLY_GUEST[fly.defaultSize] || { cpus: 1, memoryMb: 2048 };
@@ -973,6 +1069,18 @@ const fly: ProviderAdapter = {
       body: { app_name: app, org_slug: org },
     });
     if (created.status >= 300 && created.status !== 409) throw new Error(providerError(created, "create app"));
+    // A Fly Machine is an OCI image in a Firecracker microVM, NOT a cloud-init
+    // VM: the `#cloud-config` user_data the other providers use is never
+    // executed, and a bare `ubuntu:24.04` just runs `/bin/bash`, which exits
+    // immediately — so with `restart: no` + `auto_destroy` the machine boots and
+    // self-destructs before it ever installs Bivy (that's the "app has no
+    // machines" / node-offline symptom). Instead we materialize the same
+    // relay.json + start.sh via `files` and run them ourselves as a blocking
+    // foreground init process. `auto_destroy` then does the right thing: the
+    // machine is torn down only once the daemon exits (agent finished or the TTL
+    // `timeout` fires), which is exactly the "destroy when the agent finishes"
+    // contract. Falls back to user_data only if no structured bootstrap is given.
+    const machineInit = bootstrap ? flyInit(bootstrap) : { init: { user_data: userData } };
     const machine = await call(exec, {
       method: "POST",
       url: `https://api.machines.dev/v1/apps/${encodeURIComponent(app)}/machines`,
@@ -985,7 +1093,7 @@ const fly: ProviderAdapter = {
           restart: { policy: "no" },
           guest: { cpu_kind: "shared", cpus: Number(config.cpus) || guest.cpus, memory_mb: Number(config.memoryMb) || guest.memoryMb },
           metadata: { bivy: "ephemeral" },
-          init: { user_data: userData },
+          ...machineInit,
         },
       },
     });
@@ -1612,7 +1720,7 @@ export async function launchEphemeralMachine(
   const roomBytes = crypto.getRandomValues(new Uint8Array(32));
   deps.store.addKey(nodeId, b64url(roomBytes));
 
-  const userData = buildBootstrapUserData({
+  const bootstrap: BootstrapOpts = {
     relayUrl: deps.store.relay,
     controlPlaneUrl: cpBase(deps.store),
     enrollmentToken: enroll.enrollmentToken,
@@ -1622,7 +1730,11 @@ export async function launchEphemeralMachine(
     hostedTasks: opts.hostedTasks,
     nodeLabel: opts.hostedTasks ? ephemeralNodeLabel(nodeId) : undefined,
     githubToken: opts.githubToken,
-  });
+  };
+  // Both forms of the same boot intent: `userData` is the cloud-init payload VM
+  // providers run as-is; `bootstrap` lets a provider that can't run cloud-init
+  // (Fly) assemble its own boot config. Each adapter uses whichever it needs.
+  const userData = buildBootstrapUserData(bootstrap);
 
   // The picker offers the provider's live catalog, which can be broader than
   // the static `sizes` fallback, so pass the chosen size through and only
@@ -1633,6 +1745,7 @@ export async function launchEphemeralMachine(
     exec: deps.exec,
     token,
     userData,
+    bootstrap,
     config: { slug: ephemeralNodeLabel(nodeId), region: opts.region || adapter.defaultRegion, size, ttlMinutes: opts.ttlMinutes },
   });
   machine.nodeId = nodeId;

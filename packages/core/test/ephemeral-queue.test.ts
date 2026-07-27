@@ -66,6 +66,26 @@ describe("buildBootstrapUserData — hosted queue opt-in", () => {
     expect(userData).toContain("export BIVY_REPO='owner/repo'");
     expect(userData).toContain("export BIVY_GITHUB_HOSTED_TASKS=1");
   });
+
+  // Regression: the installer alone never starts a headless, pre-enrolled node
+  // (no TTY → it just prints "run bivy setup"). The bootstrap must write a
+  // start.sh and actually launch the daemon, or the machine boots and never
+  // connects to the relay.
+  it("writes /etc/bivy/start.sh and launches the daemon via systemd-run", () => {
+    const userData = buildBootstrapUserData(base);
+    expect(userData).toContain("- path: /etc/bivy/start.sh");
+    expect(userData).toContain("permissions: '0755'");
+    // start.sh runs the daemon in the foreground so the process supervisor keeps
+    // it alive; `bivy setup` is never involved.
+    expect(userData).toContain("exec bivy start");
+    // A transient systemd unit survives cloud-init's own unit exiting; the
+    // setsid fallback covers an image without systemd-run.
+    expect(userData).toContain("systemd-run --unit=bivy");
+    expect(userData).toContain("setsid bash /etc/bivy/start.sh");
+    // The install step still runs, and the TTL self-shutdown backstop remains.
+    expect(userData).toContain("curl -fsSL");
+    expect(userData).toContain("shutdown -h now");
+  });
 });
 
 describe("createGithubTaskTokenStore", () => {
