@@ -2,13 +2,14 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
+import { AutomationsPanel } from "./Automations.js";
 import { StatsPanel } from "./StatsPanel.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
@@ -140,6 +141,7 @@ const TITLES: Record<View, string> = {
   voice: "Voice input",
   github: "GitHub App",
   queue: "GitHub Queue",
+  automations: "Automations",
   nodes: "Nodes",
   ephemeral: "Ephemeral machines",
   account: "Account & billing",
@@ -215,6 +217,13 @@ export function Settings({
       items: [
         { id: "github", label: "GitHub App", icon: <IconGithub /> },
         { id: "queue", label: "GitHub Queue", icon: <IconQueue /> },
+        { id: "automations", label: "Automations", icon: <IconBolt /> },
+      ],
+    },
+    {
+      label: "Automation",
+      items: [
+        { id: "automations", label: "Webhooks", icon: <IconBolt /> },
       ],
     },
     {
@@ -315,6 +324,12 @@ export function Settings({
                 onPick={(id, path, nodeId) => onPickSession?.(id, path, nodeId)}
                 onOpenGithubSettings={() => onViewChange("github")}
               />
+            )}
+            {activeView === "automations" && (
+              <>
+                <AutomationsPanel state={state} />
+                <WebhookTriggersPanel />
+              </>
             )}
             {activeView === "nodes" && <NodesPanel state={state} />}
             {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
@@ -1085,6 +1100,108 @@ function VoicePanel({ state }: { state: AppState }) {
           {errById[p.id] && <div className="banner error inline">{errById[p.id]}</div>}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ---- Generic signed automation webhooks ----
+// Signed inbound webhook triggers (from the automation-webhooks feature). Lives
+// alongside the scheduled-automations panel (imported from ./Automations) under
+// the same "Automations" view — the two features arrived independently and both
+// belong here.
+function WebhookTriggersPanel() {
+  const [hooks, setHooks] = useState<AutomationHook[]>([]);
+  const [outcomes, setOutcomes] = useState<AutomationOutcome[]>([]);
+  const [template, setTemplate] = useState("Follow the incoming instruction in the current workspace.");
+  const [route, setRoute] = useState("");
+  const [revealed, setRevealed] = useState<{ hook: AutomationHook; secret: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = async () => {
+    try {
+      const data = await fetchAutomationHooks(controller.local);
+      setHooks(data.hooks);
+      setOutcomes(data.outcomes);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load automation hooks.");
+    }
+  };
+  useEffect(() => { void refresh(); }, []);
+  const create = async () => {
+    setBusy(true); setError("");
+    try {
+      const created = await createAutomationHook(controller.local, { templateInstruction: template, routingDefault: route });
+      setRevealed({ hook: created, secret: created.secret });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create hook.");
+    } finally { setBusy(false); }
+  };
+  const rotate = async (hook: AutomationHook) => {
+    setBusy(true); setError("");
+    try {
+      const rotated = await rotateAutomationHookSecret(controller.local, hook.id);
+      setRevealed({ hook: rotated, secret: rotated.secret });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not rotate secret.");
+    } finally { setBusy(false); }
+  };
+  const curl = revealed ? `body='{"version":"1","instruction":"Run the test suite","title":"CI follow-up","sourceUrl":"https://example.com/build/123","externalId":"build-123","metadata":{"environment":"staging"}}'
+signature=$(printf %s "$body" | openssl dgst -sha256 -hmac '${revealed.secret}' -hex | sed 's/^.* //')
+curl -X POST '${revealed.hook.endpoint}' \\
+  -H 'Content-Type: application/json' \\
+  -H "X-Bivy-Signature-256: sha256=$signature" \\
+  -H 'X-Bivy-Idempotency-Key: build-123' \\
+  --data-binary "$body"` : "";
+  return (
+    <div className="settings-form">
+      <p className="settings-lead">Create signed inbound endpoints that turn events from CI, monitoring, or internal tools into ordinary Bivy runs.</p>
+      {error && <div className="banner error inline">{error}</div>}
+      {revealed && (
+        <section className="settings-section">
+          <h3>Save this secret now</h3>
+          <p className="settings-hint">It is shown only after creation or rotation. Rotating immediately invalidates the previous secret.</p>
+          <code className="settings-code">{revealed.secret}</code>
+          <h4 className="settings-subhead">Example curl</h4>
+          <pre className="settings-code" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{curl}</pre>
+          <button className="btn" onClick={() => void navigator.clipboard.writeText(curl)}>Copy example</button>
+        </section>
+      )}
+      <section className="settings-section">
+        <h3>New webhook</h3>
+        <label className="field-label">Safe instruction template</label>
+        <textarea className="field-input" rows={3} value={template} maxLength={2000} onChange={(e) => setTemplate(e.target.value)} />
+        <p className="settings-hint">This fixed instruction is prepended to each event. Payloads cannot select commands, runtimes, models, or executable templates.</p>
+        <label className="field-label">Default node (optional)</label>
+        <input className="field-input" value={route} maxLength={80} placeholder="macbook" onChange={(e) => setRoute(e.target.value)} />
+        <button className="btn primary" disabled={busy || !template.trim()} onClick={() => void create()}>Create webhook</button>
+      </section>
+      {hooks.map((hook) => (
+        <section className="settings-section" key={hook.id}>
+          <div className="settings-row">
+            <div><h3>{hook.id}</h3><code className="settings-code">{hook.endpoint}</code></div>
+            <label><input type="checkbox" checked={hook.enabled} disabled={busy} onChange={(e) => {
+              void updateAutomationHook(controller.local, hook.id, { enabled: e.target.checked }).then(refresh).catch((err) => setError(String(err)));
+            }} /> Enabled</label>
+          </div>
+          <p className="settings-hint">Routes to {hook.routingDefault ? `bivy/${hook.routingDefault}` : "the shared bivy queue"}.</p>
+          <div className="settings-actions">
+            <button className="btn" disabled={busy} onClick={() => void rotate(hook)}>Rotate secret</button>
+            <button className="btn danger" disabled={busy || !hook.enabled} onClick={() => {
+              if (confirm("Revoke this webhook? Its current secret will stop working immediately.")) {
+                void revokeAutomationHook(controller.local, hook.id).then(refresh).catch((err) => setError(String(err)));
+              }
+            }}>Revoke</button>
+          </div>
+        </section>
+      ))}
+      <section className="settings-section">
+        <h3>Recent trigger outcomes</h3>
+        {outcomes.length === 0
+          ? <p className="settings-hint">No accepted triggers yet.</p>
+          : outcomes.map((outcome) => <div className="settings-row" key={outcome.id}><span>{outcome.title}</span><span className="settings-hint">{outcome.status}</span></div>)}
+      </section>
     </div>
   );
 }

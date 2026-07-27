@@ -17,6 +17,7 @@ import {
   loadCodexTranscript,
   loadCodexTranscriptFile,
   discoverCodexSessionForCwd,
+  discoverNativeCodexSessions,
 } from "../src/runtime/codex-sessions.js";
 
 let failures = 0;
@@ -105,6 +106,53 @@ check("missing sessions dir yields an empty list (no throw)", () => {
   process.env.CODEX_HOME = path.join(tmpHome, "does-not-exist");
   assert.deepEqual(listCodexSessions(), []);
   process.env.CODEX_HOME = prev;
+});
+
+// --- Native discovery/adoption (issue #156) ---------------------------------
+
+check("discoverNativeCodexSessions returns bounded metadata for every session with an id, newest first", () => {
+  const discovered = discoverNativeCodexSessions(() => false); // no live process for any cwd
+  assert.equal(discovered.length, 2);
+  assert.deepEqual(discovered.map((s) => s.ref), [SESSION_B, SESSION_A]);
+  for (const s of discovered) {
+    assert.equal(s.runtimeId, "codex-approvals");
+    assert.equal(s.resumable, true, "every Codex session with a recorded id is resumable via `codex exec resume <id>`");
+    assert.equal(s.active, false);
+    // Bounded metadata only — no transcript content anywhere on the shape.
+    assert.equal((s as { messages?: unknown }).messages, undefined);
+  }
+  const b = discovered.find((s) => s.ref === SESSION_B)!;
+  assert.equal(b.cwd, "/work/other");
+  assert.equal(b.file, fileB);
+});
+
+check("discoverNativeCodexSessions marks a session active when a live process is detected at its cwd", () => {
+  const discovered = discoverNativeCodexSessions((cwd) => cwd === "/work/repo");
+  const a = discovered.find((s) => s.ref === SESSION_A)!;
+  const b = discovered.find((s) => s.ref === SESSION_B)!;
+  assert.equal(a.active, true);
+  assert.equal(b.active, false);
+});
+
+check("discoverNativeCodexSessions omits a session Codex never assigned an id to (nothing to resume by)", () => {
+  writeRollout("2026/07/12", "rollout-2026-07-12T09-00-00-no-id.jsonl", [
+    { cwd: "/work/no-id" },
+    { role: "user", content: "hi", timestamp: "2026-07-12T09:00:01.000Z" },
+  ]);
+  const discovered = discoverNativeCodexSessions(() => false);
+  assert.ok(!discovered.some((s) => s.cwd === "/work/no-id"));
+});
+
+check("discoverNativeCodexSessions honors a non-default CODEX_HOME (no throw, empty list)", () => {
+  const prev = process.env.CODEX_HOME;
+  const otherHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-sessions-other-home-"));
+  process.env.CODEX_HOME = otherHome;
+  try {
+    assert.deepEqual(discoverNativeCodexSessions(() => false), []);
+  } finally {
+    process.env.CODEX_HOME = prev;
+    fs.rmSync(otherHome, { recursive: true, force: true });
+  }
 });
 
 try {

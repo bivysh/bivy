@@ -266,10 +266,73 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(blank.label, "bivy");
 
     const claimed = await store.claimWorkItem(acct.id, node.id, a.id);
+    const canonical = await store.getAutomationRun(acct.id, a.id);
+    assert.equal(canonical?.triggerKind, "github");
+    assert.equal(canonical?.routing.nodeLabel, "bivy");
+    assert.equal(canonical?.title, "A");
     assert.equal(claimed?.status, "claimed");
     assert.equal(await store.claimWorkItem(acct.id, node.id, a.id), undefined); // second claim loses
     await store.completeWorkItem(acct.id, a.id);
-    assert.equal((await store.listWorkItems(acct.id)).find((w) => w.id === a.id)?.status, "done");
+    assert.equal((await store.listWorkItems(acct.id)).find((w) => w.id === a.id)?.status, "succeeded");
+  });
+
+  await test("automation runs: trigger-neutral lifecycle and concurrent claim", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-automation@example.com");
+    const { node: a } = await store.enrollNode(acct.id, "auto-a", "A");
+    const { node: b } = await store.enrollNode(acct.id, "auto-b", "B");
+    const definition = await store.createAutomationDefinition(acct.id, {
+      name: "Triage",
+      templateCiphertext: "encrypted-template",
+      runtimeId: "codex",
+      nodeLabel: "bivy",
+    });
+    const run = await store.enqueueAutomationRun(acct.id, {
+      source: "manual",
+      triggerKind: "manual",
+      definitionId: definition.id,
+      title: "Investigate",
+      dedupeKey: "manual:one",
+    });
+    assert.equal(run.status, "pending");
+    assert.equal(run.triggerKind, "manual");
+    assert.equal(run.target.kind, "new_session");
+    const [claimA, claimB] = await Promise.all([
+      store.claimWorkItem(acct.id, a.id, run.id),
+      store.claimWorkItem(acct.id, b.id, run.id),
+    ]);
+    assert.equal([claimA, claimB].filter(Boolean).length, 1);
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "running"))?.status, "running");
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "needs_attention"))?.status, "needs_attention");
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "failed", { failure: "operator stopped" }))?.output?.failure, "operator stopped");
+
+    const slack = await store.enqueueAutomationRun(acct.id, {
+      source: "slack",
+      title: "Ship it",
+      dedupeKey: "slack:event:1",
+    });
+    const redelivery = await store.enqueueAutomationRun(acct.id, {
+      source: "slack",
+      title: "duplicate",
+      dedupeKey: "slack:event:1",
+    });
+    assert.equal(slack.triggerKind, "slack");
+    assert.equal(redelivery.id, slack.id);
+
+    // A node can throw before its best-effort /running transition lands, so a
+    // failure must terminate a still-"claimed" run rather than get stuck.
+    const stuck = await store.enqueueAutomationRun(acct.id, {
+      source: "manual",
+      triggerKind: "manual",
+      title: "Claimed then threw",
+      dedupeKey: "manual:stuck",
+    });
+    assert.ok(await store.claimWorkItem(acct.id, a.id, stuck.id));
+    assert.equal((await store.getAutomationRun(acct.id, stuck.id))?.status, "claimed");
+    assert.equal((await store.transitionAutomationRun(acct.id, stuck.id, "failed"))?.status, "failed");
+
+    const triggers = await store.listTriggerEvents(acct.id);
+    assert.equal(triggers.some((event) => event.id === slack.triggerId && event.sourceKey === "slack:event:1"), true);
+    assert.equal((await store.listTriggerEvents((await store.findOrCreateAccount("contract-automation-other@example.com")).id)).length, 0);
   });
 
   await test("work queue: dedupeKey is idempotent per account", async (store) => {
@@ -279,6 +342,34 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(again.id, first.id);
     assert.equal(again.title, "Fix");
     assert.equal((await store.listWorkItems(acct.id)).length, 1);
+  });
+
+  await test("automation hooks configure safely and report replay deduplication", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-automation@example.com");
+    const hook = await store.createInboundHook(acct.id, "automation");
+    const configured = await store.updateInboundHook(acct.id, hook.id, {
+      templateInstruction: "Investigate this event.",
+      routingDefault: "runner",
+      enabled: true,
+    });
+    assert.equal(configured?.secret, hook.secret);
+    assert.equal(configured?.templateInstruction, "Investigate this event.");
+    assert.equal((await store.listInboundHooks(acct.id, "automation")).length, 1);
+    const first = await store.enqueueAutomationRunWithResult(acct.id, {
+      source: `automation:${hook.id}`,
+      triggerKind: "webhook",
+      title: "Alert",
+      dedupeKey: `automation:${hook.id}:delivery-1`,
+    });
+    const replay = await store.enqueueAutomationRunWithResult(acct.id, {
+      source: `automation:${hook.id}`,
+      triggerKind: "webhook",
+      title: "Changed",
+      dedupeKey: `automation:${hook.id}:delivery-1`,
+    });
+    assert.equal(first.created, true);
+    assert.equal(replay.created, false);
+    assert.equal(replay.run.id, first.run.id);
   });
 
   await test("work queue: reroute + assign only affect pending items", async (store) => {

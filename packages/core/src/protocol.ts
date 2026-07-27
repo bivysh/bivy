@@ -27,6 +27,8 @@ export interface Command extends CommandBase {
     | "sessions.list"
     | "session.open"
     | "session.new"
+    | "session.discover"
+    | "session.import"
     | "session.delete"
     | "session.rename"
     | "session.pr.refresh"

@@ -85,6 +85,26 @@ import {
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
+/**
+ * Bounded discovery metadata for a provider-native session Bivy did not start
+ * (see src/runtime/types.ts's DiscoveredNativeSession, issue #156). Never
+ * carries transcript content — safe to render in a list straight off the wire.
+ */
+export interface DiscoveredNativeSessionDto {
+  runtimeId: string;
+  agentName: string;
+  ref: string;
+  cwd?: string;
+  updatedAt?: number;
+  title?: string;
+  active: boolean;
+  resumable: boolean;
+  plan: {
+    mode: "native-resume" | "seeded" | "follow-only";
+    disclosure?: string;
+  };
+}
+
 function requestId(): string {
   return `r${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -799,6 +819,39 @@ export class AppController {
     } else {
       pending.resolve(event);
     }
+  }
+
+  // --- Native session discovery/adoption (issue #156) -------------------------
+  // "Browse, follow, and take over" provider-native sessions (a bare `claude` or
+  // `codex` run outside Bivy) that the current node can see. Capability-driven:
+  // the node decides per-runtime whether a session is discoverable/adoptable
+  // (see src/runtime/native-session-discovery.ts) — this is just the transport.
+
+  /** Every provider-native session the current node can discover, bounded
+   *  metadata only (never transcript content). Throws on a transport/node error. */
+  async discoverNativeSessions(): Promise<DiscoveredNativeSessionDto[]> {
+    const event = await this.awaitAck({ kind: "session.discover" }, 20000);
+    const sessions = (event as { sessions?: unknown }).sessions;
+    return Array.isArray(sessions) ? (sessions as DiscoveredNativeSessionDto[]) : [];
+  }
+
+  /**
+   * Import a discovered session into Bivy and switch the view to it. The node
+   * re-validates the ref against a fresh discovery pass (so a stale/removed
+   * session, or one with a live external process, is rejected server-side even
+   * if this client's cached list is out of date) and resumes it natively when
+   * the runtime supports that; the provider's own history is never touched.
+   */
+  async importNativeSession(runtimeId: string, ref: string): Promise<string> {
+    const event = await this.awaitAck({ kind: "session.import", runtimeId, ref }, 60000);
+    const sessionId = String((event as { sessionId?: unknown }).sessionId || "");
+    if (!sessionId) throw new Error("Import did not return a session id");
+    // Reopen through the ordinary path/id resume (same as clicking any saved
+    // session) rather than trusting a synthetic event shape, so this works
+    // identically whether the node created a brand-new record or reused one
+    // already open in memory.
+    this.openSession(sessionId, ref);
+    return sessionId;
   }
 
   // --- Session fork (docs/session-fork-plan.md) --------------------------------
