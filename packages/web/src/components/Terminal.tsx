@@ -551,11 +551,20 @@ export function TerminalOverlay({
     searchRef.current = search;
 
     const doFit = () => {
+      // Was the viewport resting at the bottom before we refit? If so, keep it
+      // pinned there afterwards. On mobile the visual viewport changes height
+      // whenever the keyboard or the browser's own toolbars slide in/out; a
+      // refit that doesn't re-pin leaves the newest row parked a fraction below
+      // the fold, so it reads as "clipped behind the bottom toolbar". Preserve an
+      // intentional scroll-up (reading history) — only re-pin when already down.
+      const buf = term.buffer.active;
+      const wasAtBottom = buf.viewportY >= buf.baseY;
       try {
         fit.fit();
       } catch {
         return; /* not mounted yet */
       }
+      if (wasAtBottom) term.scrollToBottom();
       const id = termIdRef.current;
       const { cols, rows } = term;
       // Only tell the node when the grid actually changed — ResizeObserver and the
@@ -636,21 +645,62 @@ export function TerminalOverlay({
     // --- Touch gestures ----------------------------------------------------
     // One finger: a long-press selects the word under it, then a drag extends the
     // selection (xterm's canvas has no selectable DOM, so we drive selection off
-    // the buffer). A quick single-finger drag falls through to xterm's scroll.
-    // Two fingers: a trackpad — panning nudges the cursor with arrow keys so you
-    // can position it mid-command without hunting for the arrow bar.
-    type Mode = "none" | "pending" | "selecting" | "cursor";
+    // the buffer). A plain one-finger drag scrolls the grid — we drive that
+    // ourselves too (see below) rather than lean on xterm's native viewport
+    // scroll, which on mobile is unreliable: the GPU renderer's canvas sits over
+    // the scrollable viewport, so touches often don't reach it and momentum
+    // fights our gesture handling, making the grid jump or scroll the *wrong
+    // way*. Two fingers: a trackpad — panning nudges the cursor with arrow keys
+    // so you can position it mid-command without hunting for the arrow bar.
+    type Mode = "none" | "pending" | "scrolling" | "selecting" | "cursor";
     let mode: Mode = "none";
     let lp: ReturnType<typeof setTimeout> | null = null;
     let startX = 0, startY = 0, lastX = 0, lastY = 0;
     let cw = 8, chRow = 16;
     let midX = 0, midY = 0, startDist = 0, accX = 0, accY = 0;
+    // One-finger scroll bookkeeping: fractional rows not yet applied, the last
+    // move's timestamp, the running velocity (rows/ms) and the flick-momentum
+    // rAF handle.
+    let scrollAcc = 0, lastMoveT = 0, velRows = 0;
+    let momentumRAF: number | null = null;
     const clearLp = () => { if (lp) { clearTimeout(lp); lp = null; } };
     const dist2 = (a: Touch, b: Touch) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    const stopMomentum = () => {
+      if (momentumRAF != null) { cancelAnimationFrame(momentumRAF); momentumRAF = null; }
+      velRows = 0;
+    };
+    // Apply a signed row delta to the grid, carrying the fractional remainder so
+    // slow drags still move smoothly a whole row at a time.
+    const scrollByRows = (rows: number) => {
+      scrollAcc += rows;
+      const whole = Math.trunc(scrollAcc);
+      if (whole !== 0) {
+        term.scrollLines(whole);
+        scrollAcc -= whole;
+      }
+    };
+    // A flick keeps scrolling after the finger lifts, decaying with friction —
+    // the momentum that makes a native list feel alive.
+    const startMomentum = () => {
+      if (Math.abs(velRows) < 0.004) return; // too slow to be a flick
+      let v = velRows;
+      let prev = performance.now();
+      const step = () => {
+        const t = performance.now();
+        const dt = Math.min(t - prev, 32); // clamp so a stalled frame can't leap
+        prev = t;
+        scrollByRows(v * dt);
+        v *= Math.pow(0.94, dt / 16); // ~0.94 per 16ms frame
+        momentumRAF = Math.abs(v) > 0.004 ? requestAnimationFrame(step) : null;
+      };
+      momentumRAF = requestAnimationFrame(step);
+    };
 
     const onTouchStart = (e: TouchEvent) => {
       // A fresh touch on the grid (not a handle — those live outside term-out and
-      // never reach here) dismisses any existing selection and its handles.
+      // never reach here) halts any flick, dismisses any existing selection and
+      // its handles.
+      stopMomentum();
       setSelMenu(null);
       stopAutoScroll();
       term.clearSelection();
@@ -673,6 +723,9 @@ export function TerminalOverlay({
       if (!t0) return;
       startX = lastX = t0.clientX;
       startY = lastY = t0.clientY;
+      scrollAcc = 0;
+      velRows = 0;
+      lastMoveT = performance.now();
       mode = "pending";
       clearLp();
       lp = setTimeout(() => {
@@ -717,16 +770,35 @@ export function TerminalOverlay({
         return;
       }
       if (!t0) return;
-      lastX = t0.clientX;
-      lastY = t0.clientY;
+      const x = t0.clientX, y = t0.clientY;
       if (mode === "pending") {
-        if (Math.hypot(lastX - startX, lastY - startY) > 10) {
+        // Once the finger travels past a small slop, decide: it's a scroll.
+        // (A long-press that beat us here already switched to "selecting".)
+        if (Math.hypot(x - startX, y - startY) > 8) {
           clearLp();
-          mode = "none"; // moved before the long-press armed → let xterm scroll
+          mode = "scrolling";
+          lastMoveT = performance.now();
+          velRows = 0;
         }
+        lastX = x;
+        lastY = y;
+      } else if (mode === "scrolling") {
+        e.preventDefault();
+        // Content follows the finger: drag down → reveal earlier lines (scroll
+        // up). One row of finger travel == one row of scroll, so it tracks 1:1.
+        const dRows = -(y - lastY) / (chRow || 16);
+        scrollByRows(dRows);
+        const t = performance.now();
+        const dt = t - lastMoveT;
+        if (dt > 0) velRows = dRows / dt; // rows/ms, for the release flick
+        lastMoveT = t;
+        lastX = x;
+        lastY = y;
       } else if (mode === "selecting") {
-        applyDrag(lastX, lastY);
-        edgeAutoScroll(lastY);
+        lastX = x;
+        lastY = y;
+        applyDrag(x, y);
+        edgeAutoScroll(y);
         e.preventDefault();
       }
     };
@@ -735,6 +807,7 @@ export function TerminalOverlay({
       clearLp();
       stopAutoScroll();
       if (mode === "selecting" && term.hasSelection()) setSelMenu({ x: lastX, y: lastY });
+      else if (mode === "scrolling") startMomentum();
       selDragRef.current = null;
       mode = "none";
     };
@@ -887,8 +960,17 @@ export function TerminalOverlay({
     if (mountRef.current) ro.observe(mountRef.current);
     window.addEventListener("resize", scheduleFit);
     // The mobile virtual keyboard resizes the visual viewport without firing a
-    // window resize — react to it so the grid re-fits above the keyboard.
+    // window resize — react to it so the grid re-fits above the keyboard. iOS
+    // Safari also collapses/expands its bottom toolbar on *scroll* (not resize),
+    // which changes the visible height too, so refit on both.
     window.visualViewport?.addEventListener("resize", scheduleFit);
+    window.visualViewport?.addEventListener("scroll", scheduleFit);
+    // Focusing/blurring the grid raises/dismisses the on-screen keyboard, which
+    // is the biggest height change of all — refit (and re-pin to the bottom) so
+    // the last line never ends up hidden under the keybar when focus leaves.
+    const ta = term.textarea;
+    ta?.addEventListener("focus", scheduleFit);
+    ta?.addEventListener("blur", scheduleFit);
 
     return () => {
       off();
@@ -896,8 +978,12 @@ export function TerminalOverlay({
       ro.disconnect();
       window.removeEventListener("resize", scheduleFit);
       window.visualViewport?.removeEventListener("resize", scheduleFit);
+      window.visualViewport?.removeEventListener("scroll", scheduleFit);
+      ta?.removeEventListener("focus", scheduleFit);
+      ta?.removeEventListener("blur", scheduleFit);
       if (resizeTimer.current) clearTimeout(resizeTimer.current);
       clearLp();
+      stopMomentum();
       stopAutoScroll();
       bellDispose.dispose();
       if (touch && mountEl) {

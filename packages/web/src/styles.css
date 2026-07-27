@@ -1364,10 +1364,21 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .term-continue-chat { font-weight: 700; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
 .term-out { flex: 1; min-height: 0; overflow: hidden; padding: 6px 8px; position: relative; }
 /* Suppress the iOS long-press callout / native text-selection UI over the
-   canvas — we drive touch selection ourselves (long-press + drag). */
-.term-out { -webkit-touch-callout: none; }
+   canvas — we drive touch selection ourselves (long-press + drag). We also own
+   scrolling (see Terminal.tsx touch handlers): `touch-action: none` stops the
+   browser from also panning the canvas, which is what made scroll jump or run
+   backwards; `overscroll-behavior: contain` keeps a scroll past the top/bottom
+   from bouncing the page or triggering pull-to-refresh; and pinning the text
+   size stops iOS from silently inflating the monospace glyphs. */
+.term-out {
+  -webkit-touch-callout: none;
+  touch-action: none;
+  overscroll-behavior: contain;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 .term-out .xterm { height: 100%; }
-.term-out .xterm-viewport { overflow-y: auto; }
+.term-out .xterm-viewport { overflow-y: auto; overscroll-behavior: contain; }
 /* Smooth momentum scrolling for the terminal viewport on touch devices. */
 .term-out .xterm-viewport { -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
 
@@ -1432,6 +1443,9 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .term-selhandle-start { transform: translate(-50%, -100%); }
 .term-selhandle-end { transform: translate(-50%, 0); }
 .term-selhandle:active { background: var(--accent); filter: brightness(1.15); }
+/* A finger is far bigger than the 22px dot — extend an invisible hit area around
+   each handle so grabbing one to adjust a selection doesn't demand precision. */
+.term-selhandle::after { content: ""; position: absolute; inset: -12px; border-radius: 50%; }
 
 /* Snippets / recent-command chip bar (touch keyboard-avoider). Sits just above
    the key accessory bar; tap a chip to insert, long-press to run. */
