@@ -10,6 +10,7 @@
 
 import { linkPayloadFromText } from "./linking.js";
 import type { LocalStore } from "./local-store.js";
+import type { ExecutionPolicy } from "./execution-policy.js";
 
 export interface LinkPayload {
   session?: string;
@@ -458,6 +459,12 @@ export interface GithubQueueItem {
   attempt?: number;
   targetKind?: "new_session" | "existing_session";
   startedAt?: string;
+  /** Issue #155: `output.policyEvidence`, when a policy governed this run, is
+   *  the bounded/sanitized `PolicyEvidence` from `@bivy/core/execution-policy`
+   *  — never raw command output, diffs, or file contents. */
+  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string; policyEvidence?: unknown };
+  /** The (opaque) execution policy this run was governed by. */
+  policy?: ExecutionPolicy;
 }
 
 export type AutomationSchedule =
@@ -477,6 +484,14 @@ export interface AccountAutomation {
   schedule: AutomationSchedule;
   nextRunAt?: string;
   lastScheduledAt?: string;
+  /** Issue #155: this definition's execution policy (allowed runtimes/models,
+   *  sandbox/approval floor, required checks, clean-commit/PR requirements,
+   *  changed-file globs — see `@bivy/core/execution-policy`), layered UNDER
+   *  the node's own default policy at run time. The control plane only
+   *  routes/stores it; the node is the sole enforcement authority. `null` (as
+   *  opposed to an absent key) explicitly clears a previously-set policy on
+   *  `updateAutomation` — see `PUT /account/automations/:id`. */
+  policy?: ExecutionPolicy | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -490,7 +505,11 @@ export interface AccountAutomationRun {
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
-  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+  /** `policyEvidence`, when this run's definition had a policy configured
+   *  (issue #155), is the bounded/sanitized `PolicyEvidence` from
+   *  `@bivy/core/execution-policy` — check ids, exit status, duration, short
+   *  redacted summaries, never raw command output, diffs, or file contents. */
+  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string; policyEvidence?: unknown };
 }
 
 async function automationRequest<T>(

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
 import {
+  combineExecutionPolicies,
   defaultExecutionPolicy,
   evaluateChangedFiles,
   evaluatePolicyOutcome,
@@ -104,6 +105,79 @@ describe("mergeExecutionPolicy", () => {
   it("is a no-op with no patch", () => {
     const base = defaultExecutionPolicy();
     expect(mergeExecutionPolicy(base, undefined)).toBe(base);
+  });
+});
+
+describe("combineExecutionPolicies", () => {
+  it("takes the stricter sandbox/approval floor from either side", () => {
+    const node = { ...defaultExecutionPolicy(), requiredSandboxTier: "workspace-write" as const };
+    const definition = { ...defaultExecutionPolicy(), requiredApprovalMode: "always" as const };
+    const combined = combineExecutionPolicies(node, definition);
+    expect(combined.requiredSandboxTier).toBe("workspace-write");
+    expect(combined.requiredApprovalMode).toBe("always");
+  });
+
+  it("a stricter node floor is never loosened by a weaker definition floor", () => {
+    const node = { ...defaultExecutionPolicy(), requiredSandboxTier: "read-only" as const, requiredApprovalMode: "always" as const };
+    const definition = { ...defaultExecutionPolicy(), requiredSandboxTier: "danger-full-access" as const, requiredApprovalMode: "never" as const };
+    const combined = combineExecutionPolicies(node, definition);
+    expect(combined.requiredSandboxTier).toBe("read-only");
+    expect(combined.requiredApprovalMode).toBe("always");
+  });
+
+  it("intersects allowlists when both sides restrict them", () => {
+    const node = { ...defaultExecutionPolicy(), allowedRuntimes: ["claude-code", "codex", "gemini"] };
+    const definition = { ...defaultExecutionPolicy(), allowedRuntimes: ["codex", "aider"] };
+    expect(combineExecutionPolicies(node, definition).allowedRuntimes).toEqual(["codex"]);
+  });
+
+  it("an allowlist on only one side still restricts the combined policy", () => {
+    const node = defaultExecutionPolicy();
+    const definition = { ...defaultExecutionPolicy(), allowedRuntimes: ["codex"] };
+    expect(combineExecutionPolicies(node, definition).allowedRuntimes).toEqual(["codex"]);
+    expect(combineExecutionPolicies(definition, node).allowedRuntimes).toEqual(["codex"]);
+  });
+
+  it("false wins for networkAllowed/mcpAllowed (either side disabling disables overall)", () => {
+    const node = defaultExecutionPolicy(); // networkAllowed/mcpAllowed default true
+    const definition = { ...defaultExecutionPolicy(), networkAllowed: false };
+    const combined = combineExecutionPolicies(node, definition);
+    expect(combined.networkAllowed).toBe(false);
+    expect(combined.mcpAllowed).toBe(true);
+  });
+
+  it("true wins for requireCleanCommit/requirePr (either side requiring it requires it overall)", () => {
+    const node = defaultExecutionPolicy();
+    const definition = { ...defaultExecutionPolicy(), requirePr: true };
+    expect(combineExecutionPolicies(node, definition).requirePr).toBe(true);
+    expect(combineExecutionPolicies(definition, node).requirePr).toBe(true);
+  });
+
+  it("required checks union from both sides, deduped by id", () => {
+    const node = { ...defaultExecutionPolicy(), requiredChecks: [{ id: "lint", command: "npm run lint" }] };
+    const definition = { ...defaultExecutionPolicy(), requiredChecks: [{ id: "test", command: "npm test" }, { id: "lint", command: "should-be-ignored" }] };
+    const combined = combineExecutionPolicies(node, definition);
+    expect(combined.requiredChecks).toEqual([
+      { id: "lint", command: "npm run lint" },
+      { id: "test", command: "npm test" },
+    ]);
+  });
+
+  it("changed-file deny globs union from both sides", () => {
+    const node = { ...defaultExecutionPolicy(), changedFiles: { deny: ["**/*.env"] } };
+    const definition = { ...defaultExecutionPolicy(), changedFiles: { deny: ["secrets/**"] } };
+    expect(combineExecutionPolicies(node, definition).changedFiles?.deny?.sort()).toEqual(["**/*.env", "secrets/**"]);
+  });
+
+  it("the smaller maxDurationMs wins when both sides set one", () => {
+    const node = { ...defaultExecutionPolicy(), maxDurationMs: 600_000 };
+    const definition = { ...defaultExecutionPolicy(), maxDurationMs: 120_000 };
+    expect(combineExecutionPolicies(node, definition).maxDurationMs).toBe(120_000);
+    expect(combineExecutionPolicies(definition, node).maxDurationMs).toBe(120_000);
+  });
+
+  it("combining two fully-default policies stays fully permissive", () => {
+    expect(combineExecutionPolicies(defaultExecutionPolicy(), defaultExecutionPolicy())).toEqual(defaultExecutionPolicy());
   });
 });
 

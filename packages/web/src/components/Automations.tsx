@@ -14,6 +14,7 @@ import {
   type AccountAutomation,
   type AccountAutomationRun,
 } from "@bivy/core";
+import { defaultExecutionPolicy, parseExecutionPolicy, type ExecutionPolicy } from "@bivy/core/execution-policy";
 import { controller } from "../store/controller.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
@@ -35,6 +36,32 @@ export function AutomationsPanel({ state }: { state: AppState }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Execution policy (issue #155), edited as raw JSON — see Settings.tsx's
+  // node-global "Execution policy" section for the same pattern. This layers
+  // UNDER the node's own default at run time (combineExecutionPolicies): it
+  // can only add restriction, never loosen the node's floor.
+  const [policyText, setPolicyText] = useState("");
+  const [policyErrors, setPolicyErrors] = useState<string[]>([]);
+  const [policyJsonError, setPolicyJsonError] = useState<string | null>(null);
+  const [effectivePolicy, setEffectivePolicy] = useState<ExecutionPolicy>(defaultExecutionPolicy());
+
+  useEffect(() => {
+    if (!policyText.trim()) {
+      setEffectivePolicy(defaultExecutionPolicy());
+      setPolicyErrors([]);
+      setPolicyJsonError(null);
+      return;
+    }
+    try {
+      const raw = JSON.parse(policyText);
+      setPolicyJsonError(null);
+      const { policy, errors } = parseExecutionPolicy(raw);
+      setEffectivePolicy(policy);
+      setPolicyErrors(errors);
+    } catch (e) {
+      setPolicyJsonError(String((e as Error)?.message || e));
+    }
+  }, [policyText]);
 
   const refresh = useCallback(async () => {
     const [definitions, recent] = await Promise.all([
@@ -71,12 +98,20 @@ export function AutomationsPanel({ state }: { state: AppState }) {
         schedule: kind === "cron"
           ? { kind: "cron" as const, expression: cron.trim(), timezone: timezone.trim() }
           : { kind: "once" as const, at: new Date(onceAt).toISOString() },
+        // Skipped while the JSON itself doesn't parse, so a mid-edit typo
+        // can't clobber an already-saved policy; sending the already-
+        // normalized effective policy (not the raw textarea) keeps what's
+        // saved matching the preview shown on screen. Explicit `null` (rather
+        // than omitting the key) when the field is empty, so clearing the
+        // textarea and saving actually clears a previously-set policy.
+        ...(policyJsonError ? {} : { policy: policyText.trim() ? effectivePolicy : null }),
       };
       if (editing) await updateAutomation(controller.local, editing, input);
       else await createAutomation(controller.local, input);
       setName("");
       setCiphertext("");
       setEditing(null);
+      setPolicyText("");
       await refresh();
     } catch (e) {
       setError(String((e as Error).message || e));
@@ -114,6 +149,7 @@ export function AutomationsPanel({ state }: { state: AppState }) {
     setModel(item.model || "");
     setApprovalMode(item.approvalMode ?? "autonomous");
     setSandbox(item.sandbox || "workspace-write");
+    setPolicyText(item.policy ? JSON.stringify(item.policy, null, 2) : "");
     setKind(item.schedule.kind);
     if (item.schedule.kind === "cron") {
       setCron(item.schedule.expression);
@@ -145,6 +181,36 @@ export function AutomationsPanel({ state }: { state: AppState }) {
           <label className="field-label">Model (optional)<input value={model} onChange={(e) => setModel(e.target.value)} /></label>
           <label className="field-label">Approvals<select value={approvalMode} onChange={(e) => setApprovalMode(e.target.value as typeof approvalMode)}><option value="autonomous">Autonomous (default; pauses only for high-risk actions)</option><option value="risky">Ask before risky actions</option><option value="always">Ask before every action</option><option value="never">Never ask</option></select></label>
           <label className="field-label">Sandbox<select value={sandbox} onChange={(e) => setSandbox(e.target.value as typeof sandbox)}><option value="read-only">Read only</option><option value="workspace-write">Workspace write</option><option value="danger-full-access">Full access</option></select></label>
+          <label className="field-label">
+            Execution policy (optional, JSON)
+            <textarea
+              className="picker-search policy-editor"
+              rows={8}
+              spellCheck={false}
+              value={policyText}
+              placeholder={'{\n  "requiredChecks": [{ "id": "test", "command": "npm test" }],\n  "requirePr": true\n}'}
+              onChange={(e) => setPolicyText(e.target.value)}
+            />
+          </label>
+          <p className="muted small">
+            Layered UNDER this node's own default policy (Settings → Nodes → Execution policy) — this can only add
+            restriction on top of it, never loosen it. Leave empty to inherit the node's default as-is.
+          </p>
+          {policyJsonError && <div className="banner error inline">Invalid JSON: {policyJsonError}</div>}
+          {!policyJsonError && policyText.trim() && policyErrors.length > 0 && (
+            <div className="banner warn inline">
+              Some fields were dropped and will save as shown below:
+              <ul className="policy-errors">
+                {policyErrors.map((e, i) => <li key={i}>{e}</li>)}
+              </ul>
+            </div>
+          )}
+          {policyText.trim() && (
+            <>
+              <p className="field-label">Effective policy preview (this definition's own layer only)</p>
+              <pre className="policy-preview">{JSON.stringify(effectivePolicy, null, 2)}</pre>
+            </>
+          )}
           <button className="btn primary" disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "Create schedule"}</button>
         </form>
         {error && <p className="settings-error">{error}</p>}

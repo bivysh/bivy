@@ -1795,6 +1795,9 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     // node (the enforcement authority) does. The disposition itself is just
     // `status` (AutomationRunStatus already covers succeeded/failed/needs_attention).
     output: w.output,
+    // The resolved (opaque) policy this run was governed by — inherited from
+    // its triggering AutomationDefinition, or set directly for a manual run.
+    policy: w.policy,
   })));
 }));
 
@@ -1832,6 +1835,10 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     enabled,
     schedule,
     nextRunAt,
+    // Issue #155: opaque execution policy — the control plane only bounds its
+    // size (defense in depth; the node's own parseExecutionPolicy is the real
+    // validation) and stores/routes it, never interpreting it.
+    policy: boundPolicyEvidence(req.body?.policy),
   });
   res.status(201).json(definition);
 }));
@@ -1872,6 +1879,10 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     enabled,
     schedule,
     nextRunAt,
+    // Issue #155: same opaque, size-bounded policy handling as POST above.
+    // "policy" in the body (even `null`) replaces the stored policy; omitting
+    // the key entirely keeps whatever is already there.
+    policy: "policy" in (req.body ?? {}) ? boundPolicyEvidence(req.body.policy) : current.policy,
   };
   res.json(await store.updateAutomationDefinition(client.accountId, current.id, patch));
 }));

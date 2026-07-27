@@ -298,6 +298,75 @@ export function mergeExecutionPolicy(base: ExecutionPolicy, patch?: Partial<Exec
   return merged;
 }
 
+function intersectOrEither(a?: string[], b?: string[]): string[] | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  // Both sides restrict independently — only what's allowed by BOTH survives,
+  // same principle as an "AND" of two allowlists. An empty result (no overlap)
+  // is intentional: it means nothing satisfies both restrictions.
+  const bSet = new Set(b);
+  return a.filter((item) => bSet.has(item));
+}
+
+function unionDeduped(a?: string[], b?: string[]): string[] | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return Array.from(new Set([...a, ...b]));
+}
+
+/**
+ * Combine two INDEPENDENT policy layers (e.g. a node's default floor and a
+ * per-`AutomationDefinition` policy) into one that is never weaker than
+ * either side — unlike `mergeExecutionPolicy` (a same-layer override for
+ * previewing edits, where the patch simply replaces a field), this is for
+ * stacking two separately-authored restrictions where a run must satisfy
+ * BOTH: a run cannot use `combineExecutionPolicies` to escape either layer's
+ * floor. Per-field rule:
+ *   - `requiredSandboxTier`/`requiredApprovalMode`: the stricter of the two.
+ *   - `maxDurationMs`: the smaller (stricter) of the two, when either is set.
+ *   - `networkAllowed`/`mcpAllowed`: false wins (either layer disabling it
+ *     disables it overall).
+ *   - `requireCleanCommit`/`requirePr`: true wins (either layer requiring it
+ *     requires it overall).
+ *   - `allowedRuntimes`/`allowedModels`/`allowedRepos`/`allowedBranches`: the
+ *     INTERSECTION when both layers restrict it, else whichever one does.
+ *   - `requiredChecks`: the union (both layers' checks all run), deduped by id.
+ *   - `changedFiles.deny`: the union (either layer's denial applies).
+ *   - `changedFiles.allow`: the union of the two allow-lists when both are
+ *     set (a pragmatic approximation — true glob-pattern intersection isn't
+ *     computed; prefer `deny` on whichever layer needs to actually narrow it).
+ */
+export function combineExecutionPolicies(a: ExecutionPolicy, b: ExecutionPolicy): ExecutionPolicy {
+  const deny = unionDeduped(a.changedFiles?.deny, b.changedFiles?.deny);
+  const allow = unionDeduped(a.changedFiles?.allow, b.changedFiles?.allow);
+  const checksById = new Map<string, RequiredCheck>();
+  for (const check of [...(a.requiredChecks ?? []), ...(b.requiredChecks ?? [])]) {
+    if (!checksById.has(check.id)) checksById.set(check.id, check);
+  }
+  const strictestOrEither = <T,>(strictest: (x: T, y?: T) => T, x?: T, y?: T): T | undefined => {
+    if (x === undefined) return y;
+    return strictest(x, y);
+  };
+  return {
+    version: EXECUTION_POLICY_VERSION,
+    allowedRuntimes: intersectOrEither(a.allowedRuntimes, b.allowedRuntimes),
+    allowedModels: intersectOrEither(a.allowedModels, b.allowedModels),
+    requiredSandboxTier: strictestOrEither(strictestSandboxTier, a.requiredSandboxTier, b.requiredSandboxTier),
+    requiredApprovalMode: strictestOrEither(strictestApprovalMode, a.requiredApprovalMode, b.requiredApprovalMode),
+    maxDurationMs: a.maxDurationMs && b.maxDurationMs
+      ? Math.min(a.maxDurationMs, b.maxDurationMs)
+      : (a.maxDurationMs ?? b.maxDurationMs),
+    allowedRepos: intersectOrEither(a.allowedRepos, b.allowedRepos),
+    allowedBranches: intersectOrEither(a.allowedBranches, b.allowedBranches),
+    networkAllowed: a.networkAllowed === false || b.networkAllowed === false ? false : (a.networkAllowed ?? b.networkAllowed),
+    mcpAllowed: a.mcpAllowed === false || b.mcpAllowed === false ? false : (a.mcpAllowed ?? b.mcpAllowed),
+    requiredChecks: checksById.size ? Array.from(checksById.values()) : undefined,
+    requireCleanCommit: Boolean(a.requireCleanCommit || b.requireCleanCommit),
+    requirePr: Boolean(a.requirePr || b.requirePr),
+    changedFiles: allow || deny ? { ...(allow ? { allow } : {}), ...(deny ? { deny } : {}) } : undefined,
+  };
+}
+
 /**
  * Convert a single glob pattern (`*`, `**`, `?`, literal path segments — e.g.
  * `src/**\/*.ts`, `!secrets/**`) into a matcher. Dependency-free (no

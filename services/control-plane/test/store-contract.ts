@@ -335,6 +335,78 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal((await store.listTriggerEvents((await store.findOrCreateAccount("contract-automation-other@example.com")).id)).length, 0);
   });
 
+  // Issue #155: an AutomationDefinition's `policy` is opaque to the control
+  // plane (it never parses/validates it — the node is the sole enforcement
+  // authority) but must round-trip intact through create/update, and a run
+  // enqueued from the definition must inherit it (an explicit per-run policy
+  // wins over the definition's own, same precedence as runtimeId/model/
+  // approvalMode/sandbox).
+  await test("automation definitions: policy round-trips and flows onto enqueued runs", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-automation-policy@example.com");
+    const policy = { version: 1, requiredSandboxTier: "read-only", requiredChecks: [{ id: "test", command: "npm test" }] };
+    const definition = await store.createAutomationDefinition(acct.id, {
+      name: "Policy-governed",
+      nodeLabel: "bivy",
+      policy,
+    });
+    assert.deepEqual(definition.policy, policy);
+    assert.deepEqual((await store.getAutomationDefinition(acct.id, definition.id))?.policy, policy);
+
+    // A run enqueued from the definition with no explicit override inherits it.
+    const inherited = await store.enqueueAutomationRun(acct.id, {
+      source: "manual",
+      triggerKind: "manual",
+      definitionId: definition.id,
+      title: "Inherits policy",
+      dedupeKey: "policy:inherit",
+    });
+    assert.deepEqual(inherited.routing.policy, policy);
+
+    // An explicit per-run policy overrides the definition's own.
+    const override = { version: 1, requirePr: true };
+    const overridden = await store.enqueueAutomationRun(acct.id, {
+      source: "manual",
+      triggerKind: "manual",
+      definitionId: definition.id,
+      title: "Overrides policy",
+      dedupeKey: "policy:override",
+      policy: override,
+    });
+    assert.deepEqual(overridden.routing.policy, override);
+
+    // No definition, no explicit policy: no policy on the run.
+    const bare = await store.enqueueAutomationRun(acct.id, { source: "manual", title: "No policy", dedupeKey: "policy:none" });
+    assert.equal(bare.routing.policy, undefined);
+
+    // updateAutomationDefinition merges its patch onto the current row
+    // (store.ts's `{ ...current, ...input }`); an explicit `policy: undefined`
+    // in the patch clears it, same as any other optional field.
+    const cleared = await store.updateAutomationDefinition(acct.id, definition.id, { policy: undefined });
+    assert.equal(cleared?.policy, undefined);
+    const updated = await store.updateAutomationDefinition(acct.id, definition.id, { policy: { version: 1, requirePr: true } });
+    assert.deepEqual(updated?.policy, { version: 1, requirePr: true });
+  });
+
+  // Issue #155: completeWorkItem's bounded policy-evidence path still works
+  // correctly for a run that also carries a policy (evidence and policy
+  // config are two independent, opaque JSONB columns).
+  await test("completeWorkItem records policy evidence alongside a policy-governed run", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-policy-evidence@example.com");
+    const { node } = await store.enrollNode(acct.id, "policy-node", "Policy node");
+    const run = await store.enqueueWorkItem(acct.id, {
+      source: "github:issue",
+      title: "Governed",
+      policy: { version: 1, requireCleanCommit: true },
+    });
+    await store.claimWorkItem(acct.id, node.id, run.id);
+    const evidence = { version: 1, status: "needs_attention", checks: [], violations: ["dirty worktree"] };
+    await store.completeWorkItem(acct.id, run.id, { status: "needs_attention", evidence });
+    const finished = await store.getAutomationRun(acct.id, run.id);
+    assert.equal(finished?.status, "needs_attention");
+    assert.deepEqual(finished?.output?.policyEvidence, evidence);
+    assert.deepEqual(finished?.routing.policy, { version: 1, requireCleanCommit: true });
+  });
+
   await test("work queue: dedupeKey is idempotent per account", async (store) => {
     const acct = await store.findOrCreateAccount("contract-dedupe@example.com");
     const first = await store.enqueueWorkItem(acct.id, { source: "github:issue", title: "Fix", dedupeKey: "gh:1" });

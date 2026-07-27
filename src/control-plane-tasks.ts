@@ -40,6 +40,11 @@ export interface WorkItem {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)
+  // Issue #155: this run's resolved execution policy (inherited from its
+  // triggering AutomationDefinition, or set for a manual run) — opaque here;
+  // parsed with @bivy/core/execution-policy's parseExecutionPolicy and merged
+  // UNDER the node's own default policy before enforcement (src/server.ts).
+  policy?: unknown;
 }
 
 /**

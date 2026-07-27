@@ -406,7 +406,10 @@ export class PostgresStore implements MeshStore {
       -- status, duration, short redacted summaries, never raw command output,
       -- diffs, or file contents -- rather than a separate column, since the
       -- disposition itself is just the run's terminal status, which this
-      -- table already tracks via AutomationRunStatus.)
+      -- table already tracks via AutomationRunStatus. The policy CONFIG
+      -- itself -- allowlists/floors/required-checks/etc. -- is a separate,
+      -- opaque "policy" JSONB column below: the control plane routes/stores
+      -- it without interpreting it, the node is the sole enforcement authority.)
       CREATE TABLE IF NOT EXISTS automation_definitions (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -436,6 +439,9 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS schedule JSONB NOT NULL DEFAULT '{"kind":"once","at":"9999-12-31T00:00:00.000Z"}';
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS last_scheduled_at TIMESTAMPTZ;
+      -- Issue #155: this definition's execution policy (opaque JSON — see the
+      -- comment above the table).
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS policy JSONB;
       CREATE TABLE IF NOT EXISTS trigger_events (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -456,6 +462,10 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS output JSONB;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS approval_mode TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sandbox TEXT;
+      -- Issue #155: the resolved execution policy for this run, copied from
+      -- the triggering definition (or set directly for a manual run) at
+      -- enqueue time — opaque, same as automation_definitions.policy above.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS policy JSONB;
       INSERT INTO trigger_events (id, account_id, kind, created_at)
         SELECT 'legacy:' || id, account_id,
           CASE WHEN source LIKE 'github:%' THEN 'github'
@@ -1446,12 +1456,13 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
-       approval_mode, sandbox, enabled, schedule, next_run_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+       approval_mode, sandbox, enabled, schedule, next_run_at, policy)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
-        JSON.stringify(input.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), input.nextRunAt ?? null],
+        JSON.stringify(input.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), input.nextRunAt ?? null,
+        input.policy ? JSON.stringify(input.policy) : null],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -1475,12 +1486,13 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `UPDATE automation_definitions SET name=$3, template_ciphertext=$4, runtime_id=$5,
        model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
-       enabled=$11, schedule=$12, next_run_at=$13, updated_at=now()
+       enabled=$11, schedule=$12, next_run_at=$13, policy=$14, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
         next.approvalMode ?? null, next.sandbox ?? null, next.enabled ?? false,
-        JSON.stringify(next.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), next.nextRunAt ?? null],
+        JSON.stringify(next.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), next.nextRunAt ?? null,
+        next.policy ? JSON.stringify(next.policy) : null],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -1536,6 +1548,7 @@ export class PostgresStore implements MeshStore {
       model: definition.model,
       approvalMode: definition.approvalMode,
       sandbox: definition.sandbox,
+      policy: definition.policy,
     });
     // Optimistic advance is the scheduler lease: only one scheduler instance can
     // move this exact occurrence. The unique dedupe key separately guarantees
@@ -1614,8 +1627,8 @@ export class PostgresStore implements MeshStore {
     // per-issue collapse key (only against the still-pending row). ON CONFLICT DO
     // NOTHING covers both; on either conflict we return the existing item.
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox, policy)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -1643,6 +1656,10 @@ export class PostgresStore implements MeshStore {
         input.ephemeral ?? definition?.ephemeral ?? null,
         input.approvalMode ?? definition?.approvalMode ?? null,
         input.sandbox ?? definition?.sandbox ?? null,
+        // Issue #155: an explicit run override wins; otherwise inherit the
+        // triggering definition's own policy (never a way to loosen the
+        // node's own floor — the node merges this UNDER its default).
+        (input.policy ?? definition?.policy) ? JSON.stringify(input.policy ?? definition?.policy) : null,
       ],
     );
     if (rows[0]) return { run: mapAutomationRun(rows[0]), created: true };
@@ -1886,6 +1903,7 @@ function mapWorkItem(row: any): WorkItem {
     targetSessionId: row.target_session_id ?? undefined,
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
     output: row.output ?? undefined,
+    policy: row.policy ?? undefined,
   };
 }
 
@@ -1913,6 +1931,7 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     schedule: row.schedule,
     nextRunAt: row.next_run_at ? new Date(row.next_run_at).toISOString() : undefined,
     lastScheduledAt: row.last_scheduled_at ? new Date(row.last_scheduled_at).toISOString() : undefined,
+    policy: row.policy ?? undefined,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -1953,6 +1972,7 @@ function mapAutomationRun(row: any): AutomationRun {
       ephemeral: row.ephemeral ?? undefined,
       approvalMode: row.approval_mode ?? undefined,
       sandbox: row.sandbox ?? undefined,
+      policy: row.policy ?? undefined,
     },
     output: row.output ?? undefined,
     title: row.title,

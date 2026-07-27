@@ -50,6 +50,7 @@ import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-cli
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import {
+  combineExecutionPolicies,
   evaluateChangedFiles,
   parseExecutionPolicy,
   type ExecutionPolicy,
@@ -830,7 +831,13 @@ type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; s
    *  Distinct from `approvalMode` above, which is the routing intent's *chosen*
    *  mode (e.g. from an automation definition) — the floor still applies on
    *  top of whatever that resolves to. */
-  approvalModeFloor?: ApprovalMode };
+  approvalModeFloor?: ApprovalMode;
+  /** The exact ExecutionPolicy this run started under (issue #155) — the
+   *  node's default combined with any triggering AutomationDefinition's own
+   *  policy. `reportIssueOutcome` reuses this rather than re-resolving fresh,
+   *  so a mid-run settings/definition change can't retroactively change what
+   *  the run is judged against. */
+  executionPolicy?: ExecutionPolicy };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -4104,6 +4111,12 @@ function withIssueLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 interface RunIssueOverrides {
   runtimeId?: string;
   model?: string;
+  /** Issue #155: the resolved policy for this run (already combined with the
+   *  node's own default by the caller — see `runWorkItem`). Falls back to
+   *  `nodeGithubExecutionPolicy()` alone when unset, e.g. for the direct
+   *  GitHub-label poller and manual-pickup paths, which have no
+   *  AutomationDefinition/work-item to layer on top of the node's default. */
+  policy?: ExecutionPolicy;
 }
 
 /** The disposition of one issue-automation run — threaded back up to
@@ -4163,7 +4176,11 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   // the id `resolveRuntimeId` actually resolves to — including its own
   // fallback-when-unavailable behavior — never just what was requested, so a
   // runtime-host fallback can't slip outside the allowlist either.
-  const policy = nodeGithubExecutionPolicy();
+  // `overrides.policy` — when set by `runWorkItem` — is already the node's
+  // default combined with the triggering AutomationDefinition's own policy;
+  // paths with no definition to layer (the direct GitHub-label poller, manual
+  // pickup) fall back to the node's default alone.
+  const policy = overrides.policy ?? nodeGithubExecutionPolicy();
   const parsed = parseBivyDirectives(issue.body);
   // Manual "Run…" overrides win over in-body directives, then the node's
   // *configured* default agent (Settings → Nodes → "Default agent"). We resolve
@@ -4238,6 +4255,11 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   // the node's current global approval mode. Nothing inside the session can
   // change this once set (see the guardianInterceptorImpl read of it).
   record.approvalModeFloor = resolveEffectiveApprovalMode(policy, approvalMode);
+  // Pin the exact policy this run started under — `reportIssueOutcome` (and a
+  // follow-up turn in the same session) reuse this instead of re-resolving
+  // fresh, so a settings/definition change mid-run can't retroactively change
+  // what this run is judged against.
+  record.executionPolicy = policy;
   record.githubIssueUrl = `https://github.com/${cfg.owner}/${cfg.repo}/issues/${issue.number}`;
   // Title the session from the issue up front so it never shows as "Untitled
   // session" in the sidebar — issue title + number is a good, stable start (the
@@ -4345,8 +4367,13 @@ async function reportIssueOutcome(
   // place a required-check command actually executes. With no policy
   // configured (every automation before this feature), every signal below is
   // trivially satisfied and `evidence.status` is always "succeeded", so this
-  // block changes nothing for an unconfigured job.
-  const policy = nodeGithubExecutionPolicy();
+  // block changes nothing for an unconfigured job. Reuses the exact policy
+  // this run started under (`record.executionPolicy`, set at pickup) rather
+  // than re-resolving fresh, so a settings/definition change mid-run can't
+  // retroactively change what the run is judged against; falls back to the
+  // node's current default for a record from before this field existed
+  // (e.g. a session resumed across a node restart/upgrade).
+  const policy = record.executionPolicy ?? nodeGithubExecutionPolicy();
   const [cleanCommit, changedFiles, checks] = await Promise.all([
     isWorktreeClean(wt.path),
     listChangedFiles(wt.path, base),
@@ -4749,6 +4776,13 @@ async function resolveTokenForRepo(owner: string, repo: string): Promise<string 
 }
 
 async function runWorkItem(item: ControlPlaneWorkItem): Promise<WorkItemOutcome> {
+  // Issue #155: this run's policy is the node's own default COMBINED with
+  // whatever the triggering AutomationDefinition (or manual override)
+  // carried on the work item — combineExecutionPolicies stacks the two so
+  // neither side can loosen the other's floor (unlike a same-layer override,
+  // which would just replace a field). Computed once up front so both the
+  // GitHub-issue branch and the generic-prompt branch below govern with it.
+  const itemPolicy = combineExecutionPolicies(nodeGithubExecutionPolicy(), parseExecutionPolicy(item.policy).policy);
   if ((item.source === "schedule" || item.source === "manual") && item.body?.startsWith("bivy-room-v1:")) {
     const [, nodeId, ...payload] = item.body.split(":");
     if (nodeId !== identity.nodeId || payload.length === 0) {
@@ -4785,7 +4819,7 @@ async function runWorkItem(item: ControlPlaneWorkItem): Promise<WorkItemOutcome>
       body: item.body ?? "",
       labels: [],
       url: item.url ?? "",
-    }, { runtimeId: item.runtimeId, model: item.model });
+    }, { runtimeId: item.runtimeId, model: item.model, policy: itemPolicy });
     // The control plane only ever gets bounded/sanitized evidence (check ids,
     // exit status, duration, short redacted summaries) — never raw command
     // output, diffs, or file contents (issue #155 non-goal).
@@ -4796,8 +4830,9 @@ async function runWorkItem(item: ControlPlaneWorkItem): Promise<WorkItemOutcome>
   // session. No worktree/commit/PR concept applies here (no repo to govern),
   // but the node's runtime/model allowlist and sandbox/approval floor still
   // do (issue #155) — this is the routing-intent path scheduled/manual/Slack
-  // runs use, so the same policy that governs GitHub pickups governs these too.
-  const policy = nodeGithubExecutionPolicy();
+  // runs use, so the same combined policy that governs GitHub pickups governs
+  // these too.
+  const policy = itemPolicy;
   try {
     assertRuntimeAllowed(policy, resolveRuntimeId(item.runtimeId));
     assertModelAllowed(policy, item.model);
