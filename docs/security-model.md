@@ -47,10 +47,11 @@ Two exceptions you should know about:
   vault snapshot locally and uploads only ciphertext, plus per-node wrapped keys
   (`model_auth_vaults`, `model_auth_wrapped_keys`). The control plane cannot
   unwrap them. See [`credential-sync.md`](credential-sync.md).
-- **GitHub work queue.** The `work_items` table stores issue `title`, `body`,
-  `repo`, and `url` in plaintext, because the control plane receives them from a
-  GitHub webhook and routes them to a node. If you use the work queue, issue
-  text transits and rests on the control plane. See
+- **GitHub work queue.** The `work_items` table stores source identifiers
+  (`repo`, issue number, and `url`) and routing metadata in plaintext. Issue/
+  comment title and body transit the GitHub webhook but are **not** persisted —
+  the claiming node fetches the live text directly from GitHub with its own
+  credentials, immediately before use. See
   [`github-work-queue.md`](github-work-queue.md).
 - **Generic automation webhooks.** Each account hook has a high-entropy signing
   secret. The control plane verifies `X-Bivy-Signature-256` as an HMAC-SHA256
@@ -351,9 +352,11 @@ security-conscious user to know before trusting it with anything sensitive.
 4. **`BIVY_ALLOW_ANY_ORIGIN=1` fully disables the rebinding/cross-origin
    guard.** It exists as an escape hatch; using it re-opens the attack the guard
    was written to close.
-5. **The work queue stores issue text in plaintext on the control plane.**
-   `work_items.title`/`body` are not encrypted. If your issue bodies are
-   sensitive, do not use the hosted work queue.
+5. **Run evidence is metadata-only by design, not an audited compliance
+   artifact.** The sanitizer (`services/control-plane/src/run-evidence.ts`)
+   allowlists and bounds every field, but it is a code-level guard, not a
+   third-party certification — see
+   [Run evidence and outcome reports](automation-runs.md#run-evidence-and-outcome-reports).
 6. **The local vault's wrapping key sits next to the vault.**
    `.bivy/secrets.key` and `.bivy/secrets.json` are both on the same disk at
    mode `0600`. This protects against other local users, not against someone who

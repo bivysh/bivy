@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Privacy-safe run evidence and outcome reports** — every automation run
+  (GitHub issue/comment, Slack, manual, or scheduled) now carries a structured,
+  allowlisted evidence record on top of its routing/status: why this node/
+  runtime/model was chosen, declared-check pass/fail/exit status, and a
+  capped, ordered event timeline (claimed, attempts, retries/fallback with a
+  reason, branch, pull request, completion) — most of it stamped automatically
+  by the control plane, with a node able to layer richer events on top through
+  a new `POST /node/work/:id/evidence` endpoint. The GitHub queue view renders
+  it as a per-run "Outcome reports" timeline with a **Copy sanitized report**
+  export. The sanitizer (`services/control-plane/src/run-evidence.ts`) rejects
+  prompt, transcript, diff, file-content, secret, token, and raw command/tool-
+  output fields outright — no server-side transcript indexing, ever. GitHub
+  issue/comment title and body are also no longer retained on the control
+  plane at all: the claiming node now fetches them directly from GitHub,
+  immediately before use. (#153)
 - **Discover and adopt existing Claude Code / Codex sessions** — a node now
   advertises provider-native sessions its Claude Code or Codex adapters can
   see (a bare `claude`/`codex` run started outside Bivy), and the app can

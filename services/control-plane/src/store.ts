@@ -298,6 +298,58 @@ export type AutomationRunStatus =
 /** Compatibility status accepted by clients deployed before the automation model. */
 export type WorkItemStatus = AutomationRunStatus | "done";
 export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | "schedule";
+
+// --- Privacy-safe run evidence (issue #153) -----------------------------------
+// A run's routing/status/output above already carry most of an outcome report.
+// This adds exactly the two pieces that are still missing: an ordered,
+// human-readable EVENT TIMELINE (trigger → routed → claimed → attempts →
+// retries/fallback → approvals/policy denials → branch/PR → completion) and a
+// list of declared validation CHECKS with pass/fail/exit status. Everything
+// here is allowlisted and bounded by `sanitizeEvidencePatch` (run-evidence.ts)
+// before it ever reaches storage — no prompt, transcript, diff, file content,
+// secret, token, or raw command/tool output is ever accepted.
+export type RunEvidenceEventKind =
+  | "triggered"
+  | "routed"
+  | "claimed"
+  | "attempt_started"
+  | "checkpoint"
+  | "approval"
+  | "policy_denial"
+  | "retry"
+  | "fallback"
+  | "branch"
+  | "pull_request"
+  | "needs_attention"
+  | "completed"
+  | "cancelled";
+export interface RunEvidenceEvent {
+  at: string;
+  kind: RunEvidenceEventKind;
+  /** Short, bounded, human-readable description — never raw tool/command output. */
+  summary: string;
+  attempt?: number;
+  /** A bounded identifier this event concerns (branch name, node id, check name, etc). */
+  ref?: string;
+  url?: string;
+  status?: "passed" | "failed" | "denied" | "approved";
+}
+export interface RunCheck {
+  name: string;
+  /** Hash of the declared validation command, never the command text itself. */
+  commandHash?: string;
+  status: "passed" | "failed" | "skipped";
+  exitCode?: number;
+}
+/** Sanitized, allowlisted patch a node may report against its own claimed run.
+ *  `checks`/`events` are treated as INCREMENTAL — appended to, never replacing,
+ *  the run's existing history. */
+export interface RunEvidencePatch {
+  routingReason?: string;
+  output?: Partial<NonNullable<AutomationRun["output"]>>;
+  checks?: RunCheck[];
+  events?: RunEvidenceEvent[];
+}
 export interface AutomationDefinition {
   id: string;
   accountId: string;
@@ -344,7 +396,25 @@ export interface AutomationRun {
     approvalMode?: AutomationDefinition["approvalMode"];
     sandbox?: AutomationDefinition["sandbox"];
   };
-  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+  output?: {
+    sessionId?: string;
+    branch?: string;
+    prUrl?: string;
+    artifactUrl?: string;
+    failure?: string;
+    /** Per-turn git checkpoint id (rewind target), if the session's harness recorded one. */
+    checkpoint?: string;
+    /** Commit the run's final checkpoint/PR points at. */
+    commit?: string;
+  };
+  /** Why this run's node/runtime/model was chosen (queue label, manual override,
+   *  default agent, fallback after an error, ...). Free text, bounded. */
+  routingReason?: string;
+  /** Declared validation commands and their pass/fail/exit status — never the
+   *  command text itself. */
+  checks?: RunCheck[];
+  /** Ordered, capped, privacy-safe event timeline for the run-detail/outcome report. */
+  events?: RunEvidenceEvent[];
   title: string;
   body?: string;
   source: string;
@@ -402,6 +472,10 @@ export interface WorkItem {
   targetSessionId?: string;
   startedAt?: string;
   output?: AutomationRun["output"];
+  /** See AutomationRun — legacy clients can ignore these. */
+  routingReason?: string;
+  checks?: RunCheck[];
+  events?: RunEvidenceEvent[];
 }
 export type WorkItemInput = {
   label?: string;
@@ -812,6 +886,12 @@ export interface MeshStore {
   listAutomationRuns(accountId: string, limit?: number): Promise<AutomationRun[]>;
   getAutomationRun(accountId: string, id: string): Promise<AutomationRun | undefined>;
   transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined>;
+  // Record privacy-safe run evidence reported by the node that CLAIMED this run
+  // (issue #153) — routing reason, output refs (branch/PR/checkpoint/commit/...),
+  // declared-check results, and new timeline events. `checks`/`events` in the
+  // patch are appended to the run's existing history (bounded), never replacing
+  // it. Returns undefined for an unknown run.
+  appendRunEvidence(accountId: string, id: string, patch: RunEvidencePatch): Promise<AutomationRun | undefined>;
   // Pending items a node may run: the account's items whose label the node serves
   // (a node serving "bivy" also serves "bivy/<self>"; pass the labels it accepts).
   listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]>;

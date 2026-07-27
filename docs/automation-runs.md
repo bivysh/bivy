@@ -16,7 +16,10 @@ The domain separates four records:
   and `cancelled`. A conditional `pending` to `claimed` update provides one
   winner when nodes race.
 - An **attempt** is represented explicitly on the run and starts at one. Retry
-  policy is intentionally outside the current model.
+  policy is intentionally outside the current model, but a run's evidence
+  timeline (below) can already record a `retry`/`fallback` event with a
+  bounded reason and an incremented attempt number the moment that policy
+  lands, without a storage migration.
 
 Runs initially target a new session. The schema also represents an existing
 session target without enabling continuation yet. Routing intent carries the
@@ -30,6 +33,38 @@ to references such as session, branch, pull request, artifact, or a failure
 summary. Account APIs expose definitions, trigger history, and run history
 separately; the legacy work-item API is a projection of the same run records.
 
+## Run evidence and outcome reports
+
+Every run also carries a small, structured **evidence** record — the piece a
+PR alone can't show: what triggered the job, where it ran, which agent/model
+and why, what checks passed, and why any retry or fallback happened. Three
+fields, all allowlisted and bounded by
+`services/control-plane/src/run-evidence.ts` before they ever reach storage:
+
+- **`routingReason`** — a short, free-text explanation of why this node/
+  runtime/model was chosen (queue label, manual override, node default,
+  fallback after an error, ...).
+- **`checks`** — declared validation commands and their `passed` / `failed` /
+  `skipped` status plus exit code. The command text itself is never stored,
+  only a name and, optionally, a hash of the command.
+- **`events`** — an ordered, capped (100 entries) timeline. Every lifecycle
+  transition (claimed, running, needs-attention, completed, cancelled) is
+  stamped automatically by the control plane, so a run has a readable
+  trigger→claim→attempt→outcome timeline even if the node never reports
+  anything further. A node MAY layer richer events on top through
+  `POST /node/work/:id/evidence` — routing changes, checkpoints, approvals,
+  policy denials, retries/fallback (each with its own attempt number and
+  reason), branch creation, and PR opened — plus `output` references
+  (`checkpoint`/`commit` in addition to the existing session/branch/PR/
+  artifact/failure fields).
+
+The evidence endpoint requires the reporting node to be the run's current
+claimant and rejects (400, not a silent drop) any field that looks like a
+prompt, transcript, diff, file content, secret, token, or raw command/tool
+output. The GitHub queue UI renders this as a per-run "Outcome reports"
+timeline with a **Copy sanitized report** export — the same JSON object the
+control plane stores, nothing more.
+
 ## Compatibility and migration
 
 The existing `work_items` rows are the canonical run storage, evolved in place
@@ -41,10 +76,12 @@ context remains available to current nodes and the queue UI.
 
 ## Privacy and metering boundary
 
-The control plane stores routing and source metadata. It must not receive agent
-prompts beyond the existing inbound request text, transcripts, repository files,
-credentials, or generated content. Output fields contain references, not their
-contents.
+The control plane stores routing and source metadata, plus the sanitized
+evidence above. It must not receive agent prompts, transcripts, repository
+files, credentials, diffs, or generated content. GitHub issue/comment title
+and body are not retained at all past webhook routing — the claiming node
+fetches the live text directly from GitHub with its own token, immediately
+before use. Output fields contain references, not their contents.
 
 Webhook receipt and queue browsing are not usage. Hosted free-tier usage is
 recorded only when a claimed automation run enters `running`; self-hosted

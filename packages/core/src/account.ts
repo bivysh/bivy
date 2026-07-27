@@ -458,6 +458,33 @@ export interface GithubQueueItem {
   attempt?: number;
   targetKind?: "new_session" | "existing_session";
   startedAt?: string;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  output?: {
+    sessionId?: string;
+    branch?: string;
+    prUrl?: string;
+    artifactUrl?: string;
+    failure?: string;
+    checkpoint?: string;
+    commit?: string;
+  };
+  /** Privacy-safe run evidence (issue #153) — see docs/automation-runs.md and
+   *  docs/security-model.md. Never a prompt, transcript, diff, file content,
+   *  secret, token, or raw command/tool output; only bounded summaries,
+   *  identifiers, and URLs. */
+  routingReason?: string;
+  checks?: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; exitCode?: number }>;
+  events?: Array<{
+    at: string;
+    kind: "triggered" | "routed" | "claimed" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
+      | "retry" | "fallback" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
+    summary: string;
+    attempt?: number;
+    ref?: string;
+    url?: string;
+    status?: "passed" | "failed" | "denied" | "approved";
+  }>;
 }
 
 export type AutomationSchedule =

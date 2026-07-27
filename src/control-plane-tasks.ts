@@ -42,6 +42,10 @@ export interface WorkItem {
   appId?: string; // which configured app that installation belongs to (a node may serve several)
 }
 
+/** Sanitized-on-arrival at the control plane (services/control-plane/src/run-evidence.ts);
+ *  the node just needs to shape a plain object — routingReason/output/checks/events. */
+export type EvidencePatch = Record<string, unknown>;
+
 /**
  * Build config from the relay enrollment + node label. Returns null if disabled.
  *
@@ -111,13 +115,25 @@ export async function failWork(cfg: ControlPlaneTaskConfig, id: string): Promise
   await transitionWork(cfg, id, "fail");
 }
 
+/** Report privacy-safe run evidence (issue #153) — routing reason, output refs
+ *  (branch/PR/checkpoint/commit/...), check results, and new timeline events.
+ *  Best-effort: a dropped report loses one evidence update, never the run
+ *  itself, so failures here are swallowed like the other transition calls. */
+export async function reportEvidence(cfg: ControlPlaneTaskConfig, id: string, patch: EvidencePatch): Promise<void> {
+  await fetch(`${cfg.controlPlaneUrl}/node/work/${encodeURIComponent(id)}/evidence`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${cfg.enrollmentToken}`, "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  }).catch(() => {});
+}
+
 export class ControlPlaneTaskPoller {
   private timer?: NodeJS.Timeout;
   private inFlight = new Set<string>();
 
   constructor(
     private readonly cfg: ControlPlaneTaskConfig,
-    private readonly runItem: (item: WorkItem) => Promise<void>,
+    private readonly runItem: (item: WorkItem, report: (patch: EvidencePatch) => Promise<void>) => Promise<void>,
     /** Node's cap on concurrently-running queue sessions (0/undefined = unlimited).
      *  Read fresh each tick so the Settings → Nodes value takes effect live. */
     private readonly maxConcurrent?: () => number,
@@ -172,10 +188,16 @@ export class ControlPlaneTaskPoller {
       // Claim first so only one node runs it; skip if another node won (no
       // claim → not ours → don't run or complete it).
       if (!(await claimWork(this.cfg, item.id))) return;
+      const report = (patch: EvidencePatch) => reportEvidence(this.cfg, item.id, patch);
       try {
         await transitionWork(this.cfg, item.id, "running");
         console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
-        await this.runItem(item);
+        // routingReason is a coarse baseline — a manual "Run…" override picked
+        // this agent/model explicitly; otherwise it's whatever the queue label
+        // routed to. runWorkItem/runIssueTask may layer a more specific reason
+        // (e.g. a fallback after an error) on top via the same `report` hook.
+        await report({ routingReason: item.runtimeId || item.model ? "manual override" : "queue label" });
+        await this.runItem(item, report);
         await completeWork(this.cfg, item.id);
       } catch (error) {
         console.warn(`[control-plane-tasks] item ${item.id} failed:`, error);

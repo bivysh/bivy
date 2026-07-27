@@ -25,7 +25,7 @@ GitHub branch + pull request
    - Bivy verifies the webhook signature using the hook secret for your account.
 
 3. **Bivy queues and routes the work**
-   - Bivy records a work item with the repository, issue number, title/body, URL, and routing label.
+   - Bivy records a work item with the repository, issue number, URL, and routing label. The webhook's title/body is not retained — see [Privacy and security model](#privacy-and-security-model).
    - If your node is connected to the relay, Bivy sends it an immediate “work available” hint.
    - If the node is offline, the item stays pending until the node reconnects or polls the queue.
 
@@ -72,7 +72,7 @@ Bivy is split into three parts:
 | Part | What it sees |
 | --- | --- |
 | GitHub | The issue, repository, branch, PR, and comments, as usual. |
-| Bivy control plane | Account/node metadata and queued work metadata: repo slug, issue number, URL, title/body, routing label, status. |
+| Bivy control plane | Account/node metadata, queued work identifiers (repo slug, issue number, URL), routing/status, and a sanitized run-evidence record (see below). |
 | Bivy relay | Only connection/routing envelopes and the `work.available` hint. It does not receive repository contents or agent output. |
 | Your node | Repository contents, local files, tool output, model credentials, GitHub token, and the full agent session. |
 
@@ -91,10 +91,17 @@ For GitHub issue work, Bivy currently stores:
 
 - repository slug, for example `owner/repo`;
 - issue number and URL;
-- issue title/body used to prompt the agent;
 - routing label, for example `bivy` or `bivy/macbook`;
-- queue status: pending, claimed, done;
-- claim/completion timestamps and node id.
+- queue status and lifecycle timestamps (created/claimed/started/completed) and node id;
+- a sanitized run-evidence record: routing reason, output references (branch/
+  checkpoint/commit/PR/artifact), declared-check pass/fail/exit status, and a
+  bounded, allowlisted event timeline — see
+  [Run evidence and outcome reports](./automation-runs.md#run-evidence-and-outcome-reports).
+
+Issue/comment title and body are **not** stored. The webhook payload carries
+them, but the control plane discards them immediately after routing; the node
+that claims the item fetches the live issue/comment text directly from GitHub,
+with its own credentials, right before it prompts the agent.
 
 Bivy does **not** store repository files, diffs, terminal output, model transcripts, model API keys, or GitHub access tokens for the node.
 
