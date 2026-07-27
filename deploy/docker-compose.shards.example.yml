@@ -28,6 +28,7 @@ services:
       RELAY_SHARD_ID: "relay-0"
 
   relay-1:
+    image: "${RELAY_IMAGE:-bivy-relay:local}"
     build:
       context: ..
       dockerfile: deploy/Dockerfile.relay
