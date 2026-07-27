@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Discover and adopt existing Claude Code / Codex sessions** — a node now
+  advertises provider-native sessions its Claude Code or Codex adapters can
+  see (a bare `claude`/`codex` run started outside Bivy), and the app can
+  import one via a new "Import existing session" sheet, filterable by node,
+  provider, repository, and recency. Discovery is capability-driven
+  (`capabilities.nativeSessionDiscovery`/`nativeSessionAdoption`) and returns
+  bounded metadata only — id/ref, cwd, updated time, a truncated first-prompt
+  title, and an active/resumable flag — never transcript content, and never
+  duplicates a session Bivy already manages. Importing resumes the session
+  natively through the ordinary open/resume path without rewriting or
+  deleting the provider's own history; a session with a live external process
+  is offered read-only instead of an adopt action, since Bivy has no safe way
+  to take over a process it doesn't own. Other runtimes stay hidden from the
+  discovery UI until their adapter earns the capability. (#156)
+
 - **Scheduled automations** — Settings → Automations lets you create a
   recurring (cron, with an explicit IANA timezone) or one-time schedule that
   runs an end-to-end encrypted instruction template on an assigned node, with

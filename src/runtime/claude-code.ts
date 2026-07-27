@@ -23,6 +23,7 @@ import type {
   AgentRuntime,
   AgentCredentialStore,
   CatalogProvider,
+  DiscoveredNativeSession,
   ForkNativePayload,
   ModelInfo,
   OpenSessionOptions,
@@ -46,6 +47,11 @@ import path from "node:path";
 import { sandboxTier, claudePermissionModeFor, type SandboxTier } from "../harness/sandbox.js";
 import { anthropicCredentialPreflight, describeAnthropicError, isAnthropicAuthError } from "./anthropic-preflight.js";
 import { toModelInfo as sharedToModelInfo } from "./normalize.js";
+import { hasLiveProcessForCwd } from "./native-process-scan.js";
+
+/** Binary names a live Claude Code process could be running under (see
+ *  native-process-scan.ts's best-effort cwd match). */
+const CLAUDE_BIN_NAMES = ["claude"];
 
 /** Whether the standalone `claude` CLI (the TUI) is on PATH on this node. */
 export function claudeCliAvailable(): boolean {
@@ -356,6 +362,23 @@ function claudeProjectDirs(): string[] {
   ].filter((value): value is string => Boolean(value));
 }
 
+/**
+ * Root(s) to BULK-SCAN for native session discovery (issue #156) — narrower
+ * than claudeProjectDirs() above. That helper searches both CLAUDE_CONFIG_DIR
+ * and the default `~/.claude` when locating one already-known session id by
+ * name, which is harmless (a wrong root just doesn't have the file). Bulk
+ * discovery is different: unconditionally also listing `~/.claude` would leak
+ * unrelated sessions from the default store onto a node that was deliberately
+ * pointed at a non-default config dir. The real `claude` CLI's own
+ * CLAUDE_CONFIG_DIR handling is exclusive (it replaces the default, not adds
+ * to it), so discovery mirrors that: CLAUDE_CONFIG_DIR when set, else the
+ * default `~/.claude` — never both.
+ */
+function claudeDiscoveryRoots(): string[] {
+  const custom = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return [custom || path.join(os.homedir(), ".claude")];
+}
+
 function findClaudeTranscript(sessionId: string): string | undefined {
   const fileName = `${sessionId}.jsonl`;
   for (const root of claudeProjectDirs()) {
@@ -426,6 +449,107 @@ function dropRecoveredRestartNotices(messages: RuntimeMessage[], restartNoticeId
   const lastIdx = messages.length - 1;
   const drop = new Set(restartNoticeIdx.filter((i) => i !== lastIdx));
   return drop.size ? messages.filter((_, i) => !drop.has(i)) : messages;
+}
+
+/**
+ * Cheap, bounded per-file scan for native discovery (issue #156) — deliberately
+ * NOT loadClaudeTranscript: that reconstructs the full conversation, which is
+ * exactly the transcript CONTENT discovery must never carry. This reads only
+ * the first recorded `cwd` and a truncated first user prompt, stopping the
+ * moment both are found, plus the file's mtime as a last-activity proxy.
+ * Best-effort: any read/parse failure yields whatever was found so far (or
+ * undefined if the file itself is unreadable).
+ */
+function scanClaudeSessionForDiscovery(file: string): { cwd?: string; updatedAt?: number; title?: string } | undefined {
+  let updatedAt: number | undefined;
+  try {
+    updatedAt = fs.statSync(file).mtimeMs;
+  } catch {
+    return undefined;
+  }
+  let cwd: string | undefined;
+  let title: string | undefined;
+  try {
+    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      if (cwd && title) break;
+      let entry: any;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!cwd && typeof entry?.cwd === "string") cwd = entry.cwd;
+      if (!title) {
+        const role = entry?.message?.role ?? entry?.role;
+        const content = entry?.message?.content ?? entry?.content;
+        if (role === "user" && !hasMetaFlag(entry) && !isInterruptText(content)) {
+          const text = typeof content === "string"
+            ? content
+            : Array.isArray(content)
+              ? (content.find((b: any) => b?.type === "text")?.text as string | undefined)
+              : undefined;
+          if (text?.trim()) title = text.trim().slice(0, 200);
+        }
+      }
+    }
+  } catch {
+    // best-effort — whatever cwd/title were found before the failure still stand
+  }
+  return { cwd, updatedAt, title };
+}
+
+/**
+ * Enumerate Claude Code's on-disk sessions — from claudeDiscoveryRoots()
+ * (CLAUDE_CONFIG_DIR when set, else `~/.claude`, so a non-default provider
+ * home is honored and never mixed with the default store) — as bounded
+ * discovery metadata. Every session on disk has a stable id (the jsonl
+ * filename) Claude resumes by, so `resumable` is always true; `active` is a
+ * best-effort live-process check scoped to the session's own cwd. Best-effort
+ * throughout: an unreadable store yields fewer results, never a throw.
+ */
+export function discoverNativeClaudeSessions(
+  hasLiveProcess: (cwd: string) => boolean = (cwd) => hasLiveProcessForCwd(cwd, CLAUDE_BIN_NAMES),
+): DiscoveredNativeSession[] {
+  const out: DiscoveredNativeSession[] = [];
+  const seenIds = new Set<string>();
+  for (const root of claudeDiscoveryRoots()) {
+    const projectsDir = path.join(root, "projects");
+    let projectEntries: fs.Dirent[];
+    try {
+      projectEntries = fs.readdirSync(projectsDir, { withFileTypes: true });
+    } catch {
+      continue; // no store at this root — best-effort, try the next one
+    }
+    for (const project of projectEntries) {
+      if (!project.isDirectory()) continue;
+      const projectDir = path.join(projectsDir, project.name);
+      let files: string[];
+      try {
+        files = fs.readdirSync(projectDir).filter((name) => name.endsWith(".jsonl"));
+      } catch {
+        continue;
+      }
+      for (const fileName of files) {
+        const sessionId = fileName.slice(0, -".jsonl".length);
+        if (!sessionId || seenIds.has(sessionId)) continue;
+        seenIds.add(sessionId);
+        const meta = scanClaudeSessionForDiscovery(path.join(projectDir, fileName));
+        if (!meta) continue;
+        out.push({
+          runtimeId: "claude-code-sdk",
+          ref: sessionId,
+          file: path.join(projectDir, fileName),
+          cwd: meta.cwd,
+          updatedAt: meta.updatedAt,
+          title: meta.title,
+          active: Boolean(meta.cwd) && hasLiveProcess(meta.cwd!),
+          resumable: true,
+        });
+      }
+    }
+  }
+  return out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
 class ClaudeSession implements RuntimeSession {
@@ -1092,6 +1216,11 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     // The on-disk jsonl transcript can be exported and re-materialised on another
     // node under a fresh session id, so a claude->claude fork is full fidelity.
     forkTransport: true,
+    // Claude sessions started outside Bivy (a bare `claude` in a terminal) are
+    // discoverable across claudeProjectDirs() and every discovered session can
+    // be adopted with a true native resume (see discoverNativeSessions below).
+    nativeSessionDiscovery: true,
+    nativeSessionAdoption: true,
   };
 
   private readonly sessions: ClaudeSession[] = [];
@@ -1133,6 +1262,16 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       return loadClaudeTranscript(sessionFile);
     } catch {
       return undefined;
+    }
+  }
+
+  /** See discoverNativeClaudeSessions — enumerates Claude sessions on this node
+   *  that Bivy didn't start, as bounded metadata (issue #156). */
+  discoverNativeSessions(): DiscoveredNativeSession[] {
+    try {
+      return discoverNativeClaudeSessions();
+    } catch {
+      return [];
     }
   }
 

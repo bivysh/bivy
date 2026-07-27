@@ -8,7 +8,8 @@ import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypt
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
-import { listRuntimes, catalogRuntimes, type AgentCommand, type AgentRuntime, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { listRuntimes, catalogRuntimes, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
 import { RemoteRuntime, RemoteRuntimeSession } from "./runtime/remote.js";
@@ -2703,6 +2704,35 @@ const RELAY_COMMANDS: Record<string, Command> = {
       });
     }
   },
+  // Provider-native session discovery/adoption (issue #156) — the relay-mode
+  // twin of GET /api/sessions/discover / POST /api/sessions/import, so the
+  // hosted app (app.bivy.sh) gets the same capability-driven flow as a
+  // directly-connected node. Bounded metadata only — no transcript content
+  // rides either message.
+  async "session.discover"(msg, ctx) {
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+    try {
+      const sessions = await listDiscoverableSessions();
+      ctx.reply({ type: "session.discover.result", requestId, sessions });
+    } catch (error) {
+      ctx.reply({ type: "session.discover.error", requestId, error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async "session.import"(msg, ctx) {
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+    const runtimeId = String(msg.runtimeId ?? "").trim();
+    const ref = String(msg.ref ?? "").trim();
+    if (!runtimeId || !ref) {
+      ctx.reply({ type: "session.import.error", requestId, error: "runtimeId and ref are required" });
+      return;
+    }
+    try {
+      const record = await importNativeSession(runtimeId, ref);
+      ctx.reply({ type: "session.import.result", requestId, sessionId: record.id, runtimeId: record.runtimeId });
+    } catch (error) {
+      ctx.reply({ type: "session.import.error", requestId, error: error instanceof Error ? error.message : String(error) });
+    }
+  },
   approval(msg, ctx) {
     const id = String(msg.id ?? "");
     const approved = Boolean(msg.approved);
@@ -5364,6 +5394,60 @@ async function listAllSessions(): Promise<Array<SessionSummary & { agent: string
   }
   deduped.sort((a, b) => toMs(b.modified) - toMs(a.modified));
   return deduped.filter((s) => !isEmptyUntitledSummary(s));
+}
+
+// --- Native session discovery/adoption (issue #156) -------------------------
+// "Let a node advertise discoverable provider-native sessions and let the app
+// import/adopt one into Bivy" — capability-driven, not a per-provider UI
+// branch: any runtime advertising capabilities.nativeSessionDiscovery is asked
+// for its own discoveries (src/runtime/native-session-discovery.ts does the
+// aggregation/dedupe), and the result is bounded metadata only, never
+// transcript content, so nothing here risks leaking a conversation to a UI
+// that merely lists nodes/sessions.
+
+export interface DiscoveredSessionView extends DiscoveredNativeSession {
+  agentName: string;
+  plan: NativeAdoptionPlan;
+}
+
+/** Every provider-native session discoverable on this node, minus ones Bivy
+ *  already manages (any runtime variant, any owning id — see
+ *  native-session-discovery.ts's identity-based dedupe). */
+async function listDiscoverableSessions(): Promise<DiscoveredSessionView[]> {
+  const managed = await listAllSessions();
+  const capableRuntimes = runtimeList()
+    .filter((info) => info.status === "available" && info.capabilities.nativeSessionDiscovery)
+    .map((info) => getRuntime(info.id));
+  const discovered = await collectDiscoveredSessions(
+    capableRuntimes,
+    managed.map((s) => ({ id: s.id, path: s.path })),
+  );
+  return discovered.map((session) => {
+    const rt = getRuntime(session.runtimeId);
+    return { ...session, agentName: rt.displayName, plan: planNativeAdoption(session, rt.capabilities) };
+  });
+}
+
+/**
+ * Import a discovered provider-native session into Bivy: creates or binds a
+ * Bivy session via the ordinary resume path (createSession → runtime.openSession),
+ * so it's a native resume whenever the runtime supports one — never a rewrite
+ * or deletion of the provider's own history. Re-validates the ref against a
+ * fresh discovery pass (rather than trusting the caller's cached list) so a
+ * stale/removed session, or one with a live external process, can't be
+ * imported out from under the safety checks.
+ */
+async function importNativeSession(runtimeId: string, ref: string): Promise<SessionRecord> {
+  const rt = getRuntime(runtimeId);
+  if (!rt.capabilities.nativeSessionDiscovery || !rt.capabilities.nativeSessionAdoption) {
+    throw new Error(`${rt.displayName} does not support importing existing sessions.`);
+  }
+  const discovered = await runtimeHost.discoverNativeSessions(rt);
+  const match = discovered.find((s) => s.ref === ref);
+  if (!match) throw new Error("That session is no longer discoverable — it may already be imported, or removed.");
+  const plan = planNativeAdoption(match, rt.capabilities);
+  if (plan.mode === "follow-only") throw new Error(plan.disclosure ?? "This session has a live process outside Bivy; close it before adopting.");
+  return createSession(match.cwd || defaultWorkspace, ref, { runtimeId, source: "import" });
 }
 
 function isEmptyUntitledTitle(value: unknown): boolean {
@@ -8096,6 +8180,29 @@ app.get("/api/codex/sessions/:id/messages", (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ error: "session id is required" });
   res.json({ messages: loadCodexTranscript(id), readOnly: true, resumeCommand: `codex resume ${id}` });
+});
+
+// Provider-native session discovery/adoption (issue #156) — the runtime-agnostic
+// generalization of the Codex-only endpoints above. Bounded metadata only,
+// deduped against sessions Bivy already manages; see listDiscoverableSessions.
+app.get("/api/sessions/discover", async (_req, res, next) => {
+  try {
+    res.json({ sessions: await listDiscoverableSessions() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/sessions/import", async (req, res, next) => {
+  try {
+    const runtimeId = String(req.body?.runtimeId || "").trim();
+    const ref = String(req.body?.ref || "").trim();
+    if (!runtimeId || !ref) return res.status(400).json({ error: "runtimeId and ref are required" });
+    const record = await importNativeSession(runtimeId, ref);
+    res.json({ sessionId: record.id, runtimeId: record.runtimeId, workspace: record.workspace });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/sessions", async (_req, res, next) => {

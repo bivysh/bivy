@@ -22,7 +22,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { RuntimeMessage } from "./types.js";
+import { hasLiveProcessForCwd } from "./native-process-scan.js";
+import type { DiscoveredNativeSession, RuntimeMessage } from "./types.js";
+
+/** Binary names a live Codex process could be running under (see
+ *  native-process-scan.ts's best-effort cwd match). */
+const CODEX_BIN_NAMES = ["codex"];
 
 export function codexHome(): string {
   return process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
@@ -212,4 +217,29 @@ export function discoverCodexSessionForCwd(cwd: string, since = 0): CodexSession
   return listCodexSessions().find(
     (s) => s.cwd != null && path.resolve(s.cwd) === target && (s.createdAt ?? 0) >= since - skewMs,
   );
+}
+
+/**
+ * Enumerate Codex's on-disk sessions as bounded discovery metadata (issue
+ * #156's runtime-agnostic discovery/adoption flow — see
+ * native-session-discovery.ts). Every Codex session Codex itself assigned an
+ * id to is resumable via `codex exec resume <id>`, so `resumable` is true
+ * whenever an id was recorded; `active` is a best-effort live-process check
+ * scoped to this session's own cwd, never its transcript content.
+ */
+export function discoverNativeCodexSessions(
+  hasLiveProcess: (cwd: string) => boolean = (cwd) => hasLiveProcessForCwd(cwd, CODEX_BIN_NAMES),
+): DiscoveredNativeSession[] {
+  return listCodexSessions()
+    .filter((s): s is CodexSessionSummary & { id: string } => Boolean(s.id))
+    .map((s) => ({
+      runtimeId: "codex-approvals",
+      ref: s.id,
+      file: s.file,
+      cwd: s.cwd,
+      updatedAt: s.createdAt,
+      title: s.firstMessage,
+      active: Boolean(s.cwd) && hasLiveProcess(s.cwd!),
+      resumable: true,
+    }));
 }
