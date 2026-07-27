@@ -428,6 +428,7 @@
     <a class="brand" href="./index.html"><img src="./tent.png" alt="" width="22" height="22"> Bivy</a>
     <nav class="top">
       <a href="#app">The app</a>
+      <a href="#rulesets" class="hide-sm">Rulesets</a>
       <a href="#how" class="hide-sm">How it works</a>
       <a href="#trust" class="hide-sm">Security</a>
       <a href="#docs">Docs</a>
@@ -668,6 +669,69 @@
           machines as you like, on every plan.</p>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- RULESETS -->
+  <section id="rulesets">
+    <div class="wrap">
+      <p class="kicker">New — resilience</p>
+      <h2>Runs that recover themselves.</h2>
+      <p class="prose">A rate limit, an exhausted subscription, a full context window, a
+      node that drops — the failures that normally kill an unattended run. A <b>ruleset</b>
+      is a small policy that says what should happen instead: retry, switch to another
+      model or account, or hand it back to you. One policy, applied to both your live
+      sessions and the work queue.</p>
+
+      <div class="pillars">
+        <div class="pillar">
+          <p class="eyebrow">Classify, don't guess</p>
+          <h3>Matches stable conditions, not error strings</h3>
+          <p>Raw provider errors are sorted into stable codes — <code>rate_limited</code>,
+          <code>credits_exhausted</code>, <code>context_overflow</code>,
+          <code>auth_failed</code> — so a rule reads like intent, never a brittle regex on
+          someone's error text.</p>
+        </div>
+        <div class="pillar">
+          <p class="eyebrow">Retry · reroute · park</p>
+          <h3>Fall back across models, accounts and providers</h3>
+          <p>Retry transient blips with backoff. Reroute an exhausted subscription down a
+          chain — a backup account, a cheaper model, a different provider — skipping any
+          route the node has no key for. Park anything risky for a human.</p>
+        </div>
+        <div class="pillar">
+          <p class="eyebrow">Safe by default</p>
+          <h3>Unattended runs stay in the lines</h3>
+          <p>Max attempts and backoff caps keep an automated run from spinning or spending
+          without limit; when a policy runs out it surfaces as <em>needs attention</em>
+          instead of failing silently. Every decision lands on the run's timeline.</p>
+        </div>
+      </div>
+
+      <p class="features-label">A rule reads like this</p>
+      <pre class="block">rules:
+  <span class="c"># a transient blip or a node dropping → just retry, backing off</span>
+  - when: [transport_error, node_offline]
+    action: retry
+    maxAttempts: 3
+    backoff: { baseMs: 2000, factor: 2, capMs: 60000 }
+
+  <span class="c"># subscription ran dry → walk a fallback chain; first with valid creds wins</span>
+  - when: [credits_exhausted, rate_limited]
+    action: reroute
+    chain:
+      - { account: work-secondary }         <span class="c"># same model, backup account</span>
+      - { model: claude-sonnet }            <span class="c"># cheaper model, same provider</span>
+      - { runtimeId: codex, model: gpt-5 }  <span class="c"># cross-provider last resort</span>
+    onExhausted: park
+
+  <span class="c"># needs a human → surface it, never fail quietly</span>
+  - when: [auth_failed, context_overflow]
+    action: park</pre>
+
+      <p class="prose" style="margin-top:20px">Live now: the work queue retries and reroutes
+      automatically, and a session can switch to a fallback model mid-conversation and pick
+      up right where it left off. <a href="https://github.com/bivysh/bivy/blob/main/docs/rulesets.md" style="color:var(--accent);text-decoration:none">Read the rulesets guide →</a></p>
     </div>
   </section>
 

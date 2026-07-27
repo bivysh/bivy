@@ -133,13 +133,39 @@ Notable properties:
 - `test/policy-run-policy.test.ts` — schema validation, the matcher, and every decision path (retry, exhaustion, reroute chain + credential-skip, park, give_up, backoff math).
 - `test/control-plane-policy.test.ts` — the queue effector loop end-to-end (retry→complete, reroute rewrites routing, park→needs-attention, give_up→fail, no-policy back-compat).
 
+## Milestone 2 — in-session model reroute (shipped)
+
+The session effector's first, fully in-place action: when a live turn ends in a
+recoverable error, swap to a fallback **model** and retry the same prompt instead
+of surfacing the error.
+
+- **Seam**: the daemon's per-session `agent_end` handler already extracts a
+  terminal turn error (`src/server.ts`). `SessionRerouteController.planReroute`
+  (`src/policy/session-reroute.ts`) decides *synchronously* whether that error
+  becomes a reroute, so the error toast is suppressed atomically; the model swap
+  (`runtime.setModel`) + re-prompt run async.
+- **Scope**: model swaps only — the one thing a session can change in place. A
+  chain candidate that changes agent/account/node is skipped here (those are
+  forks / promotions — see below). Reroute happens only at the turn boundary.
+- **Opt-in**: set `BIVY_SESSION_MODEL_FALLBACK` to a comma-separated model list,
+  e.g. `BIVY_SESSION_MODEL_FALLBACK=claude-sonnet,claude-haiku`. The daemon builds
+  a session ruleset (`credits_exhausted`/`rate_limited` → reroute down the list,
+  `onExhausted: give_up`) and wires it via `createRunPolicy({ context: "session" })`.
+  Unset = inert, session behavior unchanged.
+- **Bounded**: the per-turn reroute budget resets on each user prompt; when the
+  chain drains the error surfaces as before.
+
+Tests: `test/session-reroute.test.ts` (chain walk, exhaustion, non-covered
+conditions, no-op skip, per-turn reset, failed-swap handling).
+
 ## Not yet built (the backlog)
 
-Deliberately out of scope for milestone 1, in rough order:
+In rough order:
 
-1. **Session effector** — apply the same decisions to a live interactive session:
-   swap model via `runtime.setModel`, and a `suggest` mode that asks the user
-   before costly/lossy actions (reuse `QuestionManager` / `ApprovalManager`).
+1. **Session `suggest` mode** — ask before costly/lossy actions in interactive
+   sessions (reuse `QuestionManager` / `ApprovalManager`) rather than acting
+   automatically; today the session model reroute (a same-provider downgrade) acts
+   automatically within its bounded budget.
 2. **`continue` action** — for `context_overflow`, fork into a fresh session
    preserving run lineage + workspace (full vs seeded fidelity), rather than park.
 3. **Waiting state + claim leases** — a durable `waiting` / `nextEligibleAt` so a
