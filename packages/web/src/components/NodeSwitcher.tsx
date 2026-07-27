@@ -8,6 +8,7 @@ import { AddNodeSheet } from "./AddNodeSheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import type { EphemeralSetup } from "@bivy/core";
 
 /**
  * Header control (relay mode): shows the current node and a menu to switch nodes,
@@ -18,6 +19,8 @@ export function NodeSwitcher() {
   const { nodes, currentNodeId, status, activeSessionId, sessions } = useAppState();
   const [open, setOpen] = useState(false);
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
+  const [ephemeralSetupId, setEphemeralSetupId] = useState<string | undefined>();
+  const [ephemeralSetups, setEphemeralSetups] = useState<EphemeralSetup[]>([]);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -33,6 +36,7 @@ export function NodeSwitcher() {
 
   useEffect(() => {
     if (!open) return;
+    if (EPHEMERAL_MACHINES_ENABLED) controller.listEphemeralSetups().then(setEphemeralSetups).catch(() => {});
     const onDoc = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
@@ -100,6 +104,24 @@ export function NodeSwitcher() {
               </button>
             </div>
           ))}
+          {EPHEMERAL_MACHINES_ENABLED && ephemeralSetups.length > 0 && (
+            <>
+              <div className="node-menu-head">Ephemeral setups</div>
+              {ephemeralSetups.map((setup) => (
+                <button
+                  key={setup.id}
+                  className="node-menu-item"
+                  role="menuitem"
+                  onClick={() => { setOpen(false); setEphemeralSetupId(setup.id); setEphemeralOpen(true); }}
+                >
+                  <span className="node-dot" aria-hidden />
+                  <span className="sr-only">Offline — </span>
+                  <span className="node-menu-name">{setup.name}</span>
+                  <span className="chip">{setup.provider}</span>
+                </button>
+              ))}
+            </>
+          )}
           <div className="node-menu-sep" />
           <button
             className="node-menu-item"
@@ -118,6 +140,7 @@ export function NodeSwitcher() {
               role="menuitem"
               onClick={() => {
                 setOpen(false);
+                setEphemeralSetupId(undefined);
                 setEphemeralOpen(true);
               }}
             >
@@ -144,7 +167,7 @@ export function NodeSwitcher() {
           onConfirm={() => { setConfirmSignOut(false); controller.signOut(); }}
         />
       )}
-      {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} />}
+      {ephemeralOpen && <EphemeralSheet setupId={ephemeralSetupId} onClose={() => setEphemeralOpen(false)} />}
       {addNodeOpen && <AddNodeSheet onClose={() => setAddNodeOpen(false)} />}
     </div>
   );

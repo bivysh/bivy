@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
@@ -2197,7 +2197,11 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
   const [sizes, setSizes] = useState<ProviderSize[]>(adapter.sizes);
   const [size, setSize] = useState(adapter.defaultSize);
   const [ttl, setTtl] = useState(60);
+  const [teardownOnAgentFinish, setTeardownOnAgentFinish] = useState(false);
   const [repo, setRepo] = useState("");
+  const [setups, setSetups] = useState<EphemeralSetup[]>([]);
+  const [setupId, setSetupId] = useState<string | null>(null);
+  const [setupName, setSetupName] = useState("");
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -2207,16 +2211,21 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
 
   const refreshMachines = () =>
     controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId))).catch(() => {});
+  const refreshSetups = () => controller.listEphemeralSetups(providerId).then(setSetups).catch(() => {});
+  const editSetup = (setup: EphemeralSetup | null) => {
+    setSetupId(setup?.id ?? null);
+    setSetupName(setup?.name ?? "");
+    setRegion(setup?.region || adapter.defaultRegion);
+    setSize(setup?.size || adapter.defaultSize);
+    setTtl(setup?.ttlMinutes ?? 60);
+    setTeardownOnAgentFinish(setup?.teardownOnAgentFinish === true);
+    setRepo(setup?.repo || "");
+  };
 
   // Seed the form from the saved token + preferences for this provider.
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
-    controller.getEphemeralPrefs(providerId).then((p: EphemeralPrefs) => {
-      if (p.region) setRegion(p.region);
-      if (p.size) setSize(p.size);
-      if (typeof p.ttlMinutes === "number") setTtl(p.ttlMinutes);
-      if (p.repo) setRepo(p.repo);
-    }).catch(() => {});
+    refreshSetups();
     refreshMachines();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerId]);
@@ -2255,7 +2264,13 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
     if (busy) return;
     setBusy(true);
     try {
-      await controller.setEphemeralPrefs(providerId, { region, size, ttlMinutes: ttl, repo: repo.trim() || null });
+      const values = { name: setupName, region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: repo.trim() || null };
+      if (setupId) await controller.updateEphemeralSetup(setupId, values);
+      else {
+        const created = await controller.createEphemeralSetup(providerId, values);
+        setSetupId(created.id);
+      }
+      await refreshSetups();
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
     } catch (e) {
@@ -2295,8 +2310,25 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
       ) : (
         <>
           <p className="muted">
-            Token saved on this device. Set the defaults new machines launch with — you can still change them per launch.
+            Token saved on this device. Create multiple named setups; each remains in the launcher like an offline node after its machine expires.
           </p>
+          {setups.length > 0 && (
+            <div className="picker-list">
+              {setups.map((setup) => (
+                <PickerItem
+                  key={setup.id}
+                  title={setup.name}
+                  meta={[setup.region, setup.size, setup.teardownOnAgentFinish ? "until agent finishes" : setup.ttlMinutes ? `${setup.ttlMinutes} min` : null].filter(Boolean).join(" · ")}
+                  right={<span className="chip">Setup</span>}
+                  onClick={() => editSetup(setup)}
+                />
+              ))}
+            </div>
+          )}
+          <button className="btn ghost" onClick={() => editSetup(null)}>+ New setup</button>
+          <label className="field-label">Setup name</label>
+          <input className="picker-search" value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder="e.g. EU coding node" />
+
           <label className="field-label">Region</label>
           <select className="picker-search" value={region} onChange={(e) => setRegion(e.target.value)}>
             {adapter.regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
@@ -2312,12 +2344,25 @@ function EphemeralProviderConfig({ providerId, onKeysChanged }: { providerId: st
             {EPHEMERAL_TTL_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
           </select>
 
+          <label className="field-label">Teardown</label>
+          <label className="checkbox-row">
+            <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
+            <span>Destroy when the agent finishes <span className="muted small">(TTL remains a safety fallback; the launching device must be online)</span></span>
+          </label>
+
           <label className="field-label">Repo (optional, owner/name)</label>
           <input className="picker-search" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo" />
 
           <div className="row-actions">
-            <button className="btn primary" disabled={busy} onClick={savePrefs}>{busy ? "Saving…" : "Save preferences"}</button>
+            <button className="btn primary" disabled={busy || !setupName.trim()} onClick={savePrefs}>{busy ? "Saving…" : setupId ? "Save setup" : "Create setup"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
+            {setupId && (
+              <button className="btn danger-ghost" onClick={() => setConfirm({
+                title: "Remove setup?",
+                message: `Remove ${setupName}? Running machines are not affected.`,
+                action: () => controller.removeEphemeralSetup(setupId).then(() => { editSetup(null); refreshSetups(); }),
+              })}>Remove setup</button>
+            )}
             <button
               className="btn danger-ghost"
               onClick={() => setConfirm({

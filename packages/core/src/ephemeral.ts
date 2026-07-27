@@ -365,6 +365,9 @@ export interface EphemeralPrefs {
   size: string | null;
   ttlMinutes: number | null;
   repo: string | null;
+  /** Ask the launching device to destroy the provider machine after agent_end.
+   * TTL remains a safety fallback if that device is no longer online. */
+  teardownOnAgentFinish: boolean;
 }
 
 export interface EphemeralPrefsStore {
@@ -373,7 +376,25 @@ export interface EphemeralPrefsStore {
   remove(id: string): Promise<void>;
 }
 
-const EMPTY_PREFS: EphemeralPrefs = { region: null, size: null, ttlMinutes: null, repo: null };
+/** A reusable ephemeral node definition. Unlike a running machine, a setup is
+ * device-local configuration and remains available after its machine expires. */
+export interface EphemeralSetup extends EphemeralPrefs {
+  id: string;
+  provider: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EphemeralSetupStore {
+  list(provider?: string): Promise<EphemeralSetup[]>;
+  get(id: string): Promise<EphemeralSetup | null>;
+  create(provider: string, input: { name: string } & Partial<EphemeralPrefs>): Promise<EphemeralSetup>;
+  update(id: string, patch: Partial<Pick<EphemeralSetup, "name" | keyof EphemeralPrefs>>): Promise<EphemeralSetup>;
+  remove(id: string): Promise<void>;
+}
+
+const EMPTY_PREFS: EphemeralPrefs = { region: null, size: null, ttlMinutes: null, repo: null, teardownOnAgentFinish: false };
 
 export function createEphemeralPrefsStore(
   backend: KvBackend = defaultBackend("provider-prefs", "provider"),
@@ -394,6 +415,7 @@ export function createEphemeralPrefsStore(
       size: rec.size ?? null,
       ttlMinutes: typeof rec.ttlMinutes === "number" ? rec.ttlMinutes : null,
       repo: rec.repo ?? null,
+      teardownOnAgentFinish: rec.teardownOnAgentFinish === true,
     };
   };
   return {
@@ -414,6 +436,70 @@ export function createEphemeralPrefsStore(
   };
 }
 
+function setupId(): string {
+  try {
+    return "setup-" + randHex(8);
+  } catch {
+    return `setup-${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+/** Multiple named configurations may be saved for the same cloud provider.
+ * They intentionally live in a new store so the old per-provider defaults can
+ * continue to pre-fill ad-hoc launches and existing users lose no settings. */
+export function createEphemeralSetupStore(
+  backend: KvBackend = defaultBackend("setups", "id"),
+): EphemeralSetupStore {
+  const all = async (): Promise<EphemeralSetup[]> => {
+    try {
+      return (await backend.getAll())
+        .filter((r) => r && r.id && ephemeralCatalogEntry(r.provider))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    } catch {
+      return [];
+    }
+  };
+  return {
+    async list(provider) {
+      const rows = await all();
+      if (!provider) return rows;
+      const entry = ephemeralCatalogEntry(provider);
+      return entry ? rows.filter((r) => r.provider === entry.id) : [];
+    },
+    async get(id) {
+      return (await all()).find((r) => r.id === id) ?? null;
+    },
+    async create(provider, input) {
+      const entry = ephemeralCatalogEntry(provider);
+      if (!entry) throw new Error(`Unknown ephemeral provider: ${provider}`);
+      const name = String(input.name || "").trim();
+      if (!name) throw new Error("Setup name is required");
+      const now = nowIso();
+      const setup: EphemeralSetup = {
+        id: setupId(), provider: entry.id, name, ...EMPTY_PREFS,
+        region: input.region ?? null, size: input.size ?? null,
+        ttlMinutes: input.ttlMinutes ?? null, repo: input.repo ?? null,
+        teardownOnAgentFinish: input.teardownOnAgentFinish === true,
+        createdAt: now, updatedAt: now,
+      };
+      await backend.put(setup.id, setup);
+      return setup;
+    },
+    async update(id, patch) {
+      const current = (await all()).find((r) => r.id === id);
+      if (!current) throw new Error("Ephemeral setup not found");
+      const next = { ...current, ...patch, id: current.id, provider: current.provider, updatedAt: nowIso() };
+      next.name = String(next.name || "").trim();
+      if (!next.name) throw new Error("Setup name is required");
+      await backend.put(id, next);
+      return next;
+    },
+    async remove(id) {
+      await backend.delete(id);
+    },
+  };
+}
+
 export interface EphemeralMachine {
   id: string;
   provider: string;
@@ -423,6 +509,8 @@ export interface EphemeralMachine {
   ip: string | null;
   createdAt: string;
   ttlMinutes?: number;
+  /** Destroy after the agent completes its turn; TTL is still the fallback. */
+  teardownOnAgentFinish?: boolean;
   app?: string;
   nodeId?: string;
   repo?: string;
@@ -1450,6 +1538,8 @@ export interface LaunchOpts {
   ttlMinutes?: number;
   repo?: string;
   name?: string;
+  /** Destroy this machine when the agent emits agent_end. */
+  teardownOnAgentFinish?: boolean;
   /** Opt the machine into the hosted GitHub work queue on boot (see
    *  `BootstrapOpts.hostedTasks`). Off by default so a plain "Launch machine"
    *  from the Ephemeral sheet keeps its pre-#532 behavior. */
@@ -1547,6 +1637,7 @@ export async function launchEphemeralMachine(
   });
   machine.nodeId = nodeId;
   if (opts.repo) machine.repo = opts.repo;
+  if (opts.teardownOnAgentFinish) machine.teardownOnAgentFinish = true;
   if (opts.workItemId) machine.workItemId = opts.workItemId;
   if (opts.purpose) machine.purpose = opts.purpose;
   await deps.machines.add(machine);

@@ -39,6 +39,7 @@ import {
   createEphemeralKeyStore,
   createEphemeralModelKeyStore,
   createEphemeralPrefsStore,
+  createEphemeralSetupStore,
   createMachineStore,
   createGithubTaskTokenStore,
   createTranscriptCache,
@@ -53,6 +54,8 @@ import {
   type EphemeralModelKeyInfo,
   type EphemeralPrefsStore,
   type EphemeralPrefs,
+  type EphemeralSetupStore,
+  type EphemeralSetup,
   type EphemeralMachine,
   type GithubTaskTokenStore,
   type EphemeralQueueDefault,
@@ -217,6 +220,7 @@ export class AppController {
       if (sid) {
         this.store.settleSendingFollowups(sid);
         this.drainFollowups(sid);
+        void this.maybeTeardownFinishedEphemeral(sid);
       }
     };
     // Live convergence: refresh the moment the node tells us a session was
@@ -1833,11 +1837,14 @@ export class AppController {
   private ephemeralKeys: EphemeralKeyStore = createEphemeralKeyStore();
   private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
+  private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
   private ephemeralMachines: MachineStore = createMachineStore();
   /** Ephemeral node ids we've already seeded with device-held model keys this
    *  session, so a reconnect doesn't re-push (the node write is idempotent
    *  regardless). See `seedEphemeralNodeIfNeeded`. */
   private seededEphemeralNodes = new Set<string>();
+  /** Machines already scheduled for finish-triggered teardown. */
+  private finishingEphemeralMachines = new Set<string>();
 
   listEphemeralKeys(): Promise<ProviderKeyInfo[]> {
     return this.ephemeralKeys.list();
@@ -1870,6 +1877,18 @@ export class AppController {
   }
   setEphemeralPrefs(id: string, patch: Partial<EphemeralPrefs>): Promise<EphemeralPrefs> {
     return this.ephemeralPrefs.set(id, patch);
+  }
+  listEphemeralSetups(provider?: string): Promise<EphemeralSetup[]> {
+    return this.ephemeralSetups.list(provider);
+  }
+  createEphemeralSetup(provider: string, input: { name: string } & Partial<EphemeralPrefs>): Promise<EphemeralSetup> {
+    return this.ephemeralSetups.create(provider, input);
+  }
+  updateEphemeralSetup(id: string, patch: Partial<Pick<EphemeralSetup, "name" | keyof EphemeralPrefs>>): Promise<EphemeralSetup> {
+    return this.ephemeralSetups.update(id, patch);
+  }
+  removeEphemeralSetup(id: string): Promise<void> {
+    return this.ephemeralSetups.remove(id);
   }
   listEphemeralMachines(): Promise<EphemeralMachine[]> {
     return this.ephemeralMachines.list();
@@ -1919,6 +1938,32 @@ export class AppController {
       this.send({ kind: "provider.apiKey", provider, key });
     }
   }
+  /** Destroy a configured ephemeral machine shortly after agent_end. The short
+   * grace period lets final transcript/PR metadata flush first. A queued
+   * follow-up suppresses teardown; its eventual agent_end will try again. This
+   * is device-driven, so the machine's TTL remains the safety fallback when the
+   * browser goes offline. */
+  private async maybeTeardownFinishedEphemeral(sessionId: string): Promise<void> {
+    if (this.direct || this.store.getFollowups(sessionId).length > 0) return;
+    const nodeId = this.local.cur;
+    if (!nodeId) return;
+    const machine = (await this.ephemeralMachines.list().catch(() => []))
+      .find((m) => m.nodeId === nodeId && m.teardownOnAgentFinish);
+    if (!machine || this.finishingEphemeralMachines.has(machine.id)) return;
+    this.finishingEphemeralMachines.add(machine.id);
+    setTimeout(() => {
+      // A follow-up may have been queued during the grace period.
+      if (this.store.getFollowups(sessionId).length > 0 || this.local.cur !== nodeId) {
+        this.finishingEphemeralMachines.delete(machine.id);
+        return;
+      }
+      void this.destroyEphemeral(machine).catch((e) => {
+        this.finishingEphemeralMachines.delete(machine.id);
+        this.store.setError(e instanceof Error ? e.message : String(e));
+      });
+    }, 3000);
+  }
+
   listEphemeralSizes(providerId: string, region?: string): Promise<ProviderSize[]> {
     return listEphemeralSizes(providerId, { exec: cloudExec(this.local), keys: this.ephemeralKeys }, region);
   }
