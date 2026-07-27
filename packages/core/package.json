@@ -10,6 +10,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./execution-policy": {
+      "types": "./src/execution-policy.ts",
+      "import": "./src/execution-policy.ts"
     }
   },
   "scripts": {

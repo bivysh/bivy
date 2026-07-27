@@ -40,6 +40,24 @@ export interface WorkItem {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)
+  // Issue #155: this run's resolved execution policy (inherited from its
+  // triggering AutomationDefinition, or set for a manual run) — opaque here;
+  // parsed with @bivy/core/execution-policy's parseExecutionPolicy and merged
+  // UNDER the node's own default policy before enforcement (src/server.ts).
+  policy?: unknown;
+}
+
+/**
+ * The disposition of a completed work item (issue #155's "node run completion
+ * reporting"). `evidence` — when present — is the bounded/sanitized
+ * `PolicyEvidence` from `@bivy/core/execution-policy` (check ids, exit status,
+ * duration, short redacted summaries): never raw command output, diffs, or
+ * file contents. The control plane only ever routes/stores this; it never
+ * re-derives or overrides it — the node is the sole enforcement authority.
+ */
+export interface WorkItemOutcome {
+  status: "succeeded" | "failed" | "needs_attention";
+  evidence?: unknown;
 }
 
 /**
@@ -79,10 +97,14 @@ export function resolveControlPlaneTaskConfig(
   };
 }
 
-async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string): Promise<Response> {
+async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string, body?: unknown): Promise<Response> {
   return fetch(`${cfg.controlPlaneUrl}${path}`, {
     method,
-    headers: { authorization: `Bearer ${cfg.enrollmentToken}` },
+    headers: {
+      authorization: `Bearer ${cfg.enrollmentToken}`,
+      ...(body !== undefined ? { "content-type": "application/json" } : {}),
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
 }
 
@@ -103,12 +125,18 @@ export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promis
   return res.ok;
 }
 
-export async function completeWork(cfg: ControlPlaneTaskConfig, id: string): Promise<void> {
-  await transitionWork(cfg, id, "complete");
+/** Report a work item's non-failure disposition ("succeeded" or
+ *  "needs_attention"). Defaults to "succeeded" for back-compat with any
+ *  caller that hasn't adopted policy evidence yet. A hard policy violation
+ *  goes through `failWork` below instead. */
+export async function completeWork(cfg: ControlPlaneTaskConfig, id: string, outcome?: WorkItemOutcome): Promise<void> {
+  await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/complete`, outcome ?? { status: "succeeded" }).catch(() => {});
 }
 
-export async function failWork(cfg: ControlPlaneTaskConfig, id: string): Promise<void> {
-  await transitionWork(cfg, id, "fail");
+/** Report a work item as failed, optionally with bounded/sanitized policy
+ *  evidence explaining why (issue #155). */
+export async function failWork(cfg: ControlPlaneTaskConfig, id: string, evidence?: unknown): Promise<void> {
+  await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/fail`, evidence !== undefined ? { evidence } : undefined).catch(() => {});
 }
 
 export class ControlPlaneTaskPoller {
@@ -117,7 +145,7 @@ export class ControlPlaneTaskPoller {
 
   constructor(
     private readonly cfg: ControlPlaneTaskConfig,
-    private readonly runItem: (item: WorkItem) => Promise<void>,
+    private readonly runItem: (item: WorkItem) => Promise<WorkItemOutcome | void>,
     /** Node's cap on concurrently-running queue sessions (0/undefined = unlimited).
      *  Read fresh each tick so the Settings → Nodes value takes effect live. */
     private readonly maxConcurrent?: () => number,
@@ -172,14 +200,24 @@ export class ControlPlaneTaskPoller {
       // Claim first so only one node runs it; skip if another node won (no
       // claim → not ours → don't run or complete it).
       if (!(await claimWork(this.cfg, item.id))) return;
+      // Never a false success (issue #155): an item that throws, or whose
+      // runner returns nothing, reports "failed" — only an explicit outcome
+      // from `runItem` can report success or needs_attention.
+      let outcome: WorkItemOutcome = { status: "failed" };
       try {
         await transitionWork(this.cfg, item.id, "running");
         console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
-        await this.runItem(item);
-        await completeWork(this.cfg, item.id);
+        outcome = (await this.runItem(item)) ?? { status: "failed" };
       } catch (error) {
         console.warn(`[control-plane-tasks] item ${item.id} failed:`, error);
-        await failWork(this.cfg, item.id);
+      } finally {
+        // Mark done so it leaves the queue even if the run threw — a failed
+        // item shouldn't be retried forever (it's recorded on the issue/PR).
+        // "failed" is reported through /fail (a hard policy violation, or an
+        // uncaught error/no outcome); "succeeded"/"needs_attention" through
+        // /complete — see the endpoint split in services/control-plane.
+        if (outcome.status === "failed") await failWork(this.cfg, item.id, outcome.evidence);
+        else await completeWork(this.cfg, item.id, outcome);
       }
     } finally {
       this.inFlight.delete(item.id);

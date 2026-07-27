@@ -57,7 +57,7 @@ process, so the daemon, agents and helper scripts all agree.
 | Path | Contents | Written by |
 | --- | --- | --- |
 | `cli.json` | Workspace, port, `service` flag, and an `env` block of persisted environment variables. Mode `0600` | `bivy setup`, `bivy service install/uninstall`, `bivy github:connect`, `bivy github:app-connect`, and the node when you connect/disconnect a GitHub App from the web app |
-| `settings.json` | Agent-neutral node settings: `defaultAgent`, `defaultModel`, `defaultSandbox`, `approvalMode`, `githubMaxConcurrent`, `githubIssuePrompt` | The node, from the web app's Settings screen |
+| `settings.json` | Agent-neutral node settings: `defaultAgent`, `defaultModel`, `defaultSandbox`, `approvalMode`, `githubMaxConcurrent`, `githubIssuePrompt`, `githubExecutionPolicy` | The node, from the web app's Settings screen |
 | `relay.json` | Relay URL, control-plane URL, client base URL, node enrollment token. Mode `0600` | `bivy relay:setup` |
 | `nodes.json` | Direct-node registry (`name` → `{url, token}`) for `bivy run --node` | `bivy nodes add/remove` |
 | `shims.json` | Installed agent shims | `bivy shim install/uninstall` |

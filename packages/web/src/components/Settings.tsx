@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralPrefs, ProviderKeyInfo, ProviderSize } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
+import { defaultExecutionPolicy, parseExecutionPolicy, type ExecutionPolicy } from "@bivy/core/execution-policy";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -1688,6 +1689,17 @@ function NodesPanel({ state }: { state: AppState }) {
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const currentNodeId = controller.local.cur;
+  // Execution policy (issue #155) is edited as raw JSON rather than a dozen
+  // bespoke controls — every field is optional and the shape is still settling,
+  // so a structured-but-generic editor beats hand-rolled widgets per field.
+  // `policyErrors` and the parsed preview below are recomputed on every
+  // keystroke so the effective (defaulted + merged) policy is always visible
+  // BEFORE saving — the run itself is governed entirely node-side; this is
+  // strictly a preview.
+  const [policyText, setPolicyText] = useState("");
+  const [policyErrors, setPolicyErrors] = useState<string[]>([]);
+  const [policyJsonError, setPolicyJsonError] = useState<string | null>(null);
+  const [effectivePolicy, setEffectivePolicy] = useState<ExecutionPolicy>(defaultExecutionPolicy());
 
   const reload = () => {
     controller.getNodeSettings();
@@ -1712,6 +1724,34 @@ function NodesPanel({ state }: { state: AppState }) {
   // rest of the form) re-seeds once the node echoes back the restored default.
   const sig = settings ? `${settings.name}|${settings.defaultAgent}|${settings.githubIssuePrompt}` : "";
   useEffect(() => { setForm(settings); }, [sig]);
+  // Re-seed the policy editor whenever a fresh policy arrives from the node
+  // (initial load, switching nodes, or after a save round-trip) — keyed on its
+  // serialized form so an unrelated settings field changing doesn't clobber an
+  // in-progress edit.
+  const policySig = settings ? JSON.stringify(settings.githubExecutionPolicy ?? defaultExecutionPolicy()) : "";
+  useEffect(() => {
+    if (!settings) return;
+    setPolicyText(JSON.stringify(settings.githubExecutionPolicy ?? defaultExecutionPolicy(), null, 2));
+  }, [policySig]);
+  // Live preview: reparse on every edit so the effective (defaulted, validated)
+  // policy is always visible before Save — never trust the raw JSON as-is.
+  useEffect(() => {
+    if (!policyText.trim()) {
+      setEffectivePolicy(defaultExecutionPolicy());
+      setPolicyErrors([]);
+      setPolicyJsonError(null);
+      return;
+    }
+    try {
+      const raw = JSON.parse(policyText);
+      setPolicyJsonError(null);
+      const { policy, errors } = parseExecutionPolicy(raw);
+      setEffectivePolicy(policy);
+      setPolicyErrors(errors);
+    } catch (e) {
+      setPolicyJsonError(String((e as Error)?.message || e));
+    }
+  }, [policyText]);
 
   const runtimes = state.runtimes.filter((r) => String((r as { status?: string }).status ?? "available") === "available");
   const agentCaps = state.runtimes.find((r) => r.id === form?.defaultAgent)?.capabilities as { modelSelection?: boolean } | undefined;
@@ -1738,6 +1778,12 @@ function NodesPanel({ state }: { state: AppState }) {
         worktreeSync: form.worktreeSync,
         syncStandbyNodeId: form.syncStandbyNodeId ?? "",
         sessionResumeMode: form.sessionResumeMode,
+        // Send the already-normalized effective policy, not the raw textarea —
+        // the node re-validates it regardless (parseExecutionPolicy is always
+        // tolerant), but this way what gets saved always matches the preview
+        // shown on screen. Skipped while the JSON itself doesn't parse, so a
+        // mid-edit typo can't clobber the last-saved policy.
+        ...(policyJsonError ? {} : { githubExecutionPolicy: effectivePolicy }),
       });
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
@@ -1931,6 +1977,36 @@ function NodesPanel({ state }: { state: AppState }) {
                 ? "Interrupted sessions wait for you to tap Resume — nothing runs on its own. GitHub issue automation still resumes automatically."
                 : "The agent picks up an interrupted turn on its own after the node restarts."}
             </p>
+          </section>
+
+          <section className="settings-section">
+            <h4 className="settings-subhead">Execution policy</h4>
+            <p className="muted small">
+              A declarative contract the NODE enforces on every automation run (GitHub, Slack, manual, webhook, or
+              schedule), on top of the settings above: allowed
+              runtimes/models, a sandbox/approval floor a run can never be launched below, required non-interactive checks
+              (run with a timeout, output bounded and redacted before it's ever stored), whether a clean commit or a
+              verified pull request is required to count as success, and changed-file allow/deny globs. Leave it empty for
+              no additional restriction — this never lowers what's already configured above, only adds a floor on top of it.
+            </p>
+            <textarea
+              className="picker-search policy-editor"
+              rows={12}
+              spellCheck={false}
+              value={policyText}
+              onChange={(e) => setPolicyText(e.target.value)}
+            />
+            {policyJsonError && <div className="banner error inline">Invalid JSON: {policyJsonError}</div>}
+            {!policyJsonError && policyErrors.length > 0 && (
+              <div className="banner warn inline">
+                Some fields were dropped and will save as shown below:
+                <ul className="policy-errors">
+                  {policyErrors.map((e, i) => <li key={i}>{e}</li>)}
+                </ul>
+              </div>
+            )}
+            <p className="field-label">Effective policy preview</p>
+            <pre className="policy-preview">{JSON.stringify(effectivePolicy, null, 2)}</pre>
           </section>
 
           <section className="settings-section">

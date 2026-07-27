@@ -316,6 +316,15 @@ export interface AutomationDefinition {
     | { kind: "cron"; expression: string; timezone: string };
   nextRunAt?: string;
   lastScheduledAt?: string;
+  // Issue #155: this definition's execution policy — a `@bivy/core/execution-
+  // policy` `ExecutionPolicy` object (allowed runtimes/models, sandbox/approval
+  // floor, required checks, clean-commit/PR requirements, changed-file globs),
+  // layered UNDER the node's own default policy at run time (the definition can
+  // only add restrictions, never loosen the node's floor — see
+  // `mergeExecutionPolicy`/`resolveEffective*` in src/harness/job-policy.ts).
+  // Opaque here: the control plane only routes/stores it, never interprets or
+  // validates its shape — the node is the sole enforcement authority.
+  policy?: unknown;
   createdAt: string;
   updatedAt: string;
 }
@@ -343,8 +352,18 @@ export interface AutomationRun {
     ephemeral?: boolean;
     approvalMode?: AutomationDefinition["approvalMode"];
     sandbox?: AutomationDefinition["sandbox"];
+    // Issue #155: this run's resolved execution policy (opaque — see
+    // AutomationDefinition.policy above), inherited from the triggering
+    // definition or set directly for a manual run.
+    policy?: unknown;
   };
-  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+  // `failure` is a short human-readable reason. `policyEvidence` — when a
+  // policy is configured (issue #155) — is the bounded/sanitized
+  // `PolicyEvidence` from `@bivy/core/execution-policy` (check ids, exit
+  // status, duration, short redacted summaries): never raw command output,
+  // diffs, or file contents. The control plane only ever routes/stores this;
+  // the node is the sole authority that produces and interprets it.
+  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string; policyEvidence?: unknown };
   title: string;
   body?: string;
   source: string;
@@ -402,6 +421,11 @@ export interface WorkItem {
   targetSessionId?: string;
   startedAt?: string;
   output?: AutomationRun["output"];
+  // Issue #155: the resolved execution policy for this run — copied from the
+  // triggering `AutomationDefinition.policy` at enqueue time (or set directly
+  // for a manual run), opaque to the control plane. The node merges this
+  // UNDER its own default policy before enforcing (never a way to loosen it).
+  policy?: unknown;
 }
 export type WorkItemInput = {
   label?: string;
@@ -425,6 +449,11 @@ export type WorkItemInput = {
   model?: string;
   approvalMode?: AutomationDefinition["approvalMode"];
   sandbox?: AutomationDefinition["sandbox"];
+  // Issue #155: an explicit policy override for this one run (manual trigger).
+  // `enqueueAutomationRunWithResult` falls back to the definition's own
+  // `policy` when this is unset, mirroring how runtimeId/model/approvalMode/
+  // sandbox already fall back to the definition.
+  policy?: unknown;
   ephemeral?: boolean;
   installationId?: string;
   appId?: string;
@@ -831,7 +860,12 @@ export interface MeshStore {
   // can never be counted again, so this is pure housekeeping to keep the table lean;
   // called on an interval by the control plane. Returns how many rows were removed.
   pruneRunStartsBefore(beforeIso: string): Promise<number>;
-  completeWorkItem(accountId: string, id: string): Promise<void>;
+  // `status` is the terminal AutomationRunStatus the node observed
+  // ("succeeded" or "needs_attention" — never "failed"; a hard policy
+  // violation goes through `transitionAutomationRun(..., "failed", ...)`
+  // directly, same as any other run failure). `evidence`, when present, is the
+  // bounded/sanitized `PolicyEvidence` — stored in `output.policyEvidence`.
+  completeWorkItem(accountId: string, id: string, outcome?: { status: "succeeded" | "needs_attention"; evidence?: unknown }): Promise<void>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node
   // changes so already-queued work follows the new default. Returns the updated items.

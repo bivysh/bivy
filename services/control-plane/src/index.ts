@@ -405,6 +405,23 @@ function bearer(req: Request): string | null {
   return m ? m[1].trim() : null;
 }
 
+/** Issue #155: defense in depth for the two opaque JSON blobs this feature
+ *  moves through the control plane — a definition/run's `policy` config and a
+ *  node-reported `policyEvidence` result. Both sides already bound/sanitize
+ *  their own input (parseExecutionPolicy on the policy side; the node never
+ *  sends raw command output, diffs, or file contents in evidence), but cap
+ *  what a misbehaving/future caller could grow this table with too. Oversized
+ *  input is dropped, not truncated in place — JSON truncated mid-structure
+ *  wouldn't parse back cleanly, and a missing blob is a far safer failure
+ *  mode than a corrupt one. */
+const MAX_POLICY_JSON_BYTES = 32 * 1024;
+function boundPolicyJson(raw: unknown): unknown {
+  if (raw === undefined || raw === null) return undefined;
+  const serialized = JSON.stringify(raw);
+  if (!serialized || serialized.length > MAX_POLICY_JSON_BYTES) return undefined;
+  return raw;
+}
+
 function baseUrl(req: Request): string {
   if (publicControlPlaneUrl) return publicControlPlaneUrl;
   const proto = String(req.headers["x-forwarded-proto"] ?? req.protocol ?? "http").split(",")[0];
@@ -1775,7 +1792,15 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     attempt: w.attempt,
     targetKind: w.targetKind,
     startedAt: w.startedAt,
+    // Issue #155: `output.policyEvidence`, when a policy is configured, is the
+    // bounded/sanitized `PolicyEvidence` from @bivy/core/execution-policy.
+    // Routed through as-is — the control plane never interprets it, only the
+    // node (the enforcement authority) does. The disposition itself is just
+    // `status` (AutomationRunStatus already covers succeeded/failed/needs_attention).
     output: w.output,
+    // The resolved (opaque) policy this run was governed by — inherited from
+    // its triggering AutomationDefinition, or set directly for a manual run.
+    policy: w.policy,
   })));
 }));
 
@@ -1813,6 +1838,10 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     enabled,
     schedule,
     nextRunAt,
+    // Issue #155: opaque execution policy — the control plane only bounds its
+    // size (defense in depth; the node's own parseExecutionPolicy is the real
+    // validation) and stores/routes it, never interpreting it.
+    policy: boundPolicyJson(req.body?.policy),
   });
   res.status(201).json(definition);
 }));
@@ -1853,6 +1882,10 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     enabled,
     schedule,
     nextRunAt,
+    // Issue #155: same opaque, size-bounded policy handling as POST above.
+    // "policy" in the body (even `null`) replaces the stored policy; omitting
+    // the key entirely keeps whatever is already there.
+    policy: "policy" in (req.body ?? {}) ? boundPolicyJson(req.body.policy) : current.policy,
   };
   res.json(await store.updateAutomationDefinition(client.accountId, current.id, patch));
 }));
@@ -2215,6 +2248,14 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   res.json({ ok: true, item });
 }));
 
+// Issue #155: the node may report its run's policy disposition here via an
+// optional body `{ status?, evidence? }` — `status` is "succeeded" (the
+// default, for back-compat with nodes that predate the policy feature) or
+// "needs_attention" (a soft policy violation: a missing required commit/PR —
+// recoverable, but never reported as a plain success). `evidence`, when
+// present, is bounded/sanitized `PolicyEvidence` JSON the control plane only
+// routes/stores (postgres-store further caps its size defensively) — never
+// interpreted. A hard policy violation goes through /fail below instead.
 app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
@@ -2222,7 +2263,9 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  await store.completeWorkItem(node.accountId, id);
+  const body = (req.body ?? {}) as { status?: unknown; evidence?: unknown };
+  const status = body.status === "needs_attention" ? "needs_attention" : "succeeded";
+  await store.completeWorkItem(node.accountId, id, { status, evidence: body.evidence });
   // Compatibility for older nodes that skip the explicit /running transition.
   await store.recordRunStart(node.accountId, `automation:${id}`);
   res.json({ ok: true });
@@ -2240,6 +2283,10 @@ app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) =>
   res.json({ ok: true, run });
 }));
 
+// Issue #155: `evidence`, when present, is the same bounded/sanitized
+// `PolicyEvidence` JSON as /complete's — a hard policy violation (forbidden
+// runtime/model, a failed required check, a changed-file violation) reports
+// failure here rather than through /complete.
 app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
@@ -2247,7 +2294,10 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "failed");
+  const body = (req.body ?? {}) as { evidence?: unknown };
+  const evidence = boundPolicyJson(body.evidence);
+  const output = evidence !== undefined ? { ...(current.output ?? {}), policyEvidence: evidence } : current.output;
+  const run = await store.transitionAutomationRun(node.accountId, id, "failed", output);
   if (!run) return res.status(404).json({ error: "Unknown run" });
   res.json({ ok: true, run });
 }));
