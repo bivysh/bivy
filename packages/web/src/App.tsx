@@ -390,7 +390,6 @@ export function App() {
                 sessionId={state.activeSessionId}
                 name={state.activeTitle}
                 isRepo={isRepoSession}
-                prs={activeSession?.prs}
                 collapsed={collapsed}
                 onToggleCollapsed={toggleCollapsed}
                 onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
