@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import { listRuntimes, catalogRuntimes, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { createRunPolicy } from "./policy/run-policy.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
@@ -4756,7 +4757,14 @@ function startControlPlaneTasksIfConfigured() {
   // with no manual BIVY_NODE_LABEL needed.
   const cfg = resolveControlPlaneTaskConfig(loadRelayConfig(appDir), process.env, identity.name);
   if (!cfg) return;
-  controlPlanePoller = new ControlPlaneTaskPoller(cfg, runWorkItem, nodeGithubMaxConcurrent);
+  // Policy-driven run orchestration: classify a failed queue attempt into a
+  // stable condition and decide retry / reroute / park instead of the historical
+  // "any throw → failed". The default ruleset is safe (retry transient/rate-
+  // limit, park quota/auth/context); user-authored rulesets can add fallback
+  // chains. Queue runs are unattended, so they act automatically within bounds.
+  controlPlanePoller = new ControlPlaneTaskPoller(cfg, runWorkItem, nodeGithubMaxConcurrent, {
+    policy: createRunPolicy({ context: "queue" }),
+  });
   controlPlanePoller.start();
 }
 
