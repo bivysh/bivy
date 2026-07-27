@@ -989,6 +989,10 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .import-session-badge { display: inline-block; padding: 5px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .import-session-action { padding: 7px 12px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 700; font-size: 12px; white-space: nowrap; }
 .import-session-action:disabled { opacity: 0.6; }
+/* The "follow/read-only" affordance for a live-elsewhere session: the badge
+   plus the exact command to attach to it themselves, in their own terminal. */
+.import-session-follow { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.import-session-resume-cmd { font-size: 10px; color: var(--muted); background: var(--surface-2); border-radius: 6px; padding: 2px 6px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- Settings ---- */
 .sheet-back { border: 0; background: transparent; color: var(--muted); font-size: 24px; line-height: 1; padding: 0 4px; }

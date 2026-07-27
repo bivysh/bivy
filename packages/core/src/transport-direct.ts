@@ -72,7 +72,15 @@ export class DirectTransport implements Transport {
       headers: { ...this.directHeaders(), ...((opts.headers as Record<string, string>) || {}) },
     });
     const data: any = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || `Local request failed (${res.status})`);
+    if (!res.ok) {
+      const error = new Error(data?.error || `Local request failed (${res.status})`);
+      // Preserve any extra fields the node's error payload carried (e.g.
+      // session.import's `needsDisclosure`/`disclosure`) so a caller that needs
+      // more than the message can read them off the thrown Error, the same way
+      // it would off a `*.error` relay-mode event.
+      if (data && typeof data === "object") Object.assign(error, data);
+      throw error;
+    }
     return data as T;
   }
 
@@ -274,11 +282,16 @@ export class DirectTransport implements Transport {
           try {
             const p: any = await this.directApi("/api/sessions/import", {
               method: "POST",
-              body: JSON.stringify({ runtimeId: obj.runtimeId, ref: obj.ref }),
+              body: JSON.stringify({ runtimeId: obj.runtimeId, ref: obj.ref, acceptDisclosure: obj.acceptDisclosure }),
             });
-            this.emit({ type: "session.import.result", requestId, sessionId: p.sessionId, runtimeId: p.runtimeId });
+            this.emit({ type: "session.import.result", requestId, sessionId: p.sessionId, runtimeId: p.runtimeId, mode: p.mode, seedPrompt: p.seedPrompt });
           } catch (error) {
-            this.emit({ type: "session.import.error", requestId, error: (error as Error)?.message || String(error) });
+            // A "needs disclosure" refusal (see importNativeSession) rides the
+            // thrown Error's extra fields (attached by directApi above) rather
+            // than a generic message, so the caller can show the disclosure and
+            // retry with acceptDisclosure instead of treating this as a hard failure.
+            const e = error as { message?: unknown; needsDisclosure?: unknown; disclosure?: unknown };
+            this.emit({ type: "session.import.error", requestId, error: String(e?.message ?? error), needsDisclosure: e?.needsDisclosure, disclosure: e?.disclosure });
           }
           break;
         }
