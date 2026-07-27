@@ -419,6 +419,10 @@ export interface NodeSettings {
   /** The account node this node replicates its sessions TO (the standby). Empty
    *  = sync configured but no standby chosen yet (nothing is replicated). */
   syncStandbyNodeId?: string;
+  /** How a session whose turn was cut off by a node restart recovers: "auto"
+   *  re-drives the interrupted turn on boot, "manual" waits for a one-tap Resume.
+   *  Governs interactive sessions only — issue automation always auto-resumes. */
+  sessionResumeMode: "auto" | "manual";
 }
 
 export interface AppState {

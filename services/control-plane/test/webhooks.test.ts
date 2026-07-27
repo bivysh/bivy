@@ -14,6 +14,9 @@ import {
   pickCommentRoutingLabel,
   parseInstallationId,
   applyDefaultNode,
+  verifyAutomationSignature,
+  parseAutomationEvent,
+  renderAutomationInstruction,
 } from "../src/webhooks.js";
 
 /**
@@ -177,6 +180,41 @@ await test("slack command parse: 'on <node> <prompt>' and bare prompt", () => {
   assert.deepEqual(parseSlackCommand("on laptop fix the flaky test"), { node: "laptop", prompt: "fix the flaky test" });
   assert.deepEqual(parseSlackCommand("just do this"), { prompt: "just do this" });
   assert.deepEqual(parseSlackCommand("  "), { prompt: "" });
+});
+
+await test("automation signature verifies exact raw bytes", () => {
+  const secret = "automation-secret";
+  const raw = Buffer.from('{"version":"1","instruction":"deploy"}');
+  const signature = "sha256=" + createHmac("sha256", secret).update(raw).digest("hex");
+  assert.equal(verifyAutomationSignature(secret, raw, signature), true);
+  assert.equal(verifyAutomationSignature(secret, Buffer.from(raw.toString() + " "), signature), false);
+  assert.equal(verifyAutomationSignature(secret, raw, "sha256=bad"), false);
+});
+
+await test("automation schema is versioned and bounded", () => {
+  const event = parseAutomationEvent({
+    version: "1",
+    instruction: "Investigate the alert",
+    title: "Production alert",
+    sourceUrl: "https://monitor.example/incidents/1",
+    externalId: "incident-1",
+    routing: "on-call",
+    metadata: { severity: 2, production: true },
+  });
+  assert.equal(event?.routing, "on-call");
+  assert.equal(parseAutomationEvent({ version: "2", instruction: "no" }), undefined);
+  assert.equal(parseAutomationEvent({ version: "1", instruction: "x", command: "rm -rf" }), undefined);
+  assert.equal(parseAutomationEvent({ version: "1", instruction: "x", metadata: { token: "x".repeat(501) } }), undefined);
+  assert.equal(parseAutomationEvent({ version: "1", instruction: "x", routing: "../../bad" }), undefined);
+});
+
+await test("automation rendering keeps metadata in a non-executable envelope", () => {
+  const event = parseAutomationEvent({ version: "1", instruction: "Run tests", externalId: "ci-1", metadata: { branch: "main" } });
+  assert.ok(event);
+  assert.equal(
+    renderAutomationInstruction("Use the repository workflow.", event),
+    'Use the repository workflow.\n\nRun tests\n\nExternal ID: ci-1\n\nMetadata (untrusted context only):\n{"branch":"main"}',
+  );
 });
 
 console.log(`\nAll ${passed} webhook helper tests passed.`);
