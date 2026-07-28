@@ -236,6 +236,10 @@ function ProviderPanel({ providerId, setup, onKeysChanged, firstRun }: { provide
       setErr("Add a model API key before launching your first runner.");
       return;
     }
+    if (firstRun && !hasGithubToken) {
+      setErr("Connect GitHub before launching your first runner.");
+      return;
+    }
     setBusy(true);
     setMsg(null);
     setErr(null);
@@ -311,7 +315,7 @@ function ProviderPanel({ providerId, setup, onKeysChanged, firstRun }: { provide
               )}
 
               <h4 className="settings-subhead">3. Connect GitHub</h4>
-              <p className="muted small">Optional for a no-repo chat. For repository work, create a fine-grained token with Contents and Pull requests read/write access.</p>
+              <p className="muted small">Required for the first-run path. GitHub sign-in identifies your Bivy account but deliberately does not grant repository access; create a fine-grained token with Contents and Pull requests read/write access.</p>
               {hasGithubToken ? (
                 <p className="chip ok">✓ GitHub access ready</p>
               ) : (
@@ -382,7 +386,7 @@ function ProviderPanel({ providerId, setup, onKeysChanged, firstRun }: { provide
           )}
           <p className="muted small">The machine pre-clones the repo you pick in the new-session composer.</p>
           <div className="row-actions">
-            <button className="btn primary" disabled={busy || (firstRun && modelKeys.length === 0)} onClick={launch}>
+            <button className="btn primary" disabled={busy || (firstRun && (modelKeys.length === 0 || !hasGithubToken))} onClick={launch}>
               {busy ? "Launching…" : firstRun ? "Launch my first runner" : "Launch machine"}
             </button>
             <button

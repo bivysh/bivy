@@ -38,10 +38,12 @@ The token field is a single opaque string as far as the store/UI are concerned â
 When the user selects an ephemeral provider, show a short inline guide before asking for the key. Prefer direct links that open in a new tab.
 
 For an account with no node yet, the app presents one complete four-step path:
-connect the cloud provider, save a model API key, optionally save a fine-grained
-GitHub token for repository/PR work, then choose and launch the runner. The
-launch button stays disabled until a model key is available, avoiding a machine
-that boots successfully but cannot run its first task. The device-local GitHub
+connect the cloud provider, save a model API key, save a fine-grained GitHub
+token for repository/PR work, then choose and launch the runner. GitHub account
+sign-in remains deliberately minimal-scope and does not grant repository access.
+The launch button stays disabled until both runner credentials are available,
+avoiding a machine that boots successfully but cannot run the advertised
+issue-to-PR flow. The device-local GitHub
 token is included in the runner bootstrap; model keys wait for the E2E channel
 and are then seeded into the node vault.
 
