@@ -67,7 +67,7 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
   {
     id: "aws",
     name: "AWS EC2",
-    tokenLabel: "Access key ID and secret access key",
+    tokenLabel: "Access key — paste as accessKeyId:secretAccessKey",
     blurb: "Bivy launches a temporary EC2 instance, runs the session, then terminates it.",
     steps: [
       "Create (or reuse) an IAM user scoped to a minimal EC2 policy — see the Bivy docs link below for a copy-pasteable policy.",
@@ -746,7 +746,12 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
       //    covers a rare image without systemd-run.
       `  - [ bash, -lc, "systemd-run --unit=bivy --collect --property=Restart=on-failure /etc/bivy/start.sh || setsid bash /etc/bivy/start.sh </dev/null >/var/log/bivy.log 2>&1 &" ]`,
       // 3. TTL backstop: halt the VM so a forgotten machine can't bill forever.
-      `  - [ bash, -lc, "echo 'shutdown -h now' | at now + ${ttl} minutes || (sleep ${ttl * 60} && shutdown -h now) &" ]`,
+      //    Prefer a systemd-run transient timer — it's owned by systemd, so it
+      //    survives cloud-init exiting (unlike a bare backgrounded `sleep`, which
+      //    cloud-final's cgroup reaps — the same reason step 2 uses systemd-run).
+      //    Fall back to `at`, then to a detached setsid `sleep` for the rare image
+      //    with neither, so the machine self-halts however minimal the base image.
+      `  - [ bash, -lc, "systemd-run --on-active=${ttl}m --timer-property=AccuracySec=1s --unit=bivy-ttl shutdown -h now || (echo 'shutdown -h now' | at now + ${ttl} minutes) || setsid bash -c 'sleep ${ttl * 60}; shutdown -h now' </dev/null >/var/log/bivy-ttl.log 2>&1 &" ]`,
     ].join("\n") + "\n"
   );
 }
@@ -756,11 +761,49 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
 export interface ProviderSize {
   id: string;
   label: string;
+  /** Approximate on-demand compute price per hour in the provider's currency
+   *  (see `ProviderAdapter.currency`), for showing an at-a-glance cost estimate
+   *  before launch. Indicative only — the provider's live bill is authoritative;
+   *  storage/egress/taxes aren't included. Absent when we have no figure. */
+  pricePerHour?: number;
+}
+
+/** Currency symbol for the small cost hints. Kept tiny on purpose — these are
+ *  indicative estimates, not an invoice. */
+function currencySymbol(currency: string): string {
+  return currency === "EUR" ? "€" : "$";
+}
+
+/** Format one price, e.g. `$0.0136` or `€0.007`. Sub-10-cent prices get more
+ *  decimals so a cheap machine doesn't collapse to `$0.01` or `$0.00`. */
+export function formatEphemeralPrice(amount: number, currency = "USD"): string {
+  const sym = currencySymbol(currency);
+  const digits = amount < 0.1 ? 4 : 2;
+  return `${sym}${amount.toFixed(digits)}`;
+}
+
+/** The one-line cost hint shown next to a chosen size: the hourly rate plus the
+ *  estimated ceiling for the selected TTL. Returns "" when we have no price for
+ *  the size, so callers can render it unconditionally. */
+export function ephemeralCostHint(
+  size: ProviderSize | undefined,
+  ttlMinutes: number | undefined,
+  currency = "USD",
+): string {
+  const rate = size?.pricePerHour;
+  if (!rate || rate <= 0) return "";
+  const perHour = `≈ ${formatEphemeralPrice(rate, currency)}/hr`;
+  if (!ttlMinutes || ttlMinutes <= 0) return perHour;
+  const hours = clampTtlMinutes(ttlMinutes) / 60;
+  return `${perHour} · up to ${formatEphemeralPrice(rate * hours, currency)} before it self-destructs`;
 }
 
 export interface ProviderAdapter {
   id: string;
   name: string;
+  /** ISO currency code the provider bills in — drives the cost-hint symbol.
+   *  Fly/AWS bill in USD, Hetzner in EUR. */
+  currency: string;
   regions: { id: string; label: string }[];
   defaultRegion: string;
   sizes: ProviderSize[];
@@ -821,6 +864,19 @@ interface HetznerSize {
   label: string;
   cores: number;
   memory: number;
+  pricePerHour?: number;
+}
+
+/** Pull an indicative hourly gross price (EUR) from a Hetzner server_type's
+ *  per-location `prices` array. Region prices differ slightly; the first entry
+ *  is close enough for an at-a-glance hint. Returns undefined when absent. */
+function hetznerHourlyPrice(t: any): number | undefined {
+  const prices = Array.isArray(t?.prices) ? t.prices : [];
+  for (const p of prices) {
+    const gross = Number(p?.price_hourly?.gross);
+    if (Number.isFinite(gross) && gross > 0) return gross;
+  }
+  return undefined;
 }
 
 /**
@@ -862,6 +918,7 @@ function fetchHetznerSizes(exec: ExecFn, token: string): Promise<HetznerSize[]> 
           label: `${t.name} · ${t.cores} vCPU · ${t.memory} GB · ${t.disk} GB (${arch})`,
           cores: Number(t.cores) || 0,
           memory: Number(t.memory) || 0,
+          pricePerHour: hetznerHourlyPrice(t),
         });
       }
       const next = res.body?.meta?.pagination?.next_page;
@@ -898,6 +955,7 @@ function fetchHetznerAvailability(exec: ExecFn, token: string): Promise<Map<stri
 const hetzner: ProviderAdapter = {
   id: "hetzner",
   name: "Hetzner Cloud",
+  currency: "EUR",
   regions: [
     { id: "nbg1", label: "Nuremberg" },
     { id: "fsn1", label: "Falkenstein" },
@@ -909,16 +967,18 @@ const hetzner: ProviderAdapter = {
   // Only currently-orderable shared plans. The shared-Intel `cx` line (e.g.
   // cx22 = type id 104) was deprecated on 2026-01-01 and is intentionally
   // omitted — ordering it returns HTTP 422. cpx = AMD x86, cax = Arm64.
+  // Prices are indicative hourly gross (EUR) for the cost hint; the live
+  // `listSizes` fetch below overrides them with the token's real prices.
   sizes: [
-    { id: "cpx11", label: "cpx11 · 2 vCPU · 2 GB · 40 GB (AMD x86)" },
-    { id: "cpx21", label: "cpx21 · 3 vCPU · 4 GB · 80 GB (AMD x86)" },
-    { id: "cpx31", label: "cpx31 · 4 vCPU · 8 GB · 160 GB (AMD x86)" },
-    { id: "cpx41", label: "cpx41 · 8 vCPU · 16 GB · 240 GB (AMD x86)" },
-    { id: "cpx51", label: "cpx51 · 16 vCPU · 32 GB · 360 GB (AMD x86)" },
-    { id: "cax11", label: "cax11 · 2 vCPU · 4 GB · 40 GB (Arm64)" },
-    { id: "cax21", label: "cax21 · 4 vCPU · 8 GB · 80 GB (Arm64)" },
-    { id: "cax31", label: "cax31 · 8 vCPU · 16 GB · 160 GB (Arm64)" },
-    { id: "cax41", label: "cax41 · 16 vCPU · 32 GB · 320 GB (Arm64)" },
+    { id: "cpx11", label: "cpx11 · 2 vCPU · 2 GB · 40 GB (AMD x86)", pricePerHour: 0.007 },
+    { id: "cpx21", label: "cpx21 · 3 vCPU · 4 GB · 80 GB (AMD x86)", pricePerHour: 0.013 },
+    { id: "cpx31", label: "cpx31 · 4 vCPU · 8 GB · 160 GB (AMD x86)", pricePerHour: 0.026 },
+    { id: "cpx41", label: "cpx41 · 8 vCPU · 16 GB · 240 GB (AMD x86)", pricePerHour: 0.049 },
+    { id: "cpx51", label: "cpx51 · 16 vCPU · 32 GB · 360 GB (AMD x86)", pricePerHour: 0.099 },
+    { id: "cax11", label: "cax11 · 2 vCPU · 4 GB · 40 GB (Arm64)", pricePerHour: 0.006 },
+    { id: "cax21", label: "cax21 · 4 vCPU · 8 GB · 80 GB (Arm64)", pricePerHour: 0.012 },
+    { id: "cax31", label: "cax31 · 8 vCPU · 16 GB · 160 GB (Arm64)", pricePerHour: 0.024 },
+    { id: "cax41", label: "cax41 · 16 vCPU · 32 GB · 320 GB (Arm64)", pricePerHour: 0.048 },
   ],
   // x86, 4 GB — closest drop-in for the retired cx22, and x86 avoids the
   // Arm-compat pitfalls of the cax line for Docker images and binaries.
@@ -942,7 +1002,7 @@ const hetzner: ProviderAdapter = {
     }
     return [...scoped]
       .sort((a, b) => a.cores - b.cores || a.memory - b.memory || a.id.localeCompare(b.id))
-      .map(({ id, label }) => ({ id, label }));
+      .map(({ id, label, pricePerHour }) => ({ id, label, pricePerHour }));
   },
   async provision({ exec, token, config, userData }) {
     const name = `bivy-${config.slug}`;
@@ -1047,6 +1107,7 @@ function flyInit(opts: BootstrapOpts): {
 const fly: ProviderAdapter = {
   id: "fly",
   name: "Fly.io",
+  currency: "USD",
   regions: [
     { id: "iad", label: "Ashburn, VA" },
     { id: "sjc", label: "San Jose" },
@@ -1056,11 +1117,13 @@ const fly: ProviderAdapter = {
     { id: "nrt", label: "Tokyo" },
   ],
   defaultRegion: "iad",
+  // Indicative on-demand price/hour (USD) for the cost hint: Fly's shared-cpu
+  // compute plus the extra RAM. Fly bills per second while the machine runs.
   sizes: [
-    { id: "shared-1x-1gb", label: "shared · 1 vCPU · 1 GB" },
-    { id: "shared-1x-2gb", label: "shared · 1 vCPU · 2 GB" },
-    { id: "shared-2x-4gb", label: "shared · 2 vCPU · 4 GB" },
-    { id: "shared-4x-8gb", label: "shared · 4 vCPU · 8 GB" },
+    { id: "shared-1x-1gb", label: "shared · 1 vCPU · 1 GB", pricePerHour: 0.009 },
+    { id: "shared-1x-2gb", label: "shared · 1 vCPU · 2 GB", pricePerHour: 0.0136 },
+    { id: "shared-2x-4gb", label: "shared · 2 vCPU · 4 GB", pricePerHour: 0.0273 },
+    { id: "shared-4x-8gb", label: "shared · 4 vCPU · 8 GB", pricePerHour: 0.0546 },
   ],
   defaultSize: "shared-1x-2gb",
   async provision({ exec, token, config, userData, bootstrap }) {
@@ -1509,18 +1572,21 @@ const AWS_REGIONS = [
 // family — matches the Ubuntu amd64 AMI resolved via SSM above. `listSizes`
 // narrows this to whatever DescribeInstanceTypes confirms is actually
 // orderable in the chosen region, same live-catalog pattern as Hetzner.
+// Indicative on-demand price/hour (USD, us-east-1) for the cost hint. Real
+// price varies by region; this is close enough for an at-a-glance estimate.
 const AWS_SIZES: ProviderSize[] = [
-  { id: "t3.micro", label: "t3.micro · 2 vCPU · 1 GB" },
-  { id: "t3.small", label: "t3.small · 2 vCPU · 2 GB" },
-  { id: "t3.medium", label: "t3.medium · 2 vCPU · 4 GB" },
-  { id: "t3.large", label: "t3.large · 2 vCPU · 8 GB" },
-  { id: "t3.xlarge", label: "t3.xlarge · 4 vCPU · 16 GB" },
-  { id: "t3.2xlarge", label: "t3.2xlarge · 8 vCPU · 32 GB" },
+  { id: "t3.micro", label: "t3.micro · 2 vCPU · 1 GB", pricePerHour: 0.0104 },
+  { id: "t3.small", label: "t3.small · 2 vCPU · 2 GB", pricePerHour: 0.0208 },
+  { id: "t3.medium", label: "t3.medium · 2 vCPU · 4 GB", pricePerHour: 0.0416 },
+  { id: "t3.large", label: "t3.large · 2 vCPU · 8 GB", pricePerHour: 0.0832 },
+  { id: "t3.xlarge", label: "t3.xlarge · 4 vCPU · 16 GB", pricePerHour: 0.1664 },
+  { id: "t3.2xlarge", label: "t3.2xlarge · 8 vCPU · 32 GB", pricePerHour: 0.3328 },
 ];
 
 const aws: ProviderAdapter = {
   id: "aws",
   name: "AWS EC2",
+  currency: "USD",
   regions: AWS_REGIONS,
   defaultRegion: "us-east-1",
   sizes: AWS_SIZES,
@@ -1539,12 +1605,15 @@ const aws: ProviderAdapter = {
       return AWS_SIZES; // best-effort — keep the static list rather than failing the picker
     }
     const rows = xmlChildren(xmlChild(xml, "instanceTypeSet"), "item")
-      .map((item) => {
+      .map((item): ProviderSize | null => {
         const id = xmlChild(item, "instanceType")?.text || "";
         const vcpus = xmlChild(xmlChild(item, "vCpuInfo"), "defaultVCpus")?.text;
         const memMib = xmlChild(xmlChild(item, "memoryInfo"), "sizeInMiB")?.text;
         const gb = memMib ? Math.round(Number(memMib) / 1024) : undefined;
-        return id ? { id, label: `${id} · ${vcpus ?? "?"} vCPU · ${gb ?? "?"} GB` } : null;
+        // EC2's DescribeInstanceTypes carries no pricing, so carry the static
+        // indicative price across by instance-type id for the cost hint.
+        const pricePerHour = AWS_SIZES.find((s) => s.id === id)?.pricePerHour;
+        return id ? { id, label: `${id} · ${vcpus ?? "?"} vCPU · ${gb ?? "?"} GB`, pricePerHour } : null;
       })
       .filter((r): r is ProviderSize => Boolean(r));
     return rows.length ? rows : AWS_SIZES;
@@ -1854,12 +1923,23 @@ export async function destroyEphemeralMachine(
 ): Promise<void> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const adapter = ephemeralAdapter(machine.provider);
-  const token = adapter ? await deps.keys.getToken(machine.provider) : "";
-  if (adapter && token) {
+  if (adapter) {
+    const token = await deps.keys.getToken(machine.provider);
+    // No token on this device: we can't authenticate the teardown. Keep the
+    // record and tell the user how to fix it — dropping it here would strand a
+    // machine that may still be running and billing, with no way to reach it.
+    if (!token) {
+      throw new Error(`Add the ${adapter.name} token on this device to destroy this machine.`);
+    }
     try {
       await adapter.destroy({ exec: deps.exec, token, machine });
-    } catch {
-      /* still forget it locally + unenroll below */
+    } catch (e) {
+      // Provider teardown failed (expired token, provider outage, rate limit).
+      // Keep the local record so the machine stays listed and the user can
+      // retry — silently forgetting it would leave a live, billing machine
+      // orphaned. The TTL self-shutdown remains the eventual backstop.
+      const detail = e instanceof Error ? e.message : String(e);
+      throw new Error(`Couldn't destroy this machine at ${adapter.name}: ${detail}. It's still listed — try again in a moment.`);
     }
   }
   await deps.machines.remove(machine.id);

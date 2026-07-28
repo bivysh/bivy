@@ -121,11 +121,11 @@ export function ConnectRunner({
               </span>
               <div className="connect-option-copy">
                 <h3>No machine handy?</h3>
-                <p>Spin up an ephemeral cloud server with your own provider token. It self-destructs after its TTL. Free plan included.</p>
+                <p>Spin up a temporary cloud machine with your own Fly.io, Hetzner, or AWS token. It self-destructs after its time limit. Bivy adds no fee — you pay only your provider for the minutes it runs.</p>
               </div>
             </div>
             <button type="button" className="btn primary connect-option-cta" onClick={onEphemeral}>
-              Launch ephemeral server
+              Launch ephemeral machine
             </button>
           </div>
         )}
