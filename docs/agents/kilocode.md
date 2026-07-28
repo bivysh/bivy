@@ -34,6 +34,21 @@ the generic `resume.template` primitive.
 - Launch flags are pinned against the documented CLI; override with
   `BIVY_KILOCODE_ARGS`.
 
+## ACP promotion (per-tool approvals)
+
+Kilo Code ships a native [Agent Client Protocol](https://agentclientprotocol.com)
+server (`kilo acp`), so it can be driven through Bivy's governed `ProtocolRuntime`
+instead of the `run --auto` pipe — earning **per-tool Approve/Deny** and
+`session/load` resume:
+
+```bash
+BIVY_KILOCODE_ACP=1 bivy run kilocode   # this agent, via ACP
+BIVY_PREFER_ACP=1 …                      # every ACP-capable agent, via ACP
+```
+
+Declared as data (`acp: { args: ["acp"] }`); off by default until validated for
+your version. See [acp.md](acp.md).
+
 ## Run it
 
 Pick Kilo Code in the agent picker, or:

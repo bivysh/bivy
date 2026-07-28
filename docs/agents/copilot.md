@@ -35,6 +35,22 @@ it; otherwise every prompt runs as a fresh process.
 - Governance is effect-level, not per-tool approval cards.
 - Launch flags are best-effort; override with `BIVY_COPILOT_ARGS`.
 
+## ACP promotion (per-tool approvals)
+
+The Copilot CLI ships an [Agent Client Protocol](https://agentclientprotocol.com)
+server (`copilot --acp`, public preview since Jan 2026), so it can be driven
+through Bivy's governed `ProtocolRuntime` instead of the `--allow-all-tools -p`
+pipe — earning **per-tool Approve/Deny** and `session/load` resume (which the
+pipe path lacks, since Copilot has no pinned by-id resume flag yet):
+
+```bash
+BIVY_COPILOT_ACP=1 bivy run copilot    # this agent, via ACP
+BIVY_PREFER_ACP=1 …                     # every ACP-capable agent, via ACP
+```
+
+Declared as data (`acp: { args: ["--acp"] }`); off by default until validated for
+your version. See [acp.md](acp.md).
+
 ## Run it
 
 Pick GitHub Copilot in the agent picker, or:

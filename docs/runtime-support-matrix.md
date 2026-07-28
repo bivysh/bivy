@@ -58,6 +58,23 @@ per-agent runtime code, matching the ProtocolRuntime resume primitive
 where the underlying CLI genuinely has no native "continue session `<id>`" form
 today (Aider, Crush, Hermes) or the adapter itself isn't there yet (OpenClaw).
 
+**ACP promotion** is the same data-driven idea applied to the *approvals*
+column. The `Approvals` values above describe each agent's **default** (pipe)
+path, where governance is effect-level (sandbox tier / FS-MCP-network). But any
+agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+can instead be driven through `bin/acp-shim.mjs` → the governed `ProtocolRuntime`
+— gaining **per-tool Approve/Deny** and **`session/load` resume** with zero
+per-agent code. The picker agents that ship a native ACP server declare it as
+data (an `acp` field in `CLI_AGENT_SPECS`) and are promoted with
+`BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all at once): **Gemini**
+(`--experimental-acp`), **Qwen Code** (`--experimental-acp` / newer `--acp`),
+**OpenCode** (`acp`), **Goose** (`acp`), **Kilo Code** (`acp`), **Cursor**
+(`acp`), **Cline** (`--acp`), and **GitHub Copilot** (`--acp`). Promotion is off
+by default until validated for your installed version; when on, the runtime
+honestly advertises Approvals + Resume in the picker. Agents with no first-party
+ACP mode (Aider, Amp, Crush, Continue, Grok) stay on the pipe until one ships.
+See [agents/acp.md](agents/acp.md).
+
 Beyond start/resume/model/approvals, the shared layer also surfaces, where the
 agent emits it: **token usage** (parsed from the agent's JSON — Gemini/Qwen/Goose
 today — via `getUsage`/`capabilities.usageReporting`), a **reasoning/thinking

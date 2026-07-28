@@ -52,6 +52,20 @@ contained as a fresh launch.
   cards — `toolInterception` is off for this runtime.
 - No package installs or session fork through this runtime.
 
+## ACP promotion (per-tool approvals)
+
+Gemini CLI speaks the [Agent Client Protocol](https://agentclientprotocol.com),
+so it can be driven through Bivy's governed `ProtocolRuntime` instead of the
+one-shot pipe — earning **per-tool Approve/Deny** and `session/load` resume:
+
+```bash
+BIVY_GEMINI_ACP=1 bivy run gemini     # this agent, via ACP
+BIVY_PREFER_ACP=1 …                    # every ACP-capable agent, via ACP
+```
+
+Declared as data (`acp: { args: ["--experimental-acp"] }`); off by default until
+validated for your version. See [acp.md](acp.md).
+
 ## Run it
 
 Pick Gemini CLI in the agent picker, or:
