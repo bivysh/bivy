@@ -55,6 +55,7 @@ run your first agent session.
 | [github-setup.md](github-setup.md) | Users connecting Bivy to their GitHub account/org so labeled issues dispatch agent runs — the multi-app connect walkthrough. |
 | [github-oauth-setup.md](github-oauth-setup.md) | Users connecting Bivy to GitHub for sign-in, and operators configuring the OAuth app (now parameterized for self-hosted domains). |
 | [github-work-queue.md](github-work-queue.md) | Users who want the full mechanics of how GitHub issues dispatch agent runs. |
+| [linear-work-queue.md](linear-work-queue.md) | Teams dispatching Linear issues to agent runs and GitHub pull requests. |
 | [slack-setup.md](slack-setup.md) | Users turning Slack slash commands into agent runs and pull requests. |
 | [webhook-recipes.md](webhook-recipes.md) | Users wiring CI, monitoring, or internal systems into Bivy's signed automation queue. |
 

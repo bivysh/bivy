@@ -372,6 +372,7 @@ export class PostgresStore implements MeshStore {
         body               TEXT,
         repo               TEXT,
         issue_number       INTEGER,
+        external_id        TEXT,
         url                TEXT,
         claimed_by_node_id TEXT,
         claimed_at         TIMESTAMPTZ,
@@ -385,6 +386,8 @@ export class PostgresStore implements MeshStore {
       -- Idempotency: a redelivered webhook (same delivery id) must not enqueue a
       -- second item. Partial unique index so items without a key are unconstrained.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
+      -- Provider-native identifier used for just-in-time issue retrieval (Linear).
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS external_id TEXT;
       -- GitHub App installation the node should mint a token for (flavor A).
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS installation_id TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS app_id TEXT;
@@ -1719,8 +1722,8 @@ export class PostgresStore implements MeshStore {
       url: input.url,
     };
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox, events)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::jsonb)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox, events)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -1733,6 +1736,7 @@ export class PostgresStore implements MeshStore {
         input.repo ?? null,
         input.issueNumber ?? null,
         input.url ?? null,
+        input.externalId ?? null,
         dedupeKey,
         collapseKey,
         input.defaultRouted ?? null,
@@ -2048,6 +2052,7 @@ function mapWorkItem(row: any): WorkItem {
     body: row.body ?? undefined,
     repo: row.repo ?? undefined,
     issueNumber: row.issue_number ?? undefined,
+    externalId: row.external_id ?? undefined,
     url: row.url ?? undefined,
     createdAt: new Date(row.created_at).toISOString(),
     claimedByNodeId: row.claimed_by_node_id ?? undefined,
@@ -2078,6 +2083,7 @@ function mapWorkItem(row: any): WorkItem {
 function triggerKindForSource(explicit: AutomationTriggerKind | undefined, source: string): AutomationTriggerKind {
   if (explicit) return explicit;
   if (source.startsWith("github:")) return "github";
+  if (source.startsWith("linear:")) return "webhook";
   if (source === "slack") return "slack";
   if (source === "manual") return "manual";
   return "webhook";

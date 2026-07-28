@@ -95,6 +95,7 @@ import {
   type GitHubTaskConfig,
   type GitHubIssue,
 } from "./github-tasks.js";
+import { buildLinearTaskPrompt, getLinearIssue, linearBranchName } from "./linear-tasks.js";
 import { PairingStore } from "./device-registry.js";
 import { IntegrationManager } from "./integrations/index.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
@@ -4798,6 +4799,38 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       if (item.url) issue.url = item.url;
     }
     await runIssueTask(cfg, issue, { runtimeId: item.runtimeId, model: item.model, onEvidence: report });
+    return;
+  }
+  if (item.source === "linear:issue" && item.externalId) {
+    const apiKey = process.env.BIVY_LINEAR_API_KEY?.trim();
+    const repoSlug = item.repo || process.env.BIVY_LINEAR_REPO?.trim();
+    if (!apiKey) throw new Error("no Linear API key available (set BIVY_LINEAR_API_KEY)");
+    if (!repoSlug) throw new Error("no repository mapped for Linear work (set BIVY_LINEAR_REPO or add a repo:owner/name label)");
+    const issue = await getLinearIssue(apiKey, item.externalId);
+    if (!issue) throw new Error(`Linear issue ${item.externalId} is unavailable`);
+    const parsed = parseRepo(repoSlug);
+    if (!parsed) throw new Error(`Linear work item has an invalid repo "${repoSlug}"`);
+    const githubToken = await resolveGitHubToken();
+    if (!githubToken) throw new Error("no GitHub token available to clone the Linear issue repository");
+    const repoDir = await cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token: githubToken, root: reposRoot });
+    await fetchOrigin(repoDir);
+    const base = await resolveDefaultBaseRef(repoDir);
+    const branch = linearBranchName(issue.identifier);
+    const record = await createSession(repoDir, undefined, {
+      worktree: { branch, base },
+      makeActive: false,
+      source: "queue:linear:issue",
+      runtimeId: item.runtimeId || nodeConfiguredDefaultAgent(),
+      sandbox: normalizeSandboxTier(item.sandbox),
+      approvalMode: approvalModeFrom(item.approvalMode),
+    });
+    setSessionName(record, `${issue.identifier}: ${issue.title}`);
+    if (item.model) { try { await record.session.setModel("", item.model); } catch {} }
+    await report({ output: { sessionId: record.id, branch }, events: [{ at: new Date().toISOString(), kind: "branch", summary: "Linear issue working branch and session created.", ref: branch, url: issue.url }] });
+    await runSessionTurn(record, buildLinearTaskPrompt(issue));
+    await maybePushWorktreeBranch(record);
+    await maybeDetectPullRequest(record);
+    await report({ output: { sessionId: record.id, branch, prUrl: record.prUrl }, events: record.prUrl ? [{ at: new Date().toISOString(), kind: "pull_request", summary: "Pull request opened.", ref: branch, url: record.prUrl }] : undefined });
     return;
   }
   // Slack can target a GitHub repository (`/bivy in owner/repo ...`). Give that

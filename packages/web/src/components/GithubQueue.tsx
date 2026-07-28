@@ -51,13 +51,17 @@ function queueSessionMeta(source: string | undefined): string {
     if (rest === "slack") return "Slack";
     if (rest === "github:comment") return "GitHub @-mention";
     if (rest === "github:issue") return "GitHub issue";
+    if (rest === "linear:issue") return "Linear issue";
     return rest || "Queue";
   }
   return "";
 }
 
 function queueItemSourceLabel(source: string): string {
-  return source === "github:comment" ? "@-mention" : source === "github:issue" ? "labelled issue" : source;
+  if (source === "github:comment") return "GitHub @-mention";
+  if (source === "github:issue") return "GitHub labelled issue";
+  if (source === "linear:issue") return "Linear issue";
+  return source;
 }
 
 /**

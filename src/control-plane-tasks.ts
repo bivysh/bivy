@@ -29,12 +29,13 @@ export interface ControlPlaneTaskConfig {
 export interface WorkItem {
   id: string;
   label: string;
-  source: string; // "github:issue" | "github:comment" | "slack"
+  source: string; // "github:issue" | "github:comment" | "linear:issue" | "slack"
   status: string;
   title: string;
   body?: string;
   repo?: string; // "owner/repo"
   issueNumber?: number;
+  externalId?: string; // provider-native id, e.g. Linear issue UUID
   url?: string;
   runtimeId?: string; // agent/runtime override chosen via the queue "Run…" action
   model?: string; // model override chosen via the queue "Run…" action
@@ -67,6 +68,7 @@ export function resolveControlPlaneTaskConfig(
   // on GitHub configuration: Slack, signed webhooks, schedules, and manually
   // dispatched runs use the same queue and may be the only integration enabled.
   if (!relay?.controlPlaneUrl || !relay.enrollmentToken) return null;
+
   const base = (env.BIVY_GITHUB_LABEL?.trim() || "bivy");
   // The label the node serves for its own name, e.g. name "hetzner" → "bivy/hetzner".
   const nameLabel = nodeName?.trim() ? `${base}/${nodeName.trim()}` : undefined;

@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import {
   verifyGithubSignature,
+  verifyLinearSignature,
+  parseLinearIssueEvent,
   parseGithubIssueEvent,
   pickRoutingLabel,
   pickIssueRoutingLabel,
@@ -39,6 +41,19 @@ await test("github signature: accepts a correct sha256 hmac, rejects tampering",
   assert.equal(verifyGithubSignature(secret, body + "x", sig), false);
   assert.equal(verifyGithubSignature("wrong", body, sig), false);
   assert.equal(verifyGithubSignature(secret, body, undefined), false);
+});
+
+await test("linear signature and issue parse", () => {
+  const secret = "linear-secret";
+  const body = JSON.stringify({ type: "Issue", action: "update", data: { id: "uuid-1", identifier: "ENG-42", title: "Fix it", url: "https://linear.app/acme/issue/ENG-42", labels: [{ name: "bivy/laptop" }, { name: "repo:acme/widget" }] } });
+  const sig = createHmac("sha256", secret).update(body).digest("hex");
+  assert.equal(verifyLinearSignature(secret, body, sig), true);
+  assert.equal(verifyLinearSignature(secret, body + "x", sig), false);
+  assert.deepEqual(parseLinearIssueEvent(JSON.parse(body)), {
+    id: "uuid-1", identifier: "ENG-42", title: "Fix it", url: "https://linear.app/acme/issue/ENG-42",
+    labels: ["bivy/laptop", "repo:acme/widget"], repo: "acme/widget",
+  });
+  assert.equal(parseLinearIssueEvent({ type: "Issue", action: "remove", data: { id: "x", identifier: "ENG-1" } }), undefined);
 });
 
 await test("github issue parse: filters PRs/actions, keeps labels", () => {

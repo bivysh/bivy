@@ -199,6 +199,10 @@ with its own key and `@`-mention handle.
 
 See [`docs/github-work-queue.md`](docs/github-work-queue.md).
 
+## Linear work queue
+
+Apply `bivy` or `bivy/<node>` to a Linear issue to dispatch it to the same hosted queue. The node fetches issue content directly from Linear, works in an isolated GitHub worktree, and asks the agent to open a pull request. See [`docs/linear-work-queue.md`](docs/linear-work-queue.md).
+
 ## Development
 
 ```bash

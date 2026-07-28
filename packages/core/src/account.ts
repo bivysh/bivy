@@ -434,12 +434,13 @@ export async function setEphemeralQueueDefault(
 
 export interface GithubQueueItem {
   id: string;
-  source: string; // "github:issue" | "github:comment" | "slack"
+  source: string; // "github:issue" | "github:comment" | "linear:issue" | "slack"
   status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
   label: string;
   title: string;
   repo?: string;
   issueNumber?: number;
+  externalId?: string;
   url?: string;
   runtimeId?: string; // agent override set via the queue "Run…" action
   model?: string; // model override set via the queue "Run…" action

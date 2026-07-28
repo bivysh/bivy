@@ -433,6 +433,7 @@ export interface WorkItem {
   body?: string;
   repo?: string; // "owner/repo"
   issueNumber?: number;
+  externalId?: string; // provider-native id (for example a Linear issue UUID)
   url?: string;
   createdAt: string;
   claimedByNodeId?: string;
@@ -511,7 +512,7 @@ export type WorkItemInput = {
 export interface InboundHook {
   id: string;
   accountId: string;
-  kind: string; // "github" | "github_app" | "slack"
+  kind: string; // "github" | "github_app" | "linear" | "slack"
   secret: string;
   createdAt: string;
   // GitHub App metadata registered by the node at connect time (flavor A). The
