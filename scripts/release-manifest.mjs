@@ -10,7 +10,7 @@
 // pure function so it can be unit-tested without running the full release build.
 
 /** Scripts meaningful in a packaged install — they invoke only shipped bin/ + dist/. */
-export const KEEP_SCRIPTS = ["setup", "bivy", "start", "dev", "relay:setup"];
+export const KEEP_SCRIPTS = ["setup", "bivy", "start", "dev", "relay:setup", "postinstall"];
 
 /** dependencies present only for the monorepo's mobile app; the node doesn't need them. */
 export const DROP_DEPENDENCIES = ["expo", "react", "react-native"];

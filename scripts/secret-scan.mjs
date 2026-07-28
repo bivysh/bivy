@@ -7,7 +7,12 @@ import fs from "node:fs";
 const patterns = [
   { name: "OpenAI/Anthropic-style API key", re: /\b(?:sk-ant|sk-proj|sk-live|sk_test|sk-[A-Za-z0-9])[A-Za-z0-9_-]{16,}\b/g },
   { name: "GitHub token", re: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g },
-  { name: "Stripe key", re: /\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
+  { name: "npm token", re: /\bnpm_[A-Za-z0-9]{30,}\b/g },
+  { name: "GitLab token", re: /\bglpat-[A-Za-z0-9_-]{20,}\b/g },
+  { name: "AWS access key id", re: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g },
+  { name: "Google API key", re: /\bAIza[A-Za-z0-9_-]{30,}\b/g },
+  { name: "Slack token", re: /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/g },
+  { name: "Stripe key", re: /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
   { name: "Resend key", re: /\bre_[A-Za-z0-9_]{20,}\b/g },
   { name: "Private key", re: /-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/g },
 ];
@@ -20,7 +25,7 @@ const findings = [];
 // marks it as a fixture. Checking only the matched substring misses cases like
 // `placeholder="-----BEGIN RSA PRIVATE KEY-----"`, where the giveaway is the
 // surrounding context rather than the match.
-const BENIGN = /change-me|example|placeholder|fixture|dummy|sample|test-secret|devsecret|dev-relay-secret|ABCDEFGHIJKLMNOPQRSTUVWXYZ/i;
+const BENIGN = /change-me|example|placeholder|fixture|dummy|sample|test-secret|devsecret|dev-relay-secret|ABCDEFGHIJKLMNOP/i;
 const CONTEXT = 48;
 
 function scanText(source, text) {

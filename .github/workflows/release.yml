@@ -52,17 +52,33 @@ jobs:
     name: Publish to npm and create the GitHub release
     needs: ci
     runs-on: ubuntu-latest
+    # The release environment requires a maintainer approval and is also part of
+    # npm's trusted-publisher identity. A tag push alone cannot publish.
+    environment: release
     permissions:
       contents: write # to create the GitHub release
       id-token: write # OIDC: authenticates the trusted publish and signs provenance
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.19.0'
           cache: npm
           registry-url: 'https://registry.npmjs.org'
+
+      # Refuse a tag made from an unmerged side commit. This catches accidental
+      # local tagging and prevents a write-capable account from publishing code
+      # that never passed through main's protected PR path.
+      - name: Verify release commit is on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "::error::Release tag must point to a commit contained in main." >&2
+            exit 1
+          }
 
       # Trusted publishing needs npm >= 11.5.1; Node 22.19.0 (pinned repo-wide
       # in package.json engines / ci.yml) bundles an older npm. Upgrade just
@@ -98,6 +114,11 @@ jobs:
             fi
           done
 
+      # Validate release notes BEFORE the irreversible publish. A missing
+      # CHANGELOG section must not leave npm published with no GitHub release.
+      - name: Extract CHANGELOG section for this tag
+        run: node scripts/extract-changelog.mjs "$GITHUB_REF_NAME" > release-notes.md
+
       # No token: npm authenticates this publish via the job's OIDC identity
       # against the trusted publisher configured for the `bivy` package, and
       # attaches the provenance attestation automatically as part of that --
@@ -106,9 +127,6 @@ jobs:
       # so the script needs no change to support either auth path.
       - name: Publish to npm
         run: npm run publish:npm
-
-      - name: Extract CHANGELOG section for this tag
-        run: node scripts/extract-changelog.mjs "$GITHUB_REF_NAME" > release-notes.md
 
       # Use the preinstalled `gh` CLI rather than another third-party action --
       # `contents: write` (above) is all it needs to create a release.
