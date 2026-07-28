@@ -17,6 +17,8 @@ const cases: [string, string][] = [
   ["Error: overloaded_error, please retry", "rate_limited"],
   ["Your credit balance is too low to run this request", "credits_exhausted"],
   ["402 Payment Required: quota exceeded for this month", "credits_exhausted"],
+  ["You've hit your limit · resets later today", "credits_exhausted"],
+  ["Session limit reached; try later", "credits_exhausted"],
   ["This model's maximum context length is 200000 tokens", "context_overflow"],
   ["prompt is too long: 250000 tokens", "context_overflow"],
   ["unexpected status 401 Unauthorized", "auth_failed"],
@@ -65,6 +67,12 @@ check("attaches retryAfterMs to a rate-limit classification", () => {
 
 check("parses an ISO reset timestamp", () => {
   assert.equal(parseResetsAt("quota resets_at 2026-07-27T18:00:00Z"), "2026-07-27T18:00:00Z");
+});
+
+check("attaches a reset timestamp to a session-limit classification", () => {
+  const c = classifyFailure("You've hit your limit; resets_at 2026-07-27T18:00:00Z");
+  assert.equal(c.condition, "credits_exhausted");
+  assert.equal(c.resetsAt, "2026-07-27T18:00:00Z");
 });
 
 check("does not invent recovery hints for unknown failures", () => {
