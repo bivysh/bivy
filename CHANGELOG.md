@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Ten more coding agents in the picker, and a general path to more capability.**
+  The agent selector gains nine of the most-used CLIs — Cursor, GitHub Copilot,
+  Grok, Amp, Auggie, Droid, Continue, Kilo Code, and Rovo Dev — plus a hidden
+  Codebuff runtime (no verified non-TTY headless mode upstream yet). All are wired
+  purely as data on the shared ProcessRuntime + CliParser path (resume/model
+  advertised only where the CLI actually drives it), and the selector now sorts
+  A→Z. Beyond breadth, five general levers push agents *up* the capability ladder
+  without per-agent code: (1) a unified agent manifest — one `CLI_AGENT_SPECS`
+  entry now drives the catalog, picker visibility (`hidden`), install
+  (`cliInstallSpec`, shared with the server auto-installer), and the terminal CLI
+  (`bin/agent-manifest.json`, sync-tested); (2) **MCP tool approvals**
+  (`BIVY_MCP_PROXY`) — an agent's MCP `tools/call`s get real Approve/Deny via the
+  same guardian path as native interception; (3) **tolerant structured parsers**
+  (`generic-stream-json` / `generic-json`) that add transcript fidelity opt-in
+  (`BIVY_AGENT_STRUCTURED=1`) and never lose output; (4) **capability probing**
+  (`BIVY_AGENT_PROBE=1`) that runs `<cli> --help` and downgrades any resume/model
+  capability the installed binary no longer evidences; and (5) a **general ACP
+  adapter** (`bin/acp-shim.mjs`, runtime `acp`) that drives any Agent Client
+  Protocol agent through the governed ProtocolRuntime for per-tool approvals,
+  streaming, and resume — the preferred way to wrap agents that speak it, with
+  per-agent promotion as data (Gemini CLI declares `acp` and promotes via
+  `BIVY_GEMINI_ACP=1`; `BIVY_PREFER_ACP=1` promotes all ACP-capable agents,
+  honestly gaining Approvals + Resume). See `docs/runtime-support-matrix.md` and
+  `docs/agents/`.
+
 - **Privacy-safe run evidence and outcome reports** — every automation run
   (GitHub issue/comment, Slack, manual, or scheduled) now carries a structured,
   allowlisted evidence record on top of its routing/status: why this node/

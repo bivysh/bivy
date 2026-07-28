@@ -8,7 +8,7 @@ import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypt
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
-import { listRuntimes, catalogRuntimes, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { listRuntimes, catalogRuntimes, cliInstallSpec, isCliAgentId, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController } from "./policy/session-reroute.js";
@@ -746,67 +746,34 @@ async function maybeNotifyBivyUpdate(record: SessionRecord) {
 type RuntimeInstallSpec = { id: string; command: string; args: string[]; cwd: string; displayCommand?: string };
 
 function runtimeInstallSpec(requested?: string): RuntimeInstallSpec | undefined {
-  const id = String(requested ?? "").trim().toLowerCase();
-  const npmGlobalArgs = (pkg: string) => ["install", "--global", "--prefix", userLocalPrefix, pkg];
-  const npmGlobalDisplay = (pkg: string) => `npm install --global --prefix ${userLocalPrefix} ${pkg}`;
-  if (id === "claude" || id === "claude-code" || id === "claude-code-sdk") {
+  let id = String(requested ?? "").trim().toLowerCase();
+  // Normalize a few historical aliases to their canonical runtime id.
+  const alias: Record<string, string> = {
+    "open-code": "opencode",
+    "gemini-cli": "gemini",
+    "qwen-code": "qwen",
+    "open-claw": "openclaw",
+    claude: "claude-code-sdk",
+    "claude-code": "claude-code-sdk",
+  };
+  id = alias[id] ?? id;
+
+  // Claude Code SDK is a node dependency installed into the repo (not a global
+  // CLI), and OpenClaw is a phase-1 adapter that isn't a CLI_AGENT_SPECS entry —
+  // both stay bespoke. Everything else derives from the agent's structured
+  // `install` descriptor via cliInstallSpec (the SAME source the catalog "Install"
+  // button reads), so there's a single install definition per agent, not two.
+  if (id === "claude-code-sdk") {
     return { id: "claude-code-sdk", command: "npm", args: ["install", "@anthropic-ai/claude-agent-sdk"], cwd: repoRoot };
   }
-  if (id === "codex") {
-    return { id: "codex", command: "npm", args: npmGlobalArgs("@openai/codex"), cwd: repoRoot, displayCommand: npmGlobalDisplay("@openai/codex") };
+  if (id === "openclaw") {
+    return { id: "openclaw", command: "npm", args: ["install", "--global", "--prefix", userLocalPrefix, "openclaw"], cwd: repoRoot, displayCommand: `npm install --global --prefix ${userLocalPrefix} openclaw` };
   }
-  if (id === "opencode" || id === "open-code") {
-    return { id: "opencode", command: "npm", args: npmGlobalArgs("opencode-ai"), cwd: repoRoot, displayCommand: npmGlobalDisplay("opencode-ai") };
-  }
-  if (id === "hermes") {
-    // The bare `hermes` npm package is segmentio/hermes ("Messenger of the gods"),
-    // an unrelated abandoned 2015 lib — not the agent. `hermes-agent` is the AI
-    // agent CLI and ships the `hermes` bin this runtime launches.
-    return { id: "hermes", command: "npm", args: npmGlobalArgs("hermes-agent"), cwd: repoRoot, displayCommand: npmGlobalDisplay("hermes-agent") };
-  }
-  if (id === "openclaw" || id === "open-claw") {
-    return { id: "openclaw", command: "npm", args: npmGlobalArgs("openclaw"), cwd: repoRoot, displayCommand: npmGlobalDisplay("openclaw") };
-  }
-  if (id === "aider") {
-    // Some node images ship a python3 without pip ("No module named pip"), so
-    // bootstrap it via the stdlib ensurepip module first (best-effort) before the
-    // install. Routed through sh so the two steps can chain; the displayed command
-    // stays the plain pip line users recognize.
-    return {
-      id: "aider",
-      command: "sh",
-      args: ["-c", "python3 -m ensurepip --user >/dev/null 2>&1 || true; python3 -m pip install --user aider-chat"],
-      cwd: repoRoot,
-      displayCommand: "python3 -m pip install --user aider-chat",
-    };
-  }
-  if (id === "gemini" || id === "gemini-cli") {
-    return { id: "gemini", command: "npm", args: npmGlobalArgs("@google/gemini-cli"), cwd: repoRoot, displayCommand: npmGlobalDisplay("@google/gemini-cli") };
-  }
-  if (id === "qwen" || id === "qwen-code") {
-    return { id: "qwen", command: "npm", args: npmGlobalArgs("@qwen-code/qwen-code"), cwd: repoRoot, displayCommand: npmGlobalDisplay("@qwen-code/qwen-code") };
-  }
-  if (id === "cline") {
-    return { id: "cline", command: "npm", args: npmGlobalArgs("cline"), cwd: repoRoot, displayCommand: npmGlobalDisplay("cline") };
-  }
-  if (id === "crush") {
-    return { id: "crush", command: "npm", args: npmGlobalArgs("@charmland/crush"), cwd: repoRoot, displayCommand: npmGlobalDisplay("@charmland/crush") };
-  }
-  if (id === "goose") {
-    // `brew install block/tap/goose` ENOENTs on any node without Homebrew (i.e.
-    // every stock Linux node). Use Goose's official download_cli.sh instead — it
-    // works on Linux and macOS alike and honors GOOSE_BIN_DIR, so we drop the
-    // binary into the same ~/.local/bin that's already on PATH (userLocalPrefix)
-    // where commandAvailable("goose") looks. CONFIGURE=false skips the script's
-    // interactive provider setup.
-    const gooseBin = path.join(userLocalPrefix, "bin");
-    return {
-      id: "goose",
-      command: "sh",
-      args: ["-c", `mkdir -p "${gooseBin}" && curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false GOOSE_BIN_DIR="${gooseBin}" bash`],
-      cwd: repoRoot,
-      displayCommand: "curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash",
-    };
+  if (isCliAgentId(id)) {
+    const spec = cliInstallSpec(id, userLocalPrefix);
+    // No `install` descriptor (e.g. Rovo Dev's `acli`, installed out of band) →
+    // no allowlisted auto-install; the catalog shows the agent as external.
+    return spec ? { id, command: spec.command, args: spec.args, cwd: repoRoot, displayCommand: spec.display } : undefined;
   }
   return undefined;
 }

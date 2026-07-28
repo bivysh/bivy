@@ -19,8 +19,23 @@ what's hidden from the picker — see
 | [Aider](aider.md) | Mixed | **No** |
 | [Cline](cline.md) | Agent | Yes (best-effort flags) |
 | [Crush](crush.md) | Agent | **No** |
+| [Cursor](cursor.md) | Agent | Yes |
+| [GitHub Copilot](copilot.md) | Agent | **No** |
+| [Grok](grok.md) | Agent | **No** |
+| [Amp](amp.md) | Agent | Yes (threads) |
+| [Auggie](auggie.md) | Agent | **No** |
+| [Droid](droid.md) | Agent | **No** |
+| [Continue](continue.md) | Agent | **No** |
+| [Kilo Code](kilocode.md) | Agent | Yes |
+| [Rovo Dev](rovodev.md) | Agent | Yes |
 
-All ten share one mechanism worth knowing up front: whenever you sign in to a
+One more, [Codebuff](codebuff.md), is supported as a runtime (`BIVY_RUNTIME=codebuff`)
+but is **hidden from the picker**: its `codebuff` binary has no verified non-TTY
+headless mode yet (automation is via `@codebuff/sdk`), so a picker entry would
+hang on a pipe. It flips into the picker as a data-only change the moment a
+headless flag ships upstream.
+
+They all share one mechanism worth knowing up front: whenever you sign in to a
 model provider with `bivy login`, Bivy's vault forwards that credential to
 *every* agent process as the provider's conventional environment variable
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, …) each turn — not

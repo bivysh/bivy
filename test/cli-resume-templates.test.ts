@@ -128,6 +128,76 @@ await check("aider/crush: no built-in resume template (documented upstream gap)"
   assert.equal(crush.capabilities.resume, false, "crush has no native continue-by-id flag upstream");
 });
 
+// Second wave — exercise every newly-added CLI agent through the FULL dispatch
+// (makeRuntime → ProcessRuntime launch/resumeArgs) with a stub binary standing in
+// for the real CLI, so this runs in CI with none of them installed. Each case
+// asserts (a) the advertised resume capability, (b) the launched argv (fresh or,
+// for resume-capable agents opened with a session id, the resume form), and (c)
+// that the prompt lands as the trailing argument.
+delete process.env.BIVY_SANDBOX;
+const SECOND_WAVE = [
+  { id: "cursor", bin: "cursor-agent", resumable: true, expect: ["--force", "--resume=SID", "-p"] },
+  { id: "copilot", bin: "copilot", resumable: false, expect: ["--allow-all-tools", "-p"] },
+  { id: "grok", bin: "grok", resumable: false, expect: ["-p"] },
+  { id: "amp", bin: "amp", resumable: true, expect: ["threads", "continue", "SID", "-x"] },
+  { id: "auggie", bin: "auggie", resumable: false, expect: ["--quiet", "--print"] },
+  { id: "droid", bin: "droid", resumable: false, expect: ["exec", "--auto", "high"] },
+  { id: "continue", bin: "cn", resumable: false, expect: ["--auto", "-p"] },
+  { id: "kilocode", bin: "kilo", resumable: true, expect: ["run", "-s", "SID", "--auto"] },
+  { id: "rovodev", bin: "acli", resumable: true, expect: ["rovodev", "run", "--yolo", "--restore", "SID"] },
+  // Hidden from the picker, but must still be runnable via BIVY_RUNTIME=codebuff.
+  { id: "codebuff", bin: "codebuff", resumable: true, expect: ["--continue", "SID"] },
+] as const;
+
+for (const agent of SECOND_WAVE) {
+  await check(`${agent.id}: launches via the shared ProcessRuntime path (resume=${agent.resumable})`, async () => {
+    const argsFile = path.join(tmp, `${agent.id}-args.txt`);
+    writeStub(agent.bin, argsFile, ["done"]);
+
+    const runtime = makeRuntime({ runtime: agent.id, credsDir: tmp, piDir: tmp, sessionsDir: tmp });
+    assert.equal(runtime.capabilities.resume, agent.resumable, `${agent.id} resume capability should be ${agent.resumable}`);
+
+    const sessionId = `sess-${agent.id}`;
+    const { session } = await runtime.openSession({ workspace: tmp, sessionFile: sessionId });
+    await runToEnd(session);
+
+    const launched = fs.readFileSync(argsFile, "utf8");
+    for (const token of agent.expect) {
+      const needle = token.replace(/SID/g, sessionId);
+      assert.ok(launched.includes(needle), `${agent.id}: expected argv to include '${needle}', got: ${launched}`);
+    }
+    // The prompt ("hello", from runToEnd) is passed as the trailing argv argument.
+    assert.ok(/(^|\s)hello(\s|$)/.test(launched), `${agent.id}: prompt should be the trailing arg, got: ${launched}`);
+  });
+}
+
+// #3 — an agent whose structured JSON parser is unverified (spec.parserUnverified)
+// stays on the SAFE dumb-pipe path by default (a wrong flag can't regress it), but
+// flips to its JSON mode when an operator opts in with BIVY_AGENT_STRUCTURED=1.
+await check("amp: structured JSON mode is opt-in (dumb pipe by default, --stream-json under BIVY_AGENT_STRUCTURED=1)", async () => {
+  const defFile = path.join(tmp, "amp-default.txt");
+  writeStub("amp", defFile, ["hi"]);
+  const def = makeRuntime({ runtime: "amp", credsDir: tmp, piDir: tmp, sessionsDir: tmp });
+  const fresh = await def.createSession({ workspace: tmp });
+  await runToEnd(fresh.session);
+  const defaultArgs = fs.readFileSync(defFile, "utf8");
+  assert.ok(/(^|\s)-x(\s|$)/.test(defaultArgs), `default should still run -x, got: ${defaultArgs}`);
+  assert.ok(!/--stream-json/.test(defaultArgs), `default must NOT enable the unverified JSON flag, got: ${defaultArgs}`);
+
+  process.env.BIVY_AGENT_STRUCTURED = "1";
+  try {
+    const optFile = path.join(tmp, "amp-optin.txt");
+    writeStub("amp", optFile, ['{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}', '{"type":"result"}']);
+    const opt = makeRuntime({ runtime: "amp", credsDir: tmp, piDir: tmp, sessionsDir: tmp });
+    const s = await opt.createSession({ workspace: tmp });
+    await runToEnd(s.session);
+    const optArgs = fs.readFileSync(optFile, "utf8");
+    assert.ok(/--stream-json/.test(optArgs), `BIVY_AGENT_STRUCTURED=1 should enable --stream-json, got: ${optArgs}`);
+  } finally {
+    delete process.env.BIVY_AGENT_STRUCTURED;
+  }
+});
+
 await check("generic-cli: BIVY_AGENT_RESUME_TEMPLATE opts the escape hatch into the same primitive", () => {
   const priorCommand = process.env.BIVY_AGENT_COMMAND;
   const priorTemplate = process.env.BIVY_AGENT_RESUME_TEMPLATE;
