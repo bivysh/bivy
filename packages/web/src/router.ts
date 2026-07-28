@@ -27,6 +27,7 @@ export type SettingsView =
   | "models"
   | "voice"
   | "github"
+  | "linear"
   | "slack"
   | "queue"
   | "automations"
@@ -45,6 +46,7 @@ const SETTINGS_VIEWS: readonly SettingsView[] = [
   "models",
   "voice",
   "github",
+  "linear",
   "slack",
   "queue",
   "automations",
