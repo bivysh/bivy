@@ -83,13 +83,15 @@ Override the location with `BIVY_DATA_DIR`.
 ## The setup wizard
 
 `bivy setup` (run by the installer, or `npm run setup` in an existing checkout)
-picks sensible defaults for everything and asks at most two questions:
+picks sensible defaults for everything and asks two questions:
 
-- **Remote access** — hosted (recommended; one node is free), self-hosted (your
-  own control plane + relay), or local terminal only. The local option needs no
-  Bivy account and can be upgraded later with `bivy relay:setup`.
-- **Remote login** — for hosted/self-hosted only: GitHub sign-in (default) or an
-  email magic link.
+- **Remote access** — hosted (recommended; one node is free) or self-hosted,
+  pointing this node at your own control plane + relay,
+- **Remote login** — GitHub sign-in (default) or an email magic link.
+
+Enrollment is required: without a relay/control plane, Bivy adds nothing over
+running the local agent CLI directly. If enrollment fails, setup can retry and
+will not install the background service until it succeeds.
 
 Everything else is automatic and changeable later in Settings: a dedicated
 `~/bivy-workspace` folder and local port, Pi as the default agent (other
