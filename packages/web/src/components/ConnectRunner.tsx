@@ -121,7 +121,7 @@ export function ConnectRunner({
               </span>
               <div className="connect-option-copy">
                 <h3>Launch a temporary cloud runner</h3>
-                <p>Fastest if you don't want to install anything. Add a model key, optionally connect GitHub, then launch with your own Fly.io, Hetzner, or AWS token. Bivy adds no fee.</p>
+                <p>Fastest if you don't want to install anything. Connect GitHub, add a model key, then launch with your own Fly.io, Hetzner, or AWS token. Bivy adds no fee.</p>
               </div>
             </div>
             <button type="button" className="btn primary connect-option-cta" onClick={onEphemeral}>
