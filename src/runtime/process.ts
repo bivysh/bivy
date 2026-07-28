@@ -3,6 +3,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { stripAnsi } from "./ansi.js";
 import { buildAgentCredentialEnv } from "./credentials.js";
 import { egressEnv } from "../harness/egress.js";
 import { depCacheEnv } from "../harness/dep-cache.js";
@@ -94,7 +95,10 @@ export interface ProcessRuntimeOptions {
    * Bivy can surface a clear, actionable message instead of spawning a process
    * that dies with an opaque upstream 401. Returning undefined = proceed.
    */
-  preflight?: (env: Record<string, string | undefined>) => string | undefined;
+  preflight?: (
+    env: Record<string, string | undefined>,
+    ctx: { provider?: string },
+  ) => string | undefined;
   /**
    * Optional async preparation, run each prompt after credentials are resolved
    * but before the preflight and spawn. Returns an env patch merged into both —
@@ -400,7 +404,10 @@ class ProcessSession implements RuntimeSession {
     // clear, actionable error instead of spawning a subprocess that dies with an
     // opaque upstream 401 (e.g. Codex's "unexpected status 401 Unauthorized:
     // Missing bearer …" when no OpenAI key/login is present).
-    const preflightError = this.runtimeOptions.preflight?.({ ...process.env, ...this.runtimeOptions.env, ...credentialEnv, ...prepareEnv });
+    const preflightError = this.runtimeOptions.preflight?.(
+      { ...process.env, ...this.runtimeOptions.env, ...credentialEnv, ...prepareEnv },
+      { provider: this.currentModelProvider },
+    );
     if (preflightError) {
       this.streaming = false;
       const message = { role: "assistant", content: "", errorMessage: preflightError };
@@ -469,7 +476,7 @@ class ProcessSession implements RuntimeSession {
         startedMessage = true;
         this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
       }
-      this.emit({ type: "message_update", message: { role: "assistant", content: stdout } });
+      this.emit({ type: "message_update", message: { role: "assistant", content: stripAnsi(stdout) } });
     };
 
     child.stdout.on("data", (chunk: Buffer) => {
@@ -480,7 +487,7 @@ class ProcessSession implements RuntimeSession {
     });
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
-      this.emit({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: stderr.slice(-4000) } });
+      this.emit({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: stripAnsi(stderr.slice(-4000)) } });
     });
     child.on("error", (error) => {
       stderr += error.message;
@@ -501,8 +508,9 @@ class ProcessSession implements RuntimeSession {
         return;
       }
       const failed = code && code !== 0;
-      const content = stdout.trim() || (failed ? stderr.trim() : "");
-      const message = { role: "assistant", content, ...(failed ? { errorMessage: `Process exited with code ${code}${stderr ? `: ${stderr.trim()}` : ""}` } : {}) };
+      const content = stripAnsi(stdout.trim() || (failed ? stderr.trim() : ""));
+      const cleanStderr = stripAnsi(stderr.trim());
+      const message = { role: "assistant", content, ...(failed ? { errorMessage: `Process exited with code ${code}${cleanStderr ? `: ${cleanStderr}` : ""}` } : {}) };
       this.messages.push(message);
       if (!startedMessage) this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
       this.emit({ type: "message_end", message });
