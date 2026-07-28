@@ -65,6 +65,21 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
     ],
   },
   {
+    id: "sprites",
+    name: "Fly Sprites",
+    tokenLabel: "Sprites API token",
+    blurb: "A machine that remembers: suspends to ~$0 when idle and resumes with everything intact. Reopen the session to wake it.",
+    steps: [
+      "Sign in at sprites.dev and open your account page.",
+      "Create an API token (or run `sprite org auth` in the Sprites CLI).",
+      "Copy the token and paste it below. It stays on this device.",
+    ],
+    links: [
+      { label: "Sprites account & tokens", url: "https://sprites.dev/account" },
+      { label: "Sprites docs", url: "https://docs.sprites.dev/" },
+    ],
+  },
+  {
     id: "aws",
     name: "AWS EC2",
     tokenLabel: "Access key — paste as accessKeyId:secretAccessKey",
@@ -588,6 +603,7 @@ export const ALLOWED_HOSTS = [
   "api.hetzner.cloud",
   "api.machines.dev",
   "api.fly.io",
+  "api.sprites.dev",
   "ec2.us-east-1.amazonaws.com",
   "ec2.us-west-2.amazonaws.com",
   "ec2.eu-west-1.amazonaws.com",
@@ -820,6 +836,16 @@ export interface ProviderAdapter {
   provision(args: { exec: ExecFn; token: string; config: any; userData: string; bootstrap?: BootstrapOpts }): Promise<EphemeralMachine>;
   status(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<string>;
   destroy(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
+  /** True when the provider's machines suspend themselves to ~zero cost while
+   *  idle and resume with full state (Fly Sprites). Such a machine is kept —
+   *  never TTL-destroyed on finish — and is woken via `wake` before reconnect.
+   *  Absent/false for the destroy-when-done providers (Fly Machines/Hetzner/AWS). */
+  suspendsWhenIdle?: boolean;
+  /** Resume a suspended machine so it rejoins the relay and becomes reachable.
+   *  Only meaningful when `suspendsWhenIdle` — one allowlisted request that
+   *  forces the machine warm (for Sprites, starting its supervised `bivy`
+   *  service). Idempotent: safe to call on an already-running machine. */
+  wake?(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
 }
 
 function mapHetznerStatus(s: string): string {
@@ -1685,7 +1711,171 @@ const aws: ProviderAdapter = {
   },
 };
 
-const ADAPTERS: Record<string, ProviderAdapter> = { hetzner, fly, aws };
+// --- Fly Sprites: stateful sandboxes that suspend to ~zero when idle ---------
+//
+// Sprites (https://sprites.dev) are the "machines that remember" model: a
+// bearer-token REST API (like Fly/Hetzner) that creates a Linux box which
+// auto-SUSPENDS when idle — costing ~nothing — and RESUMES with its full
+// filesystem and memory intact. That's a different lifecycle from the other
+// providers: instead of destroy-when-done plus a TTL self-shutdown, a Sprite is
+// KEPT and simply woken again when the user reopens its session (see `wake`
+// below and the controller's resume-on-open wiring). There's no cloud-init;
+// Sprites are bootstrapped by registering the daemon as a supervised *service*
+// over the same REST API, which also gives a clean, single-request wake path
+// (start the service) that our HTTPS exec proxy can drive with no WebSocket.
+const SPRITES_HOST = "https://api.sprites.dev";
+const SPRITES_SERVICE = "bivy";
+
+const SPRITES_REGIONS = [
+  { id: "iad", label: "Ashburn, VA" },
+  { id: "sjc", label: "San Jose" },
+  { id: "ord", label: "Chicago" },
+  { id: "lhr", label: "London" },
+  { id: "fra", label: "Frankfurt" },
+  { id: "syd", label: "Sydney" },
+  { id: "nrt", label: "Tokyo" },
+];
+
+// A Sprites size is a (cpus, ram) pair rather than a named plan. Prices are
+// indicative USD/hr while ACTIVE; a suspended Sprite costs ~$0 (the UI notes
+// this via `suspendsWhenIdle`).
+const SPRITES_GUEST: Record<string, { cpus: number; ramMb: number }> = {
+  "2x4": { cpus: 2, ramMb: 4096 },
+  "4x8": { cpus: 4, ramMb: 8192 },
+  "8x8": { cpus: 8, ramMb: 8192 },
+  "8x16": { cpus: 8, ramMb: 16384 },
+};
+const SPRITES_SIZES: ProviderSize[] = [
+  { id: "2x4", label: "2 vCPU · 4 GB", pricePerHour: 0.06 },
+  { id: "4x8", label: "4 vCPU · 8 GB", pricePerHour: 0.115 },
+  { id: "8x8", label: "8 vCPU · 8 GB", pricePerHour: 0.16 },
+  { id: "8x16", label: "8 vCPU · 16 GB", pricePerHour: 0.22 },
+];
+
+function mapSpritesStatus(s: string): string {
+  const v = String(s || "").toLowerCase();
+  if (/(destroy|delet|gone)/.test(v)) return "gone";
+  if (/(cold|susp|sleep|stop|off|hibernat)/.test(v)) return "stopped";
+  if (/(run|warm|ready)/.test(v)) return "running";
+  return "starting"; // creating / new / pending / starting / unknown
+}
+
+/** The boot script the `bivy` Sprites service supervises. Writes the relay
+ *  enrollment from an env var (no separate file-API call), installs Bivy once
+ *  (persisted across suspends by the Sprite's own storage), then runs the daemon
+ *  in the foreground so the service supervisor keeps it alive and re-dials the
+ *  relay after each resume. */
+function bivySpritesServiceScript(installUrl: string): string {
+  return [
+    "set -e",
+    "mkdir -p /etc/bivy",
+    'printf %s "$BIVY_RELAY_JSON_B64" | base64 -d > /etc/bivy/relay.json',
+    "chmod 600 /etc/bivy/relay.json",
+    'export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin:$PATH"',
+    `command -v bivy >/dev/null 2>&1 || { apt-get update -qq; apt-get install -y -qq curl ca-certificates; curl -fsSL ${shq(installUrl)} | bash; }`,
+    "exec bivy start",
+  ].join("\n");
+}
+
+/** The env the `bivy` service runs with — relay enrollment (base64) plus the
+ *  same optional BIVY_* switches the other providers export. */
+function spritesServiceEnv(opts: BootstrapOpts): Record<string, string> {
+  const env: Record<string, string> = {
+    BIVY_DATA_DIR: "/etc/bivy",
+    BIVY_RELAY_JSON_B64: b64(utf8.encode(bivyRelayJson(opts))),
+  };
+  if (opts.repo) env.BIVY_REPO = opts.repo;
+  if (opts.hostedTasks) env.BIVY_GITHUB_HOSTED_TASKS = "1";
+  if (opts.nodeLabel) env.BIVY_NODE_LABEL = opts.nodeLabel;
+  if (opts.githubToken) env.BIVY_GITHUB_TOKEN = opts.githubToken;
+  return env;
+}
+
+const sprites: ProviderAdapter = {
+  id: "sprites",
+  name: "Fly Sprites",
+  currency: "USD",
+  suspendsWhenIdle: true,
+  regions: SPRITES_REGIONS,
+  defaultRegion: "iad",
+  sizes: SPRITES_SIZES,
+  defaultSize: "4x8",
+  async provision({ exec, token, config, bootstrap }) {
+    const name = `bivy-${config.slug}`;
+    const guest = SPRITES_GUEST[config.size as string] || SPRITES_GUEST[sprites.defaultSize] || { cpus: 4, ramMb: 8192 };
+    // 1. Create the sprite.
+    const created = await call(exec, {
+      method: "POST",
+      url: `${SPRITES_HOST}/v1/sprites`,
+      headers: { ...bearer(token), "content-type": "application/json" },
+      body: {
+        name,
+        config: { cpus: guest.cpus, ram_mb: guest.ramMb, region: config.region || sprites.defaultRegion },
+        labels: ["bivy"],
+      },
+    });
+    if (created.status >= 300 && created.status !== 409) throw new Error(providerError(created, "create sprite"));
+    if (!bootstrap) throw new Error("Sprites bootstrap missing");
+    const installUrl = bootstrap.installUrl || "https://bivy.sh/install.sh";
+    // 2. Register the daemon as a supervised service (PUT = create-or-replace).
+    const svc = await call(exec, {
+      method: "PUT",
+      url: `${SPRITES_HOST}/v1/sprites/${encodeURIComponent(name)}/services/${SPRITES_SERVICE}`,
+      headers: { ...bearer(token), "content-type": "application/json" },
+      body: { cmd: "bash", args: ["-lc", bivySpritesServiceScript(installUrl)], env: spritesServiceEnv(bootstrap) },
+    });
+    if (svc.status >= 300) throw new Error(providerError(svc, "register bivy service"));
+    // 3. Start the service — boots the daemon now, and is the same call `wake`
+    //    uses later to resume a suspended Sprite.
+    const started = await call(exec, {
+      method: "POST",
+      url: `${SPRITES_HOST}/v1/sprites/${encodeURIComponent(name)}/services/${SPRITES_SERVICE}/start`,
+      headers: bearer(token),
+    });
+    if (started.status >= 300) throw new Error(providerError(started, "start bivy service"));
+    return {
+      id: name,
+      provider: "sprites",
+      app: name,
+      name,
+      region: config.region || sprites.defaultRegion,
+      status: "starting",
+      ip: null,
+      createdAt: nowIso(),
+    };
+  },
+  async status({ exec, token, machine }) {
+    const res = await call(exec, {
+      method: "GET",
+      url: `${SPRITES_HOST}/v1/sprites/${encodeURIComponent(machine.app || machine.id)}`,
+      headers: bearer(token),
+    });
+    if (res.status === 404) return "gone";
+    if (res.status >= 300) throw new Error(providerError(res, "get sprite"));
+    return mapSpritesStatus(res.body?.status);
+  },
+  async destroy({ exec, token, machine }) {
+    const res = await call(exec, {
+      method: "DELETE",
+      url: `${SPRITES_HOST}/v1/sprites/${encodeURIComponent(machine.app || machine.id)}`,
+      headers: bearer(token),
+    });
+    if (res.status >= 300 && res.status !== 404) throw new Error(providerError(res, "delete sprite"));
+  },
+  async wake({ exec, token, machine }) {
+    // Starting the supervised service both wakes the suspended Sprite (any
+    // request routed to it resumes it at the edge) and ensures the daemon is
+    // running so it re-dials the relay. Idempotent on an already-running Sprite.
+    const res = await call(exec, {
+      method: "POST",
+      url: `${SPRITES_HOST}/v1/sprites/${encodeURIComponent(machine.app || machine.id)}/services/${SPRITES_SERVICE}/start`,
+      headers: bearer(token),
+    });
+    if (res.status >= 300 && res.status !== 404) throw new Error(providerError(res, "wake sprite"));
+  },
+};
+
+const ADAPTERS: Record<string, ProviderAdapter> = { hetzner, fly, aws, sprites };
 export function ephemeralAdapter(id: string): ProviderAdapter | null {
   return ADAPTERS[String(id || "").trim().toLowerCase()] || null;
 }
@@ -1949,4 +2139,27 @@ export async function destroyEphemeralMachine(
       headers: { authorization: `Bearer ${deps.store.s}` },
     }).catch(() => {});
   }
+}
+
+/** True when a provider's machines suspend themselves to ~zero cost while idle
+ *  and resume with full state (Fly Sprites). The lifecycle keeps such a machine
+ *  instead of TTL-destroying it, and wakes it via `wakeEphemeralMachine` before
+ *  reconnecting. */
+export function ephemeralProviderSuspendsWhenIdle(provider: string): boolean {
+  return ephemeralAdapter(provider)?.suspendsWhenIdle === true;
+}
+
+/** Resume a suspended machine so it rejoins the relay and becomes reachable
+ *  again — the device-driven wake behind "reopen the session to resume it".
+ *  No-op for providers that don't suspend (their machines are either online or
+ *  destroyed). Idempotent: safe to call on a machine that's already awake. */
+export async function wakeEphemeralMachine(
+  machine: EphemeralMachine,
+  deps: { exec: ExecFn; keys: EphemeralKeyStore },
+): Promise<void> {
+  const adapter = ephemeralAdapter(machine.provider);
+  if (!adapter?.wake) return;
+  const token = await deps.keys.getToken(machine.provider);
+  if (!token) throw new Error(`Add the ${adapter.name} token on this device to resume this machine.`);
+  await adapter.wake({ exec: deps.exec, token, machine });
 }

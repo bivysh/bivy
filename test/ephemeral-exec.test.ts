@@ -10,6 +10,7 @@ await assert.rejects(
 await assert.rejects(() => execEphemeralRequest({ url: "not a url" }), /Bad provider URL/);
 assert.ok(EPHEMERAL_ALLOWED_HOSTS.has("api.hetzner.cloud"));
 assert.ok(EPHEMERAL_ALLOWED_HOSTS.has("api.machines.dev"));
+assert.ok(EPHEMERAL_ALLOWED_HOSTS.has("api.sprites.dev"));
 assert.ok(EPHEMERAL_ALLOWED_HOSTS.has("ec2.us-east-1.amazonaws.com"));
 assert.ok(EPHEMERAL_ALLOWED_HOSTS.has("ssm.us-east-1.amazonaws.com"));
 
