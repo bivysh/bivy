@@ -244,6 +244,15 @@ export async function fetchAccountSessions(store: LocalStore, fetchImpl: typeof 
   return list as AccountSessionAdvert[];
 }
 
+export interface PlanPrice {
+  id: string;
+  currency: string;
+  unitAmount: number | null;
+  interval?: string;
+  intervalCount?: number;
+  label: string;
+}
+
 export interface AccountMe {
   account?: { email?: string; plan?: string };
   entitlements?: {
@@ -259,6 +268,7 @@ export interface AccountMe {
     weeklyRunLimit?: number;
     ephemeralEnabled?: boolean;
   };
+  pricing?: { pro?: PlanPrice; team?: PlanPrice };
   counts?: { nodes?: number; sessions?: number; devices?: number; runsThisWeek?: number };
   [k: string]: unknown;
 }
@@ -793,12 +803,6 @@ export async function logout(store: LocalStore, devicePublicKeyB64?: string, fet
     body: JSON.stringify(devicePublicKeyB64 ? { devicePublicKeyB64 } : {}),
   });
 }
-
-/** Display price for the Pro plan. The authoritative amount lives in Stripe
- *  (env STRIPE_PRICE_PRO on the control plane); this is the marketing label
- *  shown on in-app upgrade CTAs so users see the cost before the redirect.
- *  Keep it in sync with the pricing section on the marketing site. */
-export const PRO_PRICE_LABEL = "$15/mo";
 
 /** Start a Stripe checkout; returns the URL to redirect to. */
 export async function billingCheckout(store: LocalStore, plan = "pro", fetchImpl: typeof fetch = fetch): Promise<string> {

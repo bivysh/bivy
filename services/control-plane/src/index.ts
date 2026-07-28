@@ -66,6 +66,9 @@ function assertProductionConfig() {
   if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_WEBHOOK_SECRET) {
     problems.push("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set (webhooks would be unverifiable)");
   }
+  if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_PRICE_PRO) {
+    problems.push("STRIPE_PRICE_PRO is required when Stripe billing is enabled");
+  }
   if (!process.env.PUBLIC_CONTROL_PLANE_URL) {
     // Without a fixed public URL, baseUrl() falls back to the request's
     // Host/X-Forwarded-Host header — which an attacker controls. That header is
@@ -166,21 +169,15 @@ const vapidPrivateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY || process.env.VA
 const vapidSubject = process.env.WEB_PUSH_SUBJECT || "mailto:support@bivy.sh";
 const webPushEnabled = Boolean(vapidPublicKey && vapidPrivateKey);
 if (webPushEnabled) webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
-// Whether paid-plan entitlements are enforced (Bivy Cloud). Mirrors the relay's
-// flag (services/relay/src/index.ts). When it's off — the self-host / no-billing
-// default (see docs/self-host.md, ENFORCE_ENTITLEMENTS=0) — there is no paid tier
-// to gate against and every signed-in account is "free", so gating push on
-// `pushEnabled` would make Web Push impossible to use on a self-hosted stack even
-// with VAPID keys configured. Off ⇒ push is available to any account (still
-// requires VAPID keys / webPushEnabled); on ⇒ push stays gated to paid plans.
-const enforceEntitlements = process.env.ENFORCE_ENTITLEMENTS === "1";
-// Observe-only mode for the free automation cap: keep counting and reporting jobs (so the
-// UI still shows "used / limit" and ops can watch the real automation distribution),
-// but never actually block a run. Lets Bivy Cloud gather data and
-// tune the number/window before flipping enforcement on, without walling anyone
-// during the observation window. Only meaningful when entitlements are enforced;
-// self-host is unlimited either way.
-const observeRunLimitOnly = process.env.RUN_LIMIT_OBSERVE_ONLY === "1";
+// A Stripe-backed deployment is a billed hosted service, so entitlement
+// enforcement is always on there and cannot be accidentally disabled by a stale
+// environment flag. Self-hosted/no-billing stacks retain their explicit opt-in
+// behavior and remain unlimited by default.
+const enforceEntitlements = Boolean(stripe) || process.env.ENFORCE_ENTITLEMENTS === "1";
+// Observe-only mode is retained for no-billing staging: count and report jobs but
+// do not block them. A Stripe-backed deployment always hard-enforces, so a stale
+// staging flag cannot silently disable the paid plan boundary in production.
+const observeRunLimitOnly = !stripe && process.env.RUN_LIMIT_OBSERVE_ONLY === "1";
 const enforceRunLimit = enforceEntitlements && !observeRunLimitOnly;
 async function accountPushAllowed(accountId: string): Promise<boolean> {
   if (!enforceEntitlements) return true;
@@ -227,6 +224,57 @@ const stripePrices: Partial<Record<Plan, string>> = {
   pro: process.env.STRIPE_PRICE_PRO,
   team: process.env.STRIPE_PRICE_TEAM,
 };
+
+export interface PublicPlanPrice {
+  id: string;
+  currency: string;
+  unitAmount: number | null;
+  interval?: string;
+  intervalCount?: number;
+  label: string;
+}
+
+let planPriceCache: { expiresAt: number; value: Partial<Record<Plan, PublicPlanPrice>> } | undefined;
+
+function stripeAmountLabel(price: Stripe.Price): string {
+  if (price.unit_amount == null) return "Contact us";
+  const currency = price.currency.toUpperCase();
+  const fractionDigits = new Intl.NumberFormat("en-US", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
+  const amount = price.unit_amount / 10 ** fractionDigits;
+  const formatted = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: amount % 1 === 0 ? 0 : fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(amount);
+  const recurring = price.recurring;
+  if (!recurring) return formatted;
+  const count = recurring.interval_count;
+  const interval = recurring.interval === "month" ? "mo" : recurring.interval === "year" ? "yr" : recurring.interval;
+  return count === 1 ? `${formatted}/${interval}` : `${formatted}/${count} ${interval}`;
+}
+
+async function publicPlanPrices(): Promise<Partial<Record<Plan, PublicPlanPrice>>> {
+  if (!stripe) return {};
+  if (planPriceCache && planPriceCache.expiresAt > Date.now()) return planPriceCache.value;
+  const entries = await Promise.all(
+    Object.entries(stripePrices).map(async ([plan, id]) => {
+      if (!id) return undefined;
+      const price = await stripe.prices.retrieve(id);
+      return [plan as Plan, {
+        id: price.id,
+        currency: price.currency,
+        unitAmount: price.unit_amount,
+        interval: price.recurring?.interval,
+        intervalCount: price.recurring?.interval_count,
+        label: stripeAmountLabel(price),
+      } satisfies PublicPlanPrice] as const;
+    }),
+  );
+  const value = Object.fromEntries(entries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))) as Partial<Record<Plan, PublicPlanPrice>>;
+  planPriceCache = { expiresAt: Date.now() + 5 * 60_000, value };
+  return value;
+}
 
 // Plan ids arrive from two places whose version we do not control: the published
 // CLI (packages/core's billingCheckout) and the dev-mode billing webhook used by
@@ -957,6 +1005,7 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
       planUpdatedAt: account.planUpdatedAt,
     },
     entitlements: await store.entitlements(account.id),
+    pricing: await publicPlanPrices(),
     counts: {
       nodes: (await store.listNodes(account.id)).length,
       devices: await store.countPairedDevices(account.id),
@@ -2604,7 +2653,15 @@ app.post("/client/relay-ticket", asyncHandler(async (req, res) => {
   }
 }));
 
-// --- Billing (stub) -----------------------------------------------------
+// --- Billing ------------------------------------------------------------
+
+// Public plan prices are read from the configured Stripe Price objects rather
+// than duplicated in clients or the marketing site. The short cache avoids a
+// Stripe API request on every page load while still reflecting dashboard changes.
+app.get("/billing/plans", asyncHandler(async (_req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", process.env.MARKETING_SITE_URL ?? "https://bivy.sh");
+  res.json({ plans: await publicPlanPrices() });
+}));
 
 app.post("/billing/checkout", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;

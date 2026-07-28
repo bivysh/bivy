@@ -425,8 +425,8 @@ unauthenticated dev login enabled.
 | `RELAY_SHARD_URLS` | comma-separated URLs | falls back to `RELAY_PUBLIC_URL`, then `ws://localhost:4500` | Node→shard mapping is by hash of the node id |
 | `DATABASE_POOL_MAX` | integer ≥ 1 | `10` | |
 | `LINK_GRANT_TTL_MS` | integer ms | `2592000000` (30 days) | TTL of the device-linking grant minted from a pairing QR |
-| `ENFORCE_ENTITLEMENTS` | `1` | **off** | When off, plan gates do not apply. When on, interactive CLI/app sessions remain unlimited; free accounts get `FREE_WEEKLY_RUNS` (10) unattended automations per rolling 7-day window across GitHub, Slack, webhooks, and schedules, with one grace job before refusal. Paid plans have unlimited automation. |
-| `RUN_LIMIT_OBSERVE_ONLY` | `1` | **off** | Observe-only mode for the free automation cap (only meaningful with `ENFORCE_ENTITLEMENTS=1`). Automation jobs are counted and reported but never blocked, allowing the allowance to be tuned before enforcement. |
+| `ENFORCE_ENTITLEMENTS` | `1` | **off without Stripe; always on with Stripe** | Stripe-backed hosted deployments always enforce plan gates, regardless of this flag. On no-billing/self-hosted stacks this remains opt-in. Interactive CLI/app sessions remain unlimited; free accounts get `FREE_WEEKLY_RUNS` (10) unattended automations per rolling 7-day window across GitHub, Slack, webhooks, and schedules, with one grace job before refusal. Paid plans have unlimited automation. |
+| `RUN_LIMIT_OBSERVE_ONLY` | `1` | **off** | Observe-only mode for no-billing test/staging deployments with `ENFORCE_ENTITLEMENTS=1`. It is ignored when Stripe billing is configured, where the cap is always enforced. |
 
 ## Authentication
 
