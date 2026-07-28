@@ -105,6 +105,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Free interactive sessions are now unlimited; Pro meters the operations layer.**
+  The free rolling allowance now counts only unattended GitHub, Slack, webhook,
+  and scheduled jobs. CLI, phone, browser, and interactive ephemeral-runner
+  sessions no longer consume it. Free includes 10 automations per rolling seven
+  days; Pro keeps automation unlimited. This aligns pricing with the product's
+  differentiated queue rather than charging for basic remote control.
 - **Automations panel: node selector instead of free text, plus an ephemeral
   fallback toggle** — the generic webhook automations panel's "Default node"
   field used to be a plain text box you had to type a node's label into
@@ -126,6 +132,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Updated the bundled Pi runtime to 0.82.1 and pinned patched MCP/Hono
+  transitive releases, clearing the protobuf and MCP HTTP-server advisories from
+  the release tree. One upstream `brace-expansion` advisory remains
+  inside Pi's published shrinkwrap and is tracked pending an upstream package release.
 - The node no longer authorizes bare loopback callers (no token) by default on
   a host it detects as multi-user — every local account shares `127.0.0.1`, so
   loopback alone let any other OS user on a shared host drive the agent (shell

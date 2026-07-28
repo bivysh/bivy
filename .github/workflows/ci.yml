@@ -10,6 +10,12 @@ on:
   # before publishing instead of a hand-rolled subset that can drift from what
   # a PR actually has to pass.
   workflow_call:
+    inputs:
+      force_all:
+        description: Run every gated job regardless of changed-path filters (release tags).
+        required: false
+        type: boolean
+        default: false
 
 # Cancel superseded runs: a new push to the same branch/PR aborts the previous,
 # still-running CI so we don't pay for jobs' worth of runner time on a commit
@@ -86,7 +92,7 @@ jobs:
 
   core:
     needs: changes
-    if: needs.changes.outputs.root == 'true'
+    if: inputs.force_all || needs.changes.outputs.root == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -122,7 +128,7 @@ jobs:
   # docs-only PR doesn't also pull in the full lint/typecheck/test `core` job.
   docs-links:
     needs: changes
-    if: needs.changes.outputs.docs == 'true'
+    if: inputs.force_all || needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -139,7 +145,7 @@ jobs:
   # changing so neither loses coverage.
   services:
     needs: changes
-    if: needs.changes.outputs.relay == 'true' || needs.changes.outputs.control_plane == 'true'
+    if: inputs.force_all || needs.changes.outputs.relay == 'true' || needs.changes.outputs.control_plane == 'true'
     name: relay + control-plane
     runs-on: ubuntu-latest
     steps:
@@ -172,7 +178,7 @@ jobs:
   # only runs when the transport/pairing/service code it exercises changes.
   remote-e2e:
     needs: changes
-    if: needs.changes.outputs.e2e == 'true'
+    if: inputs.force_all || needs.changes.outputs.e2e == 'true'
     name: Remote path + pairing e2e
     runs-on: ubuntu-latest
     steps:

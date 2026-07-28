@@ -44,10 +44,10 @@ tokens** (`enr_…`). Both sent as `Authorization: Bearer …`.
 
 Defined in `src/store.ts` (`PLAN_ENTITLEMENTS`):
 
-- `free`: unlimited nodes and devices, push, hosted relay, work queue, and
-  ephemeral runners — capped only at 10 runs per rolling 7-day window.
-- `pro`: same features, no run cap.
-- `team`: same features, no run cap.
+- `free`: unlimited interactive sessions, nodes and devices, push, hosted relay,
+  work queue, ephemeral runners, and 10 unattended automations per rolling 7 days.
+- `pro`: same features, unlimited automation.
+- `team`: same features, unlimited automation.
 
 Entitlements are only enforced when `ENFORCE_ENTITLEMENTS=1` (Bivy Cloud);
 self-hosted stacks leave it off, so every feature is on for every account.

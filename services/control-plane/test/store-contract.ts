@@ -520,7 +520,7 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal((await store.enrollNode(acct.id, "n3", "Third")).node.id, "n3");
   });
 
-  await test("recordRunStart is idempotent and countRunStartsSince meters the daily cap", async (store) => {
+  await test("recordRunStart is idempotent and countRunStartsSince can scope automation", async (store) => {
     const acct = await store.findOrCreateAccount("contract-runs@example.com");
     const before = new Date(Date.now() - 60_000).toISOString();
     assert.equal(await store.countRunStartsSince(acct.id, before), 0);
@@ -533,6 +533,10 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(await store.replaceNodeSessions(acct.id, node.id, [{ sessionId: "s3", status: "idle" }]), 1);
     assert.equal(await store.replaceNodeSessions(acct.id, node.id, [{ sessionId: "s3", status: "working" }]), 0, "repeat advertise emits no new run");
     assert.equal(await store.countRunStartsSince(acct.id, before), 3, "advertised session counts once");
+    assert.equal(await store.countRunStartsSince(acct.id, before, "automation:"), 0, "interactive sessions do not consume automation allowance");
+    assert.equal(await store.recordRunStart(acct.id, "automation:job-1"), true);
+    assert.equal(await store.countRunStartsSince(acct.id, before, "automation:"), 1, "queued work consumes automation allowance");
+    assert.equal(await store.countRunStartsSince(acct.id, before), 4, "aggregate funnel still includes every source");
   });
 
   return passed;

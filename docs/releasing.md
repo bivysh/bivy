@@ -75,19 +75,25 @@ bumping the repo's pinned Node version just for that.
 
 npm can only configure a trusted publisher for a package that **already
 exists** — there's no equivalent of "reserve this name for CI" for a brand
-new package. So the very first publish of `bivy` has to happen once by hand,
-with a maintainer's own npm login (or a short-lived classic Automation
-token), *before* the table above can be filled in:
+new package. The first publish therefore happens once by hand with a maintainer's
+npm login (or a short-lived classic Automation token), before the table above
+can be filled in.
+
+Bootstrap with a disposable prerelease version — **not** the final release
+version. Publishing `0.1.0` manually and then pushing `v0.1.0` would make the tag
+workflow fail because npm versions are immutable.
 
 ```bash
-npm run publish:npm:dry   # inspect what would ship
-npm login                 # if not already
-npm run publish:npm       # first publish only — no provenance yet, that's expected
+# In a clean, disposable checkout; do not commit this temporary version.
+npm pkg set version=0.1.0-bootstrap.0
+npm run publish:npm:dry
+npm login
+npm run publish:npm       # bootstrap only; no provenance is expected
 ```
 
-Once `bivy@<version>` exists on the registry, configure the trusted publisher
-above. Every tagged release after that goes through the workflow, with no
-token involved.
+Delete/reset that checkout, configure the trusted publisher above, and cut the
+real `v0.1.0` from the normal tree. The tag workflow then publishes `0.1.0` once,
+with provenance. Every later tagged release follows the same CI path.
 
 ## Cutting a release
 

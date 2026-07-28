@@ -2537,7 +2537,7 @@ function AccountPanel() {
   const ent = me?.entitlements;
   const counts = me?.counts;
   const free = (ent?.plan || me?.account?.plan) === "free";
-  // Free's one cap: runs per rolling 7-day window across every source. Undefined = unlimited (paid).
+  // Free caps unattended automation only; interactive CLI/app sessions are unlimited.
   const runCap = ent ? (ent.weeklyRunLimit ?? "∞") : "—";
   return (
     <div className="settings-form">
@@ -2554,12 +2554,12 @@ function AccountPanel() {
       {err && <div className="banner error inline">{err}</div>}
       <div className="stat-grid">
         <Stat label="Plan" value={planLabel(ent?.plan || me?.account?.plan)} />
-        <Stat label="Runs / week" value={`${counts?.runsThisWeek ?? "—"} / ${runCap}`} />
+        <Stat label="Automations / week" value={`${counts?.runsThisWeek ?? "—"} / ${runCap}`} />
       </div>
       {free && (
         <p className="muted settings-intro">
-          You're on the free plan — everything's included, capped at {runCap} runs per rolling 7 days across
-          every source (manual, app, GitHub queue, ephemeral). Pro removes the cap for {PRO_PRICE_LABEL}.
+          You're on the free plan — interactive sessions are unlimited, with {runCap} unattended automations
+          per rolling 7 days across GitHub, Slack, webhooks, and schedules. Pro removes the automation cap for {PRO_PRICE_LABEL}.
         </p>
       )}
       <div className="row-actions">

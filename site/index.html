@@ -657,7 +657,7 @@
   <!-- HERO -->
   <section class="hero">
     <div class="wrap">
-      <span class="eyebrow-pill"><svg class="ico"><use href="#i-shield"/></svg> Your machines · your keys · your code never uploaded</span>
+      <span class="eyebrow-pill"><svg class="ico"><use href="#i-shield"/></svg> Your machines · your keys · your code never uploaded to Bivy</span>
       <h1>Route coding-agent work to infrastructure you own.</h1>
       <p class="lede">
         Label a GitHub issue or send a webhook. Bivy routes the job to the machine you
@@ -683,8 +683,8 @@
       <p class="sub" style="margin:22px 0 0">
         Agent-agnostic, end-to-end encrypted, source-available, and self-hostable. Your
         machine, model credentials, repository, and cloud bill stay yours — no vendor
-        sandbox, repository upload, token markup, or single-agent lock-in. Free for 10
-        runs a week, forever; no credit card or trial clock.
+        sandbox, repository upload to Bivy, token markup, or single-agent lock-in.
+        Interactive sessions are free and unlimited; no credit card or trial clock.
       </p>
 
       <!-- HERO FLOW DIAGRAM -->
@@ -720,9 +720,9 @@
 
       <p class="runs-on">
         Runs <strong>Pi</strong>, <strong>Claude Code</strong>, <strong>Codex</strong>,
-        <strong>OpenCode</strong>, <strong>Gemini CLI</strong>, <strong>Qwen Code</strong>,
-        <strong>Goose</strong>, <strong>Aider</strong>, <strong>Cline</strong>,
-        <strong>Crush</strong> — or any CLI you point it at.
+        <strong>Cursor</strong>, <strong>GitHub Copilot</strong>, <strong>OpenCode</strong>,
+        <strong>Gemini CLI</strong>, <strong>Qwen Code</strong>, <strong>Goose</strong>,
+        <strong>Aider</strong>, and 9 more — or any CLI you point it at.
       </p>
     </div>
   </section>
@@ -756,11 +756,11 @@
               <tr>
                 <td class="cap">Which agent runs the job</td>
                 <td class="no"><svg class="ico"><use href="#i-x"/></svg>One vendor's agent</td>
-                <td class="col-bivy yes"><svg class="ico"><use href="#i-check"/></svg>Any of 10+ CLIs, per job</td>
+                <td class="col-bivy yes"><svg class="ico"><use href="#i-check"/></svg>19 agents, selected per job</td>
               </tr>
               <tr>
                 <td class="cap">Model keys &amp; token bill</td>
-                <td class="no"><svg class="ico"><use href="#i-x"/></svg>Bundled and marked up</td>
+                <td class="no"><svg class="ico"><use href="#i-x"/></svg>Vendor account and metering</td>
                 <td class="col-bivy yes"><svg class="ico"><use href="#i-check"/></svg>Your keys, billed direct</td>
               </tr>
               <tr>
@@ -889,9 +889,9 @@
       </div>
 
       <p class="upgrade-line">
-        The GitHub work queue is free — it draws from your 10 runs a week, shared with
-        every other source. Go
-        <a href="#pricing">Pro — $15/mo</a> for unlimited runs.
+        Free includes 10 unattended automations every rolling seven days. Interactive
+        sessions never consume them. Go <a href="#pricing">Pro — $15/mo</a> when you
+        want the GitHub, Slack, webhook, and scheduled queues to run without a cap.
       </p>
     </div>
   </section>
@@ -1122,10 +1122,11 @@
         <div class="pillar">
           <span class="icon-badge"><svg class="ico"><use href="#i-layers"/></svg></span>
           <p class="eyebrow">Any local agent</p>
-          <h3>Ten agents supported today — and anything else you point it at</h3>
-          <p>Pi, Claude Code, Codex, OpenCode, Gemini CLI, Qwen Code, Goose, Aider, Cline
-          and Crush, each driven through its native CLI. Bivy installs the ones you pick.
-          Any other command works via <code>bivy run -- ./your-agent</code>.</p>
+          <h3>Nineteen agents today — and anything else you point it at</h3>
+          <p>Pi, Claude Code, Codex, Cursor, GitHub Copilot, OpenCode, Gemini CLI, Qwen
+          Code, Goose, Aider, Cline, and more, each driven through its native interface.
+          ACP-capable agents can use governed per-tool approvals and resume. Any other
+          command works via <code>bivy run -- ./your-agent</code>.</p>
         </div>
         <div class="pillar">
           <span class="icon-badge"><svg class="ico"><use href="#i-fork"/></svg></span>
@@ -1174,9 +1175,10 @@
           down when the work is done.</p>
         </div>
         <div class="feature">
-          <h3><svg class="ico"><use href="#i-plug"/></svg>Generic webhooks</h3>
-          <p>A signed webhook can start or steer a run — wire CI, a cron, an issue tracker,
-          or your own tooling straight into an agent on your hardware.</p>
+          <h3><svg class="ico"><use href="#i-plug"/></svg>One automation queue</h3>
+          <p>GitHub, Slack, signed webhooks, one-time jobs, and recurring schedules route
+          through the same governed queue. Every run returns sanitized evidence: routing,
+          checks, retries, fallback decisions, branch, pull request, and outcome.</p>
         </div>
         <div class="feature">
           <h3><svg class="ico"><use href="#i-server"/></svg>Runs on any machine you own</h3>
@@ -1266,7 +1268,7 @@
             <tr><td>Cloud provider tokens</td><td class="n">No</td><td class="n">No</td><td class="n">No — device-local</td></tr>
             <tr><td>Session frames in transit</td><td class="y">Plaintext</td><td class="n">Ciphertext only</td><td class="n">Ciphertext only</td></tr>
             <tr><td>Account, node list, session index</td><td class="y">Yes</td><td class="n">No</td><td class="y">Yes</td></tr>
-            <tr><td>GitHub issue title and body</td><td class="y">Yes</td><td class="n">No</td><td class="y">Until claimed</td></tr>
+            <tr><td>GitHub issue title and body</td><td class="y">Fetched at claim</td><td class="n">No</td><td class="n">Not retained</td></tr>
             <tr><td>Push notification text</td><td class="y">Yes</td><td class="n">No</td><td class="y">Yes</td></tr>
           </tbody>
         </table>
@@ -1279,8 +1281,9 @@
         support them (Codex, Claude Code, Gemini CLI, Qwen Code). Agents without a native
         sandbox are governed at the filesystem, MCP, and network layer, not by an OS jail.
         Bivy does not ship its own OS-level jail in 0.1.</p>
-        <p>Queued GitHub issue titles and bodies are stored in plaintext by the control
-        plane until a node claims them.</p>
+        <p>GitHub issue and comment content is fetched directly by the claiming node and
+        is not retained by the control plane. Run evidence is allowlisted metadata, not a
+        third-party-audited compliance record.</p>
         <p>Push notification titles and bodies pass through the control plane in
         plaintext, and can contain session and terminal names. Everything else in a
         session stays encrypted end to end.</p>
@@ -1353,11 +1356,11 @@
   <section id="pricing" class="section-tint">
     <div class="wrap">
       <p class="kicker"><svg class="ico"><use href="#i-dollar"/></svg> Pricing</p>
-      <h2>We charge for the coordination layer, never for your tokens.</h2>
-      <p class="prose">One number gates everything: <b>runs</b>. A run is one agent session
-      you start — from the CLI, the app, a GitHub issue, or a webhook — and they all draw
-      from a single weekly count. Free is the whole product with 10 runs a week; Pro lifts
-      the cap; self-hosting has no cap at all. No token markup, ever.</p>
+      <h2>Explore interactively for free. Pay when Bivy runs the queue.</h2>
+      <p class="prose">CLI, phone, and browser sessions are free and unlimited. Free also
+      includes 10 unattended automations every rolling seven days across GitHub, Slack,
+      webhooks, and schedules. Pro makes automation unlimited for a flat $15/month.
+      Your model and infrastructure bills stay direct — no token or compute markup.</p>
 
       <div class="plans">
         <div class="plan">
@@ -1365,16 +1368,17 @@
           <h3>Free</h3>
           <div class="price">$0</div>
           <p class="price-sub">No credit card, no trial clock.</p>
-          <p class="tagline">The whole product — every feature, capped only on volume.</p>
+          <p class="tagline">Use every agent and control surface without a trial clock.</p>
           <ul>
-            <li>Any of 10+ coding agents — or your own</li>
+            <li>Any of 19 coding agents — or your own</li>
             <li>Route GitHub issues &amp; webhooks to your machines</li>
             <li>Durable sessions, worktrees &amp; rulesets</li>
             <li>Ephemeral runners in your own cloud</li>
             <li>Phone, browser &amp; terminal app — all included</li>
             <li>Push notifications, approvals &amp; sandboxes</li>
             <li>Unlimited machines and devices</li>
-            <li class="hl">10 runs / week — from any source</li>
+            <li class="hl">Unlimited interactive sessions</li>
+            <li>10 unattended automations / rolling 7 days</li>
             <li>Community support</li>
           </ul>
           <div class="cta-row">
@@ -1387,12 +1391,13 @@
           <h3>Pro</h3>
           <div class="price">$15 <span>/ month</span></div>
           <p class="price-sub">Billed monthly · cancel anytime.</p>
-          <p class="tagline">For when Bivy is part of your day.</p>
+          <p class="tagline">For a queue that keeps working while you do something else.</p>
           <p class="plus-label">Everything in Free, plus</p>
           <ul>
-            <li class="hl">Unlimited runs — no weekly cap</li>
-            <li>Uncapped GitHub-issue &amp; webhook automation</li>
-            <li>Uncapped ephemeral runners</li>
+            <li class="hl">Unlimited unattended automation</li>
+            <li>GitHub, Slack, webhook &amp; scheduled runs</li>
+            <li>Unlimited fallback reruns and BYO-cloud queue jobs</li>
+            <li>Sanitized outcome reports for every run</li>
             <li class="hl">Email support</li>
           </ul>
           <div class="cta-row">
@@ -1400,22 +1405,22 @@
           </div>
         </div>
         <div class="plan">
-          <span class="badge">Early access</span>
+          <span class="badge">Design partners</span>
           <span class="icon-badge"><svg class="ico"><use href="#i-users"/></svg></span>
           <h3>Team</h3>
           <div class="price">Let's talk</div>
-          <p class="price-sub">Per seat · onboarding included.</p>
+          <p class="price-sub">Founding-customer pricing · onboarding included.</p>
           <p class="tagline">Standardize agent work across your own fleet.</p>
           <p class="plus-label">Everything in Pro, plus</p>
           <ul>
             <li>Shared routing across your team's nodes</li>
             <li>Shared rulesets &amp; fallback routes</li>
-            <li>SSO &amp; audit <span style="color:var(--faint)">(early access)</span></li>
+            <li>SSO, roles &amp; audit export shaped with design partners</li>
             <li>Onboarding &amp; deployment review</li>
             <li>Priority support</li>
           </ul>
           <div class="cta-row">
-            <a href="mailto:support@bivy.sh?subject=Bivy%20Team%20early%20access" class="btn btn-ghost btn-block" data-plausible="team-contact">Contact us</a>
+            <a href="mailto:support@bivy.sh?subject=Bivy%20Team%20design%20partner" class="btn btn-ghost btn-block" data-plausible="team-contact">Become a design partner</a>
           </div>
         </div>
       </div>
@@ -1477,26 +1482,26 @@
       <div class="faq">
         <details open>
           <summary>Does my code ever leave my machine?</summary>
-          <p>No. Agents run in real terminals on the node you control. The relay forwards
-          encrypted frames it cannot read. The control plane holds your account, your node
-          list, and a session index — not your files, prompts, transcripts, or keys. The
-          one exception is stated above: a queued GitHub issue's title and body sit in the
-          control plane until a node claims it.</p>
+          <p>Bivy does not receive your repository. Agents run on the node you control;
+          the relay forwards encrypted frames, and the control plane holds routing metadata,
+          not files, prompts, transcripts, or model keys. The claiming node fetches GitHub
+          issue content directly. Your chosen model provider still receives whatever its
+          agent sends, under that provider's terms.</p>
         </details>
         <details>
           <summary>How is this different from Cursor's cloud agents, Devin, or the Copilot coding agent?</summary>
-          <p>Those run in the vendor's cloud, on the vendor's single agent, and bill you for
-          metered compute and marked-up tokens. Bivy runs the same issue-to-PR loop on
-          machines you own (or a cloud runner in your own account), with any of ten-plus
+          <p>Those run in the vendor's cloud, on the vendor's agent and metering. Bivy runs
+          the same issue-to-PR loop on machines you own (or a cloud runner in your own
+          account), with any of nineteen
           agent CLIs, using your keys. See the
           <a href="./compare-cloud-agents.html">full comparison</a>.</p>
         </details>
         <details>
-          <summary>What counts as a run?</summary>
-          <p>A run is one agent session you start — from the CLI, the phone or browser app,
-          a labeled GitHub issue, or a webhook. They all draw from the same count: 10 per
-          rolling seven days on the free plan (a moving window, not a fixed calendar week),
-          and unlimited on Pro. Self-host the control plane and there's no run limit at all.</p>
+          <summary>What counts toward the free automation allowance?</summary>
+          <p>Only unattended queued work: GitHub, Slack, signed webhooks, and scheduled jobs.
+          Free includes 10 every rolling seven days, plus a grace job; capacity returns as
+          older jobs age out. Sessions you start interactively from the CLI, phone, or
+          browser are unlimited on every plan. Pro and self-hosting remove the automation cap.</p>
         </details>
         <details>
           <summary>What are rulesets?</summary>
@@ -1513,7 +1518,7 @@
           you want to use. Node 22.19+ is required and the installer sets it up if it's
           missing. <code>bivy setup</code> then walks you through the rest — workspace,
           model sign-in, remote access, and a background service so it comes back after a
-          reboot. It's free, 10 runs a week, there's no credit card, and
+          reboot. Interactive use is free and unlimited, there's no credit card, and
           <code>bivy uninstall</code> removes the service and config if you decide against
           it.</p>
         </details>
@@ -1540,8 +1545,8 @@
         </details>
         <details>
           <summary>Which agents are supported, and how well?</summary>
-          <p>Ten are in the picker. Pi and Claude Code are the most complete. Codex,
-          OpenCode, Gemini CLI and Qwen Code are solid. Aider, Cline and Crush work but
+          <p>Nineteen are in the picker. Pi and Claude Code are the most complete. Codex,
+          OpenCode, Gemini CLI and Qwen Code are solid. Other agents work but
           have gaps inherited from upstream — Aider and Crush cannot resume a session, for
           instance. The <a href="https://github.com/bivysh/bivy/blob/main/docs/runtime-support-matrix.md">support
           matrix</a> lists exactly what each one can do.</p>
@@ -1579,10 +1584,11 @@
   <!-- CTA -->
   <section class="cta">
     <div class="wrap">
-      <h2>Real agents, on a real machine you own.</h2>
-      <p>One command to install, and free, 10 runs a week with your phone included.
-      Nothing to configure on your network, no credit card, and no repository to hand
-      over. Go Pro later if you outgrow 10 runs a week.</p>
+      <h2>Put your agent queue on infrastructure you trust.</h2>
+      <p>One command to install. Interactive sessions are free and unlimited, with no
+      credit card and no repository upload to Bivy. Connect GitHub, Slack, a webhook, or
+      a schedule when you're ready; go Pro when the unattended queue becomes part of
+      your week.</p>
       <div class="install">
         <code id="cmd2"><span class="p">$ </span>curl -fsSL https://bivy.sh/install.sh | bash</code>
         <button id="copy2" type="button" aria-label="Copy install command">Copy</button>

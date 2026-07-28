@@ -39,21 +39,19 @@ export interface Entitlements {
   pushEnabled: boolean;
   relayEnabled: boolean;
   // Hosted GitHub/Slack work queue (label an issue → PR on your node). Available
-  // on every plan; free's usage is bounded by the shared `weeklyRunLimit` below.
+  // on every plan; free automation usage is bounded by `weeklyRunLimit` below.
   workQueueEnabled: boolean;
-  // Runs the plan may START per ROLLING 7-DAY WINDOW ACROSS EVERY SOURCE — manual,
-  // app, GitHub/Slack work queue, and ephemeral servers all count against this one
-  // cap (one distinct session = one run; reconnecting to a live session does not
-  // count). A rolling window (not a calendar week) so capacity frees up gradually
-  // as individual runs age past 7 days — this fits bursty dev work far better than a
-  // hard daily/weekly reset. Optional: `undefined` means UNLIMITED (paid plans omit
-  // it, mirroring `maxNodes`). Free pins this to FREE_WEEKLY_RUNS. Enforced at the
-  // server-observed admission points (work-queue claim, ephemeral launch) and only
-  // when `ENFORCE_ENTITLEMENTS=1` (Bivy Cloud); self-host stacks run unlimited regardless.
+  // AUTOMATION runs the plan may start per rolling 7-day window. Only queued work
+  // (`automation:*` run keys: GitHub, Slack, webhook, and scheduled jobs) consumes
+  // this allowance. Interactive CLI/app sessions are deliberately unlimited on
+  // every plan: remote control is the free adoption surface; Pro monetizes the
+  // differentiated unattended operations layer. A rolling window lets capacity
+  // return gradually as jobs age out. Optional means unlimited (paid plans).
+  // The legacy field name stays wire-compatible with pre-release clients.
   weeklyRunLimit?: number;
   // Quick ephemeral cloud servers brokered from a phone (Fly/Hetzner/AWS/… with the
   // user's own token, proxied through the control-plane cold-start relay). Available
-  // on every plan; a launched runner counts as a run against `weeklyRunLimit`.
+  // on every plan. A runner used by queued work consumes that automation job's run.
   ephemeralEnabled: boolean;
 }
 
@@ -626,18 +624,16 @@ export interface PairedDeviceInfo {
   updatedAt: string;
 }
 
-// Free allowance: how many runs a free account may START within any rolling 7-day
-// window across EVERY source combined — manual, app, work queue, ephemeral. The one
-// cap that bounds a free account; everything else (nodes, push, ephemeral) is
-// uncapped. A rolling window fits bursty usage (a busy day doesn't wall you, and an
-// idle stretch quietly refills capacity). Paid plans omit the limit (unlimited).
+// Free allowance for unattended automation (GitHub, Slack, webhook, scheduled).
+// Interactive CLI/app sessions never consume it. This gives the commoditized remote
+// control surface away for adoption and charges for the differentiated ops layer.
+// Paid plans omit the limit (unlimited automation).
 export const FREE_WEEKLY_RUNS = 10;
 
 export const PLAN_ENTITLEMENTS: Record<Plan, Omit<Entitlements, "plan">> = {
-  // Free is now feature-complete: unlimited nodes, push notifications, and
-  // ephemeral cloud runners are all included. The ONLY cap is FREE_WEEKLY_RUNS runs
-  // per rolling 7-day window, counted across every source; paid plans omit the limit
-  // ⇒ unlimited. Every plan omits `maxNodes` ("unlimited nodes" across the board).
+  // Free is feature-complete: unlimited interactive sessions, nodes, push, and
+  // ephemeral runners. The only cap is FREE_WEEKLY_RUNS queued automation jobs per
+  // rolling 7-day window; paid plans omit it. Every plan omits `maxNodes`.
   free: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, weeklyRunLimit: FREE_WEEKLY_RUNS, ephemeralEnabled: true },
   pro: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
   team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
@@ -915,8 +911,9 @@ export interface MeshStore {
   // True only when the idempotent insert created a new run-start row.
   recordRunStart(accountId: string, runKey: string): Promise<boolean>;
   // How many DISTINCT runs the account has STARTED at/after `sinceIso` (recorded via
-  // recordRunStart). Powers the free-tier rolling run quota — one distinct run key = one run.
-  countRunStartsSince(accountId: string, sinceIso: string): Promise<number>;
+  // recordRunStart). `runKeyPrefix` scopes a meter to a class such as `automation:`;
+  // omitted means all starts (useful for aggregate product metrics).
+  countRunStartsSince(accountId: string, sinceIso: string, runKeyPrefix?: string): Promise<number>;
   // Delete run-start rows older than `beforeIso`. Runs older than the rolling window
   // can never be counted again, so this is pure housekeeping to keep the table lean;
   // called on an interval by the control plane. Returns how many rows were removed.

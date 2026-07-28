@@ -124,7 +124,7 @@ await test("free vs pro entitlements match the published pricing table", () => {
   assert.equal(free.pushEnabled, true, "free: push notifications included");
   assert.equal(free.relayEnabled, true, "free: hosted relay");
   assert.equal(free.workQueueEnabled, true, "free: hosted work queue included");
-  assert.equal(free.weeklyRunLimit, 10, "free: metered at 10 runs / rolling 7 days across every source");
+  assert.equal(free.weeklyRunLimit, 10, "free: 10 weekly automations; interactive sessions are unlimited");
   assert.equal(free.ephemeralEnabled, true, "free: quick ephemeral servers included");
 
   const pro = entitlementsForPlan("pro");

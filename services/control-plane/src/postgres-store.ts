@@ -1939,13 +1939,15 @@ export class PostgresStore implements MeshStore {
     return existing.rows.length === 0 && rows.length > 0;
   }
 
-  async countRunStartsSince(accountId: string, sinceIso: string): Promise<number> {
-    // One distinct run_key = one run. started_at is stamped once (first insert
-    // wins), so a run counts exactly once for the window it started in.
+  async countRunStartsSince(accountId: string, sinceIso: string, runKeyPrefix?: string): Promise<number> {
+    // One distinct run_key = one run. A prefix scopes commercial metering to a
+    // class of work without losing the all-source product funnel in this table.
+    // Prefixes are internal class constants (`automation:`), never user input.
+    const prefixClause = runKeyPrefix === undefined ? "" : " AND run_key LIKE $3";
     const { rows } = await this.query(
       `SELECT count(*)::int AS n FROM run_starts
-       WHERE account_id = $1 AND started_at >= $2`,
-      [accountId, sinceIso],
+       WHERE account_id = $1 AND started_at >= $2${prefixClause}`,
+      runKeyPrefix === undefined ? [accountId, sinceIso] : [accountId, sinceIso, `${runKeyPrefix}%`],
     );
     return Number(rows[0]?.n ?? 0);
   }

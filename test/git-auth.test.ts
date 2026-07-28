@@ -171,10 +171,14 @@ await check("migration: rewriting a tokenized origin to clean drops the token", 
   await git(["-C", repo, "init", "-q"]);
   await git(["-C", repo, "remote", "add", "origin", "https://x-access-token:gho_leaked@github.com/bivysh/bivy.git"]);
   await git(["-C", repo, "remote", "set-url", "origin", cleanRemoteUrl("bivysh", "bivy")]);
-  const remotes = await git(["-C", repo, "remote", "-v"]);
-  assert.ok(!remotes.includes("gho_leaked"), "token must be gone from the remote");
-  assert.ok(!remotes.includes("@github.com"), "no userinfo should remain in the remote");
-  assert.match(remotes, /https:\/\/github\.com\/bivysh\/bivy\.git/);
+  // Read the STORED URL, not `git remote -v`: the latter applies the operator's
+  // global `url.*.insteadOf` rewrite and can legitimately render an authenticated
+  // transport URL even though this repo's config is clean. This migration guards
+  // what Bivy persists, not how a developer has configured Git globally.
+  const storedRemote = await git(["-C", repo, "config", "--local", "--get", "remote.origin.url"]);
+  assert.ok(!storedRemote.includes("gho_leaked"), "token must be gone from the stored remote");
+  assert.ok(!storedRemote.includes("@github.com"), "no userinfo should remain in the stored remote");
+  assert.match(storedRemote, /https:\/\/github\.com\/bivysh\/bivy\.git/);
 });
 
 server.close();

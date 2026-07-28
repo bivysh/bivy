@@ -96,12 +96,11 @@ export function GithubQueuePanel({
     [runtimes],
   );
   const [appInfo, setAppInfo] = useState<GithubAppInfo | null>(null);
-  // The hosted work queue is a paid feature. `null` = still loading (don't flash a
-  // paywall); `false` = free account (show the upgrade prompt, hide the queue).
+  // The hosted work queue is included on every plan. `null` = still loading;
+  // `false` remains supported for a future plan that disables it.
   const [workQueueEnabled, setWorkQueueEnabled] = useState<boolean | null>(null);
-  // Free-tier rolling run quota (spans every source, not just the queue). `limit`
-  // undefined = unlimited (paid plans); `used` is runs started in the last 7 days.
-  // Drives the "N of M runs left this week" banner.
+  // Free-tier rolling automation quota. Interactive sessions are unlimited;
+  // `limit` and `used` cover queued jobs only. Undefined means unlimited (paid).
   const [runLimit, setRunLimit] = useState<number | undefined>(undefined);
   const [runsUsed, setRunsUsed] = useState<number>(0);
   const [nodes, setNodes] = useState<AccountNode[]>([]);
@@ -424,25 +423,24 @@ export function GithubQueuePanel({
 
   return (
       <div className="settings-form">
-        {/* The GitHub work queue is included on every plan. The only limit is the
-            shared rolling 7-day run cap that spans every source (manual, app,
-            queue, ephemeral) — show remaining runs, and prompt an upgrade once the
-            window's allowance is spent. */}
+        {/* The queue is included on every plan. Free meters unattended automation
+            while interactive CLI/app sessions remain unlimited. */}
         {canQuery && workQueueEnabled !== false && typeof runLimit === "number" && (
           <div className={`banner ${runsUsed >= runLimit ? "warn" : "info"} inline`}>
             {runsUsed >= runLimit ? (
               <>
-                Free plan — you've used your {runLimit} free runs this week. Extra runs still
-                work for now; capacity returns as your older runs pass 7 days.{" "}
+                {runsUsed > runLimit
+                  ? `Free plan — automation is paused after ${runLimit} included jobs plus a grace job. Capacity returns as older jobs pass 7 days. `
+                  : `Free plan — you've used your ${runLimit} included automations. Your next job is the grace job. `}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
-                  Upgrade to Pro ({PRO_PRICE_LABEL}) for unlimited →
+                  Upgrade to Pro ({PRO_PRICE_LABEL}) for unlimited automation →
                 </button>
               </>
             ) : (
               <>
-                Free plan — {Math.max(0, runLimit - runsUsed)} of {runLimit} runs left this week.{" "}
+                Free plan — {Math.max(0, runLimit - runsUsed)} of {runLimit} automations left this week.{" "}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
-                  Upgrade to Pro ({PRO_PRICE_LABEL}) for unlimited →
+                  Upgrade to Pro ({PRO_PRICE_LABEL}) for unlimited automation →
                 </button>
               </>
             )}

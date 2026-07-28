@@ -253,9 +253,9 @@ export interface AccountMe {
     relayEnabled?: boolean;
     pushEnabled?: boolean;
     workQueueEnabled?: boolean;
-    // Runs allowed per rolling 7-day window across every source
-    // (manual/app/work-queue/ephemeral). Undefined = unlimited (paid plans); free
-    // pins it to a small allowance. Pairs with counts.runsThisWeek to render "used / limit".
+    // Unattended automation jobs allowed per rolling 7-day window. Interactive
+    // CLI/app sessions are unlimited. Undefined = unlimited automation (paid);
+    // pairs with counts.runsThisWeek (legacy wire name) to render used / limit.
     weeklyRunLimit?: number;
     ephemeralEnabled?: boolean;
   };
