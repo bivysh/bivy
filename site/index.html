@@ -531,7 +531,7 @@
         <article class="plan featured">
           <span class="plan-badge">For unattended work</span>
           <h3>Pro</h3>
-          <div class="price">$15 <small>/ month</small></div>
+          <div class="price" id="pro-price">Loading…</div>
           <p class="plan-copy">For an agent queue that is part of your working week.</p>
           <ul>
             <li>Everything in Free</li>
@@ -541,7 +541,7 @@
             <li>Sanitized outcome reports</li>
             <li>Email support</li>
           </ul>
-          <a class="button block" href="https://app.bivy.sh/?intent=upgrade" data-plausible="upgrade-pro">Go Pro — $15/month</a>
+          <a class="button block" id="pro-upgrade" href="https://app.bivy.sh/?intent=upgrade" data-plausible="upgrade-pro">Go Pro</a>
         </article>
         <article class="plan">
           <span class="plan-badge">Design partners</span>
@@ -634,6 +634,17 @@
   (function () {
     var command = "curl -fsSL https://bivy.sh/install.sh | bash";
     var status = document.getElementById("copy-status");
+    fetch("https://app.bivy.sh/billing/plans")
+      .then(function (response) { if (!response.ok) throw new Error("price request failed"); return response.json(); })
+      .then(function (data) {
+        var label = data && data.plans && data.plans.pro && data.plans.pro.label;
+        if (!label) return;
+        document.getElementById("pro-price").textContent = label;
+        document.getElementById("pro-upgrade").textContent = "Go Pro — " + label;
+      })
+      .catch(function () {
+        document.getElementById("pro-price").textContent = "See checkout";
+      });
     function fallback(done) {
       var textarea = document.createElement("textarea");
       textarea.value = command;

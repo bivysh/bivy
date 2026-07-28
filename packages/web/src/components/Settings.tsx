@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, PRO_PRICE_LABEL, connectSlackHook, disconnectSlackHook, fetchSlackHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, connectSlackHook, disconnectSlackHook, fetchSlackHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -2621,6 +2621,7 @@ function AccountPanel() {
   const free = (ent?.plan || me?.account?.plan) === "free";
   // Free caps unattended automation only; interactive CLI/app sessions are unlimited.
   const runCap = ent ? (ent.weeklyRunLimit ?? "∞") : "—";
+  const proPrice = me?.pricing?.pro?.label;
   return (
     <div className="settings-form">
       {confirm && (
@@ -2641,7 +2642,7 @@ function AccountPanel() {
       {free && (
         <p className="muted settings-intro">
           You're on the free plan — interactive sessions are unlimited, with {runCap} unattended automations
-          per rolling 7 days across GitHub, Slack, webhooks, and schedules. Pro removes the automation cap for {PRO_PRICE_LABEL}.
+          per rolling 7 days across GitHub, Slack, webhooks, and schedules. Pro removes the automation cap{proPrice ? ` for ${proPrice}` : ""}.
         </p>
       )}
       <div className="row-actions">
@@ -2659,7 +2660,7 @@ function AccountPanel() {
               controller.startCheckout().catch((e) => setErr(String(e.message || e))).finally(() => setOpening(false));
             }}
           >
-            {opening ? "Opening…" : `Upgrade to Pro — ${PRO_PRICE_LABEL}`}
+            {opening ? "Opening…" : `Upgrade to Pro${proPrice ? ` — ${proPrice}` : ""}`}
           </button>
         ) : (
           <button

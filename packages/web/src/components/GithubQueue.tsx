@@ -6,7 +6,6 @@ import {
   isGithubQueueSource,
   ephemeralAdapter,
   ephemeralCostHint,
-  PRO_PRICE_LABEL,
   type AccountNode,
   type EphemeralQueueDefault,
   type GithubAppInfo,
@@ -107,6 +106,7 @@ export function GithubQueuePanel({
   // `limit` and `used` cover queued jobs only. Undefined means unlimited (paid).
   const [runLimit, setRunLimit] = useState<number | undefined>(undefined);
   const [runsUsed, setRunsUsed] = useState<number>(0);
+  const [proPrice, setProPrice] = useState<string | undefined>();
   const [nodes, setNodes] = useState<AccountNode[]>([]);
   // The queue item whose "Run…" picker is open, plus its in-progress selections.
   const [assignOpenId, setAssignOpenId] = useState<string | null>(null);
@@ -229,6 +229,7 @@ export function GithubQueuePanel({
         setWorkQueueEnabled(Boolean(m?.entitlements?.workQueueEnabled));
         setRunLimit(m?.entitlements?.weeklyRunLimit);
         setRunsUsed(Number(m?.counts?.runsThisWeek ?? 0));
+        setProPrice(m?.pricing?.pro?.label);
       })
       .catch(() => setWorkQueueEnabled(null));
     controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
@@ -437,14 +438,14 @@ export function GithubQueuePanel({
                   ? `Free plan — automation is paused after ${runLimit} included jobs plus a grace job. Capacity returns as older jobs pass 7 days. `
                   : `Free plan — you've used your ${runLimit} included automations. Your next job is the grace job. `}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
-                  Upgrade to Pro ({PRO_PRICE_LABEL}) for unlimited automation →
+                  Upgrade to Pro{proPrice ? ` (${proPrice})` : ""} for unlimited automation →
                 </button>
               </>
             ) : (
               <>
                 Free plan — {Math.max(0, runLimit - runsUsed)} of {runLimit} automations left this week.{" "}
                 <button className="link-btn" onClick={() => controller.startCheckout().catch(() => {})}>
-                  Upgrade to Pro ({PRO_PRICE_LABEL}) for unlimited automation →
+                  Upgrade to Pro{proPrice ? ` (${proPrice})` : ""} for unlimited automation →
                 </button>
               </>
             )}
