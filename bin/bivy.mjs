@@ -67,7 +67,7 @@ process.env.BIVY_DATA_DIR = appDir;
 // background service can point at repoRoot:
 //   - "git"        dev checkout (has .git)
 //   - "npx"        ephemeral `npx bivy` run (repoRoot under an npm _npx cache)
-//   - "npm-global" `npm i -g bivy` (repoRoot's parent dir is node_modules)
+//   - "npm-global" `npm i -g @bivy/bivy` (repoRoot's parent dir is node_modules)
 //   - "packaged"   install.sh tarball tree (user-owned, self-preserving)
 function detectInstallKind() {
   if (fs.existsSync(path.join(repoRoot, ".git"))) return "git";
@@ -2588,7 +2588,7 @@ async function installService(config) {
   if (detectInstallKind() === "npx") {
     console.log(c.yellow("Refusing to install a background service from an ephemeral 'npx bivy' run."));
     console.log(c.dim(`The service would point at the temporary npx cache (${repoRoot}), which npm can delete at any time, leaving a broken unit.`));
-    console.log(`Install a persistent copy first: ${c.cyan("npm i -g bivy")}, then run ${c.cyan("bivy service install")}.`);
+    console.log(`Install a persistent copy first: ${c.cyan("npm i -g @bivy/bivy")}, then run ${c.cyan("bivy service install")}.`);
     return false;
   }
   const { kind, file } = servicePaths();
@@ -3433,15 +3433,15 @@ async function runUpdate(args = []) {
   if (kind === "npx") {
     console.log(c.dim("This is an ephemeral 'npx bivy' run."));
     console.log(`${c.cyan("npx bivy")} always fetches the latest published version, so there is nothing to update.`);
-    console.log(`To install a persistent copy you can manage: ${c.cyan("npm i -g bivy")}`);
+    console.log(`To install a persistent copy you can manage: ${c.cyan("npm i -g @bivy/bivy")}`);
     return;
   }
 
   if (kind === "npm-global") {
     console.log(c.dim("Updating the globally-installed bivy package…"));
-    const code = await run("npm", ["install", "-g", "bivy@latest", "--no-audit", "--no-fund"]);
+    const code = await run("npm", ["install", "-g", "@bivy/bivy@latest", "--no-audit", "--no-fund"]);
     if (code !== 0) {
-      console.log(c.yellow(`npm reported an issue (exit ${code}). Try: sudo npm i -g bivy@latest`));
+      console.log(c.yellow(`npm reported an issue (exit ${code}). Try: sudo npm i -g @bivy/bivy@latest`));
       process.exit(code);
     }
     await ensureBundledAgents();

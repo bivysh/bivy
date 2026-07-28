@@ -40,7 +40,7 @@ this order:
    is a git checkout (has `.git`). This covers dev checkouts and the
    `install.sh` tarball tree, which are user-owned and preserve `.bivy` across
    updates.
-3. `~/.bivy` otherwise — the `npm i -g bivy` / `npx bivy` case, where the
+3. `~/.bivy` otherwise — the `npm i -g @bivy/bivy` / `npx @bivy/bivy` case, where the
    package directory may be root-owned and is replaced on update.
 
 The CLI then **exports the resolved value as `BIVY_DATA_DIR`** into every child
@@ -303,7 +303,7 @@ The hosted endpoints all derive from one domain, so you normally set nothing.
 | `BIVY_NODE_LABEL` | label | unset | Supported override — an **extra** work-queue label this node serves, on top of `<base>` and `<base>/<node-name>`. Accepts `bivy/x` or a bare `x`. Rarely needed; the node name is used automatically |
 | `BIVY_URL` | URL | `http://localhost:<PORT>` | Supported — which node the `bivy exec` / attach clients talk to. `--url` wins |
 | `BIVY_DEVICE_TOKEN` | token | unset | Supported — bearer for those clients. `--token` wins |
-| `BIVY_UPDATE_REGISTRY_URL` | URL | `https://registry.npmjs.org/bivy/latest` | Supported — registry endpoint the node polls for update notices. Point at a mirror or private registry |
+| `BIVY_UPDATE_REGISTRY_URL` | URL | `https://registry.npmjs.org/%40bivy%2Fbivy/latest` | Supported — registry endpoint the node polls for update notices. Point at a mirror or private registry |
 | `BIVY_MODEL_CATALOG_URL` | URL | `https://bivy.sh/api/models/local-catalog.json` | Supported — remote local-model presets. Fetched best-effort with a 2.5 s timeout; failure is silent |
 
 ## GitHub work queue

@@ -399,7 +399,7 @@ const queueRunPolicy: RunPolicy = {
 };
 // Bivy is distributed on npm, so "is there a newer version?" is a registry
 // question. Overridable for self-hosted or mirrored registries.
-const updateRegistryUrl = process.env.BIVY_UPDATE_REGISTRY_URL ?? "https://registry.npmjs.org/bivy/latest";
+const updateRegistryUrl = process.env.BIVY_UPDATE_REGISTRY_URL ?? "https://registry.npmjs.org/%40bivy%2Fbivy/latest";
 fs.mkdirSync(sessionsDir, { recursive: true });
 fs.mkdirSync(credsDir, { recursive: true, mode: 0o700 });
 // One-time migration for installs created before the shared vault was split out

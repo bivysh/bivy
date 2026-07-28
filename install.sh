@@ -6,7 +6,7 @@
 #
 # This script does three things:
 #   1. makes sure a supported Node.js is present (installing it on Debian/Ubuntu),
-#   2. installs the `bivy` package from npm,
+#   2. installs the `@bivy/bivy` package from npm,
 #   3. runs `bivy setup`, or restarts an existing background service.
 #
 # Distribution integrity is npm's: the registry serves content-addressed
@@ -15,7 +15,7 @@
 # given version was built:
 #
 #   npm audit signatures
-#   npm view bivy dist.integrity
+#   npm view @bivy/bivy dist.integrity
 #
 # If the package is not on the registry yet, the script falls back to the
 # self-hosted release tarball (see "Tarball fallback" below) so that a fresh
@@ -33,6 +33,7 @@
 set -euo pipefail
 
 PKG_VERSION="${BIVY_VERSION:-latest}"
+NPM_PACKAGE="@bivy/bivy"
 DATA_DIR="${BIVY_DATA_DIR:-$HOME/.bivy}"
 # Also the destination for a tarball-fallback install, whose state lives inside
 # the app directory rather than at $DATA_DIR.
@@ -291,13 +292,13 @@ install_from_tarball() {
 }
 
 install_globally() {
-  local args=(install -g "bivy@${PKG_VERSION}" --no-audit --no-fund)
+  local args=(install -g "${NPM_PACKAGE}@${PKG_VERSION}" --no-audit --no-fund)
   if [ -n "${BIVY_NPM_PREFIX:-}" ]; then
-    info "Installing bivy@${PKG_VERSION} into ${BIVY_NPM_PREFIX}"
+    info "Installing ${NPM_PACKAGE}@${PKG_VERSION} into ${BIVY_NPM_PREFIX}"
     npm "${args[@]}" --prefix "$BIVY_NPM_PREFIX"
     return
   fi
-  info "Installing bivy@${PKG_VERSION} from npm"
+  info "Installing ${NPM_PACKAGE}@${PKG_VERSION} from npm"
   if npm "${args[@]}" 2>"$ERR_LOG"; then
     return 0
   fi
@@ -315,17 +316,17 @@ install_globally() {
   # than trusting the error text alone — a 404 in the install log could just as
   # easily come from a missing transitive dependency, which the tarball (built
   # from the same package.json) would not fix either.
-  if grep -qiE 'E404|404 Not Found' "$ERR_LOG" && ! npm view "bivy@${PKG_VERSION}" version >/dev/null 2>&1; then
+  if grep -qiE 'E404|404 Not Found' "$ERR_LOG" && ! npm view "${NPM_PACKAGE}@${PKG_VERSION}" version >/dev/null 2>&1; then
     if [ "${BIVY_NO_TARBALL_FALLBACK:-}" = "1" ]; then
       cat "$ERR_LOG" >&2
-      die "bivy@${PKG_VERSION} is not published on npm, and BIVY_NO_TARBALL_FALLBACK=1."
+      die "${NPM_PACKAGE}@${PKG_VERSION} is not published on npm, and BIVY_NO_TARBALL_FALLBACK=1."
     fi
-    warn "bivy@${PKG_VERSION} is not on the npm registry yet — using the release archive instead."
+    warn "${NPM_PACKAGE}@${PKG_VERSION} is not on the npm registry yet — using the release archive instead."
     install_from_tarball
     return
   fi
   cat "$ERR_LOG" >&2
-  die "npm could not install bivy. See the error above."
+  die "npm could not install ${NPM_PACKAGE}. See the error above."
 }
 
 ERR_LOG="$(mktemp)"

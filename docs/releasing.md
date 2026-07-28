@@ -1,8 +1,8 @@
 # Releasing and distribution
 
-Bivy is distributed on npm as the [`bivy`](https://www.npmjs.com/package/bivy)
+Bivy is distributed on npm as the [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy)
 package. `install.sh` is a thin bootstrapper: it ensures a supported Node.js is
-present, runs `npm install -g bivy`, and then runs `bivy setup`.
+present, runs `npm install -g @bivy/bivy`, and then runs `bivy setup`.
 
 npm is the distribution channel. `install.sh` retains a checksum-verified
 tarball fallback (`TARBALL_URL`/`MANIFEST_URL`/`install_from_tarball`) used only
@@ -37,8 +37,8 @@ publish authentication.
 npm audit signatures
 
 # What the registry says about a specific version.
-npm view bivy@0.1.0 dist.integrity
-npm view bivy@0.1.0 dist.attestations
+npm view @bivy/bivy@0.1.0 dist.integrity
+npm view @bivy/bivy@0.1.0 dist.attestations
 ```
 
 The provenance attestation is also shown on the package page under
@@ -55,7 +55,7 @@ authenticate as this release path, and there is no standing token to leak,
 rotate, or revoke. Provenance is generated automatically as part of the same
 exchange.
 
-Configure it once, on the `bivy` package's **Settings → Trusted Publishers**
+Configure it once, on the `@bivy/bivy` package's **Settings → Trusted Publishers**
 page on npmjs.com (requires the package to already exist — see
 "Bootstrapping" below):
 
@@ -77,27 +77,10 @@ bumping the repo's pinned Node version just for that.
 
 ### Bootstrapping
 
-npm can only configure a trusted publisher for a package that **already
-exists** — there's no equivalent of "reserve this name for CI" for a brand
-new package. The first publish therefore happens once by hand with a maintainer's
-npm login (or a short-lived classic Automation token), before the table above
-can be filled in.
-
-Bootstrap with a disposable prerelease version — **not** the final release
-version. Publishing `0.1.0` manually and then pushing `v0.1.0` would make the tag
-workflow fail because npm versions are immutable.
-
-```bash
-# In a clean, disposable checkout; do not commit this temporary version.
-npm pkg set version=0.1.0-bootstrap.0
-npm run publish:npm:dry
-npm login
-npm run publish:npm       # bootstrap only; no provenance is expected
-```
-
-Delete/reset that checkout, configure the trusted publisher above, and cut the
-real `v0.1.0` from the normal tree. The tag workflow then publishes `0.1.0` once,
-with provenance. Every later tagged release follows the same CI path.
+The `@bivy/bivy` package already exists as a placeholder, so no manual bootstrap
+publish is needed. Configure the trusted publisher above, then let the tag
+workflow publish `0.1.0` with provenance. Do not publish the final version from
+a laptop; npm versions are immutable.
 
 ## Cutting a release
 
@@ -151,12 +134,12 @@ script, which fails in a packaged install.
 
 | Install kind | Update action |
 |---|---|
-| `npm-global` | `npm install -g bivy@latest`, then restart the service |
+| `npm-global` | `npm install -g @bivy/bivy@latest`, then restart the service |
 | `git` | `git pull` + `npm ci`, then restart |
 | `packaged` | re-runs `install.sh`, which migrates the install to npm |
 | `npx` | nothing to update; each run fetches afresh |
 
-The daemon checks `https://registry.npmjs.org/bivy/latest` every six hours and
+The daemon checks `https://registry.npmjs.org/%40bivy%2Fbivy/latest` every six hours and
 posts an in-session notice when a newer version exists. Override the endpoint
 with `BIVY_UPDATE_REGISTRY_URL` to point at a mirror or private registry.
 

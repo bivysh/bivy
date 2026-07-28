@@ -45,5 +45,5 @@ pages record aggregate page views plus fixed-name `CTA` and
 `Install Copy` events; they send no account/session identifiers or content.
 The Render CSP explicitly permits only Plausible's script and event endpoint.
 
-Bivy is distributed on [npm](https://www.npmjs.com/package/bivy), so this site
+Bivy is distributed on [npm](https://www.npmjs.com/package/@bivy/bivy), so this site
 hosts no release tarball or manifest. See [`docs/releasing.md`](../docs/releasing.md).
