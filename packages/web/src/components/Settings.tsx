@@ -2274,6 +2274,9 @@ function EphemeralModelKeys() {
 function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, onSetupsChanged, onBack }: { providerId: string; initialSetupId: string | null; onKeysChanged: () => void; onSetupsChanged: () => void; onBack: () => void }) {
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === providerId)!;
   const adapter = ephemeralAdapter(providerId)!;
+  // Suspend-to-zero providers (Fly Sprites) keep the machine and self-suspend
+  // when idle — so TTL self-destruct and destroy-on-finish don't apply.
+  const suspendsWhenIdle = adapter.suspendsWhenIdle === true;
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   const [token, setToken] = useState("");
   const [hasToken, setHasToken] = useState(false);
@@ -2420,20 +2423,34 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
             {sizes.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
 
-          <label className="field-label">Auto-destroy after (TTL)</label>
-          <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
-            {EPHEMERAL_TTL_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-          </select>
+          {!suspendsWhenIdle && (
+            <>
+              <label className="field-label">Auto-destroy after (TTL)</label>
+              <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
+                {EPHEMERAL_TTL_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+              </select>
+            </>
+          )}
           {(() => {
-            const hint = ephemeralCostHint(sizes.find((s) => s.id === size), ttl, adapter.currency);
-            return hint ? <p className="muted small">{hint} · billed by {catalog.name}, not Bivy</p> : null;
+            const selected = sizes.find((s) => s.id === size);
+            const hint = ephemeralCostHint(selected, suspendsWhenIdle ? undefined : ttl, adapter.currency);
+            if (!hint) return null;
+            return suspendsWhenIdle
+              ? <p className="muted small">{hint} while active · ~$0 while suspended · billed by {catalog.name}, not Bivy</p>
+              : <p className="muted small">{hint} · billed by {catalog.name}, not Bivy</p>;
           })()}
 
-          <label className="field-label">Work until finished</label>
-          <label className="checkbox-row">
-            <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
-            <span>Destroy the machine once the agent finishes its work <span className="muted small">(the TTL above stays a safety fallback; the launching device must be online)</span></span>
-          </label>
+          {suspendsWhenIdle ? (
+            <p className="muted small">Keeps its memory: suspends to ~$0 when idle and resumes with everything intact. Reopen its session from the node list to wake it — no TTL, no teardown-on-finish.</p>
+          ) : (
+            <>
+              <label className="field-label">Work until finished</label>
+              <label className="checkbox-row">
+                <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
+                <span>Destroy the machine once the agent finishes its work <span className="muted small">(the TTL above stays a safety fallback; the launching device must be online)</span></span>
+              </label>
+            </>
+          )}
 
           <p className="muted small">The repo this machine works on is whatever you pick in the new-session composer — it isn't set here.</p>
 

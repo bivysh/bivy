@@ -191,6 +191,27 @@ UI safety notes:
 - The TTL self-shutdown is armed with a `systemd-run` transient timer (surviving cloud-init), falling back to `at` then a detached `setsid` sleep, so a forgotten machine self-halts even on a minimal base image.
 - Provider tokens are stored in the same secret path as other user-provided keys, never in session transcripts.
 
+### Fly Sprites (suspend-to-zero, "machines that remember")
+
+[Fly Sprites](https://sprites.dev) are a different lifecycle from the destroy-when-done providers above, and the first realisation of the [Resume after inactivity](#resume-after-inactivity) design below. A Sprite is a stateful Linux box that **auto-suspends to ~$0 when idle** and **resumes with its full filesystem and memory intact** — so instead of tearing the machine down and rebuilding it, Bivy keeps it and simply wakes it when you reopen its session.
+
+Copy for the UI:
+
+1. Sign in at <https://sprites.dev> and open your account page.
+2. Create an API token (or run `sprite org auth` in the Sprites CLI).
+3. Paste the token into Bivy. It stays on this device like the other provider tokens.
+
+How the adapter fits the model (`sprites` in `packages/core/src/ephemeral.ts`):
+
+- **Bearer token, REST/JSON, one allowlisted host** (`api.sprites.dev`) — same shape as Fly Machines/Hetzner, so it drops into `ProviderAdapter` with no dispatch changes.
+- **No cloud-init.** A Sprite is bootstrapped by registering the daemon as a supervised **service** over the REST API: `POST /v1/sprites` (create), `PUT /v1/sprites/{name}/services/bivy` (the service — its script writes `relay.json` from an env var, installs Bivy once, then runs `bivy start` in the foreground), then `POST .../services/bivy/start`. The install persists across suspends via the Sprite's own storage, so only the first boot pays for it.
+- **Wake = start the service.** There's no explicit suspend/resume REST endpoint — a Sprite resumes on any request routed to it. Our HTTPS exec proxy can't hold a WebSocket, so the wake path is the single request `POST .../services/bivy/start`, which both resumes the cold Sprite and ensures the daemon is running so it re-dials the relay. It's exposed as the adapter's optional `wake` method and driven by `wakeEphemeralMachine` / `controller.resumeAndConnectNode`.
+- **Kept, never TTL-destroyed.** `suspendsWhenIdle: true` on the adapter tells the lifecycle to skip the TTL self-destruct and the destroy-on-finish teardown (`maybeTeardownFinishedEphemeral`) — destroying a Sprite would throw away the memory that is the whole point. Cost control is the suspend-to-zero, not a TTL. **Destroy machine now** still deletes the Sprite (and its stored state) explicitly.
+
+UI: a Sprites setup shows in the node switcher like any other. When it has suspended it appears as a **Suspended** row; tapping it wakes the Sprite (`resumeAndConnectNode`) and waits for it to rejoin the relay before opening the session, rather than the destroy/relaunch other providers need. The launch/setup forms drop the TTL and teardown-on-finish controls for Sprites and show a suspend explainer plus a "≈ $x/hr while active · ~$0 while suspended" cost hint.
+
+First-cut limitations: a curated region list (Fly region codes) and a small set of `(cpus, ram)` sizes; the `status` mapping normalises Sprites' running/warm/cold to Bivy's `running`/`stopped`; live end-to-end still needs a real Sprites token to confirm (the adapter is unit-tested via an injected transport in `packages/core/test/ephemeral-sprites.test.ts`).
+
 ## Minimum implementation
 
 - `EphemeralProvider` interface:
@@ -264,6 +285,8 @@ Claude Code mobile appears to preserve the logical session while recycling the b
 
 This gives the user the important continuity — conversation history, GitHub connection, branch/PR, selected agent/model, and session title — even when the actual VM is replaced.
 
+**Realised natively by Fly Sprites.** The [Fly Sprites](#fly-sprites-suspend-to-zero-machines-that-remember) provider gives this behaviour for free without Bivy having to snapshot/rebuild anything: the Sprite **suspends to ~$0 when idle and resumes with its filesystem *and* memory intact**, so the daemon process, runtime/session store, repo checkout, and agent all come back exactly where they were. Bivy's only job is to **wake** the suspended Sprite when the user reopens the session (`controller.resumeAndConnectNode` → the adapter's `wake` → the daemon re-dials the relay). The snapshot/rebuild path above remains the fallback for the destroy-when-done providers (Fly Machines/Hetzner/AWS), which can't preserve compute state across a teardown.
+
 ## Recommended path
 
 Start with **BYO Fly.io** or **BYO Hetzner** plus the existing account/node pairing. It avoids Bivy owning compute cost and abuse risk while proving the orchestration UX. Add Bivy-hosted machines only after quotas, billing, abuse controls, and teardown reliability are solid. **BYO AWS EC2** is now available on the same footing for users who already run infrastructure on AWS.
@@ -277,6 +300,7 @@ For context on where Fly/Hetzner/AWS sit relative to other options for short-liv
 | Fly Machines | Bearer token | REST/JSON, one `POST .../machines` call | ~0.3–2s | Explicit delete, or auto-destroy config | ~$0.003/hr (shared-1x-256MB) |
 | Hetzner Cloud | Bearer token | REST/JSON, one `POST /servers` call | ~10–20s (unofficial) | Explicit delete | ~€0.006/hr (CX22) |
 | **AWS EC2** | SigV4-signed (access key + secret) | Query/XML, one `RunInstances` call | user-data starts ~15s in | Explicit terminate, or in-guest self-shutdown | ~$0.01/hr (t3.micro) |
+| **Fly Sprites** | Bearer token | REST/JSON, `POST /v1/sprites` + a supervised service | ~1–2s create, instant start/stop | **Suspends to ~$0 when idle** (kept, not destroyed); explicit delete to remove | ~$0.06/hr active, **~$0 suspended** |
 | AWS Fargate/ECS | SigV4-signed | JSON, needs a cluster + task definition first, then `RunTask` | 20–60s unoptimized | Task stops on exit, or explicit stop | ~$0.012/hr (0.25vCPU/0.5GB) |
 | GCP Compute Engine | Service account (OAuth2) | REST/gRPC, `instances.insert` | not benchmarked | Explicit delete | ~$0.02–0.05/hr (e2-small) |
 | DigitalOcean | Bearer token | REST/JSON, `POST /v2/droplets` | not benchmarked | Explicit delete, per-second billing | ~$0.006/hr (smallest droplet) |

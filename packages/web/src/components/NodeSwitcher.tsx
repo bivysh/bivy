@@ -8,6 +8,7 @@ import { AddNodeSheet } from "./AddNodeSheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { ephemeralProviderSuspendsWhenIdle } from "@bivy/core";
 import type { EphemeralSetup, EphemeralMachine } from "@bivy/core";
 
 /**
@@ -132,6 +133,12 @@ export function NodeSwitcher() {
                 // placeholder, and no separate persistent-node row.
                 const runningNode = runningNodeForSetup(setup.id);
                 const online = Boolean(runningNode?.online);
+                // A Fly Sprite suspends to ~$0 when idle: its node stays enrolled
+                // but drops off the relay, so it shows as a running-but-offline
+                // node. Clicking it must WAKE it first (a suspended machine would
+                // hang plain switchNode forever), then connect.
+                const suspendable = ephemeralProviderSuspendsWhenIdle(setup.provider);
+                const suspended = Boolean(runningNode) && !online && suspendable;
                 return (
                   <button
                     key={setup.id}
@@ -139,16 +146,21 @@ export function NodeSwitcher() {
                     role="menuitem"
                     onClick={() => {
                       setOpen(false);
-                      if (runningNode) controller.switchNode(runningNode.id);
+                      if (runningNode) {
+                        if (suspendable && !online) void controller.resumeAndConnectNode(runningNode.id);
+                        else controller.switchNode(runningNode.id);
+                      }
                       else { setEphemeralSetupId(setup.id); setEphemeralOpen(true); }
                     }}
                   >
                     <span className={`node-dot${online ? " online" : ""}`} aria-hidden />
-                    <span className="sr-only">{online ? "Online" : "Offline"} — </span>
+                    <span className="sr-only">{online ? "Online" : suspended ? "Suspended — tap to resume" : "Offline"} — </span>
                     <span className="node-menu-name">{setup.name}</span>
                     {runningNode && runningNode.id === currentNodeId
                       ? <span className="node-menu-check">✓</span>
-                      : <span className="chip">{setup.provider}</span>}
+                      : suspended
+                        ? <span className="chip" title="Suspended to ~$0 — tap to resume with its state intact">Suspended</span>
+                        : <span className="chip">{setup.provider}</span>}
                   </button>
                 );
               })}

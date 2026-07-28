@@ -46,6 +46,8 @@ import {
   cloudExec,
   launchEphemeralMachine,
   destroyEphemeralMachine,
+  wakeEphemeralMachine,
+  ephemeralProviderSuspendsWhenIdle,
   listEphemeralSizes,
   ephemeralNodeLabel,
   type TranscriptCache,
@@ -1965,7 +1967,10 @@ export class AppController {
     const nodeId = this.local.cur;
     if (!nodeId) return;
     const machine = (await this.ephemeralMachines.list().catch(() => []))
-      .find((m) => m.nodeId === nodeId && m.teardownOnAgentFinish);
+      // Suspend-to-zero machines (Fly Sprites) are kept, never destroyed on
+      // finish — they self-suspend to ~$0 and resume with state intact, which is
+      // the whole point; destroying one would throw away its memory.
+      .find((m) => m.nodeId === nodeId && m.teardownOnAgentFinish && !ephemeralProviderSuspendsWhenIdle(m.provider));
     if (!machine || this.finishingEphemeralMachines.has(machine.id)) return;
     this.finishingEphemeralMachines.add(machine.id);
     setTimeout(() => {
@@ -2008,6 +2013,34 @@ export class AppController {
       machines: this.ephemeralMachines,
     });
     void this.refreshNodes();
+  }
+
+  /** Wake a suspended machine (Fly Sprites) so it rejoins the relay. No-op for
+   *  providers whose machines don't suspend. */
+  async wakeEphemeral(machine: EphemeralMachine): Promise<void> {
+    await wakeEphemeralMachine(machine, { exec: cloudExec(this.local), keys: this.ephemeralKeys });
+    void this.refreshNodes();
+  }
+
+  /**
+   * Open a node that may be a suspended, suspend-to-zero ephemeral machine (Fly
+   * Sprites): wake it first if needed — a suspended machine is off the relay, so
+   * plain `switchNode` would sit at "connecting" forever — then connect and wait
+   * for it to come online. For an already-online node this is just a connect.
+   * This is the "reopen the session to resume it" path behind the node switcher.
+   */
+  async resumeAndConnectNode(nodeId: string, timeoutMs = 90_000): Promise<void> {
+    try {
+      const machine = (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId);
+      if (machine && ephemeralProviderSuspendsWhenIdle(machine.provider)) {
+        await this.wakeEphemeral(machine);
+      }
+      await this.connectToNode(nodeId, timeoutMs);
+    } catch (e) {
+      // Surface a wake/connect failure (bad token, provider hiccup, slow resume)
+      // to the error toast rather than leaving the UI silently at "connecting".
+      this.store.setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   // --- GitHub work queue on ephemeral servers (issue #532) ----------------

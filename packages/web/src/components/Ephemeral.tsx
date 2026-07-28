@@ -184,13 +184,28 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
     }
   };
 
+  // Suspend-to-zero providers (Fly Sprites) keep the machine and self-suspend
+  // when idle — so the TTL self-destruct and "destroy when the agent finishes"
+  // controls don't apply; a suspend explainer replaces them.
+  const suspendsWhenIdle = adapter.suspendsWhenIdle === true;
+
   const launch = async () => {
     setBusy(true);
     setMsg(null);
     setErr(null);
     try {
-      await controller.launchEphemeral({ provider: providerId, region, size, ttlMinutes: ttl, teardownOnAgentFinish, name: setup?.name, setupId: setup?.id });
-      setMsg("Launching — it will appear in the node list once it boots.");
+      await controller.launchEphemeral({
+        provider: providerId,
+        region,
+        size,
+        ttlMinutes: suspendsWhenIdle ? undefined : ttl,
+        teardownOnAgentFinish: suspendsWhenIdle ? false : teardownOnAgentFinish,
+        name: setup?.name,
+        setupId: setup?.id,
+      });
+      setMsg(suspendsWhenIdle
+        ? "Launching — it'll appear in the node list once it boots, then suspend to ~$0 when idle."
+        : "Launching — it will appear in the node list once it boots.");
       refreshMachines();
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -244,25 +259,39 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
               ))}
             </select>
           </div>
-          <div className="eph-row">
-            <label className="field-label">Auto-destroy after</label>
-            <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
-              {TTL_OPTIONS.map((o) => (
-                <option key={o.v} value={o.v}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          {!suspendsWhenIdle && (
+            <div className="eph-row">
+              <label className="field-label">Auto-destroy after</label>
+              <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
+                {TTL_OPTIONS.map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           {(() => {
-            const hint = ephemeralCostHint(sizes.find((s) => s.id === size), ttl, adapter.currency);
-            return hint ? <p className="muted small">{hint} · billed by {catalog.name}, not Bivy</p> : null;
+            const selected = sizes.find((s) => s.id === size);
+            // Suspend-to-zero: only the hourly rate is meaningful (no TTL ceiling),
+            // and it's ~$0 while idle. Pass no TTL to get just the "≈ $x/hr" part.
+            const hint = ephemeralCostHint(selected, suspendsWhenIdle ? undefined : ttl, adapter.currency);
+            if (!hint) return null;
+            return suspendsWhenIdle
+              ? <p className="muted small">{hint} while active · ~$0 while suspended · billed by {catalog.name}, not Bivy</p>
+              : <p className="muted small">{hint} · billed by {catalog.name}, not Bivy</p>;
           })()}
-          <label className="field-label">Teardown</label>
-          <label className="checkbox-row">
-            <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
-            <span>Destroy when the agent finishes <span className="muted small">(TTL remains a safety fallback; requires this device to stay online)</span></span>
-          </label>
+          {suspendsWhenIdle ? (
+            <p className="muted small">Keeps its memory: suspends to ~$0 when idle and resumes with everything intact. Reopen its session from the node list to wake it. Destroy it manually when you're done.</p>
+          ) : (
+            <>
+              <label className="field-label">Teardown</label>
+              <label className="checkbox-row">
+                <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
+                <span>Destroy when the agent finishes <span className="muted small">(TTL remains a safety fallback; requires this device to stay online)</span></span>
+              </label>
+            </>
+          )}
           <p className="muted small">The machine pre-clones the repo you pick in the new-session composer.</p>
           <div className="row-actions">
             <button className="btn primary" disabled={busy} onClick={launch}>
