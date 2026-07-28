@@ -102,6 +102,13 @@ export interface ResolvedClient {
   nodeId: string | null; // non-null when the token is scoped to one node
 }
 
+/** Short-lived server-side state for an OAuth redirect. Kept in the shared
+ * store so the callback may land on any control-plane replica. */
+export interface OAuthState {
+  deviceId?: string;
+  returnPath?: string;
+}
+
 // Cross-node session index (option b). The control plane holds ONLY metadata:
 // ids, status, source, branch — and the title as an E2E-ENCRYPTED blob it cannot
 // read (clients decrypt with the room key). See docs/product-definition.md.
@@ -686,6 +693,13 @@ export interface MeshStore {
   accountFromSession(token: string | null): Promise<Account | undefined>;
   revokeSession(token: string): Promise<void>;
 
+  // Fleet-wide auth coordination. OAuth state must survive a callback landing
+  // on another replica; auth throttles must not reset when traffic moves between
+  // replicas. Both are atomic in the shared store.
+  createOAuthState(input: OAuthState, ttlMs?: number): Promise<string>;
+  consumeOAuthState(state: string): Promise<OAuthState | undefined>;
+  rateLimitExceeded(bucket: string, key: string, limit: number, windowMs: number): Promise<boolean>;
+
   // Device login (hands-free CLI sign-in)
   createDeviceLogin(ttlMs?: number): Promise<{ deviceId: string; deviceSecret: string }>;
   completeDeviceLogin(deviceId: string, accountId: string): Promise<void>;
@@ -919,7 +933,8 @@ export interface MeshStore {
   // called on an interval by the control plane. Returns how many rows were removed.
   pruneRunStartsBefore(beforeIso: string): Promise<number>;
   // Delete expired rows from every short-lived, single-use auth artifact table
-  // (login_tokens, sessions, link_grants, relay_tickets, device_logins). Each of
+  // (login_tokens, sessions, link_grants, relay_tickets, device_logins,
+  // oauth_states, and expired auth_rate_limits). Each of
   // these is normally deleted on successful single-use consumption, but an
   // abandoned attempt (closed tab, retried client, a node that never completes
   // introspection) leaves its row behind with no other cleanup path — called on

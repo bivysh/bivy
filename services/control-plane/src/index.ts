@@ -435,33 +435,18 @@ function validEmail(email: string): boolean {
   return /^[^@\s]+@[^@\s]+$/.test(email);
 }
 
-// Lightweight in-memory fixed-window rate limiter for the unauthenticated,
-// side-effecting auth endpoints — they send email (Resend) and provision an
-// account for any supplied address, so without a cap one source can flood third-
-// party inboxes and create unbounded rows. Per single control-plane instance;
-// good enough to blunt abuse from one origin. (Per-account quotas across the
-// fleet remain a documented 0.1 limitation — see docs/security-model.md.)
-const rateBuckets = new Map<string, { count: number; resetAt: number }>();
-function rateLimited(bucket: string, key: string, limit: number, windowMs: number): boolean {
-  const now = Date.now();
-  if (rateBuckets.size > 10_000) {
-    for (const [k, v] of rateBuckets) if (now >= v.resetAt) rateBuckets.delete(k);
-  }
-  const id = `${bucket}:${key}`;
-  const entry = rateBuckets.get(id);
-  if (!entry || now >= entry.resetAt) {
-    rateBuckets.set(id, { count: 1, resetAt: now + windowMs });
-    return false;
-  }
-  entry.count += 1;
-  return entry.count > limit;
-}
+// Fleet-wide fixed-window limits for unauthenticated, side-effecting auth
+// endpoints. The shared Postgres counter means adding replicas cannot multiply
+// the email/OAuth allowance and requests need no load-balancer affinity.
 function clientIp(req: Request): string {
   return String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket.remoteAddress || "unknown";
 }
 /** True (and responds 429) if this IP or email has exceeded the auth-email budget. */
-function authEmailRateLimited(req: Request, res: Response, email: string): boolean {
-  if (rateLimited("auth-email-ip", clientIp(req), 20, 60_000) || rateLimited("auth-email-addr", email, 5, 60_000)) {
+async function authEmailRateLimited(req: Request, res: Response, email: string): Promise<boolean> {
+  if (
+    await store.rateLimitExceeded("auth-email-ip", clientIp(req), 20, 60_000) ||
+    await store.rateLimitExceeded("auth-email-addr", email, 5, 60_000)
+  ) {
     res.status(429).json({ error: "Too many requests. Please wait a minute and try again." });
     return true;
   }
@@ -660,35 +645,9 @@ const githubClientId = process.env.GITHUB_OAUTH_CLIENT_ID || process.env.BIVY_GI
 const githubClientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET || process.env.BIVY_GITHUB_OAUTH_CLIENT_SECRET;
 const githubConfigured = Boolean(githubClientId && githubClientSecret);
 
-// Short-lived CSRF/login state. In-memory is fine for a single instance; a
-// multi-instance deployment should move this to the store (follow-up).
-//
-// GET /auth/github/start is unauthenticated and (unlike magic-link start)
-// previously had no rate limit, so every hit — including bots/scanners that
-// never complete the flow — minted an entry here with no cleanup path other
-// than a matching callback (takeOauthState). That is an unbounded, trivially
-// triggerable memory leak: on staging it presented as steadily growing
-// resident memory (pushing the container into swap) and rising CPU from GC
-// working harder to reclaim a heap that keeps growing. Bound it the same way
-// rateBuckets bounds itself below (self-sweep once the map gets large) and
-// rate-limit the endpoint like every other unauthenticated auth-start route.
-const githubOauthStates = new Map<string, { deviceId?: string; returnPath?: string; expiresAt: number }>();
-function rememberOauthState(deviceId?: string, returnPath?: string): string {
-  const now = Date.now();
-  if (githubOauthStates.size > 10_000) {
-    for (const [k, v] of githubOauthStates) if (now >= v.expiresAt) githubOauthStates.delete(k);
-  }
-  const state = randomBytes(24).toString("base64url");
-  githubOauthStates.set(state, { deviceId, returnPath, expiresAt: now + 10 * 60_000 });
-  return state;
-}
-function takeOauthState(state: string): { deviceId?: string; returnPath?: string } | undefined {
-  const rec = githubOauthStates.get(state);
-  if (!rec) return undefined;
-  githubOauthStates.delete(state); // single use
-  if (rec.expiresAt < Date.now()) return undefined;
-  return { deviceId: rec.deviceId, returnPath: rec.returnPath };
-}
+// Short-lived CSRF/login state lives in Postgres, not process memory: GitHub may
+// return the callback to any healthy control-plane replica behind the load
+// balancer. Consumption is atomic and single-use in the store.
 
 // Why a GitHub sign-in couldn't resolve an email. `token-exchange` means we never
 // got a usable access token (bad client secret, redirect_uri/PUBLIC_CONTROL_PLANE_URL
@@ -770,7 +729,7 @@ const requireNode = asyncHandler(async (req, res, next) => {
 app.post("/auth/magic-link/start", asyncHandler(async (req, res) => {
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   if (!validEmail(email)) return res.status(400).json({ error: "Invalid email" });
-  if (authEmailRateLimited(req, res, email)) return;
+  if (await authEmailRateLimited(req, res, email)) return;
 
   const loginToken = await store.createLoginToken(email);
   const loginUrl = `${baseUrl(req)}/auth/magic-link/consume?token=${encodeURIComponent(loginToken)}`;
@@ -812,7 +771,7 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
 app.post("/auth/device/start", asyncHandler(async (req, res) => {
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   if (!validEmail(email)) return res.status(400).json({ error: "Invalid email" });
-  if (authEmailRateLimited(req, res, email)) return;
+  if (await authEmailRateLimited(req, res, email)) return;
 
   const loginToken = await store.createLoginToken(email);
   const { deviceId, deviceSecret } = await store.createDeviceLogin();
@@ -852,12 +811,11 @@ app.post("/auth/device/poll", asyncHandler(async (req, res) => {
 
 // Begin GitHub OAuth. `?device=<id>` ties the login to a hands-free device login
 // (CLI / app) created via createDeviceLogin; otherwise it's a browser sign-in.
-app.get("/auth/github/start", (req, res) => {
+app.get("/auth/github/start", asyncHandler(async (req, res) => {
   if (!githubConfigured) return res.status(501).type("html").send("<h1>GitHub sign-in is not configured</h1><p>Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.</p>");
-  // Unauthenticated and side-effecting (mints a githubOauthStates entry below),
-  // same shape as /auth/magic-link/start — cap it the same way so a bot can't
-  // mint entries faster than the map's self-sweep can reclaim them.
-  if (rateLimited("oauth-github-start-ip", clientIp(req), 20, 60_000)) {
+  // Unauthenticated and side-effecting, same shape as magic-link start. The
+  // shared counter applies one allowance across the whole replica fleet.
+  if (await store.rateLimitExceeded("oauth-github-start-ip", clientIp(req), 20, 60_000)) {
     return res.status(429).type("html").send("<h1>Too many requests</h1><p>Please wait a minute and try again.</p>");
   }
   const deviceId = String(req.query.device ?? "").trim() || undefined;
@@ -865,7 +823,7 @@ app.get("/auth/github/start", (req, res) => {
   // sub-path) instead of always dumping to root. Ignored for the device flow,
   // which finishes in-place via polling rather than a redirect.
   const returnPath = deviceId ? undefined : safeReturnPath(req.query.return, "/");
-  const state = rememberOauthState(deviceId, returnPath);
+  const state = await store.createOAuthState({ deviceId, returnPath });
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", githubClientId!);
   url.searchParams.set("redirect_uri", `${baseUrl(req)}/auth/github/callback`);
@@ -873,13 +831,13 @@ app.get("/auth/github/start", (req, res) => {
   url.searchParams.set("state", state);
   url.searchParams.set("allow_signup", "true");
   res.redirect(url.toString());
-});
+}));
 
 app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   if (!githubConfigured) return res.status(501).json({ error: "GitHub sign-in not configured" });
   const code = String(req.query.code ?? "").trim();
   const state = String(req.query.state ?? "").trim();
-  const stored = takeOauthState(state);
+  const stored = await store.consumeOAuthState(state);
   if (!code || !stored) {
     // No usable state means no trustworthy return path, so land on root — but
     // still return the user to the sign-in card (with a reason) rather than a

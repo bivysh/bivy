@@ -40,6 +40,17 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(await store.consumeLoginToken(token), undefined);
   });
 
+  await test("OAuth state and auth limits are shared-store, atomic primitives", async (store) => {
+    const state = await store.createOAuthState({ deviceId: "device-1", returnPath: "/settings" });
+    assert.deepEqual(await store.consumeOAuthState(state), { deviceId: "device-1", returnPath: "/settings" });
+    assert.equal(await store.consumeOAuthState(state), undefined, "OAuth state is single-use");
+
+    assert.equal(await store.rateLimitExceeded("contract", "same-origin", 2, 60_000), false);
+    assert.equal(await store.rateLimitExceeded("contract", "same-origin", 2, 60_000), false);
+    assert.equal(await store.rateLimitExceeded("contract", "same-origin", 2, 60_000), true);
+    assert.equal(await store.rateLimitExceeded("contract", "other-origin", 2, 60_000), false, "keys are isolated");
+  });
+
   await test("sessions resolve until revoked", async (store) => {
     const acct = await store.findOrCreateAccount("contract-sess@example.com");
     const token = await store.createSession(acct.id);
