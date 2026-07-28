@@ -171,9 +171,9 @@ if (webPushEnabled) webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidP
 // with VAPID keys configured. Off ⇒ push is available to any account (still
 // requires VAPID keys / webPushEnabled); on ⇒ push stays gated to paid plans.
 const enforceEntitlements = process.env.ENFORCE_ENTITLEMENTS === "1";
-// Observe-only mode for the free run cap: keep COUNTING and reporting runs (so the
-// UI still shows "used / limit" and ops can watch the real runs-per-window
-// distribution), but never actually block a run. Lets Bivy Cloud gather data and
+// Observe-only mode for the free automation cap: keep counting and reporting jobs (so the
+// UI still shows "used / limit" and ops can watch the real automation distribution),
+// but never actually block a run. Lets Bivy Cloud gather data and
 // tune the number/window before flipping enforcement on, without walling anyone
 // during the observation window. Only meaningful when entitlements are enforced;
 // self-host is unlimited either way.
@@ -184,7 +184,7 @@ async function accountPushAllowed(accountId: string): Promise<boolean> {
   return (await store.entitlements(accountId)).pushEnabled;
 }
 
-// How many days back the free-tier run window looks. A ROLLING window (not a
+// How many days back the free-tier automation window looks. A ROLLING window (not a
 // calendar week) — capacity frees up gradually as individual runs age out the far
 // edge, which fits bursty dev work far better than a hard periodic reset.
 const RUN_WINDOW_DAYS = 7;
@@ -204,18 +204,19 @@ function runWindowStartIso(): string {
 // so the courtesy naturally recurs as the window slides.
 const RUN_GRACE = 1;
 
-// The account's run allowance for the current rolling window, counted across EVERY
-// source (manual, app, work queue, ephemeral). `limit` is the plan cap
-// (undefined ⇒ unlimited — paid plans), `used` the runs started in the window,
+// The account's unattended-automation allowance for the current rolling window.
+// Only `automation:*` starts (GitHub, Slack, webhook, scheduled) count; interactive
+// CLI/app sessions stay unlimited. `limit` is the plan cap (undefined means paid),
+// `used` is the queued automation started in the window,
 // `warn` whether this run is in the grace band (over the limit but still allowed),
 // `exhausted` whether a new run must be refused (over limit + grace). Blocking is
 // only in effect under `ENFORCE_ENTITLEMENTS=1` AND not `RUN_LIMIT_OBSERVE_ONLY=1`
 // (see enforceRunLimit); otherwise both flags stay false so runners go unlimited,
-// but `used` is ALWAYS reported for display. One distinct run (session) = one run.
+// but `used` is always reported for display. One queued work item = one automation run.
 async function runAllowance(accountId: string): Promise<{ limit?: number; used: number; warn: boolean; exhausted: boolean }> {
   const limit = (await store.entitlements(accountId)).weeklyRunLimit;
   if (typeof limit !== "number") return { limit: undefined, used: 0, warn: false, exhausted: false };
-  const used = await store.countRunStartsSince(accountId, runWindowStartIso());
+  const used = await store.countRunStartsSince(accountId, runWindowStartIso(), "automation:");
   if (!enforceRunLimit) return { limit, used, warn: false, exhausted: false };
   return { limit, used, warn: used >= limit && used < limit + RUN_GRACE, exhausted: used >= limit + RUN_GRACE };
 }
@@ -1004,9 +1005,9 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
         await store.listAccountSessions(account.id),
         await store.listNodes(account.id),
       ),
-      // Runs started in the current rolling window across every source (manual,
-      // app, work queue, ephemeral). Paired with entitlements.weeklyRunLimit so the
-      // UI can show "used / limit" and prompt an upgrade when a free account runs out.
+      // Unattended automation started in the current rolling window. The legacy
+      // property name stays compatible with existing clients; interactive sessions
+      // are excluded and unlimited on every plan.
       runsThisWeek: (await runAllowance(account.id)).used,
     },
   });
@@ -1322,20 +1323,13 @@ const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "ssm.ap-northeast-1.amazonaws.com",
 ]);
 app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
-  // Quick ephemeral servers are available on every plan (the persistent installer
-  // is also free). A launched runner is a run, so a free account that has spent its
-  // rolling run allowance can't cold-start another one. Only bites under
-  // ENFORCE_ENTITLEMENTS (Bivy Cloud); self-host is unlimited. Mirrors the client
-  // gate in EphemeralSheet — this is the authoritative check.
+  // Quick ephemeral servers are available on every plan. Interactive runner
+  // launches do not consume the automation allowance; a runner serving queued work
+  // is metered when that work enters `running`, like every other automation job.
   const account = (req as Request & { account: Account }).account;
   const ent = await store.entitlements(account.id);
   if (enforceEntitlements && !ent.ephemeralEnabled) {
     return res.status(403).json({ error: "Ephemeral servers aren't available on your plan." });
-  }
-  const allowance = await runAllowance(account.id);
-  if (allowance.exhausted) {
-    recordFunnelEvent("quota_blocked", "ephemeral", account.plan);
-    return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
   }
   const url = String(req.body?.url ?? "");
   let host: string;
@@ -2259,8 +2253,8 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
     .map((l) => l.trim())
     .filter(Boolean);
   const items = await store.listPendingWorkItems(node.accountId, labels.length ? labels : ["bivy"]);
-  // Free-tier rolling quota: once the window's run allowance (across every source)
-  // is spent, hide pending items so the node stops trying to claim them. They stay
+  // Free-tier rolling automation quota: once the queued-job allowance is spent,
+  // hide pending items so the node stops trying to claim them. They stay
   // queued and become visible again as capacity ages back in (no data lost, no
   // churn). The claim endpoint below is the authoritative backstop for a direct/racing claim.
   if ((await runAllowance(node.accountId)).exhausted) return res.json({ items: [] });
@@ -2270,14 +2264,14 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
 // Claim one item (atomic; only one node wins). Returns the item or 409 if taken.
 app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  // Authoritative free-tier quota gate: the rolling run cap spans every source, so a
-  // work-queue claim is refused once the window's runs (from any source) are spent.
+  // Authoritative free-tier quota gate for unattended automation. Interactive
+  // sessions never reach this endpoint and never consume the allowance.
   // 402 (not 409) so the node can tell "you're out of runs" from "someone else won
   // this item". Only bites under ENFORCE_ENTITLEMENTS; self-host is unlimited.
   const allowance = await runAllowance(node.accountId);
   if (allowance.exhausted) {
     recordFunnelEvent("quota_blocked", "work_queue", (await store.entitlements(node.accountId)).plan);
-    return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
+    return res.status(402).json({ error: "Weekly automation limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
   }
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });

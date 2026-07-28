@@ -47,8 +47,8 @@ GitHub branch + pull request
 
 The GitHub work queue is available on every plan.
 
-- **Free** — **10 runs per rolling 7-day window**, shared across every source: manual, app, and the GitHub/Slack work queue all draw from the same allowance. One run = one distinct session that starts work; reconnecting to a live session doesn't count. The window is **rolling** (not a calendar reset), so capacity frees up gradually as your older runs pass 7 days — a busy day doesn't wall you and idle stretches quietly refill. The cap is **soft**: the first run past the allowance still goes through (with a heads-up), and only further runs wait for capacity to age back in — queue items stay queued, nothing is lost. The queue view shows how many runs remain.
-- **Pro / Team** — unlimited runs.
+- **Free** — interactive CLI/app sessions are unlimited, plus **10 unattended automations per rolling 7-day window** across GitHub, Slack, signed webhooks, and schedules. One queued work item counts once. Capacity returns gradually as jobs pass 7 days. The cap is **soft**: the first job past the allowance still runs with a heads-up; later jobs stay queued until capacity returns. Nothing is lost.
+- **Pro / Team** — unlimited automation.
 
 The run cap is only enforced on Bivy Cloud (`ENFORCE_ENTITLEMENTS=1`). Self-hosted stacks run unlimited regardless of plan (see [configuration.md](./configuration.md)).
 

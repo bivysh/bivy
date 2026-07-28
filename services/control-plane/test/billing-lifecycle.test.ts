@@ -11,13 +11,13 @@ async function test(name: string, fn: () => Promise<void> | void) {
   console.log(`✓ ${name}`);
 }
 
-await test("free plan is feature-complete, capped only by rolling weekly runs", () => {
+await test("free plan includes unlimited interactive use and ten weekly automations", () => {
   const ent = entitlementsForPlan("free");
   assert.equal(ent.maxNodes, undefined, "free: unlimited nodes");
   assert.equal(ent.relayEnabled, true);
   assert.equal(ent.pushEnabled, true, "free: push included");
   assert.equal(ent.ephemeralEnabled, true, "free: ephemeral included");
-  assert.equal(ent.weeklyRunLimit, 10, "free: 10 runs / rolling 7 days is the only cap");
+  assert.equal(ent.weeklyRunLimit, 10, "free: 10 unattended automations / rolling 7 days; interactive sessions are unlimited");
 });
 
 await test("billing lifecycle updates plan and subscription metadata", async () => {
@@ -55,10 +55,10 @@ await test("billing lifecycle updates plan and subscription metadata", async () 
   const ent = await store.entitlements(account.id);
   assert.equal(ent.maxNodes, undefined, "downgrade keeps unlimited nodes");
   assert.equal(ent.relayEnabled, true);
-  // The queue itself stays on free — a downgrade drops the UNLIMITED allowance,
-  // re-imposing the free rolling run cap rather than turning the feature off.
+  // The queue itself stays on free — a downgrade restores the included weekly
+  // automation allowance rather than turning the feature off.
   assert.equal(ent.workQueueEnabled, true, "downgrade keeps the queue, metered");
-  assert.equal(ent.weeklyRunLimit, 10, "downgrade re-imposes the free rolling run cap");
+  assert.equal(ent.weeklyRunLimit, 10, "downgrade restores the free automation allowance");
 });
 
 console.log(`\nbilling-lifecycle: ${passed} tests passed`);

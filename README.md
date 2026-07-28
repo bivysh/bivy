@@ -1,13 +1,16 @@
 # Bivy
 
-Run coding agents on machines you own.
+Route coding-agent work to infrastructure you own.
 
-Bivy runs Claude Code, Codex, Gemini CLI, Aider and other agent CLIs on your own
-laptop or server — with your keys, your repository, and your toolchain — then
-makes those sessions reachable from your phone, browser, or another terminal.
+Bivy turns GitHub issues, Slack requests, signed webhooks, schedules, and live
+prompts into governed agent runs on your laptop, server, or cloud account. Choose
+the node, agent, and model; burst onto a short-lived runner in your own cloud;
+then watch, steer, and approve from a phone, browser, or terminal.
 
-Your code is never uploaded. Agents run in real terminals on hardware you
-control. Bivy adds the session layer, approvals, and remote access around them.
+Agents run with your repository, keys, and toolchain. Bivy's relay and control
+plane do not receive repository contents, prompts, transcripts, or model keys.
+Bivy adds routing, durable sessions, approvals, fallback rules, and outcome
+reports around agents you already use.
 
 - **Website:** [bivy.sh](https://bivy.sh)
 - **Documentation:** [`docs/`](docs/README.md) — start with the [quickstart](docs/quickstart.md)
@@ -80,7 +83,7 @@ See [`docs/remote-access.md`](docs/remote-access.md) and
 
 ## Supported agents
 
-Ten agents are available in the picker, each driven through its native CLI:
+Nineteen agents are available in the picker, each driven through its native interface:
 
 | Agent | Command | Notes |
 |---|---|---|
@@ -94,8 +97,19 @@ Ten agents are available in the picker, each driven through its native CLI:
 | Aider | `bivy run aider` | No session resume (upstream gap) |
 | Cline | `bivy run cline` | Installs `cline` |
 | Crush | `bivy run crush` | No session resume (upstream gap) |
+| Cursor | `bivy run cursor` | ACP-capable |
+| GitHub Copilot | `bivy run copilot` | ACP-capable |
+| Grok | `bivy run grok` | Model selection |
+| Amp | `bivy run amp` | Native thread resume |
+| Auggie | `bivy run auggie` | Headless CLI |
+| Droid | `bivy run droid` | Model selection |
+| Continue | `bivy run continue` | Headless CLI |
+| Kilo Code | `bivy run kilocode` | ACP-capable |
+| Rovo Dev | `bivy run rovodev` | Installed out of band |
 
-Any other command works via `bivy run -- ./your-agent --flags`.
+Any other command works via `bivy run -- ./your-agent --flags`. ACP-capable
+agents can be promoted to Bivy's governed protocol path for per-tool approvals
+and native resume.
 
 [`docs/runtime-support-matrix.md`](docs/runtime-support-matrix.md) lists exactly
 what each agent supports — resume, model selection, approvals, sandboxing.
@@ -173,9 +187,10 @@ Label an issue `bivy` (or `bivy/<node>` to target a machine), or mention the Biv
 GitHub App in a comment. A node you own claims the work, runs the agent in an
 isolated worktree, and the agent opens the pull request itself.
 
-Available on every plan: free accounts get 10 runs per rolling 7-day window
-(shared across every source — manual, app, work queue), paid plans are
-unlimited. Self-hosted stacks run unlimited.
+Available on every plan: interactive CLI/app sessions are unlimited. Free
+accounts also get 10 unattended automations per rolling 7-day window across
+GitHub, Slack, webhooks, and schedules; Pro removes the automation cap.
+Self-hosted stacks are unlimited.
 
 A private GitHub App only installs on the account that owns it, so connect one
 app per GitHub account — one for your personal repos, one per organization

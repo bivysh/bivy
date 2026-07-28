@@ -17,7 +17,7 @@
 
     <main class="wrap">
       <h1>Privacy Policy</h1>
-      <p class="updated">Last updated: 27 July 2026</p>
+      <p class="updated">Last updated: 28 July 2026</p>
 
       <p>
         Bivy is a local-first, source-available AI agent workspace that runs on your
@@ -100,13 +100,14 @@
         <a href="mailto:support@bivy.sh">support@bivy.sh</a>.
       </p>
 
-      <h2>Important note about work queues</h2>
+      <h2>Work queues</h2>
       <p>
-        If you enable the GitHub issue work-queue integration, the hosted
-        control plane stores the incoming issue title and body long enough
-        for your node to claim and run the work. Agent output and workspace data
-        still stay on your node. We are evaluating end-to-end encryption for queued
-        work-item content before broader paid launch.
+        For GitHub issue and comment jobs, the hosted control plane retains routing
+        metadata such as repository, issue number, target node, status, and timestamps.
+        It does not retain the issue title or body; the claiming node fetches that content
+        directly from GitHub immediately before running. Sanitized outcome reports contain
+        allowlisted routing, check, retry, branch, and pull-request metadata — never prompts,
+        transcripts, diffs, file contents, secrets, or raw tool output.
       </p>
 
       <h2>Changes</h2>

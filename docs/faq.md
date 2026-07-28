@@ -49,20 +49,13 @@ supported way to run Bivy.)
 
 ## Does the control plane see my GitHub issue text?
 
-Yes, in plaintext, for the GitHub work queue specifically. When a labeled
-issue or `@`-mention comment triggers a work item, the control plane stores
-that item's repository slug, issue number/URL, routing label, status — and
-the **issue title and body**, unencrypted, in its Postgres `work_items` table
-(`services/control-plane/src/postgres-store.ts`). That's true for as long as
-the item exists — at minimum while it's sitting pending and unclaimed, and
-the row isn't automatically cleared or encrypted once a node claims it either;
-it stays until you delete it yourself (`DELETE /account/work-items/:id`). If
-your issue titles/bodies are sensitive, don't route them through the hosted
-work queue. Repository contents, diffs, and agent output are a different
-story — those never leave your node. See [security-model.md § Known
-limitations for 0.1, item
-5](security-model.md#known-limitations-for-01) and
-[github-work-queue.md § Privacy and security
+It receives the signed GitHub webhook delivery in order to verify and route the
+event, but it does **not retain** the issue or comment title/body. The queued row
+contains routing metadata only: repository slug, issue number/URL, target label,
+status, and timestamps. Immediately before work starts, the claiming node fetches
+the current issue or comment directly from GitHub using its local credential.
+Repository contents, diffs, prompts, transcripts, and agent output also remain on
+the node. See [github-work-queue.md § Privacy and security
 model](github-work-queue.md#privacy-and-security-model).
 
 ## Are push notification contents private from the control plane?

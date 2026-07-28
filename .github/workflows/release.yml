@@ -40,6 +40,10 @@ jobs:
   # tests -- not just that CI was green on `main` at some earlier point.
   ci:
     uses: ./.github/workflows/ci.yml
+    with:
+      # A release validates the exact tag as a whole; changed-path optimization is
+      # only for PRs and must never skip a release job.
+      force_all: true
     permissions:
       contents: read
       pull-requests: read
