@@ -34,6 +34,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   honestly gaining Approvals + Resume). See `docs/runtime-support-matrix.md` and
   `docs/agents/`.
 
+- **Seven more agents promotable to the governed ACP path.** A systematic review
+  of every supported agent for a native Agent Client Protocol server found seven
+  beyond Gemini that ship one, and each now declares `acp` as data so it can be
+  driven through `bin/acp-shim.mjs` → the governed `ProtocolRuntime` (per-tool
+  Approve/Deny + `session/load` resume) instead of the one-shot pipe: **Qwen
+  Code** (`--experimental-acp`/`--acp`), **OpenCode** (`acp`), **Goose** (`acp`),
+  **Kilo Code** (`acp`), **Cursor** (`acp`), **Cline** (`--acp`), and **GitHub
+  Copilot** (`--acp`). Promote one with `BIVY_<ID>_ACP=1`, or all at once with
+  `BIVY_PREFER_ACP=1`; each stays off by default (on the honest pipe path) until
+  validated for the installed version. Agents with no first-party ACP server
+  (Aider, Amp, Crush, Continue, Grok) stay on the pipe — promoting them later is a
+  one-line `acp` field, no runtime code.
+
 - **Privacy-safe run evidence and outcome reports** — every automation run
   (GitHub issue/comment, Slack, manual, or scheduled) now carries a structured,
   allowlisted evidence record on top of its routing/status: why this node/

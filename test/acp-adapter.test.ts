@@ -127,6 +127,47 @@ await check("gemini: BIVY_GEMINI_ACP=1 promotes it to the governed ACP path end-
   }
 });
 
+// Every agent that ships a native ACP server declares `acp` as data, so promoting
+// it (BIVY_<ID>_ACP=1) flips its advertised capabilities to the governed path
+// (per-tool approvals + resume) with no per-agent runtime code. This locks the
+// expected set and guards against a spec regression silently dropping an agent
+// off — or onto — the ACP path. Capability advertisement is derived purely from
+// the spec + env, so it needs no installed binary.
+const ACP_CAPABLE = ["gemini", "qwen", "opencode", "goose", "kilocode", "cursor", "cline", "copilot"] as const;
+await check("acp: the expected agents declare an ACP mode and promote to governed caps", () => {
+  for (const id of ACP_CAPABLE) {
+    const envKey = `BIVY_${id.toUpperCase()}_ACP`;
+    delete process.env[envKey];
+    const before = listRuntimes().find((r) => r.id === id);
+    assert.ok(before, `${id} must be in the picker`);
+    assert.equal((before!.capabilities as Record<string, unknown>).toolInterception, false, `${id} is on the pipe by default (honest capabilities)`);
+    process.env[envKey] = "1";
+    try {
+      const caps = listRuntimes().find((r) => r.id === id)!.capabilities as Record<string, unknown>;
+      assert.equal(caps.toolInterception, true, `${id} promotes to per-tool approvals`);
+      assert.equal(caps.resume, true, `${id} promotes to session/load resume`);
+    } finally {
+      delete process.env[envKey];
+    }
+  }
+});
+
+// Agents with no first-party ACP server must NOT declare `acp`: setting the env
+// flag is a no-op and they stay on the honest pipe (effect-level governance).
+await check("acp: agents without a native ACP mode are not promotable", () => {
+  for (const id of ["aider", "amp", "crush", "continue", "grok"]) {
+    const envKey = `BIVY_${id.toUpperCase()}_ACP`;
+    process.env[envKey] = "1";
+    try {
+      const info = listRuntimes().find((r) => r.id === id);
+      if (!info) continue; // not in the picker on this build — nothing to assert
+      assert.equal((info.capabilities as Record<string, unknown>).toolInterception, false, `${id} has no ACP mode, so it stays on the pipe even when the flag is set`);
+    } finally {
+      delete process.env[envKey];
+    }
+  }
+});
+
 if (failures > 0) {
   console.error(`\n${failures} acp-adapter test(s) failed`);
   process.exit(1);

@@ -56,6 +56,21 @@ OpenCode's own session id.
 - Launch flags are pinned against the documented CLI; override with
   `BIVY_OPENCODE_ARGS` if a version differs.
 
+## ACP promotion (per-tool approvals)
+
+OpenCode ships a native [Agent Client Protocol](https://agentclientprotocol.com)
+server (`opencode acp`), so it can be driven through Bivy's governed
+`ProtocolRuntime` instead of the one-shot pipe — earning **per-tool Approve/Deny**
+and `session/load` resume:
+
+```bash
+BIVY_OPENCODE_ACP=1 bivy run opencode   # this agent, via ACP
+BIVY_PREFER_ACP=1 …                      # every ACP-capable agent, via ACP
+```
+
+Declared as data (`acp: { args: ["acp"] }`); off by default until validated for
+your version. See [acp.md](acp.md).
+
 ## Run it
 
 Pick OpenCode in the agent picker, or:

@@ -54,6 +54,21 @@ current sandbox tier.
   `toolInterception` is off for this runtime.
 - No package installs or session fork through this runtime.
 
+## ACP promotion (per-tool approvals)
+
+Qwen Code inherits Gemini CLI's [Agent Client Protocol](https://agentclientprotocol.com)
+server, so it can be driven through Bivy's governed `ProtocolRuntime` instead of
+the one-shot pipe — earning **per-tool Approve/Deny** and `session/load` resume:
+
+```bash
+BIVY_QWEN_ACP=1 bivy run qwen         # this agent, via ACP
+BIVY_PREFER_ACP=1 …                    # every ACP-capable agent, via ACP
+```
+
+Declared as data (`acp: { args: ["--experimental-acp"] }`; newer Qwen builds
+also accept `--acp`, and `--experimental-acp` remains a compatible alias). Off
+by default until validated for your version. See [acp.md](acp.md).
+
 ## Run it
 
 Pick Qwen Code in the agent picker, or:

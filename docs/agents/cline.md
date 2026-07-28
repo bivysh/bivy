@@ -48,6 +48,21 @@ Additionally:
   (filesystem, MCP, network channels), not a Cline-native mode.
 - No model picker, package installs, or session fork through this runtime.
 
+## ACP promotion (per-tool approvals)
+
+The Cline CLI (>2.0.0) speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+via `cline --acp`, so it can be driven through Bivy's governed `ProtocolRuntime`
+instead of the `-y` pipe — earning **per-tool Approve/Deny** and `session/load`
+resume:
+
+```bash
+BIVY_CLINE_ACP=1 bivy run cline        # this agent, via ACP
+BIVY_PREFER_ACP=1 …                     # every ACP-capable agent, via ACP
+```
+
+Declared as data (`acp: { args: ["--acp"] }`); off by default until validated for
+your version. See [acp.md](acp.md).
+
 ## Run it
 
 Pick Cline in the agent picker, or:

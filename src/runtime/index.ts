@@ -345,6 +345,11 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
         { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google" },
       ],
     },
+    // OpenCode ships a native ACP server (`opencode acp`, per opencode.ai/docs/acp),
+    // so it can be driven through the governed ProtocolRuntime instead of the pipe —
+    // per-tool approvals + streaming + resume. Opt in with BIVY_OPENCODE_ACP=1 (or
+    // global BIVY_PREFER_ACP=1); off by default until validated for your version.
+    acp: { args: ["acp"] },
     install: { kind: "npm", pkg: "opencode-ai" },
   },
   aider: {
@@ -405,6 +410,11 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // `goose run --resume --session-id <id> -t "<prompt>"` continues a prior
     // session by id (`--session-id` "Requires --resume", per `goose run --help`).
     resume: { template: ["run", "--output-format", "stream-json", "--resume", "--session-id", "{id}", "-t"] },
+    // Goose exposes a native ACP server (`goose acp`, per the Goose "ACP clients"
+    // guide), so it can be driven through the governed ProtocolRuntime instead of the
+    // stream-json pipe — per-tool approvals + streaming + resume. Opt in with
+    // BIVY_GOOSE_ACP=1 (or global BIVY_PREFER_ACP=1); off by default until validated.
+    acp: { args: ["acp"] },
     promptMode: "argv",
     supportTier: "beta",
     blurb: "Block's open-source agent with a structured stream-json protocol (Goose).",
@@ -480,6 +490,15 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // Gemini-CLI fork: same `--resume <id>` headless resume form (Qwen Code docs,
     // "Headless Mode"). `{sandbox}` re-derives --approval-mode from the tier.
     resume: { template: ["--output-format", "json", "{sandbox}", "--resume", "{id}", "-p"] },
+    // Qwen Code inherits Gemini CLI's ACP server (packages/cli/src/acp-integration),
+    // so it can be driven through the governed ProtocolRuntime instead of the pipe —
+    // per-tool approvals + streaming + resume. Newer builds graduated the flag to
+    // `--acp`, but `--experimental-acp` remains a backward-compatible alias across
+    // versions (deprecation warning goes to stderr, which the shim logs separately,
+    // so it can't corrupt the JSON-RPC stream). Opt in with BIVY_QWEN_ACP=1 (or
+    // global BIVY_PREFER_ACP=1); off by default until validated for your version.
+    // Zed's ACP registry lists qwen-code with `args: ["--acp"]`.
+    acp: { args: ["--experimental-acp"] },
     promptMode: "argv",
     install: { kind: "npm", pkg: "@qwen-code/qwen-code" },
   },
@@ -498,6 +517,11 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // (`--id <session-id>` "Resume an existing session by ID", per the Cline CLI
     // reference). No native sandbox/approval-mode flag, so no `{sandbox}` here.
     resume: { template: ["--id", "{id}", "-y"] },
+    // The Cline CLI (>2.0.0) speaks ACP via `cline --acp` (per docs.cline.bot ACP
+    // editor integrations), so it can be driven through the governed ProtocolRuntime
+    // instead of the `-y` pipe — per-tool approvals + streaming + resume. Opt in with
+    // BIVY_CLINE_ACP=1 (or global BIVY_PREFER_ACP=1); off by default until validated.
+    acp: { args: ["--acp"] },
     promptMode: "argv",
     install: { kind: "npm", pkg: "cline" },
   },
@@ -549,6 +573,11 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
         { id: "gpt-5", name: "GPT-5", provider: "openai" },
       ],
     },
+    // Cursor's agent speaks ACP (`cursor-agent acp`, per cursor.com/docs/cli/acp),
+    // so it can be driven through the governed ProtocolRuntime instead of the
+    // `--force -p` pipe — per-tool approvals + streaming + resume. Opt in with
+    // BIVY_CURSOR_ACP=1 (or global BIVY_PREFER_ACP=1); off by default until validated.
+    acp: { args: ["acp"] },
     promptMode: "argv",
     // Not on npm — Cursor ships a curl installer that drops `cursor-agent` on PATH.
     install: { kind: "curl", display: "curl https://cursor.com/install -fsS | bash", shell: "curl https://cursor.com/install -fsS | bash" },
@@ -574,6 +603,13 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     },
     // No `resume`: Copilot's resume flag isn't pinned to a stable by-id form yet;
     // wire one with BIVY_COPILOT_RESUME_TEMPLATE if your version documents it.
+    // Copilot CLI ships an ACP server (`copilot --acp`; public preview Jan 2026, per
+    // docs.github.com Copilot CLI reference), so it can be driven through the governed
+    // ProtocolRuntime instead of the `--allow-all-tools -p` pipe — per-tool approvals
+    // + streaming + resume (ACP `session/load` covers the resume the pipe lacks). Opt
+    // in with BIVY_COPILOT_ACP=1 (or global BIVY_PREFER_ACP=1); off by default until
+    // validated for your version.
+    acp: { args: ["--acp"] },
     promptMode: "argv",
     install: { kind: "npm", pkg: "@github/copilot" },
   },
@@ -707,6 +743,12 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     parserUnverified: true,
     // `kilo run -s <id> --auto "<prompt>"` continues a session by id.
     resume: { template: ["run", "-s", "{id}", "--auto"] },
+    // Kilo Code exposes a native ACP server (`kilo acp`, per the Kilo CLI docs —
+    // mirroring OpenCode's design, its upstream). Driven through the governed
+    // ProtocolRuntime instead of the `run --auto` pipe, it gains per-tool approvals +
+    // streaming + resume. Opt in with BIVY_KILOCODE_ACP=1 (or global BIVY_PREFER_ACP=1);
+    // off by default until validated for your version.
+    acp: { args: ["acp"] },
     // `kilo run -m <provider/model> …` — after the `run` subcommand (insertAt: 1).
     model: {
       flag: "-m",

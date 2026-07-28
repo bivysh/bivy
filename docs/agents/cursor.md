@@ -38,6 +38,21 @@ automatically via the generic `resume.template` primitive.
 - Launch flags are pinned against the documented CLI; override with
   `BIVY_CURSOR_ARGS` if a version differs.
 
+## ACP promotion (per-tool approvals)
+
+Cursor's agent speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+via `cursor-agent acp`, so it can be driven through Bivy's governed
+`ProtocolRuntime` instead of the `--force -p` pipe — earning **per-tool
+Approve/Deny** and `session/load` resume:
+
+```bash
+BIVY_CURSOR_ACP=1 bivy run cursor      # this agent, via ACP
+BIVY_PREFER_ACP=1 …                     # every ACP-capable agent, via ACP
+```
+
+Declared as data (`acp: { args: ["acp"] }`); off by default until validated for
+your version. See [acp.md](acp.md).
+
 ## Run it
 
 Pick Cursor in the agent picker, or:

@@ -59,6 +59,27 @@ until validated for your version — the North Star is that every agent which
 speaks ACP is wrapped this way, with the pipe reserved for agents that only offer
 a headless print mode.
 
+#### Agents that declare an ACP mode today
+
+Each of these ships a native ACP server, so it declares `acp` and can be promoted
+with `BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all of them at once):
+
+| Agent | id | Launch flag | Promote with |
+| --- | --- | --- | --- |
+| Gemini CLI | `gemini` | `--experimental-acp` | `BIVY_GEMINI_ACP=1` |
+| Qwen Code | `qwen` | `--experimental-acp` (newer builds: `--acp`) | `BIVY_QWEN_ACP=1` |
+| OpenCode | `opencode` | `acp` | `BIVY_OPENCODE_ACP=1` |
+| Goose | `goose` | `acp` | `BIVY_GOOSE_ACP=1` |
+| Kilo Code | `kilocode` | `acp` | `BIVY_KILOCODE_ACP=1` |
+| Cursor | `cursor` | `acp` | `BIVY_CURSOR_ACP=1` |
+| Cline | `cline` | `--acp` | `BIVY_CLINE_ACP=1` |
+| GitHub Copilot | `copilot` | `--acp` | `BIVY_COPILOT_ACP=1` |
+
+Agents with no native ACP mode (Aider, Amp, Crush, Continue, Grok, …) stay on the
+one-shot pipe — only community bridge adapters exist upstream, which Bivy doesn't
+bundle. When one of them ships a first-party ACP server, promoting it is a one-line
+`acp` field, no runtime code.
+
 ## Capabilities
 
 - **Approvals:** Yes — per-tool, via `session/request_permission`.
