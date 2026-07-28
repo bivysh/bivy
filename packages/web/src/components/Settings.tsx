@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, PRO_PRICE_LABEL, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, PRO_PRICE_LABEL, connectSlackHook, disconnectSlackHook, fetchSlackHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -49,6 +49,9 @@ const IconMic = () => (
 );
 const IconGithub = () => (
   <Glyph><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" /></Glyph>
+);
+const IconSlack = () => (
+  <Glyph><path d="M9 3v5a2 2 0 0 1-2 2H3a2 2 0 0 1 0-4h4V3a2 2 0 0 1 4 0v14a2 2 0 0 1-4 0v-4M15 21v-5a2 2 0 0 1 2-2h4a2 2 0 0 1 0 4h-4v3a2 2 0 0 1-4 0V7a2 2 0 0 1 4 0v4" /></Glyph>
 );
 const IconUser = () => (
   <Glyph><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Glyph>
@@ -155,7 +158,8 @@ const TITLES: Record<View, string> = {
   models: "Local models",
   voice: "Voice input",
   github: "GitHub App",
-  queue: "GitHub Queue",
+  slack: "Slack",
+  queue: "Work Queue",
   automations: "Automations",
   webhooks: "Webhooks",
   rulesets: "Rulesets",
@@ -235,10 +239,11 @@ export function Settings({
       ],
     },
     {
-      label: "GitHub",
+      label: "Integrations",
       items: [
         { id: "github", label: "GitHub App", icon: <IconGithub /> },
-        { id: "queue", label: "GitHub Queue", icon: <IconQueue /> },
+        ...(hosted ? [{ id: "slack" as View, label: "Slack", icon: <IconSlack /> }] : []),
+        { id: "queue", label: "Work Queue", icon: <IconQueue /> },
       ],
     },
     {
@@ -341,6 +346,7 @@ export function Settings({
             {activeView === "models" && <LocalModelsPanel state={state} />}
             {activeView === "voice" && <VoicePanel state={state} />}
             {activeView === "github" && <GithubPanel state={state} onOpenGithubQueue={() => onViewChange("queue")} />}
+            {activeView === "slack" && <SlackPanel />}
             {activeView === "queue" && (
               <GithubQueuePanel
                 queue={githubQueue ?? null}
@@ -1242,6 +1248,82 @@ function EphemeralQueueDefaultSection({ hint }: { hint?: string }) {
         )
       )}
     </>
+  );
+}
+
+// ---- Slack slash-command integration ----
+function SlackPanel() {
+  const [hook, setHook] = useState<SlackHook | null>(null);
+  const [secret, setSecret] = useState("");
+  const [route, setRoute] = useState("");
+  const [nodes, setNodes] = useState<AccountNode[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = async () => {
+    try {
+      const next = await fetchSlackHook(controller.local);
+      setHook(next);
+      if (next?.defaultNode) setRoute(next.defaultNode);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load Slack integration.");
+    }
+  };
+  useEffect(() => {
+    void refresh();
+    controller.listNodes().then(setNodes).catch(() => {});
+  }, []);
+  const connect = async () => {
+    setBusy(true); setError("");
+    try {
+      setHook(await connectSlackHook(controller.local, { signingSecret: secret, defaultNode: route || undefined }));
+      setSecret("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not connect Slack.");
+    } finally { setBusy(false); }
+  };
+  const disconnect = async () => {
+    if (!confirm("Disconnect Slack? The current slash-command URL will stop accepting requests.")) return;
+    setBusy(true); setError("");
+    try {
+      await disconnectSlackHook(controller.local);
+      setHook(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not disconnect Slack.");
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="settings-form">
+      <p className="settings-lead">Turn requests from a Slack slash command into unattended agent runs on your nodes.</p>
+      {error && <div className="banner error inline">{error}</div>}
+      {hook ? (
+        <section className="settings-section">
+          <h3>Connected</h3>
+          <p className="settings-hint">Use this as your Slack app's slash-command Request URL:</p>
+          <code className="settings-code">{hook.endpoint}</code>
+          <button className="btn" onClick={() => void navigator.clipboard.writeText(hook.endpoint)}>Copy Request URL</button>
+          <h4 className="settings-subhead">Commands</h4>
+          <code className="settings-code">/bivy fix the failing tests</code>
+          <code className="settings-code">/bivy on macbook fix the failing tests</code>
+          <code className="settings-code">/bivy in owner/repo fix the failing tests</code>
+          <p className="settings-hint">Add <code>in owner/repo</code> to run in an isolated checkout and bring back a pull request. Add <code>on node</code> to select a machine; the clauses can be combined.</p>
+          <button className="btn danger" disabled={busy} onClick={() => void disconnect()}>Disconnect Slack</button>
+        </section>
+      ) : (
+        <section className="settings-section">
+          <h3>Connect a Slack app</h3>
+          <ol className="settings-hint">
+            <li>Create a Slack app, then open <strong>Basic Information</strong>.</li>
+            <li>Copy its <strong>Signing Secret</strong> below.</li>
+            <li>After connecting, create a slash command named <code>/bivy</code> and paste the Request URL shown here.</li>
+          </ol>
+          <label className="field-label">Slack signing secret</label>
+          <input className="field-input" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Signing Secret" />
+          <label className="field-label">Default node (optional)</label>
+          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
+          <button className="btn primary" disabled={busy || secret.trim().length < 16} onClick={() => void connect()}>Connect Slack</button>
+        </section>
+      )}
+    </div>
   );
 }
 

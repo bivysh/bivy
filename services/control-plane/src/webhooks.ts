@@ -323,17 +323,32 @@ export function verifySlackSignature(
 
 export interface ParsedSlackCommand {
   node?: string; // target node label suffix, e.g. "laptop" from "on laptop"
+  repo?: string; // optional GitHub repository, e.g. "acme/api" from "in acme/api"
   prompt: string;
 }
 
 /**
- * Parse a Slack command body like `on laptop fix the flaky test` into a target
- * node and a prompt. With no leading `on <node>`, the whole text is the prompt
- * (routed to the account's default label).
+ * Parse `/bivy [on <node>] [in <owner/repo>] <request>`. The routing and repo
+ * clauses may appear in either order; without them the whole text is the prompt.
  */
 export function parseSlackCommand(text: string): ParsedSlackCommand {
-  const trimmed = (text ?? "").trim();
-  const m = trimmed.match(/^on\s+(\S+)\s+([\s\S]+)$/i);
-  if (m) return { node: m[1], prompt: m[2].trim() };
-  return { prompt: trimmed };
+  let rest = (text ?? "").trim();
+  const out: ParsedSlackCommand = { prompt: "" };
+  for (let i = 0; i < 2; i++) {
+    const node = rest.match(/^on\s+([A-Za-z0-9._-]+)\s+([\s\S]+)$/i);
+    if (node && !out.node) {
+      out.node = node[1];
+      rest = node[2].trim();
+      continue;
+    }
+    const repo = rest.match(/^in\s+([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\s+([\s\S]+)$/i);
+    if (repo && !out.repo) {
+      out.repo = repo[1];
+      rest = repo[2].trim();
+      continue;
+    }
+    break;
+  }
+  out.prompt = rest;
+  return out;
 }

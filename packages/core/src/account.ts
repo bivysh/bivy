@@ -639,6 +639,42 @@ export async function clearWorkQueue(store: LocalStore, fetchImpl: typeof fetch 
   return Number(data?.removed) || 0;
 }
 
+export interface SlackHook {
+  id: string;
+  endpoint: string;
+  enabled: boolean;
+  defaultNode?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export async function fetchSlackHook(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<SlackHook | null> {
+  const res = await fetchImpl(`${cpBase(store)}/account/slack-hook`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`Slack integration request failed: ${res.status}`);
+  const data: any = await res.json().catch(() => ({}));
+  return data?.hook ?? null;
+}
+
+export async function connectSlackHook(
+  store: LocalStore,
+  input: { signingSecret: string; defaultNode?: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<SlackHook> {
+  const res = await fetchImpl(`${cpBase(store)}/account/slack-hook`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify(input),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Connect Slack failed: ${res.status}`);
+  return data.hook;
+}
+
+export async function disconnectSlackHook(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/slack-hook`, { method: "DELETE", headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`Disconnect Slack failed: ${res.status}`);
+}
+
 export interface AutomationHook {
   id: string;
   endpoint: string;

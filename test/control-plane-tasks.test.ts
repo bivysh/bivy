@@ -27,18 +27,13 @@ async function waitFor(cond: () => boolean, { tries = 200, intervalMs = 5 } = {}
   if (!cond()) throw new Error("waitFor: condition never became true");
 }
 
-test("config: off unless enrolled AND issue pickup opted in", () => {
+test("config: every enrolled node serves the hosted work queue", () => {
   // Not enrolled → off.
   assert.equal(resolveControlPlaneTaskConfig(undefined, {}), null);
-  // Enrolled but not opted in → off.
-  assert.equal(
-    resolveControlPlaneTaskConfig({ controlPlaneUrl: "https://cp", enrollmentToken: "t" }, {}),
-    null,
-  );
-  // Enrolled + opted in → on, with default label.
+  // Slack/webhook/schedule work must run without a GitHub-specific opt-in.
   const cfg = resolveControlPlaneTaskConfig(
     { controlPlaneUrl: "https://cp/", enrollmentToken: "t" },
-    { BIVY_GITHUB_TASKS: "1" },
+    {},
   );
   assert.ok(cfg);
   assert.equal(cfg!.controlPlaneUrl, "https://cp"); // trailing slash trimmed

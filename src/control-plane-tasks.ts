@@ -63,13 +63,10 @@ export function resolveControlPlaneTaskConfig(
   env: NodeJS.ProcessEnv = process.env,
   nodeName?: string,
 ): ControlPlaneTaskConfig | null {
-  // Opt-in: only poll the hosted queue when enrolled AND issue pickup is enabled
-  // (the same switch as github-tasks, so a node doesn't poll unexpectedly).
+  // Enrollment opts the node into the hosted work queue. This cannot be gated
+  // on GitHub configuration: Slack, signed webhooks, schedules, and manually
+  // dispatched runs use the same queue and may be the only integration enabled.
   if (!relay?.controlPlaneUrl || !relay.enrollmentToken) return null;
-  const explicit = Boolean(env.BIVY_GITHUB_TOKEN?.trim() && env.BIVY_GITHUB_REPO?.trim());
-  const hostedOptIn = env.BIVY_GITHUB_HOSTED_TASKS === "1" || env.BIVY_GITHUB_TASKS === "1";
-  const appConfigured = Boolean(env.BIVY_GITHUB_APP_ID?.trim()); // GitHub App = hosted queue
-  if (!hostedOptIn && !explicit && !appConfigured) return null;
   const base = (env.BIVY_GITHUB_LABEL?.trim() || "bivy");
   // The label the node serves for its own name, e.g. name "hetzner" → "bivy/hetzner".
   const nameLabel = nodeName?.trim() ? `${base}/${nodeName.trim()}` : undefined;

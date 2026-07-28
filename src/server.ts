@@ -4800,19 +4800,56 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     await runIssueTask(cfg, issue, { runtimeId: item.runtimeId, model: item.model, onEvidence: report });
     return;
   }
-  // Generic prompt (Slack, or an issue with no repo): a background session in the
-  // default workspace so it doesn't steal the user's focused session.
-  const record = await createSession(defaultWorkspace, undefined, {
+  // Slack can target a GitHub repository (`/bivy in owner/repo ...`). Give that
+  // request the same isolated worktree and repo credentials as an interactive
+  // repo session; without a repo it still runs safely in the configured default
+  // workspace (and gains worktree isolation when that workspace is a checkout).
+  const parsedRepo = item.repo ? parseRepo(item.repo) : undefined;
+  if (item.repo && !parsedRepo) throw new Error(`work item ${item.id} has an invalid repo "${item.repo}"`);
+  const sessionOpts = {
     makeActive: false,
-    source: `queue:${item.source}`,
+    title: item.title,
     runtimeId: item.runtimeId,
     sandbox: normalizeSandboxTier(item.sandbox),
-    approvalMode: approvalModeFrom(item.approvalMode),
-  });
+  };
+  const record = parsedRepo
+    ? await createRepoSession(parsedRepo, sessionOpts)
+    : await createWorkspaceSession(defaultWorkspace, sessionOpts);
+  // Preserve queue provenance for non-repo work. Repo-backed sessions retain
+  // `repo:owner/repo`, which is required by branch push/PR detection.
+  if (!parsedRepo && !record.worktree) record.source = `queue:${item.source}`;
+  record.approvalMode = approvalModeFrom(item.approvalMode);
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
   }
-  await record.session.prompt(item.body ? `${item.title}\n\n${item.body}` : item.title);
+  const request = item.body ? `${item.title}\n\n${item.body}` : item.title;
+  const prompt = parsedRepo || record.worktree
+    ? [
+        request,
+        "",
+        "Work carefully in this repository and implement the request completely. Run the relevant tests, linter, and type-checker.",
+        "When finished, commit and push your changes, then open a pull request with a clear title and description. If you cannot open it, leave the changes committed on this branch.",
+      ].join("\n")
+    : request;
+  await runSessionTurn(record, prompt);
+  if (record.worktree) {
+    await maybePushWorktreeBranch(record);
+    await maybeDetectPullRequest(record);
+  }
+  await report({
+    output: {
+      sessionId: record.id,
+      branch: record.worktree?.branch,
+      prUrl: record.prUrl,
+    },
+    events: record.prUrl ? [{
+      at: new Date().toISOString(),
+      kind: "pull_request",
+      summary: "Pull request opened.",
+      ref: record.worktree?.branch,
+      url: record.prUrl,
+    }] : undefined,
+  });
 }
 
 function startControlPlaneTasksIfConfigured() {
