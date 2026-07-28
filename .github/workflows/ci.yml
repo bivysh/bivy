@@ -105,7 +105,10 @@ jobs:
       - run: npm ci
       # Verify the temporary postinstall repair for pi-coding-agent's published
       # shrinkwrap actually changed the on-disk package, not only npm's lockfile.
-      - run: test "$(node -p \"require('./node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion/package.json').version\")" = "5.0.8"
+      - name: Verify patched pi dependency
+        run: |
+          actual="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion/package.json').version")"
+          test "$actual" = "5.0.8"
       # Production dependencies ship to users; do not release a known
       # high/critical advisory.
       - run: npm audit --omit=dev --audit-level=high
