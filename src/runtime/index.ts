@@ -36,6 +36,7 @@ import type { ModelInfo, RuntimeMessage } from "./types.js";
 import { PiRuntime, type PiRuntimeOptions } from "./pi.js";
 import { ProcessRuntime, processRuntimeFromEnv, type ProcessModelConfig, type ProcessPromptMode, type ProcessThinkingConfig } from "./process.js";
 import { codexCredentialPreflight } from "./codex-preflight.js";
+import { opencodeCredentialPreflight } from "./opencode-preflight.js";
 import { ensureCodexAuth } from "./codex-auth.js";
 import { parserFactoryFor } from "./cli-parsers.js";
 import { sandboxTier, sandboxArgsFor, codexSandboxPolicy, type SandboxTier } from "../harness/sandbox.js";
@@ -1061,7 +1062,12 @@ export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
       // `codex login`), `prepare` mints that auth file from the shared vault so
       // the run just works; the preflight still catches the genuinely
       // uncredentialed case with an actionable message instead of an opaque 401.
-      const preflight = id === "codex" ? (env: Record<string, string | undefined>) => codexCredentialPreflight(env) : undefined;
+      const preflight =
+        id === "codex"
+          ? (env: Record<string, string | undefined>) => codexCredentialPreflight(env)
+          : id === "opencode"
+            ? (env: Record<string, string | undefined>, ctx: { provider?: string }) => opencodeCredentialPreflight(env, ctx)
+            : undefined;
       const prepare = id === "codex"
         ? async (): Promise<Record<string, string>> => {
             const home = await ensureCodexAuth(options.credsDir);

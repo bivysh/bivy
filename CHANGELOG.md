@@ -101,6 +101,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **OpenCode runs fail loudly, not opaquely, when a provider key is missing.**
+  `opencode run` boots OpenCode's own server, which returns an opaque
+  `UnknownError: Unexpected server error. Check server logs for details.`
+  (with an `err_…` ref pointing at a log Bivy can't read) when the selected
+  provider has no credential — so a user with, say, GPT-5 selected but no
+  OpenAI key just saw a cryptic 500. A provider-aware credential preflight
+  (`src/runtime/opencode-preflight.ts`, mirroring the Codex one) now catches the
+  missing key up front and returns an actionable message naming the provider and
+  the env var to set. Bivy also strips ANSI escape codes from relayed CLI output
+  (`src/runtime/ansi.ts`), so dumb-pipe agents no longer render their colorized
+  errors as `[91m[1m…` garbage in the agent-output pane. (#205)
 - **Ephemeral machines now actually come online.** The bootstrap installed
   Bivy but never *started* the node on a headless, pre-enrolled machine (no TTY
   → the installer just prints "run `bivy setup`"), so the node never dialed the
