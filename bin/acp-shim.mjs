@@ -1,0 +1,298 @@
+#!/usr/bin/env node
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (c) 2026 Petter André Sjulstad
+// ACP ⇄ Bivy Agent Protocol shim — the GENERAL high-capability adapter.
+//
+// The Codex shim (codex-app-server-shim.mjs) proved that driving an agent's
+// bidirectional JSON-RPC app-server — instead of a one-shot stdout pipe — buys
+// per-tool approvals, streaming, and resume. Everything there is Codex-specific is
+// the *protocol*. ACP (Agent Client Protocol, https://agentclientprotocol.com) is
+// the open standard for exactly that surface, and a growing set of agents speak it
+// (Gemini CLI `--experimental-acp`, and others). This shim bridges ANY ACP agent to
+// the bivy-agent-protocol JSONL that ProtocolRuntime (src/runtime/protocol.ts)
+// speaks — so a new ACP agent becomes fully governed (Approve/Deny per tool),
+// streaming, and resumable as DATA (one catalog entry), never per-agent code.
+//
+// Usage (spawned by the daemon's `acp` runtime):
+//   node acp-shim.mjs --agent <cmd> [-- <agent args…>]
+//
+// ACP surface implemented (client side of the protocol):
+//   → initialize / session/new / session/load / session/prompt / session/cancel
+//   ← session/update  (agent_message_chunk, agent_thought_chunk, tool_call,
+//                       tool_call_update, plan) → streamed transcript
+//   ← session/request_permission → a bivy `tool.call` we block on until the human
+//                       taps Approve/Deny (answered as the ACP selected option)
+//   ← fs/read_text_file / fs/write_text_file → serviced against the workspace
+//
+// Transport is newline-delimited JSON-RPC 2.0 over the agent's stdio (as Gemini's
+// ACP mode emits). Experimental: validate against your ACP agent, then promote it
+// into the picker as data. Fail-closed on permission (deny if the human declines),
+// fail-safe elsewhere (surface errors as session.error rather than wedging).
+
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+import fs from "node:fs";
+
+// --- arg parsing: --agent <cmd> [-- <args…>] --------------------------------
+const argv = process.argv.slice(2);
+let agentCmd = process.env.BIVY_ACP_COMMAND || "";
+let agentArgs = [];
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === "--agent") agentCmd = argv[++i] ?? "";
+  else if (argv[i] === "--") { agentArgs = argv.slice(i + 1); break; }
+}
+if (process.env.BIVY_ACP_ARGS && agentArgs.length === 0) {
+  try { const p = JSON.parse(process.env.BIVY_ACP_ARGS); if (Array.isArray(p)) agentArgs = p.map(String); } catch { /* ignore */ }
+}
+if (!agentCmd) {
+  process.stderr.write("acp-shim: no agent command (set --agent <cmd> or BIVY_ACP_COMMAND)\n");
+  process.exit(2);
+}
+
+// --- bivy-agent-protocol output (our stdout) --------------------------------
+function bivy(obj) {
+  process.stdout.write(`${JSON.stringify(obj)}\n`);
+}
+
+// --- ACP agent (child JSON-RPC over its stdio) ------------------------------
+const agent = spawn(agentCmd, agentArgs, { stdio: ["pipe", "pipe", "pipe"] });
+agent.stderr.on("data", (d) => process.stderr.write(`[acp-agent] ${d}`));
+agent.on("error", (e) => bivy({ type: "session.error", error: `acp agent spawn failed: ${e.message}` }));
+agent.on("exit", (code) => {
+  if (code && code !== 0) bivy({ type: "session.error", error: `acp agent exited (${code})` });
+});
+
+let nextId = 1;
+const pending = new Map(); // jsonrpc id -> {resolve, reject}
+function agentRequest(method, params) {
+  const id = nextId++;
+  agent.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+}
+function agentReply(id, result) {
+  agent.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+}
+function agentReplyError(id, code, message) {
+  agent.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } })}\n`);
+}
+function agentNotify(method, params) {
+  agent.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
+}
+
+// --- session state ----------------------------------------------------------
+let sessionId = null;
+let cwd = process.cwd();
+let initialized = false;
+// toolCallId -> { requestId, options } so a later bivy tool.decision answers the
+// right ACP permission request with a concrete optionId.
+const permissionRequests = new Map();
+
+async function ensureInitialized() {
+  if (initialized) return;
+  await agentRequest("initialize", {
+    protocolVersion: 1,
+    clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
+  });
+  initialized = true;
+}
+
+// --- ACP → bivy: streamed session/update notifications ----------------------
+function onSessionUpdate(params) {
+  const u = params?.update;
+  if (!u || typeof u !== "object") return;
+  const kind = String(u.sessionUpdate || "");
+  const textOf = (content) => {
+    if (!content) return "";
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) return content.map(textOf).join("");
+    if (content.type === "text" && typeof content.text === "string") return content.text;
+    if (typeof content.text === "string") return content.text;
+    return "";
+  };
+  switch (kind) {
+    case "agent_message_chunk": {
+      const t = textOf(u.content);
+      if (t) bivy({ type: "message.delta", text: t });
+      break;
+    }
+    case "agent_thought_chunk": {
+      const t = textOf(u.content);
+      if (t) bivy({ type: "message.reasoning", text: t });
+      break;
+    }
+    case "tool_call": {
+      // An auto-run tool (no permission requested) — surface it so the transcript
+      // shows the action; the result arrives via tool_call_update.
+      const toolCallId = String(u.toolCallId ?? u.id ?? "");
+      bivy({ type: "tool.call", toolCallId, name: String(u.title || u.kind || "tool"), input: u.rawInput ?? u.input ?? {} });
+      break;
+    }
+    case "tool_call_update": {
+      const toolCallId = String(u.toolCallId ?? u.id ?? "");
+      const status = String(u.status || "");
+      if (status === "completed" || status === "failed") {
+        bivy({ type: "tool.result", toolCallId, name: String(u.title || "tool"), result: textOf(u.content) || status });
+      }
+      break;
+    }
+    case "plan":
+      // Optional planning stream — fold into reasoning so nothing is lost.
+      if (Array.isArray(u.entries)) bivy({ type: "message.reasoning", text: u.entries.map((e) => `• ${e.content ?? ""}`).join("\n") });
+      break;
+    default:
+      break;
+  }
+}
+
+// --- ACP → bivy: agent→client requests (permission, fs) ---------------------
+async function onAgentRequest(id, method, params) {
+  switch (method) {
+    case "session/request_permission": {
+      // Turn the ACP permission prompt into a bivy tool.call the daemon gates via
+      // guardianInterceptor; remember the options so the human's decision maps back
+      // to a concrete ACP optionId.
+      const tc = params?.toolCall ?? {};
+      const toolCallId = String(tc.toolCallId ?? tc.id ?? `perm-${id}`);
+      const options = Array.isArray(params?.options) ? params.options : [];
+      permissionRequests.set(toolCallId, { requestId: id, options });
+      bivy({ type: "tool.call", toolCallId, name: String(tc.title || tc.kind || "tool"), input: tc.rawInput ?? tc.input ?? {} });
+      return;
+    }
+    case "fs/read_text_file": {
+      try {
+        let text = fs.readFileSync(String(params?.path ?? ""), "utf8");
+        if (typeof params?.line === "number" || typeof params?.limit === "number") {
+          const lines = text.split("\n");
+          const start = Math.max(0, (params.line ?? 1) - 1);
+          text = lines.slice(start, params.limit ? start + params.limit : undefined).join("\n");
+        }
+        agentReply(id, { content: text });
+      } catch (e) {
+        agentReplyError(id, -32000, `read failed: ${e.message}`);
+      }
+      return;
+    }
+    case "fs/write_text_file": {
+      try {
+        fs.writeFileSync(String(params?.path ?? ""), String(params?.content ?? ""));
+        agentReply(id, {});
+      } catch (e) {
+        agentReplyError(id, -32000, `write failed: ${e.message}`);
+      }
+      return;
+    }
+    default:
+      // Unknown client method (e.g. terminal/*): decline so the agent can fall back
+      // instead of hanging on a request we don't implement.
+      agentReplyError(id, -32601, `unsupported client method: ${method}`);
+      return;
+  }
+}
+
+// --- read the ACP agent's stdout (JSON-RPC lines) ---------------------------
+createInterface({ input: agent.stdout }).on("line", (line) => {
+  const t = line.trim();
+  if (!t) return;
+  let msg;
+  try { msg = JSON.parse(t); } catch { return; }
+  // Response to one of our requests.
+  if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
+    const p = pending.get(msg.id);
+    if (p) {
+      pending.delete(msg.id);
+      if (msg.error) p.reject(new Error(msg.error.message || "acp error"));
+      else p.resolve(msg.result);
+    }
+    return;
+  }
+  // Agent→client request (has id + method).
+  if (msg.id !== undefined && msg.method) { void onAgentRequest(msg.id, msg.method, msg.params); return; }
+  // Notification (method, no id).
+  if (msg.method === "session/update") onSessionUpdate(msg.params);
+});
+
+// --- bivy commands in (daemon → us) -----------------------------------------
+async function onBivyCommand(msg) {
+  const type = String(msg.type || "");
+  const id = msg.id;
+  try {
+    switch (type) {
+      case "hello.ack":
+        return;
+      case "session.create": {
+        await ensureInitialized();
+        cwd = String(msg.cwd || msg.workspace || cwd);
+        const res = await agentRequest("session/new", { cwd, mcpServers: [] });
+        sessionId = res?.sessionId ?? res?.session?.id ?? null;
+        bivy({ replyTo: id, ok: true, runtimeSessionRef: sessionId });
+        return;
+      }
+      case "session.resume": {
+        await ensureInitialized();
+        const ref = String(msg.runtimeSessionRef || msg.resumeRef || msg.sessionId || "");
+        cwd = String(msg.cwd || msg.workspace || cwd);
+        if (!ref) { bivy({ replyTo: id, ok: false, error: "missing resume ref" }); return; }
+        try {
+          const res = await agentRequest("session/load", { sessionId: ref, cwd, mcpServers: [] });
+          sessionId = res?.sessionId ?? ref;
+        } catch {
+          // Agent doesn't support session/load — start fresh so the chat still opens.
+          const res = await agentRequest("session/new", { cwd, mcpServers: [] });
+          sessionId = res?.sessionId ?? null;
+        }
+        bivy({ replyTo: id, ok: true, runtimeSessionRef: sessionId });
+        return;
+      }
+      case "chat.send": {
+        if (!sessionId) { bivy({ replyTo: id, ok: false, error: "no acp session" }); return; }
+        // Ack immediately; the turn streams via session/update and finishes when the
+        // session/prompt request resolves (approval cards can make a turn outlast
+        // ProtocolRuntime's command timeout, so we must not defer the ack).
+        bivy({ replyTo: id, ok: true });
+        bivy({ type: "session.status", status: "working" });
+        agentRequest("session/prompt", { sessionId, prompt: [{ type: "text", text: String(msg.text ?? "") }] })
+          .then(() => { bivy({ type: "session.status", status: "idle" }); bivy({ type: "session.done" }); })
+          .catch((e) => bivy({ type: "session.error", error: e instanceof Error ? e.message : String(e) }));
+        return;
+      }
+      case "tool.decision": {
+        const entry = permissionRequests.get(msg.toolCallId);
+        if (entry) {
+          permissionRequests.delete(msg.toolCallId);
+          const allow = msg.decision !== "deny";
+          // Pick an ACP option matching the human's choice by its `kind`
+          // (allow_once/allow_always vs reject_once/reject_always); fall back to the
+          // first option, or a cancelled outcome when nothing fits.
+          const want = allow ? /^allow/ : /^reject/;
+          const opt = entry.options.find((o) => want.test(String(o.kind || ""))) ?? entry.options[0];
+          if (opt && opt.optionId !== undefined) agentReply(entry.requestId, { outcome: { outcome: "selected", optionId: opt.optionId } });
+          else agentReply(entry.requestId, { outcome: { outcome: "cancelled" } });
+        }
+        return;
+      }
+      case "session.abort": {
+        if (sessionId) agentNotify("session/cancel", { sessionId });
+        if (id !== undefined) bivy({ replyTo: id, ok: true });
+        return;
+      }
+      default:
+        if (id !== undefined) bivy({ replyTo: id, ok: true });
+        return;
+    }
+  } catch (error) {
+    if (id !== undefined) bivy({ replyTo: id, ok: false, error: error instanceof Error ? error.message : String(error) });
+    else bivy({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+// Announce capabilities: ACP agents are governed (per-tool permission) and
+// resumable (session/load). Models aren't part of the core ACP surface, so we
+// don't advertise a picker we can't drive.
+bivy({ type: "hello", runtime: { capabilities: { toolInterception: true, modelSelection: false, resume: true } } });
+
+createInterface({ input: process.stdin }).on("line", (line) => {
+  if (!line.trim()) return;
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  void onBivyCommand(msg);
+});

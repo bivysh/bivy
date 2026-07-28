@@ -366,6 +366,19 @@ export interface OpenSessionResult {
 export interface RuntimeCapabilities {
   /** Can intercept tool calls — required for the approval/governance tier. */
   toolInterception: boolean;
+  /**
+   * The agent's MCP tool calls are gated by the same Approve/Deny flow as native
+   * tool interception, via the `bivy mcp-proxy` shim (see src/harness/mcp-*.ts):
+   * at session start Bivy rewrites the agent's MCP config so each stdio server
+   * launches through the proxy, which asks the daemon (`/api/mcp/decide` →
+   * guardianInterceptor) before every `tools/call`. This is NARROWER than
+   * `toolInterception` — it governs only tools the agent invokes *through MCP*, not
+   * its built-in shell/file edits — so it's a distinct, honest capability rather
+   * than a claim of full per-tool approval. On only when `BIVY_MCP_PROXY` is
+   * enabled for a ProcessRuntime CLI agent (Pi/Claude-SDK govern MCP natively).
+   * Optional; absent/false = MCP calls run under effect-level governance only.
+   */
+  mcpToolApprovals?: boolean;
   /** Exposes a model registry the user can pick from. */
   modelSelection: boolean;
   /** Can install/list/update packages or extensions. */

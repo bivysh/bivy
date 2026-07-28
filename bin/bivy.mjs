@@ -518,19 +518,44 @@ async function ensureSetupAgent(choice) {
   return true;
 }
 
+// The CLI-agent rows come from bin/agent-manifest.json — generated from
+// CLI_AGENT_SPECS (`npm run gen:agent-manifest`), so the terminal `bivy run`
+// agents never drift from the web picker's. A sync test guards the JSON. The two
+// native rows (Pi, Claude Code) aren't CLI specs and stay defined here.
+function loadAgentManifest() {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, "agent-manifest.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.agents) ? parsed.agents : [];
+  } catch {
+    return []; // shipped alongside this file; empty only in a broken checkout
+  }
+}
+
+// Headless "one-shot" tokens for an agent, derived from the manifest — the
+// fallback for any spec that isn't hand-tuned in AGENT_HEADLESS_FLAGS below, so a
+// newly-added agent still gets one-shot detection with no edit here.
+function manifestHeadlessFlags(id) {
+  const entry = loadAgentManifest().find((a) => a.id === id);
+  return entry && entry.headlessFlags?.length ? entry.headlessFlags : undefined;
+}
+
 const BUILTIN_TERMINAL_AGENTS = new Map([
   ["pi", { label: "Pi", type: "native-pi" }],
   ["claude", { label: "Claude Code", type: "command", command: "claude", npmPackage: "@anthropic-ai/claude-code" }],
-  ["codex", { label: "Codex", type: "command", command: "codex" }],
-  ["opencode", { label: "OpenCode", type: "command", command: "opencode" }],
-  ["aider", { label: "Aider", type: "command", command: "aider" }],
-  ["hermes", { label: "Hermes", type: "command", command: "hermes", npmPackage: "hermes" }],
   ["openclaw", { label: "OpenClaw", type: "command", command: process.env.BIVY_OPENCLAW_COMMAND || "openclaw" }],
-  ["goose", { label: "Goose", type: "command", command: "goose" }],
-  ["gemini", { label: "Gemini CLI", type: "command", command: "gemini", npmPackage: "@google/gemini-cli" }],
-  ["qwen", { label: "Qwen Code", type: "command", command: "qwen", npmPackage: "@qwen-code/qwen-code" }],
-  ["cline", { label: "Cline", type: "command", command: "cline", npmPackage: "cline" }],
-  ["crush", { label: "Crush", type: "command", command: "crush", npmPackage: "@charmland/crush" }],
+  ...loadAgentManifest().map((a) => [
+    a.id,
+    {
+      label: a.label,
+      type: "command",
+      // The manifest carries each agent's real binary (e.g. Rovo Dev → `acli`,
+      // Continue → `cn`, Kilo Code → `kilo`).
+      command: a.command,
+      // Auto-install only from npm; curl/pip agents resolve if already on PATH.
+      ...(a.install?.kind === "npm" ? { npmPackage: a.install.pkg } : {}),
+    },
+  ]),
 ]);
 
 async function ensureTerminalCommand(agent) {
@@ -804,6 +829,16 @@ const AGENT_HEADLESS_FLAGS = {
   opencode: ["run"],
   crush: ["run"],
   cline: ["-y", "--yolo", "--no-interactive", "--json"],
+  cursor: ["-p", "--print"],
+  copilot: ["-p", "--prompt"],
+  grok: ["-p", "--prompt"],
+  amp: ["-x", "--execute"],
+  auggie: ["-p", "--print"],
+  droid: ["exec"],
+  continue: ["-p"],
+  kilocode: ["run"],
+  rovodev: ["run"],
+  codebuff: ["-p", "--print"],
 };
 
 // Flag an agent's CLI accepts to pin a specific session id at launch, so the
@@ -1254,7 +1289,7 @@ async function cmdShim(args = []) {
     const headlessOverride = argValue(rest, "headless");
     const headlessFlags = headlessOverride
       ? headlessOverride.trim().split(/\s+/).filter(Boolean)
-      : (AGENT_HEADLESS_FLAGS[agent] || AGENT_HEADLESS_FLAGS.default);
+      : (AGENT_HEADLESS_FLAGS[agent] || manifestHeadlessFlags(agent) || AGENT_HEADLESS_FLAGS.default);
 
     const shimPath = path.join(shimDir, agent);
     const real = resolveRealBinary(agentCmd, shimDir);

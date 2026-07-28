@@ -22,8 +22,10 @@ const THINKING_LABELS: Record<string, string> = {
 
 function runtimeCapabilityChips(a: RuntimeInfo): Array<{ label: string; ok: boolean }> {
   const caps = (a.capabilities || {}) as Record<string, unknown>;
+  // "Approvals" is on for native per-tool interception OR the MCP-proxy gate
+  // (which governs the agent's MCP tool calls through the same Approve/Deny flow).
   return [
-    { label: "Approvals", ok: Boolean(caps.toolInterception) },
+    { label: "Approvals", ok: Boolean(caps.toolInterception) || Boolean(caps.mcpToolApprovals) },
     { label: "Resume", ok: Boolean(caps.resume) },
     { label: "Models", ok: Boolean(caps.modelSelection) },
     { label: "Fork", ok: Boolean(caps.fork) },
@@ -311,10 +313,14 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
   }, []);
   const runtimes = useMemo(() => {
     const query = q.trim().toLowerCase();
-    if (!query) return state.runtimes;
-    return state.runtimes.filter((a) =>
-      `${a.id} ${a.name || ""} ${a.displayName || ""} ${(a as any).description || ""} ${(a as any).language || ""}`.toLowerCase().includes(query),
-    );
+    const matched = !query
+      ? state.runtimes
+      : state.runtimes.filter((a) =>
+          `${a.id} ${a.name || ""} ${a.displayName || ""} ${(a as any).description || ""} ${(a as any).language || ""}`.toLowerCase().includes(query),
+        );
+    // Sort the selector by display name, ascending (A→Z, case-insensitive), so the
+    // agent list is predictable regardless of catalog insertion order.
+    return [...matched].sort((a, b) => agentLabel(a).localeCompare(agentLabel(b), undefined, { sensitivity: "base" }));
   }, [state.runtimes, q]);
 
   const cloningActiveSession = Boolean(state.activeSessionId);

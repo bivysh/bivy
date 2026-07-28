@@ -444,6 +444,151 @@ export function geminiJsonParser(): CliParser {
   };
 }
 
+/**
+ * Pull a plain-text chunk out of a heterogeneous streaming-JSON event, covering
+ * the shapes the popular agent CLIs emit (Claude/ACP assistant blocks, OpenAI
+ * chat deltas, and flat `{text|content|response|…}` fields). Returns "" when the
+ * event carries no assistant text (a control frame), so the caller can ignore it.
+ */
+function textFromStreamEvent(msg: Record<string, unknown>): string {
+  // Claude / ACP assistant shape: { message: { content: [{type:"text",text}] } }.
+  const mc = (msg.message as { content?: unknown } | undefined)?.content;
+  if (Array.isArray(mc)) {
+    return mc.map((b) => (b && typeof b === "object" && typeof (b as { text?: unknown }).text === "string" ? (b as { text: string }).text : "")).join("");
+  }
+  if (typeof mc === "string") return mc;
+  // OpenAI-style delta: { delta: { content|text } } or { choices:[{delta:{content}}] }.
+  const delta = msg.delta as { content?: unknown; text?: unknown } | undefined;
+  if (delta) {
+    if (typeof delta.text === "string") return delta.text;
+    if (typeof delta.content === "string") return delta.content;
+  }
+  const choices = msg.choices as Array<{ delta?: { content?: unknown }; text?: unknown }> | undefined;
+  if (Array.isArray(choices)) {
+    return choices.map((c) => (typeof c?.delta?.content === "string" ? (c.delta!.content as string) : typeof c?.text === "string" ? (c.text as string) : "")).join("");
+  }
+  // Flat string fields, in priority order.
+  for (const k of ["text", "content", "response", "message", "output", "chunk"]) {
+    const v = msg[k];
+    if (typeof v === "string") return v;
+  }
+  return "";
+}
+
+// Event `type` values that mean "the turn is finished" across the various CLIs.
+const STREAM_TERMINALS = new Set(["result", "done", "complete", "completed", "turn.completed", "session.done", "message_stop", "response.completed", "final"]);
+
+/**
+ * A TOLERANT line-delimited JSON parser for CLIs whose `--stream-json` /
+ * `--format json` streaming vocabularies we haven't pinned exactly (Amp, Cursor,
+ * …). It extracts assistant text and token usage from the common shapes, ignores
+ * control frames it doesn't recognize, and — crucially — if a run produced NO
+ * structured text (e.g. the flag was wrong and the CLI printed plain text, or the
+ * schema is entirely unfamiliar), it surfaces the raw output at close so enabling
+ * it can never LOSE the reply (worst case it degrades to the dumb-pipe view).
+ */
+export function genericStreamJsonParser(): CliParser {
+  const acc = new TurnAccumulator();
+  let sawText = false;
+  let rawBuffer = "";
+  return {
+    onLine(line) {
+      const events: RuntimeEvent[] = [];
+      const trimmed = line.trim();
+      if (!trimmed) return events;
+      let msg: Record<string, unknown>;
+      try {
+        msg = JSON.parse(trimmed);
+      } catch {
+        rawBuffer += `${line}\n`; // non-JSON banner/line — hold for the fallback
+        return events;
+      }
+      acc.addUsage(extractTokenUsage(msg.usage ?? msg.stats ?? msg));
+      const type = String(msg.type ?? "");
+      if (msg.error && !type.includes("delta")) {
+        const m = (msg.error as { message?: unknown }).message ?? msg.error;
+        events.push({ type: "session.error", error: String(m) });
+      }
+      const text = textFromStreamEvent(msg);
+      if (text && !STREAM_TERMINALS.has(type)) {
+        acc.appendText(text, events);
+        sawText = true;
+      }
+      if (STREAM_TERMINALS.has(type)) {
+        if (!sawText && text) {
+          acc.appendText(text, events);
+          sawText = true;
+        }
+        acc.finish(events);
+      }
+      return events;
+    },
+    onClose(code, stderr) {
+      const events: RuntimeEvent[] = [];
+      if (!acc.ended) {
+        // Nothing structured came through: fall back to whatever the CLI printed so
+        // the turn is never silently empty.
+        if (!sawText && rawBuffer.trim()) acc.appendText(rawBuffer.trim(), events);
+        else if (!sawText && code && code !== 0 && stderr.trim()) events.push({ type: "session.error", error: stderr.trim().slice(-2000) });
+        acc.finish(events);
+      }
+      return events;
+    },
+    messages: () => acc.history(),
+    usage: () => acc.usageSnapshot,
+  };
+}
+
+/**
+ * A TOLERANT final-object JSON parser for CLIs that buffer their reply and print a
+ * single JSON object at exit (`--format json`). It extracts the assistant text
+ * from whichever of the common fields is present (`response`/`result`/`text`/
+ * `content`/`message`/`output`) and token usage from anywhere, and falls back to
+ * the raw output if the object isn't a shape it recognizes — same never-lose-the-
+ * reply guarantee as the streaming parser.
+ */
+export function genericJsonParser(): CliParser {
+  const acc = new TurnAccumulator();
+  let raw = "";
+  return {
+    onLine(line) {
+      raw += `${line}\n`;
+      return [];
+    },
+    onClose(code, stderr) {
+      const events: RuntimeEvent[] = [];
+      let obj: Record<string, unknown> | undefined;
+      try {
+        obj = JSON.parse(raw.trim());
+      } catch {
+        obj = undefined;
+      }
+      const errMsg = obj && (obj.error as { message?: unknown } | undefined)?.message;
+      if (errMsg) {
+        events.push({ type: "session.error", error: String(errMsg) });
+      } else if (obj) {
+        let text = "";
+        for (const k of ["response", "result", "text", "content", "output", "message"]) {
+          const v = obj[k];
+          if (typeof v === "string") { text = v; break; }
+          if (Array.isArray(v)) { text = v.map((b) => (typeof b === "string" ? b : String((b as { text?: unknown })?.text ?? ""))).join(""); if (text) break; }
+        }
+        if (text) acc.appendText(text, events);
+        else if (raw.trim()) acc.appendText(raw.trim(), events); // unfamiliar shape → raw
+        acc.addUsage(extractTokenUsage(obj.usage ?? obj.stats ?? obj) ?? extractTokenUsage((obj.stats as Record<string, unknown> | undefined)?.tokens));
+      } else if (code && code !== 0 && stderr.trim()) {
+        events.push({ type: "session.error", error: stderr.trim().slice(-2000) });
+      } else if (raw.trim()) {
+        acc.appendText(raw.trim(), events);
+      }
+      acc.finish(events);
+      return events;
+    },
+    messages: () => acc.history(),
+    usage: () => acc.usageSnapshot,
+  };
+}
+
 /** Registry: parser id → factory. Adding an agent's fidelity = add a line here. */
 export const CLI_PARSERS: Record<string, CliParserFactory> = {
   "bivy-protocol": bivyProtocolParser,
@@ -451,6 +596,10 @@ export const CLI_PARSERS: Record<string, CliParserFactory> = {
   "codex-json": codexJsonParser,
   "goose-stream-json": gooseStreamJsonParser,
   "gemini-json": geminiJsonParser,
+  // Tolerant, format-agnostic parsers for CLIs whose JSON vocabularies we haven't
+  // pinned exactly yet (opt-in per agent via a spec parserId; see CLI_AGENT_SPECS).
+  "generic-stream-json": genericStreamJsonParser,
+  "generic-json": genericJsonParser,
 };
 
 export function parserFactoryFor(id: string | undefined): CliParserFactory | undefined {
