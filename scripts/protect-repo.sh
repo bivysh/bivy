@@ -73,9 +73,7 @@ read -r -d '' BRANCH_RULESET <<'JSON' || true
       "strict_required_status_checks_policy": true,
       "required_status_checks": [{"context": "ci-ok"}]}}
   ],
-  "bypass_actors": [
-    {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}
-  ]
+  "bypass_actors": []
 }
 JSON
 
@@ -95,9 +93,7 @@ read -r -d '' TAG_RULESET <<'JSON' || true
     {"type": "non_fast_forward"},
     {"type": "update"}
   ],
-  "bypass_actors": [
-    {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}
-  ]
+  "bypass_actors": []
 }
 JSON
 

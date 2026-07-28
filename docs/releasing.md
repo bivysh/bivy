@@ -65,7 +65,11 @@ page on npmjs.com (requires the package to already exist — see
 | Organization or user | `bivysh` |
 | Repository | `bivy` |
 | Workflow filename | `release.yml` |
-| Environment name | *(leave blank — this workflow doesn't use a GitHub environment)* |
+| Environment name | `release` |
+
+Create the GitHub `release` environment first and require a maintainer review
+under **Settings → Environments → release**. The environment is part of npm's
+OIDC trust policy, so the value above must match exactly.
 
 npm's CLI needs to be `>= 11.5.1` to speak the trusted-publishing protocol;
 `release.yml` upgrades it explicitly (`npm install -g npm@^11`) rather than
