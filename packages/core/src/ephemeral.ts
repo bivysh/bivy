@@ -1920,8 +1920,9 @@ export interface LaunchOpts {
    *  `BootstrapOpts.hostedTasks`). Off by default so a plain "Launch machine"
    *  from the Ephemeral sheet keeps its pre-#532 behavior. */
   hostedTasks?: boolean;
-  /** A GitHub token the booted node uses for queue work (see
-   *  `BootstrapOpts.githubToken`). Only meaningful with `hostedTasks`. */
+  /** A GitHub token the booted node uses for repo clone/push/PR work (see
+   *  `BootstrapOpts.githubToken`). Queue workers and first-run interactive
+   *  machines both need it because a disposable node has no native login. */
   githubToken?: string;
   /** Bookkeeping to stamp onto the resulting `EphemeralMachine` record — see
    *  `EphemeralMachine.workItemId`/`purpose`. Provisioning itself doesn't use

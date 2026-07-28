@@ -66,11 +66,11 @@ export function App() {
   // control-plane state, unavailable in direct mode.
   const [githubQueue, setGithubQueue] = useState<GithubQueueItem[] | null>(null);
   const refreshGithubQueue = useCallback(() => {
-    if (controller.direct) return;
+    if (controller.direct || !state.signedIn) return;
     controller.fetchGithubQueue().then(setGithubQueue).catch(() => {});
-  }, []);
+  }, [state.signedIn]);
   useEffect(() => {
-    if (controller.direct) return;
+    if (controller.direct || !state.signedIn) return;
     refreshGithubQueue();
     const id = setInterval(() => {
       if (document.visibilityState !== "hidden") refreshGithubQueue();
@@ -539,7 +539,7 @@ export function App() {
           }
         />
       )}
-      {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} />}
+      {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
       {terminalNodePicker && (
         <NodePicker
           state={state}

@@ -37,6 +37,14 @@ The token field is a single opaque string as far as the store/UI are concerned â
 
 When the user selects an ephemeral provider, show a short inline guide before asking for the key. Prefer direct links that open in a new tab.
 
+For an account with no node yet, the app presents one complete four-step path:
+connect the cloud provider, save a model API key, optionally save a fine-grained
+GitHub token for repository/PR work, then choose and launch the runner. The
+launch button stays disabled until a model key is available, avoiding a machine
+that boots successfully but cannot run its first task. The device-local GitHub
+token is included in the runner bootstrap; model keys wait for the E2E channel
+and are then seeded into the node vault.
+
 ## Provisioning path (implemented)
 
 Because the token lives on the device, **all provider orchestration runs in the browser** (`packages/core/src/ephemeral.ts`, the `ProviderAdapter` implementations): each adapter builds the create/status/destroy requests, mint the bootstrap user-data, and drives the lifecycle. AWS additionally signs each request (SigV4) client-side before it's sent â€” see "Adding a new provider" below. The browser can't call the provider APIs directly (no CORS), so it asks a **transport** to run one allowlisted HTTPS request on its behalf:
