@@ -64,13 +64,13 @@
       }
     }
     * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+    html { max-width: 100%; overflow-x: hidden; scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
     body {
-      margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+      max-width: 100%; margin: 0; overflow-x: hidden; background: var(--bg); color: var(--ink); font-family: var(--sans);
       font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased;
     }
     a { color: inherit; }
-    img { max-width: 100%; }
+    img { display: block; max-width: 100%; height: auto; }
     button, input { font: inherit; }
     :focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 3px; }
     .wrap { width: min(var(--max), calc(100% - 40px)); margin: 0 auto; }
@@ -109,6 +109,7 @@
 
     .hero { padding: 78px 0 70px; overflow: hidden; }
     .hero-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(360px, .8fr); gap: 72px; align-items: center; }
+    .hero-grid > *, .control-grid > * { min-width: 0; }
     .hero-badge {
       display: inline-flex; align-items: center; gap: 8px; margin-bottom: 20px; padding: 5px 11px;
       border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink-2);
@@ -117,7 +118,7 @@
     .hero-badge span { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
     .hero-lede { max-width: 610px; margin: 0 0 28px; color: var(--ink-2); font-size: clamp(18px, 2vw, 21px); line-height: 1.55; }
     .install {
-      display: flex; max-width: 560px; overflow: hidden; border: 1px solid var(--line); border-radius: 9px;
+      display: flex; width: 100%; max-width: 560px; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 9px;
       background: var(--surface-strong); box-shadow: 0 8px 30px rgba(28, 25, 18, .06);
     }
     .install code { flex: 1; min-width: 0; overflow-x: auto; padding: 14px 15px; white-space: nowrap; color: var(--ink); font-size: 13.5px; }
@@ -128,13 +129,13 @@
     .text-link { color: var(--accent-dark); font-size: 14px; font-weight: 650; text-decoration: none; }
     .text-link:hover { text-decoration: underline; }
     .hero-note { max-width: 600px; margin: 20px 0 0; color: var(--muted); font-size: 13.5px; }
-    .proof { position: relative; min-height: 540px; }
+    .proof { position: relative; width: 100%; min-height: 540px; overflow: hidden; }
     .proof::before { content: ""; position: absolute; inset: 9% -20% 5% 8%; border-radius: 50%; background: var(--accent-soft); filter: blur(1px); }
     .phone-shot {
       position: relative; width: 285px; margin-left: auto; overflow: hidden; border: 1px solid var(--line);
       border-radius: 28px; background: var(--surface-strong); box-shadow: 0 28px 70px rgba(32, 27, 18, .18); transform: rotate(1.5deg);
     }
-    .phone-shot img { display: block; width: 100%; }
+    .phone-shot img { width: 100%; height: auto; }
     .result-card {
       position: absolute; left: 0; bottom: 42px; width: 245px; padding: 17px; border: 1px solid var(--line);
       border-radius: 12px; background: var(--surface-strong); box-shadow: 0 18px 50px rgba(32, 27, 18, .16); transform: rotate(-2deg);
@@ -170,8 +171,8 @@
     .step p { margin: 0; color: var(--muted); font-size: 13.5px; }
 
     .control-grid { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 70px; align-items: center; }
-    .terminal-shot { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #0e0e11; box-shadow: 0 22px 65px rgba(20, 18, 13, .14); }
-    .terminal-shot img { display: block; width: 100%; }
+    .terminal-shot { width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #0e0e11; box-shadow: 0 22px 65px rgba(20, 18, 13, .14); }
+    .terminal-shot img { width: 100%; height: auto; aspect-ratio: 2280 / 1239; object-fit: cover; }
     .benefits { list-style: none; margin: 30px 0 0; padding: 0; }
     .benefits li { position: relative; margin: 0 0 20px; padding-left: 30px; color: var(--ink-2); }
     .benefits li::before { content: "✓"; position: absolute; left: 0; top: 2px; color: var(--green); font-weight: 800; }
@@ -233,7 +234,7 @@
       .hero { padding-top: 55px; }
       .hero-grid, .control-grid, .trust-grid, .faq-grid { grid-template-columns: 1fr; gap: 45px; }
       .hero-grid { max-width: 720px; }
-      .proof { min-height: 480px; max-width: 500px; }
+      .proof { width: min(100%, 500px); min-height: 480px; }
       .phone-shot { margin-right: 45px; }
       .cards, .plans { grid-template-columns: 1fr; }
       .card { min-height: 0; }
@@ -250,11 +251,14 @@
       .nav .button { min-height: 36px; padding: 7px 11px; }
       .hero { padding: 43px 0 54px; }
       h1 { font-size: clamp(38px, 12vw, 52px); }
-      .install code { font-size: 11.5px; padding-left: 11px; }
+      .install code { overflow: hidden; padding-left: 11px; font-size: 11.5px; text-overflow: ellipsis; }
       .copy { padding: 0 12px; }
-      .proof { min-height: 435px; }
-      .phone-shot { width: 235px; margin-right: 5px; }
-      .result-card { bottom: 12px; width: 220px; }
+      .proof { height: 370px; min-height: 0; margin: 0 auto; }
+      .phone-shot { position: absolute; top: 0; right: 4px; width: 198px; height: 368px; margin: 0; transform: none; }
+      .phone-shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+      .result-card { left: 0; bottom: 22px; width: min(220px, 64%); transform: none; }
+      .terminal-shot { aspect-ratio: 16 / 10; }
+      .terminal-shot img { width: 100%; height: 100%; aspect-ratio: auto; object-fit: cover; object-position: center; }
       .agent-inner { align-items: flex-start; flex-direction: column; gap: 9px; }
       section.section { padding: 65px 0; }
       .workflow { grid-template-columns: 1fr; }
@@ -370,7 +374,10 @@
         </ul>
       </div>
       <div class="terminal-shot">
-        <img src="./screenshots/cli-session.png" alt="A Bivy coding-agent session in an isolated worktree with its test results visible." loading="lazy" width="2280" height="1239">
+        <picture>
+          <source media="(max-width: 600px)" srcset="./screenshots/terminal-session.svg">
+          <img src="./screenshots/cli-session.png" alt="A Bivy coding-agent session in an isolated worktree with its test results visible." loading="lazy" width="2280" height="1239">
+        </picture>
       </div>
     </div>
   </section>
