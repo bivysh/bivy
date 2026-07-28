@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   EPHEMERAL_PROVIDERS,
   ephemeralAdapter,
+  ephemeralCostHint,
   type EphemeralMachine,
   type EphemeralSetup,
   type ProviderKeyInfo,
@@ -253,6 +254,10 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
               ))}
             </select>
           </div>
+          {(() => {
+            const hint = ephemeralCostHint(sizes.find((s) => s.id === size), ttl, adapter.currency);
+            return hint ? <p className="muted small">{hint} · billed by {catalog.name}, not Bivy</p> : null;
+          })()}
           <label className="field-label">Teardown</label>
           <label className="checkbox-row">
             <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
@@ -313,7 +318,7 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
                         title: "Destroy machine?",
                         message: `Destroy ${m.name || m.id} now? This can't be undone.`,
                         label: "Destroy",
-                        action: () => controller.destroyEphemeral(m).then(refreshMachines),
+                        action: () => controller.destroyEphemeral(m).then(refreshMachines).catch((e) => setErr(String((e as Error)?.message || e))),
                       });
                     }}
                   >

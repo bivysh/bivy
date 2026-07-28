@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, PRO_PRICE_LABEL, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -1224,7 +1224,7 @@ function EphemeralQueueDefaultSection({ hint }: { hint?: string }) {
         />
       </div>
       {configuredProviders.length === 0 ? (
-        <p className="muted">Add a Fly.io or Hetzner token in Ephemeral settings to enable this.</p>
+        <p className="muted">Add a provider token (Fly.io, Hetzner, or AWS) in Ephemeral settings to enable this.</p>
       ) : (
         ephemeralDefault?.enabled && (
           <>
@@ -2174,12 +2174,15 @@ function EphemeralModelKeys() {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const refresh = () => controller.listEphemeralModelKeys().then(setKeys).catch(() => {});
   useEffect(() => { refresh(); }, []);
 
   const save = async () => {
     setBusy(true);
     setMsg(null);
+    setErr(null);
     try {
       await controller.setEphemeralModelKey(provider, key);
       setProvider("");
@@ -2187,7 +2190,7 @@ function EphemeralModelKeys() {
       setMsg("Saved on this device.");
       refresh();
     } catch (e) {
-      setMsg(String((e as Error)?.message || e));
+      setErr(String((e as Error)?.message || e));
     } finally {
       setBusy(false);
     }
@@ -2214,7 +2217,7 @@ function EphemeralModelKeys() {
                   className="picker-action danger"
                   onClick={(e) => {
                     e.stopPropagation();
-                    controller.removeEphemeralModelKey(k.provider).then(refresh);
+                    setConfirmRemove(k.provider);
                   }}
                 >
                   Remove
@@ -2223,6 +2226,20 @@ function EphemeralModelKeys() {
             />
           ))}
         </div>
+      )}
+      {confirmRemove && (
+        <ConfirmDialog
+          title="Remove model key?"
+          message={`Forget the ${confirmRemove} model key on this device? New machines won't be seeded with it.`}
+          confirmLabel="Remove"
+          danger
+          onCancel={() => setConfirmRemove(null)}
+          onConfirm={() => {
+            const p = confirmRemove;
+            setConfirmRemove(null);
+            controller.removeEphemeralModelKey(p).then(refresh).catch((e) => setErr(String((e as Error)?.message || e)));
+          }}
+        />
       )}
       <datalist id="eph-model-providers">
         {COMMON_MODEL_PROVIDERS.map((p) => (
@@ -2248,6 +2265,7 @@ function EphemeralModelKeys() {
       <button className="btn primary" disabled={busy || !provider.trim() || !key.trim()} onClick={save}>
         {busy ? "Saving…" : "Save key"}
       </button>
+      {err && <span className="chip err">{err}</span>}
       {msg && <p className="muted">{msg}</p>}
     </section>
   );
@@ -2272,6 +2290,9 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // Failures render as a `chip err` — kept separate from the neutral `msg` so a
+  // token/save error doesn't read like a calm status line.
+  const [err, setErr] = useState<string | null>(null);
   // Both saveToken and savePrefs are already real awaited requests — the
   // missing piece was an in-flight guard against a double-submit (#140).
   const [busy, setBusy] = useState(false);
@@ -2315,6 +2336,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   const saveToken = async () => {
     if (busy) return;
     setBusy(true);
+    setErr(null);
     try {
       await controller.setEphemeralToken(providerId, token.trim());
       setToken("");
@@ -2322,7 +2344,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       onKeysChanged();
       setMsg("Token saved on this device.");
     } catch (e) {
-      setMsg(String((e as Error).message || e));
+      setErr(String((e as Error).message || e));
     } finally {
       setBusy(false);
     }
@@ -2331,6 +2353,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   const savePrefs = async () => {
     if (busy) return;
     setBusy(true);
+    setErr(null);
     try {
       // Repo isn't a machine setting — it comes from the new-session composer at
       // launch time — so clear any legacy value rather than carry it here.
@@ -2344,7 +2367,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
     } catch (e) {
-      setMsg(String((e as Error).message || e));
+      setErr(String((e as Error).message || e));
     } finally {
       setBusy(false);
     }
@@ -2401,6 +2424,10 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
             {EPHEMERAL_TTL_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
           </select>
+          {(() => {
+            const hint = ephemeralCostHint(sizes.find((s) => s.id === size), ttl, adapter.currency);
+            return hint ? <p className="muted small">{hint} · billed by {catalog.name}, not Bivy</p> : null;
+          })()}
 
           <label className="field-label">Work until finished</label>
           <label className="checkbox-row">
@@ -2437,6 +2464,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           </div>
         </>
       )}
+      {err && <span className="chip err">{err}</span>}
       {msg && <p className="muted">{msg}</p>}
       {machines.length > 0 && (
         <>
@@ -2457,7 +2485,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
                         title: "Destroy machine?",
                         message: `Destroy ${m.name || m.id} now? This can't be undone.`,
                         label: "Destroy",
-                        action: () => controller.destroyEphemeral(m).then(refreshMachines),
+                        action: () => controller.destroyEphemeral(m).then(refreshMachines).catch((e) => setErr(String((e as Error)?.message || e))),
                       });
                     }}
                   >

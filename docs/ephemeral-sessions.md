@@ -186,8 +186,9 @@ Known limitations for the first cut: launches into your account's **default VPC/
 
 UI safety notes:
 - The token should be scoped to a disposable project/org where possible.
-- The planned region, size, max TTL, and estimated cost are shown before provisioning.
-- A **Destroy machine now** button and a visible teardown status are always available.
+- The planned region, size, max TTL, and an **indicative cost estimate** are shown before provisioning. The estimate is `pricePerHour × TTL` in the provider's currency (`ephemeralCostHint` in `packages/core/src/ephemeral.ts`); it's a hint, not an invoice — the provider's live bill is authoritative and storage/egress/taxes aren't included. Static per-size prices ship in the size catalogs; Hetzner's live `listSizes` overrides them with the token's real prices.
+- A **Destroy machine now** button and a visible teardown status are always available. If the provider's destroy call fails, the machine record is **kept** (not silently forgotten) so teardown can be retried and a live, billing machine is never orphaned; the TTL self-shutdown remains the eventual backstop.
+- The TTL self-shutdown is armed with a `systemd-run` transient timer (surviving cloud-init), falling back to `at` then a detached `setsid` sleep, so a forgotten machine self-halts even on a minimal base image.
 - Provider tokens are stored in the same secret path as other user-provided keys, never in session transcripts.
 
 ## Minimum implementation

@@ -5,6 +5,7 @@ import {
   githubIssueRefFromSource,
   isGithubQueueSource,
   ephemeralAdapter,
+  ephemeralCostHint,
   PRO_PRICE_LABEL,
   type AccountNode,
   type EphemeralQueueDefault,
@@ -213,6 +214,7 @@ export function GithubQueuePanel({
   // re-render while one is in flight) can't fire it twice.
   const autoLaunchTried = useRef(false);
   const [autoLaunching, setAutoLaunching] = useState(false);
+  const [autoLaunchErr, setAutoLaunchErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (!canQuery) return;
@@ -405,6 +407,7 @@ export function GithubQueuePanel({
     if (autoLaunchTried.current || autoLaunching) return;
     autoLaunchTried.current = true;
     setAutoLaunching(true);
+    setAutoLaunchErr(null);
     controller
       .launchEphemeralQueueWorker({
         provider: ephemeralDefault.provider,
@@ -412,8 +415,9 @@ export function GithubQueuePanel({
         size: ephemeralDefault.size,
         ttlMinutes: ephemeralDefault.ttlMinutes,
       })
-      .catch(() => {
+      .catch((e) => {
         autoLaunchTried.current = false;
+        setAutoLaunchErr(`Couldn't auto-provision a runner: ${e instanceof Error ? e.message : String(e)}`);
       })
       .finally(() => setAutoLaunching(false));
   }, [canQuery, workQueueEnabled, ephemeralDefault, defaultProviderConfigured, anyNodeOnline, waiting, autoLaunching]);
@@ -559,6 +563,9 @@ export function GithubQueuePanel({
             {EPHEMERAL_MACHINES_ENABLED && autoLaunching && (
               <p className="muted" style={{ marginBottom: 10 }}>⚡ Provisioning an ephemeral runner to pick these up…</p>
             )}
+            {EPHEMERAL_MACHINES_ENABLED && !autoLaunching && autoLaunchErr && (
+              <div className="banner warn inline">{autoLaunchErr}</div>
+            )}
 
             {waiting === null ? (
               <p className="muted">—</p>
@@ -669,6 +676,11 @@ export function GithubQueuePanel({
                                   ))}
                                 </select>
                               </label>
+                              {(() => {
+                                const adapter = ephemeralAdapter(ephemeralProvider);
+                                const hint = adapter && ephemeralCostHint(ephemeralSizes.find((s) => s.id === ephemeralSize), ephemeralTtl, adapter.currency);
+                                return hint ? <p className="muted small">{hint} · billed by {adapter?.name}, not Bivy</p> : null;
+                              })()}
                               <label className="queue-run-field">
                                 <span>GitHub token {hasGithubTaskToken ? "(saved on this device — leave blank to reuse it)" : "(needed to clone/push/open PRs)"}</span>
                                 <div className="row-actions">
