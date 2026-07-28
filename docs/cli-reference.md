@@ -633,7 +633,7 @@ service. Waits for busy sessions first unless `--force`/`--no-wait`.
 What it actually does depends on how Bivy was installed:
 
 - **git checkout** — `git pull --ff-only`, then `npm ci`/`npm install`.
-- **`npm i -g bivy`** — `npm install -g bivy@latest`.
+- **`npm i -g @bivy/bivy`** — `npm install -g @bivy/bivy@latest`.
 - **`npx bivy`** — nothing; explains that npx always fetches the latest.
 - **installer tarball** — re-runs `curl -fsSL https://bivy.sh/install.sh | bash`
   with `BIVY_HOME` pointing at the current install. The restart happens inside

@@ -27,7 +27,7 @@ curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
 This ensures a supported Node.js is present (installing it for you on
-Debian/Ubuntu if needed), runs `npm install -g bivy`, then launches the
+Debian/Ubuntu if needed), runs `npm install -g @bivy/bivy`, then launches the
 `bivy setup` wizard. Node state lives at `~/.bivy`. (If the package isn't yet
 on the registry, the installer falls back to a checksum-verified release
 tarball — but npm is the primary path.)

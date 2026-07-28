@@ -19,7 +19,7 @@ The installer:
 1. checks for Node.js 22.19+ (on Debian/Ubuntu it can install it for you; on
    macOS it warns if Xcode Command Line Tools are missing, which the native
    `node-pty` module needs to build),
-2. runs `npm install -g bivy`,
+2. runs `npm install -g @bivy/bivy`,
 3. migrates state from a previous tarball install, if it finds one (see below),
 4. launches the interactive `bivy setup` wizard, or restarts the background
    service on an existing install.
@@ -31,7 +31,7 @@ check with `npm audit signatures`. See [releasing.md](releasing.md).
 If you already have Node.js 22.19+, the installer is optional:
 
 ```bash
-npm install -g bivy
+npm install -g @bivy/bivy
 bivy setup
 ```
 
