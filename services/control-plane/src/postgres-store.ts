@@ -191,6 +191,24 @@ export class PostgresStore implements MeshStore {
         expires_at   TIMESTAMPTZ NOT NULL
       );
 
+      -- Shared across control-plane replicas: an OAuth callback need not return
+      -- to the process that initiated it, and auth throttles cannot be bypassed
+      -- by letting the load balancer pick another process.
+      CREATE TABLE IF NOT EXISTS oauth_states (
+        state_hash   TEXT PRIMARY KEY,
+        device_id    TEXT,
+        return_path  TEXT,
+        expires_at   TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS auth_rate_limits (
+        bucket_key_hash TEXT PRIMARY KEY,
+        request_count   INTEGER NOT NULL,
+        reset_at        TIMESTAMPTZ NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_reset ON auth_rate_limits(reset_at);
+
       CREATE TABLE IF NOT EXISTS paired_devices (
         public_key_b64  TEXT PRIMARY KEY,
         account_id      TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -625,6 +643,49 @@ export class PostgresStore implements MeshStore {
 
   async revokeSession(token: string): Promise<void> {
     await this.query(`DELETE FROM sessions WHERE token_hash = $1`, [hashToken(token)]);
+  }
+
+  async createOAuthState(input: { deviceId?: string; returnPath?: string }, ttlMs = 10 * 60_000): Promise<string> {
+    const state = randomBytes(24).toString("base64url");
+    await this.query(
+      `INSERT INTO oauth_states (state_hash, device_id, return_path, expires_at) VALUES ($1, $2, $3, $4)`,
+      [hashToken(state), input.deviceId ?? null, input.returnPath ?? null, new Date(Date.now() + ttlMs)],
+    );
+    return state;
+  }
+
+  async consumeOAuthState(state: string): Promise<{ deviceId?: string; returnPath?: string } | undefined> {
+    if (!state) return undefined;
+    // DELETE ... RETURNING makes the CSRF state single-use even when two
+    // callbacks race on different replicas.
+    const { rows } = await this.query(
+      `DELETE FROM oauth_states WHERE state_hash = $1 RETURNING device_id, return_path, expires_at`,
+      [hashToken(state)],
+    );
+    const rec = rows[0];
+    if (!rec || new Date(rec.expires_at).getTime() < Date.now()) return undefined;
+    return {
+      ...(rec.device_id ? { deviceId: rec.device_id } : {}),
+      ...(rec.return_path ? { returnPath: rec.return_path } : {}),
+    };
+  }
+
+  async rateLimitExceeded(bucket: string, key: string, limit: number, windowMs: number): Promise<boolean> {
+    const bucketKeyHash = hashToken(`${bucket}\u0000${key}`);
+    const resetAt = new Date(Date.now() + Math.max(1, windowMs));
+    // One atomic UPSERT is the fleet-wide fixed-window counter. PostgreSQL locks
+    // the conflicting row, so concurrent requests on different replicas cannot
+    // lose increments.
+    const { rows } = await this.query(
+      `INSERT INTO auth_rate_limits (bucket_key_hash, request_count, reset_at)
+       VALUES ($1, 1, $2)
+       ON CONFLICT (bucket_key_hash) DO UPDATE SET
+         request_count = CASE WHEN auth_rate_limits.reset_at <= now() THEN 1 ELSE auth_rate_limits.request_count + 1 END,
+         reset_at = CASE WHEN auth_rate_limits.reset_at <= now() THEN EXCLUDED.reset_at ELSE auth_rate_limits.reset_at END
+       RETURNING request_count`,
+      [bucketKeyHash, resetAt],
+    );
+    return Number(rows[0]?.request_count ?? 1) > Math.max(0, limit);
   }
 
   async createDeviceLogin(ttlMs = LOGIN_TOKEN_TTL_MS): Promise<{ deviceId: string; deviceSecret: string }> {
@@ -1969,10 +2030,12 @@ export class PostgresStore implements MeshStore {
     // there is no cross-table transaction requirement (each row is independently
     // safe to drop once past its own expiry).
     let total = 0;
-    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins"]) {
+    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins", "oauth_states"]) {
       const { rowCount } = await this.query(`DELETE FROM ${table} WHERE expires_at < $1`, [nowIso]);
       total += rowCount ?? 0;
     }
+    const { rowCount } = await this.query(`DELETE FROM auth_rate_limits WHERE reset_at < $1`, [nowIso]);
+    total += rowCount ?? 0;
     return total;
   }
 

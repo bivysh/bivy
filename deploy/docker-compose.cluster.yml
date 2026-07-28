@@ -1,0 +1,49 @@
+# Multi-host runtime for servers behind an operator-managed load balancer.
+# Unlike docker-compose.yml this intentionally includes no Postgres or TLS
+# proxy: every replica uses managed Postgres and the external LB terminates TLS.
+# See docs/scaling.md and deploy/cluster-node.sh.
+
+x-runtime: &runtime
+  env_file:
+    - "${BIVY_CLUSTER_ENV_FILE:-.env.cluster}"
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+  ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+
+services:
+  control-plane:
+    <<: *runtime
+    image: "${CONTROL_PLANE_IMAGE:-ghcr.io/bivysh/bivy-control-plane:latest}"
+    environment:
+      PORT: "4400"
+    ports:
+      - "${CONTROL_PLANE_BIND_ADDRESS:-0.0.0.0}:${CONTROL_PLANE_HOST_PORT:-4400}:4400"
+    mem_limit: "${CONTROL_PLANE_MEMORY:-512m}"
+    healthcheck:
+      test: ["CMD", "bash", "/usr/local/bin/bivy-healthcheck", "4400", "/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  relay:
+    <<: *runtime
+    image: "${RELAY_IMAGE:-ghcr.io/bivysh/bivy-relay:latest}"
+    environment:
+      PORT: "4500"
+    ports:
+      - "${RELAY_BIND_ADDRESS:-0.0.0.0}:${RELAY_HOST_PORT:-4500}:4500"
+    mem_limit: "${RELAY_MEMORY:-512m}"
+    healthcheck:
+      test: ["CMD", "bash", "/usr/local/bin/bivy-healthcheck", "4500", "/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s

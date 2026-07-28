@@ -72,6 +72,9 @@ services:
       PORT: "4400"
       RELAY_SECRET: "${RELAY_SECRET}"
       RELAY_PUBLIC_URL: "${RELAY_PUBLIC_URL}"
+      # Optional deterministic relay fleet. Every control-plane replica must see
+      # the same ordered URL list so a node and its clients select one shard.
+      RELAY_SHARD_URLS: "${RELAY_SHARD_URLS:-}"
       PUBLIC_CONTROL_PLANE_URL: "${PUBLIC_CONTROL_PLANE_URL}"
       # Entitlement enforcement is a control-plane concern too — push gating and the
       # free-tier run cap are enforced HERE, not just by the relay's relayEnabled
@@ -141,7 +144,9 @@ services:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "4500"
       RELAY_SECRET: "${RELAY_SECRET}"
-      CONTROL_PLANE_URL: "http://control-plane:4400"
+      # Override for a relay running on another host against the control-plane
+      # load balancer; the single-host stack keeps using Docker DNS.
+      CONTROL_PLANE_URL: "${CONTROL_PLANE_URL:-http://control-plane:4400}"
       ENFORCE_ENTITLEMENTS: "${ENFORCE_ENTITLEMENTS:-0}"
       RELAY_MAX_FRAME_BYTES: "${RELAY_MAX_FRAME_BYTES:-1048576}"
       RELAY_MAX_MESSAGES_PER_MINUTE: "${RELAY_MAX_MESSAGES_PER_MINUTE:-120}"
