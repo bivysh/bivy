@@ -132,13 +132,19 @@ function commandPath(extraPath = "") {
 
 process.env.PATH = commandPath();
 
+// Keep redirected output and NO_COLOR consumers clean. FORCE_COLOR remains an
+// explicit opt-in for demos/snapshots; otherwise ANSI belongs only on a TTY.
+const colorEnabled = !Object.hasOwn(process.env, "NO_COLOR")
+  && process.env.TERM !== "dumb"
+  && (Boolean(process.stdout.isTTY) || Boolean(process.env.FORCE_COLOR));
+const color = (open, close) => (s) => colorEnabled ? `\u001b[${open}m${s}\u001b[${close}m` : String(s);
 const c = {
-  bold: (s) => `[1m${s}[22m`,
-  dim: (s) => `[2m${s}[22m`,
-  green: (s) => `[32m${s}[39m`,
-  yellow: (s) => `[33m${s}[39m`,
-  red: (s) => `[31m${s}[39m`,
-  cyan: (s) => `[36m${s}[39m`,
+  bold: color(1, 22),
+  dim: color(2, 22),
+  green: color(32, 39),
+  yellow: color(33, 39),
+  red: color(31, 39),
+  cyan: color(36, 39),
 };
 
 // --- config -----------------------------------------------------------------
@@ -2929,7 +2935,7 @@ function terminalQr(text) {
 
 async function cmdSetup(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy setup\n\nFirst-run wizard: deps, remote sync + sign-in, background service. Safe to re-run later to change the workspace, default agent, or remote access.");
+    console.log("Usage: bivy setup\n\nFirst-run wizard: workspace, remote access + sign-in, and background service. Safe to re-run later to change the workspace, default agent, or remote access.");
     return;
   }
   console.log(c.bold("\n  Bivy — node setup\n"));
@@ -2970,10 +2976,9 @@ async function cmdSetup(args = []) {
   }
   console.log(c.dim(`Default agent: ${setupAgent?.label || "Pi"}  (change in Settings; sign into your model from the agent's CLI/TUI or Settings → Keys & OAuth)`));
 
-  // 3. Secure remote web/PWA access — the whole point of a Bivy node, so it's
-  // always on. We only ask two things: where to sync (hosted vs self-hosted) and
-  // how to sign in (GitHub or email link). Both are changeable later in Settings
-  // or by re-running 'bivy relay:setup'.
+  // 3. Secure remote web/PWA access is what makes a Bivy-managed CLI useful:
+  // without a relay/control plane it adds nothing over running the agent
+  // directly. Setup therefore requires hosted or self-hosted enrollment.
   //
   // Carries the account session from relay:setup to the setup-completion step so
   // we can open the remote app signed into the whole account (see finishSetupRemote).
@@ -2981,10 +2986,9 @@ async function cmdSetup(args = []) {
   if (!fs.existsSync(relayConfigPath)) {
     console.log(c.bold("\n  Remote access\n"));
 
-    // 3a. Remote sync target. Hosted is the default — one node is free. Self-hosted
-    // points this node at your own control plane + relay.
+    console.log("Bivy uses remote access to make agent sessions visible and steerable from your other devices.");
     const syncChoice = await askChoice(
-      "Remote sync",
+      "Remote access",
       [
         { key: "h", label: "hosted (recommended — one node is free)" },
         { key: "s", label: "self-hosted (your own control plane + relay)" },
@@ -3000,8 +3004,6 @@ async function cmdSetup(args = []) {
       if (relayWs.trim()) relayArgs.push("--relay", relayWs.trim());
     }
 
-    // 3b. Sign-in method. GitHub is primary (also grants the repo access the work
-    // queue uses); an email magic-link is the alternative.
     const loginChoice = await askChoice(
       "Remote login",
       [
@@ -3019,11 +3021,8 @@ async function cmdSetup(args = []) {
     }
 
     const useGithub = relayArgs.includes("--github");
-    // Have relay:setup drop the account session it obtains into a 0600 handoff
-    // file so we can open the remote app signed into the account below. Clear any
-    // stale file first so we never consume a leftover token from a prior run.
     try { fs.rmSync(setupSessionPath, { force: true }); } catch { /* best effort */ }
-    let relayOk = false;
+    let relayOk;
     for (;;) {
       console.log(c.dim(useGithub
         ? "  We'll open GitHub in your browser (or print the URL on a headless server). Authorize, and setup continues automatically."
@@ -3039,8 +3038,14 @@ async function cmdSetup(args = []) {
       const retry = await askYesNo("Remote access setup failed. Try again?", true);
       if (!retry) break;
     }
-    if (relayOk) setupSession = consumeSetupSession();
-    if (!relayOk) console.log(c.yellow("Continuing without remote access. Run 'bivy relay:setup' later to enable it."));
+    if (!relayOk) {
+      rl.close();
+      console.error(c.red("\nSetup is incomplete: Bivy could not connect this node to a relay/control plane."));
+      console.error(`Re-run ${c.cyan("bivy setup")} to retry.`);
+      process.exitCode = 1;
+      return;
+    }
+    setupSession = consumeSetupSession();
   } else {
     console.log(c.dim("\nRemote access already configured. Re-run 'bivy relay:setup' to change sync or sign-in."));
   }
@@ -3068,6 +3073,7 @@ async function cmdSetup(args = []) {
   }
 
   console.log(c.bold(c.green("\n  ✓ Your node is running.\n")));
+  printFirstRunSteps();
   await finishSetupRemote(config, setupSession);
 }
 
@@ -3155,14 +3161,18 @@ async function openRemoteApp(config, { setupSession = null, open = true } = {}) 
   return { relay, remoteBase, accountUrl, pairedUrl, openUrl };
 }
 
+function printFirstRunSteps() {
+  console.log("  Run your first task:");
+  console.log(`    1. Model access:  ${c.cyan("bivy login")}  ${c.dim("(for Pi; other agents use their own login)")}`);
+  console.log(`    2. Start chatting: ${c.cyan("bivy")}`);
+  console.log(`       One-shot task: ${c.cyan('bivy exec "explain this repository"')}\n`);
+}
+
 async function finishSetupRemote(config, setupSession = null) {
   const openable = canOpenBrowser();
   const remote = await openRemoteApp(config, { setupSession });
 
   if (!remote) {
-    // No remote configured. There is no local-UI fallback anymore, so the user
-    // must enable remote access to get a browser UI at all. (Reaching here means
-    // relay setup was skipped or failed during `bivy setup`.)
     console.log("\n  Almost there — enable remote access to open the Bivy app:");
     console.log(`    • Enable remote:  ${c.cyan("bivy relay:setup")}  (then the app opens automatically)`);
     console.log(`    • Check status:   ${c.cyan("bivy status")}\n`);
@@ -3805,7 +3815,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy prune")}         Delete old sessions/workspaces/worktrees (--keep N, --older-than 7d, --dry-run)
   ${c.cyan("bivy exec")} "<prompt>"  One-shot headless run: prints the answer to stdout (pipe-friendly)
   ${c.cyan("bivy")}              Launch the default agent (pi) as a managed, relay-visible session
-  ${c.cyan("bivy setup")}      First-run wizard: deps, remote sync + sign-in, background service
+  ${c.cyan("bivy setup")}      First-run wizard: workspace, remote access + sign-in, background service
   ${c.cyan("bivy start")}      Run the daemon in the foreground
   ${c.cyan("bivy stop")}       Stop the background service
   ${c.cyan("bivy restart")}    Restart the background service (waits for active sessions to finish a turn; --force to skip)

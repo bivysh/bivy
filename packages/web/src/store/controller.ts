@@ -1996,7 +1996,11 @@ export class AppController {
     // on whatever repo the draft targets. An explicit opts.repo (e.g. a queue
     // caller) still wins.
     const repo = opts.repo ?? (this.store.getState().draftRepo || undefined);
-    const machine = await launchEphemeralMachine({ ...opts, repo }, {
+    // A first-run ephemeral node has no native GitHub login to inherit. Seed the
+    // device-local GitHub token during bootstrap so its very first repo picker,
+    // clone, push, and PR work instead of failing after the machine boots.
+    const githubToken = opts.githubToken ?? await this.githubTaskToken.get();
+    const machine = await launchEphemeralMachine({ ...opts, repo, githubToken: githubToken || undefined }, {
       store: this.local,
       exec: cloudExec(this.local),
       keys: this.ephemeralKeys,

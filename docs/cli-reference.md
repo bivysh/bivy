@@ -96,12 +96,15 @@ your terminal, but because the node owns the PTY the same live session is
 visible and drivable from the web/PWA app, and resumable later with
 `bivy resume`.
 
-Built-in agent ids: `pi`, `claude`, `codex`, `opencode`, `aider`, `hermes`,
-`openclaw`, `goose`, `gemini`, `qwen`, `cline`, `crush`.
+Built-in runnable agent ids: `pi`, `claude`, `openclaw`, `codex`, `opencode`,
+`aider`, `hermes`, `goose`, `gemini`, `qwen`, `cline`, `crush`, `cursor`,
+`copilot`, `grok`, `amp`, `auggie`, `droid`, `continue`, `kilocode`, `rovodev`,
+and `codebuff`. Run `bivy agents` for the live list, installation status, and
+binary names; the web picker intentionally hides experimental agents that do not
+yet meet its headless-session requirements.
 
-If the agent's CLI is not installed and Bivy knows its npm package
-(`claude`, `hermes`, `gemini`, `qwen`, `cline`, `crush`), it is installed on
-first use into `~/.local`.
+If an agent's CLI is missing and its manifest declares an npm package, Bivy
+installs it on first use into `~/.local`. Other agents must already be on PATH.
 
 Flags (consumed by Bivy; everything else is forwarded to the agent):
 

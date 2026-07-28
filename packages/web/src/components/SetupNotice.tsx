@@ -248,7 +248,7 @@ export function SetupNotice() {
       <div className="setup-card">
         <div className="setup-glyph">⛺</div>
         <h1>Bivy</h1>
-        <p>Sign in to reach your coding agents from anywhere.</p>
+        <p>Sign in or create an account, then connect a machine or launch your first cloud runner.</p>
         {signInError && (
           <div className="setup-error" role="alert">
             {signInError}
@@ -261,7 +261,7 @@ export function SetupNotice() {
             onClick={githubDeviceSignIn}
             disabled={githubBusy}
           >
-            {githubBusy ? "Waiting for GitHub…" : "Sign in with GitHub"}
+            {githubBusy ? "Waiting for GitHub…" : "Continue with GitHub"}
           </button>
         ) : (
           // Land the OAuth callback back on this client's own path so a sign-in
@@ -271,7 +271,7 @@ export function SetupNotice() {
             href={`${origin}/auth/github/start?return=${encodeURIComponent(location.pathname)}`}
             onClick={() => { setSignInError(null); setRedirecting(true); }}
           >
-            {redirecting ? "Redirecting…" : "Sign in with GitHub"}
+            {redirecting ? "Redirecting…" : "Continue with GitHub"}
           </a>
         )}
         {githubBusy && (
@@ -303,7 +303,7 @@ export function SetupNotice() {
             required
           />
           <button className="btn" type="submit" disabled={sending || emailWaiting || !email.trim()}>
-            {emailWaiting ? "Waiting for link…" : "Email me a link"}
+            {emailWaiting ? "Waiting for link…" : "Continue with email"}
           </button>
         </form>
         {note && (
@@ -331,6 +331,10 @@ export function SetupNotice() {
             . You can also edit the address above and send again.
           </p>
         )}
+        <p className="setup-foot muted">
+          By continuing, you agree to the <a href="https://bivy.sh/terms.html">Terms</a> and acknowledge the{" "}
+          <a href="https://bivy.sh/privacy.html">Privacy Policy</a>.
+        </p>
       </div>
     </div>
   );
