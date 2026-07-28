@@ -1491,8 +1491,52 @@ app.put("/node/provider-summary", requireNode, asyncHandler(async (req, res) => 
 // The control plane only routes metadata — the node runs the work with its own
 // token, so issue/agent content never reaches us.
 
-// Register (or rotate) an inbound hook for the signed-in account. Returns the
-// webhook URL + secret to paste into GitHub ("Payload URL" + "Secret") or Slack.
+function publicSlackHook(req: Request, hook: Awaited<ReturnType<typeof store.getInboundHook>>) {
+  if (!hook) return undefined;
+  return {
+    id: hook.id,
+    endpoint: `${baseUrl(req)}/webhooks/slack/${hook.id}`,
+    enabled: hook.enabled !== false,
+    defaultNode: hook.defaultNode,
+    createdAt: hook.createdAt,
+    updatedAt: hook.updatedAt,
+  };
+}
+
+// Slack creates the signing secret; Bivy stores it only for request signature
+// verification and never returns it. The endpoint is then pasted into a Slack
+// app's slash-command Request URL.
+app.get("/account/slack-hook", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const hook = (await store.listInboundHooks(account.id, "slack"))[0];
+  res.json({ hook: publicSlackHook(req, hook) ?? null });
+}));
+
+app.post("/account/slack-hook", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const signingSecret = String(req.body?.signingSecret ?? "").trim();
+  const defaultNode = String(req.body?.defaultNode ?? "").trim();
+  if (signingSecret.length < 16 || signingSecret.length > 256) {
+    return res.status(400).json({ error: "Enter the Signing Secret from Slack's Basic Information page." });
+  }
+  if (defaultNode && !/^[A-Za-z0-9._-]+$/.test(defaultNode)) {
+    return res.status(400).json({ error: "Default node contains invalid characters." });
+  }
+  let hook = await store.createInboundHook(account.id, "slack");
+  hook = (await store.setInboundHookSecret(account.id, hook.id, signingSecret)) ?? hook;
+  if (defaultNode) hook = (await store.setInboundHookDefaultNode(account.id, hook.id, defaultNode)) ?? hook;
+  res.status(201).json({ hook: publicSlackHook(req, hook) });
+}));
+
+app.delete("/account/slack-hook", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  for (const hook of await store.listInboundHooks(account.id, "slack")) {
+    await store.deleteInboundHook(account.id, hook.id);
+  }
+  res.json({ ok: true });
+}));
+
+// Legacy generic hook creation retained for node/older-client compatibility.
 app.post("/account/hooks", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const kind = String(req.body?.kind ?? "github").trim().toLowerCase();
@@ -2235,13 +2279,24 @@ app.post("/webhooks/slack/:id", asyncHandler(async (req, res) => {
   if (!(await store.entitlements(hook.accountId)).workQueueEnabled) {
     return res.json({ response_type: "ephemeral", text: "The Bivy work queue is a paid feature. Upgrade to the Individual or Team plan to route Slack commands to your nodes." });
   }
+  if (hook.enabled === false) return res.status(410).json({ error: "Slack integration disabled" });
   const form = new URLSearchParams(raw.toString("utf8"));
-  const { node, prompt } = parseSlackCommand(form.get("text") ?? "");
-  if (!prompt) return res.json({ response_type: "ephemeral", text: "Usage: /bivy [on <node>] <what to do>" });
-  const label = node ? `bivy/${node}` : "bivy";
-  const item = await store.enqueueWorkItem(hook.accountId, { label, source: "slack", title: prompt });
+  const { node, repo, prompt } = parseSlackCommand(form.get("text") ?? "");
+  if (!prompt) return res.json({ response_type: "ephemeral", text: "Usage: /bivy [on <node>] [in <owner/repo>] <what to do>" });
+  const rawLabel = node ? `bivy/${node}` : "bivy";
+  const label = applyDefaultNode(rawLabel, hook.defaultNode);
+  const triggerId = form.get("trigger_id") || undefined;
+  const item = await store.enqueueWorkItem(hook.accountId, {
+    label,
+    source: "slack",
+    title: prompt,
+    repo,
+    dedupeKey: triggerId ? `slack:${triggerId}` : undefined,
+    defaultRouted: !node,
+  });
   void notifyRelaysWorkAvailable(hook.accountId, item);
-  res.json({ response_type: "ephemeral", text: `On it — queued for ${label}. I'll open a PR when it's done.` });
+  const destination = repo ? `${repo} on ${label}` : label;
+  res.json({ response_type: "ephemeral", text: `On it — queued for ${destination}.${repo ? " I'll bring back a pull request." : ""}` });
 }));
 
 // A node pulls its pending work. `labels` (comma-separated) is the set it serves

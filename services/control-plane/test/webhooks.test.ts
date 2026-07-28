@@ -176,8 +176,11 @@ await test("slack signature: v0 hmac with replay window", () => {
   assert.equal(verifySlackSignature(secret, ts, body, "v0=deadbeef", now), false);
 });
 
-await test("slack command parse: 'on <node> <prompt>' and bare prompt", () => {
+await test("slack command parse: node/repo routing and bare prompts", () => {
   assert.deepEqual(parseSlackCommand("on laptop fix the flaky test"), { node: "laptop", prompt: "fix the flaky test" });
+  assert.deepEqual(parseSlackCommand("in acme/api fix the flaky test"), { repo: "acme/api", prompt: "fix the flaky test" });
+  assert.deepEqual(parseSlackCommand("on laptop in acme/api fix it"), { node: "laptop", repo: "acme/api", prompt: "fix it" });
+  assert.deepEqual(parseSlackCommand("in acme/api on laptop fix it"), { repo: "acme/api", node: "laptop", prompt: "fix it" });
   assert.deepEqual(parseSlackCommand("just do this"), { prompt: "just do this" });
   assert.deepEqual(parseSlackCommand("  "), { prompt: "" });
 });
