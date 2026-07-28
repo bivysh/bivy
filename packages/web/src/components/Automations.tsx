@@ -125,7 +125,8 @@ export function AutomationsPanel({ state }: { state: AppState }) {
   }
 
   return (
-    <div className="settings-panel">
+    <div className="automations-layout">
+      <div className="automations-main">
       <section className="settings-section">
         <h3>Scheduled automations</h3>
         <p className="settings-hint">
@@ -214,14 +215,17 @@ export function AutomationsPanel({ state }: { state: AppState }) {
           </div>
         ))}
       </section>
-      <section className="settings-section">
-        <h3>Recent results</h3>
-        {runs.filter((run) => run.definitionId).slice(0, 10).map((run) => (
-          <div className="settings-row" key={run.id}>
-            <span>{run.title}</span><span>{run.status} · {new Date(run.createdAt).toLocaleString()}</span>
-          </div>
-        ))}
-      </section>
+      </div>
+      <aside className="automations-aside">
+        <section className="settings-section">
+          <h3>Recent results</h3>
+          {runs.filter((run) => run.definitionId).slice(0, 10).map((run) => (
+            <div className="settings-row" key={run.id}>
+              <span>{run.title}</span><span>{run.status} · {new Date(run.createdAt).toLocaleString()}</span>
+            </div>
+          ))}
+        </section>
+      </aside>
     </div>
   );
 }

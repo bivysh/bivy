@@ -68,6 +68,10 @@ const IconServer = () => (
 const IconBolt = () => (
   <Glyph><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" /></Glyph>
 );
+// Webhook glyph — three linked nodes, the conventional inbound-hook mark.
+const IconWebhook = () => (
+  <Glyph><circle cx="6" cy="16" r="2.5" /><circle cx="18" cy="16" r="2.5" /><circle cx="12" cy="5" r="2.5" /><path d="m10.7 7.1-3 5.2M13.3 7.1l3 5.2M8.5 16h7" /></Glyph>
+);
 // Branch/policy glyph for Rulesets — a decision splitting into fallback routes.
 const IconRules = () => (
   <Glyph><circle cx="6" cy="6" r="2" /><circle cx="6" cy="18" r="2" /><circle cx="18" cy="12" r="2" /><path d="M8 6h4a4 4 0 0 1 4 4M8 18h4a4 4 0 0 0 4-4" /></Glyph>
@@ -153,6 +157,7 @@ const TITLES: Record<View, string> = {
   github: "GitHub App",
   queue: "GitHub Queue",
   automations: "Automations",
+  webhooks: "Webhooks",
   rulesets: "Rulesets",
   nodes: "Nodes",
   ephemeral: "Ephemeral machines",
@@ -234,13 +239,13 @@ export function Settings({
       items: [
         { id: "github", label: "GitHub App", icon: <IconGithub /> },
         { id: "queue", label: "GitHub Queue", icon: <IconQueue /> },
-        { id: "automations", label: "Automations", icon: <IconBolt /> },
       ],
     },
     {
       label: "Automation",
       items: [
-        { id: "automations", label: "Webhooks", icon: <IconBolt /> },
+        { id: "automations", label: "Automations", icon: <IconBolt /> },
+        { id: "webhooks", label: "Webhooks", icon: <IconWebhook /> },
         { id: "rulesets", label: "Rulesets", icon: <IconRules /> },
       ],
     },
@@ -344,12 +349,8 @@ export function Settings({
                 onOpenGithubSettings={() => onViewChange("github")}
               />
             )}
-            {activeView === "automations" && (
-              <>
-                <AutomationsPanel state={state} />
-                <WebhookTriggersPanel />
-              </>
-            )}
+            {activeView === "automations" && <AutomationsPanel state={state} />}
+            {activeView === "webhooks" && <WebhookTriggersPanel />}
             {activeView === "rulesets" && <RulesetsPanel state={state} />}
             {activeView === "nodes" && <NodesPanel state={state} />}
             {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
@@ -1245,10 +1246,10 @@ function EphemeralQueueDefaultSection({ hint }: { hint?: string }) {
 }
 
 // ---- Generic signed automation webhooks ----
-// Signed inbound webhook triggers (from the automation-webhooks feature). Lives
-// alongside the scheduled-automations panel (imported from ./Automations) under
-// the same "Automations" view — the two features arrived independently and both
-// belong here.
+// Signed inbound webhook triggers (from the automation-webhooks feature). Its
+// own "Webhooks" settings view, a sibling of the scheduled-automations panel
+// (imported from ./Automations) — the two used to share one "Automations" view
+// but were split into separate screens since they're independent features.
 function WebhookTriggersPanel() {
   const [hooks, setHooks] = useState<AutomationHook[]>([]);
   const [outcomes, setOutcomes] = useState<AutomationOutcome[]>([]);

@@ -1033,6 +1033,19 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .settings-section { display: flex; flex-direction: column; gap: 10px; }
 .settings-section + .settings-section { margin-top: 8px; padding-top: 18px; border-top: 1px solid var(--line); }
 .settings-section > .settings-subhead { margin-top: 0; }
+
+/* Automations panel: the form/schedule list and the "Recent results" aside.
+   Stacked by default (mobile) so Recent results falls below the list instead of
+   being squeezed into a narrow right rail; side-by-side once there's room. */
+.automations-layout { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.automations-main { display: flex; flex-direction: column; min-width: 0; }
+.automations-aside { min-width: 0; }
+.automations-aside .settings-section { margin-top: 0; padding-top: 0; border-top: 0; }
+@media (min-width: 721px) {
+  .automations-layout { flex-direction: row; align-items: flex-start; gap: 28px; }
+  .automations-main { flex: 1; min-width: 0; }
+  .automations-aside { flex: none; width: 280px; }
+}
 .settings-form code { font-size: 11px; padding: 1px 5px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); }
 .settings-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .queue-head { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
