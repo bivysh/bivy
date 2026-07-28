@@ -1264,7 +1264,13 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 }
 
 /* ---- Connect-a-runner onboarding screen ---- */
-.connect-runner { width: min(560px, 100%); margin: 4px auto 0; padding: 20px 16px 8px; display: flex; flex-direction: column; gap: 20px; }
+/* The ordinary app shell delegates scrolling to the chat pane and therefore
+   clips main itself. First-run onboarding replaces that pane, so give it an
+   explicit flex scrollport; otherwise tall option cards are unreachable on
+   mobile Safari. Hide the inactive session UI so it cannot consume height. */
+.main.needs-node > :not(.topbar):not(.banner):not(.connect-runner-scroll) { display: none; }
+.connect-runner-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.connect-runner { width: min(560px, 100%); margin: 4px auto 0; padding: 20px 16px max(24px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 20px; }
 .connect-hero { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .connect-hero-icon {
   width: 56px; height: 56px; margin-bottom: 6px; display: grid; place-items: center;
@@ -1703,9 +1709,9 @@ select.picker-search { appearance: auto; }
 .setup-foot { margin-top: 18px; }
 .btn.block { display: block; width: 100%; text-align: center; text-decoration: none; margin-top: 12px; padding: 11px; }
 .setup-or { color: var(--muted); font-size: 13px; margin: 16px 0 8px; }
-.setup-email { display: flex; gap: 8px; }
-.setup-email input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); color: var(--ink); font: inherit; font-size: 16px; }
-.setup-email .btn { flex: none; white-space: nowrap; }
+.setup-email { display: flex; flex-direction: column; gap: 8px; }
+.setup-email input { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); color: var(--ink); font: inherit; font-size: 16px; }
+.setup-email .btn { width: 100%; white-space: nowrap; }
 .setup-note { margin-top: 10px; word-break: break-word; }
 .setup-error { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--danger); border-left-width: 3px; border-radius: 10px; background: var(--danger-soft, transparent); color: var(--ink); font-size: 13px; line-height: 1.4; text-align: left; }
 .banner.inline { border-radius: 8px; margin: 8px 0; }

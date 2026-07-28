@@ -357,7 +357,7 @@ export function App() {
 
       {drawerOpen && <div className="scrim" onClick={closeDrawer} />}
 
-      <main className="main">
+      <main className={`main${needsNode ? " needs-node" : ""}`}>
         <header className="topbar">
           <button className="icon-btn only-mobile" onClick={() => setDrawerOpen(true)} aria-label="Open sessions">
             ☰
@@ -427,13 +427,15 @@ export function App() {
         )}
 
         {needsNode && (
-          <ConnectRunner
-            nodes={state.nodes}
-            ephemeralEnabled={EPHEMERAL_MACHINES_ENABLED}
-            onPickNode={(nodeId) => controller.switchNode(nodeId)}
-            onEphemeral={() => setEphemeralOpen(true)}
-            onRefresh={() => controller.refreshNodes()}
-          />
+          <div className="connect-runner-scroll">
+            <ConnectRunner
+              nodes={state.nodes}
+              ephemeralEnabled={EPHEMERAL_MACHINES_ENABLED}
+              onPickNode={(nodeId) => controller.switchNode(nodeId)}
+              onEphemeral={() => setEphemeralOpen(true)}
+              onRefresh={() => controller.refreshNodes()}
+            />
+          </div>
         )}
 
         <UsageBar usage={state.usage} sessionKey={state.activeSessionId} />
