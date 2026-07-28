@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, connectSlackHook, disconnectSlackHook, fetchSlackHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, LinearHook, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, connectSlackHook, disconnectSlackHook, fetchSlackHook, connectLinearHook, disconnectLinearHook, fetchLinearHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -52,6 +52,9 @@ const IconGithub = () => (
 );
 const IconSlack = () => (
   <Glyph><path d="M9 3v5a2 2 0 0 1-2 2H3a2 2 0 0 1 0-4h4V3a2 2 0 0 1 4 0v14a2 2 0 0 1-4 0v-4M15 21v-5a2 2 0 0 1 2-2h4a2 2 0 0 1 0 4h-4v3a2 2 0 0 1-4 0V7a2 2 0 0 1 4 0v4" /></Glyph>
+);
+const IconLinear = () => (
+  <Glyph><path d="M5 7.5A9 9 0 0 1 16.5 19M3.5 11A9 9 0 0 0 13 20.5M7.5 4.8 19.2 16.5M4.8 7.5l11.7 11.7" /><path d="M12 3a9 9 0 0 1 9 9c0 1.3-.3 2.6-.8 3.7L8.3 3.8A9 9 0 0 1 12 3z" /></Glyph>
 );
 const IconUser = () => (
   <Glyph><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Glyph>
@@ -158,6 +161,7 @@ const TITLES: Record<View, string> = {
   models: "Local models",
   voice: "Voice input",
   github: "GitHub App",
+  linear: "Linear",
   slack: "Slack",
   queue: "Work Queue",
   automations: "Automations",
@@ -242,7 +246,10 @@ export function Settings({
       label: "Integrations",
       items: [
         { id: "github", label: "GitHub App", icon: <IconGithub /> },
-        ...(hosted ? [{ id: "slack" as View, label: "Slack", icon: <IconSlack /> }] : []),
+        ...(hosted ? [
+          { id: "linear" as View, label: "Linear", icon: <IconLinear /> },
+          { id: "slack" as View, label: "Slack", icon: <IconSlack /> },
+        ] : []),
         { id: "queue", label: "Work Queue", icon: <IconQueue /> },
       ],
     },
@@ -346,6 +353,7 @@ export function Settings({
             {activeView === "models" && <LocalModelsPanel state={state} />}
             {activeView === "voice" && <VoicePanel state={state} />}
             {activeView === "github" && <GithubPanel state={state} onOpenGithubQueue={() => onViewChange("queue")} />}
+            {activeView === "linear" && <LinearPanel />}
             {activeView === "slack" && <SlackPanel />}
             {activeView === "queue" && (
               <GithubQueuePanel
@@ -1248,6 +1256,79 @@ function EphemeralQueueDefaultSection({ hint }: { hint?: string }) {
         )
       )}
     </>
+  );
+}
+
+// ---- Linear issue integration ----
+function LinearPanel() {
+  const [hook, setHook] = useState<LinearHook | null>(null);
+  const [secret, setSecret] = useState("");
+  const [route, setRoute] = useState("");
+  const [nodes, setNodes] = useState<AccountNode[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    fetchLinearHook(controller.local).then((next) => {
+      setHook(next);
+      if (next?.defaultNode) setRoute(next.defaultNode);
+    }).catch((e) => setError(e instanceof Error ? e.message : "Could not load Linear integration."));
+    controller.listNodes().then(setNodes).catch(() => {});
+  }, []);
+  const createEndpoint = async () => {
+    setBusy(true); setError("");
+    try { setHook(await connectLinearHook(controller.local, { defaultNode: route || undefined })); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not create Linear endpoint."); }
+    finally { setBusy(false); }
+  };
+  const connect = async () => {
+    setBusy(true); setError("");
+    try {
+      setHook(await connectLinearHook(controller.local, { signingSecret: secret, defaultNode: route || undefined }));
+      setSecret("");
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not connect Linear."); }
+    finally { setBusy(false); }
+  };
+  const disconnect = async () => {
+    if (!confirm("Disconnect Linear? Its webhook URL will stop accepting issues.")) return;
+    setBusy(true); setError("");
+    try { await disconnectLinearHook(controller.local); setHook(null); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not disconnect Linear."); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="settings-form">
+      <p className="settings-lead">Turn labelled Linear issues into unattended coding sessions and GitHub pull requests.</p>
+      {error && <div className="banner error inline">{error}</div>}
+      {!hook ? (
+        <section className="settings-section">
+          <h3>Connect Linear</h3>
+          <p className="settings-hint">First create a Bivy webhook URL. You will paste it into Linear, then bring Linear's generated signing secret back here.</p>
+          <label className="field-label">Default node (optional)</label>
+          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
+          <button className="btn primary" disabled={busy} onClick={() => void createEndpoint()}>Create webhook URL</button>
+        </section>
+      ) : (
+        <section className="settings-section">
+          <h3>{hook.enabled ? "Connected" : "Finish connecting"}</h3>
+          <ol className="settings-hint">
+            <li>In <strong>Linear → Settings → API → Webhooks</strong>, create an <strong>Issue</strong> webhook using this URL:</li>
+          </ol>
+          <code className="settings-code">{hook.endpoint}</code>
+          <button className="btn" onClick={() => void navigator.clipboard.writeText(hook.endpoint)}>Copy webhook URL</button>
+          <ol className="settings-hint" start={2}>
+            <li>Copy the signing secret generated by Linear and paste it below.</li>
+            <li>Create Linear labels <code>bivy</code> and optionally <code>bivy/node-name</code>. Applying one dispatches the issue.</li>
+          </ol>
+          <label className="field-label">Linear signing secret</label>
+          <input className="field-input" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={hook.enabled ? "Replace signing secret" : "Signing secret"} />
+          <label className="field-label">Default node (optional)</label>
+          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
+          <button className="btn primary" disabled={busy || secret.trim().length < 16} onClick={() => void connect()}>{hook.enabled ? "Update connection" : "Connect Linear"}</button>
+          <p className="settings-hint">Each runner also needs <code>BIVY_LINEAR_API_KEY</code> and a default <code>BIVY_LINEAR_REPO=owner/repo</code>. A <code>repo:owner/repo</code> issue label can override the repository.</p>
+          <button className="btn danger" disabled={busy} onClick={() => void disconnect()}>Disconnect Linear</button>
+        </section>
+      )}
+    </div>
   );
 }
 

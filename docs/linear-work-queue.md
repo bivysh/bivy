@@ -13,8 +13,8 @@ Bivy can dispatch Linear issues to the same hosted queue used by GitHub issues. 
 
    The API key stays on the node. It needs read access to issues. The repository may instead be selected per issue with a Linear label named `repo:owner/repository`.
 
-2. Create an account-scoped hook with `POST /account/hooks` and body `{"kind":"linear"}` (or use `POST /node/hooks` with an enrolled node token). Keep the returned hook ID and URL.
-3. In **Linear → Settings → API → Webhooks**, create an Issue webhook with that URL. Copy the signing secret Linear generates, then register it with Bivy using `POST /account/hooks/<id>/secret` and body `{"secret":"..."}` (the equivalent node endpoint is `POST /node/hooks/<id>/secret`).
+2. Open **Settings → Linear** in Bivy and tap **Create webhook URL**.
+3. In **Linear → Settings → API → Webhooks**, create an Issue webhook with that URL. Copy the signing secret Linear generates back into Bivy and tap **Connect Linear**.
 4. Create workspace issue labels named `bivy` and, optionally, `bivy/<node>` and `repo:owner/repository`.
 
 ## Routing and privacy

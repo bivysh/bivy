@@ -686,6 +686,43 @@ export async function disconnectSlackHook(store: LocalStore, fetchImpl: typeof f
   if (!res.ok) throw new Error(`Disconnect Slack failed: ${res.status}`);
 }
 
+export interface LinearHook {
+  id: string;
+  endpoint: string;
+  enabled: boolean;
+  defaultNode?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export async function fetchLinearHook(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<LinearHook | null> {
+  const res = await fetchImpl(`${cpBase(store)}/account/linear-hook`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`Linear integration request failed: ${res.status}`);
+  const data: any = await res.json().catch(() => ({}));
+  return data?.hook ?? null;
+}
+
+/** Create the endpoint (no secret), or finish/update it with Linear's signing secret. */
+export async function connectLinearHook(
+  store: LocalStore,
+  input: { signingSecret?: string; defaultNode?: string } = {},
+  fetchImpl: typeof fetch = fetch,
+): Promise<LinearHook> {
+  const res = await fetchImpl(`${cpBase(store)}/account/linear-hook`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify(input),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Connect Linear failed: ${res.status}`);
+  return data.hook;
+}
+
+export async function disconnectLinearHook(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/linear-hook`, { method: "DELETE", headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`Disconnect Linear failed: ${res.status}`);
+}
+
 export interface AutomationHook {
   id: string;
   endpoint: string;
