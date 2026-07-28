@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bivy — Turn issues into pull requests on your own machines</title>
-  <meta name="description" content="Route GitHub issues, Slack requests, webhooks, and schedules to your choice of coding agent on infrastructure you control. Watch, steer, and approve from anywhere.">
+  <title>Bivy — Turn GitHub, Slack, and Linear work into pull requests</title>
+  <meta name="description" content="Turn GitHub issues, Slack requests, and Linear issues into pull requests with coding agents running on infrastructure you control.">
   <meta name="theme-color" content="#f7f5f0">
   <link rel="canonical" href="https://bivy.sh/">
   <meta property="og:title" content="Bivy — Your coding-agent queue, on your infrastructure">
-  <meta property="og:description" content="Turn incoming work into pull requests with your agents, credentials, and machines. Free for interactive use; $15/month for unlimited automation.">
+  <meta property="og:description" content="Turn GitHub issues, Slack requests, and Linear issues into pull requests with your agents, credentials, and machines.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://bivy.sh/">
   <meta property="og:image" content="https://bivy.sh/screenshots/app-session.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Bivy — Your coding-agent queue, on your infrastructure">
-  <meta name="twitter:description" content="Route work to any coding agent on machines you control, then watch and steer it from anywhere.">
+  <meta name="twitter:description" content="Route GitHub, Slack, and Linear work to coding agents on machines you control, then get back a pull request.">
   <meta name="twitter:image" content="https://bivy.sh/screenshots/app-session.png">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="icon" type="image/png" href="./tent.png">
@@ -152,6 +152,23 @@
     .agents { display: flex; flex-wrap: wrap; gap: 8px 22px; color: var(--ink-2); font-size: 14px; font-weight: 600; }
     .agents a { color: var(--accent-dark); text-decoration: none; }
 
+    .integrations { padding: 82px 0 88px; border-bottom: 1px solid var(--line-soft); }
+    .integration-heading { display: flex; align-items: end; justify-content: space-between; gap: 40px; margin-bottom: 35px; }
+    .integration-heading h2 { margin-bottom: 0; }
+    .integration-heading .prose { max-width: 480px; margin: 0 0 4px; }
+    .integration-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .integration-card { display: flex; min-height: 285px; flex-direction: column; padding: 26px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+    .integration-name { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+    .integration-icon { display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-strong); color: var(--ink); }
+    .integration-icon svg { width: 22px; height: 22px; }
+    .integration-card h3 { font-size: 20px; }
+    .integration-card p { margin: 0 0 19px; color: var(--muted); font-size: 14.5px; }
+    .trigger { margin: auto 0 18px; padding: 10px 12px; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--bg); color: var(--ink-2); font: 12px/1.4 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+    .integration-card .text-link { align-self: flex-start; }
+    .integration-result { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 25px; color: var(--muted); font-size: 13.5px; }
+    .integration-result::before, .integration-result::after { content: ""; width: 44px; height: 1px; background: var(--line); }
+    .integration-result strong { color: var(--green); }
+
     section.section { padding: 88px 0; border-bottom: 1px solid var(--line-soft); }
     .section-intro { margin-bottom: 40px; }
     .section-intro p { margin-bottom: 0; }
@@ -237,6 +254,10 @@
       .proof { width: min(100%, 500px); min-height: 480px; }
       .phone-shot { margin-right: 45px; }
       .cards, .plans { grid-template-columns: 1fr; }
+      .integration-heading { display: block; }
+      .integration-heading h2 { margin-bottom: 16px; }
+      .integration-grid { grid-template-columns: 1fr; }
+      .integration-card { min-height: 0; }
       .card { min-height: 0; }
       .plan-copy { min-height: 0; }
       .workflow { grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -260,6 +281,8 @@
       .terminal-shot { aspect-ratio: 16 / 10; }
       .terminal-shot img { width: 100%; height: 100%; aspect-ratio: auto; object-fit: cover; object-position: center; }
       .agent-inner { align-items: flex-start; flex-direction: column; gap: 9px; }
+      .integrations { padding: 60px 0 65px; }
+      .integration-result { align-items: flex-start; text-align: center; }
       section.section { padding: 65px 0; }
       .workflow { grid-template-columns: 1fr; }
       .trust-row { grid-template-columns: 1fr; gap: 2px; }
@@ -276,6 +299,7 @@
   <div class="wrap header-inner">
     <a class="brand" href="./index.html"><img src="./tent.png" alt="" width="24" height="24">Bivy</a>
     <nav class="nav" aria-label="Primary navigation">
+      <a class="optional" href="#integrations">Integrations</a>
       <a class="optional" href="#product">Product</a>
       <a class="optional" href="#security">Security</a>
       <a class="optional" href="#pricing">Pricing</a>
@@ -290,9 +314,9 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div>
-        <div class="hero-badge"><span aria-hidden="true"></span>Agent operations on infrastructure you control</div>
-        <h1>Turn issues into pull requests on your own machines.</h1>
-        <p class="hero-lede">Bivy routes GitHub issues, Slack requests, webhooks, and schedules to the coding agent and machine you choose. It runs the work, recovers from common failures, and brings back a pull request you can review from anywhere.</p>
+        <div class="hero-badge"><span aria-hidden="true"></span>GitHub · Slack · Linear → pull requests</div>
+        <h1>Turn team requests into pull requests on your own machines.</h1>
+        <p class="hero-lede">Label a GitHub or Linear issue, or send a Slack request. Bivy routes it to the coding agent and machine you choose, runs the work, and brings back a pull request you can review from anywhere.</p>
         <div class="install" aria-label="Install Bivy">
           <code><span class="prompt">$ </span>curl -fsSL https://bivy.sh/install.sh | bash</code>
           <button class="copy" id="copy-hero" type="button" data-copy aria-label="Copy install command">Copy</button>
@@ -326,6 +350,57 @@
     </div>
   </div>
 
+  <section class="integrations" id="integrations">
+    <div class="wrap">
+      <div class="integration-heading">
+        <div>
+          <p class="eyebrow">Work in, pull request out</p>
+          <h2>Start where the request already lives.</h2>
+        </div>
+        <p class="prose">No copying tickets into a chat window. Give Bivy work from the tools your team already watches, then follow the result back to GitHub.</p>
+      </div>
+      <div class="integration-grid">
+        <article class="integration-card">
+          <div class="integration-name">
+            <span class="integration-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10M8 7.5c5 0 3 8.5 8 8.5M16 8v8"/></svg>
+            </span>
+            GitHub
+          </div>
+          <h3>Label an issue. Get a PR.</h3>
+          <p>Add a <code>bivy</code> label or mention your Bivy GitHub App. The agent works in an isolated branch, runs your checks, and opens a linked pull request.</p>
+          <div class="trigger">issue #482&nbsp;&nbsp; + label: bivy</div>
+          <a class="text-link" href="https://github.com/bivysh/bivy/blob/main/docs/github-work-queue.md" data-plausible="integration-github">Set up GitHub →</a>
+        </article>
+        <article class="integration-card">
+          <div class="integration-name">
+            <span class="integration-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="10" y="2" width="4" height="9" rx="2"/><rect x="13" y="10" width="9" height="4" rx="2"/><rect x="10" y="13" width="4" height="9" rx="2"/><rect x="2" y="10" width="9" height="4" rx="2"/><circle cx="7" cy="7" r="2"/><circle cx="17" cy="7" r="2"/><circle cx="17" cy="17" r="2"/><circle cx="7" cy="17" r="2"/></svg>
+            </span>
+            Slack
+          </div>
+          <h3>Ask from the conversation.</h3>
+          <p>Use <code>/bivy</code> with a request, repository, and optional target node. Bivy acknowledges it privately and sends the work to your queue.</p>
+          <div class="trigger">/bivy in acme/api fix checkout</div>
+          <a class="text-link" href="https://github.com/bivysh/bivy/blob/main/docs/slack-setup.md" data-plausible="integration-slack">Set up Slack →</a>
+        </article>
+        <article class="integration-card">
+          <div class="integration-name">
+            <span class="integration-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M5.7 17.9 17.9 5.7M8.4 20.2 20.2 8.4M4 14.7 14.7 4"/></svg>
+            </span>
+            Linear
+          </div>
+          <h3>Move the backlog into motion.</h3>
+          <p>Apply a <code>bivy</code> label to a Linear issue. Your node fetches the live issue, creates an isolated coding session, and opens a GitHub pull request.</p>
+          <div class="trigger">ENG-241&nbsp;&nbsp; + label: bivy</div>
+          <a class="text-link" href="https://github.com/bivysh/bivy/blob/main/docs/linear-work-queue.md" data-plausible="integration-linear">Set up Linear →</a>
+        </article>
+      </div>
+      <div class="integration-result"><span>Each route uses the same durable queue and your routing rules</span><strong>→ reviewed pull request</strong></div>
+    </div>
+  </section>
+
   <section class="section" id="product">
     <div class="wrap">
       <div class="section-intro">
@@ -352,7 +427,7 @@
       </div>
 
       <div class="workflow" aria-label="Bivy automation workflow">
-        <div class="step"><small>01 · TRIGGER</small><strong>Work arrives</strong><p>Label an issue, send a Slack request or signed webhook, or run a schedule.</p></div>
+        <div class="step"><small>01 · TRIGGER</small><strong>Work arrives</strong><p>Label a GitHub or Linear issue, send a Slack request or signed webhook, or run a schedule.</p></div>
         <div class="step"><small>02 · ROUTE</small><strong>Bivy picks a lane</strong><p>Your routing defaults select the node, agent, model, and safety policy.</p></div>
         <div class="step"><small>03 · RUN</small><strong>Your node executes</strong><p>The agent works in an isolated git worktree with your tools and credentials.</p></div>
         <div class="step"><small>04 · REVIEW</small><strong>A result comes back</strong><p>Open the PR and inspect checks, attempts, fallbacks, and the final outcome.</p></div>
@@ -397,7 +472,7 @@
               <tr><td>Where work runs</td><td>Your laptop, server, or cloud account</td><td>Vendor-managed environment</td><td>Your machine</td></tr>
               <tr><td>Agent choice</td><td>19 integrations; select per job</td><td>Usually the vendor's own agent</td><td>Anything you install</td></tr>
               <tr><td>Setup</td><td>Install a node and connect model auth</td><td>Lowest setup; compute is managed</td><td>You assemble and operate it</td></tr>
-              <tr><td>Unattended queue</td><td>GitHub, Slack, webhooks, schedules</td><td>Vendor-specific integrations</td><td>Build it yourself</td></tr>
+              <tr><td>Unattended queue</td><td>GitHub, Slack, Linear, webhooks, schedules</td><td>Vendor-specific integrations</td><td>Build it yourself</td></tr>
               <tr><td>Failure policy</td><td>Bounded retry, reroute, or park</td><td>Varies by service</td><td>Build it yourself</td></tr>
               <tr><td>Mobile control</td><td>Sessions, diffs, approvals, PTY</td><td>Varies by service</td><td>Terminal access</td></tr>
               <tr><td>Billing</td><td>Bivy subscription; model and compute billed direct</td><td>Bundled or vendor-metered</td><td>Model and compute billed direct</td></tr>
@@ -423,7 +498,7 @@
         <div class="trust-row"><span>Repository files and diffs</span><span>Stay on your node</span></div>
         <div class="trust-row"><span>Prompts and transcripts</span><span>End-to-end encrypted</span></div>
         <div class="trust-row"><span>Model and repository credentials</span><span>Stay on your node</span></div>
-        <div class="trust-row"><span>GitHub issue content</span><span>Fetched by your node</span></div>
+        <div class="trust-row"><span>GitHub and Linear issue content</span><span>Fetched by your node</span></div>
         <div class="trust-row"><span>Account, node, routing, and run status</span><span>Control-plane metadata</span></div>
         <div class="trust-row"><span>Push notification text</span><span>Visible to control plane</span></div>
       </div>
@@ -461,7 +536,7 @@
           <ul>
             <li>Everything in Free</li>
             <li>Unlimited unattended automation</li>
-            <li>GitHub, Slack, webhooks, and schedules</li>
+            <li>GitHub, Slack, Linear, webhooks, and schedules</li>
             <li>Fallback reruns and BYO-cloud queue jobs</li>
             <li>Sanitized outcome reports</li>
             <li>Email support</li>
