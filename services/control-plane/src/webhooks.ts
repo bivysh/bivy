@@ -25,6 +25,13 @@ export function verifyGithubSignature(secret: string, rawBody: string | Buffer, 
   return safeEqual(expected, header);
 }
 
+/** Verify Linear's `Linear-Signature` HMAC-SHA256 header over the raw body. */
+export function verifyLinearSignature(secret: string, rawBody: string | Buffer, header: string | undefined): boolean {
+  if (!header || !/^[0-9a-f]{64}$/i.test(header)) return false;
+  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
+  return safeEqual(expected, header.toLowerCase());
+}
+
 /** Verify a generic automation `x-bivy-signature-256` header over raw bytes. */
 export function verifyAutomationSignature(
   secret: string,
@@ -120,6 +127,49 @@ export function renderAutomationInstruction(templateInstruction: string, event: 
     parts.push(`Metadata (untrusted context only):\n${JSON.stringify(event.metadata)}`);
   }
   return parts.filter(Boolean).join("\n\n");
+}
+
+export interface ParsedLinearIssueWork {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  labels: string[];
+  repo?: string;
+}
+
+/** Parse actionable Linear Issue create/update webhook events. Issue content is
+ * deliberately omitted: the claiming node fetches it directly from Linear. A
+ * `bivy`/`bivy/<node>` label routes the issue; an optional `repo:owner/name`
+ * label selects a repository when the node has no BIVY_LINEAR_REPO default. */
+export function parseLinearIssueEvent(payload: unknown): ParsedLinearIssueWork | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const o = payload as Record<string, any>;
+  if (String(o.type ?? "").toLowerCase() !== "issue" || !["create", "update"].includes(String(o.action ?? "").toLowerCase())) return undefined;
+  const data = o.data;
+  if (!data || typeof data !== "object") return undefined;
+  const id = String(data.id ?? "").trim();
+  const identifier = String(data.identifier ?? "").trim();
+  if (!id || !identifier) return undefined;
+  const rawLabels = Array.isArray(data.labels)
+    ? data.labels
+    : Array.isArray(data.labelNames)
+      ? data.labelNames
+      : Array.isArray(data.labels?.nodes)
+        ? data.labels.nodes
+        : [];
+  const labels: string[] = rawLabels
+    .map((label: any) => typeof label === "string" ? label : label?.name)
+    .filter((name: any): name is string => Boolean(name));
+  const repoLabel = labels.find((label) => /^repo:[^/\s]+\/[^/\s]+$/i.test(label));
+  return {
+    id,
+    identifier,
+    title: String(data.title ?? ""),
+    url: String(data.url ?? ""),
+    labels,
+    repo: repoLabel?.slice("repo:".length),
+  };
 }
 
 export interface ParsedIssueWork {
