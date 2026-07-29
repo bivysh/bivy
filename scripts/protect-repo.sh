@@ -3,11 +3,10 @@ set -euo pipefail
 
 # Apply branch + tag protection rulesets to this repo.
 #
-# Rulesets require a public repo or a paid org plan. While bivysh is on the free
-# plan and bivy is private, the API returns 403 and there is no way to protect
-# main at all -- this script exists so that protection is one command at the
-# moment the repo goes public, instead of a set of settings-page clicks nobody
-# remembers the shape of.
+# Rulesets require a public repo or a paid org plan. bivy is public now, so this
+# applies for real; it stays a script rather than a set of settings-page clicks
+# so the protection is reviewable, diffable, and re-appliable after any change.
+# Re-running is safe: apply() matches on ruleset name and updates in place.
 #
 # Usage:
 #   scripts/protect-repo.sh              # apply

@@ -1,9 +1,8 @@
 # Code owners for this repository.
 #
-# Inert while the repo is private on a free org plan: CODEOWNERS review is only
-# *enforced* by a branch ruleset, and rulesets require a public repo or a paid
-# plan. Committing it now means enforcement is a one-flag change at that point
-# (`require_code_owner_review` in scripts/protect-repo.sh) rather than a new
-# file to write under time pressure.
+# CODEOWNERS review is only *enforced* by a branch ruleset. The repo is public
+# and scripts/protect-repo.sh now applies its rulesets for real, so turning this
+# from advisory into required is a one-flag change there
+# (`require_code_owner_review`).
 
 * @pettersj
