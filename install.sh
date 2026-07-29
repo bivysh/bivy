@@ -465,6 +465,17 @@ else
   STATE_DIR="$DATA_DIR"
 fi
 
+# Record the release channel (npm dist-tag) next to the node's state so
+# `bivy update` keeps tracking it instead of snapping back to `latest`. A staging
+# tester who installed with BIVY_CHANNEL=staging should stay on staging across
+# updates. BIVY_VERSION pins an exact version rather than a channel, so skip the
+# record then and leave any existing marker untouched. Best-effort — an
+# unwritable state dir just means update falls back to the default channel.
+if [ -z "${BIVY_VERSION:-}" ]; then
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  printf '%s\n' "${BIVY_CHANNEL:-latest}" > "$STATE_DIR/channel" 2>/dev/null || true
+fi
+
 if [ "${BIVY_INSTALL_ALL_AGENTS:-}" = "1" ]; then
   info "Installing all bundled agent runtimes"
   "$BIVY_BIN" agents:install || warn "Could not install every bundled agent runtime. Bivy still works; run 'bivy agents:install' later to retry."

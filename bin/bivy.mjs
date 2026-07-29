@@ -84,6 +84,47 @@ const relayConfigPath = path.join(appDir, "relay.json");
 // Read once and deleted immediately — never a credential left at rest.
 const setupSessionPath = path.join(appDir, ".setup-session.json");
 const updateLogPath = path.join(appDir, "update.log");
+// The release channel (npm dist-tag) this install tracks, recorded at install
+// time by install.sh and here by `bivy update --channel`. Absent = `latest`, so
+// existing installs keep behaving exactly as before.
+const channelPath = path.join(appDir, "channel");
+function readChannel() {
+  try {
+    const ch = fs.readFileSync(channelPath, "utf8").trim();
+    return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(ch) ? ch : "latest";
+  } catch {
+    return "latest";
+  }
+}
+function writeChannel(ch) {
+  try {
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(channelPath, `${ch}\n`);
+  } catch {
+    /* best-effort: an unwritable data dir just means update uses the default */
+  }
+}
+// Pick the channel for an update: an explicit --stable/--staging/--channel flag
+// wins and is PERSISTED (so later plain `bivy update`s stay on it); otherwise use
+// the recorded channel (default `latest`). Returns a validated tag.
+function resolveUpdateChannel(args) {
+  let ch = null;
+  if (args.includes("--stable")) ch = "latest";
+  else if (args.includes("--staging")) ch = "staging";
+  else {
+    const i = args.indexOf("--channel");
+    if (i !== -1 && args[i + 1]) ch = args[i + 1];
+  }
+  if (ch) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(ch)) {
+      console.log(c.yellow(`Ignoring invalid channel '${ch}'; keeping ${readChannel()}.`));
+      ch = null;
+    } else {
+      writeChannel(ch);
+    }
+  }
+  return ch || readChannel();
+}
 const packaged = fs.existsSync(path.join(repoRoot, "dist", "server.js"));
 const serverEntry = path.join(repoRoot, packaged ? "dist/server.js" : "src/server.ts");
 const nativePiEntry = path.join(repoRoot, packaged ? "dist/native-pi.js" : "src/native-pi.ts");
@@ -3393,7 +3434,7 @@ async function showDetachedUpdateProgress(child, start) {
 
 async function cmdUpdate(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy update [--force|--no-wait]\n\nUpdate Bivy + install deps + restart service. Waits for active sessions to finish a turn first; --force/--no-wait skips the wait. See 'bivy update:log' for the last run's output.");
+    console.log("Usage: bivy update [--force|--no-wait] [--staging|--stable|--channel <name>]\n\nUpdate Bivy + install deps + restart service. Stays on the release channel recorded at install time (default 'latest'); --staging/--stable/--channel switch channels and are remembered for future updates. Waits for active sessions to finish a turn first; --force/--no-wait skips the wait. See 'bivy update:log' for the last run's output.");
     return;
   }
   // Inside a Bivy web/PWA terminal the shell is a child of the node's own
@@ -3437,11 +3478,15 @@ async function runUpdate(args = []) {
     return;
   }
 
+  // Update along the recorded channel (default `latest`), not a hardcoded tag,
+  // so a staging box stays on staging instead of silently jumping to production.
+  const channel = resolveUpdateChannel(args);
+
   if (kind === "npm-global") {
-    console.log(c.dim("Updating the globally-installed bivy package…"));
-    const code = await run("npm", ["install", "-g", "@bivy/bivy@latest", "--no-audit", "--no-fund"]);
+    console.log(c.dim(`Updating the globally-installed bivy package (channel: ${channel})…`));
+    const code = await run("npm", ["install", "-g", `@bivy/bivy@${channel}`, "--no-audit", "--no-fund"]);
     if (code !== 0) {
-      console.log(c.yellow(`npm reported an issue (exit ${code}). Try: sudo npm i -g @bivy/bivy@latest`));
+      console.log(c.yellow(`npm reported an issue (exit ${code}). Try: sudo npm i -g @bivy/bivy@${channel}`));
       process.exit(code);
     }
     await ensureBundledAgents();
@@ -3457,7 +3502,7 @@ async function runUpdate(args = []) {
   }
 
   if (kind === "packaged") {
-    console.log(c.dim("Updating packaged Bivy install…"));
+    console.log(c.dim(`Updating packaged Bivy install (channel: ${channel})…`));
     // The actual restart happens inside install.sh, which shells out to
     // `bivy restart` (using the freshly-swapped binary) once the new code is in
     // place — that invocation waits for busy sessions on its own. This earlier
@@ -3466,9 +3511,11 @@ async function runUpdate(args = []) {
     // surprise anyone mid-turn.
     const config = loadConfig();
     await waitForIdleSessions(config, { skip: skipWait });
+    // install.sh reads BIVY_CHANNEL from the env; pass the recorded channel so a
+    // packaged re-install stays on it (and re-records it) instead of latest.
     const code = await run("bash", ["-c", "curl -fsSL https://bivy.sh/install.sh | bash"], {
       cwd: repoRoot,
-      env: { ...process.env, BIVY_HOME: repoRoot },
+      env: { ...process.env, BIVY_HOME: repoRoot, BIVY_CHANNEL: channel },
     });
     process.exit(code);
   }
