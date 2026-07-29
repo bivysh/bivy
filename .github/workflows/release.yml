@@ -181,6 +181,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
+          # An annotated tag needs a committer identity, and the runner has none
+          # it can auto-detect (its hostname has no domain, so git derives an
+          # invalid `runner@host.(none)` and hard-fails). This step runs *after*
+          # the irreversible publish, so an unset identity would strand a release
+          # on npm with no tag and no GitHub release.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v$VERSION" -m "Bivy $VERSION"
           git push origin "v$VERSION"
           gh release create "v$VERSION" --title "v$VERSION" --notes-file release-notes.md

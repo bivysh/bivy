@@ -221,13 +221,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal that ran the installer, leaving `bivy` unrecognized in every new
   shell afterwards. Opt out with `BIVY_NO_RC_UPDATE=1`. (#69)
 
-## [0.1.0-bootstrap.0] - 2026-07-29
-
-Disposable bootstrap prerelease. Not a feature release: it exists only to
-exercise the real npm distribution path end to end — trusted publishing from
-CI, provenance attestation, and the `install.sh` → `npm install -g @bivy/bivy`
-flow — before cutting the actual `0.1.0`. Safe to `npm unpublish` once verified.
-
 ## [0.1.0] - 2026-07-24
 
 First public release.
