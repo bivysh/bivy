@@ -232,7 +232,6 @@ Repository layout:
 - `services/relay` — self-hostable relay
 - `services/control-plane` — self-hostable control plane
 - `deploy/` — self-host deployment examples
-- `site/` — the marketing and install site
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
