@@ -347,7 +347,39 @@ if [ "$INSTALL_MODE" = "npm" ]; then
   fi
   BIVY_BIN="$BIN_DIR/bivy"
 fi
-[ -x "$BIVY_BIN" ] || die "bivy was installed but no executable was found at $BIVY_BIN."
+# The install can "succeed" yet leave no runnable `bivy`. By far the most common
+# cause before launch is that the requested channel points at a PLACEHOLDER
+# release with no executable — e.g. `latest` is a 0.0.0 stub until a production
+# release is promoted. npm installs that happily, then has nothing to link, and a
+# bare "no executable at <path>" sends people hunting for a PATH bug that isn't
+# there. Diagnose the two real cases (binless release vs. prefix/PATH mismatch)
+# and say what to do.
+if [ ! -x "$BIVY_BIN" ]; then
+  pkg_json=""
+  if [ "$INSTALL_MODE" = "npm" ]; then
+    if [ -n "${BIVY_NPM_PREFIX:-}" ]; then
+      pkg_json="$BIVY_NPM_PREFIX/lib/node_modules/${NPM_PACKAGE}/package.json"
+    else
+      pkg_json="$(npm root -g 2>/dev/null)/${NPM_PACKAGE}/package.json"
+    fi
+  fi
+  # Binless-release case: the package installed but declares no `bin`.
+  if [ -n "$pkg_json" ] && [ -f "$pkg_json" ] \
+     && ! node -e 'const b=require(process.argv[1]).bin;process.exit(b&&(typeof b==="string"||Object.keys(b).length)?0:1)' "$pkg_json" 2>/dev/null; then
+    ver="$(node -e 'try{process.stdout.write(String(require(process.argv[1]).version||"?"))}catch(e){process.stdout.write("?")}' "$pkg_json" 2>/dev/null || echo "?")"
+    warn "${NPM_PACKAGE}@${PKG_VERSION} resolved to version ${ver}, which ships no 'bivy' executable —"
+    warn "that channel only has a placeholder release so far, so there is nothing to run yet."
+    if [ "${BIVY_CHANNEL:-latest}" != "staging" ] && [ -z "${BIVY_VERSION:-}" ]; then
+      die "No published build on the '${BIVY_CHANNEL:-latest}' channel yet. Install the current dev build:
+    npm i -g ${NPM_PACKAGE}@staging
+  (or re-run this installer with BIVY_CHANNEL=staging, once a channel-aware install.sh is served)."
+    fi
+    die "The '${PKG_VERSION}' release ships no executable. Pick a channel/version with a published build — see: npm view ${NPM_PACKAGE} dist-tags"
+  fi
+  # Otherwise the package has a bin but it isn't where we looked: a prefix/PATH mismatch.
+  die "bivy installed but no executable was found at $BIVY_BIN.
+Your npm global bin dir may differ from '$BIN_DIR' — check: npm prefix -g   (its bin/ must be on PATH)."
+fi
 
 # ------------------------------------------------------- migrate legacy state
 #
