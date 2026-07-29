@@ -1,67 +1,61 @@
 name: Release
 
-# Tag-triggered npm release, via npm Trusted Publishing (OIDC) -- see
-# "Trusted publishing" in docs/releasing.md.
+# ONE trusted-publisher workflow driving BOTH npm channels. npm allows only a
+# single trusted publisher (one workflow file) per package, so staging and
+# production must live here together -- see docs/releasing.md.
 #
-# `npm run publish:npm` (scripts/build-release.mjs --publish) has always
-# existed, but nothing called it -- publishing was a manual, unattested
-# `npm publish` from a laptop. There is no NPM_TOKEN secret: this workflow
-# authenticates to the registry with the same GitHub Actions OIDC identity
-# (`permissions: id-token: write`) that npm also uses to generate the
-# provenance attestation -- the replacement for the old self-managed Ed25519
-# manifest signature. npm only accepts that identity for a publish because
-# the `bivy` package's trusted publisher is configured (on npmjs.com) to trust
-# exactly this repository and this workflow file, so nothing else can
-# impersonate this release path -- and there is no long-lived credential
-# anywhere to leak, rotate, or guard.
+#   push to main       -> STAGING (automatic). Publishes X.Y.Z-staging.<run#> to
+#                         the `staging` dist-tag on every merge. No approval, no
+#                         git tag, never moves `latest`. This is the dev channel
+#                         every change lands on.
+#   workflow_dispatch  -> PRODUCTION (deliberate). Promotes the current
+#                         package.json version to the `latest` dist-tag, gated by
+#                         the `release` environment approval and the full CI
+#                         suite, then tags the commit and creates the GitHub
+#                         release. This is the one-click "Promote" button.
 #
-# npm can only configure a trusted publisher for a package that already
-# exists, so this depends on a one-time manual bootstrap publish having
-# already happened -- see "Bootstrapping" in docs/releasing.md.
+# Both jobs authenticate to npm with the job's GitHub Actions OIDC identity
+# (`id-token: write`) against the ONE trusted publisher configured for
+# `@bivy/bivy` -- there is no NPM_TOKEN. That trusted publisher MUST have its
+# Environment field left BLANK: the automatic staging job runs in no environment,
+# so a policy that pins an environment would reject it. The production job still
+# self-gates on the `release` GitHub environment (approval) -- that is a
+# GitHub-side control and does not need to be part of npm's trust policy.
+# Provenance is attached automatically on both (scripts/build-release.mjs adds
+# --provenance whenever GITHUB_ACTIONS + id-token are present).
+
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      confirm_version:
+        description: 'Promote to `latest`: type the exact version from package.json (e.g. 0.1.0).'
+        required: true
+        type: string
 
 permissions:
   contents: read
 
-# Never cancel a release run mid-publish -- a superseded/duplicate tag push is
-# vanishingly rare, and cancelling between "npm publish" and "create the
-# GitHub release" would leave the two out of sync.
 concurrency:
-  group: release-${{ github.ref }}
+  # Never cancel a publish mid-flight. Keyed per-SHA so rapid merges each publish
+  # their own unique staging version instead of cancelling one another.
+  group: release-${{ github.event_name }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
-  # Re-run the exact gate a pull request would have to pass. A tag can be
-  # pushed from any local checkout of any commit, so this is what actually
-  # guarantees the thing about to be published builds, lints, and passes
-  # tests -- not just that CI was green on `main` at some earlier point.
-  ci:
-    uses: ./.github/workflows/ci.yml
-    with:
-      # A release validates the exact tag as a whole; changed-path optimization is
-      # only for PRs and must never skip a release job.
-      force_all: true
-    permissions:
-      contents: read
-      pull-requests: read
-
-  publish:
-    name: Publish to npm and create the GitHub release
-    needs: ci
+  # ------------------------------------------------------------------ STAGING --
+  # Automatic on every merge to main. The whole point of the dev channel: any
+  # change that lands is immediately installable via `@bivy/bivy@staging`.
+  staging:
+    if: github.event_name == 'push'
+    name: Publish staging build (dist-tag `staging`)
     runs-on: ubuntu-latest
-    # The release environment requires a maintainer approval and is also part of
-    # npm's trusted-publisher identity. A tag push alone cannot publish.
-    environment: release
     permissions:
-      contents: write # to create the GitHub release
-      id-token: write # OIDC: authenticates the trusted publish and signs provenance
+      id-token: write # OIDC: trusted publish + provenance
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -69,71 +63,124 @@ jobs:
           cache: npm
           registry-url: 'https://registry.npmjs.org'
 
-      # Refuse a tag made from an unmerged side commit. This catches accidental
-      # local tagging and prevents a write-capable account from publishing code
-      # that never passed through main's protected PR path.
-      - name: Verify release commit is on main
-        run: |
-          git fetch --no-tags origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
-            echo "::error::Release tag must point to a commit contained in main." >&2
-            exit 1
-          }
-
-      # Trusted publishing needs npm >= 11.5.1; Node 22.19.0 (pinned repo-wide
-      # in package.json engines / ci.yml) bundles an older npm. Upgrade just
-      # the CLI here rather than bumping the pinned Node version for this one
-      # job.
+      # Trusted publishing needs npm >= 11.5.1; the pinned Node bundles an older
+      # npm. Upgrade just the CLI rather than bumping the repo-wide Node version.
       - name: Upgrade npm for trusted publishing (requires npm >= 11.5.1)
         run: npm install -g npm@^11
 
       - run: npm ci
 
-      # The tag is the source of truth for what version ships. Catch a
-      # forgotten version bump (or a wrong tag) here, with a clear message,
-      # rather than publishing a package whose version doesn't match its own
-      # git tag.
-      - name: Verify tag matches package.json version (and all workspaces agree)
+      # Stamp a unique, immutable prerelease version for this build. github's
+      # run_number is monotonic, so versions never collide (npm versions are
+      # immutable). main must carry a clean X.Y.Z base -- a prerelease base would
+      # produce a nonsense double-prerelease like 0.1.0-rc.1-staging.7.
+      - name: Stamp a unique staging prerelease version
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          pkg="$(node -p "require('./package.json').version")"
-          if [ "$tag" != "$pkg" ]; then
-            echo "::error::Tag v$tag does not match package.json version $pkg. Bump the version (all workspaces must agree) and re-tag -- see docs/releasing.md." >&2
-            exit 1
+          base="$(node -p "require('./package.json').version")"
+          case "$base" in
+            *-*) echo "::error::package.json version '$base' is already a prerelease; main must hold a clean X.Y.Z."; exit 1 ;;
+          esac
+          version="${base}-staging.${GITHUB_RUN_NUMBER}"
+          npm version --no-git-tag-version --allow-same-version "$version"
+          echo "Publishing staging version: $version"
+
+      # `--tag staging` keeps this off `latest`. Provenance is added automatically.
+      - name: Publish to npm (dist-tag `staging`)
+        run: npm run publish:npm -- --tag staging
+
+  # --------------------------------------------------------------- PRODUCTION --
+  # Re-run the exact gate a PR must pass, on the commit about to be promoted.
+  ci:
+    if: github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/ci.yml
+    with:
+      force_all: true
+    permissions:
+      contents: read
+      pull-requests: read
+
+  production:
+    if: github.event_name == 'workflow_dispatch'
+    name: Promote to npm `latest` + tag + GitHub release
+    needs: ci
+    runs-on: ubuntu-latest
+    # Approval gate: a dispatch alone cannot publish to production.
+    environment: release
+    permissions:
+      contents: write # push the tag + create the GitHub release
+      id-token: write # OIDC: trusted publish + provenance
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Refuse to promote from anywhere but main
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main" \
+            || { echo "::error::Promotion must be dispatched from main (got $GITHUB_REF)."; exit 1; }
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm for trusted publishing (requires npm >= 11.5.1)
+        run: npm install -g npm@^11
+
+      - run: npm ci
+
+      # package.json is the single source of truth for the version to release.
+      # Validate it is a clean release version, that the dispatcher typed it
+      # exactly (a deliberate act), and that it was not already published.
+      - name: Resolve and validate the release version
+        id: ver
+        env:
+          CONFIRM: ${{ inputs.confirm_version }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          case "$version" in
+            *-*) echo "::error::package.json version '$version' is a prerelease; bump it to a clean X.Y.Z in a PR before promoting."; exit 1 ;;
+          esac
+          if [ "$CONFIRM" != "$version" ]; then
+            echo "::error::Confirmation '$CONFIRM' does not match package.json version '$version'. Re-run and type the exact version to promote."; exit 1
           fi
-          # The error text has always PROMISED workspace agreement; enforce it so
-          # a forgotten bump in packages/* or services/* can't ship an internally
-          # inconsistent monorepo. The npm artifact drops these workspaces, so
-          # this is a consistency guard, not a correctness one for the tarball.
-          for wpkg in packages/*/package.json services/*/package.json; do
-            [ -f "$wpkg" ] || continue
-            wver="$(node -p "require('./$wpkg').version")"
-            if [ "$wver" != "$tag" ]; then
-              echo "::error::$wpkg is at version $wver but the tag is v$tag. All workspace versions must match the tag -- see docs/releasing.md." >&2
-              exit 1
-            fi
+          if git rev-parse "v$version" >/dev/null 2>&1 \
+            || git ls-remote --exit-code --tags origin "v$version" >/dev/null 2>&1; then
+            echo "::error::Tag v$version already exists -- this version was already released. Bump the version in a PR first."; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The npm artifact ships only the root package, but keep all workspaces in
+      # lockstep so the monorepo never publishes an internally inconsistent state.
+      - name: Verify all workspaces agree on the version
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          for w in package.json packages/*/package.json services/*/package.json; do
+            [ -f "$w" ] || continue
+            wv="$(node -p "require('./$w').version")"
+            [ "$wv" = "$VERSION" ] \
+              || { echo "::error::$w is $wv but promoting $VERSION -- all workspace versions must match."; exit 1; }
           done
 
-      # Validate release notes BEFORE the irreversible publish. A missing
-      # CHANGELOG section must not leave npm published with no GitHub release.
-      - name: Extract CHANGELOG section for this tag
-        run: node scripts/extract-changelog.mjs "$GITHUB_REF_NAME" > release-notes.md
+      # Validate release notes BEFORE the irreversible publish.
+      - name: Extract CHANGELOG section for this version
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: node scripts/extract-changelog.mjs "v$VERSION" > release-notes.md
 
-      # No token: npm authenticates this publish via the job's OIDC identity
-      # against the trusted publisher configured for the `bivy` package, and
-      # attaches the provenance attestation automatically as part of that --
-      # scripts/build-release.mjs's own --provenance flag (added whenever
-      # GITHUB_ACTIONS + id-token are present) is redundant here but harmless,
-      # so the script needs no change to support either auth path.
-      - name: Publish to npm
+      - name: Publish to npm (dist-tag `latest`)
         run: npm run publish:npm
 
-      # Use the preinstalled `gh` CLI rather than another third-party action --
-      # `contents: write` (above) is all it needs to create a release.
-      - name: Create GitHub release
+      # Tag the promoted commit and cut the GitHub release. The tag push uses
+      # GITHUB_TOKEN, which by design does not retrigger this workflow (and a tag
+      # push would not match `on: push: branches` anyway).
+      - name: Tag the release commit and create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --notes-file release-notes.md
+          git tag -a "v$VERSION" -m "Bivy $VERSION"
+          git push origin "v$VERSION"
+          gh release create "v$VERSION" --title "v$VERSION" --notes-file release-notes.md
