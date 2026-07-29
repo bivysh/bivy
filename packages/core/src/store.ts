@@ -2713,11 +2713,19 @@ export class SessionStore {
           this.commitPendingProse();
           this.draft.finalized = true;
         } else {
-          // No per-token transcript churn any more — just keep the working label
-          // honest, and only when it actually changes so we don't notify on every
-          // update.
+          // Keep the working label honest, and only when it actually changes so
+          // we don't notify on every update.
           const label = text ? "Drafting response…" : "Thinking…";
           if (this.state.workingLabel !== label || !this.state.working) this.setWorking(label);
+          // Show the in-flight prose as a live streaming bubble so a session the
+          // user just switched back to (or is watching continuously) reflects the
+          // agent's current answer immediately — instead of nothing until
+          // message_end, which mid-turn is several seconds away and reads as a
+          // stale, frozen transcript. Rendered as plain text (no per-update
+          // markdown/highlight pass — that O(n²) churn is the reason streaming
+          // prose was originally deferred to boundaries); commitPendingProse
+          // swaps in the rendered markdown when the run seals.
+          this.previewPendingProse();
         }
         for (const tool of toolEntriesFromContent(msg.content)) this.applyTool(tool);
         return;
@@ -2813,11 +2821,43 @@ export class SessionStore {
     const tail = (full.startsWith(committed) ? full.slice(committed.length) : full).trim();
     if (!tail) return;
     this.draft.committedText = full;
-    // Each committed run is its own bubble; drop any reuse handle so upsertDraft
-    // pushes a fresh entry rather than replacing the previous run.
-    this.draft.assistantId = null;
-    if (looksLikeAgentError(tail)) this.pushEntry({ id: nextId(), role: "error", text: humanizeError(tail) });
-    else this.upsertDraft("assistant", tail, true);
+    if (looksLikeAgentError(tail)) {
+      // A run that turns out to be an agent error becomes a red bubble. Drop any
+      // in-flight streaming preview for this run first so it isn't left dangling
+      // as a plain-text bubble above the error.
+      if (this.draft.assistantId) {
+        this.removeEntry(this.draft.assistantId);
+        this.draft.assistantId = null;
+      }
+      this.pushEntry({ id: nextId(), role: "error", text: humanizeError(tail) });
+      return;
+    }
+    // Seal this run's bubble as rendered markdown. When previewPendingProse
+    // already pushed a live (plain-text, streaming) preview for it, upsertDraft
+    // reuses that entry via draft.assistantId and swaps in the HTML in place;
+    // otherwise it pushes a fresh finished bubble. Either way upsertDraft clears
+    // assistantId on finalize, so the next run (after a tool boundary) starts its
+    // own bubble.
+    this.upsertDraft("assistant", tail, true);
+  }
+
+  /**
+   * Paint the not-yet-committed prose of the current draft as a live streaming
+   * bubble (plain text, no markdown pass) so an actively-streaming turn shows its
+   * progress the instant the user is looking — most visibly when they switch back
+   * to a session mid-turn. The finished, markdown-rendered bubble replaces it at
+   * the next tool boundary / message_end via commitPendingProse (which reuses the
+   * same draft.assistantId entry). Mirrors commitPendingProse's tail arithmetic so
+   * cumulative (Codex) and per-segment (Claude) runtimes both preview correctly; a
+   * run that only classifies as an error once complete is handled at commit, so a
+   * partial that merely looks error-shaped mid-stream isn't special-cased here.
+   */
+  private previewPendingProse(): void {
+    const full = this.draft.pendingText;
+    const committed = this.draft.committedText;
+    const tail = (full.startsWith(committed) ? full.slice(committed.length) : full).trim();
+    if (!tail) return;
+    this.upsertDraft("assistant", tail, false);
   }
 
   /**
@@ -2845,15 +2885,25 @@ export class SessionStore {
   private upsertDraft(which: "assistant" | "thinking", text: string, finalize: boolean): void {
     const role: TranscriptRole = which === "assistant" ? "assistant" : "thinking";
     const idField = which === "assistant" ? "assistantId" : "thinkingId";
+    // Only render markdown once the run is finalized. A streaming assistant
+    // preview updates on every coalesced message_update, so running toHtml (plus
+    // syntax highlighting) each time is the O(n²) churn we deliberately avoid —
+    // the view renders the streaming entry's plain `text` and computes markdown
+    // only when it seals (see EntryView in ChatView).
+    const html = role === "assistant" && finalize ? toHtml(text) : undefined;
     let id = this.draft[idField];
     if (!id) {
       id = nextId();
       this.draft[idField] = id;
-      this.pushEntry({ id, role, text, html: role === "assistant" ? toHtml(text) : undefined, streaming: !finalize });
+      this.pushEntry({ id, role, text, html, streaming: !finalize });
     } else {
-      this.replaceEntry(id, { text, html: role === "assistant" ? toHtml(text) : undefined, streaming: !finalize });
+      this.replaceEntry(id, { text, html, streaming: !finalize });
     }
     if (finalize) this.draft[idField] = null;
+  }
+
+  private removeEntry(id: string): void {
+    this.set({ transcript: this.state.transcript.filter((e) => e.id !== id) });
   }
 
   private finishDrafts(): void {

@@ -293,20 +293,43 @@ describe("SessionStore", () => {
     expect(err!.text).toContain("API Error: 401");
   });
 
-  it("shows a whole assistant message on message_end, not token-by-token updates", () => {
+  it("previews in-flight prose as a plain-text streaming bubble, then seals it whole on message_end", () => {
     const store = new SessionStore();
     store.apply({ type: "message_start", message: { role: "assistant" } });
-    // Token updates no longer render — per-token markdown re-renders were too
-    // laggy in the web chat. Nothing lands in the transcript until the message ends.
+    // A token update now paints a live preview so a session the user switches
+    // back to mid-turn shows the agent's current answer immediately — but as
+    // plain text (no per-update markdown pass; that churn is why streaming prose
+    // used to be deferred to boundaries).
     store.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "partial" }] } });
-    expect(store.getState().transcript.some((e) => e.role === "assistant")).toBe(false);
+    const streaming = store.getState().transcript.filter((e) => e.role === "assistant");
+    expect(streaming).toHaveLength(1);
+    expect(streaming[0]!.streaming).toBe(true);
+    expect(streaming[0]!.text).toBe("partial");
+    expect(streaming[0]!.html).toBeUndefined(); // rendered as plain text while streaming
     expect(store.getState().working).toBe(true); // the working indicator still signals activity
-    // The finished message lands whole, and never as a streaming draft.
+    // The finished message seals in place — the same single bubble, now whole and
+    // markdown-rendered, never a leftover streaming draft alongside it.
     store.apply({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "final answer" }] } });
     const assistant = store.getState().transcript.filter((e) => e.role === "assistant");
     expect(assistant).toHaveLength(1);
     expect(assistant[0]!.text).toBe("final answer");
     expect(assistant[0]!.streaming).toBe(false);
+    expect(assistant[0]!.html).toBeDefined(); // markdown rendered once it seals
+  });
+
+  it("replaces a streaming preview with an error bubble when the sealed run is an agent error", () => {
+    const store = new SessionStore();
+    store.apply({ type: "message_start", message: { role: "assistant" } });
+    // A partial that doesn't yet read as an error paints a live preview…
+    store.apply({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "API Error: 401" }] } });
+    expect(store.getState().transcript.filter((e) => e.role === "assistant")).toHaveLength(1);
+    // …but once it seals and classifies as an error, the plain-text preview is
+    // dropped (no orphan assistant bubble) and a single error bubble remains.
+    store.apply({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "API Error: 401 Invalid authentication credentials" }] } });
+    const tx = store.getState().transcript;
+    expect(tx.some((e) => e.role === "assistant")).toBe(false);
+    expect(tx.filter((e) => e.role === "error")).toHaveLength(1);
+    expect(tx.find((e) => e.role === "error")!.text).toContain("API Error: 401");
   });
 
   it("renders Pi toolResult messages as tool output, not assistant prose", () => {
