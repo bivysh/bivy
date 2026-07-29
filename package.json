@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "license": "FSL-1.1-ALv2",
+  "description": "Run coding agents on machines you own. Source-available, self-hostable agent workspace.",
+  "homepage": "https://bivy.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bivysh/bivy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bivysh/bivy/issues"
+  },
   "engines": {
     "node": ">=22.19.0"
   },
