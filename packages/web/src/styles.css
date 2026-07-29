@@ -356,6 +356,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    instead means children can only overflow *themselves* (the .pre already has
    its own overflow-x:auto), never the parent. */
 .msg.assistant { align-self: stretch; width: 100%; }
+/* Live streaming prose is rendered as plain text (no markdown pass per update);
+   preserve its newlines/indentation and wrap long lines so it reads naturally
+   until the finished markdown bubble replaces it at message_end. */
+.msg.assistant.streaming-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.assistant :where(p, ul, ol, pre, table, blockquote) { margin: 0.5em 0; }
 .msg.assistant :where(p, ul, ol, pre, table, blockquote):first-child { margin-top: 0; }
 .msg.assistant :where(p, ul, ol, pre, table, blockquote):last-child { margin-bottom: 0; }

@@ -152,12 +152,15 @@ const EntryView = memo(function EntryView({
   // a long session slow and blocking) — history entries arrive as plain `text`,
   // so we render markdown here. Because only the mounted window ever calls this,
   // the cost scales with what's on screen, not with the conversation length.
-  // A streaming/optimistic entry already carries `html`, so we reuse it. Hooks
-  // must run unconditionally, so this sits above the role branches; the ternary
-  // keeps the (unused) markdown pass off the non-assistant roles.
+  // A finished assistant entry carries pre-rendered `html`; otherwise we render
+  // its markdown here. A *streaming* assistant entry is shown as plain text and
+  // is skipped entirely — running the markdown pass on every coalesced update is
+  // the O(n²) churn the store avoids by not pre-rendering it (see previewPendingProse).
+  // Hooks must run unconditionally, so this sits above the role branches; the
+  // ternary keeps the (unused) markdown pass off streaming and non-assistant roles.
   const html = useMemo(
-    () => (entry.role === "assistant" ? entry.html ?? toHtml(entry.text) : ""),
-    [entry.role, entry.html, entry.text],
+    () => (entry.role === "assistant" && !entry.streaming ? entry.html ?? toHtml(entry.text) : ""),
+    [entry.role, entry.streaming, entry.html, entry.text],
   );
   // Syntax-highlight fenced code blocks once the assistant HTML is in the DOM.
   // Re-runs as streaming replaces the markup; hooks stay above the role branches.
@@ -211,14 +214,20 @@ const EntryView = memo(function EntryView({
       </div>
     );
   }
+  if (entry.streaming)
+    // Live prose: plain text (whitespace preserved via .streaming-text) so it
+    // updates cheaply; it seals into the markdown bubble below at message_end.
+    return (
+      <div className="assistant-row">
+        <div ref={bodyRef} className="msg assistant streaming streaming-text">
+          {entry.text}
+        </div>
+      </div>
+    );
   return (
     <div className="assistant-row">
-      <div
-        ref={bodyRef}
-        className={`msg assistant${entry.streaming ? " streaming" : ""}`}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-      {!entry.streaming && entry.text && <CopyButton text={entry.text} />}
+      <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
+      {entry.text && <CopyButton text={entry.text} />}
     </div>
   );
 });
