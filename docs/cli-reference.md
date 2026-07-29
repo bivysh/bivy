@@ -625,19 +625,28 @@ bivy logs --lines 500
 
 ## Maintenance
 
-### `bivy update [--force|--no-wait]`
+### `bivy update [--force|--no-wait] [--staging|--stable|--channel <name>]`
 
 Updates Bivy, reinstalls dependencies, installs bundled agents, and restarts the
 service. Waits for busy sessions first unless `--force`/`--no-wait`.
 
-What it actually does depends on how Bivy was installed:
+**Release channel.** Update follows the channel recorded at install time — the
+npm dist-tag you installed from (`BIVY_CHANNEL`, default `latest`) — instead of
+always jumping to `latest`. So a box installed with `BIVY_CHANNEL=staging` stays
+on the `staging` build (published on every merge to core `main`) across updates.
+Switch channels deliberately with `--staging`, `--stable` (= `latest`), or
+`--channel <name>`; the choice is remembered for future `bivy update`s. (Only the
+tag-tracking installs carry a channel; an exact `BIVY_VERSION=x.y.z` pin does
+not.)
+
+What it actually does depends on how Bivy was installed (`<ch>` = the channel):
 
 - **git checkout** — `git pull --ff-only`, then `npm ci`/`npm install`.
-- **`npm i -g @bivy/bivy`** — `npm install -g @bivy/bivy@latest`.
+- **`npm i -g @bivy/bivy`** — `npm install -g @bivy/bivy@<ch>`.
 - **`npx bivy`** — nothing; explains that npx always fetches the latest.
 - **installer tarball** — re-runs `curl -fsSL https://bivy.sh/install.sh | bash`
-  with `BIVY_HOME` pointing at the current install. The restart happens inside
-  the installer.
+  with `BIVY_CHANNEL=<ch>` and `BIVY_HOME` pointing at the current install. The
+  restart happens inside the installer.
 
 Inside a Bivy web/PWA terminal (`BIVY_TERMINAL=1`) the update re-execs itself
 detached, logs to `<data-dir>/update.log`, and mirrors live progress into the
@@ -647,6 +656,8 @@ the detached process survives the restart and finishes the update.
 ```bash
 bivy update
 bivy update --force
+bivy update --staging        # switch to (and stay on) the staging channel
+bivy update --stable         # switch back to the latest/stable channel
 ```
 
 ### `bivy update:log [-f]`
