@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 /**
  * Extract a single version's section from CHANGELOG.md, for use as the body
- * of the GitHub release created by the tag-triggered release workflow
+ * of the GitHub release created by the release workflow's production/promote job
  * (.github/workflows/release.yml).
  *
  * Usage:

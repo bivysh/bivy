@@ -6,9 +6,9 @@ on:
   pull_request:
     branches: [main]
   # Lets other workflows call this one to run the exact same gate rather than
-  # re-implementing it. Used by release.yml so a tag push runs the full suite
-  # before publishing instead of a hand-rolled subset that can drift from what
-  # a PR actually has to pass.
+  # re-implementing it. Used by release.yml so a production promotion runs the
+  # full suite before publishing, instead of a hand-rolled subset that can drift
+  # from what a PR actually has to pass.
   workflow_call:
     inputs:
       force_all:
