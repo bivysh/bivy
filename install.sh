@@ -24,6 +24,8 @@
 #
 # Overrides:
 #   BIVY_VERSION=0.1.0            install a specific version instead of latest
+#   BIVY_CHANNEL=staging          install the latest dev build off the `staging`
+#                                 dist-tag (every merge to main); default `latest`
 #   BIVY_NPM_PREFIX=~/.local      install into a user-owned npm prefix (no sudo)
 #   BIVY_INSTALL_ALL_AGENTS=1     preinstall every bundled agent runtime
 #   BIVY_NO_TARBALL_FALLBACK=1    fail instead of falling back to the tarball
@@ -32,7 +34,9 @@
 #
 set -euo pipefail
 
-PKG_VERSION="${BIVY_VERSION:-latest}"
+# BIVY_VERSION pins an exact version; BIVY_CHANNEL selects a dist-tag
+# (latest | staging). BIVY_VERSION wins if both are set.
+PKG_VERSION="${BIVY_VERSION:-${BIVY_CHANNEL:-latest}}"
 NPM_PACKAGE="@bivy/bivy"
 DATA_DIR="${BIVY_DATA_DIR:-$HOME/.bivy}"
 # Also the destination for a tarball-fallback install, whose state lives inside
