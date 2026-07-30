@@ -1025,6 +1025,21 @@ describe("SessionStore", () => {
     expect(gh.repo).toBe("acme/widgets");
   });
 
+  it("normalizes a forked session's parent id from sessions.list, and leaves it undefined for an ordinary session", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "sessions.list",
+      sessions: [
+        { id: "fork1", name: "Retry the flaky test", forkedFrom: "parent1" },
+        { id: "plain1", name: "Ordinary session" },
+      ],
+    });
+    const fork = store.getState().sessions.find((s) => s.sessionId === "fork1");
+    const plain = store.getState().sessions.find((s) => s.sessionId === "plain1");
+    expect(fork?.forkedFrom).toBe("parent1");
+    expect(plain?.forkedFrom).toBeUndefined();
+  });
+
   it("beginOpen clears a previous session's pill when the next row has no PR", () => {
     const store = new SessionStore();
     store.apply({

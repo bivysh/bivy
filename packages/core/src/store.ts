@@ -84,6 +84,11 @@ export interface SessionSummary {
   worktree?: string;
   name: string;
   source?: string;
+  /** Parent session's id, when this session was materialized from a fork
+   *  bundle (see src/session/fork.ts on the node). Undefined for an ordinary
+   *  session. The parent may live on a different node, so this is only ever
+   *  an id to display/link, not something guaranteed resolvable locally. */
+  forkedFrom?: string;
   /** Relay/account mode: node that owns this session. Used by all-node lists. */
   nodeId?: string;
   runtimeId?: string;

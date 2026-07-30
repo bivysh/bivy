@@ -860,7 +860,7 @@ let relay: RelayConnector | undefined;
 const clients = new Set<WebSocket>();
 const commandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const oauthLogins = new Map<string, OAuthLoginState>();
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -2782,6 +2782,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
         agent: meta?.runtimeId ?? s.agent,
         agentName: meta?.agentName ?? s.agentName,
         source: rec?.source ?? meta?.source,
+        forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
         branch: rec?.worktree?.branch ?? meta?.branch,
         sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
         prUrl: rec?.prUrl ?? meta?.prUrl,
@@ -5597,6 +5598,11 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
   const record = plan.kind === "resume"
     ? await createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, makeActive: false })
     : await createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, makeActive: false });
+  // Mark the new session as a fork of its source, so the run card can show
+  // "Forked from …" and the lineage survives a reload (persisted below). Just
+  // the parent's session id — an identifier, not content, so it's safe to
+  // carry into metadata the same way branch/prUrl already are.
+  record.forkedFrom = bundle.record.sourceSessionId;
   // Attach the reconstructed worktree to the record. createSession only
   // populates record.worktree when it provisions one itself (fresh repo session)
   // or restores it from stored metadata (resume) — neither happens for a fork,
@@ -5980,6 +5986,7 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
     name: record.session.getName(),
     workspace: record.workspace,
     source: record.source ?? "manual",
+    forkedFrom: record.forkedFrom,
     runtimeId: record.runtimeId,
     sandbox: record.sandbox,
     agentName: getRuntime(record.runtimeId).displayName,
@@ -8700,6 +8707,7 @@ app.get("/api/sessions", async (_req, res, next) => {
         agent: meta?.runtimeId ?? s.agent,
         agentName: meta?.agentName ?? s.agentName,
         source: rec?.source ?? meta?.source,
+        forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
         branch: rec?.worktree?.branch ?? meta?.branch,
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,
