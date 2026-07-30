@@ -200,6 +200,7 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       worktree: s?.worktree || s?.bivySession?.worktree || s?.bivySession?.workspaceContext?.worktree || undefined,
       name: String(s?.name || "Untitled session"),
       source: s?.source,
+      forkedFrom: s?.forkedFrom || undefined,
       nodeId: s?.nodeId || undefined,
       runtimeId: s?.runtimeId,
       agentName: s?.agentName,

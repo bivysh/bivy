@@ -102,14 +102,19 @@ function sessionRepo(s: { source?: string }): string {
   return repoFromSource(s.source) || githubIssueRefFromSource(s.source)?.repo || "";
 }
 
-function sessionMeta(s: { source?: string; branch?: string; agentName?: string; nodeId?: string }, nodeLabel: string | null): string {
+function sessionMeta(
+  s: { source?: string; branch?: string; agentName?: string; nodeId?: string; forkedFrom?: string },
+  nodeLabel: string | null,
+): string {
   // Keep the title row for the human title + state badges. Agent/runtime names
   // and repo/branch context are supporting details, so they live on the quieter
   // second line where they don't steal the tiny sidebar's most valuable pixels.
   // GitHub-issue/queue sessions run in a disposable worktree with no branch and
   // no `repo:` source, so fall back to their originating issue/queue ref (the
   // only useful context) — mirrors GithubQueue's queueSessionMeta.
-  const parts = [s.agentName, nodeLabel, s.branch || repoFromSource(s.source) || queueSourceMeta(s.source)];
+  // A fork gets a one-word "Forked" flag up front — parity with the run pill's
+  // own "Forked from" row (RunPill.tsx), for the rows that never open the pill.
+  const parts = [s.forkedFrom ? "Forked" : null, s.agentName, nodeLabel, s.branch || repoFromSource(s.source) || queueSourceMeta(s.source)];
   return parts.filter(Boolean).join(" · ");
 }
 
