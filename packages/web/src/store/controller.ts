@@ -23,6 +23,7 @@ import {
   clearWorkQueue,
   disconnectGithubApp,
   setGithubAppDefaultNode,
+  setGithubAppTriggerAccess,
   fetchEphemeralQueueDefault,
   setEphemeralQueueDefault,
   removeAccountNode,
@@ -1831,6 +1832,14 @@ export class AppController {
    *  an appId it covers every connected app — it's an account-level preference. */
   setGithubAppDefaultNode(node: string, appId?: string): Promise<string | undefined> {
     return setGithubAppDefaultNode(this.local, node, appId);
+  }
+  /** Set who may @-mention-trigger a run (issue #259). Without an appId it
+   *  covers every connected app — it's an account-level preference. */
+  setGithubAppTriggerAccess(
+    triggerAccess: "everyone" | "contributor" | "collaborator",
+    appId?: string,
+  ): Promise<"everyone" | "contributor" | "collaborator"> {
+    return setGithubAppTriggerAccess(this.local, triggerAccess, appId);
   }
   /** Manually dispatch a pending queue item to a chosen node + agent/model. */
   assignWorkItem(id: string, input: { node?: string; runtimeId?: string; model?: string; ephemeral?: boolean }): Promise<void> {

@@ -29,6 +29,7 @@ import {
   verifySlackSignature,
   parseSlackCommand,
   applyDefaultNode,
+  meetsTriggerAccess,
   verifyAutomationSignature,
   parseAutomationEvent,
   renderAutomationInstruction,
@@ -1851,6 +1852,9 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
       // The node-label suffix (e.g. "macbook") that untagged/generic `bivy`-routed
       // work defaults to. undefined = no default (shared-queue behavior).
       defaultNode: hook.defaultNode,
+      // Who may `@`-mention-trigger a run (issue #259). undefined = "everyone",
+      // the behavior before this setting existed.
+      triggerAccess: hook.triggerAccess,
       // The node currently servicing the app (holds the key), or null if none — the
       // signal that lets the UI say "no node is running this app; connect one".
       servedBy,
@@ -1887,6 +1891,32 @@ app.post("/account/github-app/default-node", asyncHandler(async (req, res) => {
   const rerouted = await store.rerouteDefaultRoutedPending(client.accountId, applyDefaultNode("bivy", updated?.defaultNode));
   for (const item of rerouted) void notifyRelaysWorkAvailable(client.accountId, item);
   res.json({ ok: true, defaultNode: updated?.defaultNode, rerouted: rerouted.length });
+}));
+
+// Set who may `@`-mention-trigger a run: "everyone" (default), "contributor"
+// (any prior relationship with the repo), or "collaborator" (push access
+// only). Issue #259 — a public repo otherwise lets any GitHub user trigger a
+// run. Account-wide preference stored per hook, same shape as default-node:
+// without an appId it applies to every connected app.
+app.post("/account/github-app/trigger-access", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const raw = typeof req.body?.triggerAccess === "string" ? req.body.triggerAccess.trim() : "";
+  if (raw && raw !== "everyone" && raw !== "contributor" && raw !== "collaborator") {
+    return res.status(400).json({ error: "triggerAccess must be 'everyone', 'contributor', or 'collaborator'" });
+  }
+  const triggerAccess = raw === "contributor" || raw === "collaborator" ? raw : undefined;
+  const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
+  const hooks = appId
+    ? [await store.getGithubAppHook(client.accountId, appId)].filter(Boolean as unknown as (h: unknown) => boolean)
+    : await store.listGithubAppHooks(client.accountId);
+  const targets = hooks as Array<{ id: string }>;
+  if (!targets.length) return res.status(404).json({ error: "No GitHub App connected" });
+  let updated: { triggerAccess?: string } | undefined;
+  for (const target of targets) {
+    updated = (await store.setInboundHookTriggerAccess(client.accountId, target.id, triggerAccess)) ?? updated;
+  }
+  res.json({ ok: true, triggerAccess: updated?.triggerAccess ?? "everyone" });
 }));
 
 // Disconnect the account's GitHub App: drop the inbound hook so it stops routing
@@ -2283,6 +2313,13 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     const triggerLogin = (hook.botMention || process.env.BIVY_GITHUB_BOT_MENTION || "bivy").trim();
     const comment = parseGithubCommentEvent(payload, triggerLogin);
     if (!comment) return res.json({ ok: true, enqueued: false });
+    // Issue #259: on a public repo, anyone can `@`-mention the bot in a comment —
+    // gate on the commenter's GitHub `author_association` per the account's
+    // configured access level (Settings → GitHub App). Ack 200 so GitHub doesn't
+    // retry; just enqueue nothing.
+    if (!meetsTriggerAccess(comment.authorAssociation, hook.triggerAccess)) {
+      return res.json({ ok: true, enqueued: false, reason: "access" });
+    }
     const rawLabel = pickCommentRoutingLabel(comment.instruction, comment.issueLabels, triggerLogin);
     const label = applyDefaultNode(rawLabel, hook.defaultNode);
     const item = await store.enqueueWorkItem(hook.accountId, {
@@ -2314,6 +2351,14 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   const rawLabel = issue ? pickIssueRoutingLabel(issue, triggerLogin) : undefined;
   const label = rawLabel ? applyDefaultNode(rawLabel, hook.defaultNode) : undefined;
   if (!issue || !label || !rawLabel) return res.json({ ok: true, enqueued: false });
+  // Issue #259: a `bivy`/`bivy/<node>` LABEL already implies collaborator/triage
+  // access (GitHub itself restricts who can apply a label), so only the body-
+  // mention path — anyone can open an issue on a public repo — needs gating on
+  // the author's `author_association`.
+  const isLabelRouted = Boolean(pickRoutingLabel(issue.labels));
+  if (!isLabelRouted && !meetsTriggerAccess(issue.authorAssociation, hook.triggerAccess)) {
+    return res.json({ ok: true, enqueued: false, reason: "access" });
+  }
   const item = await store.enqueueWorkItem(hook.accountId, {
     label,
     source: "github:issue",

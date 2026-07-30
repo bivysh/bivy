@@ -368,6 +368,11 @@ export class PostgresStore implements MeshStore {
       -- work should default to, so it deterministically lands on one node instead
       -- of racing across every node serving the shared label. Settings -> GitHub App.
       ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS default_node TEXT;
+      -- Who may @-mention-trigger a run via a GitHub issue/comment: NULL/
+      -- 'everyone' (no restriction, the prior behavior), 'contributor' (any
+      -- prior relationship with the repo), or 'collaborator' (push access
+      -- only). See meetsTriggerAccess in webhooks.ts (issue #259).
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS trigger_access TEXT;
       -- The node currently holding this GitHub App's key and servicing it. Cleared
       -- when that node is removed, so the UI shows "no node serving" instead of a
       -- stale "connected" after a node delete/reinstall.
@@ -1543,6 +1548,21 @@ export class PostgresStore implements MeshStore {
     return rows[0] ? mapHook(rows[0]) : undefined;
   }
 
+  async setInboundHookTriggerAccess(
+    accountId: string,
+    id: string,
+    triggerAccess: "everyone" | "contributor" | "collaborator" | undefined,
+  ): Promise<InboundHook | undefined> {
+    // "everyone" is stored as NULL (same as unset) — it's the no-restriction
+    // default, so there's nothing meaningful to distinguish it from "never set".
+    const value = triggerAccess === "contributor" || triggerAccess === "collaborator" ? triggerAccess : null;
+    const { rows } = await this.query(
+      `UPDATE inbound_hooks SET trigger_access = $3 WHERE id = $2 AND account_id = $1 RETURNING *`,
+      [accountId, id, value],
+    );
+    return rows[0] ? mapHook(rows[0]) : undefined;
+  }
+
   async listGithubAppHooks(accountId: string): Promise<InboundHook[]> {
     // Completed hooks (mention registered) first; abandoned create-flow orphans last.
     const { rows } = await this.query(
@@ -2083,6 +2103,7 @@ function mapHook(row: any): InboundHook {
     installCount: row.install_count ?? undefined,
     installsSyncedAt: row.installs_synced_at ? new Date(row.installs_synced_at).toISOString() : undefined,
     defaultNode: row.default_node ?? undefined,
+    triggerAccess: row.trigger_access === "contributor" || row.trigger_access === "collaborator" ? row.trigger_access : undefined,
     servingNodeId: row.serving_node_id ?? undefined,
     servingNodeSeenAt: row.serving_node_seen_at ? new Date(row.serving_node_seen_at).toISOString() : undefined,
     enabled: row.enabled ?? true,

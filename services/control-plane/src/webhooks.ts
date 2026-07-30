@@ -179,6 +179,10 @@ export interface ParsedIssueWork {
   issueNumber: number;
   url: string;
   labels: string[];
+  // GitHub's `author_association` for the issue's author on this repo (e.g.
+  // "OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "NONE"). Used by
+  // `meetsTriggerAccess` to gate the body-mention trigger — see issue #259.
+  authorAssociation?: string;
 }
 
 /**
@@ -208,7 +212,41 @@ export function parseGithubIssueEvent(payload: unknown): ParsedIssueWork | undef
     issueNumber,
     url: String(issue.html_url ?? ""),
     labels,
+    authorAssociation: issue.author_association ? String(issue.author_association) : undefined,
   };
+}
+
+/**
+ * Access tiers for who may `@`-mention-trigger a run (issue #259 — on a public
+ * repo, anyone can otherwise comment/open an issue and burn the account's
+ * automation quota with arbitrary instructions). Checked against GitHub's own
+ * `author_association` on the triggering issue/comment — no extra API call:
+ *   - "everyone" — no restriction (default; preserves prior behavior for hooks
+ *     that never opted in).
+ *   - "contributor" — the author has SOME prior relationship with the repo:
+ *     they've had a PR merged, are a collaborator/member, or own it. Excludes
+ *     a rando who has never interacted with the project (`NONE`,
+ *     `FIRST_TIMER`, `FIRST_TIME_CONTRIBUTOR`, `MANNEQUIN`).
+ *   - "collaborator" — push access only: a collaborator, org member, or the
+ *     owner. The same bar GitHub itself uses for who can apply a label, so it
+ *     matches the (already-safe) label-routing trigger.
+ */
+export type TriggerAccess = "everyone" | "contributor" | "collaborator";
+
+const TRIGGER_ACCESS_ASSOCIATIONS: Record<Exclude<TriggerAccess, "everyone">, Set<string>> = {
+  contributor: new Set(["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]),
+  collaborator: new Set(["OWNER", "MEMBER", "COLLABORATOR"]),
+};
+
+/**
+ * Whether `association` (a GitHub `author_association` value, case-
+ * insensitive) clears the bar set by `access`. `undefined`/unrecognized
+ * `access` behaves like `"everyone"` so hooks created before this setting
+ * existed keep working exactly as before.
+ */
+export function meetsTriggerAccess(association: string | undefined, access: TriggerAccess | undefined): boolean {
+  if (access !== "contributor" && access !== "collaborator") return true;
+  return TRIGGER_ACCESS_ASSOCIATIONS[access].has(String(association ?? "").trim().toUpperCase());
 }
 
 /**
@@ -265,6 +303,9 @@ export interface ParsedCommentWork {
   url: string;
   mentions: string[];
   issueLabels: string[];
+  // GitHub's `author_association` for the commenter on this repo. Used by
+  // `meetsTriggerAccess` to gate the mention trigger — see issue #259.
+  authorAssociation?: string;
 }
 
 /**
@@ -300,6 +341,7 @@ export function parseGithubCommentEvent(payload: unknown, triggerLogin: string):
     url: String(comment.html_url ?? issue.html_url ?? ""),
     mentions,
     issueLabels,
+    authorAssociation: comment.author_association ? String(comment.author_association) : undefined,
   };
 }
 

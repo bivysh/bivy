@@ -333,6 +333,11 @@ export interface GithubAppEntry {
   // issues/comments default to, instead of racing across every node serving the
   // shared queue. undefined = no default set.
   defaultNode?: string;
+  // Who may `@`-mention-trigger a run via a GitHub issue/comment (issue #259):
+  // "everyone" (undefined default — anyone, incl. a stranger on a public repo),
+  // "contributor" (any prior relationship with the repo), or "collaborator"
+  // (push access only).
+  triggerAccess?: "everyone" | "contributor" | "collaborator";
   // The node currently holding the app's key and servicing it, or null if none.
   // `connected: true` with `servedBy: null` means the account has the app set up
   // but no live node is running it (e.g. after a node was deleted/reinstalled) —
@@ -410,6 +415,28 @@ export async function setGithubAppDefaultNode(store: LocalStore, node: string, a
   const data: any = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `set default node failed: ${res.status}`);
   return data.defaultNode as string | undefined;
+}
+
+/**
+ * Set the account's GitHub App trigger-access level (issue #259): who may
+ * `@`-mention-trigger a run via an issue/comment. Without an `appId` it
+ * applies to every connected app, matching the account-level setting in the
+ * UI. Returns the resulting value ("everyone" when unset/cleared).
+ */
+export async function setGithubAppTriggerAccess(
+  store: LocalStore,
+  triggerAccess: "everyone" | "contributor" | "collaborator",
+  appId?: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<"everyone" | "contributor" | "collaborator"> {
+  const res = await fetchImpl(`${cpBase(store)}/account/github-app/trigger-access`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify(appId ? { triggerAccess, appId } : { triggerAccess }),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `set trigger access failed: ${res.status}`);
+  return (data.triggerAccess as "everyone" | "contributor" | "collaborator" | undefined) ?? "everyone";
 }
 
 // The account's saved preference for auto-provisioning an ephemeral runner

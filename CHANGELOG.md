@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- GitHub App runs can now be restricted to contributors or collaborators only,
+  via **Settings → GitHub App → Who can trigger runs**. Previously, anyone
+  could `@`-mention the bot in an issue/comment on a public repository and
+  queue a run; the new setting gates the mention trigger on GitHub's own
+  `author_association` for the issue/comment author. Defaults to "everyone"
+  (unchanged behavior). (#259)
+
 ## [0.1.2] - 2026-07-30
 
 ### Fixed

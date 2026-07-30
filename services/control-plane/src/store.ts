@@ -545,6 +545,13 @@ export interface InboundHook {
   // node serving the shared `bivy` label. Set from Settings → GitHub App in the
   // web UI. undefined = no default, keep the shared-queue behavior.
   defaultNode?: string;
+  // Who may `@`-mention-trigger a run via a GitHub issue/comment (issue #259:
+  // on a public repo, anyone can otherwise comment and burn the account's
+  // automation quota). Checked against the triggering author's GitHub
+  // `author_association` — see `meetsTriggerAccess` in webhooks.ts. undefined
+  // (and "everyone") mean no restriction — the behavior before this setting
+  // existed. Set from Settings → GitHub App in the web UI.
+  triggerAccess?: "everyone" | "contributor" | "collaborator";
   // The node that currently holds this GitHub App's private key and services it
   // (set when a node registers app-meta / connects). The control plane can't run
   // the app itself — only a node with the key can — so this is how the UI tells
@@ -873,6 +880,13 @@ export interface MeshStore {
   // `bivy`-routed work should default to, e.g. "macbook" routes it as
   // `bivy/macbook` instead of the shared queue. Settings → GitHub App in the web UI.
   setInboundHookDefaultNode(accountId: string, id: string, defaultNode: string | undefined): Promise<InboundHook | undefined>;
+  // Set (or clear, with undefined) who may `@`-mention-trigger a run on this
+  // hook. Settings → GitHub App in the web UI.
+  setInboundHookTriggerAccess(
+    accountId: string,
+    id: string,
+    triggerAccess: "everyone" | "contributor" | "collaborator" | undefined,
+  ): Promise<InboundHook | undefined>;
   // The account's GitHub App hook, if one is connected (flavor A: one per
   // account). Prefers a completed hook (one with a registered mention) over an
   // orphan left by an abandoned create flow.
