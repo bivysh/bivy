@@ -89,7 +89,16 @@ export function isStandaloneDisplay(): boolean {
     !!mm?.("(display-mode: minimal-ui)").matches;
   // iOS Safari (pre-display-mode) marks home-screen apps with navigator.standalone.
   const iosStandalone = (globalThis.navigator as { standalone?: boolean } | undefined)?.standalone === true;
-  return displayModeStandalone || iosStandalone;
+  // A native shell (a Capacitor iOS/Android WKWebView) reports none of the above
+  // — its display-mode is "browser" — yet it is exactly the scoped-window case
+  // the device-poll flow exists for: a full-page OAuth redirect escapes the
+  // WebView to the system browser and the finished session never returns to the
+  // app. Treat the native runtime as standalone so sign-in takes the device-poll
+  // path. Pure feature-detect (no import); inert in an ordinary browser where
+  // `Capacitor` is undefined.
+  const capacitorNative =
+    (globalThis as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.() === true;
+  return displayModeStandalone || iosStandalone || capacitorNative;
 }
 
 export interface GithubDeviceLogin {
