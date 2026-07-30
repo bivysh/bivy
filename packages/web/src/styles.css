@@ -630,7 +630,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-pr .gh-icon { width: 10px; height: 10px; }
 .session-pr.merged { border-color: var(--merged); color: var(--merged); }
 .session-pr.closed { border-color: var(--muted); color: var(--muted); }
-.session-pr-text { white-space: nowrap; }
+/* The label is all-caps with no descenders, so within the line box its ink
+   rides above the optical centre and reads high in the fixed-height pill. Nudge
+   it down a touch to sit on the pill's true centre next to the glyph. */
+.session-pr-text { white-space: nowrap; position: relative; top: 0.5px; }
 
 /* ---- Source marks & run pill (see sessionSource.ts / SourceMark.tsx) ----
    `--sc` is the per-source hue; every mark tints its glyph and a faint fill
