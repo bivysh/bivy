@@ -64,13 +64,23 @@ export function useEdgeSwipe({ onOpen, onClose, isOpen, maxWidth = 720, edge = 2
       if (!t) return;
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
-      // Wait until the gesture shows clear horizontal intent, then take it
-      // over from the browser's native back-swipe. A vertical-dominant move
-      // is a scroll, so leave it alone.
-      if (!claimed && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) {
-        // Only claim in the direction that maps to an action: opening pulls
-        // right from the edge; closing pulls left while open.
-        if ((!isOpen && fromEdge && dx > 0) || (isOpen && dx < 0)) claimed = true;
+      if (!claimed) {
+        // A vertical-dominant move is a scroll — stop tracking and let the
+        // browser handle it (never preventDefault a scroll).
+        if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 6) {
+          tracking = false;
+          return;
+        }
+        // Claim on the very first hint of horizontal intent. Waiting even a
+        // few pixels lets the platform (notably an iOS PWA) commit to its
+        // native edge-swipe "back" navigation before we can suppress it, so
+        // the gesture would both open the drawer AND navigate back. For an
+        // edge-originating swipe we claim in either direction so the system
+        // back/forward gesture is fully suppressed; while open we only need
+        // the leftward close direction.
+        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 2) {
+          if ((!isOpen && fromEdge) || (isOpen && dx < 0)) claimed = true;
+        }
       }
       if (claimed && e.cancelable) e.preventDefault();
     };
