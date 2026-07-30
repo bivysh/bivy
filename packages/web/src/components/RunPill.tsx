@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// The in-session run badge. For a session an automation started (a labelled
-// issue, a Slack request, a schedule, …) this supersedes the plain GithubPill
-// in the band above the composer: it names the *source* and shows the run's
-// live status, then opens a sheet with the run's outcome — the checks it ran,
-// how many attempts it took, how long it ran, its branch/PR — brought here from
-// the account queue's evidence record (see runEvidence.ts) instead of buried in
-// the GitHub Queue screen. For hand-opened sessions the band keeps the ordinary
-// GithubPill, so this only ever appears where there's a real trigger to show.
+// The in-session run card. It sits in the band above the composer for *every*
+// active session and names the session's source — an automation trigger (a
+// labelled issue, a Slack request, a schedule, …) or a plain hand-opened
+// session — with its live status. Tapping it opens a sheet with whatever
+// applies: the run's outcome (finished time, checks, attempts, routing/ruleset
+// reason, branch/PR, the approval + sandbox policy it ran under — from the
+// account queue's evidence record, see runEvidence.ts), GitHub links, and the
+// cost / token / plan-quota usage that used to live in the standalone bar under
+// the topbar. Non-automation sessions simply carry less to show (source,
+// status, usage) — the card is the same, the information applies.
 
 import { useState } from "react";
-import { primaryPr, type GithubContext, type GithubQueueItem, type PrRef } from "@bivy/core";
+import { primaryPr, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { SourceGlyph } from "./SourceMark.js";
 import { shortSourceLabel, type SourceInfo } from "../sessionSource.js";
@@ -20,6 +22,35 @@ import { checkCounts, retryReason, runDuration } from "../runEvidence.js";
 interface Action {
   label: string;
   url: string;
+}
+
+/** " · resets Mar 4, 9:00 AM" for a plan window's reset instant, or "" if none. */
+function formatResets(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return ` · resets ${d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+}
+
+/** Human labels for the run's policy tiers (mirrors the automation editor's
+ *  option text in Automations.tsx), with the raw tag as a safe fallback. */
+const APPROVAL_LABEL: Record<string, string> = {
+  autonomous: "Autonomous",
+  risky: "Ask before risky actions",
+  always: "Ask before every action",
+  never: "Never ask",
+};
+const SANDBOX_LABEL: Record<string, string> = {
+  "read-only": "Read only",
+  "workspace-write": "Workspace write",
+  "danger-full-access": "Full access",
+};
+
+/** "Jul 30, 3:04 PM" for an instant (epoch ms or ISO), or "" if unparseable. */
+function formatWhen(value: number | string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function prActionLabel(pr: PrRef): string {
@@ -69,6 +100,8 @@ export function RunPill({
   statusLabel,
   gh,
   evidence,
+  finishedAt,
+  usage,
 }: {
   source: SourceInfo;
   /** The row's status class (`working` / `needs-action` / `saved` / `idle`)
@@ -79,6 +112,13 @@ export function RunPill({
   /** The run's evidence, joined by session id in App (null in direct/local
    *  mode, or before the run reports anything). */
   evidence?: GithubQueueItem;
+  /** Epoch ms the session's last turn finished (SessionSummary.finishedAt).
+   *  Present for every session, not just automation runs — undefined for one
+   *  that hasn't finished a turn yet. */
+  finishedAt?: number;
+  /** The session's cost / token / plan-quota snapshot, moved here from the
+   *  standalone usage bar (null before the session reports any usage). */
+  usage?: Usage | null;
 }) {
   const [open, setOpen] = useState(false);
   useModalEscape(() => setOpen(false), open);
@@ -88,10 +128,20 @@ export function RunPill({
 
   const counts = evidence ? checkCounts(evidence) : null;
   const duration = evidence ? runDuration(evidence) : null;
+  const finished = typeof finishedAt === "number" ? formatWhen(finishedAt) : "";
   const attempt = evidence?.attempt ?? 0;
   const reason = evidence ? retryReason(evidence) : null;
   const agentLine = [evidence?.runtimeId, evidence?.model].filter(Boolean).join(" · ");
   const failure = evidence?.output?.failure;
+
+  const tokenTotal = usage?.tokens?.total ?? 0;
+  const hasCost = typeof usage?.costUsd === "number";
+  // Show the window nearest a limit first (highest utilization), matching the
+  // old usage bar's "nearest window" pick.
+  const planWindows = [...(usage?.plan?.windows ?? [])].sort(
+    (a, b) => (b.utilizationPct ?? 0) - (a.utilizationPct ?? 0),
+  );
+  const hasUsage = hasCost || tokenTotal > 0 || planWindows.length > 0;
 
   return (
     <>
@@ -105,7 +155,7 @@ export function RunPill({
         <span className="run-pill-stat"><span className="run-dot" />{statusLabel}</span>
       </button>
       {open && (
-        <div className="action-sheet open" role="dialog" aria-label="Automation run">
+        <div className="action-sheet open" role="dialog" aria-label={source.label}>
           <div className="action-sheet-backdrop" onClick={() => setOpen(false)} />
           <div className="action-sheet-body">
             <div className="action-sheet-head">
@@ -125,6 +175,14 @@ export function RunPill({
 
             {failure && <div className="run-sheet-failure">{failure}</div>}
 
+            {(finished || duration) && (
+              <div className="run-sheet-rows">
+                <Row k="Finished">
+                  {[finished || null, duration ? `ran ${duration}` : null].filter(Boolean).join(" · ")}
+                </Row>
+              </div>
+            )}
+
             {evidence && (
               <div className="run-sheet-rows">
                 {counts && (
@@ -135,7 +193,7 @@ export function RunPill({
                 {attempt > 1 && (
                   <Row k="Attempts">{reason ? `${attempt} · ${reason}` : String(attempt)}</Row>
                 )}
-                {duration && <Row k="Ran for">{duration}</Row>}
+                {evidence.routingReason && <Row k="Routing">{evidence.routingReason}</Row>}
                 {evidence.output?.branch && (
                   <Row k="Branch"><code>{evidence.output.branch}</code></Row>
                 )}
@@ -143,6 +201,25 @@ export function RunPill({
                   <Row k="Commit"><code>{evidence.output.commit.slice(0, 12)}</code></Row>
                 )}
                 {agentLine && <Row k="Ran on">{agentLine}</Row>}
+                {evidence.approvalMode && (
+                  <Row k="Approvals">{APPROVAL_LABEL[evidence.approvalMode] ?? evidence.approvalMode}</Row>
+                )}
+                {evidence.sandbox && (
+                  <Row k="Sandbox">{SANDBOX_LABEL[evidence.sandbox] ?? evidence.sandbox}</Row>
+                )}
+              </div>
+            )}
+
+            {hasUsage && (
+              <div className="run-sheet-rows">
+                {hasCost && <Row k="Cost">${usage!.costUsd!.toFixed(4)}</Row>}
+                {tokenTotal > 0 && <Row k="Tokens">{tokenTotal.toLocaleString()}</Row>}
+                {planWindows.map((w) => (
+                  <Row k={w.label} key={w.label}>
+                    {typeof w.utilizationPct === "number" ? `${Math.round(w.utilizationPct)}% used` : "usage unknown"}
+                    {formatResets(w.resetsAt)}
+                  </Row>
+                ))}
               </div>
             )}
 
@@ -163,8 +240,8 @@ export function RunPill({
                 View artifact
               </a>
             )}
-            {actions.length === 0 && !evidence && (
-              <div className="action-sheet-empty">This run carries no report yet.</div>
+            {actions.length === 0 && !evidence && !hasUsage && (
+              <div className="action-sheet-empty">This session has nothing to report yet.</div>
             )}
           </div>
         </div>

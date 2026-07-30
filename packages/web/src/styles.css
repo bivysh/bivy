@@ -1678,10 +1678,6 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .settings-gear-label { color: var(--ink); }
 
 /* ---- Usage bar ---- */
-.usage-bar { display: flex; align-items: center; gap: 8px; padding: 5px 18px; font-size: 12px; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--line); }
-.usage-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.usage-dismiss { border: 0; background: transparent; color: var(--muted); font-size: 12px; line-height: 1; padding: 2px 4px; flex: none; }
-.usage-dismiss:hover { color: var(--ink); }
 
 /* ---- Banners / toasts ---- */
 .banner { display: flex; align-items: center; gap: 10px; padding: 10px 18px; font-size: 13px; }

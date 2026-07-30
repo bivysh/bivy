@@ -17,7 +17,6 @@ import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
 import { classifySource } from "./sessionSource.js";
 import { indexRunEvidence } from "./runEvidence.js";
-import { UsageBar } from "./components/UsageBar.js";
 import { ChangesCard } from "./components/ChangesCard.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
@@ -463,8 +462,6 @@ export function App() {
           </div>
         )}
 
-        <UsageBar usage={state.usage} sessionKey={state.activeSessionId} />
-
         <ChatView
           entries={state.transcript}
           working={state.working}
@@ -492,13 +489,20 @@ export function App() {
         <ChangesCard changes={state.changes} checkpoints={state.checkpoints} />
 
         <div className="composer-gh">
-          {activeSession && activeRunSource?.automation ? (
+          {/* The run card now stands for every active session — an automation
+              trigger or a plain hand-opened one — carrying whatever applies:
+              source, live status, token usage, and (in its sheet) the run
+              evidence and GitHub links. Only a draft (no session yet) falls
+              back to the bare GithubPill for repo context. */}
+          {activeSession && activeRunSource ? (
             <RunPill
               source={activeRunSource}
               statusClass={statusClass(activeSession)}
               statusLabel={statusLabel(activeSession)}
               gh={state.github}
               evidence={runEvidence.get(activeSession.sessionId)}
+              finishedAt={activeSession.finishedAt}
+              usage={state.usage}
             />
           ) : (
             <GithubPill gh={state.github} />
