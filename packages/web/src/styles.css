@@ -170,6 +170,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-actions-btn:hover, .session-actions-btn[aria-expanded="true"] { background: var(--surface-3); }
 .session-actions-menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 190px; z-index: 40; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.28); overflow: hidden; padding: 4px; animation: sheet-up 0.14s ease; }
 .session-actions-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--ink); padding: 9px 12px; font-size: 13px; border-radius: 8px; }
+.session-actions-item:has(svg) { display: flex; align-items: center; gap: 8px; }
+.session-actions-item svg { flex: none; color: var(--muted); }
 .session-actions-item:hover { background: var(--surface-2); }
 .session-actions-item.danger { color: var(--danger); }
 
@@ -1492,8 +1494,9 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace; }
 
 /* ---- Terminal ---- */
-.term-btn { display: inline-flex; align-items: center; justify-content: center; }
-.term-btn svg { display: block; }
+.term-btn, .eye-btn { display: inline-flex; align-items: center; justify-content: center; }
+.term-btn svg, .eye-btn svg { display: block; }
+.eye-btn[aria-pressed="true"] { color: var(--accent); }
 /* Pin to the *visual* viewport (--app-h/--app-top from viewport.ts), not the
    layout viewport. iOS Safari doesn't shrink the layout viewport when the
    on-screen keyboard opens, so `inset: 0` would leave the overlay full-screen
