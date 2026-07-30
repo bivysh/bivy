@@ -1541,6 +1541,9 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   const [defaultNode, setDefaultNode] = useState("");
   const [savingDefaultNode, setSavingDefaultNode] = useState(false);
   const [defaultNodeMsg, setDefaultNodeMsg] = useState<string | null>(null);
+  const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">("everyone");
+  const [savingTriggerAccess, setSavingTriggerAccess] = useState(false);
+  const [triggerAccessMsg, setTriggerAccessMsg] = useState<string | null>(null);
   // "Connect an existing GitHub App" (App ID + .pem) — for reconnecting an app
   // this account already set up onto the active node, without creating a new one.
   // `ceApp` is the connected app the form was opened for (null = a fresh app the
@@ -1653,6 +1656,10 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   // Seed the editable field from the account's stored default whenever it
   // changes (initial load, or after a save round-trip elsewhere).
   useEffect(() => { setDefaultNode(storedDefaultNode); }, [storedDefaultNode]);
+  // Same account-wide-preference pattern as the default node: any app that has
+  // it set answers for all of them; "everyone" (no restriction) if none do.
+  const storedTriggerAccess = apps.find((a) => a.triggerAccess)?.triggerAccess ?? "everyone";
+  useEffect(() => { setTriggerAccess(storedTriggerAccess); }, [storedTriggerAccess]);
 
   // The apps share the same routing copy; show the first one's handle as the example.
   const primaryMention = apps.find((a) => a.mention)?.mention;
@@ -1668,6 +1675,23 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
       setDefaultNodeMsg(String((e as Error)?.message || e));
     } finally {
       setSavingDefaultNode(false);
+    }
+  };
+  const saveTriggerAccess = async (next: "everyone" | "contributor" | "collaborator") => {
+    setTriggerAccessMsg(null);
+    setSavingTriggerAccess(true);
+    const prev = triggerAccess;
+    setTriggerAccess(next); // optimistic — it's a plain select, not a form submit
+    try {
+      const saved = await controller.setGithubAppTriggerAccess(next);
+      setInfo((cur) => (cur ? { ...cur, triggerAccess: saved, apps: cur.apps.map((a) => ({ ...a, triggerAccess: saved })) } : cur));
+      setTriggerAccessMsg("Saved");
+      setTimeout(() => setTriggerAccessMsg(null), 1500);
+    } catch (e) {
+      setTriggerAccess(prev);
+      setTriggerAccessMsg(String((e as Error)?.message || e));
+    } finally {
+      setSavingTriggerAccess(false);
     }
   };
   const disconnect = async (entry: GithubAppEntry) => {
@@ -1881,6 +1905,27 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
               </button>
               {defaultNodeMsg && <span className="chip ok">{defaultNodeMsg}</span>}
             </div>
+          </section>
+
+          <section className="settings-section">
+            <h4 className="settings-subhead">Who can trigger runs</h4>
+            <p className="muted">
+              On a public repository, anyone can open an issue or leave a comment — by default,{" "}
+              <code>@{primaryMention || "mention"}</code>-ing the bot there queues a run for whoever wrote it. Restrict
+              this to people GitHub already trusts with the repo. One setting for the whole account: it applies to
+              every app above.
+            </p>
+            <select
+              className="picker-search"
+              value={triggerAccess}
+              disabled={savingTriggerAccess}
+              onChange={(e) => void saveTriggerAccess(e.target.value as "everyone" | "contributor" | "collaborator")}
+            >
+              <option value="everyone">Everyone — any GitHub user (default)</option>
+              <option value="contributor">Contributors — anyone with a prior merged contribution, or higher</option>
+              <option value="collaborator">Collaborators only — push access (collaborator, member, or owner)</option>
+            </select>
+            {triggerAccessMsg && <span className="chip ok">{triggerAccessMsg}</span>}
           </section>
 
           <section className="settings-section">

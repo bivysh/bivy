@@ -12,6 +12,7 @@ import {
   removePairedDevice,
   logout,
   setGithubAppDefaultNode,
+  setGithubAppTriggerAccess,
   disconnectGithubApp,
   fetchGithubApp,
   assignWorkItem,
@@ -118,6 +119,54 @@ describe("setGithubAppDefaultNode", () => {
     const fakeFetch = (async () =>
       ({ ok: false, status: 404, json: async () => ({ error: "No GitHub App connected" }) }) as Response) as unknown as typeof fetch;
     await expect(setGithubAppDefaultNode(store, "macbook", undefined, fakeFetch)).rejects.toThrow("No GitHub App connected");
+  });
+});
+
+describe("setGithubAppTriggerAccess", () => {
+  it("POSTs the access level and returns the stored value", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenBody = "";
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenBody = String(init?.body || "");
+      return { ok: true, json: async () => ({ ok: true, triggerAccess: "contributor" }) } as Response;
+    }) as unknown as typeof fetch;
+    const result = await setGithubAppTriggerAccess(store, "contributor", undefined, fakeFetch);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/github-app/trigger-access");
+    // No appId = every connected app, which is what the account-level setting wants.
+    expect(JSON.parse(seenBody)).toEqual({ triggerAccess: "contributor" });
+    expect(result).toBe("contributor");
+  });
+
+  it("scopes the setting to a single app when given an appId", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    let seenBody = "";
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      seenBody = String(init?.body || "");
+      return { ok: true, json: async () => ({ ok: true, triggerAccess: "collaborator" }) } as Response;
+    }) as unknown as typeof fetch;
+    await setGithubAppTriggerAccess(store, "collaborator", "12345", fakeFetch);
+    expect(JSON.parse(seenBody)).toEqual({ triggerAccess: "collaborator", appId: "12345" });
+  });
+
+  it("defaults to 'everyone' when the response omits triggerAccess (cleared back to unrestricted)", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () => ({ ok: true, json: async () => ({ ok: true }) }) as Response) as unknown as typeof fetch;
+    const result = await setGithubAppTriggerAccess(store, "everyone", undefined, fakeFetch);
+    expect(result).toBe("everyone");
+  });
+
+  it("throws with the server's error message on a non-2xx response", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () =>
+      ({ ok: false, status: 404, json: async () => ({ error: "No GitHub App connected" }) }) as Response) as unknown as typeof fetch;
+    await expect(setGithubAppTriggerAccess(store, "contributor", undefined, fakeFetch)).rejects.toThrow("No GitHub App connected");
   });
 });
 

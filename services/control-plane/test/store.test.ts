@@ -501,6 +501,29 @@ await test("setInboundHookDefaultNode sets/clears the default node, scoped to th
   assert.equal(await store.setInboundHookDefaultNode(other.id, hook.id, "elsewhere"), undefined);
 });
 
+await test("setInboundHookTriggerAccess sets/clears who can trigger a run, scoped to the account (issue #259)", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("trigger-access@example.com");
+  const hook = await store.createInboundHook(acct.id, "github_app");
+  // Unset by default — "everyone" (no restriction), the behavior before this
+  // setting existed.
+  assert.equal((await store.getInboundHook(hook.id))?.triggerAccess, undefined);
+  let updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "contributor");
+  assert.equal(updated?.triggerAccess, "contributor");
+  assert.equal((await store.getInboundHook(hook.id))?.triggerAccess, "contributor");
+  updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "collaborator");
+  assert.equal(updated?.triggerAccess, "collaborator");
+  // Setting back to "everyone" clears it (stored the same as unset).
+  updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "everyone");
+  assert.equal(updated?.triggerAccess, undefined);
+  updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "collaborator");
+  updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, undefined);
+  assert.equal(updated?.triggerAccess, undefined);
+  // Scoped to the owning account.
+  const other = await store.findOrCreateAccount("trigger-access2@example.com");
+  assert.equal(await store.setInboundHookTriggerAccess(other.id, hook.id, "collaborator"), undefined);
+});
+
 await test("renaming a node carries its GitHub App default-node reference along (issue #464)", async () => {
   const store = await makeStore();
   const acct = await store.findOrCreateAccount("rename-default-node@example.com");
