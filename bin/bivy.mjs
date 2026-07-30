@@ -37,7 +37,7 @@ import { selectStaleSessions, sessionActivityMs } from "./prune-sessions.mjs";
 import { resolveSessionsLimit, truncateSavedSessions } from "./sessions-list.mjs";
 import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForShell } from "./shim-path.mjs";
 import { removeExcept } from "./uninstall-paths.mjs";
-import { findAvailablePort } from "./port-picker.mjs";
+import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
 
 const selfScript = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(selfScript);
@@ -2644,6 +2644,11 @@ async function installService(config) {
     console.log(c.yellow(`No background-service template for ${process.platform}. Use 'bivy start' instead.`));
     return false;
   }
+  // Re-check the port before baking it into the unit: a second node on this
+  // machine may have claimed the saved port since setup, and unlike `bivy setup`
+  // this path used to write it in verbatim (so the node would fail to bind and
+  // silently exit). reconcileNodePort persists any change into `config` first.
+  await reconcileNodePort(config);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (kind === "launchd") {
     fs.writeFileSync(file, plistContent(config));
@@ -2731,6 +2736,57 @@ function restartService() {
     return runQuiet("systemctl", ["--user", "restart", SERVICE_UNIT], { env: systemdUserEnv() }).code === 0;
   }
   return false;
+}
+
+// Is `config.port` currently held by *this install's own* node, as opposed to a
+// foreign node (a second OS user's, a staging+prod pair) or an unrelated
+// process? We ask whoever is listening for its data dir via /api/status and
+// compare to ours: our own node reports the same appDir; a foreign bivy node
+// reports a different one (or rejects our device token and throws); a non-bivy
+// process makes the request throw. Only a match counts as "ours", so port
+// reconciliation never relocates a node off a port it legitimately owns.
+async function portHeldByOwnNode(config) {
+  try {
+    const status = await localApi(config, "/api/status");
+    return Boolean(status?.appDir) && path.resolve(status.appDir) === path.resolve(appDir);
+  } catch {
+    return false;
+  }
+}
+
+// Re-validate the saved node port before it is baked into a service unit or
+// restarted into, rolling it forward (and persisting the new value) if a second
+// node on this machine has claimed it since setup. An explicit `PORT=…` is
+// honored verbatim. Returns true when the port changed, so the caller knows to
+// rewrite the unit whose PORT env is now stale. See reconcilePort() for the
+// decision rules. Our own running node is never treated as a collision.
+async function reconcileNodePort(config) {
+  const current = Number(config.port) || 4317;
+  const chosen = await reconcilePort(current, nodeBindHost(), {
+    explicitPort: Number(process.env.PORT),
+    heldByOwnNode: () => portHeldByOwnNode(config),
+  });
+  if (chosen === current) return false;
+  console.log(
+    c.yellow(`Port ${current} is already in use by another node on this machine — moving this node to ${chosen}.`),
+  );
+  config.port = chosen;
+  saveConfig(config);
+  return true;
+}
+
+// Restart the background service, but first make sure the port it will bind is
+// still free. If a foreign node grabbed it while ours was down, relocate: the
+// unit's baked-in PORT is now stale, so a full reinstall rewrites it (and
+// reloads/relaunches). Otherwise a plain restart. Returns true if the service
+// was (re)started. Used by `bivy restart` and `bivy update` — the paths that
+// previously trusted the saved port verbatim.
+async function restartServiceReconciled(config) {
+  const { file } = servicePaths();
+  if (fs.existsSync(file) && (await reconcileNodePort(config))) {
+    return await installService(config);
+  }
+  return restartService();
 }
 
 // How long a restart triggered by `bivy update`/`bivy restart` will wait for
@@ -3555,7 +3611,7 @@ async function runUpdate(args = []) {
     await ensureBundledAgents();
     const config = loadConfig();
     await waitForIdleSessions(config, { skip: skipWait });
-    if (config.service && restartService()) {
+    if (config.service && (await restartServiceReconciled(config))) {
       console.log(c.green("Updated and restarted the background service."));
     } else {
       console.log(c.green("Updated. Run 'bivy start' (or restart your service) to apply."));
@@ -3591,7 +3647,7 @@ async function runUpdate(args = []) {
   await ensureBundledAgents();
   const config = loadConfig();
   await waitForIdleSessions(config, { skip: skipWait });
-  if (config.service && restartService()) {
+  if (config.service && (await restartServiceReconciled(config))) {
     console.log(c.green("Updated and restarted the background service."));
   } else {
     console.log(c.green("Updated. Run 'bivy start' (or restart your service) to apply."));
@@ -4037,8 +4093,10 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
         console.log("Usage: bivy restart [--force|--no-wait]\n\nRestart the background service. Waits for active sessions to finish a turn first; --force/--no-wait skips the wait.");
         break;
       }
-      await waitForIdleSessions(loadConfig(), { skip: args.includes("--force") || args.includes("--no-wait") });
-      if (restartService()) {
+      {
+      const restartConfig = loadConfig();
+      await waitForIdleSessions(restartConfig, { skip: args.includes("--force") || args.includes("--no-wait") });
+      if (await restartServiceReconciled(restartConfig)) {
         console.log(c.green("Service restarted."));
       } else if (fs.existsSync(servicePaths().file)) {
         console.error(c.red("Failed to restart the background service."));
@@ -4050,6 +4108,7 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
         // non-zero so callers like install.sh can tell nothing was restarted.
         console.log(c.yellow("No background service to restart. Run 'bivy setup' to install one so the node stays reachable."));
         process.exitCode = 1;
+      }
       }
       break;
     case "status":

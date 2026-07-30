@@ -38,3 +38,31 @@ export async function findAvailablePort(preferred, host, isFree = portIsFree) {
   }
   return preferred;
 }
+
+// Decide which port a node should (re)start on, re-validating a *saved* port
+// right before it is baked into a service unit or restarted into. `bivy setup`
+// already auto-avoids collisions, but `bivy service install`, `bivy restart` and
+// `bivy update` used to trust the saved port verbatim — so a node whose 4317 had
+// since been claimed by a second node on the same machine would fail to bind
+// (EADDRINUSE) and silently exit. Rules, in order:
+//   - an explicit `PORT=…` override wins verbatim (the operator pinned it);
+//   - a free port is kept as-is (the common case — no collision);
+//   - a port still held by *our own* node is kept (a plain restart must not
+//     relocate a node off the port it already owns — `heldByOwnNode` tells ours
+//     apart from a foreign occupant);
+//   - otherwise roll forward to the first free port above it.
+// `isFree` and `heldByOwnNode` are injectable so the decision is unit-testable
+// without sockets or a live node. Returns the chosen port; callers compare it to
+// the current one to decide whether to persist and rewrite the unit.
+export async function reconcilePort(current, host, {
+  explicitPort = 0,
+  isFree = portIsFree,
+  heldByOwnNode = async () => false,
+} = {}) {
+  const pinned = Number(explicitPort);
+  if (pinned) return pinned;
+  const port = Number(current) || 4317;
+  if (await isFree(port, host)) return port;
+  if (await heldByOwnNode(port, host)) return port;
+  return findAvailablePort(port + 1, host, isFree);
+}
