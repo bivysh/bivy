@@ -277,6 +277,28 @@ export class DirectTransport implements Transport {
           }
           break;
         }
+        case "attachment.fetch": {
+          // Fetch attachment bytes from the local HTTP endpoint and re-emit as an
+          // `attachment.data` event, so the client's fetchAttachment() settles the
+          // same way it does over the relay (which replies with base64 too).
+          const requestId = String(obj.requestId ?? "");
+          const hash = String((obj as { hash?: unknown }).hash ?? "");
+          try {
+            const res = await this.fetchImpl(`${this.origin}/api/attachment/${encodeURIComponent(hash)}`, { headers: this.directHeaders() });
+            if (!res.ok) throw new Error(`Attachment fetch failed (${res.status})`);
+            const mimeType = res.headers.get("content-type") || "application/octet-stream";
+            const buf = new Uint8Array(await res.arrayBuffer());
+            // Chunked to keep String.fromCharCode(...) off a huge spread (stack) and
+            // to base64 without pulling in a dependency.
+            let binary = "";
+            const CHUNK = 0x8000;
+            for (let i = 0; i < buf.length; i += CHUNK) binary += String.fromCharCode(...buf.subarray(i, i + CHUNK));
+            this.emit({ type: "attachment.data", requestId, hash, mimeType, data: btoa(binary) });
+          } catch (error) {
+            this.emit({ type: "attachment.error", requestId, hash, error: (error as Error)?.message || String(error) });
+          }
+          break;
+        }
         case "session.import": {
           const requestId = String(obj.requestId ?? "");
           try {
