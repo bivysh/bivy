@@ -14,6 +14,8 @@ import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { SessionMenu } from "./components/SessionMenu.js";
 import { GithubPill } from "./components/GithubPill.js";
+import { RunPill } from "./components/RunPill.js";
+import { classifySource } from "./sessionSource.js";
 import { UsageBar } from "./components/UsageBar.js";
 import { ChangesCard } from "./components/ChangesCard.js";
 import { ErrorToast } from "./components/ErrorToast.js";
@@ -266,6 +268,10 @@ export function App() {
 
   const closeDrawer = () => setDrawerOpen(false);
   const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId);
+  // A session an automation triggered shows a source+status run pill in the
+  // band above the composer instead of the plain GitHub pill; a hand-opened
+  // session keeps the ordinary pill. `null` for a draft (no session yet).
+  const activeRunSource = activeSession ? classifySource(activeSession.source) : null;
   const activeSessionNodeId = activeSession?.nodeId || state.currentNodeId || undefined;
   const activeSessionNode = state.nodes.find((node) => node.id === activeSessionNodeId);
   const activeSessionNodeLabel = activeSessionNode
@@ -467,7 +473,16 @@ export function App() {
         <ChangesCard changes={state.changes} checkpoints={state.checkpoints} />
 
         <div className="composer-gh">
-          <GithubPill gh={state.github} />
+          {activeSession && activeRunSource?.automation ? (
+            <RunPill
+              source={activeRunSource}
+              statusClass={statusClass(activeSession)}
+              statusLabel={statusLabel(activeSession)}
+              gh={state.github}
+            />
+          ) : (
+            <GithubPill gh={state.github} />
+          )}
           {/* Slash-command pill, pushed to the right so it sits top-right over
               the composer on the same band as the GitHub context. Tapping it
               (re)initializes a closed session so its commands can be fetched,

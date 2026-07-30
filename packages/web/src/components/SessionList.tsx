@@ -6,6 +6,28 @@ import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
 import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
+import { SourceGlyph } from "./SourceMark.js";
+import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
+
+/** The leading indicator on a session row: a tinted source tile carrying the
+ *  trigger's glyph, with the live status as a small dot badge on its corner.
+ *  Source is the identity, status is the presence — one element, two axes, so
+ *  the row now reads "where it came from" and "what it's doing" at a glance.
+ *  The dot's colour/shape logic is the same statusClass the header pill uses. */
+export function RowMark({ kind, status, unseen, srLabel }: { kind: SourceKind; status: string; unseen?: boolean; srLabel: string }) {
+  return (
+    <>
+      <span className={`session-mark src-${kind}`} aria-hidden>
+        <SourceGlyph kind={kind} />
+        <span className={`mark-badge ${status}${unseen ? " unseen" : ""}`} />
+      </span>
+      {/* The mark + badge are colour/shape only and aria-hidden; mirror both the
+          source and the status as screen-reader-only text (parity with the old
+          bare status dot, which did the same for status alone). */}
+      <span className="sr-only">{srLabel}</span>
+    </>
+  );
+}
 
 // How long "Update GitHub status" stays in its busy state before giving up and
 // re-enabling the button — `controller.refreshPrStatus` is fire-and-forget
@@ -466,8 +488,7 @@ export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: st
           return (
             <li key={t.termId} className="session-row">
               <button className="session-item" onClick={() => onPickTerminal(t.termId, t.nodeId)}>
-                <span className="session-dot working" title="Running in terminal" aria-hidden />
-                <span className="sr-only">Running in terminal</span>
+                <RowMark kind={CLI_SOURCE.kind} status="working" srLabel={`${CLI_SOURCE.label} · Running in terminal`} />
                 <span className="session-body">
                   <span className="session-title-row">
                     <span className="session-name">{title}</span>
@@ -487,24 +508,14 @@ export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: st
           const meta = sessionMeta(s, nodeName(s.nodeId));
           const unseen = isUnseen(s);
           const label = statusLabel(s);
+          const src = classifySource(s.source);
           return (
             <li key={s.sessionId} className="session-row">
               <button
                 className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
                 onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
               >
-                <span
-                  className={`session-dot ${statusClass(s)}${unseen ? " unseen" : ""}`}
-                  title={label}
-                  aria-hidden
-                />
-                {/* The dot is the single most important glanceable signal in the
-                    row (needs-action / working / idle / unseen) but is color/shape
-                    only and `aria-hidden` — invisible to screen readers, and `title`
-                    tooltips aren't reliably exposed either. Mirror it as
-                    screen-reader-only text (already includes "· new" when unseen —
-                    see statusLabel) so the status is still announced. */}
-                <span className="sr-only">{label}</span>
+                <RowMark kind={src.kind} status={statusClass(s)} unseen={unseen} srLabel={`${src.label} · ${label}`} />
                 <span className="session-body">
                   <span className="session-title-row">
                     <span className="session-name">{s.name}</span>
