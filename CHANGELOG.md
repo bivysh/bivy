@@ -22,7 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runtime that can't import history (or an import that fails at run time) still
   falls back cleanly to the seeded continuation. Pi and Claude Code both
   implement it (`AgentRuntime.importHistoryForFork`); see `src/session/fork.ts`
-  and `buildForkHistory` in `src/session/transcript-normal.ts`.
+  and `buildForkHistory` in `src/session/transcript-normal.ts`. The *source*
+  side now works for **every** agent, not just those with a `readMessages` fast
+  path: `buildForkBundle` falls back to the live session's transcript, so a fork
+  *from* a wrapped CLI agent (which keeps its transcript only on the live
+  session) carries its real history instead of an empty one — a true replay into
+  pi/Claude, and a full-history seeded prompt into any other target.
 
 - **Ten more coding agents in the picker, and a general path to more capability.**
   The agent selector gains nine of the most-used CLIs — Cursor, GitHub Copilot,

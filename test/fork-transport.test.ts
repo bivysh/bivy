@@ -214,6 +214,37 @@ async function run() {
     assert.ok(cross.normalized.turns.length > 0, "normalized seed survives so the seeded fork still has history");
   });
 
+  // --- source breadth: a runtime with no readMessages still carries history ---
+  await test("buildForkBundle falls back to the live transcript when the source runtime has no readMessages", () => {
+    // The generic CLI runtime keeps its transcript on the live session only; it
+    // exposes no readMessages, so a fork must read history off the live session.
+    const cliLike = {
+      id: "generic-cli",
+      displayName: "Generic CLI Agent",
+      capabilities: { toolInterception: false, modelSelection: false, packages: false, resume: true, fork: false },
+      createSession: async () => { throw new Error("unused"); },
+      openSession: async () => { throw new Error("unused"); },
+      listSessions: async () => [],
+      // readMessages intentionally absent.
+    } as AgentRuntime;
+
+    const withoutLive = buildForkBundle({ runtime: cliLike, sessionFile: "x", record: record({ runtimeId: "generic-cli" }) });
+    assert.equal(withoutLive.normalized.turns.length, 0, "no readMessages and no live transcript => empty history (the old gap)");
+
+    const withLive = buildForkBundle({
+      runtime: cliLike,
+      sessionFile: "x",
+      record: record({ runtimeId: "generic-cli" }),
+      liveMessages: [
+        { role: "user", content: "add a retry" },
+        { role: "assistant", content: [{ type: "text", text: "added it" }] },
+      ],
+      targetRuntimeId: "pi",
+    });
+    assert.equal(withLive.normalized.turns.length, 2, "the live transcript fills the normalized bundle for a CLI-agent source");
+    assert.deepEqual(withLive.normalized.turns.map((t) => t.role), ["user", "assistant"]);
+  });
+
   console.log(`fork-transport: all ${passed} tests passed`);
 }
 

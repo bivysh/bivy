@@ -1,4 +1,4 @@
-import type { AgentRuntime, ForkNativePayload } from "../runtime/types.js";
+import type { AgentRuntime, ForkNativePayload, RuntimeMessage } from "../runtime/types.js";
 import {
   normalizeMessages,
   buildSeedPrompt,
@@ -82,6 +82,17 @@ export interface BuildForkBundleOptions {
    * keep the native payload for a potential full-fidelity replay.
    */
   targetRuntimeId?: string;
+  /**
+   * The source session's LIVE transcript, used as the normalized-transcript
+   * source when the runtime has no `readMessages` fast path. The generic CLI
+   * runtime (which backs most wrapped agents) builds its transcript from parsed
+   * stdout and keeps it only on the live session — without this a fork *from*
+   * one of those agents would carry an empty transcript, degrading even the
+   * seeded prompt to "(no prior turns)". `readMessages` is still preferred when
+   * present (pi/Claude), so this only fills the gap. Same `{role, content}`
+   * shape as `readMessages`. Omit when the runtime already exposes readMessages.
+   */
+  liveMessages?: readonly RuntimeMessage[];
 }
 
 /**
@@ -94,7 +105,10 @@ export interface BuildForkBundleOptions {
  */
 export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
   const { runtime, sessionFile, record } = opts;
-  const messages = runtime.readMessages?.(sessionFile);
+  // Prefer the build-free readMessages fast path (pi/Claude); fall back to the
+  // live session's transcript for runtimes without one (the generic CLI runtime),
+  // so a fork *from* any agent still carries its real history.
+  const messages = runtime.readMessages?.(sessionFile) ?? opts.liveMessages;
   const normalized = normalizeMessages(messages, {
     sourceRuntimeId: runtime.id,
     model: record.model,
