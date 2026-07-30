@@ -143,7 +143,7 @@ Nineteen agents are available in the picker, each driven through its native inte
 | Pi | `bivy run pi` | Default; bundled |
 | Claude Code | `bivy run claude` | Bundled SDK |
 | Codex | `bivy run codex` | Installs `@openai/codex` |
-| OpenCode | `bivy run opencode` | Installs `opencode-ai/opencode` |
+| OpenCode | `bivy run opencode` | Installs `opencode-ai` |
 | Gemini CLI | `bivy run gemini` | Installs `@google/gemini-cli` |
 | Qwen Code | `bivy run qwen` | Installs `@qwen-code/qwen-code` |
 | Goose | `bivy run goose` | Requires `goose` on PATH |
@@ -207,7 +207,7 @@ If you want to be asked about more, set the mode explicitly:
 
 ```bash
 BIVY_APPROVAL_MODE=risky    # prompt on risky shell commands and file edits
-BIVY_APPROVAL_MODE=always   # prompt on every tool call
+BIVY_APPROVAL_MODE=always   # prompt on all shell commands and file edits
 BIVY_APPROVAL_MODE=never    # no prompts beyond the hard floor
 ```
 
@@ -231,8 +231,9 @@ bivy secrets ref github.repo-token op://Bivy/GitHub/repo-token
 bivy secrets doctor
 ```
 
-`secret://`, `env://`, and `op://` (1Password) references are resolved before the
-daemon starts. See [`docs/key-management.md`](docs/key-management.md).
+`secret://`, `env://`, and `op://` (1Password) references are resolved on demand
+when the daemon provisions an agent run, so the raw values never sit in your
+config. See [`docs/key-management.md`](docs/key-management.md).
 
 ## GitHub work queue
 
