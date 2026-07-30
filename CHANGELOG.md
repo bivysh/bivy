@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-30
+
+### Fixed
+
+- Work queued for a node renamed while running is now picked up immediately; the
+  hosted queue poller updates its `bivy/<node>` route without requiring a daemon
+  restart. (#261)
+- Git operations no longer fail with `Unable to read current working directory`
+  after an npm update replaces the daemon's install directory. The daemon and its
+  credential helper now anchor themselves in durable directories. (#261)
+
+### Changed
+
+- Settings now uses the official Slack and Linear logo geometry instead of
+  approximate line-art icons. (#261)
+
 ## [0.1.1] - 2026-07-30
 
 ### Fixed
