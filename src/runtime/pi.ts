@@ -32,6 +32,7 @@ import type {
   AgentCommand,
   AgentRuntime,
   CatalogProvider,
+  ForkHistoryMessage,
   ForkNativePayload,
   ModelInfo,
   OpenSessionOptions,
@@ -424,6 +425,9 @@ export class PiRuntime implements AgentRuntime {
     // pi transcripts are structured messages that round-trip through the session
     // store, so a pi->pi fork is full fidelity (see exportForFork/importForFork).
     forkTransport: true,
+    // pi can also stand up a session from portable {role,text} history, so a fork
+    // FROM another agent INTO pi is a true replay, not a seeded summary.
+    forkHistoryImport: true,
     // The pi-coding-agent SDK implements both explicitly: prompting mid-turn
     // with no streamingBehavior hint throws, forcing every caller to choose.
     streamingBehaviors: ["steer", "followUp"],
@@ -576,6 +580,27 @@ export class PiRuntime implements AgentRuntime {
     }
     const sessionFile = sessionManager.getSessionFile();
     if (!sessionFile) throw new Error("pi.importForFork: session file was not persisted");
+    return { sessionFile, id: sessionManager.getSessionId() };
+  }
+
+  /**
+   * Stand up a pi session from a **cross-runtime** fork's portable history: open
+   * a fresh session in the destination workspace and append each `{role, text}`
+   * turn as a plain-text message, so the new session resumes on a copy of the
+   * whole conversation (fidelity "replayed"). The turns already have any tool
+   * activity inlined as text (see buildForkHistory), so nothing here needs to
+   * reconstruct provider-specific tool blocks. Never touches the source.
+   */
+  async importHistoryForFork(
+    history: ForkHistoryMessage[],
+    ctx: { workspace: string; cwd: string },
+  ): Promise<{ sessionFile: string; id: string }> {
+    const sessionManager = SessionManager.create(ctx.cwd || ctx.workspace, this.options.sessionsDir);
+    for (const message of history) {
+      sessionManager.appendMessage({ role: message.role, content: message.text } as unknown as Parameters<typeof sessionManager.appendMessage>[0]);
+    }
+    const sessionFile = sessionManager.getSessionFile();
+    if (!sessionFile) throw new Error("pi.importHistoryForFork: session file was not persisted");
     return { sessionFile, id: sessionManager.getSessionId() };
   }
 }

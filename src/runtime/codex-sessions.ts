@@ -22,8 +22,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { hasLiveProcessForCwd } from "./native-process-scan.js";
-import type { DiscoveredNativeSession, RuntimeMessage } from "./types.js";
+import type { DiscoveredNativeSession, ForkHistoryMessage, RuntimeMessage } from "./types.js";
 
 /** Binary names a live Codex process could be running under (see
  *  native-process-scan.ts's best-effort cwd match). */
@@ -142,6 +143,59 @@ export function loadCodexTranscriptFile(file: string): RuntimeMessage[] {
     messages.push({ role, content: text, timestamp: toEpoch(p.timestamp ?? rec.timestamp) ?? Date.now() });
   }
   return messages;
+}
+
+/**
+ * Materialise a **cross-runtime** fork's portable history as a fresh Codex
+ * rollout so `codex ... resume <id>` (the app-server's `thread/resume`) opens on
+ * a copy of the whole conversation — the write-side counterpart to
+ * `loadCodexTranscript`, and Codex's `importHistoryForFork` (fidelity
+ * "replayed"). The rollout is written in the current wrapped layout — a
+ * `session_meta` line then one `response_item` per turn — under the id-addressed
+ * date path Codex uses (`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl`), the
+ * same shape `loadCodexTranscriptFile` reads back and `discoverCodexSessionForCwd`
+ * locates. Message turns carry a Responses-API `message` item (`input_text` for
+ * the user, `output_text` for the assistant), which reads back through `textOf`.
+ *
+ * IMPORTANT — best-effort, and NOT verified against a live Codex resume here (see
+ * this module's header): Codex's rollout schema is version-variable, so whether a
+ * *synthesised* rollout is fully honored by `thread/resume` depends on the
+ * installed Codex. The fork engine calls this only as its "replayed" tier and
+ * falls back to a seeded continuation prompt if it throws; a node can force that
+ * fallback outright with `BIVY_CODEX_NO_FORK_REPLAY=1` when its Codex build
+ * doesn't accept synthesised rollouts.
+ */
+export function writeCodexRollout(
+  history: ForkHistoryMessage[],
+  cwd: string,
+): { sessionFile: string; id: string } {
+  if (process.env.BIVY_CODEX_NO_FORK_REPLAY === "1") {
+    throw new Error("Codex fork replay disabled (BIVY_CODEX_NO_FORK_REPLAY=1)");
+  }
+  const id = randomUUID();
+  const now = new Date();
+  const iso = now.toISOString();
+  const yyyy = String(now.getUTCFullYear());
+  const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(now.getUTCDate()).padStart(2, "0");
+  const dir = path.join(codexSessionsDir(), yyyy, mm, dd);
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = iso.replace(/[:.]/g, "-").replace(/Z$/, "");
+  const file = path.join(dir, `rollout-${stamp}-${id}.jsonl`);
+  const records: unknown[] = [
+    { type: "session_meta", timestamp: iso, payload: { id, timestamp: iso, cwd, cli_version: "bivy-fork" } },
+    ...history.map((message) => ({
+      type: "response_item",
+      timestamp: iso,
+      payload: {
+        type: "message",
+        role: message.role,
+        content: [{ type: message.role === "user" ? "input_text" : "output_text", text: message.text }],
+      },
+    })),
+  ];
+  fs.writeFileSync(file, records.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  return { sessionFile: id, id };
 }
 
 /** Enumerate Codex sessions on disk, newest first. Best-effort. */

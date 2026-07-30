@@ -8,7 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntime, claudeRuntimeFromEnv, claudeSdkInstalled } from "./claude-code.js";
-import { deleteCodexSession, discoverNativeCodexSessions, loadCodexTranscript } from "./codex-sessions.js";
+import { deleteCodexSession, discoverNativeCodexSessions, loadCodexTranscript, writeCodexRollout } from "./codex-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 
 // Args that continue an existing Codex session each prompt. Codex assigns its own
@@ -1247,6 +1247,10 @@ function codexAppServerRuntime(credsDir: string, tier?: SandboxTier): AgentRunti
     resumable: true,
     loadHistory: (sessionId) => loadCodexTranscript(sessionId),
     deleteHistory: (sessionId) => void deleteCodexSession(sessionId),
+    // True cross-runtime replay INTO Codex: synthesise a resumable rollout from
+    // portable history so a fork from another agent opens on a copy of the whole
+    // conversation instead of a seeded summary (best-effort — see writeCodexRollout).
+    writeHistory: (history, ctx) => writeCodexRollout(history, ctx.cwd || ctx.workspace),
     suggestName: suggestCodexSessionName,
     // Native discovery (issue #156): enumerate Codex rollouts on this node that
     // Bivy didn't start, so a pre-existing `codex` session can be adopted here

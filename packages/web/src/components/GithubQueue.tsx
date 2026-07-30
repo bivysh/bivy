@@ -15,8 +15,9 @@ import {
 } from "@bivy/core";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
-import { PrBadge, relTime, toMs } from "./SessionList.js";
+import { PrBadge, RowMark, relTime, toMs } from "./SessionList.js";
 import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
+import { classifySource } from "../sessionSource.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { writeClipboard } from "../clipboard.js";
@@ -498,14 +499,14 @@ export function GithubQueuePanel({
                 const meta = queueSessionMeta(s.source);
                 const unseen = isUnseen(s);
                 const label = statusLabel(s);
+                const src = classifySource(s.source);
                 return (
                   <li key={s.sessionId} className="session-row">
                     <button
                       className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
                       onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
                     >
-                      <span className={`session-dot ${statusClass(s)}${unseen ? " unseen" : ""}`} title={label} aria-hidden />
-                      <span className="sr-only">{label}</span>
+                      <RowMark kind={src.kind} status={statusClass(s)} unseen={unseen} srLabel={`${src.label} · ${label}`} />
                       <span className="session-body">
                         <span className="session-title-row">
                           <span className="session-name">{s.name}</span>

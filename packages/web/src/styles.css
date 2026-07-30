@@ -27,6 +27,12 @@
      (working), danger (needs input) or ok/merged (already used by PR state),
      so "something's ready" reads as its own signal at a glance. */
   --unseen: #2563eb;
+  /* Per-source hues for the session/run marks (see sessionSource.ts). Kept
+     clear of the status palette (ok / danger / unseen) so a source is never
+     mistaken for an outcome; `app`/`cli` stay quiet so hand-opened sessions
+     don't shout next to a triggered run. */
+  --s-github: #24292f; --s-slack: #7c2d92; --s-linear: #5e6ad2; --s-schedule: #0e7490;
+  --s-webhook: #6d28d9; --s-manual: #b45309; --s-cli: #3f6212; --s-app: #64748b;
   /* Terminal text selection — a clearly visible tint that keeps glyphs readable
      (the old --surface-3 highlight was invisible against the terminal bg). */
   --term-selection: rgba(37, 99, 235, 0.32);
@@ -42,6 +48,8 @@
   --accent: #f87c18; --accent-contrast: #081028; --accent-hover: #ff9433;
   --danger: #ff4444; --danger-soft: #3a1a1a; --ok: #22aa44; --merged: #a371f7;
   --unseen: #5b9dff;
+  --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;
+  --s-webhook: #b79bf7; --s-manual: #f0a45a; --s-cli: #a3c987; --s-app: #9aa4b2;
   --term-selection: rgba(96, 165, 250, 0.40); --term-selection-inactive: rgba(96, 165, 250, 0.26);
 }
 @media (prefers-color-scheme: dark) {
@@ -622,7 +630,119 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-pr .gh-icon { width: 10px; height: 10px; }
 .session-pr.merged { border-color: var(--merged); color: var(--merged); }
 .session-pr.closed { border-color: var(--muted); color: var(--muted); }
-.session-pr-text { white-space: nowrap; }
+/* The label is all-caps with no descenders, so within the line box its ink
+   rides above the optical centre and reads high in the fixed-height pill. Nudge
+   it down a touch to sit on the pill's true centre next to the glyph. */
+.session-pr-text { white-space: nowrap; position: relative; top: 0.5px; }
+
+/* ---- Source marks & run pill (see sessionSource.ts / SourceMark.tsx) ----
+   `--sc` is the per-source hue; every mark tints its glyph and a faint fill
+   from it. Set once per source class so the tile, the sidebar mark and the
+   in-session pill all read from the same variable. */
+.src-github-issue, .src-github-mention { --sc: var(--s-github); }
+.src-slack { --sc: var(--s-slack); }
+.src-linear { --sc: var(--s-linear); }
+.src-schedule { --sc: var(--s-schedule); }
+.src-webhook { --sc: var(--s-webhook); }
+.src-manual { --sc: var(--s-manual); }
+.src-cli { --sc: var(--s-cli); }
+.src-app { --sc: var(--s-app); }
+
+/* Standalone tinted tile (run-pill sheet header, and anywhere a source needs a
+   chip). */
+.source-mark {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 8px;
+  color: var(--sc, var(--muted));
+  background: color-mix(in srgb, var(--sc, var(--muted)) 15%, var(--surface));
+}
+.source-mark svg { width: 17px; height: 17px; display: block; }
+.source-mark.sm { width: 22px; height: 22px; border-radius: 6px; }
+.source-mark.sm svg { width: 13px; height: 13px; }
+
+/* Sidebar row leading mark: the source tile with the live status as a corner
+   dot badge. Source = identity, badge = presence. */
+.session-mark {
+  position: relative; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 8px;
+  color: var(--sc, var(--muted));
+  background: color-mix(in srgb, var(--sc, var(--muted)) 14%, var(--surface));
+}
+.session-mark svg { width: 16px; height: 16px; display: block; }
+/* The presence dot. A 2px ring in the sidebar's own surface colour lifts it off
+   the tile; colour/shape mirror the old bare .session-dot states. */
+.mark-badge {
+  position: absolute; right: -3px; bottom: -3px;
+  width: 11px; height: 11px; border-radius: 50%;
+  background: var(--line-strong); box-shadow: 0 0 0 2px var(--surface);
+}
+.mark-badge.working { background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
+.mark-badge.needs-action { background: var(--danger); }
+.mark-badge.saved { background: transparent; border: 1.5px solid var(--muted); }
+.mark-badge.idle { background: var(--line-strong); }
+/* Finished-and-unseen keeps its own colour whichever base state it rode in on,
+   so it must come after .idle. */
+.mark-badge.unseen { background: var(--unseen); }
+
+/* In-session run pill (App.tsx composer band): supersedes the GitHub pill for a
+   triggered session. Source glyph + short label + a status segment. */
+.run-pill {
+  display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+  border-radius: 999px; padding: 4px 11px 4px 5px; font-size: 12px; font-weight: 600;
+}
+.run-pill:hover { border-color: var(--line-strong); background: var(--surface-3); }
+.run-pill-glyph {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 6px;
+  color: var(--sc, var(--muted));
+  background: color-mix(in srgb, var(--sc, var(--muted)) 18%, transparent);
+}
+.run-pill-glyph svg { width: 13px; height: 13px; display: block; }
+.run-pill-label { flex: none; }
+.run-pill-stat {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0;
+  padding-left: 8px; border-left: 1px solid var(--line); color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.run-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
+.run-pill.working .run-pill-stat { color: var(--accent); }
+.run-pill.working .run-dot, .run-sheet-status .run-dot.working { background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
+.run-pill.needs-action .run-pill-stat { color: var(--danger); }
+.run-pill.needs-action .run-dot, .run-sheet-status .run-dot.needs-action { background: var(--danger); }
+.run-pill.saved .run-dot, .run-sheet-status .run-dot.saved { background: transparent; border: 1.5px solid var(--muted); }
+.run-pill.idle .run-dot, .run-sheet-status .run-dot.idle { background: var(--line-strong); }
+
+/* Run-pill action sheet extras (reuses .action-sheet* from the GitHub pill). */
+.run-sheet-title { display: inline-flex; align-items: center; gap: 9px; min-width: 0; font-weight: 700; }
+.run-sheet-status {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; border-bottom: 1px solid var(--line);
+  font-size: 13px; font-weight: 600; color: var(--ink);
+}
+.run-sheet-status .session-pr { margin-left: auto; }
+.action-sheet-empty { padding: 14px 16px; color: var(--muted); font-size: 13px; }
+
+/* Run-pill sheet outcome: the run evidence (checks, attempts, duration,
+   branch/commit, agent) joined from the account queue — see runEvidence.ts. */
+.run-sheet-failure { padding: 11px 16px; border-bottom: 1px solid var(--line); color: var(--danger); font-size: 13px; line-height: 1.4; }
+.run-sheet-rows { display: flex; flex-direction: column; }
+.run-sheet-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.run-sheet-row:last-child { border-bottom: 0; }
+.run-sheet-row .k { flex: none; color: var(--muted); }
+.run-sheet-row .v { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 8px; justify-content: flex-end; align-items: center; color: var(--ink); font-weight: 600; text-align: right; }
+.run-sheet-row code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; padding: 1px 5px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-2); }
+.run-sheet-checks { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+.chk { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.chk.passed { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.chk.failed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.chk.skipped { color: var(--muted); }
+
+/* One-word exception hint on a sidebar row's meta line (failed / needs-you). */
+.row-hint { font-weight: 600; }
+.row-hint.danger { color: var(--danger); }
+.row-hint.warn { color: var(--accent); }
 .action-sheet { position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; justify-content: center; }
 .action-sheet-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.4); }
 .action-sheet-body {
