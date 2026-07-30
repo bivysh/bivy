@@ -10,7 +10,7 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import net from "node:net";
 // @ts-expect-error - plain .mjs helper, no type declarations
-import { portIsFree, findAvailablePort } from "../bin/port-picker.mjs";
+import { portIsFree, findAvailablePort, reconcilePort } from "../bin/port-picker.mjs";
 
 const HOST = "127.0.0.1";
 
@@ -58,4 +58,48 @@ test("findAvailablePort probes upward from the preferred port, not from zero", a
   const chosen = await findAvailablePort(4317, HOST, isFree);
   assert.equal(chosen, 4319);
   assert.deepEqual(probed, [4317, 4318, 4319]);
+});
+
+// reconcilePort guards the second-node collision at (re)start/install time — the
+// gap where `bivy service install`/`restart`/`update` trusted a saved port a
+// second node had since claimed.
+
+test("reconcilePort keeps the saved port when it is free", async () => {
+  const isFree = async () => true;
+  assert.equal(await reconcilePort(4317, HOST, { isFree }), 4317);
+});
+
+test("reconcilePort keeps the port when our own node already holds it", async () => {
+  // Busy, but it's ours — a plain restart must not relocate off its own port.
+  const isFree = async () => false;
+  const heldByOwnNode = async () => true;
+  assert.equal(await reconcilePort(4317, HOST, { isFree, heldByOwnNode }), 4317);
+});
+
+test("reconcilePort rolls forward when a foreign node holds the port", async () => {
+  const taken = new Set([4317]);
+  const isFree = async (port: number) => !taken.has(port);
+  const heldByOwnNode = async () => false; // occupant isn't ours
+  assert.equal(await reconcilePort(4317, HOST, { isFree, heldByOwnNode }), 4318);
+});
+
+test("reconcilePort does not probe ownership when the port is already free", async () => {
+  let ownershipChecked = false;
+  const isFree = async () => true;
+  const heldByOwnNode = async () => {
+    ownershipChecked = true;
+    return false;
+  };
+  assert.equal(await reconcilePort(4317, HOST, { isFree, heldByOwnNode }), 4317);
+  assert.equal(ownershipChecked, false);
+});
+
+test("reconcilePort honors an explicit PORT override verbatim, without probing", async () => {
+  let probed = false;
+  const isFree = async () => {
+    probed = true;
+    return true;
+  };
+  assert.equal(await reconcilePort(4317, HOST, { explicitPort: 5000, isFree }), 5000);
+  assert.equal(probed, false);
 });

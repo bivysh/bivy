@@ -193,6 +193,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails loudly on a taken port with an actionable message instead of wedging
   silently.
 
+- **Port-collision detection now also covers install, restart, and update — not
+  just `bivy setup`.** The auto-avoidance above only ran during `bivy setup`;
+  `bivy service install`, `bivy restart`, and `bivy update` baked the *saved*
+  `cli.json` port into the systemd/launchd unit (and restarted into it) verbatim.
+  So a node whose `4317` had since been claimed by a second node on the same box
+  — e.g. a root install plus a per-user install, or a second OS user who ran
+  setup while the first node was down — would keep colliding across every restart
+  and update, with no re-check. These paths now re-validate the port right before
+  writing the unit / restarting: a free port is kept, a port still held by *this
+  install's own* node is kept (a plain restart never relocates a node off the port
+  it already owns — the occupant is identified by comparing its `/api/status`
+  `appDir` to ours), and a port taken by a *foreign* node rolls forward to the
+  next free one, is persisted to `cli.json`, and the unit is rewritten to match.
+  An explicit `PORT` is still honored verbatim. New pure helper `reconcilePort`
+  in `bin/port-picker.mjs`, unit-tested alongside `findAvailablePort`. (Detecting
+  a *stopped* peer's pinned port still isn't possible from a live socket probe —
+  that would need reading another user's `cli.json`, which a per-user install
+  can't do — so give distinct installs distinct ports up front if they may be
+  down at install time.)
+
 - **OpenCode runs fail loudly, not opaquely, when a provider key is missing.**
   `opencode run` boots OpenCode's own server, which returns an opaque
   `UnknownError: Unexpected server error. Check server logs for details.`
