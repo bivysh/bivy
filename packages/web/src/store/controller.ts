@@ -182,6 +182,11 @@ export class AppController {
   private pendingAcks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** Persistent transcript cache (IndexedDB) for instant paint + incremental backfill. */
   private transcriptCache: TranscriptCache = createTranscriptCache({ maxSessions: 50 });
+  /** De-dupe in-flight/settled attachment fetches by content hash, so several
+   *  chips referencing the same blob (and re-renders) share one round-trip. Since
+   *  the content is immutable per hash, successful results are cached for the
+   *  session; failures are evicted so a later chip can retry. */
+  private attachmentFetches = new Map<string, Promise<{ mimeType: string; data: string } | null>>();
   /** A GitHub App manifest `code` captured from a redirect, sent once connected. */
   private pendingGithubAppCode: { code: string; state: string } | null = null;
   /** The route the app was loaded on (e.g. a `/sessions/:id` deep link), applied
@@ -829,6 +834,33 @@ export class AppController {
       this.pendingAcks.set(rid, { resolve, reject, timer });
       void this.transport.send({ ...command, requestId: rid });
     });
+  }
+
+  /**
+   * Fetch a stored attachment's bytes by content hash, returning base64 data +
+   * mime (or null if unavailable). Works over both transports: the relay replies
+   * with base64 directly; the direct transport fetches the HTTP endpoint and
+   * re-emits the same `attachment.data` shape (see transport-direct). Used by the
+   * chat to rehydrate a thumbnail whose bytes aren't in the local cache — the
+   * re-findable path after a reload or on another device.
+   */
+  fetchAttachment(hash: string): Promise<{ mimeType: string; data: string } | null> {
+    if (!hash) return Promise.resolve(null);
+    const existing = this.attachmentFetches.get(hash);
+    if (existing) return existing;
+    const p = (async () => {
+      try {
+        const ev = (await this.awaitAck({ kind: "attachment.fetch", hash }, 30000)) as { data?: unknown; mimeType?: unknown };
+        if (ev && typeof ev.data === "string") return { mimeType: String(ev.mimeType || "application/octet-stream"), data: ev.data };
+        this.attachmentFetches.delete(hash);
+        return null;
+      } catch {
+        this.attachmentFetches.delete(hash); // allow a later retry
+        return null;
+      }
+    })();
+    this.attachmentFetches.set(hash, p);
+    return p;
   }
 
   /** Resolve/reject an in-flight awaitAck() call from its matching reply. */

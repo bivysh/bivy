@@ -14,7 +14,7 @@
 // reproduced here yet — see packages/web/STATUS.md. They are refinements over
 // this correct baseline, not prerequisites for it.
 
-import type { ConnectionStatus, PromptAttachment, ServerEvent } from "./protocol.js";
+import type { AttachmentRef, ConnectionStatus, PromptAttachment, ServerEvent } from "./protocol.js";
 import type { AccountNode } from "./account.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml } from "./markdown.js";
@@ -1057,6 +1057,21 @@ export class SessionStore {
   restoreAttachments(entries: Array<[string, PromptAttachment[]]> | undefined): void {
     if (!entries || !entries.length) return;
     for (const [text, attachments] of entries) this.rememberAttachments(text, attachments);
+  }
+
+  /** Fold the durable attachment references a `session.history` event carries
+   *  (text→refs, persisted by the node's event log) into the in-memory cache, so
+   *  attachments rehydrate after a reload or on a device that never sent them.
+   *  The refs carry no bytes — only a content `hash` the chip resolves lazily via
+   *  `controller.fetchAttachment`. A text already cached with real bytes (our own
+   *  send this session) is left untouched; refs only ever FILL gaps. */
+  foldAttachmentRefs(entries: Array<[string, AttachmentRef[]]> | undefined): void {
+    if (!entries || !entries.length) return;
+    for (const [text, refs] of entries) {
+      if (!text || !refs.length || this.attachmentsByText.has(text)) continue;
+      const attachments: PromptAttachment[] = refs.map((r) => ({ kind: r.kind, name: r.name, size: r.size, mimeType: r.mimeType, hash: r.hash }));
+      this.rememberAttachments(text, attachments);
+    }
   }
 
   /** Re-attach cached attachments onto matching user entries rebuilt from
@@ -2453,6 +2468,10 @@ export class SessionStore {
    * full replace. Re-renders, refreshes both caches, and persists the cursor.
    */
   private applyHistory(e: any, sessionId: string | null): void {
+    // Durable attachment refs (text→refs) fill the in-memory cache before render,
+    // so a reload / another device rehydrates thumbnails by hash instead of a bare
+    // "[Image attachment: …]" placeholder. Must precede withCachedAttachments.
+    if (Array.isArray(e.attachmentRefs)) this.foldAttachmentRefs(e.attachmentRefs as Array<[string, AttachmentRef[]]>);
     const incoming: any[] = Array.isArray(e.messages) ? e.messages : [];
     const prev = sessionId ? this.historyRaw.get(sessionId) : undefined;
     const isAppend = e.mode === "append" && prev && (e.baseCount === undefined || e.baseCount === prev.count);
