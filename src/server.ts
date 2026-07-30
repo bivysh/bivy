@@ -1517,7 +1517,11 @@ async function runTerminalList() {
   const out = [];
   for (const t of runs) {
     let sessionRef = t.meta.sessionId;
-    if (!sessionRef && t.meta.autoName) {
+    // Discover the on-disk session for agents that assign their id lazily (Pi,
+    // Codex). Runs whenever there's no pinned id — not just for auto-named
+    // terminals — so the takeover-readiness flag below is accurate even for a
+    // run launched with an explicit --name.
+    if (!sessionRef) {
       try { sessionRef = await SESSION_DISCOVERY_BY_AGENT[t.meta.agent ?? ""]?.(t.workspace, t.createdAt); }
       catch { /* agent may still be starting */ }
     }
@@ -1525,7 +1529,11 @@ async function runTerminalList() {
     const nativeName = native?.name?.trim();
     if (t.meta.autoName && nativeName && !isEmptyUntitledTitle(nativeName)) t.meta.name = nativeName;
     const { autoName: _autoName, ...publicMeta } = t.meta;
-    out.push({ termId: t.id, workspace: t.workspace, createdAt: t.createdAt, lastActivityAt: t.lastActivityAt, pid: terminals.pid(t.id), ...publicMeta });
+    // "Continue as chat" can only adopt a session that exists: a pinned id, or a
+    // session discovered on disk. Surface that so the client can disable the
+    // affordance (with guidance) until the agent has actually started its
+    // session, instead of letting the user tap it and hit a 409.
+    out.push({ termId: t.id, workspace: t.workspace, createdAt: t.createdAt, lastActivityAt: t.lastActivityAt, pid: terminals.pid(t.id), ...publicMeta, takeoverReady: Boolean(sessionRef) });
   }
   return out;
 }
