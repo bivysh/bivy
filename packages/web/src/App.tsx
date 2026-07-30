@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
@@ -14,6 +14,9 @@ import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { SessionMenu } from "./components/SessionMenu.js";
 import { GithubPill } from "./components/GithubPill.js";
+import { RunPill } from "./components/RunPill.js";
+import { classifySource } from "./sessionSource.js";
+import { indexRunEvidence } from "./runEvidence.js";
 import { UsageBar } from "./components/UsageBar.js";
 import { ChangesCard } from "./components/ChangesCard.js";
 import { ErrorToast } from "./components/ErrorToast.js";
@@ -77,6 +80,10 @@ export function App() {
     }, 30000);
     return () => clearInterval(id);
   }, [refreshGithubQueue]);
+  // sessionId → the run that produced it, joined from the queue's evidence.
+  // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
+  // here (not by activeSession below) so the hook stays above any early return.
+  const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
   // Signed in on the hosted app but no node yet: poll for a newly-installed
   // machine so the empty state advances to the live app the moment the node
   // dials in — the user shouldn't have to hit "Refresh nodes" after running the
@@ -266,6 +273,10 @@ export function App() {
 
   const closeDrawer = () => setDrawerOpen(false);
   const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId);
+  // A session an automation triggered shows a source+status run pill in the
+  // band above the composer instead of the plain GitHub pill; a hand-opened
+  // session keeps the ordinary pill. `null` for a draft (no session yet).
+  const activeRunSource = activeSession ? classifySource(activeSession.source) : null;
   const activeSessionNodeId = activeSession?.nodeId || state.currentNodeId || undefined;
   const activeSessionNode = state.nodes.find((node) => node.id === activeSessionNodeId);
   const activeSessionNodeLabel = activeSessionNode
@@ -328,6 +339,7 @@ export function App() {
           </div>
         </div>
         <SessionList
+          runEvidence={runEvidence}
           onPick={(id, path, nodeId) => {
             controller.openSessionOnNode(id, path, nodeId);
             closeDrawer();
@@ -467,7 +479,17 @@ export function App() {
         <ChangesCard changes={state.changes} checkpoints={state.checkpoints} />
 
         <div className="composer-gh">
-          <GithubPill gh={state.github} />
+          {activeSession && activeRunSource?.automation ? (
+            <RunPill
+              source={activeRunSource}
+              statusClass={statusClass(activeSession)}
+              statusLabel={statusLabel(activeSession)}
+              gh={state.github}
+              evidence={runEvidence.get(activeSession.sessionId)}
+            />
+          ) : (
+            <GithubPill gh={state.github} />
+          )}
           {/* Slash-command pill, pushed to the right so it sits top-right over
               the composer on the same band as the GitHub context. Tapping it
               (re)initializes a closed session so its commands can be fetched,
