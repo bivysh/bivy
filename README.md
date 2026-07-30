@@ -25,30 +25,83 @@ reports around agents you already use.
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
-macOS and Linux. Requires Node 22.19 or newer; the installer sets it up if
-missing. It installs the [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package
-from npm, then runs the guided `bivy setup` wizard — workspace, relay/control-
-plane sign-in, and an auto-start background service (launchd on macOS, systemd
-on Linux).
+macOS and Linux. Requires Node.js 22.19 or newer; the installer installs it for
+you on Debian/Ubuntu and otherwise points you at nodejs.org. It installs the
+[`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package from npm, puts
+the `bivy` command on your `PATH`, then runs the guided `bivy setup` wizard —
+workspace, relay/control-plane sign-in, and an auto-start background service
+(launchd on macOS, systemd on Linux). Re-running it on a machine that already
+has Bivy just applies the latest build and restarts the service.
 
-Already have Node? The installer is optional:
+Already have Node.js 22.19+? The installer is optional:
 
 ```bash
 npm install -g @bivy/bivy
 bivy setup
 ```
 
-Releases are published from CI with provenance attestations; verify with
-`npm audit signatures`. See [`docs/releasing.md`](docs/releasing.md).
+Or try it once without installing anything (`npx` always fetches the latest):
 
-Already have the repository checked out:
+```bash
+npx @bivy/bivy setup
+```
+
+Releases are published from CI with provenance attestations; verify a build's
+origin with `npm audit signatures`. See [`docs/releasing.md`](docs/releasing.md).
+
+### Install options
+
+Environment variables passed to the one-line installer change what it does:
+
+| Goal | Variable |
+|---|---|
+| Track the dev channel (new build on every merge to `main`) | `BIVY_CHANNEL=staging` |
+| Pin an exact version | `BIVY_VERSION=0.1.0` |
+| Install without sudo, into a user-owned prefix | `BIVY_NPM_PREFIX=~/.local` |
+| Preinstall every bundled agent runtime | `BIVY_INSTALL_ALL_AGENTS=1` |
+
+For example: `BIVY_CHANNEL=staging curl -fsSL https://bivy.sh/install.sh | bash`.
+
+Working from a checkout of this repository instead:
 
 ```bash
 npm install
 npm run setup
 ```
 
-See [`docs/install.md`](docs/install.md) for service management and uninstall.
+See [`docs/install.md`](docs/install.md) for where data lives, service
+management, and uninstall.
+
+## Updating
+
+```bash
+bivy update
+```
+
+`bivy update` detects how Bivy was installed and does the right thing, then
+waits for any active session to finish its current turn and restarts the
+background service so the node reconnects on the new build:
+
+| Install kind | What `bivy update` does |
+|---|---|
+| npm global (`npm i -g`) | `npm install -g @bivy/bivy@<channel>`, then restart the service |
+| installer / packaged | re-runs `install.sh` (migrating to npm if needed), then restart |
+| git checkout | `git pull --ff-only` + `npm ci`, then restart |
+| `npx` run | nothing to update — each run already fetches the latest |
+
+Updates follow the release **channel** recorded at install time — `latest`
+(production) by default, or `staging` if you installed with
+`BIVY_CHANNEL=staging`. Switch channels (the choice is remembered for next
+time), or skip the wait for a busy session:
+
+```bash
+bivy update --staging   # move to the dev channel
+bivy update --stable    # move back to production (latest)
+bivy update --force     # don't wait for an in-flight turn to finish
+```
+
+The daemon also checks the registry periodically and posts an in-session notice
+when a newer build is available.
 
 ## Architecture
 
