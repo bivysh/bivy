@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **True cross-agent session forks.** Forking a session onto a *different* agent
+  or model no longer drops the new agent into a 12-turn summary prompt. When the
+  target runtime can import portable history (a new `forkHistoryImport`
+  capability), the fork now materialises the *whole* transcript as real prior
+  turns in the target's own store and resumes it — so a `pi → claude` (or
+  model-swap) fork opens on an actual copy of the conversation, a third fidelity
+  tier `"replayed"` between `"full"` (byte-exact same-runtime native replay) and
+  `"seeded"` (the summary-prompt fallback). The replayed history is rendered as
+  plain-text turns with tool activity inlined — never provider-specific
+  `tool_use`/`tool_result` blocks — so it stays valid on any target model, and a
+  runtime that can't import history (or an import that fails at run time) still
+  falls back cleanly to the seeded continuation. Pi, Claude Code, and Codex all
+  implement it (`AgentRuntime.importHistoryForFork`) — Codex by synthesising a
+  resumable rollout under `$CODEX_HOME/sessions` (`writeCodexRollout`; best-effort
+  against a live Codex resume, opt out with `BIVY_CODEX_NO_FORK_REPLAY=1`), wired
+  through the shared `ProtocolRuntime.writeHistory` hook so any protocol/ACP agent
+  with a writable store can opt in the same way. See `src/session/fork.ts` and
+  `buildForkHistory` in `src/session/transcript-normal.ts`. The *source*
+  side now works for **every** agent, not just those with a `readMessages` fast
+  path: `buildForkBundle` falls back to the live session's transcript, so a fork
+  *from* a wrapped CLI agent (which keeps its transcript only on the live
+  session) carries its real history instead of an empty one — a true replay into
+  pi/Claude/Codex, and a richer seeded prompt into any other target. The seeded
+  fallback (for agents with no writable resume store) is now **budget-adaptive**
+  rather than a fixed 12-turn tail: `buildSeedPrompt` packs verbatim recent turns
+  up to a character budget (default ~3k tokens), so a long run of short turns
+  carries far more context, while verbose turns stay bounded for the target's
+  context window; anything that doesn't fit is reported as an omission count that
+  points at the full transcript.
+
 - **Ten more coding agents in the picker, and a general path to more capability.**
   The agent selector gains nine of the most-used CLIs — Cursor, GitHub Copilot,
   Grok, Amp, Auggie, Droid, Continue, Kilo Code, and Rovo Dev — plus a hidden

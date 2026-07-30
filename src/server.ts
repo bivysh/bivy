@@ -3291,7 +3291,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       // When the client has already picked a target agent, pass it so the
       // bundle omits the native payload for a cross-runtime fork (it could
       // never be replayed there — see buildForkBundle). Unset => keep it.
-      const bundle = buildForkBundle({ runtime: getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: agentFrom(msg) });
+      const bundle = buildForkBundle({ runtime: getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: agentFrom(msg), liveMessages: rec.session.getMessages() });
       relay?.sendEvent({ type: "session.fork.bundle", requestId, bundle });
     } catch (error) {
       relay?.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
@@ -3370,7 +3370,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
         try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort */ }
       }
       // Same runtime → the bundle carries the native payload → full fidelity.
-      const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId });
+      const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages() });
       // Cut a fresh fork branch (the source still holds its own); skip prereq
       // detection (same node + same runtime ⇒ agent and repo are present).
       const outcome = await standUpFork({
@@ -7844,7 +7844,14 @@ app.get("/api/status", (_req, res) => {
       workspaceBoundary: true,
       strictApprovalOptIn: true,
     },
-    relay: { configured: Boolean(relayConfig), connected: Boolean(relay) },
+    relay: {
+      configured: Boolean(relayConfig),
+      // Real link state (relay sent `ready`), not merely "a connector exists".
+      connected: Boolean(relay?.connected),
+      controlPlaneUrl: relayConfig?.controlPlaneUrl,
+      relayUrl: relayConfig?.url,
+      ...(relay?.lastError ? { lastError: relay.lastError } : {}),
+    },
     sessions: {
       open: new Set(openSessions.values()).size,
       indexed: metadata.listSessions().length,

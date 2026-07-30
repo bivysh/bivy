@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { normalizeMessages, buildSeedPrompt } from "../src/session/transcript-normal.js";
+import { normalizeMessages, buildSeedPrompt, buildForkHistory } from "../src/session/transcript-normal.js";
 import type { NormalizedTranscriptHeader } from "../src/session/transcript-normal.js";
 
 // Unit tests for the runtime-neutral transcript used by session fork
@@ -107,6 +107,84 @@ test("buildSeedPrompt without a transcript URL still yields a usable prompt", ()
   const seed = buildSeedPrompt({ header, turns: [{ role: "user", text: "hello" }] }, {});
   assert.ok(seed.includes("Continue from here."));
   assert.ok(!seed.includes("Full original transcript"));
+});
+
+test("buildSeedPrompt: adaptive budget carries far more than the old fixed 12 short turns", () => {
+  // 40 short turns — under the default char budget they should ALL be inlined,
+  // where the old fixed 12-turn tail would have dropped the first 28.
+  const turns = Array.from({ length: 40 }, (_, i) => ({
+    role: (i % 2 ? "assistant" : "user") as const,
+    text: `turn ${i}`,
+  }));
+  const seed = buildSeedPrompt({ header, turns }, {});
+  assert.ok(seed.includes("turn 0"), "the earliest short turn fits within budget");
+  assert.ok(seed.includes("turn 39"), "the latest turn is kept");
+  assert.ok(!/\d+ earlier turns? omitted/.test(seed), "nothing omitted when the whole history fits the budget");
+});
+
+test("buildSeedPrompt: a tight char budget keeps the newest turns and notes the omission", () => {
+  const turns = Array.from({ length: 10 }, (_, i) => ({
+    role: (i % 2 ? "assistant" : "user") as const,
+    text: `turn ${i} ${"z".repeat(300)}`,
+  }));
+  const seed = buildSeedPrompt({ header, turns }, { charBudget: 700, transcriptUrl: "https://app.example/s/1" });
+  assert.ok(seed.includes("turn 9"), "the most recent turn is always kept");
+  assert.ok(!seed.includes("turn 0"), "the oldest turn is dropped under a tight budget");
+  assert.ok(/\d+ earlier turns? omitted/.test(seed), "the omitted count is surfaced");
+  assert.ok(seed.includes("linked above"), "points at the full transcript for the rest");
+});
+
+test("buildSeedPrompt: the most recent turn is kept even when it alone exceeds the budget", () => {
+  const seed = buildSeedPrompt(
+    { header, turns: [{ role: "user", text: "x".repeat(5000) }] },
+    { charBudget: 100 },
+  );
+  assert.ok(seed.includes("- user: x"), "never emits an empty seed");
+  assert.ok(!/earlier turns? omitted/.test(seed), "a single kept turn is not reported as an omission");
+});
+
+test("buildForkHistory: keeps EVERY turn as real roles for a true replay fork", () => {
+  const turns = Array.from({ length: 30 }, (_, i) => ({
+    role: (i % 2 ? "assistant" : "user") as const,
+    text: `turn ${i}`,
+  }));
+  const history = buildForkHistory({ header, turns });
+  // Unlike buildSeedPrompt, nothing is dropped — the whole conversation carries.
+  assert.ok(history.some((m) => m.text.includes("turn 0")), "the earliest turn survives (not just the tail)");
+  assert.ok(history.some((m) => m.text.includes("turn 29")), "the latest turn survives");
+  assert.deepEqual([...new Set(history.map((m) => m.role))].sort(), ["assistant", "user"], "roles are preserved, not flattened into one user prompt");
+});
+
+test("buildForkHistory: inlines tool activity as text and merges consecutive same-role turns", () => {
+  const history = buildForkHistory({
+    header,
+    turns: [
+      { role: "user", text: "read the file" },
+      { role: "assistant", text: "Reading it now.", toolName: "Read", toolSummary: "Read(/etc/hosts)" },
+      { role: "tool", text: "", toolSummary: "→ 127.0.0.1 localhost" },
+    ],
+  });
+  // The assistant text turn and the following tool-result turn merge into one
+  // assistant message (tool result is the agent's own work, not the user's).
+  assert.equal(history.length, 2, "user turn, then a merged assistant turn");
+  assert.equal(history[0].role, "user");
+  assert.equal(history[1].role, "assistant");
+  assert.ok(history[1].text.includes("Reading it now."), "assistant prose kept");
+  assert.ok(history[1].text.includes("[ran Read] Read(/etc/hosts)"), "the tool call is inlined as readable text");
+  assert.ok(history[1].text.includes("[tool result] → 127.0.0.1 localhost"), "the tool result is inlined as readable text");
+  assert.ok(!/tool_use|tool_result/.test(history[1].text), "no provider-specific structured blocks leak in");
+});
+
+test("buildForkHistory: a system/error notice folds into the assistant voice", () => {
+  const history = buildForkHistory({
+    header,
+    turns: [
+      { role: "user", text: "go" },
+      { role: "error", text: "session was interrupted" },
+    ],
+  });
+  assert.equal(history[1].role, "assistant", "only the human's turns ever carry the user role");
+  assert.ok(history[1].text.includes("[system] session was interrupted"));
 });
 
 console.log(`transcript-normal: all ${passed} tests passed`);

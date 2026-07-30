@@ -3265,15 +3265,47 @@ async function cmdStatus(args = []) {
     try { status = await localApi(config, "/api/status"); } catch {}
   }
   if (json) {
-    console.log(JSON.stringify({ reachable, url: url(config), workspace: status?.workspace || config.workspace, service: serviceStatusLine(), remoteConfigured: Boolean(status?.relay?.configured || fs.existsSync(relayConfigPath)), status }, null, 2));
+    const relayCfgJson = loadRelayConfig();
+    console.log(JSON.stringify({
+      reachable,
+      url: url(config),
+      workspace: status?.workspace || config.workspace,
+      service: serviceStatusLine(),
+      remoteConfigured: Boolean(status?.relay?.configured || relayCfgJson),
+      relay: {
+        configured: Boolean(status?.relay?.configured || relayCfgJson),
+        connected: status?.relay?.connected ?? null,
+        app: status?.relay?.controlPlaneUrl || relayCfgJson?.controlPlaneUrl || null,
+        relay: status?.relay?.relayUrl || relayCfgJson?.url || null,
+        lastError: status?.relay?.lastError || null,
+      },
+      status,
+    }, null, 2));
     return;
   }
   console.log(c.bold("\n  Bivy node\n"));
   console.log(`  url:       ${url(config)}  ${reachable ? c.green("● reachable") : c.dim("○ not reachable")}`);
   console.log(`  workspace: ${status?.workspace || config.workspace}`);
   console.log(`  ${serviceStatusLine()}`);
-  console.log(`  remote:    ${status?.relay?.configured || fs.existsSync(relayConfigPath) ? c.green("relay configured") : "local only"}`);
   const relay = loadRelayConfig();
+  const relaySt = status?.relay;
+  const relayConfigured = Boolean(relaySt?.configured || relay);
+  if (!relayConfigured) {
+    console.log(`  remote:    ${c.dim("local only")}  ${c.dim("('bivy relay:setup' to enable remote access)")}`);
+  } else {
+    // The live link state is only knowable when the node is running; if it's
+    // down we can say it's configured but not whether it's currently connected.
+    let state;
+    if (!reachable) state = c.yellow("configured (node not running)");
+    else if (relaySt?.connected) state = c.green("● connected");
+    else state = c.yellow("○ configured, not connected");
+    const relErr = relaySt?.lastError ? c.dim(`  (${relaySt.lastError})`) : "";
+    console.log(`  remote:    ${state}${relErr}`);
+    const cpUrl = relaySt?.controlPlaneUrl || relay?.controlPlaneUrl;
+    const rlUrl = relaySt?.relayUrl || relay?.url;
+    if (cpUrl) console.log(`  app:       ${cpUrl}`);
+    if (rlUrl) console.log(`  relay:     ${rlUrl}`);
+  }
   if (relay?.controlPlaneUrl && relay?.enrollmentToken) {
     try {
       const acct = await controlPlaneNodeApi(relay, "/node/account");
@@ -3331,7 +3363,15 @@ async function cmdDoctor(args = []) {
   console.log(`  ${mark(agentAvailable, true)} agent ${runtimeInfo?.displayName || defaultAgent}${agentAvailable ? "" : c.dim(" not available — install it or run 'bivy setup'")}`);
   console.log(`  ${mark(hasModelConfig(config), authOwner !== "bivy")} model ${hasModelConfig(config) ? "configured" : authOwner === "bivy" ? c.dim("not configured — run 'bivy login'") : c.dim("agent-native auth — use the agent's CLI login if needed")}`);
   const relayConfigured = Boolean(status?.relay?.configured || fs.existsSync(relayConfigPath));
-  console.log(`  ${relayConfigured ? ok : c.dim("○")} remote ${relayConfigured ? (status?.relay?.connected ? c.green("relay connected") : "relay configured") : c.dim("local only — 'bivy relay:setup' to enable")}`);
+  const relayConnected = Boolean(status?.relay?.connected);
+  const relayApp = status?.relay?.controlPlaneUrl;
+  const relayErr = status?.relay?.lastError;
+  const relayLine = !relayConfigured
+    ? c.dim("local only — 'bivy relay:setup' to enable")
+    : relayConnected
+      ? c.green("relay connected") + (relayApp ? c.dim(`  ${relayApp}`) : "")
+      : c.yellow("configured, not connected") + (relayErr ? c.dim(`  (${relayErr})`) : "");
+  console.log(`  ${relayConfigured ? (relayConnected ? ok : warn) : c.dim("○")} remote ${relayLine}`);
   // Derived from BUILTIN_TERMINAL_AGENTS (the same list 'bivy agents'/'bivy run'
   // use) rather than a hand-maintained list, so it can't drift out of sync (#113).
   const agentCommands = [...BUILTIN_TERMINAL_AGENTS.values()].filter((a) => a.type === "command").map((a) => a.command);
@@ -3980,8 +4020,13 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       } else if (fs.existsSync(servicePaths().file)) {
         console.error(c.red("Failed to restart the background service."));
         printNodeStartupDiagnostics();
+        process.exitCode = 1;
       } else {
-        console.log(c.yellow("No background service to restart. Use 'bivy start'."));
+        // Remote-only: the node must run as a service to be reachable. Point at
+        // setup (which installs one), not a foreground local 'bivy start'. Exit
+        // non-zero so callers like install.sh can tell nothing was restarted.
+        console.log(c.yellow("No background service to restart. Run 'bivy setup' to install one so the node stays reachable."));
+        process.exitCode = 1;
       }
       break;
     case "status":

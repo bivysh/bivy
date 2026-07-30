@@ -514,12 +514,19 @@ if [ "${BIVY_INSTALL_ALL_AGENTS:-}" = "1" ]; then
 fi
 
 if [ -f "$STATE_DIR/cli.json" ]; then
-  info "Existing Bivy configuration found; skipping first-run setup."
-  if node -e 'const fs=require("fs");process.exit(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).service===true?0:1)' "$STATE_DIR/cli.json" 2>/dev/null; then
-    info "Restarting the background service…"
-    "$BIVY_BIN" restart || warn "Could not restart the service automatically. Run: bivy restart"
+  info "Existing Bivy configuration found; applying the update."
+  # A Bivy node is remote-only — it has to keep running to stay reachable through
+  # the relay — so an update RESTARTS the background service to pick up the new
+  # build and reconnect. It never drops you at a local 'bivy start'. `bivy
+  # restart` exits non-zero when there is no service to restart; in that case
+  # install one so the node keeps running. (Don't gate on cli.json's `service`
+  # flag: a box can have an active service while that flag is unset, which is
+  # exactly how an update used to silently do nothing.)
+  if "$BIVY_BIN" restart; then
+    :
   else
-    info "Update complete. Start Bivy with: bivy start"
+    info "No background service yet — installing one so the node keeps running…"
+    "$BIVY_BIN" service install || warn "Could not install the background service automatically. Finish with: bivy setup"
   fi
 else
   info "Launching setup…"
