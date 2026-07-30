@@ -18,6 +18,7 @@ import {
   loadCodexTranscriptFile,
   discoverCodexSessionForCwd,
   discoverNativeCodexSessions,
+  writeCodexRollout,
 } from "../src/runtime/codex-sessions.js";
 
 let failures = 0;
@@ -152,6 +153,38 @@ check("discoverNativeCodexSessions honors a non-default CODEX_HOME (no throw, em
   } finally {
     process.env.CODEX_HOME = prev;
     fs.rmSync(otherHome, { recursive: true, force: true });
+  }
+});
+
+// --- writeCodexRollout: the write-side of a true "replayed" fork INTO Codex ---
+
+check("writeCodexRollout synthesises a rollout that reads back as the full transcript", () => {
+  const { id, sessionFile } = writeCodexRollout(
+    [
+      { role: "user", text: "port the parser to rust" },
+      { role: "assistant", text: "Starting the port." },
+    ],
+    "/work/ported",
+  );
+  assert.equal(sessionFile, id, "the resume ref is the rollout id");
+  // Reads back through the ordinary reader as an in-order user/assistant turn pair.
+  const msgs = loadCodexTranscript(id) as Array<{ role: string; content: string }>;
+  assert.deepEqual(msgs.map((m) => [m.role, m.content]), [["user", "port the parser to rust"], ["assistant", "Starting the port."]]);
+  // Discoverable by id and by cwd, exactly like a real Codex rollout.
+  const discovered = discoverNativeCodexSessions(() => false).find((s) => s.ref === id);
+  assert.ok(discovered, "the synthesised rollout is discoverable by id");
+  assert.equal(discovered!.cwd, "/work/ported");
+  assert.equal(discoverCodexSessionForCwd("/work/ported")?.id, id, "locatable by cwd for resume");
+});
+
+check("writeCodexRollout honors BIVY_CODEX_NO_FORK_REPLAY as an opt-out", () => {
+  const prev = process.env.BIVY_CODEX_NO_FORK_REPLAY;
+  process.env.BIVY_CODEX_NO_FORK_REPLAY = "1";
+  try {
+    assert.throws(() => writeCodexRollout([{ role: "user", text: "x" }], "/work/x"), /disabled/);
+  } finally {
+    if (prev === undefined) delete process.env.BIVY_CODEX_NO_FORK_REPLAY;
+    else process.env.BIVY_CODEX_NO_FORK_REPLAY = prev;
   }
 });
 

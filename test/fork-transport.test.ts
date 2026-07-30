@@ -114,8 +114,8 @@ async function run() {
     }
   });
 
-  // --- pi -> claude: cross-runtime falls back to a seeded prompt --------------
-  await test("cross-runtime fork (pi->claude) is seeded, carrying recent turns + context", async () => {
+  // --- pi -> claude: a TRUE cross-runtime fork replays the whole transcript ----
+  await test("cross-runtime fork (pi->claude) is replayed: the full transcript is materialised as claude history", async () => {
     const piDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-fork-x-"));
     const sessions = path.join(piDir, "sessions");
     fs.mkdirSync(sessions, { recursive: true });
@@ -124,13 +124,52 @@ async function run() {
     sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "starting the port" }] });
     const sessionFile = sm.getSessionFile()!;
     const pi = new PiRuntime({ credsDir: piDir, piDir, sessionsDir: sessions });
-    const bundle = buildForkBundle({ runtime: pi, sessionFile, record: record({ branch: "bivy/port" }) });
+    const bundle = buildForkBundle({ runtime: pi, sessionFile, record: record({ branch: "bivy/port" }), targetRuntimeId: "claude-code-sdk" });
 
-    const claude = new ClaudeCodeRuntime();
-    assert.equal(resolveForkFidelity(bundle, claude), "seeded", "a claude target can't replay a pi native payload");
+    const dstHome = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-fork-x-claude-"));
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    try {
+      process.env.CLAUDE_CONFIG_DIR = dstHome;
+      const claude = new ClaudeCodeRuntime();
+      assert.equal(resolveForkFidelity(bundle, claude), "replayed", "a claude target can import portable history");
+      const cwd = "/home/user/ported";
+      const plan = await materializeFork({ bundle, targetRuntime: claude, ctx: { workspace: cwd, cwd } });
+      assert.equal(plan.kind, "resume", "a replayed fork resumes a materialised session, it does not seed a prompt");
+      assert.equal(plan.fidelity, "replayed");
+      const newId = (plan as { sessionFile: string }).sessionFile;
+
+      // The synthesised jsonl reads back as the full conversation, in order.
+      const replayed = claude.readMessages(newId)!;
+      assert.equal(replayed.length, 2, "the whole transcript is materialised, not a summary");
+      assert.deepEqual(replayed.map((m) => (m as { role: string }).role), ["user", "assistant"]);
+      const first = replayed[0] as { content: unknown };
+      assert.ok(String(first.content).includes("port this to rust"), "the original prose is preserved verbatim");
+
+      // Source pi session is untouched by the cross-runtime fork.
+      assert.equal(pi.readMessages(sessionFile)!.length, 2, "source transcript is not mutated");
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  });
+
+  // --- fallback: a target with no history import still seeds a prompt ----------
+  await test("cross-runtime fork to a runtime without forkHistoryImport falls back to a seeded prompt", async () => {
+    const piDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-fork-seed-"));
+    const sessions = path.join(piDir, "sessions");
+    fs.mkdirSync(sessions, { recursive: true });
+    const sm = SessionManager.create(process.cwd(), sessions);
+    sm.appendMessage({ role: "user", content: "port this to rust" });
+    sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "starting the port" }] });
+    const pi = new PiRuntime({ credsDir: piDir, piDir, sessionsDir: sessions });
+    const bundle = buildForkBundle({ runtime: pi, sessionFile: sm.getSessionFile()!, record: record({ branch: "bivy/port" }), targetRuntimeId: "legacy-shim" });
+
+    // A runtime that can neither replay a pi native payload nor import history.
+    const shim = fakeRuntime("legacy-shim", false);
+    assert.equal(resolveForkFidelity(bundle, shim), "seeded", "no native import + no history import => seeded");
     const plan = await materializeFork({
       bundle,
-      targetRuntime: claude,
+      targetRuntime: shim,
       ctx: { workspace: "/tmp/x", cwd: "/tmp/x" },
       seed: { transcriptUrl: "https://app.example/sessions/src-1" },
     });
@@ -140,7 +179,6 @@ async function run() {
     assert.ok(seedPrompt.includes("port this to rust"), "recent turns are inlined");
     assert.ok(seedPrompt.includes("Branch: bivy/port"), "carried context appears");
     assert.ok(seedPrompt.includes("https://app.example/sessions/src-1"), "link to the full transcript");
-    assert.ok(seedPrompt.includes("Claude Code"), "names the target agent");
   });
 
   // --- fidelity gating on capability, not just id -----------------------------
@@ -152,7 +190,11 @@ async function run() {
     });
     assert.equal(resolveForkFidelity(bundle, fakeRuntime("pi", false)), "seeded", "no forkTransport => seeded");
     assert.equal(resolveForkFidelity(bundle, fakeRuntime("pi", true)), "full", "same id + forkTransport => full");
-    assert.equal(resolveForkFidelity(bundle, fakeRuntime("other", true)), "seeded", "different runtime => seeded");
+    assert.equal(resolveForkFidelity(bundle, fakeRuntime("other", true)), "seeded", "different runtime, no history import => seeded");
+    // A different runtime that CAN import portable history is a true (replayed) fork.
+    assert.equal(resolveForkFidelity(bundle, fakeRuntime("other", false, true)), "replayed", "different runtime + forkHistoryImport => replayed");
+    // Native import still wins over history replay for a same-runtime target.
+    assert.equal(resolveForkFidelity(bundle, fakeRuntime("pi", true, true)), "full", "same runtime prefers full over replayed");
   });
 
   // --- agent-aware export: drop the unusable native payload cross-runtime -----
@@ -172,21 +214,53 @@ async function run() {
     assert.ok(cross.normalized.turns.length > 0, "normalized seed survives so the seeded fork still has history");
   });
 
+  // --- source breadth: a runtime with no readMessages still carries history ---
+  await test("buildForkBundle falls back to the live transcript when the source runtime has no readMessages", () => {
+    // The generic CLI runtime keeps its transcript on the live session only; it
+    // exposes no readMessages, so a fork must read history off the live session.
+    const cliLike = {
+      id: "generic-cli",
+      displayName: "Generic CLI Agent",
+      capabilities: { toolInterception: false, modelSelection: false, packages: false, resume: true, fork: false },
+      createSession: async () => { throw new Error("unused"); },
+      openSession: async () => { throw new Error("unused"); },
+      listSessions: async () => [],
+      // readMessages intentionally absent.
+    } as AgentRuntime;
+
+    const withoutLive = buildForkBundle({ runtime: cliLike, sessionFile: "x", record: record({ runtimeId: "generic-cli" }) });
+    assert.equal(withoutLive.normalized.turns.length, 0, "no readMessages and no live transcript => empty history (the old gap)");
+
+    const withLive = buildForkBundle({
+      runtime: cliLike,
+      sessionFile: "x",
+      record: record({ runtimeId: "generic-cli" }),
+      liveMessages: [
+        { role: "user", content: "add a retry" },
+        { role: "assistant", content: [{ type: "text", text: "added it" }] },
+      ],
+      targetRuntimeId: "pi",
+    });
+    assert.equal(withLive.normalized.turns.length, 2, "the live transcript fills the normalized bundle for a CLI-agent source");
+    assert.deepEqual(withLive.normalized.turns.map((t) => t.role), ["user", "assistant"]);
+  });
+
   console.log(`fork-transport: all ${passed} tests passed`);
 }
 
 /** Minimal AgentRuntime stand-in for capability-gating assertions. */
-function fakeRuntime(id: string, forkTransport: boolean): AgentRuntime {
+function fakeRuntime(id: string, forkTransport: boolean, forkHistoryImport = false): AgentRuntime {
   return {
     id,
     displayName: id,
-    capabilities: { toolInterception: false, modelSelection: false, packages: false, resume: true, fork: false, forkTransport },
+    capabilities: { toolInterception: false, modelSelection: false, packages: false, resume: true, fork: false, forkTransport, forkHistoryImport },
     createSession: async () => { throw new Error("unused"); },
     openSession: async () => { throw new Error("unused"); },
     listSessions: async () => [],
     readMessages: () => [{ role: "user", content: "seed me" }],
     exportForFork: forkTransport ? () => ({ runtimeId: id, kind: "fake", data: {} }) : undefined,
     importForFork: forkTransport ? async () => ({ sessionFile: "new", id: "new" }) : undefined,
+    importHistoryForFork: forkHistoryImport ? async () => ({ sessionFile: "hist", id: "hist" }) : undefined,
   } as AgentRuntime;
 }
 

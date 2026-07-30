@@ -407,6 +407,18 @@ export interface RuntimeCapabilities {
    */
   forkTransport?: boolean;
   /**
+   * The runtime can materialise a **cross-runtime** fork's full conversation as
+   * real prior turns in its OWN session store — a "true fork" (fidelity
+   * "replayed", see docs/session-fork-plan.md) — so a fork that changes agent
+   * opens on an actual copy of the transcript instead of a seeded summary prompt.
+   * Backed by `AgentRuntime.importHistoryForFork`, which consumes the portable
+   * `ForkHistoryMessage[]` any runtime can produce (`buildForkHistory`), NOT a
+   * runtime-owned native payload — that is what makes it work across runtimes
+   * where `forkTransport` cannot. Absent/false (or an import that fails at run
+   * time) falls back to a seeded continuation prompt. Optional; absent = false.
+   */
+  forkHistoryImport?: boolean;
+  /**
    * The runtime can hand a live session to its own interactive CLI/TUI on this
    * node (see RuntimeSession.interactiveTuiCommand). Optional; absent = false.
    */
@@ -569,6 +581,23 @@ export interface AgentRuntime {
   ): Promise<{ sessionFile: string; id: string }>;
 
   /**
+   * Materialise a **cross-runtime** fork ("true fork", fidelity "replayed") by
+   * writing `history` — portable `{role, text}` turns any runtime can produce
+   * (`buildForkHistory`) — as real prior conversation into a brand-new session in
+   * THIS runtime's own store, returning the resume ref + id. Unlike
+   * `importForFork`, the input is runtime-neutral, so this is how a fork that
+   * changes agent opens on a copy of the transcript rather than a seeded summary.
+   * The rendered turns are plain text (tool activity inlined), never provider-
+   * specific structured blocks, so the resumed conversation is valid for any
+   * target model. Must not mutate the source session. Only meaningful when
+   * `capabilities.forkHistoryImport` is true. Optional; absent = seeded only.
+   */
+  importHistoryForFork?(
+    history: ForkHistoryMessage[],
+    ctx: { workspace: string; cwd: string },
+  ): Promise<{ sessionFile: string; id: string }>;
+
+  /**
    * Remove a persisted session from this runtime's OWN on-disk store so a
    * user-initiated delete actually sticks. The node's deleteSessionFile clears
    * Bivy's metadata row and the transcript under `piDir/sessions`, but a runtime
@@ -616,6 +645,19 @@ export interface ForkNativePayload {
   kind: string;
   /** Opaque payload; must be JSON-serialisable so it can ride the E2E bundle. */
   data: unknown;
+}
+
+/**
+ * One portable turn of a **cross-runtime** ("true fork") transcript replay,
+ * produced by `buildForkHistory` and consumed by any runtime's
+ * `importHistoryForFork`. Deliberately provider-neutral: a `role` every model
+ * accepts and `text` that already has any tool activity inlined, so it can be
+ * written as real prior history into whatever store the target runtime uses.
+ */
+export interface ForkHistoryMessage {
+  role: "user" | "assistant";
+  /** Human-readable turn content; never provider-specific structured blocks. */
+  text: string;
 }
 
 /** A provider and the models an agent can run under it — one session-less catalog entry. */
