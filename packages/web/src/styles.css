@@ -723,6 +723,26 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .run-sheet-status .session-pr { margin-left: auto; }
 .action-sheet-empty { padding: 14px 16px; color: var(--muted); font-size: 13px; }
+
+/* Run-pill sheet outcome: the run evidence (checks, attempts, duration,
+   branch/commit, agent) joined from the account queue — see runEvidence.ts. */
+.run-sheet-failure { padding: 11px 16px; border-bottom: 1px solid var(--line); color: var(--danger); font-size: 13px; line-height: 1.4; }
+.run-sheet-rows { display: flex; flex-direction: column; }
+.run-sheet-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.run-sheet-row:last-child { border-bottom: 0; }
+.run-sheet-row .k { flex: none; color: var(--muted); }
+.run-sheet-row .v { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 8px; justify-content: flex-end; align-items: center; color: var(--ink); font-weight: 600; text-align: right; }
+.run-sheet-row code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; padding: 1px 5px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-2); }
+.run-sheet-checks { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+.chk { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.chk.passed { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.chk.failed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.chk.skipped { color: var(--muted); }
+
+/* One-word exception hint on a sidebar row's meta line (failed / needs-you). */
+.row-hint { font-weight: 600; }
+.row-hint.danger { color: var(--danger); }
+.row-hint.warn { color: var(--accent); }
 .action-sheet { position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; justify-content: center; }
 .action-sheet-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.4); }
 .action-sheet-body {

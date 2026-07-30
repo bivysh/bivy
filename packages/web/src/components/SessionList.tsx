@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useRef, useState } from "react";
-import { githubIssueRefFromSource, primaryPr, repoFromSource, type PrRef, type RunTerminalSummary } from "@bivy/core";
+import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueItem, type PrRef, type RunTerminalSummary } from "@bivy/core";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
 import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
 import { SourceGlyph } from "./SourceMark.js";
 import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
+import { rowHint } from "../runEvidence.js";
 
 /** The leading indicator on a session row: a tinted source tile carrying the
  *  trigger's glyph, with the live status as a small dot badge on its corner.
@@ -271,7 +272,7 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
 // what's mounted and let the user page through the tail.
 const PAGE = 10;
 
-export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void }) {
+export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem> }) {
   const { sessions, runTerminals, activeSessionId, nodes, currentNodeId } = useAppState();
   const [query, setQuery] = useState("");
   const [repoFilter, setRepoFilter] = useState("");
@@ -509,6 +510,9 @@ export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: st
           const unseen = isUnseen(s);
           const label = statusLabel(s);
           const src = classifySource(s.source);
+          // A one-word exception hint on failed / waiting-on-you runs, so those
+          // rows pop in a long list; null (no extra text) for the calm majority.
+          const hint = rowHint(runEvidence?.get(s.sessionId));
           return (
             <li key={s.sessionId} className="session-row">
               <button
@@ -526,7 +530,13 @@ export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: st
                       </span>
                     )}
                   </span>
-                  {meta && <span className="session-meta">{meta}</span>}
+                  {(hint || meta) && (
+                    <span className="session-meta">
+                      {hint && <span className={`row-hint ${hint.tone}`}>{hint.text}</span>}
+                      {hint && meta ? " · " : ""}
+                      {meta}
+                    </span>
+                  )}
                 </span>
               </button>
               {(controller.direct || !s.nodeId || s.nodeId === currentNodeId) && (
