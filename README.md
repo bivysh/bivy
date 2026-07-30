@@ -308,8 +308,9 @@ Each URL has a flag and an environment-variable equivalent (the flag wins):
 | `--relay <wss-url>` | `BIVY_RELAY_URL` | the encrypted-frame relay your node dials out to | hosted |
 | `--client <url>` | `BIVY_CLIENT_BASE_URL` | base URL used when building app/PWA links | the `--control-plane` URL |
 
-Sign-in defaults to GitHub; add `--email you@example.com` for an email
-magic-link instead. `relay:setup` checks the control plane is reachable, enrolls
+Sign-in defaults to GitHub device login (`--github`); pass
+`--email you@example.com` for an email magic-link, or `--session-token <token>`
+to skip interactive sign-in. `relay:setup` checks the control plane is reachable, enrolls
 this node, and writes the endpoints to `.bivy/relay.json`, so `bivy open`,
 `bivy link`, and `bivy update` all keep using your deployment afterwards.
 
