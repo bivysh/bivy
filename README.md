@@ -25,30 +25,83 @@ reports around agents you already use.
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
-macOS and Linux. Requires Node 22.19 or newer; the installer sets it up if
-missing. It installs the [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package
-from npm, then runs the guided `bivy setup` wizard — workspace, relay/control-
-plane sign-in, and an auto-start background service (launchd on macOS, systemd
-on Linux).
+macOS and Linux. Requires Node.js 22.19 or newer; the installer installs it for
+you on Debian/Ubuntu and otherwise points you at nodejs.org. It installs the
+[`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package from npm, puts
+the `bivy` command on your `PATH`, then runs the guided `bivy setup` wizard —
+workspace, relay/control-plane sign-in, and an auto-start background service
+(launchd on macOS, systemd on Linux). Re-running it on a machine that already
+has Bivy just applies the latest build and restarts the service.
 
-Already have Node? The installer is optional:
+Already have Node.js 22.19+? The installer is optional:
 
 ```bash
 npm install -g @bivy/bivy
 bivy setup
 ```
 
-Releases are published from CI with provenance attestations; verify with
-`npm audit signatures`. See [`docs/releasing.md`](docs/releasing.md).
+Or try it once without installing anything (`npx` always fetches the latest):
 
-Already have the repository checked out:
+```bash
+npx @bivy/bivy setup
+```
+
+Releases are published from CI with provenance attestations; verify a build's
+origin with `npm audit signatures`. See [`docs/releasing.md`](docs/releasing.md).
+
+### Install options
+
+Environment variables passed to the one-line installer change what it does:
+
+| Goal | Variable |
+|---|---|
+| Track the dev channel (new build on every merge to `main`) | `BIVY_CHANNEL=staging` |
+| Pin an exact version | `BIVY_VERSION=0.1.0` |
+| Install without sudo, into a user-owned prefix | `BIVY_NPM_PREFIX=~/.local` |
+| Preinstall every bundled agent runtime | `BIVY_INSTALL_ALL_AGENTS=1` |
+
+For example: `BIVY_CHANNEL=staging curl -fsSL https://bivy.sh/install.sh | bash`.
+
+Working from a checkout of this repository instead:
 
 ```bash
 npm install
 npm run setup
 ```
 
-See [`docs/install.md`](docs/install.md) for service management and uninstall.
+See [`docs/install.md`](docs/install.md) for where data lives, service
+management, and uninstall.
+
+## Updating
+
+```bash
+bivy update
+```
+
+`bivy update` detects how Bivy was installed and does the right thing, then
+waits for any active session to finish its current turn and restarts the
+background service so the node reconnects on the new build:
+
+| Install kind | What `bivy update` does |
+|---|---|
+| npm global (`npm i -g`) | `npm install -g @bivy/bivy@<channel>`, then restart the service |
+| installer / packaged | re-runs `install.sh` (migrating to npm if needed), then restart |
+| git checkout | `git pull --ff-only` + `npm ci`, then restart |
+| `npx` run | nothing to update — each run already fetches the latest |
+
+Updates follow the release **channel** recorded at install time — `latest`
+(production) by default, or `staging` if you installed with
+`BIVY_CHANNEL=staging`. Switch channels (the choice is remembered for next
+time), or skip the wait for a busy session:
+
+```bash
+bivy update --staging   # move to the dev channel
+bivy update --stable    # move back to production (latest)
+bivy update --force     # don't wait for an in-flight turn to finish
+```
+
+The daemon also checks the registry periodically and posts an in-session notice
+when a newer build is available.
 
 ## Architecture
 
@@ -90,7 +143,7 @@ Nineteen agents are available in the picker, each driven through its native inte
 | Pi | `bivy run pi` | Default; bundled |
 | Claude Code | `bivy run claude` | Bundled SDK |
 | Codex | `bivy run codex` | Installs `@openai/codex` |
-| OpenCode | `bivy run opencode` | Installs `opencode-ai/opencode` |
+| OpenCode | `bivy run opencode` | Installs `opencode-ai` |
 | Gemini CLI | `bivy run gemini` | Installs `@google/gemini-cli` |
 | Qwen Code | `bivy run qwen` | Installs `@qwen-code/qwen-code` |
 | Goose | `bivy run goose` | Requires `goose` on PATH |
@@ -154,7 +207,7 @@ If you want to be asked about more, set the mode explicitly:
 
 ```bash
 BIVY_APPROVAL_MODE=risky    # prompt on risky shell commands and file edits
-BIVY_APPROVAL_MODE=always   # prompt on every tool call
+BIVY_APPROVAL_MODE=always   # prompt on all shell commands and file edits
 BIVY_APPROVAL_MODE=never    # no prompts beyond the hard floor
 ```
 
@@ -178,8 +231,9 @@ bivy secrets ref github.repo-token op://Bivy/GitHub/repo-token
 bivy secrets doctor
 ```
 
-`secret://`, `env://`, and `op://` (1Password) references are resolved before the
-daemon starts. See [`docs/key-management.md`](docs/key-management.md).
+`secret://`, `env://`, and `op://` (1Password) references are resolved on demand
+when the daemon provisions an agent run, so the raw values never sit in your
+config. See [`docs/key-management.md`](docs/key-management.md).
 
 ## GitHub work queue
 
@@ -237,13 +291,29 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Self-hosting
 
-Node, relay, and control plane are all in this repository, and the CLI accepts
-flags to point at your own deployment:
+Node, relay, and control plane are all in this repository. Point a node at your
+own deployment by passing URLs to `bivy relay:setup` — re-running it switches an
+existing node over to the new endpoints:
 
 ```bash
-bivy relay:setup --relay wss://relay.example.com \
-                 --control-plane https://bivy.example.com
+bivy relay:setup \
+  --control-plane https://bivy.example.com \
+  --relay wss://relay.example.com
 ```
+
+Each URL has a flag and an environment-variable equivalent (the flag wins):
+
+| Flag | Environment variable | Points at | Default |
+|---|---|---|---|
+| `--control-plane <url>` | `BIVY_CONTROL_PLANE_URL` | accounts, node registry, and the web-app API | hosted (`app.bivy.sh`) |
+| `--relay <wss-url>` | `BIVY_RELAY_URL` | the encrypted-frame relay your node dials out to | hosted |
+| `--client <url>` | `BIVY_CLIENT_BASE_URL` | base URL used when building app/PWA links | the `--control-plane` URL |
+
+Sign-in defaults to GitHub device login (`--github`); pass
+`--email you@example.com` for an email magic-link, or `--session-token <token>`
+to skip interactive sign-in. `relay:setup` checks the control plane is reachable, enrolls
+this node, and writes the endpoints to `.bivy/relay.json`, so `bivy open`,
+`bivy link`, and `bivy update` all keep using your deployment afterwards.
 
 **Self-hosting is unsupported** — no SLA, community best-effort via GitHub
 issues. You own TLS, backups, upgrades, and hardening. See
