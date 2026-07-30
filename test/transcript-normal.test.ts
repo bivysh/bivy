@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { normalizeMessages, buildSeedPrompt } from "../src/session/transcript-normal.js";
+import { normalizeMessages, buildSeedPrompt, buildForkHistory } from "../src/session/transcript-normal.js";
 import type { NormalizedTranscriptHeader } from "../src/session/transcript-normal.js";
 
 // Unit tests for the runtime-neutral transcript used by session fork
@@ -107,6 +107,50 @@ test("buildSeedPrompt without a transcript URL still yields a usable prompt", ()
   const seed = buildSeedPrompt({ header, turns: [{ role: "user", text: "hello" }] }, {});
   assert.ok(seed.includes("Continue from here."));
   assert.ok(!seed.includes("Full original transcript"));
+});
+
+test("buildForkHistory: keeps EVERY turn as real roles for a true replay fork", () => {
+  const turns = Array.from({ length: 30 }, (_, i) => ({
+    role: (i % 2 ? "assistant" : "user") as const,
+    text: `turn ${i}`,
+  }));
+  const history = buildForkHistory({ header, turns });
+  // Unlike buildSeedPrompt, nothing is dropped — the whole conversation carries.
+  assert.ok(history.some((m) => m.text.includes("turn 0")), "the earliest turn survives (not just the tail)");
+  assert.ok(history.some((m) => m.text.includes("turn 29")), "the latest turn survives");
+  assert.deepEqual([...new Set(history.map((m) => m.role))].sort(), ["assistant", "user"], "roles are preserved, not flattened into one user prompt");
+});
+
+test("buildForkHistory: inlines tool activity as text and merges consecutive same-role turns", () => {
+  const history = buildForkHistory({
+    header,
+    turns: [
+      { role: "user", text: "read the file" },
+      { role: "assistant", text: "Reading it now.", toolName: "Read", toolSummary: "Read(/etc/hosts)" },
+      { role: "tool", text: "", toolSummary: "→ 127.0.0.1 localhost" },
+    ],
+  });
+  // The assistant text turn and the following tool-result turn merge into one
+  // assistant message (tool result is the agent's own work, not the user's).
+  assert.equal(history.length, 2, "user turn, then a merged assistant turn");
+  assert.equal(history[0].role, "user");
+  assert.equal(history[1].role, "assistant");
+  assert.ok(history[1].text.includes("Reading it now."), "assistant prose kept");
+  assert.ok(history[1].text.includes("[ran Read] Read(/etc/hosts)"), "the tool call is inlined as readable text");
+  assert.ok(history[1].text.includes("[tool result] → 127.0.0.1 localhost"), "the tool result is inlined as readable text");
+  assert.ok(!/tool_use|tool_result/.test(history[1].text), "no provider-specific structured blocks leak in");
+});
+
+test("buildForkHistory: a system/error notice folds into the assistant voice", () => {
+  const history = buildForkHistory({
+    header,
+    turns: [
+      { role: "user", text: "go" },
+      { role: "error", text: "session was interrupted" },
+    ],
+  });
+  assert.equal(history[1].role, "assistant", "only the human's turns ever carry the user role");
+  assert.ok(history[1].text.includes("[system] session was interrupted"));
 });
 
 console.log(`transcript-normal: all ${passed} tests passed`);

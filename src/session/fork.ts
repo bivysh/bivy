@@ -2,6 +2,7 @@ import type { AgentRuntime, ForkNativePayload } from "../runtime/types.js";
 import {
   normalizeMessages,
   buildSeedPrompt,
+  buildForkHistory,
   type ForkFidelity,
   type NormalizedTranscript,
   type SeedPromptOptions,
@@ -19,8 +20,10 @@ import {
  *     payload + the portable session metadata).
  *   - `resolveForkFidelity` / `materializeFork` run on the DESTINATION node:
  *     they decide whether the target runtime can replay the native payload
- *     ("full") or must seed a continuation prompt ("seeded"), and produce the
- *     concrete instruction the server uses to stand the new session up.
+ *     ("full"), materialise the portable transcript as real history in its own
+ *     store ("replayed" — a true fork across agents), or must seed a
+ *     continuation prompt ("seeded"), and produce the concrete instruction the
+ *     server uses to stand the new session up.
  *
  * Transport of the bundle between nodes is client-mediated (the PWA holds both
  * room keys) and lives in the server/controller layers; this module is pure of
@@ -108,24 +111,39 @@ export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
 }
 
 /**
- * Decide the fidelity a fork of `bundle` into `targetRuntime` can achieve —
- * "full" only when the target is the SAME runtime that produced the native
- * payload and can import it; "seeded" otherwise. Pure; no side effects.
+ * Decide the best fidelity a fork of `bundle` into `targetRuntime` can achieve:
+ *   - "full"     when the target is the SAME runtime that produced the native
+ *                payload and can import it (byte-exact resume);
+ *   - "replayed" when a *different* target can import portable history
+ *                (`forkHistoryImport`) and there is history to replay — a true
+ *                fork onto a copy of the transcript;
+ *   - "seeded"   otherwise.
+ * Pure; no side effects. `materializeFork` degrades "replayed"→"seeded" if the
+ * import fails at run time, so this only reports the *intended* fidelity.
  */
 export function resolveForkFidelity(bundle: ForkBundle, targetRuntime: AgentRuntime): ForkFidelity {
   const native = bundle.native;
-  const canImport =
+  const canImportNative =
     !!native &&
     native.runtimeId === targetRuntime.id &&
     !!targetRuntime.capabilities.forkTransport &&
     typeof targetRuntime.importForFork === "function";
-  return canImport ? "full" : "seeded";
+  if (canImportNative) return "full";
+  const canReplayHistory =
+    !!targetRuntime.capabilities.forkHistoryImport &&
+    typeof targetRuntime.importHistoryForFork === "function" &&
+    bundle.normalized.turns.length > 0;
+  return canReplayHistory ? "replayed" : "seeded";
 }
 
-/** Resume an imported native transcript (full fidelity). */
+/**
+ * Resume a materialised transcript on this node — either a byte-exact native
+ * import ("full") or the portable history replayed into the target's own store
+ * ("replayed"). Both yield a real session the server resumes by `sessionFile`.
+ */
 export interface ForkResume {
   kind: "resume";
-  fidelity: "full";
+  fidelity: "full" | "replayed";
   /** Resume ref for the freshly materialised session on this node. */
   sessionFile: string;
   id: string;
@@ -151,15 +169,33 @@ export interface MaterializeForkOptions {
 
 /**
  * Turn a fork bundle into a concrete stand-up plan on the destination node:
- * either resume a natively imported transcript (full) or a seed prompt for a
- * fresh session (seeded). The server executes the returned plan (worktree +
- * session creation live there); this stays pure of daemon wiring.
+ * resume a natively imported transcript (full), replay the portable transcript
+ * as real history in the target's own store (replayed — a true cross-runtime
+ * fork), or a seed prompt for a fresh session (seeded). The server executes the
+ * returned plan (worktree + session creation live there); this stays pure of
+ * daemon wiring.
  */
 export async function materializeFork(opts: MaterializeForkOptions): Promise<ForkPlan> {
   const { bundle, targetRuntime, ctx } = opts;
-  if (resolveForkFidelity(bundle, targetRuntime) === "full" && bundle.native && targetRuntime.importForFork) {
+  const fidelity = resolveForkFidelity(bundle, targetRuntime);
+  if (fidelity === "full" && bundle.native && targetRuntime.importForFork) {
     const { sessionFile, id } = await targetRuntime.importForFork(bundle.native, ctx);
     return { kind: "resume", fidelity: "full", sessionFile, id };
+  }
+  // True cross-runtime fork: write the whole transcript as real prior turns into
+  // the target runtime's own store and resume it. Best-effort — if the runtime's
+  // history import throws (a malformed store, an unwritable dir), fall through to
+  // a seeded prompt so the fork still succeeds rather than erroring outright.
+  if (fidelity === "replayed" && targetRuntime.importHistoryForFork) {
+    try {
+      const history = buildForkHistory(bundle.normalized);
+      if (history.length > 0) {
+        const { sessionFile, id } = await targetRuntime.importHistoryForFork(history, ctx);
+        return { kind: "resume", fidelity: "replayed", sessionFile, id };
+      }
+    } catch {
+      // fall through to the seeded continuation below
+    }
   }
   const seedPrompt = buildSeedPrompt(bundle.normalized, {
     targetAgent: targetRuntime.displayName,

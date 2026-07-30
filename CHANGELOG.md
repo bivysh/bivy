@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **True cross-agent session forks.** Forking a session onto a *different* agent
+  or model no longer drops the new agent into a 12-turn summary prompt. When the
+  target runtime can import portable history (a new `forkHistoryImport`
+  capability), the fork now materialises the *whole* transcript as real prior
+  turns in the target's own store and resumes it — so a `pi → claude` (or
+  model-swap) fork opens on an actual copy of the conversation, a third fidelity
+  tier `"replayed"` between `"full"` (byte-exact same-runtime native replay) and
+  `"seeded"` (the summary-prompt fallback). The replayed history is rendered as
+  plain-text turns with tool activity inlined — never provider-specific
+  `tool_use`/`tool_result` blocks — so it stays valid on any target model, and a
+  runtime that can't import history (or an import that fails at run time) still
+  falls back cleanly to the seeded continuation. Pi and Claude Code both
+  implement it (`AgentRuntime.importHistoryForFork`); see `src/session/fork.ts`
+  and `buildForkHistory` in `src/session/transcript-normal.ts`.
+
 - **Ten more coding agents in the picker, and a general path to more capability.**
   The agent selector gains nine of the most-used CLIs — Cursor, GitHub Copilot,
   Grok, Amp, Auggie, Droid, Continue, Kilo Code, and Rovo Dev — plus a hidden

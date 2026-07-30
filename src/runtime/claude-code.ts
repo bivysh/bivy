@@ -24,6 +24,7 @@ import type {
   AgentCredentialStore,
   CatalogProvider,
   DiscoveredNativeSession,
+  ForkHistoryMessage,
   ForkNativePayload,
   ModelInfo,
   OpenSessionOptions,
@@ -1216,6 +1217,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     // The on-disk jsonl transcript can be exported and re-materialised on another
     // node under a fresh session id, so a claude->claude fork is full fidelity.
     forkTransport: true,
+    // Claude can also synthesise a resumable jsonl from portable {role,text}
+    // history, so a fork FROM another agent INTO claude is a true replay of the
+    // whole transcript rather than a seeded summary (see importHistoryForFork).
+    forkHistoryImport: true,
     // Claude Code ignores the streamingBehavior hint entirely — a mid-turn
     // prompt always re-enters the live input queue and behaves like an
     // immediate steer, regardless of what's asked for. There is no real
@@ -1335,6 +1340,50 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       })
       .join("\n");
     fs.writeFileSync(path.join(projectDir, `${newId}.jsonl`), rewritten ? `${rewritten}\n` : "");
+    return { sessionFile: newId, id: newId };
+  }
+
+  /**
+   * Stand up a claude session from a **cross-runtime** fork's portable history:
+   * synthesise a resumable jsonl transcript from the `{role, text}` turns and
+   * write it under the destination cwd's project dir with a fresh session id, so
+   * `--resume <id>` opens on a copy of the whole conversation (fidelity
+   * "replayed"). Each turn becomes one claude jsonl entry whose `message` is a
+   * plain-text user/assistant message — the same shape loadClaudeTranscript reads
+   * back — chained by `uuid`/`parentUuid` exactly as claude's own transcripts are.
+   * Tool activity is already inlined as text upstream, so no `tool_use`/
+   * `tool_result` blocks (whose ids would dangle) are ever emitted. The source is
+   * never touched.
+   */
+  async importHistoryForFork(
+    history: ForkHistoryMessage[],
+    ctx: { workspace: string; cwd: string },
+  ): Promise<{ sessionFile: string; id: string }> {
+    const newId = randomUUID();
+    const cwd = ctx.cwd || ctx.workspace;
+    // Claude encodes the cwd into the project-dir name by replacing every
+    // non-alphanumeric char with "-" (matches importForFork above).
+    const projectSlug = cwd.replace(/[^a-zA-Z0-9]/g, "-");
+    const root = claudeProjectDirs()[0] ?? path.join(os.homedir(), ".claude");
+    const projectDir = path.join(root, "projects", projectSlug);
+    fs.mkdirSync(projectDir, { recursive: true });
+    let parentUuid: string | null = null;
+    const lines = history.map((message) => {
+      const uuid = randomUUID();
+      const entry = {
+        parentUuid,
+        isSidechain: false,
+        userType: "external",
+        cwd,
+        sessionId: newId,
+        type: message.role,
+        message: { role: message.role, content: message.text },
+        uuid,
+      };
+      parentUuid = uuid;
+      return JSON.stringify(entry);
+    });
+    fs.writeFileSync(path.join(projectDir, `${newId}.jsonl`), lines.length ? `${lines.join("\n")}\n` : "");
     return { sessionFile: newId, id: newId };
   }
 
