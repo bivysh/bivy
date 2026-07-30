@@ -4020,8 +4020,13 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       } else if (fs.existsSync(servicePaths().file)) {
         console.error(c.red("Failed to restart the background service."));
         printNodeStartupDiagnostics();
+        process.exitCode = 1;
       } else {
-        console.log(c.yellow("No background service to restart. Use 'bivy start'."));
+        // Remote-only: the node must run as a service to be reachable. Point at
+        // setup (which installs one), not a foreground local 'bivy start'. Exit
+        // non-zero so callers like install.sh can tell nothing was restarted.
+        console.log(c.yellow("No background service to restart. Run 'bivy setup' to install one so the node stays reachable."));
+        process.exitCode = 1;
       }
       break;
     case "status":
