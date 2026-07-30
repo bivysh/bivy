@@ -1292,6 +1292,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-nav-item:hover { background: var(--surface-3); }
 .settings-nav-item.active { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent); font-weight: 600; }
 .settings-nav-icon { flex: none; display: inline-flex; color: var(--muted); }
+.settings-nav-icon svg { width: 20px; height: 20px; display: block; }
 .settings-nav-item.active .settings-nav-icon { color: var(--accent); }
 .settings-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-nav-chevron { display: none; flex: none; color: var(--muted); font-size: 18px; }

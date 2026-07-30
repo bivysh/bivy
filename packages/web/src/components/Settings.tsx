@@ -16,6 +16,7 @@ import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { SourceGlyph } from "./SourceMark.js";
 
 // The view enumeration lives in router.ts (as `SettingsView`) so the router can
 // validate a `/settings/:view` path without importing this component module;
@@ -50,12 +51,10 @@ const IconMic = () => (
 const IconGithub = () => (
   <Glyph><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" /></Glyph>
 );
-const IconSlack = () => (
-  <Glyph><path d="M9 3v5a2 2 0 0 1-2 2H3a2 2 0 0 1 0-4h4V3a2 2 0 0 1 4 0v14a2 2 0 0 1-4 0v-4M15 21v-5a2 2 0 0 1 2-2h4a2 2 0 0 1 0 4h-4v3a2 2 0 0 1-4 0V7a2 2 0 0 1 4 0v4" /></Glyph>
-);
-const IconLinear = () => (
-  <Glyph><path d="M5 7.5A9 9 0 0 1 16.5 19M3.5 11A9 9 0 0 0 13 20.5M7.5 4.8 19.2 16.5M4.8 7.5l11.7 11.7" /><path d="M12 3a9 9 0 0 1 9 9c0 1.3-.3 2.6-.8 3.7L8.3 3.8A9 9 0 0 1 12 3z" /></Glyph>
-);
+// Reuse the official brand geometry used by run-source marks instead of
+// maintaining approximate line-art versions in Settings.
+const IconSlack = () => <SourceGlyph kind="slack" />;
+const IconLinear = () => <SourceGlyph kind="linear" />;
 const IconUser = () => (
   <Glyph><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Glyph>
 );

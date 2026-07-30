@@ -72,6 +72,34 @@ test("config: the node auto-serves bivy/<its-name> without any manual label", ()
   assert.deepEqual(both!.labels, ["bivy", "bivy/hetzner", "bivy/extra"]);
 });
 
+test("poller: adopts renamed-node labels without a restart", async () => {
+  const cfg: ControlPlaneTaskConfig = {
+    controlPlaneUrl: "https://cp",
+    enrollmentToken: "tok",
+    labels: ["bivy", "bivy/old-name"],
+    pollMs: 60_000,
+  };
+  const urls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    urls.push(url);
+    return { ok: true, json: async () => ({ items: [] }) } as Response;
+  }) as typeof fetch;
+
+  const poller = new ControlPlaneTaskPoller(cfg, async () => {});
+  try {
+    poller.setLabels(["bivy", "bivy/new-name"]);
+    await waitFor(() => urls.length > 0);
+  } finally {
+    poller.stop();
+    globalThis.fetch = original;
+  }
+
+  assert.equal(cfg.labels.includes("bivy/new-name"), true);
+  assert.equal(cfg.labels.includes("bivy/old-name"), false);
+  assert.ok(urls.some((url) => decodeURIComponent(url).includes("labels=bivy,bivy/new-name")));
+});
+
 test("poller: claims then runs then completes; skips items lost to another node", async () => {
   const cfg: ControlPlaneTaskConfig = {
     controlPlaneUrl: "https://cp",

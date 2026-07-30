@@ -158,7 +158,7 @@ const repoRoot = path.resolve(__dirname, "..");
 // running from source. Packaged/release builds may override them (BIVY_ASSET_ROOT,
 // BIVY_DATA_DIR) so it can write outside the read-only app bundle.
 const assetRoot = process.env.BIVY_ASSET_ROOT ?? repoRoot;
-const appDir = process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy");
+const appDir = path.resolve(process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy"));
 // Load persisted env from cli.json into process.env so config written there —
 // e.g. connecting a GitHub App (BIVY_GITHUB_APP_ID / BIVY_GITHUB_HOSTED_TASKS /
 // BIVY_NODE_LABEL) — takes effect on the NEXT restart even if the service
@@ -185,6 +185,13 @@ initSharedDepCache(appDir);
 // Materialize the git credential helper under the data dir so repo clones can
 // authenticate without ever writing a token into their remote URL / .git/config.
 configureGitAuth(appDir);
+// Never leave the daemon parked in its installed package directory. A global
+// npm update atomically replaces that directory while the old process drains;
+// any later child process (notably git's remote/credential helpers) then aborts
+// before running with "Unable to read current working directory". appDir is the
+// durable state root and every workspace/asset path below is already absolute.
+// Anchoring the process itself fixes all subprocess paths, not just `git clone`.
+process.chdir(appDir);
 // Make `bivy update` and user-scoped npm globals available to agents/tools
 // launched by the daemon even when the node runs under systemd/launchd with a
 // minimal PATH. The installer also symlinks ~/.local/bin/bivy, but adding these
@@ -2580,6 +2587,9 @@ const RELAY_COMMANDS: Record<string, Command> = {
   "node.rename"(msg, ctx) {
     const prev = identity.name;
     const name = identity.setName(String(msg.name ?? ""));
+    // Queue routing follows the node name (`bivy/<name>`). Update the live
+    // poller now instead of leaving it on its startup-time label until restart.
+    refreshControlPlaneTaskLabels();
     void advertiseNodeName(name, prev);
     ctx.broadcast({ type: "node.updated", name });
     ctx.reply({ type: "node.updated", name });
@@ -4009,6 +4019,7 @@ async function advertiseNodeName(name: string, prevName?: string) {
       const accepted = typeof data?.node?.name === "string" ? data.node.name : undefined;
       if (accepted && accepted !== identity.name) {
         identity.setName(accepted);
+        refreshControlPlaneTaskLabels();
         broadcast({ type: "node.updated", name: accepted });
         relay?.sendEvent({ type: "node.updated", name: accepted });
       }
@@ -4018,6 +4029,7 @@ async function advertiseNodeName(name: string, prevName?: string) {
     // optimistic local change so the node name stays consistent with the account.
     if (prevName && prevName !== identity.name) {
       identity.setName(prevName);
+      refreshControlPlaneTaskLabels();
       broadcast({ type: "node.updated", name: prevName });
       relay?.sendEvent({ type: "node.updated", name: prevName });
     }
@@ -4704,6 +4716,13 @@ async function startGitHubTasksIfConfigured() {
 }
 
 let controlPlanePoller: ControlPlaneTaskPoller | undefined;
+
+/** Refresh a running queue poller's labels after the node is renamed. */
+function refreshControlPlaneTaskLabels(): void {
+  if (!controlPlanePoller) return;
+  const cfg = resolveControlPlaneTaskConfig(loadRelayConfig(appDir), process.env, identity.name);
+  if (cfg) controlPlanePoller.setLabels(cfg.labels);
+}
 
 /**
  * Run one hosted work-queue item (E2 GitHub webhook / E4 Slack). GitHub-issue
