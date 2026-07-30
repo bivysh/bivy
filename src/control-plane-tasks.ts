@@ -174,6 +174,23 @@ export class ControlPlaneTaskPoller {
     void this.tick();
   }
 
+  /**
+   * Replace the routing labels this live poller serves.
+   *
+   * Node names are editable while the daemon is running, and targeted queue
+   * labels are derived from that name (`bivy/<name>`). Keeping the startup-time
+   * labels forever leaves work routed to a renamed node pending until the daemon
+   * restarts. Update in place so already-running queue jobs are not disturbed,
+   * then poll immediately for work addressed to the new name.
+   */
+  setLabels(labels: string[]): void {
+    const next = Array.from(new Set(labels.map((label) => label.trim()).filter(Boolean)));
+    if (!next.length || (next.length === this.cfg.labels.length && next.every((label, i) => label === this.cfg.labels[i]))) return;
+    this.cfg.labels = next;
+    console.log(`[control-plane-tasks] now watching hosted queue for labels [${next.join(", ")}]`);
+    this.poke();
+  }
+
   stop(): void {
     if (this.timer) clearInterval(this.timer);
   }

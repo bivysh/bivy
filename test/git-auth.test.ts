@@ -140,8 +140,13 @@ await check("credConfigArgs resets the helper chain before adding bivy's helper"
 
 await check("nothing long-lived is stored on disk (fetch-on-demand)", () => {
   const credDir = path.join(dataDir, "git-cred");
-  assert.ok(fs.existsSync(path.join(credDir, "credential-helper.sh")), "shim should exist");
+  const shimFile = path.join(credDir, "credential-helper.sh");
+  assert.ok(fs.existsSync(shimFile), "shim should exist");
   assert.ok(fs.existsSync(path.join(credDir, "credential-helper.mjs")), "worker should exist");
+  // The helper may be launched by git after its inherited checkout was removed.
+  // It must leave that cwd before starting Node, whose bootstrap otherwise dies
+  // with uv_cwd before the worker gets to run.
+  assert.match(fs.readFileSync(shimFile, "utf8"), /\ncd \/ \|\| exit 0\n/, "shim moves to a stable cwd before starting Node");
   // No per-repo token files anywhere — the only on-disk secret is endpoint.json's
   // bootstrap secret (0600), which is not a GitHub token.
   assert.ok(!fs.existsSync(path.join(credDir, "tokens")), "no token files should exist");
