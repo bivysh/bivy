@@ -179,6 +179,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Multiple nodes on one machine no longer collide on port 4317.** Running a
+  second node on the same box — a staging + production node, or one node per OS
+  user — used to fail: `bivy setup` always defaulted the local port to `4317`,
+  never checked whether it was free, and even ignored `PORT=… bivy setup`
+  (it only read `cli.json`). The loopback address `127.0.0.1:4317` is
+  machine-wide, not per-user, so whichever node started second failed to bind —
+  and worse, the daemon's catch-all `uncaughtException` net swallowed the
+  `EADDRINUSE`, leaving a process that was "running" but listening on nothing.
+  Setup now auto-selects the first free port at or above `4317`
+  (`bin/port-picker.mjs`), so additional nodes land on `4318`, `4319`, …
+  automatically; an explicit `PORT` is still honored verbatim. And the daemon now
+  fails loudly on a taken port with an actionable message instead of wedging
+  silently.
+
 - **OpenCode runs fail loudly, not opaquely, when a provider key is missing.**
   `opencode run` boots OpenCode's own server, which returns an opaque
   `UnknownError: Unexpected server error. Check server logs for details.`

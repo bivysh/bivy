@@ -9648,6 +9648,25 @@ const server = app.listen(port, host, async () => {
   if (!process.env.BIVY_MCP_ENDPOINT) process.env.BIVY_MCP_ENDPOINT = `http://127.0.0.1:${port}`;
 });
 
+// A failed bind is fatal and must be reported, not swallowed. `app.listen` emits
+// the error on the server; with no handler it reaches the global
+// `uncaughtException` net below, which keeps the process alive — leaving a node
+// that is "running" but listening on nothing. The common cause is another node
+// already on this port (two OS users, or a staging + production node, both
+// defaulting to 4317). Print an actionable message and exit so the supervisor
+// and `bivy logs` surface a real failure instead of a silent hang.
+server.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EADDRINUSE") {
+    console.error(
+      `[bivy] Port ${port} is already in use — another Bivy node or process holds ${host}:${port}. ` +
+        `Give this node its own port (set PORT, or re-run 'bivy setup', which now picks a free one automatically) and start it again.`,
+    );
+  } else {
+    console.error(`[bivy] Could not bind ${host}:${port}:`, error);
+  }
+  process.exit(1);
+});
+
 const wss = new WebSocketServer({ server, path: "/ws" });
 wss.on("connection", (socket, req) => {
   // Reject cross-origin / DNS-rebinding upgrades before auth: loopback bypasses
