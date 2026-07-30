@@ -31,7 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path: `buildForkBundle` falls back to the live session's transcript, so a fork
   *from* a wrapped CLI agent (which keeps its transcript only on the live
   session) carries its real history instead of an empty one — a true replay into
-  pi/Claude, and a full-history seeded prompt into any other target.
+  pi/Claude/Codex, and a richer seeded prompt into any other target. The seeded
+  fallback (for agents with no writable resume store) is now **budget-adaptive**
+  rather than a fixed 12-turn tail: `buildSeedPrompt` packs verbatim recent turns
+  up to a character budget (default ~3k tokens), so a long run of short turns
+  carries far more context, while verbose turns stay bounded for the target's
+  context window; anything that doesn't fit is reported as an omission count that
+  points at the full transcript.
 
 - **Ten more coding agents in the picker, and a general path to more capability.**
   The agent selector gains nine of the most-used CLIs — Cursor, GitHub Copilot,

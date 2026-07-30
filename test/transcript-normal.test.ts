@@ -109,6 +109,40 @@ test("buildSeedPrompt without a transcript URL still yields a usable prompt", ()
   assert.ok(!seed.includes("Full original transcript"));
 });
 
+test("buildSeedPrompt: adaptive budget carries far more than the old fixed 12 short turns", () => {
+  // 40 short turns — under the default char budget they should ALL be inlined,
+  // where the old fixed 12-turn tail would have dropped the first 28.
+  const turns = Array.from({ length: 40 }, (_, i) => ({
+    role: (i % 2 ? "assistant" : "user") as const,
+    text: `turn ${i}`,
+  }));
+  const seed = buildSeedPrompt({ header, turns }, {});
+  assert.ok(seed.includes("turn 0"), "the earliest short turn fits within budget");
+  assert.ok(seed.includes("turn 39"), "the latest turn is kept");
+  assert.ok(!/\d+ earlier turns? omitted/.test(seed), "nothing omitted when the whole history fits the budget");
+});
+
+test("buildSeedPrompt: a tight char budget keeps the newest turns and notes the omission", () => {
+  const turns = Array.from({ length: 10 }, (_, i) => ({
+    role: (i % 2 ? "assistant" : "user") as const,
+    text: `turn ${i} ${"z".repeat(300)}`,
+  }));
+  const seed = buildSeedPrompt({ header, turns }, { charBudget: 700, transcriptUrl: "https://app.example/s/1" });
+  assert.ok(seed.includes("turn 9"), "the most recent turn is always kept");
+  assert.ok(!seed.includes("turn 0"), "the oldest turn is dropped under a tight budget");
+  assert.ok(/\d+ earlier turns? omitted/.test(seed), "the omitted count is surfaced");
+  assert.ok(seed.includes("linked above"), "points at the full transcript for the rest");
+});
+
+test("buildSeedPrompt: the most recent turn is kept even when it alone exceeds the budget", () => {
+  const seed = buildSeedPrompt(
+    { header, turns: [{ role: "user", text: "x".repeat(5000) }] },
+    { charBudget: 100 },
+  );
+  assert.ok(seed.includes("- user: x"), "never emits an empty seed");
+  assert.ok(!/earlier turns? omitted/.test(seed), "a single kept turn is not reported as an omission");
+});
+
 test("buildForkHistory: keeps EVERY turn as real roles for a true replay fork", () => {
   const turns = Array.from({ length: 30 }, (_, i) => ({
     role: (i % 2 ? "assistant" : "user") as const,
