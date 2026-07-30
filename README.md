@@ -290,13 +290,28 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Self-hosting
 
-Node, relay, and control plane are all in this repository, and the CLI accepts
-flags to point at your own deployment:
+Node, relay, and control plane are all in this repository. Point a node at your
+own deployment by passing URLs to `bivy relay:setup` — re-running it switches an
+existing node over to the new endpoints:
 
 ```bash
-bivy relay:setup --relay wss://relay.example.com \
-                 --control-plane https://bivy.example.com
+bivy relay:setup \
+  --control-plane https://bivy.example.com \
+  --relay wss://relay.example.com
 ```
+
+Each URL has a flag and an environment-variable equivalent (the flag wins):
+
+| Flag | Environment variable | Points at | Default |
+|---|---|---|---|
+| `--control-plane <url>` | `BIVY_CONTROL_PLANE_URL` | accounts, node registry, and the web-app API | hosted (`app.bivy.sh`) |
+| `--relay <wss-url>` | `BIVY_RELAY_URL` | the encrypted-frame relay your node dials out to | hosted |
+| `--client <url>` | `BIVY_CLIENT_BASE_URL` | base URL used when building app/PWA links | the `--control-plane` URL |
+
+Sign-in defaults to GitHub; add `--email you@example.com` for an email
+magic-link instead. `relay:setup` checks the control plane is reachable, enrolls
+this node, and writes the endpoints to `.bivy/relay.json`, so `bivy open`,
+`bivy link`, and `bivy update` all keep using your deployment afterwards.
 
 **Self-hosting is unsupported** — no SLA, community best-effort via GitHub
 issues. You own TLS, backups, upgrades, and hardening. See
