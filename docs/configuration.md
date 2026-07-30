@@ -166,7 +166,7 @@ unless noted.
 
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
-| `PORT` | integer | `4317` | Supported | Node HTTP/WebSocket port |
+| `PORT` | integer | `4317` | Supported | Node HTTP/WebSocket port. `bivy setup` auto-picks the first **free** port at or above `4317`, so a second node on the same machine (staging + production, or one node per OS user) lands on `4318`, `4319`, … without you choosing. Set `PORT` explicitly to override; the daemon exits with a clear error if its port is already taken |
 | `BIVY_HOST` | address | `127.0.0.1` | Supported | Bind address. `HOST` is accepted as a fallback. **This port grants full control of the node with no TLS** — only widen it on a network you trust |
 | `HOST` | address | — | Supported | Second choice for `BIVY_HOST` |
 | `BIVY_PUBLIC_URL` | URL | request-derived, else `http://localhost:<port>` | Supported | External base URL used to build integration OAuth redirect URIs. Set this behind a reverse proxy |

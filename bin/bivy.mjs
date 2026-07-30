@@ -37,6 +37,7 @@ import { selectStaleSessions, sessionActivityMs } from "./prune-sessions.mjs";
 import { resolveSessionsLimit, truncateSavedSessions } from "./sessions-list.mjs";
 import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForShell } from "./shim-path.mjs";
 import { removeExcept } from "./uninstall-paths.mjs";
+import { findAvailablePort } from "./port-picker.mjs";
 
 const selfScript = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(selfScript);
@@ -401,6 +402,12 @@ function setupAgentByRuntime(runtimeId) {
 
 function url(config) {
   return `http://localhost:${config.port}`;
+}
+
+// The host the node will bind (mirrors src/server.ts). We probe on this same
+// address so a "free" port here is one the daemon can actually claim.
+function nodeBindHost() {
+  return process.env.BIVY_HOST ?? process.env.HOST ?? "127.0.0.1";
 }
 
 // --- process helpers --------------------------------------------------------
@@ -2994,11 +3001,27 @@ async function cmdSetup(args = []) {
   // defaults to a dedicated ~/bivy-workspace folder that won't collide with the
   // user's own projects; the local port is for this machine only (remote access
   // goes through the relay). Both are changeable later in Settings.
+  //
+  // Port selection auto-avoids collisions so multiple nodes on one machine (e.g.
+  // a staging + production node, or one node per OS user) "just work" without the
+  // user picking ports: an explicit `PORT=… bivy setup` is honored verbatim,
+  // otherwise we take the first free port at or above 4317. Without this the
+  // second node would default to 4317 too and silently fail to bind.
   if (!existingConfig || config.workspace === repoRoot) {
     const workspace = config.workspace !== repoRoot ? config.workspace : path.join(os.homedir(), "bivy-workspace");
     if (!fs.existsSync(workspace)) fs.mkdirSync(workspace, { recursive: true });
     config.workspace = workspace;
-    config.port = Number(config.port) || 4317;
+    const explicitPort = Number(process.env.PORT);
+    const savedPort = Number(config.port);
+    if (explicitPort) {
+      config.port = explicitPort;
+    } else {
+      const preferred = savedPort || 4317;
+      config.port = await findAvailablePort(preferred, nodeBindHost());
+      if (config.port !== preferred) {
+        console.log(c.dim(`Port ${preferred} is already in use (another node?) — using ${config.port} for this node.`));
+      }
+    }
     saveConfig(config);
   }
   console.log(c.dim(`Workspace: ${config.workspace}  ·  local port: ${config.port}  (change both in Settings)`));
