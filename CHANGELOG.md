@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The in-session run card now appears for **every** session, not just
+  automation-triggered ones, and carries the session's token/cost usage
+  (previously a separate bar pinned under the top bar). Its detail sheet also
+  surfaces the run's finished time, the routing/ruleset reason it was routed by,
+  and the approval and sandbox policy it ran under. (#266)
+
 ## [0.2.0] - 2026-07-30
 
 ### Added
