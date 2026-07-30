@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useAppState, controller } from "../store/useStore.js";
 
-// A non-blocking error toast pinned above the composer. It shows the FULL
-// message — wrapped and capped to the viewport height (it scrolls if taller) —
-// so the user can actually read it; a truncated "401 Unauthorized: Miss…" is
-// useless. Longer messages linger longer before auto-dismissing; the × closes
-// it immediately.
+// A non-blocking error toast pinned above the composer. Keep verbose command
+// output collapsed initially so one failure cannot cover most of a phone screen;
+// the full, scrollable diagnostic remains available on demand. Longer messages
+// linger longer before auto-dismissing; the × closes it immediately.
 
 // Auto-dismiss after enough time to read it: a short line goes in ~6s, a long
 // multi-line error gets proportionally longer, capped at 30s.
@@ -17,20 +16,31 @@ function dismissDelay(raw: string): number {
 
 export function ErrorToast() {
   const { error } = useAppState();
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
+    setExpanded(false);
     if (!error) return;
     const t = setTimeout(() => controller.store.setError(""), dismissDelay(error));
     return () => clearTimeout(t);
   }, [error]);
 
   if (!error) return null;
+  const message = error.trim();
+  const hasDetails = message.includes("\n") || message.length > 240;
   return (
-    <div className="error-toast" role="alert">
+    <div className={`error-toast${expanded ? " expanded" : ""}`} role="alert">
       <span className="error-toast-icon" aria-hidden>
         !
       </span>
-      <span className="error-toast-text">{error.trim()}</span>
+      <div className="error-toast-content">
+        <span className="error-toast-text">{message}</span>
+        {hasDetails && (
+          <button className="error-toast-details" type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+            {expanded ? "Hide details" : "Show details"}
+          </button>
+        )}
+      </div>
       <button className="error-toast-close" onClick={() => controller.store.setError("")} aria-label="Dismiss">
         ×
       </button>

@@ -1768,22 +1768,24 @@ select.picker-search { appearance: auto; }
 .update-toast .btn { flex: none; white-space: nowrap; padding: 6px 12px; }
 /* Compact, non-blocking error toast (replaces the raw full-width red banner). */
 .error-toast {
-  display: flex; align-items: flex-start; gap: 10px; max-width: min(92vw, 560px);
-  /* Cap to the viewport so a long error never runs off-screen; scroll instead. */
-  max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto;
+  display: flex; align-items: flex-start; gap: 10px; width: min(92vw, 560px); box-sizing: border-box;
   background: var(--surface); border: 1px solid var(--danger); border-left-width: 3px;
   border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.28);
   animation: sheet-up 0.16s ease;
 }
+/* Only expanded diagnostics scroll. The default toast stays compact instead of
+   turning raw command output into a screen-covering panel on mobile. */
+.error-toast.expanded { max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto; }
 .error-toast-icon { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; background: var(--danger); color: #fff; font-weight: 700; font-size: 12px; display: grid; place-items: center; }
-/* Show the whole message: wrap long lines and honor newlines instead of
-   clipping to a single ellipsized line. */
-.error-toast-text { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.error-toast-content { flex: 1; min-width: 0; display: grid; gap: 5px; }
+.error-toast-text { min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.error-toast.expanded .error-toast-text { display: block; overflow: visible; }
+.error-toast-details { justify-self: start; border: 0; background: transparent; color: var(--accent); padding: 0; font: inherit; font-size: 12px; font-weight: 600; }
 .error-toast-close { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; position: sticky; top: 0; }
 
 /* Success/confirmation toast — same shape as the error toast, positive accent. */
 .notice-toast {
-  display: flex; align-items: flex-start; gap: 10px; max-width: min(92vw, 560px);
+  display: flex; align-items: flex-start; gap: 10px; width: min(92vw, 560px); box-sizing: border-box;
   max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto;
   background: var(--surface); border: 1px solid var(--ok); border-left-width: 3px;
   border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.28);

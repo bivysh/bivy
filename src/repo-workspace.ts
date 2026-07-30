@@ -49,7 +49,7 @@ export function parseGitHubRemote(input: string): ParsedRepo | undefined {
 /** Infer owner/repo from a workspace's origin remote, if it is a GitHub checkout. */
 export async function inferGitHubRepoFromWorkspace(workspace: string): Promise<ParsedRepo | undefined> {
   try {
-    const { stdout } = await exec("git", ["-C", workspace, "remote", "get-url", "origin"]);
+    const { stdout } = await exec("git", ["-C", workspace, "remote", "get-url", "origin"], { cwd: workspace });
     return parseGitHubRemote(stdout);
   } catch {
     return undefined;
@@ -81,7 +81,7 @@ export async function resolveGitHubToken(env: NodeJS.ProcessEnv = process.env): 
  */
 export async function fetchOrigin(repoDir: string): Promise<void> {
   try {
-    await exec("git", ["-C", repoDir, "fetch", "origin", "--prune"], { timeout: 120_000 });
+    await exec("git", ["-C", repoDir, "fetch", "origin", "--prune"], { cwd: repoDir, timeout: 120_000 });
   } catch {
     // offline / no origin / no rights — branch off the refs we already have.
   }
@@ -96,15 +96,15 @@ export async function fetchOrigin(repoDir: string): Promise<void> {
 export async function resolveDefaultBaseRef(repoDir: string): Promise<string> {
   // origin/HEAD points at the remote's default branch when it's been recorded.
   try {
-    const { stdout } = await exec("git", ["-C", repoDir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+    const { stdout } = await exec("git", ["-C", repoDir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd: repoDir });
     const ref = stdout.trim();
     if (ref) return ref; // e.g. "origin/main"
   } catch {
     // origin/HEAD is often unset on a fresh clone — record it, then retry.
   }
   try {
-    await exec("git", ["-C", repoDir, "remote", "set-head", "origin", "--auto"]);
-    const { stdout } = await exec("git", ["-C", repoDir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+    await exec("git", ["-C", repoDir, "remote", "set-head", "origin", "--auto"], { cwd: repoDir });
+    const { stdout } = await exec("git", ["-C", repoDir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd: repoDir });
     const ref = stdout.trim();
     if (ref) return ref;
   } catch {
@@ -125,7 +125,7 @@ export async function resolveDefaultBaseRef(repoDir: string): Promise<string> {
 export async function resolveBranchBaseRef(repoDir: string, branch: string): Promise<string> {
   const ref = `origin/${branch}`;
   try {
-    await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", ref]);
+    await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", ref], { cwd: repoDir });
     return ref;
   } catch {
     throw new Error(`Branch "${branch}" was not found on the remote.`);
@@ -143,7 +143,7 @@ export async function resolveBranchBaseRef(repoDir: string, branch: string): Pro
 export async function isReusableCheckout(dest: string): Promise<boolean> {
   if (!fs.existsSync(path.join(dest, ".git"))) return false;
   try {
-    await exec("git", ["-C", dest, "rev-parse", "--show-toplevel"]);
+    await exec("git", ["-C", dest, "rev-parse", "--show-toplevel"], { cwd: dest });
     return true;
   } catch {
     return false;
@@ -190,15 +190,15 @@ export async function cloneOrUpdateRepo(opts: { owner: string; repo: string; tok
     try {
       // Rewrite origin to the clean URL. This also MIGRATES any pre-existing
       // clone whose remote still carries an embedded token from before this fix.
-      await exec("git", ["-C", dest, "remote", "set-url", "origin", url]);
-      await configureRepoCredentialHelper((a) => exec("git", a), dest);
-      await exec("git", ["-C", dest, ...cc, "fetch", "--all", "--prune"], { timeout: 120_000, env });
+      await exec("git", ["-C", dest, "remote", "set-url", "origin", url], { cwd: dest });
+      await configureRepoCredentialHelper((a) => exec("git", a, { cwd: dest }), dest);
+      await exec("git", ["-C", dest, ...cc, "fetch", "--all", "--prune"], { cwd: dest, timeout: 120_000, env });
       // Re-point origin/HEAD at the remote's CURRENT default branch. Without
       // this a cached checkout keeps whatever default it recorded at first
       // clone, so if the repo's default later changed (e.g. main → master) a new
       // session would branch off the stale remote default. --auto is best-effort
       // and only rewrites the local origin/HEAD pointer, never a branch.
-      await exec("git", ["-C", dest, "remote", "set-head", "origin", "--auto"]);
+      await exec("git", ["-C", dest, "remote", "set-head", "origin", "--auto"], { cwd: dest });
     } catch {
       // offline / fetch failed — reuse the existing checkout as-is
     }
@@ -212,9 +212,15 @@ export async function cloneOrUpdateRepo(opts: { owner: string; repo: string; tok
   // (<root>/<owner>__<repo>), repair it instead of letting every later "new repo
   // session" fail with "destination exists" or "Not a git repository".
   if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
-  await exec("git", [...cc, "clone", url, dest], { timeout: 600_000, env });
+  // Always give child_process a real cwd. The daemon may still be serving while
+  // an npm-global update atomically replaces its install directory; inheriting
+  // that now-unlinked cwd makes git abort before it can even process `clone`
+  // ("Unable to read current working directory"). The repos root is durable
+  // across package updates and was created immediately above.
+  await exec("git", [...cc, "clone", url, dest], { cwd: opts.root, timeout: 600_000, env });
   // Persist the helper config so agent-run git in this clone authenticates too.
-  await configureRepoCredentialHelper((a) => exec("git", a), dest);
+  // These follow-up processes need an explicit cwd for the same reason.
+  await configureRepoCredentialHelper((a) => exec("git", a, { cwd: dest }), dest);
   hardenGitConfigPerms(dest);
   return dest;
 }
