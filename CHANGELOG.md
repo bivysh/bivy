@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-30
+
+### Fixed
+
+- Repository cloning now recovers when the daemon inherited a stale or deleted
+  working directory. Clone destinations are resolved from a stable base, and the
+  web client surfaces the self-healing retry instead of leaving the operation
+  stuck on an opaque failure. (#256)
+
 ## [0.1.0] - 2026-07-30
 
 First public release.
