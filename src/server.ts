@@ -6653,7 +6653,10 @@ function maybeRenameWorktreeBranch(record: SessionRecord, name: string) {
   const result = spawnSync("git", ["-C", wt.path, "branch", "-m", wt.branch, next], { encoding: "utf8", timeout: 10_000 });
   if (result.error || result.status !== 0) {
     const detail = String(result.stderr || result.error || "git branch rename failed").trim();
-    console.warn(`[branch-rename] could not rename ${wt.branch} to ${next}:`, detail);
+    // Pass the branch names as args, not spliced into the format string: a branch
+    // name containing a %-specifier would otherwise be interpreted by console.warn
+    // (CodeQL js/tainted-format-string).
+    console.warn("[branch-rename] could not rename %s to %s:", wt.branch, next, detail);
     return;
   }
 
