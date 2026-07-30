@@ -91,6 +91,14 @@ export class RelayConnector {
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private stableTimer?: ReturnType<typeof setTimeout>;
   private lastPongAt = 0;
+  // True only between the relay's `ready` message (auth + entitlement passed)
+  // and the socket closing. This — not "a connector object exists" — is what
+  // "connected" means to the control plane, so it's what `bivy status` reports.
+  private ready = false;
+  // Most recent relay-side failure (ticket mint, socket error, or an `error`
+  // frame), surfaced by `bivy status`/`doctor` so a node that never connects
+  // explains why instead of silently showing "configured".
+  private lastErrorMessage?: string;
   private readonly replay = new ReplayGuard();
   private readonly reassembler = new FrameReassembler();
   private readonly pairing: PairingStore;
@@ -116,6 +124,21 @@ export class RelayConnector {
     this.ws.send(JSON.stringify({ t: "pair", p: JSON.stringify({ k: "key.rotate", deliveries }) }));
   }
 
+  /**
+   * True only while the relay link is live AND the relay has sent `ready`
+   * (auth/entitlement checks passed) — i.e. the node is actually reachable from
+   * the control plane. A socket that opened but was rejected, or one still
+   * reconnecting, reads false.
+   */
+  get connected(): boolean {
+    return this.ready && this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /** Most recent relay-side failure, if any — for status/diagnostics. */
+  get lastError(): string | undefined {
+    return this.lastErrorMessage;
+  }
+
   start() {
     this.closed = false;
     void this.connect();
@@ -123,6 +146,7 @@ export class RelayConnector {
 
   stop() {
     this.closed = true;
+    this.ready = false;
     this.stopHeartbeat();
     this.clearBackoffReset();
     this.ws?.close();
@@ -296,6 +320,7 @@ export class RelayConnector {
     try {
       ({ ticket, relayUrl } = await this.mintTicket());
     } catch (error) {
+      this.lastErrorMessage = `ticket mint failed: ${(error as Error).message}`;
       console.warn("[relay] could not mint relay ticket:", (error as Error).message);
       this.scheduleReconnect();
       return;
@@ -323,6 +348,8 @@ export class RelayConnector {
         return;
       }
       if (env.t === "ready") {
+        this.ready = true;
+        this.lastErrorMessage = undefined;
         this.startHeartbeat(ws);
         this.scheduleBackoffReset(ws);
         console.log("[relay] connected");
@@ -356,6 +383,7 @@ export class RelayConnector {
       }
       if (env.t === "error") {
         const message = (env as { error?: string }).error || "Relay error";
+        this.lastErrorMessage = message;
         console.warn("[relay] error:", message);
         if (isFatalRelayError(message)) {
           console.warn("[relay] disabling connector; fix relay setup/plan and restart the node dev server");
@@ -370,11 +398,13 @@ export class RelayConnector {
     });
 
     ws.on("close", () => {
+      this.ready = false;
       this.stopHeartbeat();
       this.clearBackoffReset();
       this.scheduleReconnect();
     });
     ws.on("error", (error) => {
+      this.lastErrorMessage = (error as Error).message;
       console.warn("[relay] socket error:", (error as Error).message);
     });
   }

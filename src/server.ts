@@ -7844,7 +7844,14 @@ app.get("/api/status", (_req, res) => {
       workspaceBoundary: true,
       strictApprovalOptIn: true,
     },
-    relay: { configured: Boolean(relayConfig), connected: Boolean(relay) },
+    relay: {
+      configured: Boolean(relayConfig),
+      // Real link state (relay sent `ready`), not merely "a connector exists".
+      connected: Boolean(relay?.connected),
+      controlPlaneUrl: relayConfig?.controlPlaneUrl,
+      relayUrl: relayConfig?.url,
+      ...(relay?.lastError ? { lastError: relay.lastError } : {}),
+    },
     sessions: {
       open: new Set(openSessions.values()).size,
       indexed: metadata.listSessions().length,
