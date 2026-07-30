@@ -20,9 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plain-text turns with tool activity inlined — never provider-specific
   `tool_use`/`tool_result` blocks — so it stays valid on any target model, and a
   runtime that can't import history (or an import that fails at run time) still
-  falls back cleanly to the seeded continuation. Pi and Claude Code both
-  implement it (`AgentRuntime.importHistoryForFork`); see `src/session/fork.ts`
-  and `buildForkHistory` in `src/session/transcript-normal.ts`. The *source*
+  falls back cleanly to the seeded continuation. Pi, Claude Code, and Codex all
+  implement it (`AgentRuntime.importHistoryForFork`) — Codex by synthesising a
+  resumable rollout under `$CODEX_HOME/sessions` (`writeCodexRollout`; best-effort
+  against a live Codex resume, opt out with `BIVY_CODEX_NO_FORK_REPLAY=1`), wired
+  through the shared `ProtocolRuntime.writeHistory` hook so any protocol/ACP agent
+  with a writable store can opt in the same way. See `src/session/fork.ts` and
+  `buildForkHistory` in `src/session/transcript-normal.ts`. The *source*
   side now works for **every** agent, not just those with a `readMessages` fast
   path: `buildForkBundle` falls back to the live session's transcript, so a fork
   *from* a wrapped CLI agent (which keeps its transcript only on the live

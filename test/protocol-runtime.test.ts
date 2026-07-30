@@ -293,4 +293,30 @@ await assert.rejects(
   /does not support resume/,
 );
 
+// --- writeHistory wires a true cross-runtime replay fork INTO this agent ----
+// Without the hook, forkHistoryImport is off and importHistoryForFork refuses;
+// with it (Codex wires writeCodexRollout), the capability flips on and the
+// method delegates — the seam the fork engine gates its "replayed" tier on.
+const noHistoryImport = new ProtocolRuntime({ command: process.execPath, args: [fixture], displayName: "No History" });
+assert.notEqual(noHistoryImport.capabilities.forkHistoryImport, true, "no writeHistory => capability off");
+await assert.rejects(
+  () => noHistoryImport.importHistoryForFork([{ role: "user", text: "hi" }], { workspace: process.cwd(), cwd: process.cwd() }),
+  /does not support history import/,
+);
+
+let seen: unknown;
+const historyImport = new ProtocolRuntime({
+  command: process.execPath,
+  args: [fixture],
+  displayName: "History Import",
+  writeHistory: (history, ctx) => { seen = { history, ctx }; return { sessionFile: "roll-1", id: "roll-1" }; },
+});
+assert.equal(historyImport.capabilities.forkHistoryImport, true, "writeHistory => capability on");
+const imported = await historyImport.importHistoryForFork(
+  [{ role: "user", text: "port to rust" }, { role: "assistant", text: "on it" }],
+  { workspace: "/w", cwd: "/w/fork" },
+);
+assert.deepEqual(imported, { sessionFile: "roll-1", id: "roll-1" }, "delegates to writeHistory's result");
+assert.deepEqual((seen as { history: unknown }).history, [{ role: "user", text: "port to rust" }, { role: "assistant", text: "on it" }]);
+
 console.log("protocol-runtime: all tests passed");
