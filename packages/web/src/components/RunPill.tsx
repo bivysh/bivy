@@ -161,6 +161,7 @@ export function RunPill({
         <span className="run-pill-glyph"><SourceGlyph kind={source.kind} /></span>
         <span className="run-pill-label">{short}</span>
         <span className="run-pill-stat"><span className="run-dot" />{statusLabel}</span>
+        {pr && <span className={`session-pr ${pr.state}`} aria-hidden><span className="session-pr-text">{pr.state === "merged" ? "Merged" : pr.state === "closed" ? "Closed" : "Open PR"}</span></span>}
       </button>
       {open && (
         <div className="action-sheet open" role="dialog" aria-label={source.label}>
