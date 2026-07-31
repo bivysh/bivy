@@ -13,8 +13,6 @@ import { useModalEscape } from "../modalStack.js";
 interface Action {
   label: string;
   url: string;
-  /** Render a GitHub mark on the right (the branch link). */
-  github?: boolean;
 }
 
 /** Human-facing label for a PR row in the action sheet. */
@@ -24,12 +22,15 @@ function prActionLabel(pr: PrRef): string {
   return `Pull request${num} (${state})`;
 }
 
+// The sheet's GitHub links (issue / PR / branch) — one row anatomy, each led by
+// the GitHub mark. `gh.repo` is "owner/name"; lead the branch link with it so it
+// reads "org/repo · branch".
 function actionsFor(gh: GithubContext): Action[] {
   const actions: Action[] = [];
-  if (gh.issueUrl) actions.push({ label: "Open issue on GitHub", url: gh.issueUrl });
+  if (gh.issueUrl) actions.push({ label: "Open issue", url: gh.issueUrl });
   for (const pr of gh.prs) actions.push({ label: prActionLabel(pr), url: pr.url });
   if (gh.branch && gh.repo)
-    actions.push({ label: gh.branch, url: `https://github.com/${gh.repo}/tree/${encodeURIComponent(gh.branch)}`, github: true });
+    actions.push({ label: `${gh.repo} · ${gh.branch}`, url: `https://github.com/${gh.repo}/tree/${encodeURIComponent(gh.branch)}` });
   return actions;
 }
 
@@ -82,7 +83,10 @@ export function GithubPill({ gh }: { gh: GithubContext }) {
           <div className="action-sheet-backdrop" onClick={() => setOpen(false)} />
           <div className="action-sheet-body">
             <div className="action-sheet-head">
-              <span>GitHub</span>
+              <span className="run-sheet-title">
+                <span className="gh-head-mark" aria-hidden><GhIcon /></span>
+                GitHub
+              </span>
               <button className="action-sheet-close" onClick={() => setOpen(false)} aria-label="Close">
                 ×
               </button>
@@ -90,14 +94,14 @@ export function GithubPill({ gh }: { gh: GithubContext }) {
             {actions.map((a) => (
               <a
                 key={a.url}
-                className={`action-sheet-item${a.github ? " gh-branch" : ""}`}
+                className="action-sheet-item gh-link"
                 href={a.url}
                 target="_blank"
                 rel="noopener"
                 onClick={() => setOpen(false)}
               >
+                <GhIcon />
                 <span>{a.label}</span>
-                {a.github && <GhIcon />}
               </a>
             ))}
           </div>

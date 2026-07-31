@@ -24,8 +24,6 @@ import { checkCounts, retryReason, runDuration } from "../runEvidence.js";
 interface Action {
   label: string;
   url: string;
-  /** Render a GitHub mark on the right (the branch link). */
-  github?: boolean;
 }
 
 /** " · resets Mar 4, 9:00 AM" for a plan window's reset instant, or "" if none. */
@@ -63,12 +61,16 @@ function prActionLabel(pr: PrRef): string {
   return `Pull request${num} (${state})`;
 }
 
+// The sheet's GitHub links (issue / PR / branch) — one row anatomy, each led by
+// the GitHub mark, so they read as one group. `gh.repo` is "owner/name"; lead
+// the branch link with it so it reads "org/repo · branch" — the repo is the
+// context, the branch the detail.
 function actionsFor(gh: GithubContext): Action[] {
   const actions: Action[] = [];
-  if (gh.issueUrl) actions.push({ label: "Open issue on GitHub", url: gh.issueUrl });
+  if (gh.issueUrl) actions.push({ label: "Open issue", url: gh.issueUrl });
   for (const pr of gh.prs) actions.push({ label: prActionLabel(pr), url: pr.url });
   if (gh.branch && gh.repo)
-    actions.push({ label: gh.branch, url: `https://github.com/${gh.repo}/tree/${encodeURIComponent(gh.branch)}`, github: true });
+    actions.push({ label: `${gh.repo} · ${gh.branch}`, url: `https://github.com/${gh.repo}/tree/${encodeURIComponent(gh.branch)}` });
   return actions;
 }
 
@@ -134,6 +136,10 @@ export function RunPill({
   useModalEscape(() => setOpen(false), open);
   const actions = actionsFor(gh);
   const short = shortSourceLabel(source.kind);
+  // The plain "Open" state means the session is still live on its node and can
+  // be resumed instantly (the counterpart to "Saved" — no live record). Spell
+  // that out in the sheet, where there's room; the terse pill/sidebar keep "Open".
+  const sheetStatus = statusLabel === "Open" ? "Open on node" : statusLabel;
 
   const counts = evidence ? checkCounts(evidence) : null;
   const duration = evidence ? runDuration(evidence) : null;
@@ -180,7 +186,7 @@ export function RunPill({
             </div>
             <div className="run-sheet-status">
               <span className={`run-dot ${statusClass}`} aria-hidden />
-              {statusLabel}
+              {sheetStatus}
             </div>
 
             {failure && <div className="run-sheet-failure">{failure}</div>}
@@ -242,14 +248,14 @@ export function RunPill({
             {actions.map((a) => (
               <a
                 key={a.url}
-                className={`action-sheet-item${a.github ? " gh-branch" : ""}`}
+                className="action-sheet-item gh-link"
                 href={a.url}
                 target="_blank"
                 rel="noopener"
                 onClick={() => setOpen(false)}
               >
+                <GhMark />
                 <span>{a.label}</span>
-                {a.github && <GhMark />}
               </a>
             ))}
             {evidence?.output?.artifactUrl && (
