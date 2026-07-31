@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-31
+
+### Added
+
+- Ephemeral machine configs are now first-class, routable **nodes**: they appear
+  as selectable targets in the work-queue router and the new-session picker, and
+  the control plane can **provision one unattended** when work arrives and no
+  device is online — closing the device-offline path that previously required a
+  signed-in device. Adds account-level `EphemeralNodeConfig` runner templates
+  (provider/region/size/ttl/teardown), stored as JSONB on the account, with CRUD
+  endpoints. (#276)
+- The collapsed in-session run pill now shows the session's **PR badge** (open /
+  merged / closed) when the session has a primary PR, matching the badge already
+  rendered on the expanded run card — so you can see PR status without opening
+  the card. (#277)
+
+### Changed
+
+- Polished the in-session run pill and its action sheet: the pill now reuses the
+  sidebar `PrBadge` (GitHub mark + `PR`) instead of the wordy "Open PR" text,
+  status labels drop the redundant "on node" ("Open on node" → **Open**,
+  "Saved · not open on node" → **Saved**), and app sessions read **App** instead
+  of "Session". (#278)
+- Made the App-session sheet coherent — unified the GitHub link rows, aligned
+  labels and icons, and added a repo link alongside the branch link — so the
+  sheet reads as one system rather than a mix of idioms. (#279)
+
 ## [0.2.1] - 2026-07-31
 
 ### Added
