@@ -226,6 +226,117 @@ export function normalizeEphemeralQueueDefault(value: unknown): EphemeralQueueDe
   return out;
 }
 
+// Account-level, reusable ephemeral node config ("a config = a selectable
+// node"). Non-secret sizing only; the launching device supplies the provider
+// token. Stored as a JSONB array on the account row.
+export interface EphemeralNodeConfig {
+  id: string;
+  name: string;
+  provider: string;
+  region?: string;
+  size?: string;
+  ttlMinutes?: number;
+  teardownOnAgentFinish?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Normalize a stored/inbound configs array, dropping malformed entries and
+ *  clamping ttlMinutes. */
+export function normalizeEphemeralConfigs(value: unknown): EphemeralNodeConfig[] {
+  if (!Array.isArray(value)) return [];
+  const out: EphemeralNodeConfig[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const v = raw as Record<string, unknown>;
+    const id = typeof v.id === "string" ? v.id.trim() : "";
+    const name = typeof v.name === "string" ? v.name.trim() : "";
+    const provider = typeof v.provider === "string" ? v.provider.trim() : "";
+    if (!id || !name || !provider) continue;
+    const cfg: EphemeralNodeConfig = {
+      id, name, provider,
+      createdAt: typeof v.createdAt === "string" ? v.createdAt : "",
+      updatedAt: typeof v.updatedAt === "string" ? v.updatedAt : "",
+    };
+    if (typeof v.region === "string" && v.region.trim()) cfg.region = v.region.trim();
+    if (typeof v.size === "string" && v.size.trim()) cfg.size = v.size.trim();
+    if (typeof v.ttlMinutes === "number" && Number.isFinite(v.ttlMinutes)) cfg.ttlMinutes = Math.max(5, Math.min(24 * 60, Math.floor(v.ttlMinutes)));
+    if (v.teardownOnAgentFinish === true) cfg.teardownOnAgentFinish = true;
+    out.push(cfg);
+  }
+  return out;
+}
+
+// The account's default queue routing. `primary` names the runner; only a
+// persistent-node primary may carry an ephemeral-config `fallback`.
+export type QueueRunnerTarget =
+  | { kind: "shared" }
+  | { kind: "node"; node: string }
+  | { kind: "config"; configId: string };
+
+export interface QueueRouting {
+  primary: QueueRunnerTarget;
+  fallback?: { kind: "config"; configId: string };
+}
+
+export const DEFAULT_QUEUE_ROUTING: QueueRouting = { primary: { kind: "shared" } };
+
+/** Normalize a stored/inbound routing value; unknown/invalid → shared queue,
+ *  and a fallback is only kept for a persistent-node primary. */
+export function normalizeQueueRouting(value: unknown): QueueRouting {
+  if (!value || typeof value !== "object") return { ...DEFAULT_QUEUE_ROUTING };
+  const v = value as Record<string, any>;
+  const p = v.primary;
+  let primary: QueueRunnerTarget = { kind: "shared" };
+  if (p && typeof p === "object") {
+    if (p.kind === "node" && typeof p.node === "string" && p.node.trim()) primary = { kind: "node", node: p.node.trim() };
+    else if (p.kind === "config" && typeof p.configId === "string" && p.configId.trim()) primary = { kind: "config", configId: p.configId.trim() };
+  }
+  const f = v.fallback;
+  const fallback = f && typeof f === "object" && f.kind === "config" && typeof f.configId === "string" && f.configId.trim()
+    ? { kind: "config" as const, configId: f.configId.trim() }
+    : undefined;
+  return primary.kind === "node" && fallback ? { primary, fallback } : { primary };
+}
+
+// SECURITY / TRUST-MODEL NOTE: enabling hosted provisioning stores repo-capable
+// and cloud-capable credentials on the CONTROL PLANE for the first time — a
+// deliberate departure from "the control plane holds no secrets". It's the price
+// of unattended, device-offline provisioning (the control plane launches an
+// ephemeral machine itself when a webhook arrives and nothing is online). Off by
+// default, per account. Tokens are stored as JSONB here; a production deployment
+// MUST encrypt them at rest (KMS/HSM) and audit every use.
+export interface HostedProvisioning {
+  enabled: boolean;
+  /** Injected into the machine as BIVY_GITHUB_TOKEN for clone/push/PR work. */
+  githubToken?: string;
+  /** Cloud provider tokens keyed by provider id (fly/hetzner/aws), used to launch. */
+  providerTokens?: Record<string, string>;
+}
+
+export const DEFAULT_HOSTED_PROVISIONING: HostedProvisioning = { enabled: false };
+
+export function normalizeHostedProvisioning(value: unknown): HostedProvisioning {
+  if (!value || typeof value !== "object") return { ...DEFAULT_HOSTED_PROVISIONING };
+  const v = value as Record<string, unknown>;
+  const out: HostedProvisioning = { enabled: Boolean(v.enabled) };
+  if (typeof v.githubToken === "string" && v.githubToken.trim()) out.githubToken = v.githubToken.trim();
+  if (v.providerTokens && typeof v.providerTokens === "object") {
+    const tokens: Record<string, string> = {};
+    for (const [k, val] of Object.entries(v.providerTokens as Record<string, unknown>)) {
+      if (typeof val === "string" && val.trim()) tokens[k.trim()] = val.trim();
+    }
+    if (Object.keys(tokens).length) out.providerTokens = tokens;
+  }
+  return out;
+}
+
+/** Non-secret view of hosted provisioning for GET responses — never leaks tokens. */
+export interface HostedProvisioningStatus { enabled: boolean; hasGithubToken: boolean; providers: string[]; }
+export function redactHostedProvisioning(h: HostedProvisioning): HostedProvisioningStatus {
+  return { enabled: h.enabled, hasGithubToken: Boolean(h.githubToken), providers: Object.keys(h.providerTokens ?? {}) };
+}
+
 // Cross-node model credential snapshot. Nodes push the exact provider auth
 // records their local credential vault uses; other nodes on the same account can pull
 // and import them so model logins/API keys are account-wide instead of per-node.
@@ -818,6 +929,22 @@ export interface MeshStore {
   // notification preferences above.
   getEphemeralQueueDefault(accountId: string): Promise<EphemeralQueueDefault>;
   setEphemeralQueueDefault(accountId: string, patch: Partial<EphemeralQueueDefault>): Promise<EphemeralQueueDefault>;
+
+  // Per-account ephemeral node configs (reusable, named runner templates) and
+  // the account's default queue routing (primary runner + optional fallback).
+  // Both are JSONB on the account row, same getter/full-set shape as above.
+  getEphemeralConfigs(accountId: string): Promise<EphemeralNodeConfig[]>;
+  setEphemeralConfigs(accountId: string, configs: EphemeralNodeConfig[]): Promise<EphemeralNodeConfig[]>;
+  getQueueRouting(accountId: string): Promise<QueueRouting>;
+  setQueueRouting(accountId: string, routing: QueueRouting): Promise<QueueRouting>;
+
+  // Hosted (control-plane-orchestrated) provisioning: per-account credentials +
+  // enable flag, and a tracking list of machines the control plane launched
+  // itself (for dedupe/teardown). Machines are stored as opaque JSONB records.
+  getHostedProvisioning(accountId: string): Promise<HostedProvisioning>;
+  setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
+  getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
+  setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
 
   // Account-wide model provider credentials, shared across enrolled nodes.
   getModelAuthVault(accountId: string): Promise<ModelAuthVault | undefined>;

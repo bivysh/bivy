@@ -8,6 +8,7 @@ import {
   type EphemeralMachine,
   type EphemeralModelKeyInfo,
   type EphemeralSetup,
+  type EphemeralNodeConfig,
   type ProviderKeyInfo,
   type ProviderSize,
 } from "@bivy/core";
@@ -22,7 +23,7 @@ const TTL_OPTIONS = [
   { v: 480, label: "8 hours" },
 ];
 
-export function EphemeralSheet({ onClose, setupId, firstRun = false }: { onClose: () => void; setupId?: string; firstRun?: boolean }) {
+export function EphemeralSheet({ onClose, setupId, config, firstRun = false }: { onClose: () => void; setupId?: string; config?: EphemeralNodeConfig; firstRun?: boolean }) {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
   const [setups, setSetups] = useState<EphemeralSetup[]>([]);
   const [selectedSetup, setSelectedSetup] = useState<EphemeralSetup | null>(null);
@@ -30,6 +31,24 @@ export function EphemeralSheet({ onClose, setupId, firstRun = false }: { onClose
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys);
   useEffect(() => {
     refreshKeys();
+    // An account-level ephemeral config selected in the node picker: launch a
+    // fresh machine from it, stamped with the config id so a device can tie the
+    // running machine back to its config (see NodeSwitcher configInUse). The
+    // config is presented as a one-item "saved setup" via a synthetic record so
+    // the launch form and machine-record correlation work unchanged.
+    if (config) {
+      const synthetic: EphemeralSetup = {
+        id: config.id, provider: config.provider, name: config.name,
+        region: config.region ?? null, size: config.size ?? null,
+        ttlMinutes: config.ttlMinutes ?? null, repo: null,
+        teardownOnAgentFinish: Boolean(config.teardownOnAgentFinish),
+        createdAt: config.createdAt, updatedAt: config.updatedAt,
+      };
+      setSetups([synthetic]);
+      setSelectedSetup(synthetic);
+      setProvider(config.provider);
+      return;
+    }
     controller.listEphemeralSetups().then((rows) => {
       setSetups(rows);
       const selected = setupId ? rows.find((s) => s.id === setupId) : undefined;
@@ -38,7 +57,7 @@ export function EphemeralSheet({ onClose, setupId, firstRun = false }: { onClose
         setProvider(selected.provider);
       }
     });
-  }, [setupId]);
+  }, [setupId, config]);
 
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === provider);
 

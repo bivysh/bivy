@@ -26,6 +26,15 @@ import {
   setGithubAppTriggerAccess,
   fetchEphemeralQueueDefault,
   setEphemeralQueueDefault,
+  fetchEphemeralConfigs,
+  createEphemeralConfig as apiCreateEphemeralConfig,
+  updateEphemeralConfig as apiUpdateEphemeralConfig,
+  deleteEphemeralConfig as apiDeleteEphemeralConfig,
+  fetchQueueRouting,
+  setQueueRouting as apiSetQueueRouting,
+  type EphemeralNodeConfig,
+  type EphemeralConfigInput,
+  type QueueRouting,
   removeAccountNode,
   fetchPairedDevices,
   removePairedDevice,
@@ -2117,12 +2126,12 @@ export class AppController {
    */
   async runWorkItemOnEphemeral(
     id: string,
-    opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; runtimeId?: string; model?: string },
+    opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; runtimeId?: string; model?: string; configId?: string },
   ): Promise<EphemeralMachine> {
     if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
     const githubToken = await this.githubTaskToken.get();
     const machine = await launchEphemeralMachine(
-      { ...opts, hostedTasks: true, githubToken: githubToken || undefined, workItemId: id, purpose: "queue-item", name: "Ephemeral queue runner" },
+      { ...opts, setupId: opts.configId, hostedTasks: true, githubToken: githubToken || undefined, workItemId: id, purpose: "queue-item", name: "Ephemeral queue runner" },
       { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines },
     );
     try {
@@ -2143,11 +2152,11 @@ export class AppController {
    * (no specific item), so incoming work can run without a persistent node —
    * the queue-level "auto-provision" default's manual/triggered form.
    */
-  async launchEphemeralQueueWorker(opts: { provider: string; region?: string; size?: string; ttlMinutes?: number }): Promise<EphemeralMachine> {
+  async launchEphemeralQueueWorker(opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; configId?: string }): Promise<EphemeralMachine> {
     if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
     const githubToken = await this.githubTaskToken.get();
     const machine = await launchEphemeralMachine(
-      { ...opts, hostedTasks: true, githubToken: githubToken || undefined, purpose: "queue-default", name: "Ephemeral queue worker" },
+      { ...opts, setupId: opts.configId, hostedTasks: true, githubToken: githubToken || undefined, purpose: "queue-default", name: "Ephemeral queue worker" },
       { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines },
     );
     void this.refreshNodes();
@@ -2161,6 +2170,26 @@ export class AppController {
   }
   setEphemeralQueueDefault(patch: Partial<EphemeralQueueDefault>): Promise<EphemeralQueueDefault> {
     return setEphemeralQueueDefault(this.local, patch);
+  }
+  /** Account-level ephemeral node configs (shared across the account's devices). */
+  listEphemeralConfigs(): Promise<EphemeralNodeConfig[]> {
+    return fetchEphemeralConfigs(this.local);
+  }
+  createEphemeralConfig(input: EphemeralConfigInput): Promise<EphemeralNodeConfig> {
+    return apiCreateEphemeralConfig(this.local, input);
+  }
+  updateEphemeralConfig(id: string, patch: Partial<EphemeralConfigInput>): Promise<EphemeralNodeConfig> {
+    return apiUpdateEphemeralConfig(this.local, id, patch);
+  }
+  removeEphemeralConfig(id: string): Promise<void> {
+    return apiDeleteEphemeralConfig(this.local, id);
+  }
+  /** The account's default queue routing (primary runner + optional fallback). */
+  getQueueRouting(): Promise<QueueRouting> {
+    return fetchQueueRouting(this.local);
+  }
+  setQueueRouting(routing: QueueRouting): Promise<QueueRouting> {
+    return apiSetQueueRouting(this.local, routing);
   }
 
   // --- Terminal ----------------------------------------------------------

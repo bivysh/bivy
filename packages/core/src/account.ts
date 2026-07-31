@@ -478,6 +478,114 @@ export async function setEphemeralQueueDefault(
   return { enabled: Boolean(data?.enabled), provider: data?.provider, region: data?.region, size: data?.size, ttlMinutes: data?.ttlMinutes };
 }
 
+// An account-level, reusable ephemeral node config — "a config = a selectable
+// node" in both the queue router and the new-session picker. Non-secret sizing
+// only; the launching device still supplies the provider token. Account-level
+// (not device-local) so queued work can route to it from any device or,
+// eventually, an unattended orchestrator.
+export interface EphemeralNodeConfig {
+  id: string;
+  name: string;
+  provider: string;
+  region?: string;
+  size?: string;
+  ttlMinutes?: number;
+  teardownOnAgentFinish?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EphemeralConfigInput = {
+  name: string;
+  provider: string;
+  region?: string | null;
+  size?: string | null;
+  ttlMinutes?: number | null;
+  teardownOnAgentFinish?: boolean;
+};
+
+// How the account routes queued work by default. `primary` names the runner;
+// only a persistent-node primary may carry an ephemeral-config `fallback` (used
+// when that node is offline) — an ephemeral-config primary is provisioned on
+// demand and needs none.
+export type QueueRunnerTarget =
+  | { kind: "shared" }
+  | { kind: "node"; node: string }
+  | { kind: "config"; configId: string };
+
+export interface QueueRouting {
+  primary: QueueRunnerTarget;
+  fallback?: { kind: "config"; configId: string };
+}
+
+function coerceConfig(v: any): EphemeralNodeConfig {
+  return {
+    id: String(v?.id ?? ""),
+    name: String(v?.name ?? ""),
+    provider: String(v?.provider ?? ""),
+    region: typeof v?.region === "string" && v.region ? v.region : undefined,
+    size: typeof v?.size === "string" && v.size ? v.size : undefined,
+    ttlMinutes: typeof v?.ttlMinutes === "number" ? v.ttlMinutes : undefined,
+    teardownOnAgentFinish: Boolean(v?.teardownOnAgentFinish) || undefined,
+    createdAt: String(v?.createdAt ?? ""),
+    updatedAt: String(v?.updatedAt ?? ""),
+  };
+}
+
+/** The account's saved ephemeral node configs (shared across the account's devices). */
+export async function fetchEphemeralConfigs(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`ephemeral-configs request failed: ${res.status}`);
+  const data: unknown = await res.json().catch(() => []);
+  return Array.isArray(data) ? data.map(coerceConfig).filter((c) => c.id) : [];
+}
+
+export async function createEphemeralConfig(store: LocalStore, input: EphemeralConfigInput, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs`, { method: "POST", headers: authHeaders(store), body: JSON.stringify(input) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `create ephemeral config failed: ${res.status}`);
+  return coerceConfig(data);
+}
+
+export async function updateEphemeralConfig(store: LocalStore, id: string, patch: Partial<EphemeralConfigInput>, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs/${encodeURIComponent(id)}`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(patch) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `update ephemeral config failed: ${res.status}`);
+  return coerceConfig(data);
+}
+
+export async function deleteEphemeralConfig(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders(store) });
+  if (!res.ok) {
+    const data: any = await res.json().catch(() => ({}));
+    throw new Error(data?.error || `delete ephemeral config failed: ${res.status}`);
+  }
+}
+
+function coerceRouting(v: any): QueueRouting {
+  const p = v?.primary;
+  let primary: QueueRunnerTarget = { kind: "shared" };
+  if (p?.kind === "node" && typeof p.node === "string" && p.node.trim()) primary = { kind: "node", node: p.node.trim() };
+  else if (p?.kind === "config" && typeof p.configId === "string" && p.configId) primary = { kind: "config", configId: p.configId };
+  const f = v?.fallback;
+  const fallback = f?.kind === "config" && typeof f.configId === "string" && f.configId ? { kind: "config" as const, configId: f.configId } : undefined;
+  return primary.kind === "node" && fallback ? { primary, fallback } : { primary };
+}
+
+/** The account's default queue routing (primary runner + optional fallback). */
+export async function fetchQueueRouting(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<QueueRouting> {
+  const res = await fetchImpl(`${cpBase(store)}/account/queue-routing`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`queue-routing request failed: ${res.status}`);
+  return coerceRouting(await res.json().catch(() => ({})));
+}
+
+export async function setQueueRouting(store: LocalStore, routing: QueueRouting, fetchImpl: typeof fetch = fetch): Promise<QueueRouting> {
+  const res = await fetchImpl(`${cpBase(store)}/account/queue-routing`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(routing) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `set queue routing failed: ${res.status}`);
+  return coerceRouting(data);
+}
+
 export interface GithubQueueItem {
   id: string;
   source: string; // "github:issue" | "github:comment" | "linear:issue" | "slack"

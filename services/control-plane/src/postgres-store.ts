@@ -22,6 +22,12 @@ import {
   normalizeNotificationPreferences,
   type EphemeralQueueDefault,
   normalizeEphemeralQueueDefault,
+  type EphemeralNodeConfig,
+  normalizeEphemeralConfigs,
+  type QueueRouting,
+  normalizeQueueRouting,
+  type HostedProvisioning,
+  normalizeHostedProvisioning,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
@@ -149,6 +155,16 @@ export class PostgresStore implements MeshStore {
       -- queue when no persistent node is online. NULL = disabled (never set).
       -- Non-secret preferences only — see EphemeralQueueDefault in store.ts.
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ephemeral_queue_default JSONB;
+      -- Account-level ephemeral node configs (reusable runner templates) and the
+      -- account's default queue routing (primary runner + optional fallback).
+      -- Non-secret; provider tokens stay device-local. See store.ts.
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ephemeral_configs JSONB;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS queue_routing     JSONB;
+      -- Hosted provisioning: control-plane-held credentials + enable flag, and a
+      -- tracking list of machines the control plane launched itself. Off by
+      -- default; SECURITY: encrypt these at rest in production (see store.ts).
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_provisioning JSONB;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_machines     JSONB;
       -- The paid single-user plan was renamed 'individual' -> 'pro' to match what
       -- it is sold as. The plan column is plain TEXT with no enum or CHECK, so the
       -- backfill is a straight UPDATE; it is idempotent (the second run matches no
@@ -1281,6 +1297,57 @@ export class PostgresStore implements MeshStore {
     const merged = normalizeEphemeralQueueDefault({ ...current, ...patch });
     await this.query(`UPDATE accounts SET ephemeral_queue_default = $2 WHERE id = $1`, [accountId, JSON.stringify(merged)]);
     return merged;
+  }
+
+  async getEphemeralConfigs(accountId: string): Promise<EphemeralNodeConfig[]> {
+    const { rows } = await this.query(`SELECT ephemeral_configs FROM accounts WHERE id = $1`, [accountId]);
+    return normalizeEphemeralConfigs(rows[0]?.ephemeral_configs ?? null);
+  }
+
+  async setEphemeralConfigs(accountId: string, configs: EphemeralNodeConfig[]): Promise<EphemeralNodeConfig[]> {
+    const normalized = normalizeEphemeralConfigs(configs);
+    await this.query(`UPDATE accounts SET ephemeral_configs = $2 WHERE id = $1`, [accountId, JSON.stringify(normalized)]);
+    return normalized;
+  }
+
+  async getQueueRouting(accountId: string): Promise<QueueRouting> {
+    const { rows } = await this.query(`SELECT queue_routing FROM accounts WHERE id = $1`, [accountId]);
+    return normalizeQueueRouting(rows[0]?.queue_routing ?? null);
+  }
+
+  async setQueueRouting(accountId: string, routing: QueueRouting): Promise<QueueRouting> {
+    const normalized = normalizeQueueRouting(routing);
+    await this.query(`UPDATE accounts SET queue_routing = $2 WHERE id = $1`, [accountId, JSON.stringify(normalized)]);
+    return normalized;
+  }
+
+  async getHostedProvisioning(accountId: string): Promise<HostedProvisioning> {
+    const { rows } = await this.query(`SELECT hosted_provisioning FROM accounts WHERE id = $1`, [accountId]);
+    return normalizeHostedProvisioning(rows[0]?.hosted_provisioning ?? null);
+  }
+
+  async setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning> {
+    const current = await this.getHostedProvisioning(accountId);
+    // Merge provider tokens so adding one provider doesn't wipe the others.
+    const merged = normalizeHostedProvisioning({
+      ...current,
+      ...patch,
+      providerTokens: { ...(current.providerTokens ?? {}), ...(patch.providerTokens ?? {}) },
+    });
+    await this.query(`UPDATE accounts SET hosted_provisioning = $2 WHERE id = $1`, [accountId, JSON.stringify(merged)]);
+    return merged;
+  }
+
+  async getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>> {
+    const { rows } = await this.query(`SELECT hosted_machines FROM accounts WHERE id = $1`, [accountId]);
+    const v = rows[0]?.hosted_machines;
+    return Array.isArray(v) ? v : [];
+  }
+
+  async setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
+    const arr = Array.isArray(machines) ? machines : [];
+    await this.query(`UPDATE accounts SET hosted_machines = $2 WHERE id = $1`, [accountId, JSON.stringify(arr)]);
+    return arr;
   }
 
   async getModelAuthVault(accountId: string): Promise<ModelAuthVault | undefined> {
