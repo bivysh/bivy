@@ -1,6 +1,6 @@
 {
   "name": "bivy-control-plane",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Self-hostable/Bivy Cloud control plane: accounts, node registry, entitlements, billing hooks. Data plane lives in the node daemon.",
