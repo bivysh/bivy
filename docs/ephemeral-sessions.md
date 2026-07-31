@@ -222,6 +222,26 @@ UI: a Sprites setup shows in the node switcher like any other. When it has suspe
 
 First-cut limitations: a curated region list (Fly region codes) and a small set of `(cpus, ram)` sizes; the `status` mapping normalises Sprites' running/warm/cold to Bivy's `running`/`stopped`; live end-to-end still needs a real Sprites token to confirm (the adapter is unit-tested via an injected transport in `packages/core/test/ephemeral-sprites.test.ts`).
 
+> **Unverified assumption — does an idle Sprite actually suspend while the daemon runs?** The whole "~$0 when idle" value depends on Fly's idle-detection, which lives in the external Sprites service, not this repo. Meanwhile the daemon holds a **persistent outbound relay WebSocket and pings it every 30s** (`HEARTBEAT_INTERVAL_MS` in `src/relay-client.ts`), plus 30–60s control-plane poll timers — with **no quiet-mode or throttle** anywhere. If Sprites counts any open connection or outbound traffic as "active", a Sprite would never suspend and the cost benefit evaporates. It *likely* keys off **inbound** routed requests (consistent with "a Sprite resumes on any request routed to it" above), in which case the outbound socket is harmless — but this is unconfirmed and must be checked against a live Sprite. If it does not suspend, the daemon needs a suspend-aware quiet mode that drops the relay socket and pauses the poll timers when a session is idle. (E2B below sidesteps this entirely: its pause is a deterministic server-enforced timeout, not an idle heuristic.)
+
+### E2B
+
+[E2B](https://e2b.dev) is the second managed-sandbox substrate (`e2b` in `packages/core/src/ephemeral.ts`), a sibling to Fly Sprites: a `X-API-Key` REST API (host `api.e2b.app`) that creates a Firecracker microVM for agent workloads. Its lifecycle is enforced **server-side by E2B** — every sandbox carries a `timeout`, and when it elapses E2B either kills the sandbox or, with `autoPause`, pauses it to ~$0 with full filesystem + memory state, resumable (~1s) with everything intact. Bivy models it as a suspend-when-idle provider (`suspendsWhenIdle: true`, `wake` = resume), so it reuses the same kept-not-destroyed lifecycle and UI as Sprites.
+
+Copy for the UI:
+
+1. Sign in at <https://e2b.dev> and open your dashboard.
+2. Go to **Team → API Keys** and create a key.
+3. Paste the key into Bivy. It stays on this device like the other provider tokens.
+
+Why E2B is attractive here: its pause is **deterministic** (driven by the server-enforced timeout), not by an unverified idle heuristic, so it holds regardless of what the daemon's relay socket is doing — the opposite of the Sprites caveat above.
+
+**Status: prototype.** The adapter is written against E2B's documented REST shape and unit-tested with an injected transport (`packages/core/test/ephemeral-e2b.test.ts`), but three things must be resolved before it ships as GA:
+
+- <a id="e2b"></a>**Bootstrap needs a published template.** E2B runs a *template's* start command and (unlike Sprites) can't take an arbitrary boot script at create time. So this depends on published `bivy-<size>` E2B templates that install Bivy and run `bivy start`, reading relay enrollment from the env vars we pass at create (`bivyNodeEnv`). That template artifact is tracked separately, like the install script.
+- **API shape needs live confirmation.** Endpoint paths and field names (`/v2/sandboxes`, `autoPause`, `envVars`, `sandboxID`, `/resume`) are from E2B's documented surface and need a real key to confirm.
+- **Timeout is wall-clock, not activity-based.** To keep a long *active* session warm, someone must refresh the timeout (the device while online, or a control-plane keepalive) — the same lifecycle question the bring-your-own-cloud lane tracks. The prototype sets a generous fixed window and lets `autoPause` preserve state if it elapses mid-session.
+
 ## Minimum implementation
 
 - `EphemeralProvider` interface:

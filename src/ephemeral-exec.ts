@@ -17,6 +17,7 @@ export const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "api.machines.dev",
   "api.fly.io",
   "api.sprites.dev",
+  "api.e2b.app",
   "ec2.us-east-1.amazonaws.com",
   "ec2.us-west-2.amazonaws.com",
   "ec2.eu-west-1.amazonaws.com",
