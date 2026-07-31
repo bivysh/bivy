@@ -87,8 +87,8 @@ async function main() {
   const port = await startControlPlane({ ENFORCE_ENTITLEMENTS: "0", HOSTED_CREDENTIAL_KEY: Buffer.alloc(32, 7).toString("base64") });
 
   // Unauthenticated read is refused.
-  const noAuth = await req(port, "GET", "/account/ephemeral-configs", undefined);
-  expect(noAuth.status === 401, `unauthenticated GET is refused (got ${noAuth.status})`);
+  const anonRead = await req(port, "GET", "/account/ephemeral-configs", undefined);
+  expect(anonRead.status === 401, `unauthenticated GET is refused (got ${anonRead.status})`);
 
   const login = await req(port, "POST", "/auth/dev-login", { email: "cfg@example.com" });
   const token = login.json.token;
