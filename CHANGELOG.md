@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-31
+
+### Added
+
+- `bivy rename <name>` (alias `bivy node:rename`) renames the current node from
+  the terminal, reusing the same local device-token auth as every other CLI
+  command. The change takes effect immediately with no restart — the daemon
+  persists it and live-updates relay presence and the `bivy/<node>` work-queue
+  label. Previously renaming was only possible from the app UI. (#272)
+- The in-session run card now shows a **"Forked from …"** marker when a session
+  was forked from another, resolving the parent's name from the local session
+  list (and degrading to a shortened id when the parent lives on another node or
+  is gone). The sidebar row carries a matching **"Forked"** flag. (#270)
+
 ### Changed
 
 - The in-session run card now appears for **every** session, not just
@@ -14,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (previously a separate bar pinned under the top bar). Its detail sheet also
   surfaces the run's finished time, the routing/ruleset reason it was routed by,
   and the approval and sandbox policy it ran under. (#266)
+
+### Fixed
+
+- **Continue in chat** on a freshly-launched Pi or Codex run-terminal is now
+  disabled until the agent has actually assigned its session, with a
+  plain-language **"Send a message first"** caption, instead of enabling the
+  button early and dumping a raw 409 error into the terminal. (#269)
+- Edge-swiping to open the sidebar in the PWA no longer also triggers the
+  browser's native back navigation. The gesture is now claimed on the first hint
+  of horizontal intent, so `preventDefault()` fires while the system
+  back/forward swipe is still cancelable. (#268)
 
 ## [0.2.0] - 2026-07-30
 
