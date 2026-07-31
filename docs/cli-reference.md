@@ -338,6 +338,24 @@ machine and register this node there with `bivy nodes add`.
 bivy token
 ```
 
+### `bivy rename <name>`
+
+Renames **this** node. Alias: `bivy node:rename`.
+
+```bash
+bivy rename "staging-agent"
+```
+
+The name is persisted to `<data-dir>/node.json` and takes effect immediately —
+no restart. The daemon trims and collapses whitespace and caps the length at 80
+characters. Renaming live-updates relay presence and the GitHub work-queue
+routing label (`bivy/<node-name>`).
+
+If the name is already used by another node on your account, the control plane
+auto-adjusts it to stay unique (e.g. `staging-agent-2`); run `bivy status` to
+confirm the name that stuck. This is the CLI equivalent of renaming from the app
+(Settings → node) or `POST /api/node/name`.
+
 ### `bivy nodes [add|remove] …`
 
 Manages the direct-node registry in `<data-dir>/nodes.json` — other Bivy nodes
