@@ -43,6 +43,6 @@ export function statusLabel(s: SessionStatusInput): string {
   // "saved" means the node has no live record for this session (closed, not
   // attached) — distinct from "idle", where it's open on the node and can be
   // resumed instantly. Both used to render as the same flat grey dot.
-  if (s.status === "saved") return "Saved · not open on node";
-  return isUnseen(s) ? "Finished · new" : "Open on node";
+  if (s.status === "saved") return "Saved";
+  return isUnseen(s) ? "Finished · new" : "Open";
 }

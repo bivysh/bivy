@@ -13,6 +13,8 @@ import { useModalEscape } from "../modalStack.js";
 interface Action {
   label: string;
   url: string;
+  /** Render a GitHub mark on the right (the branch link). */
+  github?: boolean;
 }
 
 /** Human-facing label for a PR row in the action sheet. */
@@ -27,7 +29,7 @@ function actionsFor(gh: GithubContext): Action[] {
   if (gh.issueUrl) actions.push({ label: "Open issue on GitHub", url: gh.issueUrl });
   for (const pr of gh.prs) actions.push({ label: prActionLabel(pr), url: pr.url });
   if (gh.branch && gh.repo)
-    actions.push({ label: `View branch ${gh.branch}`, url: `https://github.com/${gh.repo}/tree/${encodeURIComponent(gh.branch)}` });
+    actions.push({ label: gh.branch, url: `https://github.com/${gh.repo}/tree/${encodeURIComponent(gh.branch)}`, github: true });
   return actions;
 }
 
@@ -88,13 +90,14 @@ export function GithubPill({ gh }: { gh: GithubContext }) {
             {actions.map((a) => (
               <a
                 key={a.url}
-                className="action-sheet-item"
+                className={`action-sheet-item${a.github ? " gh-branch" : ""}`}
                 href={a.url}
                 target="_blank"
                 rel="noopener"
                 onClick={() => setOpen(false)}
               >
-                {a.label}
+                <span>{a.label}</span>
+                {a.github && <GhIcon />}
               </a>
             ))}
           </div>
