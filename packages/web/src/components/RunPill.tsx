@@ -14,15 +14,18 @@
 // usage) — the card is the same, the information applies.
 
 import { useState } from "react";
-import { primaryPr, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
+import { type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { SourceGlyph } from "./SourceMark.js";
+import { PrBadge, GhMark } from "./SessionList.js";
 import { shortSourceLabel, type SourceInfo } from "../sessionSource.js";
 import { checkCounts, retryReason, runDuration } from "../runEvidence.js";
 
 interface Action {
   label: string;
   url: string;
+  /** Render a GitHub mark on the right (the branch link). */
+  github?: boolean;
 }
 
 /** " · resets Mar 4, 9:00 AM" for a plan window's reset instant, or "" if none. */
@@ -65,7 +68,7 @@ function actionsFor(gh: GithubContext): Action[] {
   if (gh.issueUrl) actions.push({ label: "Open issue on GitHub", url: gh.issueUrl });
   for (const pr of gh.prs) actions.push({ label: prActionLabel(pr), url: pr.url });
   if (gh.branch && gh.repo)
-    actions.push({ label: `View branch ${gh.branch}`, url: `https://github.com/${gh.repo}/tree/${encodeURIComponent(gh.branch)}` });
+    actions.push({ label: gh.branch, url: `https://github.com/${gh.repo}/tree/${encodeURIComponent(gh.branch)}`, github: true });
   return actions;
 }
 
@@ -130,7 +133,6 @@ export function RunPill({
   const [open, setOpen] = useState(false);
   useModalEscape(() => setOpen(false), open);
   const actions = actionsFor(gh);
-  const pr = primaryPr(gh.prs);
   const short = shortSourceLabel(source.kind);
 
   const counts = evidence ? checkCounts(evidence) : null;
@@ -161,7 +163,7 @@ export function RunPill({
         <span className="run-pill-glyph"><SourceGlyph kind={source.kind} /></span>
         <span className="run-pill-label">{short}</span>
         <span className="run-pill-stat"><span className="run-dot" />{statusLabel}</span>
-        {pr && <span className={`session-pr ${pr.state}`} aria-hidden><span className="session-pr-text">{pr.state === "merged" ? "Merged" : pr.state === "closed" ? "Closed" : "Open PR"}</span></span>}
+        <PrBadge prs={gh.prs} />
       </button>
       {open && (
         <div className="action-sheet open" role="dialog" aria-label={source.label}>
@@ -179,7 +181,6 @@ export function RunPill({
             <div className="run-sheet-status">
               <span className={`run-dot ${statusClass}`} aria-hidden />
               {statusLabel}
-              {pr && <span className={`session-pr ${pr.state}`} aria-hidden><span className="session-pr-text">{pr.state === "merged" ? "Merged" : pr.state === "closed" ? "Closed" : "Open PR"}</span></span>}
             </div>
 
             {failure && <div className="run-sheet-failure">{failure}</div>}
@@ -241,13 +242,14 @@ export function RunPill({
             {actions.map((a) => (
               <a
                 key={a.url}
-                className="action-sheet-item"
+                className={`action-sheet-item${a.github ? " gh-branch" : ""}`}
                 href={a.url}
                 target="_blank"
                 rel="noopener"
                 onClick={() => setOpen(false)}
               >
-                {a.label}
+                <span>{a.label}</span>
+                {a.github && <GhMark />}
               </a>
             ))}
             {evidence?.output?.artifactUrl && (

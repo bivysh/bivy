@@ -762,6 +762,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 button.action-sheet-item { width: 100%; text-align: left; border-width: 0 0 1px 0; border-style: solid; border-color: var(--line); background: transparent; font: inherit; }
 button.action-sheet-item:last-child { border-bottom: 0; }
 .action-sheet-item.danger { color: var(--danger); }
+/* Branch link: repo/branch on the left, a GitHub mark on the right. */
+.action-sheet-item.gh-branch { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.action-sheet-item.gh-branch > span { min-width: 0; overflow-wrap: anywhere; }
+.action-sheet-item.gh-branch .gh-icon { width: 15px; height: 15px; flex: none; color: var(--muted); }
 .action-sheet-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* GitHub pills parked in a band just above the composer: the repo picker on a
