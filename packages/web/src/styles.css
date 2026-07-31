@@ -1533,6 +1533,14 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .term-attach-chat { border: 0; border-left: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); padding: 10px 14px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .term-attach-chat:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 .term-continue-chat { font-weight: 700; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+/* Takeover not possible yet — the agent hasn't started its session. Greyed,
+   with a visible caption (mobile has no hover title) telling the user what to
+   do, instead of firing a takeover that would 409. */
+.term-continue-chat:disabled { opacity: 0.5; box-shadow: none; cursor: default; }
+.term-continue-notready { display: inline-flex; flex-direction: column; align-items: stretch; gap: 2px; }
+.term-continue-hint-text { font-size: 10px; line-height: 1.15; color: var(--muted); text-align: center; }
+.term-attach-chat.is-disabled { opacity: 0.55; cursor: default; color: var(--muted); background: transparent; }
+.term-attach-chat.is-disabled:hover { background: transparent; }
 .term-out { flex: 1; min-height: 0; overflow: hidden; padding: 6px 8px; position: relative; }
 /* Suppress the iOS long-press callout / native text-selection UI over the
    canvas — we drive touch selection ourselves (long-press + drag). We also own

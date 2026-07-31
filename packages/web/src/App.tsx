@@ -272,10 +272,16 @@ export function App() {
 
   const closeDrawer = () => setDrawerOpen(false);
   const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId);
-  // A session an automation triggered shows a source+status run pill in the
-  // band above the composer instead of the plain GitHub pill; a hand-opened
-  // session keeps the ordinary pill. `null` for a draft (no session yet).
+  // Every active session shows the run card (source + live status) in the band
+  // above the composer; `null` for a draft (no session yet) falls back to the
+  // plain GitHub pill.
   const activeRunSource = activeSession ? classifySource(activeSession.source) : null;
+  // A forked session's sheet gets its own "Forked from" row. The parent's name
+  // is resolved from the local session list when known; it may live on
+  // another node or be gone by now, so this degrades to a bare id.
+  const activeForkedFrom = activeSession?.forkedFrom
+    ? { sessionId: activeSession.forkedFrom, name: state.sessions.find((s) => s.sessionId === activeSession.forkedFrom)?.name }
+    : undefined;
   const activeSessionNodeId = activeSession?.nodeId || state.currentNodeId || undefined;
   const activeSessionNode = state.nodes.find((node) => node.id === activeSessionNodeId);
   const activeSessionNodeLabel = activeSessionNode
@@ -490,10 +496,10 @@ export function App() {
 
         <div className="composer-gh">
           {/* The run card now stands for every active session — an automation
-              trigger or a plain hand-opened one — carrying whatever applies:
-              source, live status, token usage, and (in its sheet) the run
-              evidence and GitHub links. Only a draft (no session yet) falls
-              back to the bare GithubPill for repo context. */}
+              trigger, a fork, or a plain hand-opened one — carrying whatever
+              applies: source, live status, token usage, fork lineage, and (in
+              its sheet) the run evidence and GitHub links. Only a draft (no
+              session yet) falls back to the bare GithubPill for repo context. */}
           {activeSession && activeRunSource ? (
             <RunPill
               source={activeRunSource}
@@ -503,6 +509,7 @@ export function App() {
               evidence={runEvidence.get(activeSession.sessionId)}
               finishedAt={activeSession.finishedAt}
               usage={state.usage}
+              forkedFrom={activeForkedFrom}
             />
           ) : (
             <GithubPill gh={state.github} />

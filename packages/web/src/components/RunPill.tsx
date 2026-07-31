@@ -7,10 +7,11 @@
 // session — with its live status. Tapping it opens a sheet with whatever
 // applies: the run's outcome (finished time, checks, attempts, routing/ruleset
 // reason, branch/PR, the approval + sandbox policy it ran under — from the
-// account queue's evidence record, see runEvidence.ts), GitHub links, and the
+// account queue's evidence record, see runEvidence.ts), GitHub links, the
 // cost / token / plan-quota usage that used to live in the standalone bar under
-// the topbar. Non-automation sessions simply carry less to show (source,
-// status, usage) — the card is the same, the information applies.
+// the topbar, and — when this session was forked from another one — its fork
+// lineage. Non-automation sessions simply carry less to show (source, status,
+// usage) — the card is the same, the information applies.
 
 import { useState } from "react";
 import { primaryPr, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
@@ -102,6 +103,7 @@ export function RunPill({
   evidence,
   finishedAt,
   usage,
+  forkedFrom,
 }: {
   source: SourceInfo;
   /** The row's status class (`working` / `needs-action` / `saved` / `idle`)
@@ -119,6 +121,11 @@ export function RunPill({
   /** The session's cost / token / plan-quota snapshot, moved here from the
    *  standalone usage bar (null before the session reports any usage). */
   usage?: Usage | null;
+  /** The parent this session was forked from, when it is a fork (see
+   *  src/session/fork.ts on the node). `name` is resolved client-side from the
+   *  local session list — the parent may live on another node or be gone by
+   *  now, so it's best-effort and falls back to a shortened id. */
+  forkedFrom?: { sessionId: string; name?: string };
 }) {
   const [open, setOpen] = useState(false);
   useModalEscape(() => setOpen(false), open);
@@ -133,6 +140,7 @@ export function RunPill({
   const reason = evidence ? retryReason(evidence) : null;
   const agentLine = [evidence?.runtimeId, evidence?.model].filter(Boolean).join(" · ");
   const failure = evidence?.output?.failure;
+  const forkedFromLabel = forkedFrom ? forkedFrom.name || `session ${forkedFrom.sessionId.slice(0, 8)}` : null;
 
   const tokenTotal = usage?.tokens?.total ?? 0;
   const hasCost = typeof usage?.costUsd === "number";
@@ -174,6 +182,12 @@ export function RunPill({
             </div>
 
             {failure && <div className="run-sheet-failure">{failure}</div>}
+
+            {forkedFrom && (
+              <div className="run-sheet-rows">
+                <Row k="Forked from">{forkedFromLabel}</Row>
+              </div>
+            )}
 
             {(finished || duration) && (
               <div className="run-sheet-rows">
@@ -240,7 +254,7 @@ export function RunPill({
                 View artifact
               </a>
             )}
-            {actions.length === 0 && !evidence && !hasUsage && (
+            {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && (
               <div className="action-sheet-empty">This session has nothing to report yet.</div>
             )}
           </div>
