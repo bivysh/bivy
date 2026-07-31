@@ -1470,6 +1470,19 @@ function HostedProvisioningSection() {
     }
   };
 
+  const rotate = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      setStatus(await controller.rotateHostedProvisioning());
+      refreshAudit();
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const enabled = Boolean(status?.enabled);
   const canSaveSecrets = Boolean(status?.encryptionReady);
 
@@ -1551,6 +1564,14 @@ function HostedProvisioningSection() {
           <button className="btn primary" disabled={busy || !canSaveSecrets || !providerToken.trim()} onClick={() => save({ providerTokens: { [provider]: providerToken.trim() } }, () => setProviderToken(""))}>
             {busy ? "Saving…" : `Save ${provider} token`}
           </button>
+
+          <h4 className="settings-subhead">Encryption</h4>
+          <p className="muted small">
+            Credentials are encrypted at rest{status?.keyId ? <> under key <span className="chip">{status.keyId}</span></> : ""}. Rotating re-seals them under the current primary key.
+          </p>
+          <div className="row-actions">
+            <button className="btn" disabled={busy || !canSaveSecrets} onClick={rotate}>Rotate encryption key</button>
+          </div>
 
           <h4 className="settings-subhead">Check</h4>
           <div className="row-actions">

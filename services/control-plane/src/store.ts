@@ -369,7 +369,7 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped";
+  action: "credential_updated" | "credential_rotated" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped";
   provider?: string;
   configId?: string;
   nodeId?: string;

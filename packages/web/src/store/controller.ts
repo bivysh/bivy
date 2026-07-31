@@ -35,6 +35,7 @@ import {
   fetchHostedProvisioning,
   setHostedProvisioning as apiSetHostedProvisioning,
   fetchHostedAudit,
+  rotateHostedProvisioning as apiRotateHostedProvisioning,
   triggerHostedProvision as apiTriggerHostedProvision,
   type EphemeralNodeConfig,
   type EphemeralConfigInput,
@@ -2207,6 +2208,9 @@ export class AppController {
   }
   listHostedAudit(): Promise<HostedAuditEvent[]> {
     return fetchHostedAudit(this.local);
+  }
+  rotateHostedProvisioning(): Promise<HostedProvisioningStatus> {
+    return apiRotateHostedProvisioning(this.local);
   }
   triggerHostedProvision(execute = false) {
     return apiTriggerHostedProvision(this.local, execute);

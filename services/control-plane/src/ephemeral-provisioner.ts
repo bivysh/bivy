@@ -200,15 +200,12 @@ export async function provisionEphemeralForAccount(
   if (!providerToken) throw new Error(`No hosted provider token for ${config.provider}`);
   await audit(store, accountId, { action: "provision_attempt", provider: config.provider, configId: config.id });
 
-  // Prefer a freshly-minted, short-lived GitHub App installation token over a
-  // stored PAT (see docs/hosted-provisioning-trust-model.md). Falls back to the
-  // PAT only when no app is configured.
-  let githubToken = hosted.githubToken;
-  if (hosted.githubApp) {
-    const minted = await mintInstallationToken(hosted.githubApp);
-    githubToken = minted.token;
-    await audit(store, accountId, { action: "token_minted", detail: `installation token, expires ${minted.expiresAt}` });
-  }
+  // With a GitHub App, the machine self-mints a fresh, short-lived installation
+  // token from the control plane per git op (BIVY_HOSTED_MINT) — no static
+  // credential is ever baked into the machine, and long sessions keep working.
+  // With only a stored PAT, inject it statically (the legacy fallback).
+  const useHostedMint = Boolean(hosted.githubApp);
+  const githubToken = useHostedMint ? undefined : hosted.githubToken;
 
   // Enroll runs over HTTP against our own /nodes/enroll with this bearer.
   const sessionToken = await store.createSession(accountId);
@@ -223,6 +220,7 @@ export async function provisionEphemeralForAccount(
         ttlMinutes: config.ttlMinutes,
         hostedTasks: true,
         githubToken,
+        hostedMint: useHostedMint,
         setupId: config.id,
         purpose: "queue-default",
         name: `Hosted ${config.name}`,

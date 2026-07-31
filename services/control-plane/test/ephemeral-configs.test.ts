@@ -141,6 +141,7 @@ async function main() {
   const hp0 = await req(port, "GET", "/account/hosted-provisioning", undefined, token);
   expect(hp0.json?.enabled === false && hp0.json?.credential === "none" && Array.isArray(hp0.json?.providers) && hp0.json.providers.length === 0, "hosted provisioning off by default");
   expect(hp0.json?.encryptionReady === true, "encryption key is configured (encryptionReady)");
+  expect(hp0.json?.keyId === "default", "active key id reported (single-key → 'default')");
 
   // Disabled → the plan won't provision.
   const plan0 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
@@ -169,9 +170,21 @@ async function main() {
   expect(Array.isArray(auditRows.json) && auditRows.json.some((e: { action: string }) => e.action === "credential_updated"), "audit records credential_updated");
   expect(!/ghp_secret_value|fly_secret_value/.test(JSON.stringify(auditRows.json)), "audit never contains secrets");
 
+  // Mint-on-demand endpoint: node-authenticated; 404 while no GitHub App is set.
+  const enrollTok = (await req(port, "POST", "/nodes/enroll", { nodeId: "eph-mint-t", name: "mint-t" }, token)).json?.enrollmentToken;
+  expect(Boolean(enrollTok), "node enrolled for the mint test");
+  expect((await req(port, "POST", "/node/hosted-git-credential", undefined)).status === 401, "mint endpoint requires node auth (401)");
+  expect((await req(port, "POST", "/node/hosted-git-credential", undefined, enrollTok)).status === 404, "mint endpoint 404 when no GitHub App");
+
   // Switch to a GitHub App credential (minted tokens preferred over a PAT).
   const hpApp = await req(port, "PUT", "/account/hosted-provisioning", { githubApp: { appId: "123", installationId: "456", privateKeyPem: "-----BEGIN KEY-----\nx\n-----END KEY-----" } }, token);
   expect(hpApp.json?.credential === "app" && hpApp.json?.githubAppId === "123", "credential switches to app when app creds set");
+
+  // Key rotation: re-seal credentials under the current primary key; audited.
+  const rot = await req(port, "POST", "/account/hosted-provisioning/rotate", {}, token);
+  expect(rot.status === 200 && rot.json?.keyId === "default", "rotate re-seals under the primary key");
+  const audit2 = await req(port, "GET", "/account/hosted-audit", undefined, token);
+  expect(Array.isArray(audit2.json) && audit2.json.some((e: { action: string }) => e.action === "credential_rotated"), "audit records credential_rotated");
 
   // Shared routing → nothing to provision.
   await req(port, "PUT", "/account/queue-routing", { primary: { kind: "shared" } }, token);

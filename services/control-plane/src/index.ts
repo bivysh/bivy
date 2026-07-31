@@ -9,7 +9,7 @@ import Stripe from "stripe";
 import webpush from "web-push";
 import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken } from "./ephemeral-provisioner.js";
-import { hostedEncryptionAvailable } from "./hosted-crypto.js";
+import { hostedEncryptionAvailable, hostedPrimaryKid } from "./hosted-crypto.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
@@ -2266,7 +2266,7 @@ app.get("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const status = await store.getHostedProvisioningStatus(client.accountId);
-  res.json({ ...status, encryptionReady: hostedEncryptionAvailable() });
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
 }));
 
 app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
@@ -2290,7 +2290,7 @@ app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   await store.setHostedProvisioning(client.accountId, patch);
   await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_updated", detail: Object.keys(patch).join(",") || "none" });
   const status = await store.getHostedProvisioningStatus(client.accountId);
-  res.json({ ...status, encryptionReady: hostedEncryptionAvailable() });
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
 }));
 
 // Audit trail of hosted-credential use (never contains secrets).
@@ -2298,6 +2298,18 @@ app.get("/account/hosted-audit", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   res.json(await store.listHostedAudit(client.accountId, 50));
+}));
+
+// Re-seal this account's hosted credentials under the current primary key
+// (key rotation): a decrypt-with-old-kid + encrypt-with-primary round-trip.
+app.post("/account/hosted-provisioning/rotate", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  if (!hostedEncryptionAvailable()) return res.status(503).json({ error: "No encryption key configured" });
+  await store.setHostedProvisioning(client.accountId, {}); // re-encrypts under the primary key
+  await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_rotated", detail: `kid ${hostedPrimaryKid() ?? ""}` });
+  const status = await store.getHostedProvisioningStatus(client.accountId);
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
 }));
 
 // Inspect or trigger the provisioning decision. Dry-run by default (returns the

@@ -4776,6 +4776,32 @@ function invalidateGitHubApps(): void {
  * replies post as `<app>[bot]`; anything else uses the device-flow PAT. This is
  * where future sources (Slack bot token, Linear/Notion OAuth) branch in.
  */
+// Hosted (control-plane-orchestrated) machines carry neither a static GitHub
+// token nor an app key. When BIVY_HOSTED_MINT is set they mint a fresh,
+// short-lived token from the control plane per git op — cached until ~5 min
+// before expiry so a burst of git ops is a single round trip. This is the final
+// fallback rung after local apps and BIVY_GITHUB_TOKEN.
+let hostedMintCache: { token: string; expiresAt: number } | undefined;
+async function hostedMintToken(): Promise<string | undefined> {
+  if (!process.env.BIVY_HOSTED_MINT || !sessionAdvertiseTarget) return undefined;
+  const now = Date.now();
+  if (hostedMintCache && hostedMintCache.expiresAt - now > 5 * 60 * 1000) return hostedMintCache.token;
+  try {
+    const res = await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/hosted-git-credential`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}` },
+    });
+    if (!res.ok) return undefined;
+    const data = (await res.json().catch(() => ({}))) as { token?: string; expiresAt?: string };
+    if (!data.token) return undefined;
+    const parsed = data.expiresAt ? Date.parse(data.expiresAt) : NaN;
+    hostedMintCache = { token: data.token, expiresAt: Number.isFinite(parsed) ? parsed : now + 55 * 60 * 1000 };
+    return data.token;
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveTokenForWorkItem(item: ControlPlaneWorkItem): Promise<string | undefined> {
   if (item.installationId) {
     const apps = await ensureGitHubApps();
@@ -4792,7 +4818,7 @@ async function resolveTokenForWorkItem(item: ControlPlaneWorkItem): Promise<stri
       }
     }
   }
-  return resolveGitHubToken();
+  return (await resolveGitHubToken()) ?? (await hostedMintToken());
 }
 
 /**
@@ -4840,7 +4866,7 @@ async function resolveTokenForRepo(owner: string, repo: string): Promise<string 
       }
     }
   }
-  return resolveGitHubToken();
+  return (await resolveGitHubToken()) ?? (await hostedMintToken());
 }
 
 async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>) {

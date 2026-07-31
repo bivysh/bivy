@@ -595,6 +595,8 @@ export interface HostedProvisioningStatus {
   providers: string[];
   /** Whether the server has an encryption key configured; secrets can't be saved without it. */
   encryptionReady: boolean;
+  /** Active encryption key id (for rotation display). */
+  keyId?: string;
 }
 
 export interface HostedProvisioningPatch {
@@ -623,6 +625,7 @@ function coerceHostedStatus(d: any): HostedProvisioningStatus {
     githubAppId: typeof d?.githubAppId === "string" ? d.githubAppId : undefined,
     providers: Array.isArray(d?.providers) ? d.providers : [],
     encryptionReady: Boolean(d?.encryptionReady),
+    keyId: typeof d?.keyId === "string" ? d.keyId : undefined,
   };
 }
 
@@ -636,6 +639,13 @@ export async function setHostedProvisioning(store: LocalStore, patch: HostedProv
   const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(patch) });
   const data: any = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `set hosted provisioning failed: ${res.status}`);
+  return coerceHostedStatus(data);
+}
+
+export async function rotateHostedProvisioning(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning/rotate`, { method: "POST", headers: authHeaders(store) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `rotate hosted credentials failed: ${res.status}`);
   return coerceHostedStatus(data);
 }
 

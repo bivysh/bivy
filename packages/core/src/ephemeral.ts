@@ -678,6 +678,10 @@ export interface BootstrapOpts {
    *  in the same device→provider user_data as the relay enrollment token/E2E
    *  key above — never sent to the control plane. */
   githubToken?: string;
+  /** Have the machine self-mint a GitHub token from the control plane per git op
+   *  (exports BIVY_HOSTED_MINT) instead of carrying a static token — the hosted
+   *  GitHub App path, so no long-lived credential ever lands on the machine. */
+  hostedMint?: boolean;
 }
 
 /** Clamp a requested TTL into a sane 5-minute…24-hour window (default 60). A
@@ -713,6 +717,7 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
     opts.hostedTasks ? `export BIVY_GITHUB_HOSTED_TASKS=1` : "",
     opts.nodeLabel ? `export BIVY_NODE_LABEL=${shq(opts.nodeLabel)}` : "",
     opts.githubToken ? `export BIVY_GITHUB_TOKEN=${shq(opts.githubToken)}` : "",
+    opts.hostedMint ? `export BIVY_HOSTED_MINT=1` : "",
   ].filter(Boolean);
 }
 
@@ -1788,6 +1793,7 @@ function spritesServiceEnv(opts: BootstrapOpts): Record<string, string> {
   if (opts.hostedTasks) env.BIVY_GITHUB_HOSTED_TASKS = "1";
   if (opts.nodeLabel) env.BIVY_NODE_LABEL = opts.nodeLabel;
   if (opts.githubToken) env.BIVY_GITHUB_TOKEN = opts.githubToken;
+  if (opts.hostedMint) env.BIVY_HOSTED_MINT = "1";
   return env;
 }
 
@@ -1924,6 +1930,9 @@ export interface LaunchOpts {
    *  `BootstrapOpts.githubToken`). Queue workers and first-run interactive
    *  machines both need it because a disposable node has no native login. */
   githubToken?: string;
+  /** Have the booted machine self-mint its GitHub token from the control plane
+   *  per git op (sets BIVY_HOSTED_MINT) instead of carrying a static token. */
+  hostedMint?: boolean;
   /** Bookkeeping to stamp onto the resulting `EphemeralMachine` record — see
    *  `EphemeralMachine.workItemId`/`purpose`. Provisioning itself doesn't use
    *  these; callers (the queue UI) do, to track/watch what a machine is for. */
@@ -2072,6 +2081,7 @@ export async function launchEphemeralMachine(
     hostedTasks: opts.hostedTasks,
     nodeLabel: opts.hostedTasks ? ephemeralNodeLabel(nodeId) : undefined,
     githubToken: opts.githubToken,
+    hostedMint: opts.hostedMint,
   };
   // Both forms of the same boot intent: `userData` is the cloud-init payload VM
   // providers run as-is; `bootstrap` lets a provider that can't run cloud-init

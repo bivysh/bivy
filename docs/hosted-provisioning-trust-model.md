@@ -135,22 +135,28 @@ and why the hardening below is mandatory for production.
 The following are implemented (see the modules noted); items marked *interim*
 have a clear production upgrade path.
 
-1. **Encryption at rest, per-account isolation** — every hosted secret is sealed
-   with AES-256-GCM under a per-account subkey derived via HKDF-SHA256 from a
-   master key (`hosted-crypto.ts`); ciphertext is bound to its account (a
-   cross-account decrypt fails). No plaintext credential is ever written to the
-   database, and **writes fail closed** (503) when no key is configured.
-   *Interim:* the master key comes from `HOSTED_CREDENTIAL_KEY`; swap
-   `masterKey()` for a KMS/HSM decrypt to upgrade without touching callers.
+1. **Encryption at rest, per-account isolation, key rotation** — every hosted
+   secret is sealed with AES-256-GCM under a per-account subkey derived via
+   HKDF-SHA256 from a keyring master key (`hosted-crypto.ts`). Each envelope
+   records its key id (`kid`), so a new primary key can be introduced while old
+   ciphertext still decrypts; rotation (`POST /account/hosted-provisioning/rotate`)
+   re-seals under the primary. Ciphertext is bound to its account (a cross-account
+   decrypt fails); no plaintext credential is ever written to the database, and
+   **writes fail closed** (503) when no key is configured. *Interim:* keys come
+   from `HOSTED_CREDENTIAL_KEYS`/`HOSTED_CREDENTIAL_KEY`; swap `loadKeyring()` for
+   a KMS/HSM to upgrade without touching callers.
 2. **Audit trail** — every credential update, provision attempt/launch/failure,
    token mint, and machine reap is recorded per account (`appendHostedAudit`),
    readable at `GET /account/hosted-audit`. Events never contain secrets.
-3. **Short-lived minted credentials** — a hosted **GitHub App** is preferred over
-   a stored PAT: the CP mints a ~1 h installation token per launch
-   (`hosted-github-auth.ts`), and a mint-on-demand endpoint
-   (`POST /node/hosted-git-credential`, node-authenticated) lets a machine's git
-   credential helper fetch a fresh token per op, so sessions of any length work
-   without a long-lived secret on the machine.
+3. **Short-lived minted credentials — no static token on the machine** — with a
+   hosted **GitHub App**, the machine carries *no* GitHub token: it self-mints a
+   fresh ~1 h installation token from the control plane per git op via
+   `BIVY_HOSTED_MINT` → `POST /node/hosted-git-credential` (node-authenticated),
+   resolved as the final fallback in the node's git-credential path
+   (`hostedMintToken` in `src/server.ts`) and cached until ~5 min before expiry.
+   Sessions of any length work without a long-lived secret ever landing on the
+   machine. A stored PAT remains the legacy fallback when no app is configured.
+   (`hosted-github-auth.ts`.)
 4. **Rate cap** — provisions per account per hour are bounded
    (`HOSTED_PROVISION_MAX_PER_HOUR`, default 5) in the provisioning decision, on
    top of the one-at-a-time dedupe window.
@@ -161,12 +167,12 @@ have a clear production upgrade path.
    relying on a device.
 
 ### Still recommended before GA
-- Replace the env master key with a real **KMS/HSM** and add key rotation.
+- Back the keyring with a real **KMS/HSM** — rotation and per-key-id envelopes
+  are already in place, so only the key *source* (`loadKeyring()`) needs swapping.
 - **Scope** the GitHub App installation and cloud tokens to the minimum repos /
   permissions needed (operational).
-- Ship the machine-side git credential helper that calls the mint-on-demand
-  endpoint (the endpoint exists; wiring the helper into the hosted bootstrap is
-  the remaining step).
+- Exercise a real **end-to-end cloud launch** with live provider credentials
+  (the code path is complete; it needs a real provider account to run).
 
 ## Design principles preserved
 
