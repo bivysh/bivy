@@ -1527,7 +1527,7 @@ async function cmdExec(args = []) {
 function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
-    "run", "sessions", "ls", "resume", "promote", "nodes", "agents", "agents:install", "shim", "takeover", "token", "exec",
+    "run", "sessions", "ls", "resume", "promote", "rename", "nodes", "agents", "agents:install", "shim", "takeover", "token", "exec",
     "send", "kill", "setup", "start", "stop", "restart", "status", "doctor", "logs", "login",
     "update", "update:log", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
@@ -1906,6 +1906,49 @@ async function cmdPromote(args = []) {
     console.error(c.red(`Promotion failed (${res.status}): ${data.error || "unknown error"}`));
     process.exit(1);
   }
+}
+
+// `bivy rename <name>` — rename THIS node. Runs against the local daemon, which
+// persists the name to .bivy/node.json and live-updates relay/work-queue routing
+// (no restart needed). If the name collides on your account the control plane
+// auto-adjusts it for uniqueness, so we re-read the node info afterward to show
+// the name that actually stuck. Alias: node:rename.
+async function cmdRename(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log('Usage: bivy rename <name>\n\nRename this node. Takes effect immediately (no restart). If the name is already used by another node on your account, it is auto-adjusted to stay unique.');
+    return;
+  }
+  if (!(await ensureDeps())) process.exit(1);
+  // Node names may contain spaces, so join all positional (non-flag) args rather
+  // than taking only the first. The daemon trims/collapses whitespace and caps
+  // the length; we just forward the raw text.
+  const name = args.filter((a) => !a.startsWith("-")).join(" ").trim();
+  if (!name) { console.error(c.red("Usage: bivy rename <name>")); process.exit(1); return; }
+
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not start the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  let token;
+  try { token = await localDeviceToken(config); }
+  catch (error) { console.error(c.red(error?.message || String(error))); process.exit(1); return; }
+
+  const base = url(config);
+  const prev = await fetchJson(base, "/api/node/info", token).then((d) => d?.name).catch(() => undefined);
+  const res = await fetch(`${base}/api/node/name`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    console.error(c.red(`Rename failed (${res.status}): ${data.error || "unknown error"}`));
+    process.exit(1);
+    return;
+  }
+  const data = await res.json().catch(() => ({}));
+  const applied = data.name || name;
+  if (prev && prev !== applied) console.log(c.green(`Renamed node: ${c.dim(prev)} → ${applied}`));
+  else console.log(c.green(`Node name set to "${applied}".`));
+  if (applied !== name) console.log(c.dim(`(Adjusted from "${name}" to stay unique on your account.)`));
 }
 
 // `bivy send <id> "<message>"` — send a prompt to an existing session and stream
@@ -3968,6 +4011,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy run <agent> --node <name>")}  Start the session on another registered node
   ${c.cyan("bivy run <agent> --clone [remote]")}  Start in a fresh clone (current repo, or a given remote)
   ${c.cyan("bivy run <agent> --workspace <dir>")}  Start in an existing directory (default: current repo, else the configured workspace)
+  ${c.cyan("bivy rename <name>")}  Rename this node (takes effect immediately, no restart)
   ${c.cyan("bivy nodes")}       List/add/remove other nodes (add <name> <url> --token <t>)
   ${c.cyan("bivy agents")}      List the supported agents and which are installed (--json)
   ${c.cyan("bivy shim install <agent>")}  Make interactive '<agent>' launch its native TUI in a Bivy PTY (remote-visible)
@@ -4050,6 +4094,10 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "promote":
       await cmdPromote(args);
+      break;
+    case "rename":
+    case "node:rename":
+      await cmdRename(args);
       break;
     case "nodes":
       await cmdNodes(args);
