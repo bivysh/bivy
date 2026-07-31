@@ -94,6 +94,6 @@ export function shortSourceLabel(kind: SourceKind): string {
     case "cli":
       return "CLI";
     case "app":
-      return "Session";
+      return "App";
   }
 }
