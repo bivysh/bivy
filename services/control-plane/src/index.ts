@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
-import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken } from "./ephemeral-provisioner.js";
+import { hostedEncryptionAvailable, hostedPrimaryKid } from "./hosted-crypto.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
@@ -152,6 +154,9 @@ async function notifyRelaysWorkAvailable(accountId: string, item: { id: string; 
       });
     }),
   );
+  // Unattended provisioning: any enqueued work triggers a hosted-provisioning
+  // check (gated + deduped inside). Fire-and-forget; never blocks the notify.
+  void maybeAutoProvision(store, accountId, provisionEnv());
 }
 if (relayShardUrls.length > 1) {
   console.log(`[relay] sharding across ${relayShardUrls.length} relays: ${relayShardUrls.join(", ")}`);
@@ -164,6 +169,14 @@ function normalizePublicUrl(value: string): string {
 }
 
 const publicControlPlaneUrl = process.env.PUBLIC_CONTROL_PLANE_URL ? normalizePublicUrl(process.env.PUBLIC_CONTROL_PLANE_URL) : undefined;
+
+// Bootstrap URLs the control plane bakes into a machine it launches itself.
+// These must be PUBLIC (the VM reaches them); without PUBLIC_CONTROL_PLANE_URL a
+// hosted machine can't reach us, so hosted provisioning is effectively off.
+const provisionEnv = (): { cpBaseUrl: string; relayUrl: string } => ({
+  cpBaseUrl: publicControlPlaneUrl ?? `http://localhost:${process.env.PORT ?? 8080}`,
+  relayUrl: relayPublicUrl,
+});
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const vapidPublicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY || "";
 const vapidPrivateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY || process.env.VAPID_PRIVATE_KEY || "";
@@ -2174,6 +2187,152 @@ app.put("/account/ephemeral-default", asyncHandler(async (req, res) => {
   if (typeof body.size === "string") patch.size = body.size.trim() || undefined;
   if (typeof body.ttlMinutes === "number") patch.ttlMinutes = body.ttlMinutes;
   res.json(await store.setEphemeralQueueDefault(client.accountId, patch));
+}));
+
+// Account-level ephemeral node configs (reusable runner templates). CRUD via
+// read-modify-write of the JSONB array — low write frequency, so no locking.
+app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.getEphemeralConfigs(client.accountId));
+}));
+
+app.post("/account/ephemeral-configs", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const provider = typeof body.provider === "string" ? body.provider.trim() : "";
+  if (!name) return res.status(400).json({ error: "Config name is required" });
+  if (!provider) return res.status(400).json({ error: "Provider is required" });
+  const now = new Date().toISOString();
+  const config: EphemeralNodeConfig = {
+    id: `cfg-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+    name, provider, createdAt: now, updatedAt: now,
+  };
+  if (typeof body.region === "string" && body.region.trim()) config.region = body.region.trim();
+  if (typeof body.size === "string" && body.size.trim()) config.size = body.size.trim();
+  if (typeof body.ttlMinutes === "number") config.ttlMinutes = body.ttlMinutes;
+  if (body.teardownOnAgentFinish === true) config.teardownOnAgentFinish = true;
+  const current = await store.getEphemeralConfigs(client.accountId);
+  const saved = await store.setEphemeralConfigs(client.accountId, [...current, config]);
+  res.json(saved.find((c) => c.id === config.id) ?? config);
+}));
+
+app.put("/account/ephemeral-configs/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const id = String(req.params.id);
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const current = await store.getEphemeralConfigs(client.accountId);
+  const existing = current.find((c) => c.id === id);
+  if (!existing) return res.status(404).json({ error: "Config not found" });
+  const next: EphemeralNodeConfig = { ...existing, updatedAt: new Date().toISOString() };
+  if (typeof body.name === "string" && body.name.trim()) next.name = body.name.trim();
+  if (typeof body.provider === "string" && body.provider.trim()) next.provider = body.provider.trim();
+  if (typeof body.region === "string") next.region = body.region.trim() || undefined;
+  if (typeof body.size === "string") next.size = body.size.trim() || undefined;
+  if (typeof body.ttlMinutes === "number") next.ttlMinutes = body.ttlMinutes;
+  if (typeof body.teardownOnAgentFinish === "boolean") next.teardownOnAgentFinish = body.teardownOnAgentFinish || undefined;
+  const saved = await store.setEphemeralConfigs(client.accountId, current.map((c) => (c.id === id ? next : c)));
+  res.json(saved.find((c) => c.id === id) ?? next);
+}));
+
+app.delete("/account/ephemeral-configs/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const id = String(req.params.id);
+  const current = await store.getEphemeralConfigs(client.accountId);
+  const saved = await store.setEphemeralConfigs(client.accountId, current.filter((c) => c.id !== id));
+  res.json({ ok: true, configs: saved });
+}));
+
+app.get("/account/queue-routing", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.getQueueRouting(client.accountId));
+}));
+
+app.put("/account/queue-routing", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.setQueueRouting(client.accountId, (req.body ?? {}) as QueueRouting));
+}));
+
+// Hosted (control-plane-orchestrated) provisioning. GET returns a redacted
+// status (never tokens). SECURITY: enabling this stores repo/cloud credentials
+// on the control plane — see store.ts.
+app.get("/account/hosted-provisioning", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const status = await store.getHostedProvisioningStatus(client.accountId);
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
+}));
+
+app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  // Fail closed: never accept secrets to store unless encryption is configured.
+  const providerTokens = body.providerTokens as Record<string, unknown> | undefined;
+  const settingSecret =
+    (typeof body.githubToken === "string" && body.githubToken.trim() !== "")
+    || (providerTokens && typeof providerTokens === "object" && Object.values(providerTokens).some((v) => typeof v === "string" && v))
+    || (body.githubApp != null && typeof body.githubApp === "object");
+  if (settingSecret && !hostedEncryptionAvailable()) {
+    return res.status(503).json({ error: "Credential encryption is not configured (set HOSTED_CREDENTIAL_KEY). Refusing to store secrets in plaintext." });
+  }
+  const patch: Partial<HostedProvisioning> = {};
+  if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
+  if (typeof body.githubToken === "string") patch.githubToken = body.githubToken;
+  if (body.githubApp != null && typeof body.githubApp === "object") patch.githubApp = body.githubApp as HostedProvisioning["githubApp"];
+  if (providerTokens && typeof providerTokens === "object") patch.providerTokens = providerTokens as Record<string, string>;
+  await store.setHostedProvisioning(client.accountId, patch);
+  await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_updated", detail: Object.keys(patch).join(",") || "none" });
+  const status = await store.getHostedProvisioningStatus(client.accountId);
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
+}));
+
+// Audit trail of hosted-credential use (never contains secrets).
+app.get("/account/hosted-audit", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listHostedAudit(client.accountId, 50));
+}));
+
+// Re-seal this account's hosted credentials under the current primary key
+// (key rotation): a decrypt-with-old-kid + encrypt-with-primary round-trip.
+app.post("/account/hosted-provisioning/rotate", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  if (!hostedEncryptionAvailable()) return res.status(503).json({ error: "No encryption key configured" });
+  await store.setHostedProvisioning(client.accountId, {}); // re-encrypts under the primary key
+  await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_rotated", detail: `kid ${hostedPrimaryKid() ?? ""}` });
+  const status = await store.getHostedProvisioningStatus(client.accountId);
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
+}));
+
+// Inspect or trigger the provisioning decision. Dry-run by default (returns the
+// plan); pass { execute: true } to actually launch when the plan says so.
+app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const plan = await planAutoProvision(store, client.accountId);
+  if (req.body?.execute === true && plan.willProvision) {
+    const machine = await maybeAutoProvision(store, client.accountId, provisionEnv());
+    return res.json({ plan, provisioned: machine ? { id: machine.id, nodeId: machine.nodeId } : null });
+  }
+  res.json({ plan });
+}));
+
+// Mint-on-demand: a hosted machine's git credential helper fetches a fresh
+// installation token per git op (so long sessions never hold a stale/long-lived
+// token). Authenticated by the node's enrollment token.
+app.post("/node/hosted-git-credential", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const minted = await mintHostedInstallationToken(store, node.accountId);
+  if (!minted) return res.status(404).json({ error: "No hosted GitHub App configured" });
+  res.json({ token: minted.token, expiresAt: minted.expiresAt });
 }));
 
 // Clear the whole queue: remove every *pending* item (the "Clear queue" action).

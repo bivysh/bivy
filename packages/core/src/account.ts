@@ -478,6 +478,191 @@ export async function setEphemeralQueueDefault(
   return { enabled: Boolean(data?.enabled), provider: data?.provider, region: data?.region, size: data?.size, ttlMinutes: data?.ttlMinutes };
 }
 
+// An account-level, reusable ephemeral node config — "a config = a selectable
+// node" in both the queue router and the new-session picker. Non-secret sizing
+// only; the launching device still supplies the provider token. Account-level
+// (not device-local) so queued work can route to it from any device or,
+// eventually, an unattended orchestrator.
+export interface EphemeralNodeConfig {
+  id: string;
+  name: string;
+  provider: string;
+  region?: string;
+  size?: string;
+  ttlMinutes?: number;
+  teardownOnAgentFinish?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EphemeralConfigInput = {
+  name: string;
+  provider: string;
+  region?: string | null;
+  size?: string | null;
+  ttlMinutes?: number | null;
+  teardownOnAgentFinish?: boolean;
+};
+
+// How the account routes queued work by default. `primary` names the runner;
+// only a persistent-node primary may carry an ephemeral-config `fallback` (used
+// when that node is offline) — an ephemeral-config primary is provisioned on
+// demand and needs none.
+export type QueueRunnerTarget =
+  | { kind: "shared" }
+  | { kind: "node"; node: string }
+  | { kind: "config"; configId: string };
+
+export interface QueueRouting {
+  primary: QueueRunnerTarget;
+  fallback?: { kind: "config"; configId: string };
+}
+
+function coerceConfig(v: any): EphemeralNodeConfig {
+  return {
+    id: String(v?.id ?? ""),
+    name: String(v?.name ?? ""),
+    provider: String(v?.provider ?? ""),
+    region: typeof v?.region === "string" && v.region ? v.region : undefined,
+    size: typeof v?.size === "string" && v.size ? v.size : undefined,
+    ttlMinutes: typeof v?.ttlMinutes === "number" ? v.ttlMinutes : undefined,
+    teardownOnAgentFinish: Boolean(v?.teardownOnAgentFinish) || undefined,
+    createdAt: String(v?.createdAt ?? ""),
+    updatedAt: String(v?.updatedAt ?? ""),
+  };
+}
+
+/** The account's saved ephemeral node configs (shared across the account's devices). */
+export async function fetchEphemeralConfigs(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`ephemeral-configs request failed: ${res.status}`);
+  const data: unknown = await res.json().catch(() => []);
+  return Array.isArray(data) ? data.map(coerceConfig).filter((c) => c.id) : [];
+}
+
+export async function createEphemeralConfig(store: LocalStore, input: EphemeralConfigInput, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs`, { method: "POST", headers: authHeaders(store), body: JSON.stringify(input) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `create ephemeral config failed: ${res.status}`);
+  return coerceConfig(data);
+}
+
+export async function updateEphemeralConfig(store: LocalStore, id: string, patch: Partial<EphemeralConfigInput>, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs/${encodeURIComponent(id)}`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(patch) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `update ephemeral config failed: ${res.status}`);
+  return coerceConfig(data);
+}
+
+export async function deleteEphemeralConfig(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders(store) });
+  if (!res.ok) {
+    const data: any = await res.json().catch(() => ({}));
+    throw new Error(data?.error || `delete ephemeral config failed: ${res.status}`);
+  }
+}
+
+function coerceRouting(v: any): QueueRouting {
+  const p = v?.primary;
+  let primary: QueueRunnerTarget = { kind: "shared" };
+  if (p?.kind === "node" && typeof p.node === "string" && p.node.trim()) primary = { kind: "node", node: p.node.trim() };
+  else if (p?.kind === "config" && typeof p.configId === "string" && p.configId) primary = { kind: "config", configId: p.configId };
+  const f = v?.fallback;
+  const fallback = f?.kind === "config" && typeof f.configId === "string" && f.configId ? { kind: "config" as const, configId: f.configId } : undefined;
+  return primary.kind === "node" && fallback ? { primary, fallback } : { primary };
+}
+
+/** The account's default queue routing (primary runner + optional fallback). */
+export async function fetchQueueRouting(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<QueueRouting> {
+  const res = await fetchImpl(`${cpBase(store)}/account/queue-routing`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`queue-routing request failed: ${res.status}`);
+  return coerceRouting(await res.json().catch(() => ({})));
+}
+
+export async function setQueueRouting(store: LocalStore, routing: QueueRouting, fetchImpl: typeof fetch = fetch): Promise<QueueRouting> {
+  const res = await fetchImpl(`${cpBase(store)}/account/queue-routing`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(routing) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `set queue routing failed: ${res.status}`);
+  return coerceRouting(data);
+}
+
+// --- Hosted (control-plane-orchestrated) provisioning -----------------------
+// Status is non-secret: which credentials are present, never their values.
+export interface HostedProvisioningStatus {
+  enabled: boolean;
+  credential: "app" | "pat" | "none";
+  githubAppId?: string;
+  providers: string[];
+  /** Whether the server has an encryption key configured; secrets can't be saved without it. */
+  encryptionReady: boolean;
+  /** Active encryption key id (for rotation display). */
+  keyId?: string;
+}
+
+export interface HostedProvisioningPatch {
+  enabled?: boolean;
+  githubToken?: string;
+  githubApp?: { appId: string; installationId: string; privateKeyPem: string } | null;
+  providerTokens?: Record<string, string>;
+}
+
+export interface HostedAuditEvent {
+  at: string;
+  action: string;
+  provider?: string;
+  configId?: string;
+  nodeId?: string;
+  workItemId?: string;
+  detail?: string;
+}
+
+export interface HostedProvisionPlan { willProvision: boolean; targetConfigId: string | null; reason: string; }
+
+function coerceHostedStatus(d: any): HostedProvisioningStatus {
+  return {
+    enabled: Boolean(d?.enabled),
+    credential: d?.credential === "app" || d?.credential === "pat" ? d.credential : "none",
+    githubAppId: typeof d?.githubAppId === "string" ? d.githubAppId : undefined,
+    providers: Array.isArray(d?.providers) ? d.providers : [],
+    encryptionReady: Boolean(d?.encryptionReady),
+    keyId: typeof d?.keyId === "string" ? d.keyId : undefined,
+  };
+}
+
+export async function fetchHostedProvisioning(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`hosted-provisioning request failed: ${res.status}`);
+  return coerceHostedStatus(await res.json().catch(() => ({})));
+}
+
+export async function setHostedProvisioning(store: LocalStore, patch: HostedProvisioningPatch, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(patch) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `set hosted provisioning failed: ${res.status}`);
+  return coerceHostedStatus(data);
+}
+
+export async function rotateHostedProvisioning(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning/rotate`, { method: "POST", headers: authHeaders(store) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `rotate hosted credentials failed: ${res.status}`);
+  return coerceHostedStatus(data);
+}
+
+export async function fetchHostedAudit(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedAuditEvent[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-audit`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`hosted-audit request failed: ${res.status}`);
+  const d: unknown = await res.json().catch(() => []);
+  return Array.isArray(d) ? (d as HostedAuditEvent[]) : [];
+}
+
+export async function triggerHostedProvision(store: LocalStore, execute = false, fetchImpl: typeof fetch = fetch): Promise<{ plan: HostedProvisionPlan; provisioned?: { id: string; nodeId?: string } | null }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provision-now`, { method: "POST", headers: authHeaders(store), body: JSON.stringify({ execute }) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `hosted provision failed: ${res.status}`);
+  return data;
+}
+
 export interface GithubQueueItem {
   id: string;
   source: string; // "github:issue" | "github:comment" | "linear:issue" | "slack"

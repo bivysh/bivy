@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
+import { encryptSecret, decryptSecret, isSecretEnvelope } from "./hosted-crypto.js";
 import {
   type Account,
   type DeviceLoginStatus,
@@ -22,6 +23,15 @@ import {
   normalizeNotificationPreferences,
   type EphemeralQueueDefault,
   normalizeEphemeralQueueDefault,
+  type EphemeralNodeConfig,
+  normalizeEphemeralConfigs,
+  type QueueRouting,
+  normalizeQueueRouting,
+  type HostedProvisioning,
+  normalizeHostedProvisioning,
+  DEFAULT_HOSTED_PROVISIONING,
+  type HostedProvisioningStatus,
+  type HostedAuditEvent,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
@@ -149,6 +159,18 @@ export class PostgresStore implements MeshStore {
       -- queue when no persistent node is online. NULL = disabled (never set).
       -- Non-secret preferences only — see EphemeralQueueDefault in store.ts.
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ephemeral_queue_default JSONB;
+      -- Account-level ephemeral node configs (reusable runner templates) and the
+      -- account's default queue routing (primary runner + optional fallback).
+      -- Non-secret; provider tokens stay device-local. See store.ts.
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ephemeral_configs JSONB;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS queue_routing     JSONB;
+      -- Hosted provisioning: control-plane-held credentials + enable flag, and a
+      -- tracking list of machines the control plane launched itself. Off by
+      -- default; SECURITY: encrypt these at rest in production (see store.ts).
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_provisioning JSONB;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_machines     JSONB;
+      -- Append-only audit trail of hosted-credential use (capped in app code).
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_audit         JSONB;
       -- The paid single-user plan was renamed 'individual' -> 'pro' to match what
       -- it is sold as. The plan column is plain TEXT with no enum or CHECK, so the
       -- backfill is a straight UPDATE; it is idempotent (the second run matches no
@@ -1281,6 +1303,135 @@ export class PostgresStore implements MeshStore {
     const merged = normalizeEphemeralQueueDefault({ ...current, ...patch });
     await this.query(`UPDATE accounts SET ephemeral_queue_default = $2 WHERE id = $1`, [accountId, JSON.stringify(merged)]);
     return merged;
+  }
+
+  async getEphemeralConfigs(accountId: string): Promise<EphemeralNodeConfig[]> {
+    const { rows } = await this.query(`SELECT ephemeral_configs FROM accounts WHERE id = $1`, [accountId]);
+    return normalizeEphemeralConfigs(rows[0]?.ephemeral_configs ?? null);
+  }
+
+  async setEphemeralConfigs(accountId: string, configs: EphemeralNodeConfig[]): Promise<EphemeralNodeConfig[]> {
+    const normalized = normalizeEphemeralConfigs(configs);
+    await this.query(`UPDATE accounts SET ephemeral_configs = $2 WHERE id = $1`, [accountId, JSON.stringify(normalized)]);
+    return normalized;
+  }
+
+  async getQueueRouting(accountId: string): Promise<QueueRouting> {
+    const { rows } = await this.query(`SELECT queue_routing FROM accounts WHERE id = $1`, [accountId]);
+    return normalizeQueueRouting(rows[0]?.queue_routing ?? null);
+  }
+
+  async setQueueRouting(accountId: string, routing: QueueRouting): Promise<QueueRouting> {
+    const normalized = normalizeQueueRouting(routing);
+    await this.query(`UPDATE accounts SET queue_routing = $2 WHERE id = $1`, [accountId, JSON.stringify(normalized)]);
+    return normalized;
+  }
+
+  // Seal plaintext hosted credentials into the at-rest form: every secret value
+  // is an AES-256-GCM envelope bound to the account; ids stay in the clear.
+  private sealHosted(accountId: string, h: HostedProvisioning): Record<string, unknown> {
+    const out: Record<string, unknown> = { enabled: h.enabled };
+    if (h.githubToken) out.githubToken = encryptSecret(accountId, h.githubToken);
+    if (h.githubApp) {
+      out.githubApp = {
+        appId: h.githubApp.appId,
+        installationId: h.githubApp.installationId,
+        privateKeyPem: encryptSecret(accountId, h.githubApp.privateKeyPem),
+      };
+    }
+    if (h.providerTokens && Object.keys(h.providerTokens).length) {
+      const enc: Record<string, unknown> = {};
+      for (const [p, t] of Object.entries(h.providerTokens)) enc[p] = encryptSecret(accountId, t);
+      out.providerTokens = enc;
+    }
+    return out;
+  }
+
+  // Open the at-rest form back to plaintext. Tolerates legacy plaintext strings
+  // (pre-encryption) on read; requires the master key for sealed values.
+  private openHosted(accountId: string, stored: unknown): HostedProvisioning {
+    if (!stored || typeof stored !== "object") return { ...DEFAULT_HOSTED_PROVISIONING };
+    const s = stored as Record<string, any>;
+    const dec = (v: unknown): string | undefined => {
+      if (isSecretEnvelope(v)) return decryptSecret(accountId, v);
+      if (typeof v === "string" && v) return v;
+      return undefined;
+    };
+    const out: HostedProvisioning = { enabled: Boolean(s.enabled) };
+    const gt = dec(s.githubToken);
+    if (gt) out.githubToken = gt;
+    if (s.githubApp && typeof s.githubApp === "object") {
+      const pk = dec(s.githubApp.privateKeyPem);
+      if (typeof s.githubApp.appId === "string" && typeof s.githubApp.installationId === "string" && pk) {
+        out.githubApp = { appId: s.githubApp.appId, installationId: s.githubApp.installationId, privateKeyPem: pk };
+      }
+    }
+    if (s.providerTokens && typeof s.providerTokens === "object") {
+      const tokens: Record<string, string> = {};
+      for (const [p, v] of Object.entries(s.providerTokens)) {
+        const t = dec(v);
+        if (t) tokens[p] = t;
+      }
+      if (Object.keys(tokens).length) out.providerTokens = tokens;
+    }
+    return out;
+  }
+
+  async getHostedProvisioning(accountId: string): Promise<HostedProvisioning> {
+    const { rows } = await this.query(`SELECT hosted_provisioning FROM accounts WHERE id = $1`, [accountId]);
+    return this.openHosted(accountId, rows[0]?.hosted_provisioning ?? null);
+  }
+
+  // Non-decrypting status read — reports which credentials are present without
+  // needing the master key, so the settings UI works even if the key rotates.
+  async getHostedProvisioningStatus(accountId: string): Promise<HostedProvisioningStatus> {
+    const { rows } = await this.query(`SELECT hosted_provisioning FROM accounts WHERE id = $1`, [accountId]);
+    const s = (rows[0]?.hosted_provisioning ?? {}) as Record<string, any>;
+    const hasApp = Boolean(s.githubApp && s.githubApp.appId);
+    return {
+      enabled: Boolean(s.enabled),
+      credential: hasApp ? "app" : s.githubToken ? "pat" : "none",
+      githubAppId: hasApp ? String(s.githubApp.appId) : undefined,
+      providers: s.providerTokens && typeof s.providerTokens === "object" ? Object.keys(s.providerTokens) : [],
+    };
+  }
+
+  async setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning> {
+    const current = await this.getHostedProvisioning(accountId);
+    // Merge provider tokens so adding one provider doesn't wipe the others.
+    const merged = normalizeHostedProvisioning({
+      ...current,
+      ...patch,
+      providerTokens: { ...(current.providerTokens ?? {}), ...(patch.providerTokens ?? {}) },
+    });
+    // Encrypt at rest (throws if the master key is unset — fail closed).
+    await this.query(`UPDATE accounts SET hosted_provisioning = $2 WHERE id = $1`, [accountId, JSON.stringify(this.sealHosted(accountId, merged))]);
+    return merged;
+  }
+
+  async getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>> {
+    const { rows } = await this.query(`SELECT hosted_machines FROM accounts WHERE id = $1`, [accountId]);
+    const v = rows[0]?.hosted_machines;
+    return Array.isArray(v) ? v : [];
+  }
+
+  async setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
+    const arr = Array.isArray(machines) ? machines : [];
+    await this.query(`UPDATE accounts SET hosted_machines = $2 WHERE id = $1`, [accountId, JSON.stringify(arr)]);
+    return arr;
+  }
+
+  async appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void> {
+    const { rows } = await this.query(`SELECT hosted_audit FROM accounts WHERE id = $1`, [accountId]);
+    const cur = Array.isArray(rows[0]?.hosted_audit) ? (rows[0].hosted_audit as HostedAuditEvent[]) : [];
+    const next = [...cur, event].slice(-200); // cap the trail
+    await this.query(`UPDATE accounts SET hosted_audit = $2 WHERE id = $1`, [accountId, JSON.stringify(next)]);
+  }
+
+  async listHostedAudit(accountId: string, limit = 50): Promise<HostedAuditEvent[]> {
+    const { rows } = await this.query(`SELECT hosted_audit FROM accounts WHERE id = $1`, [accountId]);
+    const cur = Array.isArray(rows[0]?.hosted_audit) ? (rows[0].hosted_audit as HostedAuditEvent[]) : [];
+    return cur.slice(-limit).reverse();
   }
 
   async getModelAuthVault(accountId: string): Promise<ModelAuthVault | undefined> {
