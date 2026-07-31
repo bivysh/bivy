@@ -6901,7 +6901,18 @@ function restoredWorktreeFromMetadata(meta?: MetadataSession): Worktree | undefi
  * only `sessionId`); the session file is taken from `path` when present, else
  * from the durable metadata store.
  */
+/** Surface the slow session-open steps (attach lookup/handshake, disk paint) in
+ *  the log without spamming healthy sub-second opens — this is the instrumentation
+ *  for chasing the "10s to see an active session" report. Threshold-gated and
+ *  overridable via BIVY_OPEN_SLOW_LOG_MS. */
+const openSlowLogMs = Number(process.env.BIVY_OPEN_SLOW_LOG_MS ?? 500);
+function logSlowOpen(op: string, startedMs: number, extra?: string): void {
+  const elapsed = Date.now() - startedMs;
+  if (elapsed >= openSlowLogMs) console.warn(`[open] slow ${op}: ${elapsed}ms${extra ? ` ${extra}` : ""}`);
+}
+
 function fastHistoryEvent(msg: ClientMessage): ReturnType<typeof buildHistoryEvent> | null {
+  const fastStart = Date.now();
   try {
     const sessionId = typeof msg.sessionId === "string" ? msg.sessionId.trim() : "";
     if (!sessionId) return null;
@@ -6938,7 +6949,14 @@ function fastHistoryEvent(msg: ClientMessage): ReturnType<typeof buildHistoryEve
     // Only fast-paint when there's actually something to show. Sending an empty
     // "full" snapshot would needlessly blank a client's cached view, so fall back
     // to the normal open path when neither source has anything.
-    if (!base || base.length === 0) return null;
+    if (!base || base.length === 0) {
+      // A remote session this node never streamed has no local mirror to paint —
+      // the transcript then can't appear until the (slow) attach resolves. This
+      // is the cross-node case that instrumentation should make visible.
+      logSlowOpen(`fastHistory MISS (no local base) ${sessionId} runtime=${rt.id}`, fastStart);
+      return null;
+    }
+    logSlowOpen(`fastHistory paint ${sessionId} src=${runtimeBase && runtimeBase.length ? "runtime" : "mirror"} n=${base.length}`, fastStart);
     return buildHistoryEvent({
       sessionId,
       workspace: meta?.worktree ?? meta?.workspace ?? defaultWorkspace,
@@ -7008,7 +7026,9 @@ type AttachOutcome =
 
 async function tryAttachLiveRemote(sessionId: string | undefined, options: OpenSessionOptions): Promise<AttachOutcome | undefined> {
   if (!sessionId) return undefined;
+  const lookupStart = Date.now();
   const location = await sessionLocations.lookup(sessionId).catch(() => undefined);
+  logSlowOpen(`attach.lookup ${sessionId}`, lookupStart);
   if (!location?.agentServiceAddress) return undefined;
   // Route to the service that ACTUALLY hosts this session (Stage 3 per-session
   // routing) — an adopted session may live on a different service than the node
@@ -7021,7 +7041,9 @@ async function tryAttachLiveRemote(sessionId: string | undefined, options: OpenS
   }
   if (!(remote instanceof RemoteRuntime)) return undefined;
   try {
+    const attachStart = Date.now();
     const result = await remote.attachSession(sessionId, { toolInterceptor: options.toolInterceptor, toolProvider: options.toolProvider });
+    logSlowOpen(`attach.session ${sessionId} @ ${location.agentServiceAddress}`, attachStart);
     return { result, address: location.agentServiceAddress };
   } catch (error) {
     // Forget the mapping ONLY when the service is reachable and reports no such

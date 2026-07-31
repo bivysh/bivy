@@ -76,6 +76,29 @@ export interface RpcTransport {
   close(): void;
 }
 
+/**
+ * Bound every daemon → agent-service round-trip so a slow, unreachable, or
+ * restarting service fails fast instead of stalling on the OS socket timeout
+ * (tens of seconds). A blocked handshake here is exactly what made opening an
+ * "active" cloud session take upward of 10s: `startRemoteSession` awaited the
+ * `started` frame, `connectSocketTransport` awaited `connect`, and `runtimeCall`
+ * awaited a `res` — none with a deadline. All three are overridable for slow
+ * links / tests.
+ */
+const REMOTE_CONNECT_TIMEOUT_MS = Number(process.env.BIVY_REMOTE_CONNECT_TIMEOUT_MS ?? 8_000);
+const REMOTE_HANDSHAKE_TIMEOUT_MS = Number(process.env.BIVY_REMOTE_HANDSHAKE_TIMEOUT_MS ?? 15_000);
+const REMOTE_RPC_TIMEOUT_MS = Number(process.env.BIVY_REMOTE_RPC_TIMEOUT_MS ?? 10_000);
+
+/** Log a remote round-trip that crossed the slow threshold, so the 10s cases are
+ *  visible in the daemon log without drowning healthy sub-second opens. */
+const REMOTE_SLOW_LOG_MS = Number(process.env.BIVY_REMOTE_SLOW_LOG_MS ?? 1_000);
+function logRemoteTiming(op: string, startedMs: number, extra?: string): void {
+  const elapsed = Date.now() - startedMs;
+  if (elapsed >= REMOTE_SLOW_LOG_MS) {
+    console.warn(`[remote] slow ${op}: ${elapsed}ms${extra ? ` ${extra}` : ""}`);
+  }
+}
+
 interface RemoteSessionOptions {
   toolInterceptor?: ToolInterceptor;
   /**
@@ -453,6 +476,20 @@ export async function startRemoteSession(
     else fail?.(err ?? new Error("agent service connection closed during start"));
   });
 
+  const startedAt = Date.now();
+  // Deadline the handshake: if the service never answers `start` (down, wedged,
+  // mid-restart) settle would hang forever, blocking the session open. On timeout
+  // reject AND tear the transport down so we don't leak the half-open socket.
+  const timer = setTimeout(() => {
+    fail?.(new Error(`agent service handshake timed out after ${REMOTE_HANDSHAKE_TIMEOUT_MS}ms (op=${params.op})`));
+    try {
+      transport.close();
+    } catch {
+      // best-effort
+    }
+  }, REMOTE_HANDSHAKE_TIMEOUT_MS);
+  timer.unref?.();
+
   transport.send({
     t: "start",
     id: startId,
@@ -463,7 +500,13 @@ export async function startRemoteSession(
     options: params.options,
   });
 
-  const snapshot = await ready;
+  let snapshot: InitialSnapshot;
+  try {
+    snapshot = await ready;
+  } finally {
+    clearTimeout(timer);
+    logRemoteTiming(`handshake op=${params.op}`, startedAt);
+  }
   const session = new RemoteRuntimeSession(transport, snapshot, options);
   state.session = session;
   for (const message of buffered) session.handleMessage(message);
@@ -506,7 +549,19 @@ export function connectSocketTransport(raw: string): Promise<RpcTransport> {
     let settled = false;
     let closeErr: Error | undefined;
 
+    // Bound the TCP/unix connect itself. Without this a black-holed host (dropped
+    // SYNs, no RST) leaves us waiting for the OS connect timeout — the tens of
+    // seconds a user sees when the agent service is unreachable.
+    const connectTimer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      reject(new Error(`agent service connect timed out after ${REMOTE_CONNECT_TIMEOUT_MS}ms (${raw})`));
+    }, REMOTE_CONNECT_TIMEOUT_MS);
+    connectTimer.unref?.();
+
     socket.once("connect", () => {
+      clearTimeout(connectTimer);
       settled = true;
       resolve({
         send(message) {
@@ -544,6 +599,7 @@ export function connectSocketTransport(raw: string): Promise<RpcTransport> {
     });
     socket.on("error", (error) => {
       if (!settled) {
+        clearTimeout(connectTimer);
         settled = true;
         reject(error);
         return;
@@ -646,12 +702,16 @@ export class RemoteRuntime implements AgentRuntime {
   /** Session-less runtime-level RPC on a short-lived connection. */
   private async runtimeCall<T>(method: RuntimeRpcMethod, args: unknown[]): Promise<T | undefined> {
     const transport = await this.config.connect();
+    const startedAt = Date.now();
     return new Promise<T | undefined>((resolve, reject) => {
       const id = 1;
       let done = false;
+      let timer: ReturnType<typeof setTimeout>;
       const finish = (fn: () => void) => {
         if (done) return;
         done = true;
+        clearTimeout(timer);
+        logRemoteTiming(`rt ${method}`, startedAt);
         try {
           transport.close();
         } catch {
@@ -659,6 +719,13 @@ export class RemoteRuntime implements AgentRuntime {
         }
         fn();
       };
+      // A never-answered `res` (service wedged after connect) would hang this RPC
+      // forever, and listSessions/listAllSessions fans this out across every
+      // runtime — one stuck service stalls the whole session list. Deadline it.
+      timer = setTimeout(() => {
+        finish(() => reject(new Error(`agent service ${method} RPC timed out after ${REMOTE_RPC_TIMEOUT_MS}ms`)));
+      }, REMOTE_RPC_TIMEOUT_MS);
+      timer.unref?.();
       transport.onMessage((message) => {
         if (message.t === "res" && message.id === id) {
           if (message.ok) finish(() => resolve(message.value as T));
