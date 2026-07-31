@@ -7,8 +7,9 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
-import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, redactHostedProvisioning, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision } from "./ephemeral-provisioner.js";
+import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken } from "./ephemeral-provisioner.js";
+import { hostedEncryptionAvailable } from "./hosted-crypto.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
@@ -2264,18 +2265,39 @@ app.put("/account/queue-routing", asyncHandler(async (req, res) => {
 app.get("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  res.json(redactHostedProvisioning(await store.getHostedProvisioning(client.accountId)));
+  const status = await store.getHostedProvisioningStatus(client.accountId);
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable() });
 }));
 
 app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const body = (req.body ?? {}) as Record<string, unknown>;
+  // Fail closed: never accept secrets to store unless encryption is configured.
+  const providerTokens = body.providerTokens as Record<string, unknown> | undefined;
+  const settingSecret =
+    (typeof body.githubToken === "string" && body.githubToken.trim() !== "")
+    || (providerTokens && typeof providerTokens === "object" && Object.values(providerTokens).some((v) => typeof v === "string" && v))
+    || (body.githubApp != null && typeof body.githubApp === "object");
+  if (settingSecret && !hostedEncryptionAvailable()) {
+    return res.status(503).json({ error: "Credential encryption is not configured (set HOSTED_CREDENTIAL_KEY). Refusing to store secrets in plaintext." });
+  }
   const patch: Partial<HostedProvisioning> = {};
   if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
   if (typeof body.githubToken === "string") patch.githubToken = body.githubToken;
-  if (body.providerTokens && typeof body.providerTokens === "object") patch.providerTokens = body.providerTokens as Record<string, string>;
-  res.json(redactHostedProvisioning(await store.setHostedProvisioning(client.accountId, patch)));
+  if (body.githubApp != null && typeof body.githubApp === "object") patch.githubApp = body.githubApp as HostedProvisioning["githubApp"];
+  if (providerTokens && typeof providerTokens === "object") patch.providerTokens = providerTokens as Record<string, string>;
+  await store.setHostedProvisioning(client.accountId, patch);
+  await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_updated", detail: Object.keys(patch).join(",") || "none" });
+  const status = await store.getHostedProvisioningStatus(client.accountId);
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable() });
+}));
+
+// Audit trail of hosted-credential use (never contains secrets).
+app.get("/account/hosted-audit", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listHostedAudit(client.accountId, 50));
 }));
 
 // Inspect or trigger the provisioning decision. Dry-run by default (returns the
@@ -2289,6 +2311,16 @@ app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
     return res.json({ plan, provisioned: machine ? { id: machine.id, nodeId: machine.nodeId } : null });
   }
   res.json({ plan });
+}));
+
+// Mint-on-demand: a hosted machine's git credential helper fetches a fresh
+// installation token per git op (so long sessions never hold a stale/long-lived
+// token). Authenticated by the node's enrollment token.
+app.post("/node/hosted-git-credential", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const minted = await mintHostedInstallationToken(store, node.accountId);
+  if (!minted) return res.status(404).json({ error: "No hosted GitHub App configured" });
+  res.json({ token: minted.token, expiresAt: minted.expiresAt });
 }));
 
 // Clear the whole queue: remove every *pending* item (the "Clear queue" action).

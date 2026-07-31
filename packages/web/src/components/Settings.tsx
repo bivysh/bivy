@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralNodeConfig, QueueRouting, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, LinearHook, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralNodeConfig, QueueRouting, HostedProvisioningStatus, HostedAuditEvent, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, LinearHook, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, connectSlackHook, disconnectSlackHook, fetchSlackHook, connectLinearHook, disconnectLinearHook, fetchLinearHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
@@ -1414,6 +1414,168 @@ function QueueRoutingSection() {
   );
 }
 
+const HOSTED_PROVIDERS = [
+  { id: "fly", name: "Fly.io" },
+  { id: "hetzner", name: "Hetzner" },
+  { id: "aws", name: "AWS" },
+];
+
+// Unattended (control-plane-orchestrated) provisioning. Lets the control plane
+// launch an ephemeral config when work arrives with no device online. This
+// stores cloud + GitHub credentials on the control plane — see
+// docs/hosted-provisioning-trust-model.md — so it's opt-in and surfaces the
+// trust trade-off, the encryption-key status, and an audit trail here.
+function HostedProvisioningSection() {
+  const [status, setStatus] = useState<HostedProvisioningStatus | null>(null);
+  const [audit, setAudit] = useState<HostedAuditEvent[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+  const [mode, setMode] = useState<"app" | "pat">("app");
+  const [appId, setAppId] = useState("");
+  const [installationId, setInstallationId] = useState("");
+  const [privateKeyPem, setPrivateKeyPem] = useState("");
+  const [pat, setPat] = useState("");
+  const [provider, setProvider] = useState("fly");
+  const [providerToken, setProviderToken] = useState("");
+
+  const refreshAudit = () => controller.listHostedAudit().then(setAudit).catch(() => {});
+  useEffect(() => {
+    controller.getHostedProvisioning().then(setStatus).catch(() => setStatus(null));
+    refreshAudit();
+  }, []);
+
+  const save = async (patch: Parameters<typeof controller.setHostedProvisioning>[0], done?: () => void) => {
+    setErr(null);
+    setBusy(true);
+    try {
+      setStatus(await controller.setHostedProvisioning(patch));
+      done?.();
+      refreshAudit();
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runTest = async () => {
+    setErr(null);
+    setTestMsg(null);
+    try {
+      const { plan } = await controller.triggerHostedProvision(false);
+      setTestMsg(plan.willProvision ? `Ready — would provision ${plan.targetConfigId}` : `Would not provision: ${plan.reason}`);
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    }
+  };
+
+  const enabled = Boolean(status?.enabled);
+  const canSaveSecrets = Boolean(status?.encryptionReady);
+
+  return (
+    <>
+      <p className="muted small">
+        Let the control plane launch an ephemeral config for queued work when nothing is online — no device needed.
+        This stores cloud and GitHub credentials on the control plane (encrypted at rest); it is opt-in per account.
+      </p>
+
+      {status && !status.encryptionReady && (
+        <div className="banner error inline">
+          Credential encryption is not configured on the server (<code>HOSTED_CREDENTIAL_KEY</code>). You can enable the
+          flag, but saving credentials is refused until a key is set.
+        </div>
+      )}
+
+      <div className="settings-toggle-row">
+        <div className="settings-toggle-text">
+          <span className="settings-toggle-title">Enable unattended provisioning</span>
+          <span className="muted small">Off by default. When on, the control plane provisions per your queue routing.</span>
+        </div>
+        <Toggle checked={enabled} disabled={busy} onChange={(v) => save({ enabled: v })} label="Enable unattended provisioning" />
+      </div>
+
+      {enabled && (
+        <>
+          <h4 className="settings-subhead">GitHub credential</h4>
+          <p className="muted small">
+            Current: <span className="chip">{status?.credential === "app" ? `GitHub App ${status.githubAppId ?? ""}` : status?.credential === "pat" ? "Personal token" : "none"}</span>
+            {" "}A GitHub App is recommended — the control plane mints a fresh, short-lived installation token per run instead of holding a long-lived token.
+          </p>
+          <label className="field-label"><span>Credential type</span>
+            <select className="picker-search" value={mode} onChange={(e) => setMode(e.target.value as "app" | "pat")}>
+              <option value="app">GitHub App (recommended)</option>
+              <option value="pat">Personal access token</option>
+            </select>
+          </label>
+          {mode === "app" ? (
+            <>
+              <label className="field-label"><span>App ID</span>
+                <input className="picker-search" value={appId} placeholder="123456" onChange={(e) => setAppId(e.target.value)} />
+              </label>
+              <label className="field-label"><span>Installation ID</span>
+                <input className="picker-search" value={installationId} placeholder="789012" onChange={(e) => setInstallationId(e.target.value)} />
+              </label>
+              <label className="field-label"><span>Private key (PEM)</span>
+                <textarea className="picker-search" rows={4} value={privateKeyPem} placeholder="-----BEGIN RSA PRIVATE KEY-----" onChange={(e) => setPrivateKeyPem(e.target.value)} />
+              </label>
+              <button
+                className="btn primary"
+                disabled={busy || !canSaveSecrets || !appId.trim() || !installationId.trim() || !privateKeyPem.trim()}
+                onClick={() => save({ githubApp: { appId: appId.trim(), installationId: installationId.trim(), privateKeyPem } }, () => { setAppId(""); setInstallationId(""); setPrivateKeyPem(""); })}
+              >
+                {busy ? "Saving…" : "Save GitHub App"}
+              </button>
+            </>
+          ) : (
+            <>
+              <label className="field-label"><span>Fine-grained token (Contents + Pull requests)</span>
+                <input className="picker-search" type="password" value={pat} placeholder="github_pat_…" onChange={(e) => setPat(e.target.value)} />
+              </label>
+              <button className="btn primary" disabled={busy || !canSaveSecrets || !pat.trim()} onClick={() => save({ githubToken: pat.trim() }, () => setPat(""))}>
+                {busy ? "Saving…" : "Save token"}
+              </button>
+            </>
+          )}
+
+          <h4 className="settings-subhead">Cloud provider token</h4>
+          <p className="muted small">Configured: {status?.providers.length ? status.providers.map((p) => <span key={p} className="chip">{p}</span>) : <span className="muted">none</span>}</p>
+          <label className="field-label"><span>Provider</span>
+            <select className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value)}>
+              {HOSTED_PROVIDERS.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+            </select>
+          </label>
+          <label className="field-label"><span>Token</span>
+            <input className="picker-search" type="password" value={providerToken} placeholder="provider API token" onChange={(e) => setProviderToken(e.target.value)} />
+          </label>
+          <button className="btn primary" disabled={busy || !canSaveSecrets || !providerToken.trim()} onClick={() => save({ providerTokens: { [provider]: providerToken.trim() } }, () => setProviderToken(""))}>
+            {busy ? "Saving…" : `Save ${provider} token`}
+          </button>
+
+          <h4 className="settings-subhead">Check</h4>
+          <div className="row-actions">
+            <button className="btn" disabled={busy} onClick={runTest}>Dry-run the provisioning decision</button>
+            {testMsg && <span className="chip ok">{testMsg}</span>}
+          </div>
+
+          <h4 className="settings-subhead">Audit</h4>
+          <div className="picker-list">
+            {audit.length === 0 && <div className="picker-empty">No credential activity yet.</div>}
+            {audit.map((e, i) => (
+              <PickerItem
+                key={`${e.at}-${i}`}
+                title={e.action}
+                meta={[new Date(e.at).toLocaleString(), e.provider, e.nodeId, e.detail].filter(Boolean).join(" · ")}
+              />
+            ))}
+          </div>
+        </>
+      )}
+      {err && <span className="chip err">{err}</span>}
+    </>
+  );
+}
+
 // ---- Linear issue integration ----
 function LinearPanel() {
   const [hook, setHook] = useState<LinearHook | null>(null);
@@ -2098,6 +2260,13 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
             <section className="settings-section">
               <h4 className="settings-subhead">Queue routing</h4>
               <QueueRoutingSection />
+            </section>
+          )}
+
+          {EPHEMERAL_MACHINES_ENABLED && (
+            <section className="settings-section">
+              <h4 className="settings-subhead">Unattended provisioning</h4>
+              <HostedProvisioningSection />
             </section>
           )}
         </>

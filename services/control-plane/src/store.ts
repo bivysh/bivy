@@ -306,9 +306,21 @@ export function normalizeQueueRouting(value: unknown): QueueRouting {
 // ephemeral machine itself when a webhook arrives and nothing is online). Off by
 // default, per account. Tokens are stored as JSONB here; a production deployment
 // MUST encrypt them at rest (KMS/HSM) and audit every use.
+/** A GitHub App the control plane can mint short-lived installation tokens from
+ *  — preferred over a stored PAT (see docs/hosted-provisioning-trust-model.md). */
+export interface HostedGithubApp {
+  appId: string;
+  installationId: string;
+  privateKeyPem: string;
+}
+
 export interface HostedProvisioning {
   enabled: boolean;
-  /** Injected into the machine as BIVY_GITHUB_TOKEN for clone/push/PR work. */
+  /** GitHub App creds — when set, a fresh installation token is minted per
+   *  launch/op instead of using a stored PAT. Strongly preferred. */
+  githubApp?: HostedGithubApp;
+  /** Fallback long-lived PAT, injected as BIVY_GITHUB_TOKEN. Used only when no
+   *  githubApp is configured. */
   githubToken?: string;
   /** Cloud provider tokens keyed by provider id (fly/hetzner/aws), used to launch. */
   providerTokens?: Record<string, string>;
@@ -321,6 +333,13 @@ export function normalizeHostedProvisioning(value: unknown): HostedProvisioning 
   const v = value as Record<string, unknown>;
   const out: HostedProvisioning = { enabled: Boolean(v.enabled) };
   if (typeof v.githubToken === "string" && v.githubToken.trim()) out.githubToken = v.githubToken.trim();
+  const app = v.githubApp as Record<string, unknown> | undefined;
+  if (app && typeof app === "object"
+    && typeof app.appId === "string" && app.appId.trim()
+    && typeof app.installationId === "string" && app.installationId.trim()
+    && typeof app.privateKeyPem === "string" && app.privateKeyPem.trim()) {
+    out.githubApp = { appId: app.appId.trim(), installationId: app.installationId.trim(), privateKeyPem: app.privateKeyPem };
+  }
   if (v.providerTokens && typeof v.providerTokens === "object") {
     const tokens: Record<string, string> = {};
     for (const [k, val] of Object.entries(v.providerTokens as Record<string, unknown>)) {
@@ -332,9 +351,30 @@ export function normalizeHostedProvisioning(value: unknown): HostedProvisioning 
 }
 
 /** Non-secret view of hosted provisioning for GET responses — never leaks tokens. */
-export interface HostedProvisioningStatus { enabled: boolean; hasGithubToken: boolean; providers: string[]; }
+export interface HostedProvisioningStatus {
+  enabled: boolean;
+  credential: "app" | "pat" | "none";
+  githubAppId?: string;
+  providers: string[];
+}
 export function redactHostedProvisioning(h: HostedProvisioning): HostedProvisioningStatus {
-  return { enabled: h.enabled, hasGithubToken: Boolean(h.githubToken), providers: Object.keys(h.providerTokens ?? {}) };
+  return {
+    enabled: h.enabled,
+    credential: h.githubApp ? "app" : h.githubToken ? "pat" : "none",
+    githubAppId: h.githubApp?.appId,
+    providers: Object.keys(h.providerTokens ?? {}),
+  };
+}
+
+/** An audit event recording a use of hosted credentials (never contains a secret). */
+export interface HostedAuditEvent {
+  at: string;
+  action: "credential_updated" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped";
+  provider?: string;
+  configId?: string;
+  nodeId?: string;
+  workItemId?: string;
+  detail?: string;
 }
 
 // Cross-node model credential snapshot. Nodes push the exact provider auth
@@ -942,9 +982,14 @@ export interface MeshStore {
   // enable flag, and a tracking list of machines the control plane launched
   // itself (for dedupe/teardown). Machines are stored as opaque JSONB records.
   getHostedProvisioning(accountId: string): Promise<HostedProvisioning>;
+  /** Non-decrypting presence view for the settings UI (no master key needed). */
+  getHostedProvisioningStatus(accountId: string): Promise<HostedProvisioningStatus>;
   setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
   getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
   setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
+  // Append-only audit trail of hosted-credential use (capped, newest-first read).
+  appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
+  listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;
 
   // Account-wide model provider credentials, shared across enrolled nodes.
   getModelAuthVault(accountId: string): Promise<ModelAuthVault | undefined>;

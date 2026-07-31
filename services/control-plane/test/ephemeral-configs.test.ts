@@ -84,7 +84,7 @@ function expect(cond: boolean, msg: string) {
 }
 
 async function main() {
-  const port = await startControlPlane({ ENFORCE_ENTITLEMENTS: "0" });
+  const port = await startControlPlane({ ENFORCE_ENTITLEMENTS: "0", HOSTED_CREDENTIAL_KEY: Buffer.alloc(32, 7).toString("base64") });
 
   // Unauthenticated read is refused.
   const noAuth = await req(port, "GET", "/account/ephemeral-configs", undefined);
@@ -136,10 +136,11 @@ async function main() {
   const rAfter = await req(port, "GET", "/account/queue-routing", undefined, token);
   expect(rAfter.json?.primary?.node === "laptop" && rAfter.json?.fallback?.configId === id, "routing persists across requests");
 
-  // --- Hosted (control-plane-orchestrated) provisioning decision ---
-  // Off by default and redacted (never leaks tokens).
+  // --- Hosted (control-plane-orchestrated) provisioning ---
+  // Off by default; status is redacted (credential type only, never values).
   const hp0 = await req(port, "GET", "/account/hosted-provisioning", undefined, token);
-  expect(hp0.json?.enabled === false && hp0.json?.hasGithubToken === false && Array.isArray(hp0.json?.providers) && hp0.json.providers.length === 0, "hosted provisioning off + redacted by default");
+  expect(hp0.json?.enabled === false && hp0.json?.credential === "none" && Array.isArray(hp0.json?.providers) && hp0.json.providers.length === 0, "hosted provisioning off by default");
+  expect(hp0.json?.encryptionReady === true, "encryption key is configured (encryptionReady)");
 
   // Disabled → the plan won't provision.
   const plan0 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
@@ -151,16 +152,26 @@ async function main() {
   const plan1 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
   expect(plan1.json?.plan?.willProvision === false && /no hosted token/.test(plan1.json?.plan?.reason), "plan: config primary, no provider token → no provision");
 
-  // Add credentials; verify they are never echoed back.
+  // Add credentials (encrypted at rest); verify they are never echoed back.
   const hpSet = await req(port, "PUT", "/account/hosted-provisioning", { githubToken: "ghp_secret_value", providerTokens: { fly: "fly_secret_value" } }, token);
-  expect(hpSet.json?.hasGithubToken === true && hpSet.json?.providers?.includes("fly"), "credentials saved (redacted view shows presence)");
+  expect(hpSet.json?.credential === "pat" && hpSet.json?.providers?.includes("fly"), "credentials saved (redacted: pat + fly)");
   expect(!/ghp_secret_value|fly_secret_value/.test(JSON.stringify(hpSet.json)), "PUT never leaks token values");
   const hpGet = await req(port, "GET", "/account/hosted-provisioning", undefined, token);
   expect(!/ghp_secret_value|fly_secret_value/.test(JSON.stringify(hpGet.json)), "GET never leaks token values");
 
-  // Config primary + creds + no node online → will provision.
+  // The credential round-trips through AES-256-GCM (proves encrypt+decrypt): the
+  // plan can now use the provider token to say "ready".
   const plan2 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
-  expect(plan2.json?.plan?.willProvision === true && plan2.json?.plan?.targetConfigId === id, "plan: config primary ready → will provision");
+  expect(plan2.json?.plan?.willProvision === true && plan2.json?.plan?.targetConfigId === id, "plan: config primary ready → will provision (decrypts token)");
+
+  // Audit trail records credential updates and never contains a secret.
+  const auditRows = await req(port, "GET", "/account/hosted-audit", undefined, token);
+  expect(Array.isArray(auditRows.json) && auditRows.json.some((e: { action: string }) => e.action === "credential_updated"), "audit records credential_updated");
+  expect(!/ghp_secret_value|fly_secret_value/.test(JSON.stringify(auditRows.json)), "audit never contains secrets");
+
+  // Switch to a GitHub App credential (minted tokens preferred over a PAT).
+  const hpApp = await req(port, "PUT", "/account/hosted-provisioning", { githubApp: { appId: "123", installationId: "456", privateKeyPem: "-----BEGIN KEY-----\nx\n-----END KEY-----" } }, token);
+  expect(hpApp.json?.credential === "app" && hpApp.json?.githubAppId === "123", "credential switches to app when app creds set");
 
   // Shared routing → nothing to provision.
   await req(port, "PUT", "/account/queue-routing", { primary: { kind: "shared" } }, token);
@@ -171,6 +182,14 @@ async function main() {
   await req(port, "PUT", "/account/queue-routing", { primary: { kind: "node", node: "laptop" }, fallback: { kind: "config", configId: id } }, token);
   const plan4 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
   expect(plan4.json?.plan?.willProvision === true && plan4.json?.plan?.targetConfigId === id, "plan: node offline → provision fallback config");
+
+  // Fail closed: a control plane WITHOUT an encryption key refuses to store secrets.
+  const port2 = await startControlPlane({ ENFORCE_ENTITLEMENTS: "0" });
+  const token2 = (await req(port2, "POST", "/auth/dev-login", { email: "nokey@example.com" })).json.token;
+  const refused = await req(port2, "PUT", "/account/hosted-provisioning", { providerTokens: { fly: "x" } }, token2);
+  expect(refused.status === 503, `no encryption key → secret writes refused (got ${refused.status})`);
+  const enableOk = await req(port2, "PUT", "/account/hosted-provisioning", { enabled: true }, token2);
+  expect(enableOk.status === 200 && enableOk.json?.encryptionReady === false, "the enable flag alone is still allowed without a key");
 
   // Delete removes the config.
   const del = await req(port, "DELETE", `/account/ephemeral-configs/${id}`, undefined, token);

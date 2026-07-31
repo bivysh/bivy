@@ -586,6 +586,73 @@ export async function setQueueRouting(store: LocalStore, routing: QueueRouting, 
   return coerceRouting(data);
 }
 
+// --- Hosted (control-plane-orchestrated) provisioning -----------------------
+// Status is non-secret: which credentials are present, never their values.
+export interface HostedProvisioningStatus {
+  enabled: boolean;
+  credential: "app" | "pat" | "none";
+  githubAppId?: string;
+  providers: string[];
+  /** Whether the server has an encryption key configured; secrets can't be saved without it. */
+  encryptionReady: boolean;
+}
+
+export interface HostedProvisioningPatch {
+  enabled?: boolean;
+  githubToken?: string;
+  githubApp?: { appId: string; installationId: string; privateKeyPem: string } | null;
+  providerTokens?: Record<string, string>;
+}
+
+export interface HostedAuditEvent {
+  at: string;
+  action: string;
+  provider?: string;
+  configId?: string;
+  nodeId?: string;
+  workItemId?: string;
+  detail?: string;
+}
+
+export interface HostedProvisionPlan { willProvision: boolean; targetConfigId: string | null; reason: string; }
+
+function coerceHostedStatus(d: any): HostedProvisioningStatus {
+  return {
+    enabled: Boolean(d?.enabled),
+    credential: d?.credential === "app" || d?.credential === "pat" ? d.credential : "none",
+    githubAppId: typeof d?.githubAppId === "string" ? d.githubAppId : undefined,
+    providers: Array.isArray(d?.providers) ? d.providers : [],
+    encryptionReady: Boolean(d?.encryptionReady),
+  };
+}
+
+export async function fetchHostedProvisioning(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`hosted-provisioning request failed: ${res.status}`);
+  return coerceHostedStatus(await res.json().catch(() => ({})));
+}
+
+export async function setHostedProvisioning(store: LocalStore, patch: HostedProvisioningPatch, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(patch) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `set hosted provisioning failed: ${res.status}`);
+  return coerceHostedStatus(data);
+}
+
+export async function fetchHostedAudit(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedAuditEvent[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-audit`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`hosted-audit request failed: ${res.status}`);
+  const d: unknown = await res.json().catch(() => []);
+  return Array.isArray(d) ? (d as HostedAuditEvent[]) : [];
+}
+
+export async function triggerHostedProvision(store: LocalStore, execute = false, fetchImpl: typeof fetch = fetch): Promise<{ plan: HostedProvisionPlan; provisioned?: { id: string; nodeId?: string } | null }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provision-now`, { method: "POST", headers: authHeaders(store), body: JSON.stringify({ execute }) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `hosted provision failed: ${res.status}`);
+  return data;
+}
+
 export interface GithubQueueItem {
   id: string;
   source: string; // "github:issue" | "github:comment" | "linear:issue" | "slack"

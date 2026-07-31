@@ -32,9 +32,16 @@ import {
   deleteEphemeralConfig as apiDeleteEphemeralConfig,
   fetchQueueRouting,
   setQueueRouting as apiSetQueueRouting,
+  fetchHostedProvisioning,
+  setHostedProvisioning as apiSetHostedProvisioning,
+  fetchHostedAudit,
+  triggerHostedProvision as apiTriggerHostedProvision,
   type EphemeralNodeConfig,
   type EphemeralConfigInput,
   type QueueRouting,
+  type HostedProvisioningStatus,
+  type HostedProvisioningPatch,
+  type HostedAuditEvent,
   removeAccountNode,
   fetchPairedDevices,
   removePairedDevice,
@@ -2190,6 +2197,19 @@ export class AppController {
   }
   setQueueRouting(routing: QueueRouting): Promise<QueueRouting> {
     return apiSetQueueRouting(this.local, routing);
+  }
+  /** Hosted (control-plane-orchestrated) provisioning: status, credentials, audit. */
+  getHostedProvisioning(): Promise<HostedProvisioningStatus> {
+    return fetchHostedProvisioning(this.local);
+  }
+  setHostedProvisioning(patch: HostedProvisioningPatch): Promise<HostedProvisioningStatus> {
+    return apiSetHostedProvisioning(this.local, patch);
+  }
+  listHostedAudit(): Promise<HostedAuditEvent[]> {
+    return fetchHostedAudit(this.local);
+  }
+  triggerHostedProvision(execute = false) {
+    return apiTriggerHostedProvision(this.local, execute);
   }
 
   // --- Terminal ----------------------------------------------------------
