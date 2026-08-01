@@ -58,7 +58,7 @@ import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
-import { createWorktree, removeWorktree, branchSlug, type Worktree } from "./worktree.js";
+import { createWorktree, removeWorktree, branchSlug, gitRepoRoot, type Worktree } from "./worktree.js";
 import { HarnessManager } from "./harness/manager.js";
 import { startEgressProxyIfEnabled } from "./harness/egress.js";
 import { initSharedDepCache, sharedDepCacheRoot } from "./harness/dep-cache.js";
@@ -5704,6 +5704,21 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
     workspace = repoDir;
     cwd = wt.path;
     worktree = wt;
+  } else {
+    // Non-repo-backed source. The fork would otherwise reuse the PARENT's cwd,
+    // putting two sessions in one working tree — so when that cwd is itself a git
+    // checkout (a local repo without a GitHub origin), cut the fork its own
+    // worktree on a fresh branch. Best-effort: a non-git workspace has no tree to
+    // isolate, so the fork keeps the fallback cwd (no git collisions possible).
+    const forkRepoRoot = await gitRepoRoot(cwd);
+    if (forkRepoRoot) {
+      const forkBranch = `bivy/fork-${randomBytes(6).toString("hex")}`;
+      const wt = await createWorktree({ repoDir: forkRepoRoot, id: forkBranch, branch: forkBranch });
+      applyDirtyPatch(wt.path, bundle.dirtyPatch);
+      workspace = forkRepoRoot;
+      cwd = wt.path;
+      worktree = wt;
+    }
   }
 
   // Materialise the transcript, then stand the session up — resume the imported
@@ -7358,6 +7373,33 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
     // the second session into a directory another session already owns.
     worktree = await createWorktree({ repoDir: workspace, id: wtOpts.branch ?? `session-${randomBytes(6).toString("hex")}`, branch: wtOpts.branch, base: wtOpts.base });
     runtimeWorkspace = worktree.path;
+  }
+
+  // Resume with a reaped worktree. When a repo-backed session is resumed but its
+  // worktree directory was removed while it was closed (disk cleanup, a manual
+  // rm, `git worktree remove`), restoredWorktree is undefined and we'd otherwise
+  // fall back to the shared clone root — which the invariant below then rejects.
+  // Re-provision a fresh worktree on the SAME branch instead (branches survive
+  // `git worktree remove`, so the agent's committed history is intact), restoring
+  // isolation so the resumed session is usable again. Best-effort: if the clone
+  // or branch is gone, we leave it to the invariant to fail safe rather than
+  // corrupt a neighbour. The clone root is reconstructed from `source`
+  // (`repo:owner/repo`) because stored `workspace` is the old worktree path.
+  if (requestedSessionFile && !worktree && storedMeta?.worktree && storedMeta?.branch) {
+    const parsedSource = parseRepoSource(storedMeta.source);
+    if (parsedSource) {
+      const repoDir = path.join(reposRoot, `${parsedSource.owner}__${parsedSource.repo}`);
+      try {
+        // Clear any stale registration left by a dir that was rm'd out from under
+        // git, so re-adding the branch's worktree doesn't hit "already checked out".
+        runGit(["worktree", "prune"], repoDir);
+        const reprovisioned = await createWorktree({ repoDir, id: storedMeta.branch, branch: storedMeta.branch });
+        worktree = reprovisioned;
+        runtimeWorkspace = reprovisioned.path;
+      } catch (error) {
+        console.warn(`Could not re-provision worktree for resumed session on ${storedMeta.branch}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 
   // Isolation invariant. A session must NEVER run directly in a Bivy-managed
