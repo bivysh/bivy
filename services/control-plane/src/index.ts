@@ -2604,9 +2604,13 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     }
     const rawLabel = pickCommentRoutingLabel(comment.instruction, comment.issueLabels, triggerLogin);
     const label = applyDefaultNode(rawLabel, hook.defaultNode);
+    // Case B: if this issue already has an indexed session, CONTINUE it rather than
+    // starting a fresh one, so a follow-up comment lands in the same thread.
+    const existingSession = await store.findSessionByIssue(hook.accountId, comment.repo, comment.issueNumber).catch(() => undefined);
     const item = await store.enqueueWorkItem(hook.accountId, {
       label,
       source: "github:comment",
+      target: existingSession ? { kind: "existing_session", sessionId: existingSession.sessionId } : undefined,
       // Issue #153: the control plane no longer retains issue/comment title or
       // body — the claiming node fetches the live comment directly from GitHub
       // (see getIssueCommentBody in src/github-tasks.ts) immediately before use.
@@ -2641,9 +2645,12 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   if (!isLabelRouted && !meetsTriggerAccess(issue.authorAssociation, hook.triggerAccess)) {
     return res.json({ ok: true, enqueued: false, reason: "access" });
   }
+  // Case B: continue an existing session for this issue if one is already indexed.
+  const existingIssueSession = await store.findSessionByIssue(hook.accountId, issue.repo, issue.issueNumber).catch(() => undefined);
   const item = await store.enqueueWorkItem(hook.accountId, {
     label,
     source: "github:issue",
+    target: existingIssueSession ? { kind: "existing_session", sessionId: existingIssueSession.sessionId } : undefined,
     // Issue #153: the control plane no longer retains issue title/body — the
     // claiming node fetches the live issue directly from GitHub (getIssue in
     // src/github-tasks.ts) immediately before use.

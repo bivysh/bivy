@@ -4987,6 +4987,19 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       issue.body = instruction;
       if (item.url) issue.url = item.url;
     }
+    // Case B: the control plane asked us to CONTINUE an existing session for this
+    // issue (an inbound comment/issue on a thread that already has one). If that
+    // session isn't live on this node — e.g. its ephemeral machine was torn down —
+    // best-effort restore its snapshot first so its transcript + branch state are
+    // rebuilt and the work continues the thread instead of starting cold. On
+    // failure we fall through to the normal idempotent, remote-branch-adopting
+    // pickup, so this can only help, never break.
+    const issueSource = `issue:${parsed.owner}/${parsed.repo}#${item.issueNumber}`;
+    if (item.targetKind === "existing_session" && item.targetSessionId && !findIssueSession(issueSource)) {
+      await restoreSessionFromSnapshot(item.targetSessionId).catch((e) => {
+        console.warn(`[case-b] snapshot restore for ${item.targetSessionId} failed:`, (e as Error).message);
+      });
+    }
     await runIssueTask(cfg, issue, { runtimeId: item.runtimeId, model: item.model, onEvidence: report });
     return;
   }

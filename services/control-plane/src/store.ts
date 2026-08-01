@@ -1073,6 +1073,12 @@ export interface MeshStore {
   setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation>;
   deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void>;
 
+  // Case B: find an indexed session for a GitHub issue so an inbound comment/issue
+  // CONTINUES it instead of starting a new one. Matches session_index.source
+  // ("issue:owner/repo#N"). Covers sessions on currently-enrolled nodes; a session
+  // whose node was already torn down is rebuilt via the device send path (Gap 1).
+  findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined>;
+
   // GitHub App private-key vault (issue #88), per-app — see GithubAppVault above.
   // A node lists every app the account has a vault for (it may not hold all of
   // them locally yet) rather than asking per-app, so a newly opted-in node
