@@ -46,14 +46,62 @@ export function parseGitHubRemote(input: string): ParsedRepo | undefined {
   return undefined;
 }
 
-/** Infer owner/repo from a workspace's origin remote, if it is a GitHub checkout. */
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A git failure that DEFINITIVELY means "this workspace is not a GitHub-connected
+ * checkout" — a genuine `undefined` answer — as opposed to a transient failure we
+ * must not mistake for one. `git remote get-url origin` reports "not a git
+ * repository" (no repo) or "No such remote" (a repo with no origin); both are
+ * real, stable answers. Anything else (notably `index.lock`/`config.lock`
+ * contention when many sessions touch the same shared clone at once) is transient.
+ */
+function isDefinitiveNonGitHubError(error: unknown): boolean {
+  const e = error as { stderr?: string; message?: string } | undefined;
+  const text = `${e?.stderr ?? ""} ${e?.message ?? String(error)}`;
+  return /not a git repository|No such remote|does not appear to be a git repository/i.test(text);
+}
+
+/**
+ * Infer owner/repo from a workspace's origin remote, if it is a GitHub checkout.
+ *
+ * Retries transient git failures before giving up. Misclassifying a momentarily
+ * busy GitHub checkout as "not a repo" is what let a session skip worktree
+ * isolation and run directly in the shared clone root, where its `git
+ * checkout`/`git stash` collided with a concurrent session (the "sessions
+ * mixing" bug). So: a DEFINITIVE non-GitHub result (not a repo / no origin)
+ * resolves to `undefined` as before, but a transient error is retried and then
+ * THROWN — the caller must fail loudly rather than silently degrade to running
+ * the agent in the shared root.
+ */
 export async function inferGitHubRepoFromWorkspace(workspace: string): Promise<ParsedRepo | undefined> {
-  try {
-    const { stdout } = await exec("git", ["-C", workspace, "remote", "get-url", "origin"], { cwd: workspace });
-    return parseGitHubRemote(stdout);
-  } catch {
-    return undefined;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const { stdout } = await exec("git", ["-C", workspace, "remote", "get-url", "origin"], { cwd: workspace });
+      return parseGitHubRemote(stdout);
+    } catch (error) {
+      if (isDefinitiveNonGitHubError(error)) return undefined;
+      lastError = error;
+      if (attempt < 2) await delay(50 * (attempt + 1));
+    }
   }
+  throw new Error(
+    `Could not determine the GitHub repo for ${workspace} (the checkout may be busy): ` +
+      `${(lastError as Error)?.message ?? String(lastError)}`,
+  );
+}
+
+/**
+ * True when `dir` is a Bivy-managed shared clone root — a direct child of the
+ * repos root, i.e. `<reposRoot>/owner__repo` (see `cloneOrUpdateRepo`). Every
+ * session for a repo shares that one checkout, so an agent must NEVER run
+ * directly in it; it runs in a per-session worktree instead. Worktree paths live
+ * DEEPER (`<clone>/.bivy/worktrees/<slug>`) and are intentionally not matched, so
+ * this cleanly distinguishes "the shared root" from "an isolated worktree".
+ */
+export function isSharedCloneRoot(dir: string, reposRoot: string): boolean {
+  return path.resolve(path.dirname(path.resolve(dir))) === path.resolve(reposRoot);
 }
 
 /** A GitHub token from env or the local `gh` login, or undefined (public only). */
