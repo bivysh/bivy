@@ -35,4 +35,10 @@ describe("bootstrap ephemeral self-teardown env", () => {
   it("emits nothing when no provider is set (older/unaware bootstrap)", () => {
     expect(buildBootstrapUserData(base)).not.toContain("BIVY_EPHEMERAL");
   });
+
+  it("emits BIVY_RESTORE for a rebuild-resume boot (Gap B), else omits it", () => {
+    const restore = buildBootstrapUserData({ ...base, provider: "fly", restoreSessionId: "sess-xyz" });
+    expect(restore).toContain("export BIVY_RESTORE='sess-xyz'");
+    expect(buildBootstrapUserData({ ...base, provider: "fly" })).not.toContain("BIVY_RESTORE");
+  });
 });

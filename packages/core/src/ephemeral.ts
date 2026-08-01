@@ -19,7 +19,7 @@
 // control-plane's cold-start relay in services/control-plane/src/index.ts).
 // See docs/ephemeral-sessions.md#adding-a-new-provider for the full checklist.
 
-import { b64, b64url } from "./base64.js";
+import { b64, b64url, unb64url } from "./base64.js";
 import type { LocalStore } from "./local-store.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -709,6 +709,10 @@ export interface BootstrapOpts {
    *  the device's "Destroy when the agent finishes" toggle, so it no longer needs
    *  the launching device to stay online. */
   teardownOnAgentFinish?: boolean;
+  /** Rebuild-resume (Gap B): the session id to restore from its control-plane
+   *  snapshot on boot (exported as `BIVY_RESTORE`). The machine reuses this
+   *  session's node id + room key so it can fetch and decrypt the snapshot. */
+  restoreSessionId?: string;
 }
 
 /** Clamp a requested TTL into a sane 5-minute…24-hour window (default 60). A
@@ -753,6 +757,7 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
     ephemeral ? `export BIVY_EPHEMERAL_PROVIDER=${shq(opts.provider)}` : "",
     ephemeral ? `export BIVY_EPHEMERAL_TTL_MIN=${clampTtlMinutes(opts.ttlMinutes)}` : "",
     ephemeral && opts.teardownOnAgentFinish ? `export BIVY_TEARDOWN_ON_FINISH=1` : "",
+    ephemeral && opts.restoreSessionId ? `export BIVY_RESTORE=${shq(opts.restoreSessionId)}` : "",
   ].filter(Boolean);
 }
 
@@ -2110,6 +2115,13 @@ export interface LaunchOpts {
    *  these; callers (the queue UI) do, to track/watch what a machine is for. */
   workItemId?: string;
   purpose?: EphemeralMachine["purpose"];
+  /** Rebuild-resume (Gap B): re-provision a torn-down destroy-lane session onto a
+   *  new machine. Reuse the old node id + room key so the launching device still
+   *  reaches it and the daemon can decrypt the session snapshot, and reuse the
+   *  session id so the daemon knows which snapshot to restore on boot. */
+  reuseNodeId?: string;
+  reuseRoomKeyB64?: string;
+  restoreSessionId?: string;
 }
 
 /** The routing-label suffix a hosted-tasks ephemeral node serves, derived from
@@ -2216,7 +2228,10 @@ export async function launchEphemeralMachine(
   const token = await deps.keys.getToken(opts.provider);
   if (!token) throw new Error(`Add a ${adapter.name} token first.`);
 
-  const nodeId = "eph-" + randHex(8);
+  // Rebuild-resume reuses the torn-down session's node id so the launching device
+  // still reaches it (it holds that node's room key) and the daemon knows which
+  // snapshot to restore; a normal launch mints a fresh one.
+  const nodeId = opts.reuseNodeId || "eph-" + randHex(8);
   const enrollBody = JSON.stringify({ nodeId, name: opts.name || `Ephemeral ${adapter.name}` });
   const enrollOnce = async () => {
     const res = await fetchImpl(`${cpBase(deps.store)}/nodes/enroll`, {
@@ -2240,7 +2255,10 @@ export async function launchEphemeralMachine(
   }
   if (!enrollRes.ok || !enroll?.enrollmentToken) throw new Error(enroll?.error || "Could not enroll the machine");
 
-  const roomBytes = crypto.getRandomValues(new Uint8Array(32));
+  // Reuse the old session's room key on rebuild so the device (which already
+  // holds it) reaches the new machine and the daemon can decrypt the snapshot
+  // that was sealed under it; otherwise mint a fresh 32-byte key.
+  const roomBytes = opts.reuseRoomKeyB64 ? unb64url(opts.reuseRoomKeyB64) : crypto.getRandomValues(new Uint8Array(32));
   deps.store.addKey(nodeId, b64url(roomBytes));
 
   const bootstrap: BootstrapOpts = {
@@ -2256,6 +2274,7 @@ export async function launchEphemeralMachine(
     hostedMint: opts.hostedMint,
     provider: opts.provider,
     teardownOnAgentFinish: opts.teardownOnAgentFinish,
+    restoreSessionId: opts.restoreSessionId,
   };
   // Both forms of the same boot intent: `userData` is the cloud-init payload VM
   // providers run as-is; `bootstrap` lets a provider that can't run cloud-init

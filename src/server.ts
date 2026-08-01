@@ -52,8 +52,8 @@ import { SessionEventCoalescer } from "./session-event-coalescer.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from "./auth.js";
 import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-client.js";
 import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
-import { buildSessionSnapshot } from "./session/snapshot.js";
-import { createCheckpointBundle } from "./session/checkpoint-pack.js";
+import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
+import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
@@ -6426,6 +6426,45 @@ async function signalSettledToControlPlane(): Promise<void> {
   }).catch(() => {});
 }
 
+/** Rebuild-resume (Gap B): on a freshly re-provisioned machine booted with
+ *  `BIVY_RESTORE=<sessionId>`, fetch the session's control-plane snapshot,
+ *  decrypt it with this machine's room key (reused from the torn-down session so
+ *  the seal matches), and apply it — restoring the transcript (EventLog) and the
+ *  git checkpoint into a repo the session can open. The runtime process starts
+ *  fresh/seeded from the restored transcript ("reconstructed", not byte-identical
+ *  — see docs/ephemeral-sessions.md). Best-effort: a missing/undecryptable
+ *  snapshot leaves a clean fresh machine. Reuses the standby-replica machinery. */
+async function restoreSessionFromSnapshot(sessionId: string): Promise<void> {
+  if (!sessionAdvertiseTarget) return;
+  const cpBaseUrl = sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "");
+  try {
+    const res = await fetch(`${cpBaseUrl}/node/session-snapshot/${encodeURIComponent(sessionId)}`, {
+      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}` },
+    });
+    if (!res.ok) {
+      console.error(`[restore] no snapshot for ${sessionId} (${res.status})`);
+      return;
+    }
+    const data = (await res.json()) as { ciphertext?: string };
+    if (!data.ciphertext) return;
+    const applied = await applySessionSnapshot(data.ciphertext, pairingStore.roomKey(), {
+      persistRecords: (id, records) => eventLog.rewrite(id, records),
+      applyBundle: async (id, buf) => applyCheckpointBundle(await ensureReplicaRepo(id), id, buf),
+      materialize: async (id) => materializeCheckpoint(await ensureReplicaRepo(id), id),
+    });
+    // Register the rebuilt session so it lists and opens (mirrors the standby's
+    // upsertReplicaMeta); the transcript replays from the restored EventLog.
+    try {
+      metadata.upsertSession({ id: sessionId, source: "restored", status: "saved" });
+    } catch {
+      /* best-effort listing */
+    }
+    console.log(`[restore] session ${sessionId}: ${applied.recordCount} records, checkpoint ${applied.checkpointCommit ?? "none"}`);
+  } catch (e) {
+    console.error(`[restore] session ${sessionId} failed: ${(e as Error)?.message || e}`);
+  }
+}
+
 /** Flush a durable, E2E-encrypted snapshot of each open session to the control
  *  plane before this disposable machine is torn down, so a destroy-lane session
  *  can be rebuilt on a fresh machine later (Gap B). Sealed under the node room
@@ -9793,6 +9832,9 @@ const server = app.listen(port, host, async () => {
   console.log(`Agent data dir: ${piDir}`);
   console.log(`Workspace: ${defaultWorkspace}`);
   startRelayIfConfigured();
+  // Rebuild-resume (Gap B): if this machine was re-provisioned to restore a
+  // torn-down session, pull + apply its snapshot before serving. Non-blocking.
+  if (process.env.BIVY_RESTORE) void restoreSessionFromSnapshot(String(process.env.BIVY_RESTORE));
   startModelAuthWatcher();
   startGithubAppSyncWatcher();
   await startGitHubTasksIfConfigured();

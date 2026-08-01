@@ -2188,6 +2188,43 @@ export class AppController {
     }
   }
 
+  /**
+   * Rebuild-resume (Gap B): re-provision a torn-down destroy-lane session onto a
+   * NEW machine and restore it from its control-plane snapshot. Reuses the old
+   * node id + room key (this device holds it) so the new machine can decrypt the
+   * snapshot, and the old session id so its daemon knows what to restore. The
+   * machine's shape comes from its device-local record (or the node registry).
+   */
+  async reprovisionEphemeral(nodeId: string, sessionId: string): Promise<void> {
+    try {
+      const roomKeyB64 = this.local.keys()[nodeId];
+      if (!roomKeyB64) throw new Error("This device no longer holds this session's key, so it can't rebuild it.");
+      const machine =
+        (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
+        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId });
+      if (!machine) throw new Error("No record of the machine to rebuild — re-launch it from Ephemeral settings.");
+      if (ephemeralProviderSuspendsWhenIdle(machine.provider)) {
+        // A suspend provider is never destroyed — just wake it.
+        await this.resumeAndConnectNode(nodeId);
+        return;
+      }
+      await this.launchEphemeral({
+        provider: machine.provider,
+        region: machine.region || undefined,
+        ttlMinutes: machine.ttlMinutes,
+        repo: machine.repo,
+        setupId: machine.setupId,
+        teardownOnAgentFinish: machine.teardownOnAgentFinish,
+        reuseNodeId: nodeId,
+        reuseRoomKeyB64: roomKeyB64,
+        restoreSessionId: sessionId,
+      });
+      await this.connectToNode(nodeId, 120_000);
+    } catch (e) {
+      this.store.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   // --- GitHub work queue on ephemeral servers (issue #532) ----------------
   // Reuses the exact provision/destroy lifecycle above; the only new pieces are
   // (1) booting the machine opted into the hosted work queue and pre-labelled so
