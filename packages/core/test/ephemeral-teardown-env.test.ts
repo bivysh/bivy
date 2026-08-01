@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (c) 2026 Petter André Sjulstad
+import { describe, expect, it } from "vitest";
+import { buildBootstrapUserData, type BootstrapOpts } from "../src/index.js";
+
+const base: BootstrapOpts = {
+  relayUrl: "wss://relay.bivy.sh",
+  controlPlaneUrl: "https://app.bivy.sh",
+  enrollmentToken: "enroll-tok",
+  e2eKeyB64: "e2e-key-b64",
+  ttlMinutes: 90,
+};
+
+describe("bootstrap ephemeral self-teardown env", () => {
+  it("emits BIVY_EPHEMERAL awareness for a destroy-lane provider + finish flag", () => {
+    const ud = buildBootstrapUserData({ ...base, provider: "fly", teardownOnAgentFinish: true });
+    expect(ud).toContain("export BIVY_EPHEMERAL=1");
+    expect(ud).toContain("export BIVY_EPHEMERAL_PROVIDER='fly'");
+    expect(ud).toContain("export BIVY_EPHEMERAL_TTL_MIN=90");
+    expect(ud).toContain("export BIVY_TEARDOWN_ON_FINISH=1");
+  });
+
+  it("omits the finish flag when teardownOnAgentFinish is unset (idle-teardown only)", () => {
+    const ud = buildBootstrapUserData({ ...base, provider: "hetzner" });
+    expect(ud).toContain("export BIVY_EPHEMERAL=1");
+    expect(ud).toContain("export BIVY_EPHEMERAL_PROVIDER='hetzner'");
+    expect(ud).not.toContain("BIVY_TEARDOWN_ON_FINISH");
+  });
+
+  it("emits nothing for a suspend-to-zero provider (kept, never destroyed)", () => {
+    const ud = buildBootstrapUserData({ ...base, provider: "sprites", teardownOnAgentFinish: true });
+    expect(ud).not.toContain("BIVY_EPHEMERAL");
+  });
+
+  it("emits nothing when no provider is set (older/unaware bootstrap)", () => {
+    expect(buildBootstrapUserData(base)).not.toContain("BIVY_EPHEMERAL");
+  });
+});

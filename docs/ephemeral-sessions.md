@@ -317,6 +317,26 @@ This gives the user the important continuity — conversation history, GitHub co
 
 **Realised natively by Fly Sprites.** The [Fly Sprites](#fly-sprites-suspend-to-zero-machines-that-remember) provider gives this behaviour for free without Bivy having to snapshot/rebuild anything: the Sprite **suspends to ~$0 when idle and resumes with its filesystem *and* memory intact**, so the daemon process, runtime/session store, repo checkout, and agent all come back exactly where they were. Bivy's only job is to **wake** the suspended Sprite when the user reopens the session (`controller.resumeAndConnectNode` → the adapter's `wake` → the daemon re-dials the relay). The snapshot/rebuild path above remains the fallback for the destroy-when-done providers (Fly Machines/Hetzner/AWS), which can't preserve compute state across a teardown.
 
+## Server-side teardown (device-independent)
+
+Teardown was historically **device-driven**: `controller.maybeTeardownFinishedEphemeral` issued the destroy from the launching browser after `agent_end`, using the device-local provider token, with the machine's TTL self-shutdown as the only server-side backstop. That's why the launch UI warned that "destroy when the agent finishes" **requires this device to stay online** — and it left background automation workers (no device at all) burning their whole TTL idle.
+
+Teardown authority now lives on the machine and the control plane, so it works for sessions **and** automations with no device or persistent node online:
+
+- **The machine's own daemon self-terminates once idle.** The bootstrap tags a destroy-lane machine with `BIVY_EPHEMERAL=1` (+ provider, TTL, and `BIVY_TEARDOWN_ON_FINISH` mirroring the device toggle — see `bivyBootstrapExports` in `packages/core/src/ephemeral.ts`; suspend-to-zero providers are never tagged, they're kept). The daemon evaluates a **pure quiet condition** (`shouldSelfTeardown` in `src/ephemeral-teardown.ts`): no session running a turn, no device attached (`remoteActive`), no in-flight queue work, sustained past a grace — short after an agent finishes, else the idle window — and only after the machine has been busy at least once (never reaps a freshly-booted box). It's evaluated on `agent_end` and on the idle sweep (`closeIdleSessions`).
+- **The teardown action is provider-correct.** Fly: the daemon exits → `auto_destroy` reaps the init process. EC2: `shutdown -h now` → `InstanceInitiatedShutdownBehavior: terminate`. Hetzner: exiting can't reap the (still-billing) server, so the daemon posts a non-secret `POST /node/settled` and the control plane destroys it.
+- **The control plane is the backstop.** `/node/settled` and the lazy `reconcileHostedMachines` (`services/control-plane/src/ephemeral-provisioner.ts`) now **actively `destroyEphemeralMachine`** for hosted machines whose provider doesn't self-reap (Hetzner), using the `hosted.providerTokens` the CP already holds — idempotent/404-tolerant, so it races the daemon and the device fast-path harmlessly.
+
+| Provider | Teardown once idle, no device online | Credential needed server-side |
+|---|---|---|
+| Fly Machines | daemon exits → `auto_destroy` | none |
+| EC2 | daemon `shutdown -h now` → terminate | none |
+| Hetzner (hosted) | daemon `/node/settled` → CP `destroyEphemeralMachine` | the CP's own `hosted.providerTokens` |
+| Hetzner (device-launched) | still device/TTL-bound — CP holds no token for it | — (documented limitation) |
+| Fly Sprites / E2B | n/a — kept and suspended, never destroyed on finish | — |
+
+The device fast path (`maybeTeardownFinishedEphemeral`) is kept for snappy teardown while a device *is* watching; it's just no longer the sole authority. **Follow-up:** a global CP timer sweeping all accounts' hosted machines (today reconciliation is prompt via `/node/settled` and lazy on the next enqueue) needs a store account-enumeration method — tracked separately.
+
 ## Resumability with no persistent nodes
 
 "Resume" always means *reach the machine that still physically holds the state* — the control plane stores E2E-encrypted **metadata only** (session index title, ownership node-ids), never the transcript, files, or runtime. So resumability is a pure function of whether some machine still has the session and whether *this* device can reach it. Today:

@@ -8,7 +8,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import Stripe from "stripe";
 import webpush from "web-push";
 import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid } from "./hosted-crypto.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
@@ -1117,6 +1117,18 @@ app.post("/node/name", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const updated = await store.setNodeName(node.id, String(req.body?.name ?? ""));
   res.json({ ok: true, node: updated });
+}));
+
+// A disposable ephemeral machine's daemon calls this once it has gone idle, so
+// the control plane can promptly reap providers that don't self-destruct on
+// daemon exit (Hetzner halts but keeps billing). Non-secret: identifies the node
+// via its enrollment bearer only. Fly/EC2 already self-reap on exit, so this is
+// a harmless backstop for them; device-launched machines aren't tracked
+// server-side → reaped:false. See src/ephemeral-teardown.ts.
+app.post("/node/settled", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const reaped = await reapSettledHostedMachine(store, node.accountId, node.id, provisionEnv()).catch(() => false);
+  res.json({ ok: true, reaped });
 }));
 
 // The node reads its owner's entitlements (plan, node limit, push/relay flags).

@@ -51,6 +51,7 @@ import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from "./auth.js";
 import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-client.js";
+import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
@@ -6398,10 +6399,62 @@ async function deleteSessionFile(opts: { id?: string; path?: string; fallbackAct
   return { sessionId: deletedSessionId, sessionFile: inRoot ? resolved : undefined };
 }
 
-const idleCloseTimer = setInterval(() => { closeIdleSessions(); pruneGhostSessions(); pruneEmptySessions(); }, idleCloseSweepMs);
+const idleCloseTimer = setInterval(() => { closeIdleSessions(); pruneGhostSessions(); pruneEmptySessions(); evaluateEphemeralTeardown(); }, idleCloseSweepMs);
 idleCloseTimer.unref?.();
 const worktreeCleanupTimer = setInterval(() => void sweepDiskGuardrails(), worktreeCleanupSweepMs);
 worktreeCleanupTimer.unref?.();
+
+// --- server-side ephemeral teardown ----------------------------------------
+// On a disposable machine (bootstrap set BIVY_EPHEMERAL=1) the daemon ends the
+// machine ITSELF once it goes idle, so teardown no longer needs the launching
+// device online. See src/ephemeral-teardown.ts + docs/ephemeral-sessions.md.
+const ephemeralTeardownCfg = readEphemeralTeardownConfig();
+let ephemeralEverBusy = false;
+let ephemeralLastBusyAt = Date.now();
+
+/** Best-effort "I've settled — reap me" signal to the control plane. Non-secret
+ *  (node id via the enrollment bearer); lets a hosted machine whose provider
+ *  can't self-reap on exit (Hetzner) be destroyed server-side. */
+async function signalSettledToControlPlane(): Promise<void> {
+  if (!sessionAdvertiseTarget) return;
+  await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/settled`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
+    body: "{}",
+  }).catch(() => {});
+}
+
+/** Evaluate the quiet condition and self-terminate if the machine is done. Reads
+ *  live session/queue state each call, so it's safe to invoke from the idle
+ *  sweep and from agent_end. No-op on a persistent node (env absent). */
+function evaluateEphemeralTeardown(): void {
+  if (!ephemeralTeardownCfg.enabled) return;
+  const records = new Set(openSessions.values());
+  const anyWorking = [...records].some((r) => r.isWorking);
+  const anyRemoteActive = [...records].some((r) => r.remoteActive);
+  const inFlightWork = controlPlanePoller?.inFlightCount() ?? 0;
+  if (anyWorking || anyRemoteActive || inFlightWork > 0) {
+    ephemeralEverBusy = true;
+    ephemeralLastBusyAt = Date.now();
+    return;
+  }
+  const idleForMs = Date.now() - ephemeralLastBusyAt;
+  if (!shouldSelfTeardown(ephemeralTeardownCfg, { everBusy: ephemeralEverBusy, anyWorking, anyRemoteActive, inFlightWork, idleForMs })) return;
+  void performSelfTeardown({
+    provider: ephemeralTeardownCfg.provider,
+    signalSettled: signalSettledToControlPlane,
+    shutdown: () => { try { spawnSync("shutdown", ["-h", "now"], { stdio: "ignore" }); } catch { /* TTL backstops */ } },
+  });
+}
+
+if (ephemeralTeardownCfg.enabled) {
+  // Sample often enough to honour the finish grace (~10s) without waiting for the
+  // 1–5min idle sweep. Ephemeral-only, so no cost on a persistent node.
+  const ephemeralEvalMs = Math.max(2_000, Math.min(ephemeralTeardownCfg.finishGraceMs, 15_000));
+  const ephemeralTeardownTimer = setInterval(() => evaluateEphemeralTeardown(), ephemeralEvalMs);
+  ephemeralTeardownTimer.unref?.();
+  console.log(`[ephemeral-teardown] armed: provider=${ephemeralTeardownCfg.provider} onFinish=${ephemeralTeardownCfg.onFinish} ttl=${ephemeralTeardownCfg.ttlMin}m`);
+}
 setTimeout(() => void sweepDiskGuardrails(), 30_000).unref?.();
 // One sweep shortly after boot clears ghosts left by a previous run before any
 // client paints its sidebar; the idle timer keeps it clean thereafter.
@@ -6633,6 +6686,9 @@ function attachSessionListeners(record: SessionRecord) {
       // itself (gh/API/web) so the badge lights up.
       void maybePushWorktreeBranch(record)
         .then(() => maybeDetectPullRequest(record));
+      // On a disposable machine, a finished turn with nobody watching is the cue
+      // to consider self-teardown promptly (the idle sweep is the backstop).
+      evaluateEphemeralTeardown();
     }
     const sessionEventPayload = { type: "session.event", sessionId: record.id, event };
     if (event.type === "message_update") {

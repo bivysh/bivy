@@ -698,6 +698,17 @@ export interface BootstrapOpts {
    *  (exports BIVY_HOSTED_MINT) instead of carrying a static token — the hosted
    *  GitHub App path, so no long-lived credential ever lands on the machine. */
   hostedMint?: boolean;
+  /** The ephemeral provider this machine runs on (`fly`/`hetzner`/`aws`/…). Lets
+   *  the daemon learn it's disposable and, for destroy-lane providers, end the
+   *  machine itself once idle — see `bivyBootstrapExports`/src/ephemeral-teardown.ts.
+   *  Suspend-to-zero providers (Sprites/E2B) are kept, so no self-teardown env is
+   *  emitted for them. */
+  provider?: string;
+  /** Ask the daemon to tear the machine down promptly after the agent finishes
+   *  (a short grace), not just at the idle window — the server-side equivalent of
+   *  the device's "Destroy when the agent finishes" toggle, so it no longer needs
+   *  the launching device to stay online. */
+  teardownOnAgentFinish?: boolean;
 }
 
 /** Clamp a requested TTL into a sane 5-minute…24-hour window (default 60). A
@@ -727,6 +738,10 @@ function bivyRelayJson(opts: BootstrapOpts): string {
  *  the cloud-init (Hetzner/EC2) and Fly bootstraps so a node's env is identical
  *  however it was launched. */
 function bivyBootstrapExports(opts: BootstrapOpts): string[] {
+  // Destroy-lane providers learn they're disposable so the daemon can end the
+  // machine itself once idle (src/ephemeral-teardown.ts). Suspend-to-zero
+  // providers (Sprites/E2B) are KEPT, so they get no self-teardown env.
+  const ephemeral = Boolean(opts.provider) && !ephemeralProviderSuspendsWhenIdle(opts.provider as string);
   return [
     "export BIVY_DATA_DIR=/etc/bivy",
     opts.repo ? `export BIVY_REPO=${shq(opts.repo)}` : "",
@@ -734,6 +749,10 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
     opts.nodeLabel ? `export BIVY_NODE_LABEL=${shq(opts.nodeLabel)}` : "",
     opts.githubToken ? `export BIVY_GITHUB_TOKEN=${shq(opts.githubToken)}` : "",
     opts.hostedMint ? `export BIVY_HOSTED_MINT=1` : "",
+    ephemeral ? `export BIVY_EPHEMERAL=1` : "",
+    ephemeral ? `export BIVY_EPHEMERAL_PROVIDER=${shq(opts.provider)}` : "",
+    ephemeral ? `export BIVY_EPHEMERAL_TTL_MIN=${clampTtlMinutes(opts.ttlMinutes)}` : "",
+    ephemeral && opts.teardownOnAgentFinish ? `export BIVY_TEARDOWN_ON_FINISH=1` : "",
   ].filter(Boolean);
 }
 
@@ -2235,6 +2254,8 @@ export async function launchEphemeralMachine(
     nodeLabel: opts.hostedTasks ? ephemeralNodeLabel(nodeId) : undefined,
     githubToken: opts.githubToken,
     hostedMint: opts.hostedMint,
+    provider: opts.provider,
+    teardownOnAgentFinish: opts.teardownOnAgentFinish,
   };
   // Both forms of the same boot intent: `userData` is the cloud-init payload VM
   // providers run as-is; `bootstrap` lets a provider that can't run cloud-init

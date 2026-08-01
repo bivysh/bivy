@@ -2018,9 +2018,14 @@ export class AppController {
   }
   /** Destroy a configured ephemeral machine shortly after agent_end. The short
    * grace period lets final transcript/PR metadata flush first. A queued
-   * follow-up suppresses teardown; its eventual agent_end will try again. This
-   * is device-driven, so the machine's TTL remains the safety fallback when the
-   * browser goes offline. */
+   * follow-up suppresses teardown; its eventual agent_end will try again.
+   *
+   * This is the device-driven FAST PATH, kept for snappy teardown while a device
+   * is watching. It is no longer the sole authority: the machine's own daemon now
+   * self-terminates once idle (BIVY_EPHEMERAL — see src/ephemeral-teardown.ts) and
+   * the control-plane reconciler reaps leak-prone providers, so teardown happens
+   * even with no device online. Provider destroy is idempotent/404-tolerant, so
+   * these paths race harmlessly; TTL remains the final backstop. */
   private async maybeTeardownFinishedEphemeral(sessionId: string): Promise<void> {
     if (this.direct || this.store.getFollowups(sessionId).length > 0) return;
     const nodeId = this.local.cur;
