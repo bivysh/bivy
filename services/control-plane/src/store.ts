@@ -1055,6 +1055,15 @@ export interface MeshStore {
   listModelAuthKeyRequests(accountId: string, exceptNodeId: string): Promise<ModelAuthKeyRequest[]>;
   setModelAuthWrappedKey(accountId: string, targetNodeId: string, wrappedByNodeId: string, wrappedByPublicKey: string, wrappedKey: string): Promise<ModelAuthWrappedKey>;
 
+  // Node-less inheritance (hosted): escrow the model-auth vault KEY, sealed at rest
+  // with the per-account hosted key, so a LONE hosted ephemeral can decrypt the
+  // synced vault (incl. subscription OAuth) with no peer to wrap the key. Hosted-
+  // provisioning accounts ONLY (enforced at the endpoint) — CP-readable by design,
+  // the same posture as provider tokens / room-key escrow. Non-hosted accounts stay
+  // fully peer-wrapped (E2E, CP-blind).
+  getHostedModelAuthVaultKey(accountId: string): Promise<SecretEnvelope | undefined>;
+  setHostedModelAuthVaultKey(accountId: string, enc: SecretEnvelope): Promise<void>;
+
   // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
   getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;
   setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string): Promise<DeviceVault>;

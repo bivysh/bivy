@@ -327,6 +327,16 @@ export class PostgresStore implements MeshStore {
       );
       ALTER TABLE model_auth_wrapped_keys ADD COLUMN IF NOT EXISTS wrapped_by_public_key TEXT NOT NULL DEFAULT '';
 
+      -- Hosted escrow of the model-auth vault KEY (node-less inheritance). Sealed at
+      -- rest with the per-account hosted key so a LONE hosted ephemeral can decrypt
+      -- the synced vault without a peer to wrap the key. One row per account, written
+      -- and served ONLY for hosted-provisioning accounts (gated at the endpoint).
+      CREATE TABLE IF NOT EXISTS hosted_model_auth_keys (
+        account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        key_enc     JSONB NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
       CREATE TABLE IF NOT EXISTS model_auth_key_requests (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -1522,6 +1532,22 @@ export class PostgresStore implements MeshStore {
     const row = rows[0];
     if (!row) return undefined;
     return { ciphertext: row.ciphertext, updatedAt: new Date(row.updated_at).toISOString(), updatedByNodeId: row.updated_by_node_id };
+  }
+
+  async getHostedModelAuthVaultKey(accountId: string): Promise<SecretEnvelope | undefined> {
+    const { rows } = await this.query(`SELECT key_enc FROM hosted_model_auth_keys WHERE account_id = $1`, [accountId]);
+    if (!rows[0]) return undefined;
+    const raw = rows[0].key_enc;
+    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
+  }
+
+  async setHostedModelAuthVaultKey(accountId: string, enc: SecretEnvelope): Promise<void> {
+    await this.query(
+      `INSERT INTO hosted_model_auth_keys (account_id, key_enc, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (account_id) DO UPDATE SET key_enc = EXCLUDED.key_enc, updated_at = now()`,
+      [accountId, JSON.stringify(enc)],
+    );
   }
 
   async setModelAuthVault(accountId: string, nodeId: string, ciphertext: string): Promise<ModelAuthVault> {

@@ -208,6 +208,10 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       needsAction: Boolean(s?.needsAction),
       status: normalizeSessionStatus(s?.status, Boolean(s?.needsAction), Boolean(s?.isStreaming)),
       branch: s?.branch || undefined,
+      // Honored only when explicitly set on the incoming row (the client re-derives
+      // it each refresh for still-torn-down sessions). NOT carried over from prev, so
+      // a rebuilt session that reappears in the live list correctly loses the flag.
+      rebuildable: s?.rebuildable ? true : undefined,
       sandbox: normalizeSandboxTier(s?.sandbox ?? s?.bivySession?.sandbox),
       prUrl: s?.prUrl || undefined,
       prs: normalizePrs(s?.prs, s?.prUrl),

@@ -100,6 +100,11 @@ export interface SessionSummary {
    *  carries this from the node — see src/server.ts — it was previously dropped
    *  here, which is why the sidebar had no branch/PR context per row). */
   branch?: string;
+  /** This session's ephemeral node was torn down (unenrolled, gone from the
+   *  registry) but is REBUILDABLE from a durable correlation + the room key this
+   *  device still holds — so the row stays in the sidebar as offline-but-rebuildable
+   *  and a send rebuilds it (Gap 1). Client-local; the node has no concept of it. */
+  rebuildable?: boolean;
   /** Per-session sandbox tier this session was created with (the override); absent
    *  = the node default. Baked in at creation and read-only for the session's life
    *  — surfaced so a running session can show its sandbox mode read-only. */

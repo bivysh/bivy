@@ -27,6 +27,7 @@ import { provisionAgentRun } from "./runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
 import { suggestNameFromSelectedModel } from "./runtime/model-namer.js";
 import { isNativeOAuthProvider, loginModelOAuth, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
+import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
 import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } from "./runtime/codex-sessions.js";
 import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
@@ -866,6 +867,35 @@ let relay: RelayConnector | undefined;
 const clients = new Set<WebSocket>();
 const commandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const oauthLogins = new Map<string, OAuthLoginState>();
+// A browser-initiated subscription login parks the node on `manualCodePromise`
+// until the remote device pastes the code (`provider.oauth.code`). If the user
+// abandons it, the entry — AND its local callback http.Server — would otherwise
+// linger until the process exits. That matters especially on a short-lived
+// ephemeral node. Sweep periodically: abort (which closes the callback server,
+// see startCallbackServer) + drop any in-flight login past its TTL, and drop a
+// finished one after a short grace so clients can still read the final status.
+const OAUTH_LOGIN_TTL_MS = 10 * 60_000;
+const OAUTH_LOGIN_DONE_GRACE_MS = 2 * 60_000;
+function sweepOauthLogins(now = Date.now()): void {
+  for (const [id, login] of oauthLogins.entries()) {
+    const { drop, abort } = decideOAuthLoginSweep(login.status, now - login.createdAt, {
+      ttlMs: OAUTH_LOGIN_TTL_MS,
+      graceMs: OAUTH_LOGIN_DONE_GRACE_MS,
+    });
+    if (!drop) continue;
+    if (abort) {
+      login.cancelled = true;
+      try { login.abort.abort(); } catch { /* already settled */ }
+    }
+    oauthLogins.delete(id);
+  }
+}
+let oauthLoginSweepTimer: ReturnType<typeof setInterval> | undefined;
+function startOAuthLoginSweeper(): void {
+  if (oauthLoginSweepTimer) return;
+  oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
+  oauthLoginSweepTimer.unref?.();
+}
 type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController };
 
 // Options for createSession. `worktree` runs the session in an isolated git
@@ -3610,6 +3640,9 @@ function startRelayIfConfigured() {
 type ModelAuthVaultResponse = {
   vault?: { ciphertext: string; updatedAt: string; updatedByNodeId: string } | null;
   wrappedKey?: { nodeId: string; wrappedKey: string; wrappedByNodeId: string; wrappedByPublicKey: string } | null;
+  // Hosted escrow: the raw vault key, served only for hosted-provisioning accounts
+  // so a lone hosted ephemeral can decrypt the vault without a peer (node-less).
+  hostedKey?: string | null;
   requests?: Array<{ nodeId: string; publicKey: string }>;
 };
 const modelAuthVaultKeyPath = path.join(appDir, "model-auth-vault.json");
@@ -3759,6 +3792,15 @@ async function syncModelAuthFromControlPlane() {
       writeLocalModelAuthVaultKey(vaultKeyB64);
     }
 
+    // Node-less inheritance: a lone HOSTED ephemeral (no peer to wrap the key)
+    // adopts the vault key the control plane escrowed for this hosted account, so
+    // it can decrypt the synced vault (incl. subscription OAuth) on cold start. The
+    // control plane serves `hostedKey` only for hosted-provisioning accounts.
+    if (!vaultKeyB64 && data.hostedKey && Buffer.from(data.hostedKey, "base64").length === 32) {
+      vaultKeyB64 = data.hostedKey;
+      writeLocalModelAuthVaultKey(vaultKeyB64);
+    }
+
     if (data.vault?.ciphertext && vaultKeyB64) {
       const { providers, localModels } = decryptModelAuthEnvelope(data.vault.ciphertext, vaultKeyB64);
       await importProviderAuth(credsDir, providers);
@@ -3823,6 +3865,13 @@ async function pushModelAuthToControlPlane() {
       method: "PUT",
       body: JSON.stringify({ targetNodeId: identity.nodeId, wrappedByPublicKey: pairingStore.nodePublicKeyB64(), wrappedKey: pairingStore.wrapForNodePublicKey(pairingStore.nodePublicKeyB64(), vaultKeyB64) }),
     });
+    // Node-less inheritance: a HOSTED node also escrows the vault key to the control
+    // plane (sealed at rest, hosted-only) so the account's NEXT hosted ephemeral —
+    // possibly the only node — can decrypt this vault without a peer to wrap the key.
+    // Gated to hosted nodes; the CP double-checks the account is hosted. Best effort.
+    if (process.env.BIVY_GITHUB_HOSTED_TASKS) {
+      await modelAuthFetch("/node/model-auth-key/hosted-escrow", { method: "PUT", body: JSON.stringify({ vaultKeyB64 }) }).catch(() => {});
+    }
     lastPushedModelAuthCiphertext = ciphertext;
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
@@ -5305,6 +5354,9 @@ async function startOAuthLogin(provider: string) {
   // wildcard so browsers resolving localhost to ::1 can reach the callback.
   process.env.PI_OAUTH_CALLBACK_HOST ||= "::";
 
+  // Opportunistically drop stale/abandoned logins whenever a new one starts, so a
+  // long-lived node doesn't accumulate them between sweeps (and tests can drive it).
+  sweepOauthLogins();
   const id = randomUUID();
   const abort = new AbortController();
   const state: OAuthLoginState = { id, provider, status: "starting", abort, createdAt: Date.now(), progress: [] };
@@ -9986,6 +10038,7 @@ const server = app.listen(port, host, async () => {
   // torn-down session, pull + apply its snapshot before serving. Non-blocking.
   if (process.env.BIVY_RESTORE) void restoreSessionFromSnapshot(String(process.env.BIVY_RESTORE));
   startModelAuthWatcher();
+  startOAuthLoginSweeper();
   startGithubAppSyncWatcher();
   await startGitHubTasksIfConfigured();
   startControlPlaneTasksIfConfigured();
