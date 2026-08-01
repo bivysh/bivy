@@ -277,6 +277,8 @@ Implemented now for regular managed sessions/select paths where an allowlisted r
 
 A brand-new ephemeral machine has no model credentials of its own. For most sessions that's fine — Bivy's **model-auth vault** syncs provider keys/OAuth records end-to-end across your nodes (see [`credential-sync.md`](credential-sync.md) §2), so a freshly-enrolled node just pulls them. But that sync is **node → node**: a requesting node asks the account for the wrapped vault key and *another node that already holds it* wraps it back. In the **true cold-start case — the ephemeral machine is your only node** (e.g. launched from a phone that owns no computer) — there is no peer to wrap from, so the vault can't seed and the agent boots with no model key.
 
+> **Subscription OAuth on ephemeral runners.** The node→node sync above carries the *whole* vault — model API keys **and** the supported subscription-OAuth logins (Anthropic Claude Code, OpenAI Codex; see [`credential-sync.md`](credential-sync.md) §2/§4). So an ephemeral runner with **any** peer node online receives those logins too, and its agent runs project them the normal way (`CLAUDE_CODE_OAUTH_TOKEN`, Codex `auth.json`) — no extra path needed. To keep this fast for a machine that may only live a minute, a node's vault-key request now **wakes the account's peers over the relay** (event-driven) so one answers within seconds instead of on its 30s poll, and the requester fast-retries until the wrapped key lands. This is **peer-only**: the wrapped key is always answered by another node over the E2E wrap, so no subscription token or vault key ever transits the device or control plane in the clear. Only the **lone-node** cold start below (no peer online at all) falls back to API-keys-only.
+
 The GitHub token already dodges this: it's held **on the device** and injected at launch (`BIVY_GITHUB_TOKEN`, see "Provisioning path"). We close the model-key gap the same way — **the device becomes the vault source** — but deliberately *not* through user-data.
 
 ### Why not bake the key into user-data
@@ -293,7 +295,9 @@ Keep user-data minimal (enrollment token + room key, as today). The machine boot
 
 ### Scope: API keys only
 
-This path carries **model API keys** — opaque bearer secrets an agent can use from anywhere. It deliberately does **not** try to ship **agent-native OAuth / subscription logins** (Claude Code, Codex, Gemini CLI). Those are per-machine native logins (see [`credential-sync.md`](credential-sync.md) §4) and replaying them onto disposable machines is fragile — device/IP binding, refresh-token rotation, and subscription terms-of-service all bite. Steer OAuth-subscription agents toward an API key where the provider offers one; otherwise they still need a per-machine login.
+This **device-seed** path (the lone-node fallback) carries **model API keys** only — opaque bearer secrets an agent can use from anywhere. It deliberately does **not** ship **agent-native OAuth / subscription logins** through the device: putting subscription refresh tokens at rest in the browser would widen the trust boundary, and replaying them onto disposable machines is fragile — device/IP binding, refresh-token rotation, and subscription terms-of-service all bite.
+
+Note this scope limit applies **only** to the lone-node cold start. When the account has any other node online, the supported subscription logins (Anthropic Claude Code, OpenAI Codex) **do** reach the ephemeral runner — via the peer vault sync described above, kept fast by the event-driven wake — with the tokens staying E2E-wrapped node→node. If you truly have no peer node and need a subscription-only agent on a fresh machine, steer it toward an API key where the provider offers one; otherwise it waits for a peer to come online.
 
 ### Implementation
 

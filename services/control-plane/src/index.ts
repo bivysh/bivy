@@ -1506,6 +1506,13 @@ app.post("/node/model-auth-key/request", requireNode, asyncHandler(async (req, r
   const publicKey = String(req.body?.publicKey ?? "").trim();
   if (!publicKey) return res.status(400).json({ error: "Missing publicKey" });
   await store.requestModelAuthWrappedKey(node.accountId, node.id, publicKey);
+  // Event-driven vault-key hand-off: wake the account's other (peer) nodes over
+  // the relay so one of them runs a model-auth sync and answers this request now,
+  // instead of on its 30s poll. Critical for short-lived ephemeral runners. Best
+  // effort — the requester's fast-retry + fallback poll still guarantee pickup if
+  // no relay/peer is reachable. Peer-only: the CP only relays a wake signal and
+  // never sees the vault key or any credential.
+  void notifyRelaysWorkAvailable(node.accountId, { id: "model-auth", label: "model-auth" }).catch(() => {});
   res.json({ ok: true });
 }));
 
