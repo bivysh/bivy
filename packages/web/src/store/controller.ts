@@ -735,7 +735,13 @@ export class AppController {
       // merely offline node still appears in the list, so this only clears nodes
       // that are genuinely gone.
       if (this.local.cur && !nodes.some((n) => n.id === this.local.cur)) {
-        this.clearCurrentNode();
+        // A torn-down destroy-lane node is gone from the registry, but if it's
+        // REBUILDABLE (durable correlation + the room key we still hold) we keep it
+        // selected — offline, not dialing — so its session stays open and a send
+        // rebuilds it (Gap 1). Only a genuinely-gone node falls back to the empty
+        // state.
+        if (this.currentNodeIsRebuildable()) this.markCurrentNodeAwaitingRebuild();
+        else this.clearCurrentNode();
       }
       void this.refreshAccountSessions();
     } catch {
@@ -758,6 +764,36 @@ export class AppController {
     this.local.cur = "";
     this.store.setCurrentNode(null);
     this.store.resetSession();
+    this.store.setStatus("offline");
+  }
+
+  /** True when the current node is gone from the registry but this device can
+   *  rebuild it: a durable session↔machine correlation names it and we still hold
+   *  its room key. Distinguishes a torn-down-but-rebuildable node from one that is
+   *  genuinely gone (which should clear to the empty state). */
+  private currentNodeIsRebuildable(): boolean {
+    const nodeId = this.local.cur;
+    if (!nodeId) return false;
+    try {
+      if (!this.local.keys()[nodeId]) return false;
+    } catch {
+      return false;
+    }
+    return this.ephemeralCorrelations.some((c) => c.nodeId === nodeId);
+  }
+
+  /** Keep a torn-down-but-rebuildable node SELECTED without dialing it: stop the
+   *  transport (so the header doesn't spin forever on a gone node / a Forbidden
+   *  pairing reject), but retain `local.cur` + the session pane so the composer
+   *  stays enabled (isCurrentNodeResumable) and a send fires reprovisionEphemeral.
+   *  Idempotent — a repeated refreshNodes while offline just no-ops. */
+  private markCurrentNodeAwaitingRebuild(): void {
+    if (this.store.getState().status === "offline") return; // already parked
+    try {
+      this.transport.close();
+    } catch {
+      /* noop */
+    }
     this.store.setStatus("offline");
   }
 
@@ -1203,7 +1239,30 @@ export class AppController {
           updatedAt: previous?.updatedAt || s.updatedAt,
         };
       }));
-      this.store.setSessions(sessions.filter((s) => s.sessionId && s.nodeId));
+      const live = sessions.filter((s) => s.sessionId && s.nodeId);
+      // Gap 1 visibility: a torn-down destroy-lane session cascades out of the
+      // control-plane session index when its node is unenrolled, so it would vanish
+      // from the sidebar — with nothing to open and send into to trigger a rebuild.
+      // Re-add it from the durable correlation (offline, rebuildable), keeping any
+      // name/branch we cached before teardown.
+      const liveIds = new Set(live.map((s) => s.sessionId));
+      const previous = this.store.getState().sessions;
+      const ghosts = this.ephemeralCorrelations
+        .filter((c) => !liveIds.has(c.sessionId) && !!this.local.keys()[c.nodeId])
+        .map((c) => {
+          const prior = previous.find((s) => s.sessionId === c.sessionId);
+          return {
+            ...prior,
+            sessionId: c.sessionId,
+            nodeId: c.nodeId,
+            name: prior?.name || (c.repo ? `${c.repo}` : "Rebuildable session"),
+            source: prior?.source,
+            status: "saved" as const,
+            rebuildable: true,
+            updatedAt: prior?.updatedAt,
+          };
+        });
+      this.store.setSessions([...live, ...ghosts]);
     } catch {
       // Best-effort; the connected node's E2E sessions.list still keeps the app usable.
     }

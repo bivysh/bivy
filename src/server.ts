@@ -3610,6 +3610,9 @@ function startRelayIfConfigured() {
 type ModelAuthVaultResponse = {
   vault?: { ciphertext: string; updatedAt: string; updatedByNodeId: string } | null;
   wrappedKey?: { nodeId: string; wrappedKey: string; wrappedByNodeId: string; wrappedByPublicKey: string } | null;
+  // Hosted escrow: the raw vault key, served only for hosted-provisioning accounts
+  // so a lone hosted ephemeral can decrypt the vault without a peer (node-less).
+  hostedKey?: string | null;
   requests?: Array<{ nodeId: string; publicKey: string }>;
 };
 const modelAuthVaultKeyPath = path.join(appDir, "model-auth-vault.json");
@@ -3759,6 +3762,15 @@ async function syncModelAuthFromControlPlane() {
       writeLocalModelAuthVaultKey(vaultKeyB64);
     }
 
+    // Node-less inheritance: a lone HOSTED ephemeral (no peer to wrap the key)
+    // adopts the vault key the control plane escrowed for this hosted account, so
+    // it can decrypt the synced vault (incl. subscription OAuth) on cold start. The
+    // control plane serves `hostedKey` only for hosted-provisioning accounts.
+    if (!vaultKeyB64 && data.hostedKey && Buffer.from(data.hostedKey, "base64").length === 32) {
+      vaultKeyB64 = data.hostedKey;
+      writeLocalModelAuthVaultKey(vaultKeyB64);
+    }
+
     if (data.vault?.ciphertext && vaultKeyB64) {
       const { providers, localModels } = decryptModelAuthEnvelope(data.vault.ciphertext, vaultKeyB64);
       await importProviderAuth(credsDir, providers);
@@ -3823,6 +3835,13 @@ async function pushModelAuthToControlPlane() {
       method: "PUT",
       body: JSON.stringify({ targetNodeId: identity.nodeId, wrappedByPublicKey: pairingStore.nodePublicKeyB64(), wrappedKey: pairingStore.wrapForNodePublicKey(pairingStore.nodePublicKeyB64(), vaultKeyB64) }),
     });
+    // Node-less inheritance: a HOSTED node also escrows the vault key to the control
+    // plane (sealed at rest, hosted-only) so the account's NEXT hosted ephemeral —
+    // possibly the only node — can decrypt this vault without a peer to wrap the key.
+    // Gated to hosted nodes; the CP double-checks the account is hosted. Best effort.
+    if (process.env.BIVY_GITHUB_HOSTED_TASKS) {
+      await modelAuthFetch("/node/model-auth-key/hosted-escrow", { method: "PUT", body: JSON.stringify({ vaultKeyB64 }) }).catch(() => {});
+    }
     lastPushedModelAuthCiphertext = ciphertext;
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
