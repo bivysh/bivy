@@ -214,6 +214,20 @@ export interface AccountNode {
   name?: string;
   online?: boolean;
   providers?: NodeProviderSummary[];
+  /** Non-secret provider identity of an ephemeral (`eph-*`) node, populated by
+   *  the control-plane node registry at launch. Lets a *second* account device —
+   *  which doesn't hold the launching device's local machine record — reconstruct
+   *  the machine so it can wake a suspend-to-zero node (see
+   *  `ephemeralMachineFromNode` and docs/ephemeral-sessions.md "Gap A"). This is
+   *  identity only (a Fly machine id / E2B sandbox id), never a credential. */
+  ephemeral?: {
+    provider: string;
+    /** The provider's machine/sandbox id (the adapter's `EphemeralMachine.id`). */
+    machineId: string;
+    /** The provider "app"/grouping handle, when the adapter uses one (Fly/Sprites). */
+    app?: string;
+    region?: string;
+  };
   [k: string]: unknown;
 }
 

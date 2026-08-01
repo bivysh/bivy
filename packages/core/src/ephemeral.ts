@@ -2313,6 +2313,43 @@ export function ephemeralProviderSuspendsWhenIdle(provider: string): boolean {
   return ephemeralAdapter(provider)?.suspendsWhenIdle === true;
 }
 
+/** Reconstruct a minimal `EphemeralMachine` from the non-secret provider
+ *  identity carried on an account node registry entry (`AccountNode.ephemeral`).
+ *
+ *  Cross-device resume (docs/ephemeral-sessions.md "Gap A"): the device that
+ *  launched a machine holds its full record in local IndexedDB, but a *second*
+ *  account device does not — so `resumeAndConnectNode` can't tell what to wake
+ *  and silently hangs connecting to an off-relay node. The control-plane node
+ *  registry does carry the machine's identity (provider + machine id + app +
+ *  region — never a credential), so any account device can rebuild enough of the
+ *  machine to call `wakeEphemeralMachine`. Waking still needs the provider token
+ *  on this device; without it the wake surfaces a clear "add the token" error
+ *  instead of the UI hanging.
+ *
+ *  Returns null when the node has no ephemeral identity (a persistent node, or an
+ *  older control plane that doesn't populate the field yet) — callers fall back
+ *  to the existing behaviour. Only the fields needed for wake/reconnect are set;
+ *  status is "stopped" since a node we're being asked to resume is off-relay. */
+export function ephemeralMachineFromNode(node: {
+  id: string;
+  name?: string;
+  ephemeral?: { provider?: string; machineId?: string; app?: string; region?: string };
+}): EphemeralMachine | null {
+  const e = node.ephemeral;
+  if (!e || !e.provider || !e.machineId) return null;
+  return {
+    id: e.machineId,
+    provider: e.provider,
+    name: node.name || e.machineId,
+    region: e.region || "",
+    status: "stopped",
+    ip: null,
+    createdAt: "",
+    app: e.app,
+    nodeId: node.id,
+  };
+}
+
 /** Resume a suspended machine so it rejoins the relay and becomes reachable
  *  again — the device-driven wake behind "reopen the session to resume it".
  *  No-op for providers that don't suspend (their machines are either online or

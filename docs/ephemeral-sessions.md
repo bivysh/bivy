@@ -317,6 +317,47 @@ This gives the user the important continuity — conversation history, GitHub co
 
 **Realised natively by Fly Sprites.** The [Fly Sprites](#fly-sprites-suspend-to-zero-machines-that-remember) provider gives this behaviour for free without Bivy having to snapshot/rebuild anything: the Sprite **suspends to ~$0 when idle and resumes with its filesystem *and* memory intact**, so the daemon process, runtime/session store, repo checkout, and agent all come back exactly where they were. Bivy's only job is to **wake** the suspended Sprite when the user reopens the session (`controller.resumeAndConnectNode` → the adapter's `wake` → the daemon re-dials the relay). The snapshot/rebuild path above remains the fallback for the destroy-when-done providers (Fly Machines/Hetzner/AWS), which can't preserve compute state across a teardown.
 
+## Resumability with no persistent nodes
+
+"Resume" always means *reach the machine that still physically holds the state* — the control plane stores E2E-encrypted **metadata only** (session index title, ownership node-ids), never the transcript, files, or runtime. So resumability is a pure function of whether some machine still has the session and whether *this* device can reach it. Today:
+
+| Case | Resumable? | Why |
+|---|---|---|
+| Sprites/E2B, **same device** that launched it | **Yes** | Machine is kept (never torn down), wakes with full FS + memory. Resume = `wake`. |
+| Sprites/E2B, **different/offline device** | **No (state alive but unreachable)** | Provider token + machine record are device-local; a second device can't wake it. (Room key is *not* the blocker — see below.) |
+| Fly Machines/Hetzner/EC2 **after teardown** | **No** | Transcript + runtime are gone; only the pushed GitHub branch/PR survives. Rebuild path below is designed but unimplemented. |
+| Fresh device, **zero nodes online** | **No** | Session metadata/title is listed, but opening needs a live node to connect to over the relay. |
+| Session replication (`session-replication.md`) | **Only to your other online node** | Full-transcript warm standby, node→node, manual promotion, **off by default** — evaporates if *all* nodes go away. |
+| Hosted auto-provision (`ephemeral-provisioner.ts`) | Runs **new queued work** | Server-side, device-offline — but it starts new queue items, it does not rehydrate an existing session. |
+
+Two gaps follow, tracked below. Both ultimately need the same hard primitive — encrypting a secret so **only the account, never the control plane, can read it** on a fresh device — which is the same key-availability problem as [Closing the cold-start gap](#closing-the-cold-start-gap-device-seeded-model-keys).
+
+### Gap A — cross-device resume of a suspend-to-zero machine
+
+Make a Sprite/E2B sandbox that device A launched resumable from device B. Three things are device-local, but they are **not** equally hard:
+
+- **Room key — not actually a blocker.** The per-node room key is random and device-local at mint (`crypto.getRandomValues` in `launchEphemeralMachine`, stored in `localStorage["bivy_keys"]`), but it is **re-delivered to any account device by the existing pairing handshake** once the node is online: `sendAccountPair` → the node replies with the room key ECDH+HKDF-wrapped to the requesting device's pubkey (`transport-relay.ts`, `docs/credential-sync.md`). So waking the machine is sufficient to make it reachable — **no room-key sync required.**
+- **Machine provider identity — the wake blocker (P1, non-secret).** `resumeAndConnectNode` looks up the `EphemeralMachine` in device-local IndexedDB (`bivy-ephemeral-machines`) to know *what* to wake. Device B's store is empty, so it silently skips the wake and hangs connecting to an off-relay node. Device B *does* see the node in the account `/nodes` registry, but not its provider machine id. **Fix: carry the non-secret machine identity (`provider`, machine id, `app`, region) on the enrolled `eph-*` node registry entry**, and reconstruct an `EphemeralMachine` from it on device B. A Fly machine id / E2B sandbox id is not a credential — no posture change.
+- **Provider token — the real secret work (P2, net-new).** Waking still needs the provider token, which lives only in device A's IndexedDB (`provider-keys`) and never leaves it. There is **no device↔device secret channel today** (the existing model/GitHub vaults are node↔node). Fix: an **opt-in E2E device vault** that wraps the token to each account device's X25519 pubkey (reuse `wrapKeyFor`/`seal`); the control plane stores ciphertext + per-device wrapped-key metadata only, exactly like the node vaults. `EphemeralKeyStore.getToken` already fronts every call site, so back it with the vault and nothing else changes. Posture: broadens *where the (still E2E-encrypted) token lives*; keep it opt-in and revocable (re-wrap on device revoke). *Alternative:* move wake server-side with a scoped, opt-in wake credential (same posture as the Hetzner-teardown direction in `CLOUD.md`), keeping the token off extra devices.
+
+Sequencing: **P1 first** (cheap, unblocks the wake *attempt* with no posture risk — without the token it now surfaces a clear "add the token on this device" error instead of hanging), then **P2** (the load-bearing secret plumbing, and the shared unlock for Gap B).
+
+### Gap B — rebuild-resume for destroy-when-done providers
+
+Resume a torn-down Fly Machine/Hetzner/EC2 session onto a *new* machine. The keystone problem: **there is no node-independent durable store for session state.** Git holds code only; session replication is node→node, off by default, and evaporates if all nodes die. What already exists to build on: the branch push before teardown (`maybePushWorktreeBranch`), and the replication payload shape — `{ git checkpoint bundle, EventLog transcript deltas, runtimeSessionRef }` (`src/session/replication.ts`, `replicator.ts`, `checkpoint-pack.ts`) — plus restore primitives (`applyCheckpointBundle`, `EventLog` rewrite, `writeHistory`, the fork/native-import seeded-summary fallback).
+
+Net-new pieces, prioritised:
+
+1. **A durable, node-independent snapshot store** — the decision that dictates E2E handling. Recommend a control-plane **ciphertext** blob (node-independent, account-visible, phone-reachable), client/node-side encrypted with the room-key/wrapped-key machinery so the CP only ever sees opaque bytes (like `title_enc`). Rejected: node→node replica (evaporates), git side-refs (leaks conversation into the repo).
+2. **A guaranteed pre-teardown snapshot flush** — added to `maybeTeardownFinishedEphemeral`; today only the branch push is relied on, and teardown is a 3s device timer + TTL backstop, so the flush must be awaited or the machine dies mid-snapshot.
+3. **Launch-with-existing node/session + restore bootstrap** — reuse `launchEphemeralMachine` but reuse the old `sessionId`/`nodeId` and boot in "restore" mode.
+4. **A boot-time restore orchestrator** — clone branch, apply checkpoint bundle, rewrite EventLog, re-derive the runtime. Note `runtimeSessionRef` is **not self-sufficient**: for Claude Code it names an on-disk JSONL (`~/.claude/projects/.../<id>.jsonl`) that won't exist on a fresh machine, so rebuild reconstructs it from the EventLog via `writeHistory` or falls back to a seeded-summary continuation marked "resumed/fresh". Resume fidelity is therefore "reconstructed", not byte-identical.
+5. **A "Suspended/Archived" session row that re-provisions** on tap (mirroring the Sprites wake UX) instead of waking.
+
+Fastest credible first cut: retarget the existing warm-replication pipeline's sink from a sibling node to an encrypted CP blob, add the pre-teardown flush and re-provision-on-tap — reusing the already-built delta/frame/bundle machinery rather than building snapshotting from scratch. P2's device-vault key machinery (Gap A) is the shared prerequisite for making that blob readable on a fresh device.
+
+**Repo boundary:** the server halves of both gaps (node registry fields, control-plane vault/blob endpoints, the daemon-side sync loop and restore bootstrap) live in the **Cloud repo**; what's implementable here is the `web`/`core` client halves, which must land in lockstep.
+
 ## Recommended path
 
 Start with **BYO Fly.io** or **BYO Hetzner** plus the existing account/node pairing. It avoids Bivy owning compute cost and abuse risk while proving the orchestration UX. Add Bivy-hosted machines only after quotas, billing, abuse controls, and teardown reliability are solid. **BYO AWS EC2** is now available on the same footing for users who already run infrastructure on AWS.

@@ -66,6 +66,7 @@ import {
   destroyEphemeralMachine,
   wakeEphemeralMachine,
   ephemeralProviderSuspendsWhenIdle,
+  ephemeralMachineFromNode,
   listEphemeralSizes,
   ephemeralNodeLabel,
   type TranscriptCache,
@@ -2093,7 +2094,14 @@ export class AppController {
    */
   async resumeAndConnectNode(nodeId: string, timeoutMs = 90_000): Promise<void> {
     try {
-      const machine = (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId);
+      // The launching device holds the machine record locally; a second account
+      // device doesn't, so fall back to the non-secret machine identity carried
+      // on the account node registry entry (cross-device resume — Gap A in
+      // docs/ephemeral-sessions.md). Reconstructing it lets this device wake a
+      // suspended node instead of hanging while connecting to it off-relay.
+      const machine =
+        (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
+        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId });
       if (machine && ephemeralProviderSuspendsWhenIdle(machine.provider)) {
         await this.wakeEphemeral(machine);
       }
