@@ -190,6 +190,13 @@ export class AppController {
    *  created — queued instead of firing their own `session.new`, then drained
    *  into the one real session by maybeFlushPendingPrompt. See sendPrompt. */
   private pendingFollowups: Array<{ text: string; clientMessageId: string; attachments?: PromptAttachment[] }> = [];
+  /** Prompts sent into a session whose ephemeral node is offline (a suspended
+   *  Sprite or a torn-down machine). Sending IS the resume gesture: the message
+   *  is buffered here, the machine is woken/rebuilt, and these replay once it's
+   *  back online (drainPendingResume in onReconnected). No "resume" button. */
+  private pendingResume: Array<{ sessionId: string; text: string; clientMessageId: string; attachments?: PromptAttachment[] }> = [];
+  /** Guards a resume/rebuild already in flight so repeated sends don't re-launch. */
+  private resumingNode = new Set<string>();
   /** Subscribers for terminal / multiplexer events (the terminal overlay). */
   private terminalListeners = new Set<(e: ServerEvent) => void>();
   /** In-flight transcription requests, resolved when the node returns text. */
@@ -1357,6 +1364,8 @@ export class AppController {
     if (sid && !openedAfterNodeSwitch) {
       this.requestHistory(sid);
       this.retryStuckFollowups(sid);
+      // Deliver anything the user typed while the node was offline/resuming.
+      this.drainPendingResume(sid);
     }
     // No active session but a session.new is still pending → its session.history
     // was lost to the drop. Re-fire it (idempotent on the node by requestId) so the
@@ -1540,6 +1549,16 @@ export class AppController {
     if (active) {
       if (this.mustQueue(active)) {
         this.store.enqueueFollowup(active, { id: cmid, text: trimmed, attachments: files }, Date.now());
+        return;
+      }
+      // The node is offline but this is an ephemeral machine we can bring back
+      // (a suspended Sprite, or a torn-down destroy-lane machine we hold the key
+      // to rebuild). Sending IS the resume: show the bubble, buffer the prompt,
+      // wake/rebuild the machine, and replay on reconnect — no separate button.
+      if (this.shouldAutoResume()) {
+        this.store.addUserMessage(trimmed, cmid, files);
+        this.pendingResume.push({ sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files });
+        void this.resumeNodeForSession(active);
         return;
       }
       this.store.addUserMessage(trimmed, cmid, files);
@@ -2222,6 +2241,54 @@ export class AppController {
       await this.connectToNode(nodeId, 120_000);
     } catch (e) {
       this.store.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * True when the current node is an ephemeral machine that's offline but this
+   * device can bring back — a suspended Sprite/E2B we hold the room key for. A
+   * send should then auto-resume rather than being blocked; drives both the send
+   * interception (`shouldAutoResume`) and the composer's enabled state.
+   * (A destroy-lane machine that was torn down is unenrolled and drops from the
+   * registry, so it isn't covered here yet — that needs the durable session↔
+   * machine link tracked with the inbound-resume work; see docs.)
+   */
+  isCurrentNodeResumable(): boolean {
+    if (this.direct) return false;
+    const nodeId = this.local.cur;
+    if (!nodeId) return false;
+    const node = this.store.getState().nodes.find((n) => n.id === nodeId);
+    if (!node || node.online) return false;
+    try {
+      return !!this.local.keys()[nodeId];
+    } catch {
+      return false;
+    }
+  }
+  private shouldAutoResume(): boolean {
+    return this.isCurrentNodeResumable() && !this.resumingNode.has(this.local.cur);
+  }
+  /** Bring the current session's node back: `reprovisionEphemeral` self-selects
+   *  wake (suspend providers) vs rebuild (destroy providers). Guarded so repeated
+   *  sends while it's coming up don't re-trigger it. */
+  private async resumeNodeForSession(sessionId: string): Promise<void> {
+    const nodeId = this.local.cur;
+    if (!nodeId || this.resumingNode.has(nodeId)) return;
+    this.resumingNode.add(nodeId);
+    try {
+      await this.reprovisionEphemeral(nodeId, sessionId);
+    } finally {
+      this.resumingNode.delete(nodeId);
+    }
+  }
+  /** Replay prompts buffered while the node was offline/resuming, once it's back
+   *  online — the deferred half of the "sending is the resume gesture" flow. */
+  private drainPendingResume(sessionId: string): void {
+    const mine = this.pendingResume.filter((p) => p.sessionId === sessionId);
+    if (!mine.length) return;
+    this.pendingResume = this.pendingResume.filter((p) => p.sessionId !== sessionId);
+    for (const p of mine) {
+      this.send({ kind: "prompt", sessionId, text: p.text, clientMessageId: p.clientMessageId, attachments: p.attachments });
     }
   }
 
