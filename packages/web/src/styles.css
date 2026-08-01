@@ -380,6 +380,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .msg.assistant h4 { font-size: 1em; }
 .msg.assistant ul, .msg.assistant ol { padding-left: 1.4em; }
 .msg.assistant li { margin: 0.15em 0; }
+/* Inline markdown images an agent embeds via ![alt](https://…). Constrain so a
+   large remote image can't blow out the chat column; rounded to match chips. */
+.msg.assistant img { max-width: 100%; height: auto; border-radius: 10px; }
+.msg.assistant img.md-image { max-height: 420px; object-fit: contain; }
+/* An agent-sent attachment block sits in the assistant row above any caption. */
+.assistant-row > .msg-attachments { width: 100%; }
 .msg.assistant li.task-list-item { list-style: none; margin-left: -1.2em; }
 .msg.assistant li.task-list-item input { margin-right: 6px; vertical-align: middle; }
 /* Belt-and-suspenders for the common case (markdown.ts already unwraps a

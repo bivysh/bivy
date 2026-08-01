@@ -1528,7 +1528,7 @@ function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
     "run", "sessions", "ls", "resume", "promote", "rename", "nodes", "agents", "agents:install", "shim", "takeover", "token", "exec",
-    "send", "kill", "setup", "start", "stop", "restart", "status", "doctor", "logs", "login",
+    "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "logs", "login",
     "update", "update:log", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
@@ -1972,6 +1972,62 @@ async function cmdSend(args = []) {
     env: startEnv(config),
   });
   process.exit(code);
+}
+
+// `bivy attach <file> [--caption "…"] [--session <id>]` — surface a file the
+// agent produced into the chat as an image/file attachment (the reverse of the
+// composer paperclip). The universal path: any agent that can run a shell command
+// can call this. The session id defaults to $BIVY_SESSION_ID, which the daemon
+// injects into the agent's subprocess env. The file is resolved to an absolute
+// path here (the CLI's cwd is the agent's workdir) and confined to the session
+// workspace server-side.
+async function cmdAttach(args = []) {
+  const flag = (name) => {
+    const i = args.indexOf(name);
+    return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
+  };
+  const sessionId = flag("--session") || process.env.BIVY_SESSION_ID;
+  const caption = flag("--caption");
+  const name = flag("--name");
+  const mimeType = flag("--mime") || flag("--mimeType");
+  const flagsWithValue = new Set(["--session", "--caption", "--name", "--mime", "--mimeType"]);
+  // First positional that isn't a flag or a flag's value.
+  let file;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith("-")) { if (flagsWithValue.has(a)) i++; continue; }
+    if (i > 0 && flagsWithValue.has(args[i - 1])) continue;
+    file = a;
+    break;
+  }
+  if (!file) { console.error(c.red('Usage: bivy attach <file> [--caption "…"] [--session <id>]')); process.exit(1); return; }
+  if (!sessionId) { console.error(c.red("No session id. Set --session <id> or run inside an agent session ($BIVY_SESSION_ID).")); process.exit(1); return; }
+  const absPath = path.resolve(process.cwd(), file);
+  if (!fs.existsSync(absPath)) { console.error(c.red(`File not found: ${file}`)); process.exit(1); return; }
+
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  // A token isn't required on a single-user host (loopback bypasses auth), but
+  // include it when available so multi-user hosts work too.
+  let token;
+  try { token = await localDeviceToken(config); } catch { token = undefined; }
+  const headers = { "content-type": "application/json" };
+  if (token) headers.authorization = `Bearer ${token}`;
+  let res;
+  try {
+    res = await fetch(`${url(config)}/api/session/${encodeURIComponent(sessionId)}/attach`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ path: absPath, caption, name, mimeType }),
+    });
+  } catch (error) {
+    console.error(c.red(`Could not reach the Bivy node: ${error?.message || String(error)}`));
+    process.exit(1);
+    return;
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { console.error(c.red(`Attach failed (${res.status}): ${body?.error || "unknown error"}`)); process.exit(1); return; }
+  console.log(c.green(`Attached ${body.name} (${body.kind}, ${body.size} bytes) to the chat.`));
 }
 
 // Map a saved session's runtime id to the `bivy run` agent whose native CLI can
@@ -4127,6 +4183,9 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "send":
       await cmdSend(args);
+      break;
+    case "attach":
+      await cmdAttach(args);
       break;
     case "completions":
     case "completion":

@@ -7,9 +7,42 @@
 
 import { isToolResultBlock, isToolUseBlock, toolCallId, toolInput, toolName } from "./tool-activity.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
+import type { AttachmentRef, PromptAttachment } from "./protocol.js";
 import type { ToolActivity, TranscriptEntry } from "./store.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/** The content-block type an agent-sent attachment is carried as inside a
+ *  synthetic assistant message. The node emits it live as an `attachment`
+ *  session event and, for durable history, folds it into the transcript as a
+ *  time-anchored overlay message carrying exactly this block (see the node's
+ *  event-log outbound-attachment projection). Renders here to a normal
+ *  attachment chip/thumbnail, reusing the same PromptAttachment path user
+ *  uploads use. */
+export const AGENT_ATTACHMENT_BLOCK = "bivy_attachment";
+
+interface AgentAttachmentBlock {
+  type: typeof AGENT_ATTACHMENT_BLOCK;
+  ref: AttachmentRef;
+  caption?: string;
+}
+
+function isAgentAttachmentBlock(block: any): block is AgentAttachmentBlock {
+  return (
+    !!block &&
+    block.type === AGENT_ATTACHMENT_BLOCK &&
+    !!block.ref &&
+    typeof block.ref.hash === "string" &&
+    (block.ref.kind === "image" || block.ref.kind === "file")
+  );
+}
+
+/** A durable AttachmentRef → the (byte-less) PromptAttachment the view renders
+ *  by hash. Shared by history render and the live reducer so both produce an
+ *  identical chip. */
+export function attachmentFromRef(ref: AttachmentRef): PromptAttachment {
+  return { kind: ref.kind, name: ref.name, size: ref.size, mimeType: ref.mimeType, hash: ref.hash };
+}
 
 let idSeq = 0;
 /** Monotonic transcript-entry id. Shared by the render helpers and the reducer so
@@ -157,6 +190,17 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
             pushText(buf.join("\n"));
             buf = [];
             for (const tool of toolEntriesFromContent([block])) mergeToolInto(entries, tool);
+          } else if (isAgentAttachmentBlock(block)) {
+            // Seal any prose before the attachment so a caption the agent wrote
+            // above it stays above it, and the chip lands as its own entry.
+            pushText(buf.join("\n"));
+            buf = [];
+            entries.push({
+              id: nextId(),
+              role: "assistant",
+              text: typeof block.caption === "string" ? block.caption : "",
+              attachments: [attachmentFromRef(block.ref)],
+            });
           } else if (isTextBlock(block)) {
             buf.push(String(block?.text ?? block?.content ?? ""));
           }

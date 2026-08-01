@@ -16,6 +16,7 @@ get shell completion.
 | Rejoin the last session | `bivy resume` |
 | Ask one question and get one answer | `bivy exec "…"` |
 | Continue an existing session non-interactively | `bivy send <id> "…"` |
+| Send a file/image from the agent into the chat | `bivy attach <file>` |
 | Stop a session | `bivy kill <id>` |
 | Use the web/PWA app | `bivy relay:setup` then `bivy open` |
 | Pair my phone | `bivy link` |
@@ -194,6 +195,25 @@ the same client `bivy exec` uses, with `--session <id>`.
 
 ```bash
 bivy send 3f1c9a02-… "now add a test for that"
+```
+
+### `bivy attach <file> [--caption "…"] [--session <id>]`
+
+Surfaces a file the agent produced into the chat as an attachment — an image
+renders inline as a thumbnail, anything else as a downloadable file chip (the
+reverse of the composer paperclip). Meant to be run **by the agent itself**: any
+agent that can run a shell command can call it, so it works across runtimes. The
+session id defaults to `$BIVY_SESSION_ID`, which the daemon injects into the
+agent's subprocess environment; pass `--session` to target another session.
+
+The file is resolved against the current directory and **confined to the session
+workspace** — a path (or symlink) that escapes the workspace is refused, so this
+can't be turned into a file-exfiltration primitive. On a single-user host the
+loopback auth bypass means no token is needed.
+
+```bash
+bivy attach ./out/chart.png --caption "Revenue by month"
+bivy attach report.pdf
 ```
 
 ### `bivy takeover <termId|session-id>`
