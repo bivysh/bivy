@@ -137,6 +137,22 @@ export interface AttachmentRef {
 }
 
 /**
+ * The inner event of a `session.event` the node emits when an AGENT sends an
+ * attachment into the chat (image or file) — the reverse of the composer
+ * paperclip. Carried live so the client can render a chip/thumbnail immediately
+ * (via `controller.fetchAttachment(ref.hash)`); durable history reproduces the
+ * same entry from an outbound-attachment overlay folded into the transcript, so
+ * a reload or another device shows it too. `id` is a stable transcript-entry id
+ * so the live entry and its history twin don't double up.
+ */
+export interface AttachmentEvent {
+  type: "attachment";
+  id: string;
+  ref: AttachmentRef;
+  caption?: string;
+}
+
+/**
  * How a prompt sent to an already-busy (streaming) session should be handled by
  * the runtime: `"steer"` injects it into the current turn immediately (an
  * explicit interrupt); `"followUp"` defers it until the current turn ends. Not

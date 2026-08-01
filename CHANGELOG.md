@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Agents can now send attachments into the chat.** An agent surfaces a file it
+  produced — an image renders inline as a thumbnail, anything else as a
+  downloadable chip — via `bivy attach <file> [--caption "…"]`, the reverse of
+  the composer paperclip. Works across runtimes (any agent that can run a shell
+  command), reusing the existing content-addressed AttachmentStore, relay
+  chunking, and rehydrate-by-hash rendering. The file is confined to the session
+  workspace. Assistant messages now also render inline markdown images
+  (`![alt](https://…)`, https-only). Backed by `POST /api/session/:id/attach`
+  and a durable, position-anchored outbound-attachment projection in the event
+  log so a reload or another device shows the attachment too.
+
 ## [0.3.0] - 2026-07-31
 
 ### Added

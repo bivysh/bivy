@@ -725,6 +725,11 @@ class ClaudeSession implements RuntimeSession {
     const env: Record<string, string> = { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env } as Record<string, string>;
     const credEnv = await this.resolveCredentialEnv();
     Object.assign(env, credEnv);
+    // Let the agent's own shell surface a file into the chat via `bivy attach`
+    // (POST /api/session/:id/attach). The session id is otherwise invisible to
+    // the subprocess. Other runtimes should set this the same way to enable the
+    // universal attach path for their agents.
+    env.BIVY_SESSION_ID = this.id;
     this.spawnedToken = authTokenFromEnv(credEnv);
 
     const options: Record<string, unknown> = {

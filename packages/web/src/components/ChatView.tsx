@@ -249,9 +249,23 @@ const EntryView = memo(function EntryView({
         </div>
       </div>
     );
+  // An agent-sent attachment (image/file) lands as an assistant entry carrying
+  // `attachments` (and an optional caption in `text`). Render the chip(s) the same
+  // way user uploads render, above any caption bubble. Reuses AttachmentChip, so
+  // hash-only refs rehydrate their bytes on demand exactly like inbound ones.
+  const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
   return (
     <div className="assistant-row">
-      <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
+      {hasAttachments && (
+        <div className="msg-attachments">
+          {entry.attachments!.map((a, i) => (
+            <AttachmentChip key={`${a.name}-${i}`} attachment={a} />
+          ))}
+        </div>
+      )}
+      {(entry.text || !hasAttachments) && (
+        <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
+      )}
       {entry.text && <CopyButton text={entry.text} />}
     </div>
   );

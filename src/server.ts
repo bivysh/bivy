@@ -111,6 +111,7 @@ import { normalizeMessages } from "./session/transcript-normal.js";
 import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog } from "./session/event-log.js";
 import { AttachmentStore, isValidAttachmentHash, type AttachmentRef } from "./session/attachment-store.js";
+import { planAttachment, isAttachPlanError } from "./session/attach-to-chat.js";
 import { ReplicationService } from "./session/replication-service.js";
 import type { ReplWireFrame } from "./session/replicator.js";
 import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
@@ -1144,6 +1145,42 @@ function materializeAttachments(record: SessionRecord, files: DecodedAttachment[
     }
   }
   return { note: notes.join("\n"), refs };
+}
+
+/**
+ * Surface an AGENT-produced file into the chat as an attachment (image or file)
+ * — the reverse of the composer paperclip. Confines to the session workspace,
+ * stores the bytes in the content-addressed AttachmentStore, persists a durable
+ * outbound reference anchored at the current transcript position (so a reload or
+ * another device shows it), and emits the live `attachment` event so attached
+ * devices render the chip/thumbnail immediately. Shared by the HTTP endpoint and
+ * the `bivy attach` CLI. Returns the stored ref, or a human-readable error.
+ */
+function attachToChat(
+  record: SessionRecord,
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+): { ref: AttachmentRef } | { error: string } {
+  const plan = planAttachment({
+    workspaceDir: harnessDirFor(record),
+    filePath: opts.filePath,
+    mimeType: opts.mimeType,
+    name: opts.name,
+  });
+  if (isAttachPlanError(plan)) return { error: plan.error };
+  let ref: AttachmentRef;
+  try {
+    ref = attachmentStore.put(plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind });
+  } catch (error) {
+    return { error: `Could not store the attachment: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const entryId = `att-${randomBytes(8).toString("hex")}`;
+  const caption = opts.caption ? String(opts.caption).slice(0, 2000) : undefined;
+  // Anchor at the current base length so history replay interleaves the
+  // attachment where it was emitted (see event-log outbound projection).
+  const afterMessageCount = record.session.getMessages().length;
+  eventLog.appendOutboundAttachment(record.id, { afterMessageCount, id: entryId, ref, caption });
+  broadcast({ type: "session.event", sessionId: record.id, event: { type: "attachment", id: entryId, ref, caption } });
+  return { ref };
 }
 
 function approvalModeFrom(value: unknown): ApprovalMode | undefined {
@@ -9678,6 +9715,27 @@ app.get("/api/attachment/:hash", (req, res) => {
   // Content-addressed: the bytes for a hash never change, so cache aggressively.
   res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
   res.end(bytes);
+});
+
+// Let an AGENT push a file into the chat as an attachment (image/file) — the
+// reverse of the composer upload. Called by the agent's own shell (`bivy attach`)
+// or any local tool; on a single-user host the loopback bypass means no token is
+// needed. Behind /api's authMiddleware. `path` is resolved inside — and confined
+// to — the session's workspace (see planAttachment's security note).
+app.post("/api/session/:id/attach", (req, res) => {
+  const record = openSessions.get(String(req.params.id));
+  if (!record) return res.status(404).json({ error: "Session not found" });
+  const filePath = String(req.body?.path ?? req.body?.filePath ?? "").trim();
+  if (!filePath) return res.status(400).json({ error: "Missing file path" });
+  const result = attachToChat(record, {
+    filePath,
+    caption: typeof req.body?.caption === "string" ? req.body.caption : undefined,
+    mimeType: typeof req.body?.mimeType === "string" ? req.body.mimeType : undefined,
+    name: typeof req.body?.name === "string" ? req.body.name : undefined,
+  });
+  if ("error" in result) return res.status(400).json({ error: result.error });
+  const { hash, name, mimeType, size, kind } = result.ref;
+  res.json({ ok: true, hash, name, mimeType, size, kind });
 });
 
 app.post("/api/session/prompt", async (req, res, next) => {

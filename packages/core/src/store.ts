@@ -20,7 +20,7 @@ import { type SlashCommand } from "./slash.js";
 import { toHtml } from "./markdown.js";
 import { eventKind, normalizeEventType, toolCallId, toolInput, toolName } from "./tool-activity.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
-import { contentThinking, contentToText, mergeToolInto, nextId, renderHistory, toolEntriesFromContent } from "./store-render.js";
+import { attachmentFromRef, contentThinking, contentToText, mergeToolInto, nextId, renderHistory, toolEntriesFromContent } from "./store-render.js";
 import {
   agentLabel,
   githubContext,
@@ -2707,6 +2707,23 @@ export class SessionStore {
           this.setWorking("Drafting response…");
         }
         return;
+      case "attachment": {
+        // An agent-sent attachment (image or file). Land it as its own assistant
+        // entry so it renders as a chip/thumbnail, reusing the same
+        // PromptAttachment path user uploads use. Seal any in-flight prose first
+        // so a caption the agent wrote above the attachment stays above it rather
+        // than merging into this bubble. Durable history reproduces the identical
+        // entry via the outbound-attachment overlay (see renderHistory).
+        const ref = (event as any).ref;
+        if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return;
+        this.commitPendingThinking();
+        this.commitPendingProse();
+        this.finishDrafts();
+        const caption = typeof (event as any).caption === "string" ? (event as any).caption : "";
+        const id = (event as any).id ? String((event as any).id) : nextId();
+        this.pushEntry({ id, role: "assistant", text: caption, attachments: [attachmentFromRef(ref)] });
+        return;
+      }
       case "message_update":
       case "message_end": {
         const msg = (event as any).message;
