@@ -143,7 +143,10 @@ export function App() {
   // send fail with an error, lock the composer and show a banner offering to
   // jump to the terminal or take the session back into chat.
   const activeTuiLocked = Boolean(state.activeSessionId && state.tuiSessions.includes(state.activeSessionId));
-  const canCompose = (online || transientReconnect) && !activeTuiLocked;
+  // When the node is an offline-but-resumable ephemeral machine (a suspended
+  // Sprite we hold the key for), keep the composer usable: sending IS the resume
+  // gesture — controller.sendPrompt wakes the machine and replays the message.
+  const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable()) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
   useEdgeSwipe({ isOpen: drawerOpen, onOpen: () => setDrawerOpen(true), onClose: () => setDrawerOpen(false) });

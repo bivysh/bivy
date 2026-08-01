@@ -381,6 +381,22 @@ Status: **capture + restore are both implemented** end to end at the data-plane 
 
 **Repo boundary:** the server halves of both gaps (node registry fields, control-plane vault/blob endpoints, the daemon-side sync loop and restore bootstrap) live in the **Cloud repo**; what's implementable here is the `web`/`core` client halves, which must land in lockstep.
 
+### Automatic resume — the message is the trigger (no button)
+
+Resume/wake/rebuild should never need a dedicated button: **sending a message into a dormant session, or a new message arriving on the same issue/thread, is the intent to resume.** Two triggers:
+
+**Case A — interactive send (implemented).** `controller.sendPrompt` intercepts a send into an active session whose node is offline-but-resumable: it shows the bubble, buffers the prompt (`pendingResume`), calls `reprovisionEphemeral` (which self-selects wake for suspend providers vs rebuild for destroy providers), and replays the buffered prompt on reconnect (`drainPendingResume` in `onReconnected`). The composer is unlocked in that state (`isCurrentNodeResumable` → `canCompose` in `App.tsx`) so typing *is* the resume gesture.
+- *Covered now:* **suspended Sprites/E2B** — the node stays enrolled (offline) and we hold its room key.
+- *Not covered yet:* a **torn-down destroy-lane** machine is *unenrolled* on teardown and dropped from the node registry (and `refreshNodes` clears it as the current node), so the session↔machine link is lost before a send can rebuild it. Closing this needs the durable session→machine correlation below (shared with Case B).
+
+**Case B — inbound message on the same issue/thread (scoped, net-new).** A GitHub/Linear/Slack follow-up should continue the *existing* session, rebuilding its machine if gone — with no device online. The mechanisms exist (`WorkItem.target = {kind:"existing_session", sessionId}` in the schema; `launchEphemeralMachine` restore opts; `restoreSessionFromSnapshot`) but the wiring is missing:
+1. **Persist the correlation.** The node advertises `githubIssueUrl` per session but the control plane *strips it* (`sessionAdvertsFrom`, `services/control-plane/src/index.ts`). Keep it on `SessionIndexEntry` so the CP can resolve "issue/thread → sessionId + owning nodeId".
+2. **Target the existing session on inbound.** In the webhook handlers, look up that index and `enqueueWorkItem({ target: { kind: "existing_session", sessionId } })` (schema already supports it; the node-side `WorkItem` interface in `src/control-plane-tasks.ts` needs `targetKind`/`targetSessionId` added and read by `runWorkItem`).
+3. **Consume the target on the node.** `runWorkItem` branches on the target → resume the existing session and run the comment as a turn, instead of always `createSession`.
+4. **Restore-mode provision when the machine is gone.** `provisionEphemeralForAccount` forwards `restoreSessionId`/`reuseNodeId`/`reuseRoomKeyB64` to `launchEphemeralMachine` (all supported downstream via `BIVY_RESTORE` → `restoreSessionFromSnapshot`). **The one real blocker:** the control plane holds no room key (`serverLocalStore.keys` is empty), so it can't decrypt the snapshot for a *hosted* rebuild — this is the same credential gap P2's device vault solved for devices, now needed server-side (a scoped, opt-in server-held room/snapshot key, or extending the vault to the control-plane provisioner).
+
+Both the destroy-lane half of Case A and all of Case B hinge on the **durable session→machine/thread correlation** (#1) plus, for hosted rebuilds, the **server-side snapshot key** — those two are the net-new foundation to build next.
+
 ## Recommended path
 
 Start with **BYO Fly.io** or **BYO Hetzner** plus the existing account/node pairing. It avoids Bivy owning compute cost and abuse risk while proving the orchestration UX. Add Bivy-hosted machines only after quotas, billing, abuse controls, and teardown reliability are solid. **BYO AWS EC2** is now available on the same footing for users who already run infrastructure on AWS.
