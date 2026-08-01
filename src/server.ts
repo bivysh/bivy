@@ -66,7 +66,7 @@ import { evictToCap, dirSizeBytes } from "./harness/cache-evict.js";
 import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { injectMcpProxyForSession } from "./harness/mcp-inject.js";
-import { parseRepo, inferGitHubRepoFromWorkspace, resolveGitHubToken, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
+import { parseRepo, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
   GitHubTaskPoller,
@@ -7352,8 +7352,27 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
     const admission = checkDiskAdmission(workspace);
     if (!admission.allowed) throw new Error(`Not enough disk to start a new worktree session: ${admission.reason}`);
     const wtOpts = typeof opts.worktree === "object" ? opts.worktree : {};
-    worktree = await createWorktree({ repoDir: workspace, id: wtOpts.branch ?? `session-${Date.now()}`, branch: wtOpts.branch, base: wtOpts.base });
+    // A random suffix, never a timestamp: two sessions started in the same
+    // millisecond would otherwise resolve to the same slug → same worktree path
+    // and branch, and `createWorktree` would ADOPT the first's worktree, dropping
+    // the second session into a directory another session already owns.
+    worktree = await createWorktree({ repoDir: workspace, id: wtOpts.branch ?? `session-${randomBytes(6).toString("hex")}`, branch: wtOpts.branch, base: wtOpts.base });
     runtimeWorkspace = worktree.path;
+  }
+
+  // Isolation invariant. A session must NEVER run directly in a Bivy-managed
+  // shared clone root (`<reposRoot>/owner__repo`): every session for that repo
+  // shares that one checkout, so an agent running there collides with concurrent
+  // sessions on `git checkout`/`git stash` — exactly the "sessions mixing" bug.
+  // A GitHub-backed session is supposed to get its own worktree; reaching here
+  // without one means an earlier step degraded (e.g. a transient repo-inference
+  // failure, or a resume whose worktree was reaped). Fail loudly instead of
+  // silently sharing the tree and corrupting a neighbouring session's work.
+  if (!worktree && isSharedCloneRoot(runtimeWorkspace, reposRoot)) {
+    throw new Error(
+      `Refusing to start a session in the shared clone root ${runtimeWorkspace} without an isolated worktree — ` +
+        `this would collide with concurrent sessions on the same repo. Retry; if it persists the checkout may be busy.`,
+    );
   }
 
   const runtimeSessionOptions = { workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
@@ -7382,8 +7401,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // session" in the sidebar.
   if (requestedSessionFile && storedMeta?.name && !session.getName()) session.setName(storedMeta.name);
   const sessionWorkspace = session.cwd || runtimeWorkspace;
-  const inferredRepo = opts.source || storedMeta?.source ? undefined : await inferGitHubRepoFromWorkspace(sessionWorkspace);
-  if (!worktree && requestedSessionFile && inferredRepo) {
+  // Best-effort here (unlike createWorkspaceSession, which must fail loudly):
+  // this only decides whether to ADOPT an already-checked-out branch as the
+  // session's worktree label, so a transient inference failure should quietly
+  // skip adoption rather than break resuming the session.
+  const inferredRepo = opts.source || storedMeta?.source ? undefined : await inferGitHubRepoFromWorkspace(sessionWorkspace).catch(() => undefined);
+  if (!worktree && requestedSessionFile && inferredRepo && !isSharedCloneRoot(sessionWorkspace, reposRoot)) {
     const branch = runGit(["branch", "--show-current"], sessionWorkspace) || runGit(["rev-parse", "--short", "HEAD"], sessionWorkspace) || undefined;
     if (branch) {
       const mainWorktree = runGit(["worktree", "list", "--porcelain"], sessionWorkspace)?.split("\n").find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
