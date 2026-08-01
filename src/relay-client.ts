@@ -31,6 +31,12 @@ export interface RelayConfig {
   // Base http(s) URL where the remote web client is hosted (the page a phone
   // opens after scanning the linking QR). Defaults to the control plane.
   clientBaseUrl?: string;
+  // Pre-shared room key (base64) baked in by a device/CP that is REUSING an
+  // existing session's node id — an ephemeral rebuild (see PairingStore.load).
+  // A fresh machine that mints its own node id has no e2eKey and generates a
+  // random room key as before. Only consumed to SEED a brand-new pairing state;
+  // an existing pairing.json always wins.
+  e2eKey?: string;
 }
 
 export type ClientMessage = { kind: string; [key: string]: unknown };
@@ -42,7 +48,7 @@ function isFatalRelayError(message: string) {
 export function loadRelayConfig(appDir: string): RelayConfig | null {
   const envUrl = process.env.BIVY_RELAY_URL;
   const filePath = path.join(appDir, "relay.json");
-  let raw: { url?: string; enrollmentToken?: string; controlPlaneUrl?: string; clientBaseUrl?: string } = {};
+  let raw: { url?: string; enrollmentToken?: string; controlPlaneUrl?: string; clientBaseUrl?: string; e2eKey?: string } = {};
   if (fs.existsSync(filePath)) {
     try {
       raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -55,7 +61,8 @@ export function loadRelayConfig(appDir: string): RelayConfig | null {
   if (!url || !enrollmentToken) return null;
   const controlPlaneUrl = process.env.BIVY_CONTROL_PLANE_URL ?? raw.controlPlaneUrl;
   const clientBaseUrl = process.env.BIVY_CLIENT_BASE_URL ?? raw.clientBaseUrl ?? controlPlaneUrl;
-  return { url, enrollmentToken, controlPlaneUrl, clientBaseUrl };
+  const e2eKey = process.env.BIVY_ROOM_KEY ?? raw.e2eKey;
+  return { url, enrollmentToken, controlPlaneUrl, clientBaseUrl, e2eKey };
 }
 
 export interface RelayConnectorOptions {
