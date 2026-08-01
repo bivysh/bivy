@@ -422,6 +422,17 @@ export interface DeviceVaultKeyRequest {
   createdAt: string;
 }
 
+// A durable, node-independent, E2E-encrypted session snapshot (Gap B). Keyed by
+// session (not node) so it survives the owning machine's teardown; the control
+// plane stores only opaque ciphertext (a sealed replication frame — transcript +
+// git checkpoint + runtime resume token), never plaintext. Lets a torn-down
+// destroy-lane session be rebuilt onto a fresh machine.
+export interface SessionSnapshotRecord {
+  sessionId: string;
+  ciphertext: string;
+  updatedAt: string;
+}
+
 // GitHub App private-key vault (issue #88). Same shape/guarantee as the model-
 // auth vault above — the control plane stores ciphertext plus per-node wrapped
 // keys and never a plaintext key — but keyed per APP (`appId`), not one blob per
@@ -1029,6 +1040,11 @@ export interface MeshStore {
   requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void>;
   listDeviceVaultKeyRequests(accountId: string, exceptDevicePublicKey: string): Promise<DeviceVaultKeyRequest[]>;
   setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<DeviceVaultWrappedKeyRecord>;
+
+  // Durable E2E session snapshots for rebuild-resume (Gap B) — opaque ciphertext.
+  getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined>;
+  setSessionSnapshot(accountId: string, sessionId: string, ciphertext: string): Promise<SessionSnapshotRecord>;
+  deleteSessionSnapshot(accountId: string, sessionId: string): Promise<void>;
 
   // GitHub App private-key vault (issue #88), per-app — see GithubAppVault above.
   // A node lists every app the account has a vault for (it may not hold all of

@@ -1164,6 +1164,33 @@ app.post("/node/name", requireNode, asyncHandler(async (req, res) => {
   res.json({ ok: true, node: updated });
 }));
 
+// --- Durable E2E session snapshots for rebuild-resume (Gap B) ---------------
+// A destroy-lane machine's daemon flushes a sealed snapshot (transcript + git
+// checkpoint + runtime resume token) before teardown; a freshly re-provisioned
+// machine reads it to rebuild the session. `requireNode` (the daemon uses its
+// enrollment token); the control plane only ever stores/serves ciphertext.
+app.put("/node/session-snapshot/:sessionId", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const ciphertext = String(req.body?.ciphertext ?? "");
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  if (!ciphertext || !sessionId) { res.status(400).json({ error: "sessionId and ciphertext required" }); return; }
+  await store.setSessionSnapshot(node.accountId, sessionId, ciphertext);
+  res.json({ ok: true });
+}));
+
+app.get("/node/session-snapshot/:sessionId", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const snap = await store.getSessionSnapshot(node.accountId, String(req.params.sessionId ?? "").trim());
+  if (!snap) { res.status(404).json({ error: "no snapshot" }); return; }
+  res.json({ ok: true, ciphertext: snap.ciphertext, updatedAt: snap.updatedAt });
+}));
+
+app.delete("/node/session-snapshot/:sessionId", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  await store.deleteSessionSnapshot(node.accountId, String(req.params.sessionId ?? "").trim());
+  res.json({ ok: true });
+}));
+
 // A disposable ephemeral machine's daemon calls this once it has gone idle, so
 // the control plane can promptly reap providers that don't self-destruct on
 // daemon exit (Hetzner halts but keeps billing). Non-secret: identifies the node

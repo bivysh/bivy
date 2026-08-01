@@ -38,6 +38,7 @@ import {
   type DeviceVault,
   type DeviceVaultWrappedKeyRecord,
   type DeviceVaultKeyRequest,
+  type SessionSnapshotRecord,
   type GithubAppVault,
   type GithubAppWrappedKey,
   type GithubAppKeyRequest,
@@ -394,6 +395,19 @@ export class PostgresStore implements MeshStore {
         device_pub  TEXT NOT NULL,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, device_pub)
+      );
+
+      -- Durable, node-independent, E2E-encrypted session snapshots (Gap B). Keyed
+      -- by SESSION (not node) so it outlives the machine's teardown, mirroring
+      -- session_ownership. Opaque ciphertext only (a sealed replication frame),
+      -- like session_index.title_enc — the control plane can't read it. Lets a
+      -- torn-down destroy-lane session be rebuilt onto a fresh machine.
+      CREATE TABLE IF NOT EXISTS session_snapshots (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id  TEXT NOT NULL,
+        ciphertext  TEXT NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, session_id)
       );
 
       -- Inbound hooks (route a GitHub/Slack webhook to an account) + work queue
@@ -1673,6 +1687,30 @@ export class PostgresStore implements MeshStore {
     );
     await this.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, targetDevicePublicKey]);
     return { devicePublicKey: rows[0].device_pub, wrappedKey: rows[0].wrapped_key, wrappedByPublicKey: rows[0].wrapped_by_public_key, updatedAt: new Date(rows[0].updated_at).toISOString() };
+  }
+
+  // --- Durable E2E session snapshots (Gap B) ---------------------------
+
+  async getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined> {
+    const { rows } = await this.query(`SELECT * FROM session_snapshots WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return { sessionId: row.session_id, ciphertext: row.ciphertext, updatedAt: new Date(row.updated_at).toISOString() };
+  }
+
+  async setSessionSnapshot(accountId: string, sessionId: string, ciphertext: string): Promise<SessionSnapshotRecord> {
+    const { rows } = await this.query(
+      `INSERT INTO session_snapshots (account_id, session_id, ciphertext, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id, session_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_at = now()
+       RETURNING *`,
+      [accountId, sessionId, ciphertext],
+    );
+    return { sessionId: rows[0].session_id, ciphertext: rows[0].ciphertext, updatedAt: new Date(rows[0].updated_at).toISOString() };
+  }
+
+  async deleteSessionSnapshot(accountId: string, sessionId: string): Promise<void> {
+    await this.query(`DELETE FROM session_snapshots WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
   }
 
   // --- Inbound hooks + work queue (E2/E4) ------------------------------

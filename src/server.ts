@@ -52,6 +52,8 @@ import { SessionEventCoalescer } from "./session-event-coalescer.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from "./auth.js";
 import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-client.js";
 import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
+import { buildSessionSnapshot } from "./session/snapshot.js";
+import { createCheckpointBundle } from "./session/checkpoint-pack.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
@@ -6424,11 +6426,50 @@ async function signalSettledToControlPlane(): Promise<void> {
   }).catch(() => {});
 }
 
+/** Flush a durable, E2E-encrypted snapshot of each open session to the control
+ *  plane before this disposable machine is torn down, so a destroy-lane session
+ *  can be rebuilt on a fresh machine later (Gap B). Sealed under the node room
+ *  key — the same key that seals the session title — so a restore machine that
+ *  reuses this session's room key can decrypt it; the control plane sees only
+ *  ciphertext. Best-effort per session; never blocks teardown for long. */
+async function flushSessionSnapshots(): Promise<void> {
+  if (!sessionAdvertiseTarget) return;
+  const roomKey = pairingStore.roomKey();
+  const cpBaseUrl = sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "");
+  for (const record of new Set(openSessions.values())) {
+    try {
+      const sealed = await buildSessionSnapshot(record.id, roomKey, {
+        readRecords: (id) => eventLog.entries(id),
+        epochOf: () => 0,
+        checkpointHead: async (id) => {
+          try {
+            return (await harness.checkpoints(id))[0]?.id;
+          } catch {
+            return undefined;
+          }
+        },
+        bundleCheckpoint: async (id, since) => createCheckpointBundle(harnessDirFor(record), id, since),
+        runtimeSessionRef: (id) => openSessions.get(id)?.sessionFile,
+        worktreeSync: () => true,
+      });
+      if (!sealed) continue;
+      await fetch(`${cpBaseUrl}/node/session-snapshot/${encodeURIComponent(record.id)}`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ ciphertext: sealed }),
+      }).catch(() => {});
+    } catch {
+      /* best effort per session — TTL/branch push remain the backstops */
+    }
+  }
+}
+
+let ephemeralTearingDown = false;
 /** Evaluate the quiet condition and self-terminate if the machine is done. Reads
  *  live session/queue state each call, so it's safe to invoke from the idle
  *  sweep and from agent_end. No-op on a persistent node (env absent). */
 function evaluateEphemeralTeardown(): void {
-  if (!ephemeralTeardownCfg.enabled) return;
+  if (!ephemeralTeardownCfg.enabled || ephemeralTearingDown) return;
   const records = new Set(openSessions.values());
   const anyWorking = [...records].some((r) => r.isWorking);
   const anyRemoteActive = [...records].some((r) => r.remoteActive);
@@ -6440,11 +6481,16 @@ function evaluateEphemeralTeardown(): void {
   }
   const idleForMs = Date.now() - ephemeralLastBusyAt;
   if (!shouldSelfTeardown(ephemeralTeardownCfg, { everBusy: ephemeralEverBusy, anyWorking, anyRemoteActive, inFlightWork, idleForMs })) return;
-  void performSelfTeardown({
-    provider: ephemeralTeardownCfg.provider,
-    signalSettled: signalSettledToControlPlane,
-    shutdown: () => { try { spawnSync("shutdown", ["-h", "now"], { stdio: "ignore" }); } catch { /* TTL backstops */ } },
-  });
+  ephemeralTearingDown = true;
+  void (async () => {
+    // Persist a rebuild snapshot BEFORE the machine goes away (Gap B), then reap.
+    await flushSessionSnapshots();
+    await performSelfTeardown({
+      provider: ephemeralTeardownCfg.provider,
+      signalSettled: signalSettledToControlPlane,
+      shutdown: () => { try { spawnSync("shutdown", ["-h", "now"], { stdio: "ignore" }); } catch { /* TTL backstops */ } },
+    });
+  })();
 }
 
 if (ephemeralTeardownCfg.enabled) {
