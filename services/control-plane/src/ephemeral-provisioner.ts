@@ -193,8 +193,9 @@ function serverLocalStore(opts: { sessionToken: string; env: ProvisionEnv; onAdd
  * targets an existing session whose durable correlation names a node with an
  * escrowed room key (Gap 3). Returns the reuse args, or null when no restorable
  * candidate exists (→ normal fresh provision). Requires a correlation for the
- * target session — device-recorded today; a purely server-originated session
- * needs the CP to record one on advertise (a documented follow-up seam).
+ * target session — written by the device when it launches an ephemeral, and
+ * (for purely hosted-origin sessions with no device) by the CP on session advert
+ * via `correlateHostedSessions` (hosted-correlation.ts).
  */
 async function planRestoreProvision(
   store: MeshStore,
