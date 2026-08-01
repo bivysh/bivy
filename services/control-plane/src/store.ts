@@ -433,6 +433,27 @@ export interface SessionSnapshotRecord {
   updatedAt: string;
 }
 
+// Durable session↔machine correlation (Gap 1). Non-secret routing/identity that
+// lets a torn-down destroy-lane session be rebuilt AFTER its node is unenrolled
+// and drops from the node registry: it records the reusable eph-* node id plus
+// the launch params needed to re-provision the same machine. Keyed by session
+// and NOT FK-cascaded off nodes, so it outlives teardown (like session_snapshots).
+// Same trust tier as nodeId — never holds a credential (the escrowed room key for
+// hosted rebuild lives separately in node_room_keys, Gap 3).
+export interface SessionCorrelation {
+  sessionId: string;
+  nodeId: string;
+  provider: string;
+  region?: string;
+  ttlMinutes?: number;
+  repo?: string;
+  setupId?: string;
+  machineId?: string;
+  app?: string;
+  updatedAt: string;
+}
+export type SessionCorrelationInput = Omit<SessionCorrelation, "updatedAt">;
+
 // GitHub App private-key vault (issue #88). Same shape/guarantee as the model-
 // auth vault above — the control plane stores ciphertext plus per-node wrapped
 // keys and never a plaintext key — but keyed per APP (`appId`), not one blob per
@@ -1045,6 +1066,12 @@ export interface MeshStore {
   getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined>;
   setSessionSnapshot(accountId: string, sessionId: string, ciphertext: string): Promise<SessionSnapshotRecord>;
   deleteSessionSnapshot(accountId: string, sessionId: string): Promise<void>;
+
+  // Durable session↔machine correlation for rebuild-after-teardown (Gap 1).
+  getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined>;
+  listSessionCorrelations(accountId: string): Promise<SessionCorrelation[]>;
+  setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation>;
+  deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void>;
 
   // GitHub App private-key vault (issue #88), per-app — see GithubAppVault above.
   // A node lists every app the account has a vault for (it may not hold all of

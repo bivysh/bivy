@@ -2370,6 +2370,43 @@ export function ephemeralProviderSuspendsWhenIdle(provider: string): boolean {
  *  older control plane that doesn't populate the field yet) — callers fall back
  *  to the existing behaviour. Only the fields needed for wake/reconnect are set;
  *  status is "stopped" since a node we're being asked to resume is off-relay. */
+/** Non-secret session↔machine correlation persisted server-side (Gap 1) so a
+ *  torn-down destroy-lane session can be rebuilt after its node has been
+ *  unenrolled and dropped from the node registry. Never holds a credential — the
+ *  reused session's room key stays device-local (or, for hosted rebuild, escrowed
+ *  server-side in node_room_keys). Mirrors the control-plane `SessionCorrelation`. */
+export interface SessionCorrelation {
+  sessionId: string;
+  nodeId: string;
+  provider: string;
+  region?: string;
+  ttlMinutes?: number;
+  repo?: string;
+  setupId?: string;
+  machineId?: string;
+  app?: string;
+}
+
+/** Reconstruct an `EphemeralMachine` from a durable correlation row so a rebuild
+ *  can proceed after the device-local machine record and the registry node are
+ *  both gone (post-teardown). Status "gone" — it no longer exists at the provider. */
+export function ephemeralMachineFromCorrelation(c: SessionCorrelation): EphemeralMachine {
+  return {
+    id: c.machineId || c.nodeId,
+    provider: c.provider,
+    name: c.nodeId,
+    region: c.region || "",
+    status: "gone",
+    ip: null,
+    createdAt: "",
+    ttlMinutes: c.ttlMinutes,
+    app: c.app,
+    nodeId: c.nodeId,
+    setupId: c.setupId,
+    repo: c.repo,
+  };
+}
+
 export function ephemeralMachineFromNode(node: {
   id: string;
   name?: string;

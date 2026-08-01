@@ -67,6 +67,8 @@ import {
   wakeEphemeralMachine,
   ephemeralProviderSuspendsWhenIdle,
   ephemeralMachineFromNode,
+  ephemeralMachineFromCorrelation,
+  type SessionCorrelation,
   createDeviceVaultKeyStore,
   deviceKeypair,
   listEphemeralSizes,
@@ -197,6 +199,11 @@ export class AppController {
   private pendingResume: Array<{ sessionId: string; text: string; clientMessageId: string; attachments?: PromptAttachment[] }> = [];
   /** Guards a resume/rebuild already in flight so repeated sends don't re-launch. */
   private resumingNode = new Set<string>();
+  // Durable session↔machine correlations fetched from the control plane (Gap 1),
+  // so a torn-down destroy-lane session stays rebuildable after its node drops
+  // from the registry. Refreshed on reconnect; written (deduped) before teardown.
+  private ephemeralCorrelations: SessionCorrelation[] = [];
+  private correlatedSessions = new Set<string>();
   /** Subscribers for terminal / multiplexer events (the terminal overlay). */
   private terminalListeners = new Set<(e: ServerEvent) => void>();
   /** In-flight transcription requests, resolved when the node returns text. */
@@ -1356,6 +1363,9 @@ export class AppController {
     // If this is a machine we just launched, seed its vault with the model API
     // keys held on this device (closes the cold-start gap — see the method doc).
     void this.seedEphemeralNodeIfNeeded();
+    // Pull durable session↔machine correlations so a torn-down session stays
+    // rebuildable (Gap 1); then record one for the machine we're on, if owned.
+    void this.refreshEphemeralCorrelations();
     // Replay a `/sessions/:id` deep link now that a live transport exists — must
     // run before the requestHistory below so the session it opens is the one we
     // refresh. A cross-node selection was already opened just above.
@@ -2125,6 +2135,9 @@ export class AppController {
       // the whole point; destroying one would throw away its memory.
       .find((m) => m.nodeId === nodeId && m.teardownOnAgentFinish && !ephemeralProviderSuspendsWhenIdle(m.provider));
     if (!machine || this.finishingEphemeralMachines.has(machine.id)) return;
+    // Persist the session↔machine correlation BEFORE teardown so this session can
+    // be rebuilt after the node is unenrolled and drops from the registry (Gap 1).
+    void this.recordSessionCorrelation(sessionId, machine);
     this.finishingEphemeralMachines.add(machine.id);
     setTimeout(() => {
       // A follow-up may have been queued during the grace period.
@@ -2214,13 +2227,68 @@ export class AppController {
    * snapshot, and the old session id so its daemon knows what to restore. The
    * machine's shape comes from its device-local record (or the node registry).
    */
+  /** Base control-plane URL + bearer for the account-authenticated (`requireUser`)
+   *  session-correlation endpoints. */
+  private correlationApi() {
+    const base = (this.local.cp || (typeof location !== "undefined" ? location.origin : "")).replace(/\/$/, "");
+    return { base, auth: { authorization: `Bearer ${this.local.s}`, "content-type": "application/json" } };
+  }
+
+  /** Pull the account's durable session↔machine correlations so a torn-down
+   *  session stays rebuildable (Gap 1). Best-effort; failures leave the cache. */
+  private async refreshEphemeralCorrelations(): Promise<void> {
+    if (this.direct || !this.local.s) return;
+    try {
+      const { base, auth } = this.correlationApi();
+      const res = await fetch(`${base}/session-correlation`, { headers: { authorization: auth.authorization } });
+      if (!res.ok) return;
+      const data = (await res.json()) as { correlations?: SessionCorrelation[] };
+      if (Array.isArray(data.correlations)) this.ephemeralCorrelations = data.correlations;
+    } catch {
+      // best-effort — keep whatever we had
+    }
+  }
+
+  /** Persist (upsert) the session↔machine correlation for a machine this device
+   *  launched, so it survives the node's teardown/unenroll (Gap 1). Deduped per
+   *  (node, session); updates the local cache so an immediate rebuild sees it. */
+  private async recordSessionCorrelation(sessionId: string, machine: EphemeralMachine): Promise<void> {
+    if (this.direct || !this.local.s || !machine.nodeId || !sessionId) return;
+    const dedupe = `${machine.nodeId}:${sessionId}`;
+    if (this.correlatedSessions.has(dedupe)) return;
+    this.correlatedSessions.add(dedupe);
+    const body: SessionCorrelation = {
+      sessionId,
+      nodeId: machine.nodeId,
+      provider: machine.provider,
+      region: machine.region || undefined,
+      ttlMinutes: machine.ttlMinutes,
+      repo: machine.repo,
+      setupId: machine.setupId,
+      machineId: machine.id,
+      app: machine.app,
+    };
+    try {
+      const { base, auth } = this.correlationApi();
+      await fetch(`${base}/session-correlation/${encodeURIComponent(sessionId)}`, { method: "PUT", headers: auth, body: JSON.stringify(body) });
+      this.ephemeralCorrelations = [body, ...this.ephemeralCorrelations.filter((c) => c.sessionId !== sessionId)];
+    } catch {
+      this.correlatedSessions.delete(dedupe); // let a later attempt retry
+    }
+  }
+
   async reprovisionEphemeral(nodeId: string, sessionId: string): Promise<void> {
     try {
       const roomKeyB64 = this.local.keys()[nodeId];
       if (!roomKeyB64) throw new Error("This device no longer holds this session's key, so it can't rebuild it.");
+      // Prefer the device-local record; fall back to the registry node; finally,
+      // for a torn-down machine (record + node both gone) fall back to the durable
+      // server-side correlation (Gap 1) matched by node or session.
+      const corr = this.ephemeralCorrelations.find((c) => c.nodeId === nodeId || c.sessionId === sessionId);
       const machine =
         (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
-        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId });
+        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId }) ??
+        (corr ? ephemeralMachineFromCorrelation(corr) : null);
       if (!machine) throw new Error("No record of the machine to rebuild — re-launch it from Ephemeral settings.");
       if (ephemeralProviderSuspendsWhenIdle(machine.provider)) {
         // A suspend provider is never destroyed — just wake it.
@@ -2245,25 +2313,30 @@ export class AppController {
   }
 
   /**
-   * True when the current node is an ephemeral machine that's offline but this
-   * device can bring back — a suspended Sprite/E2B we hold the room key for. A
-   * send should then auto-resume rather than being blocked; drives both the send
-   * interception (`shouldAutoResume`) and the composer's enabled state.
-   * (A destroy-lane machine that was torn down is unenrolled and drops from the
-   * registry, so it isn't covered here yet — that needs the durable session↔
-   * machine link tracked with the inbound-resume work; see docs.)
+   * True when the current node is an ephemeral machine this device can bring back
+   * with a send, so it should auto-resume rather than being blocked (drives both
+   * `shouldAutoResume` and the composer's enabled state). Two cases, both requiring
+   * that we still hold the node's room key:
+   *  - a suspended/offline enrolled node (Sprite/E2B) — wake it; or
+   *  - a torn-down destroy-lane node that dropped from the registry but has a
+   *    durable session↔machine correlation (Gap 1) — rebuild it.
    */
   isCurrentNodeResumable(): boolean {
     if (this.direct) return false;
     const nodeId = this.local.cur;
     if (!nodeId) return false;
-    const node = this.store.getState().nodes.find((n) => n.id === nodeId);
-    if (!node || node.online) return false;
+    let hasKey = false;
     try {
-      return !!this.local.keys()[nodeId];
+      hasKey = !!this.local.keys()[nodeId];
     } catch {
       return false;
     }
+    if (!hasKey) return false;
+    const node = this.store.getState().nodes.find((n) => n.id === nodeId);
+    // Enrolled but offline → resumable (wake). Absent from the registry → resumable
+    // only if a durable correlation lets us rebuild it.
+    if (node) return !node.online;
+    return this.ephemeralCorrelations.some((c) => c.nodeId === nodeId);
   }
   private shouldAutoResume(): boolean {
     return this.isCurrentNodeResumable() && !this.resumingNode.has(this.local.cur);

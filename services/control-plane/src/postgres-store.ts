@@ -39,6 +39,8 @@ import {
   type DeviceVaultWrappedKeyRecord,
   type DeviceVaultKeyRequest,
   type SessionSnapshotRecord,
+  type SessionCorrelation,
+  type SessionCorrelationInput,
   type GithubAppVault,
   type GithubAppWrappedKey,
   type GithubAppKeyRequest,
@@ -406,6 +408,26 @@ export class PostgresStore implements MeshStore {
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         session_id  TEXT NOT NULL,
         ciphertext  TEXT NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, session_id)
+      );
+
+      -- Durable session↔machine correlation (Gap 1). Lets a torn-down destroy-lane
+      -- session be rebuilt AFTER its node is unenrolled and drops from the registry:
+      -- records the reusable eph-* node id + non-secret launch params. Keyed by
+      -- session and deliberately NOT FK-cascaded off nodes, so it outlives teardown
+      -- (like session_snapshots). Never holds a credential.
+      CREATE TABLE IF NOT EXISTS session_correlation (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id  TEXT NOT NULL,
+        node_id     TEXT NOT NULL,
+        provider    TEXT NOT NULL,
+        region      TEXT,
+        ttl_minutes INTEGER,
+        repo        TEXT,
+        setup_id    TEXT,
+        machine_id  TEXT,
+        app         TEXT,
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, session_id)
       );
@@ -1711,6 +1733,56 @@ export class PostgresStore implements MeshStore {
 
   async deleteSessionSnapshot(accountId: string, sessionId: string): Promise<void> {
     await this.query(`DELETE FROM session_snapshots WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+  }
+
+  // --- Session↔machine correlation for rebuild-after-teardown (Gap 1) --------
+
+  private mapSessionCorrelation(row: any): SessionCorrelation {
+    return {
+      sessionId: String(row.session_id),
+      nodeId: String(row.node_id),
+      provider: String(row.provider),
+      region: row.region ?? undefined,
+      ttlMinutes: row.ttl_minutes != null ? Number(row.ttl_minutes) : undefined,
+      repo: row.repo ?? undefined,
+      setupId: row.setup_id ?? undefined,
+      machineId: row.machine_id ?? undefined,
+      app: row.app ?? undefined,
+      updatedAt: new Date(row.updated_at).toISOString(),
+    };
+  }
+
+  async getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined> {
+    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+    return rows[0] ? this.mapSessionCorrelation(rows[0]) : undefined;
+  }
+
+  async listSessionCorrelations(accountId: string): Promise<SessionCorrelation[]> {
+    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 ORDER BY updated_at DESC`, [accountId]);
+    return rows.map((r) => this.mapSessionCorrelation(r));
+  }
+
+  async setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation> {
+    const { rows } = await this.query(
+      `INSERT INTO session_correlation
+         (account_id, session_id, node_id, provider, region, ttl_minutes, repo, setup_id, machine_id, app, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+       ON CONFLICT (account_id, session_id) DO UPDATE SET
+         node_id = EXCLUDED.node_id, provider = EXCLUDED.provider, region = EXCLUDED.region,
+         ttl_minutes = EXCLUDED.ttl_minutes, repo = EXCLUDED.repo, setup_id = EXCLUDED.setup_id,
+         machine_id = EXCLUDED.machine_id, app = EXCLUDED.app, updated_at = now()
+       RETURNING *`,
+      [
+        accountId, input.sessionId, input.nodeId, input.provider,
+        input.region ?? null, input.ttlMinutes ?? null, input.repo ?? null,
+        input.setupId ?? null, input.machineId ?? null, input.app ?? null,
+      ],
+    );
+    return this.mapSessionCorrelation(rows[0]);
+  }
+
+  async deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void> {
+    await this.query(`DELETE FROM session_correlation WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
   }
 
   // --- Inbound hooks + work queue (E2/E4) ------------------------------
