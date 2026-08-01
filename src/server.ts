@@ -851,8 +851,11 @@ function getRuntime(requested?: string, sandbox?: SandboxTier): AgentRuntime {
 }
 // Holds the node's X25519 identity key, the rotating room key, and the linked
 // device registry. The room key is generated fresh on first load and delivered
-// to devices via the X25519 pairing handshake — there is no static seed.
-const pairingStore = PairingStore.load(appDir);
+// to devices via the X25519 pairing handshake — there is no static seed, EXCEPT
+// on an ephemeral rebuild: relay.json carries the reused session's room key
+// (`e2eKey`) so a brand-new pairing state adopts it and can decrypt the restored
+// snapshot. Only seeds a first-run node; an existing pairing.json always wins.
+const pairingStore = PairingStore.load(appDir, loadRelayConfig(appDir)?.e2eKey);
 function syncPairingMetadata() {
   for (const device of pairingStore.listDevices()) {
     metadata.upsertDevice({ id: device.id, label: device.label, publicKeyB64: device.publicKeyB64, firstSeenAt: device.createdAt, lastSeenAt: device.lastSeenAt ?? undefined });
@@ -4983,6 +4986,19 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       if (!instruction) throw new Error("the triggering GitHub comment is unavailable");
       issue.body = instruction;
       if (item.url) issue.url = item.url;
+    }
+    // Case B: the control plane asked us to CONTINUE an existing session for this
+    // issue (an inbound comment/issue on a thread that already has one). If that
+    // session isn't live on this node — e.g. its ephemeral machine was torn down —
+    // best-effort restore its snapshot first so its transcript + branch state are
+    // rebuilt and the work continues the thread instead of starting cold. On
+    // failure we fall through to the normal idempotent, remote-branch-adopting
+    // pickup, so this can only help, never break.
+    const issueSource = `issue:${parsed.owner}/${parsed.repo}#${item.issueNumber}`;
+    if (item.targetKind === "existing_session" && item.targetSessionId && !findIssueSession(issueSource)) {
+      await restoreSessionFromSnapshot(item.targetSessionId).catch((e) => {
+        console.warn(`[case-b] snapshot restore for ${item.targetSessionId} failed:`, (e as Error).message);
+      });
     }
     await runIssueTask(cfg, issue, { runtimeId: item.runtimeId, model: item.model, onEvidence: report });
     return;

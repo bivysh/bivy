@@ -26,6 +26,7 @@ import {
 } from "@bivy/core";
 import type { MeshStore, EphemeralNodeConfig, QueueRouting, HostedAuditEvent } from "./store.js";
 import { mintInstallationToken } from "./hosted-github-auth.js";
+import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
 
 export interface ProvisionEnv {
   /** Public control-plane base URL the booted machine enrolls/reports to. */
@@ -187,6 +188,30 @@ function serverLocalStore(opts: { sessionToken: string; env: ProvisionEnv; onAdd
   } as unknown as LocalStore;
 }
 
+/**
+ * Select a torn-down session to rebuild server-side: a pending work item that
+ * targets an existing session whose durable correlation names a node with an
+ * escrowed room key (Gap 3). Returns the reuse args, or null when no restorable
+ * candidate exists (→ normal fresh provision). Requires a correlation for the
+ * target session — device-recorded today; a purely server-originated session
+ * needs the CP to record one on advertise (a documented follow-up seam).
+ */
+async function planRestoreProvision(
+  store: MeshStore,
+  accountId: string,
+): Promise<{ reuseNodeId: string; restoreSessionId: string } | null> {
+  const items = await store.listWorkItems(accountId, 50).catch(() => []);
+  for (const it of items) {
+    if (it.status !== "pending" || it.targetKind !== "existing_session" || !it.targetSessionId) continue;
+    const corr = await store.getSessionCorrelation(accountId, it.targetSessionId).catch(() => undefined);
+    if (!corr) continue;
+    const enc = await store.getNodeRoomKeyEnc(accountId, corr.nodeId).catch(() => undefined);
+    if (!enc) continue;
+    return { reuseNodeId: corr.nodeId, restoreSessionId: it.targetSessionId };
+  }
+  return null;
+}
+
 /** Launch an ephemeral machine for `config` on behalf of the account. */
 export async function provisionEphemeralForAccount(
   store: MeshStore,
@@ -228,7 +253,75 @@ export async function provisionEphemeralForAccount(
       },
       { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs) },
     );
-    void roomKeyB64; // persisted on the machine record via the machine store
+    await audit(store, accountId, { action: "provision_launched", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
+    // Gap 3: escrow the room key the control plane just generated, sealed at rest
+    // with this account's hosted-provisioning key, keyed by the (reusable) node id.
+    // This is what lets a later HOSTED, device-offline rebuild decrypt the session
+    // snapshot — see provisionEphemeralRestore. Hosted-only by construction (this
+    // function requires a hosted provider token); the CP never sees the plaintext
+    // key on the wire and never exposes it to any client.
+    if (roomKeyB64 && machine.nodeId) {
+      await store.setNodeRoomKeyEnc(accountId, machine.nodeId, encryptSecret(accountId, roomKeyB64));
+      await audit(store, accountId, { action: "room_key_escrowed", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
+    }
+    return machine;
+  } catch (e) {
+    await audit(store, accountId, { action: "provision_failed", provider: config.provider, configId: config.id, detail: String((e as Error)?.message || e).slice(0, 200) });
+    throw e;
+  }
+}
+
+/**
+ * Restore-mode hosted provision (Gap 3): rebuild a torn-down session server-side
+ * when NO device is online. Reuses the old eph-* node id and the ESCROWED session
+ * room key (decrypted here) so the freshly-provisioned machine adopts that key
+ * (relay.json `e2eKey` → PairingStore.load) and its daemon restores the session
+ * snapshot via BIVY_RESTORE. The control plane never decrypts the snapshot itself
+ * — it only hands the key to the machine it launches. Hosted-only: requires the
+ * account's stored provider token and a previously escrowed room key.
+ */
+export async function provisionEphemeralRestore(
+  store: MeshStore,
+  accountId: string,
+  config: EphemeralNodeConfig,
+  env: ProvisionEnv,
+  opts: { reuseNodeId: string; restoreSessionId: string },
+  launcher = launchEphemeralMachine,
+  nowMs = Date.now(),
+): Promise<EphemeralMachine> {
+  const hosted = await store.getHostedProvisioning(accountId);
+  const providerToken = hosted.providerTokens?.[config.provider];
+  if (!providerToken) throw new Error(`No hosted provider token for ${config.provider}`);
+  const enc = await store.getNodeRoomKeyEnc(accountId, opts.reuseNodeId);
+  if (!enc) throw new Error(`No escrowed room key for ${opts.reuseNodeId} — cannot rebuild this session server-side`);
+  const reuseRoomKeyB64 = decryptSecret(accountId, enc);
+  const useHostedMint = Boolean(hosted.githubApp);
+  const githubToken = useHostedMint ? undefined : hosted.githubToken;
+  await audit(store, accountId, { action: "provision_attempt", provider: config.provider, configId: config.id });
+
+  const sessionToken = await store.createSession(accountId);
+  const localStore = serverLocalStore({ sessionToken, env, onAddKey: () => {} });
+  try {
+    const machine = await launcher(
+      {
+        provider: config.provider,
+        region: config.region,
+        size: config.size,
+        ttlMinutes: config.ttlMinutes,
+        hostedTasks: true,
+        githubToken,
+        hostedMint: useHostedMint,
+        setupId: config.id,
+        purpose: "queue-default",
+        name: `Hosted ${config.name}`,
+        // Rebuild the torn-down session in place: same node id + room key + session.
+        reuseNodeId: opts.reuseNodeId,
+        reuseRoomKeyB64,
+        restoreSessionId: opts.restoreSessionId,
+      },
+      { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs) },
+    );
+    await audit(store, accountId, { action: "room_key_reused", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
     await audit(store, accountId, { action: "provision_launched", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
     return machine;
   } catch (e) {
@@ -384,6 +477,12 @@ export async function maybeAutoProvision(
     const configs = await store.getEphemeralConfigs(accountId);
     const target = configs.find((c) => c.id === plan.targetConfigId);
     if (!target) return null;
+    // Case B + Gap 3: if a pending item wants to CONTINUE an existing session whose
+    // (torn-down) node still has an escrowed room key, rebuild that session in place
+    // server-side rather than launching a blank machine. Best-effort — any gap
+    // (no correlation / no escrowed key) falls back to a normal fresh provision.
+    const restore = await planRestoreProvision(store, accountId).catch(() => null);
+    if (restore) return await provisionEphemeralRestore(store, accountId, target, env, restore, launcher);
     return await provisionEphemeralForAccount(store, accountId, target, env, launcher);
   } catch (e) {
     console.error(`[hosted-provision] account ${accountId}:`, (e as Error)?.message || e);

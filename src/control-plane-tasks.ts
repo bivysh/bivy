@@ -43,6 +43,12 @@ export interface WorkItem {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)
+  // Case B: the control plane sets this to "existing_session" + a sessionId when an
+  // inbound issue/comment matches an already-indexed session, so the node continues
+  // that thread instead of starting fresh (see runWorkItem). Already on the wire
+  // (mapWorkItem); typed here so it isn't silently dropped.
+  targetKind?: "new_session" | "existing_session";
+  targetSessionId?: string;
 }
 
 /** Sanitized-on-arrival at the control plane (services/control-plane/src/run-evidence.ts);

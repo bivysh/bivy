@@ -1191,6 +1191,37 @@ app.delete("/node/session-snapshot/:sessionId", requireNode, asyncHandler(async 
   res.json({ ok: true });
 }));
 
+// --- Session↔machine correlation for rebuild-after-teardown (Gap 1) ---------
+// Non-secret routing/identity (reusable eph-* node id + launch params) that lets
+// a device rebuild a torn-down destroy-lane session after its node has dropped
+// from the registry. `requireUser` (the device that launched it, or any account
+// device). Never carries a credential — the escrowed room key for hosted rebuild
+// lives in node_room_keys (Gap 3) and is never exposed here.
+app.get("/session-correlation", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.json({ ok: true, correlations: await store.listSessionCorrelations(account.id) });
+}));
+
+app.put("/session-correlation/:sessionId", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  const nodeId = String(req.body?.nodeId ?? "").trim();
+  const provider = String(req.body?.provider ?? "").trim();
+  if (!sessionId || !nodeId || !provider) { res.status(400).json({ error: "sessionId, nodeId and provider required" }); return; }
+  const num = (v: unknown) => (v == null || v === "" ? undefined : Number(v));
+  const str = (v: unknown) => (v == null || v === "" ? undefined : String(v));
+  const rec = await store.setSessionCorrelation(account.id, {
+    sessionId, nodeId, provider,
+    region: str(req.body?.region),
+    ttlMinutes: num(req.body?.ttlMinutes),
+    repo: str(req.body?.repo),
+    setupId: str(req.body?.setupId),
+    machineId: str(req.body?.machineId),
+    app: str(req.body?.app),
+  });
+  res.json({ ok: true, correlation: rec });
+}));
+
 // A disposable ephemeral machine's daemon calls this once it has gone idle, so
 // the control plane can promptly reap providers that don't self-destruct on
 // daemon exit (Hetzner halts but keeps billing). Non-secret: identifies the node
@@ -2573,9 +2604,13 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     }
     const rawLabel = pickCommentRoutingLabel(comment.instruction, comment.issueLabels, triggerLogin);
     const label = applyDefaultNode(rawLabel, hook.defaultNode);
+    // Case B: if this issue already has an indexed session, CONTINUE it rather than
+    // starting a fresh one, so a follow-up comment lands in the same thread.
+    const existingSession = await store.findSessionByIssue(hook.accountId, comment.repo, comment.issueNumber).catch(() => undefined);
     const item = await store.enqueueWorkItem(hook.accountId, {
       label,
       source: "github:comment",
+      target: existingSession ? { kind: "existing_session", sessionId: existingSession.sessionId } : undefined,
       // Issue #153: the control plane no longer retains issue/comment title or
       // body — the claiming node fetches the live comment directly from GitHub
       // (see getIssueCommentBody in src/github-tasks.ts) immediately before use.
@@ -2610,9 +2645,12 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   if (!isLabelRouted && !meetsTriggerAccess(issue.authorAssociation, hook.triggerAccess)) {
     return res.json({ ok: true, enqueued: false, reason: "access" });
   }
+  // Case B: continue an existing session for this issue if one is already indexed.
+  const existingIssueSession = await store.findSessionByIssue(hook.accountId, issue.repo, issue.issueNumber).catch(() => undefined);
   const item = await store.enqueueWorkItem(hook.accountId, {
     label,
     source: "github:issue",
+    target: existingIssueSession ? { kind: "existing_session", sessionId: existingIssueSession.sessionId } : undefined,
     // Issue #153: the control plane no longer retains issue title/body — the
     // claiming node fetches the live issue directly from GitHub (getIssue in
     // src/github-tasks.ts) immediately before use.

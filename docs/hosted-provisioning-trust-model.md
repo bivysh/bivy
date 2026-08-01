@@ -81,7 +81,7 @@ Gating and shape (`HostedProvisioning` in `services/control-plane/src/store.ts`)
 |---|---|---|
 | Cloud provider token | Device local storage only | **+ Control plane** (per account) |
 | GitHub token | Device local storage only | **+ Control plane** (per account) |
-| E2E room key | Device-generated, device-held | CP generates & holds it for machines it launches |
+| E2E room key | Device-generated, device-held | CP generates it and **escrows it at rest** (`node_room_keys`, sealed with the per-account hosted key) so it can rebuild a torn-down session with no device online — injected into the new machine, never used to decrypt a snapshot CP-side |
 | Account session token | Device | CP mints one per launch (`createSession`) to self-enroll |
 | GitHub App private key | Node vault only | Unchanged (not used by this path) |
 

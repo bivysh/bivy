@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
-import { encryptSecret, decryptSecret, isSecretEnvelope } from "./hosted-crypto.js";
+import { encryptSecret, decryptSecret, isSecretEnvelope, type SecretEnvelope } from "./hosted-crypto.js";
 import {
   type Account,
   type DeviceLoginStatus,
@@ -39,6 +39,8 @@ import {
   type DeviceVaultWrappedKeyRecord,
   type DeviceVaultKeyRequest,
   type SessionSnapshotRecord,
+  type SessionCorrelation,
+  type SessionCorrelationInput,
   type GithubAppVault,
   type GithubAppWrappedKey,
   type GithubAppKeyRequest,
@@ -408,6 +410,40 @@ export class PostgresStore implements MeshStore {
         ciphertext  TEXT NOT NULL,
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, session_id)
+      );
+
+      -- Durable session↔machine correlation (Gap 1). Lets a torn-down destroy-lane
+      -- session be rebuilt AFTER its node is unenrolled and drops from the registry:
+      -- records the reusable eph-* node id + non-secret launch params. Keyed by
+      -- session and deliberately NOT FK-cascaded off nodes, so it outlives teardown
+      -- (like session_snapshots). Never holds a credential.
+      CREATE TABLE IF NOT EXISTS session_correlation (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id  TEXT NOT NULL,
+        node_id     TEXT NOT NULL,
+        provider    TEXT NOT NULL,
+        region      TEXT,
+        ttl_minutes INTEGER,
+        repo        TEXT,
+        setup_id    TEXT,
+        machine_id  TEXT,
+        app         TEXT,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, session_id)
+      );
+
+      -- Escrowed session ROOM KEY for HOSTED (device-offline) rebuild (Gap 3).
+      -- Sealed at rest with the per-account hosted-provisioning key (hosted-crypto),
+      -- keyed by the reusable eph-* node id and deliberately NOT FK-cascaded off
+      -- nodes so it survives teardown/unenroll. Only written for hosted-provisioning
+      -- accounts (whose provider/GitHub creds the control plane already holds); a
+      -- device-launched session keeps its room key device-only and never escrows.
+      CREATE TABLE IF NOT EXISTS node_room_keys (
+        account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        node_id      TEXT NOT NULL,
+        room_key_enc JSONB NOT NULL,
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, node_id)
       );
 
       -- Inbound hooks (route a GitHub/Slack webhook to an account) + work queue
@@ -1711,6 +1747,82 @@ export class PostgresStore implements MeshStore {
 
   async deleteSessionSnapshot(accountId: string, sessionId: string): Promise<void> {
     await this.query(`DELETE FROM session_snapshots WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+  }
+
+  // --- Session↔machine correlation for rebuild-after-teardown (Gap 1) --------
+
+  private mapSessionCorrelation(row: any): SessionCorrelation {
+    return {
+      sessionId: String(row.session_id),
+      nodeId: String(row.node_id),
+      provider: String(row.provider),
+      region: row.region ?? undefined,
+      ttlMinutes: row.ttl_minutes != null ? Number(row.ttl_minutes) : undefined,
+      repo: row.repo ?? undefined,
+      setupId: row.setup_id ?? undefined,
+      machineId: row.machine_id ?? undefined,
+      app: row.app ?? undefined,
+      updatedAt: new Date(row.updated_at).toISOString(),
+    };
+  }
+
+  async getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined> {
+    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+    return rows[0] ? this.mapSessionCorrelation(rows[0]) : undefined;
+  }
+
+  async listSessionCorrelations(accountId: string): Promise<SessionCorrelation[]> {
+    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 ORDER BY updated_at DESC`, [accountId]);
+    return rows.map((r) => this.mapSessionCorrelation(r));
+  }
+
+  async setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation> {
+    const { rows } = await this.query(
+      `INSERT INTO session_correlation
+         (account_id, session_id, node_id, provider, region, ttl_minutes, repo, setup_id, machine_id, app, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+       ON CONFLICT (account_id, session_id) DO UPDATE SET
+         node_id = EXCLUDED.node_id, provider = EXCLUDED.provider, region = EXCLUDED.region,
+         ttl_minutes = EXCLUDED.ttl_minutes, repo = EXCLUDED.repo, setup_id = EXCLUDED.setup_id,
+         machine_id = EXCLUDED.machine_id, app = EXCLUDED.app, updated_at = now()
+       RETURNING *`,
+      [
+        accountId, input.sessionId, input.nodeId, input.provider,
+        input.region ?? null, input.ttlMinutes ?? null, input.repo ?? null,
+        input.setupId ?? null, input.machineId ?? null, input.app ?? null,
+      ],
+    );
+    return this.mapSessionCorrelation(rows[0]);
+  }
+
+  async deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void> {
+    await this.query(`DELETE FROM session_correlation WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+  }
+
+  async getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined> {
+    const { rows } = await this.query(`SELECT room_key_enc FROM node_room_keys WHERE account_id = $1 AND node_id = $2`, [accountId, nodeId]);
+    if (!rows[0]) return undefined;
+    const raw = rows[0].room_key_enc;
+    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
+  }
+
+  async setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void> {
+    await this.query(
+      `INSERT INTO node_room_keys (account_id, node_id, room_key_enc, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id, node_id) DO UPDATE SET room_key_enc = EXCLUDED.room_key_enc, updated_at = now()`,
+      [accountId, nodeId, JSON.stringify(enc)],
+    );
+  }
+
+  async findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined> {
+    // The node advertises issue sessions with source "issue:owner/repo#N".
+    const source = `issue:${repo}#${issueNumber}`;
+    const { rows } = await this.query(
+      `SELECT session_id, node_id FROM session_index WHERE account_id = $1 AND source = $2 ORDER BY updated_at DESC LIMIT 1`,
+      [accountId, source],
+    );
+    return rows[0] ? { sessionId: String(rows[0].session_id), nodeId: String(rows[0].node_id) } : undefined;
   }
 
   // --- Inbound hooks + work queue (E2/E4) ------------------------------

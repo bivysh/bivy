@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHash } from "node:crypto";
+import type { SecretEnvelope } from "./hosted-crypto.js";
 
 /**
  * Control plane data store.
@@ -369,7 +370,7 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "credential_rotated" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped";
+  action: "credential_updated" | "credential_rotated" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "room_key_escrowed" | "room_key_reused";
   provider?: string;
   configId?: string;
   nodeId?: string;
@@ -432,6 +433,27 @@ export interface SessionSnapshotRecord {
   ciphertext: string;
   updatedAt: string;
 }
+
+// Durable session↔machine correlation (Gap 1). Non-secret routing/identity that
+// lets a torn-down destroy-lane session be rebuilt AFTER its node is unenrolled
+// and drops from the node registry: it records the reusable eph-* node id plus
+// the launch params needed to re-provision the same machine. Keyed by session
+// and NOT FK-cascaded off nodes, so it outlives teardown (like session_snapshots).
+// Same trust tier as nodeId — never holds a credential (the escrowed room key for
+// hosted rebuild lives separately in node_room_keys, Gap 3).
+export interface SessionCorrelation {
+  sessionId: string;
+  nodeId: string;
+  provider: string;
+  region?: string;
+  ttlMinutes?: number;
+  repo?: string;
+  setupId?: string;
+  machineId?: string;
+  app?: string;
+  updatedAt: string;
+}
+export type SessionCorrelationInput = Omit<SessionCorrelation, "updatedAt">;
 
 // GitHub App private-key vault (issue #88). Same shape/guarantee as the model-
 // auth vault above — the control plane stores ciphertext plus per-node wrapped
@@ -1045,6 +1067,27 @@ export interface MeshStore {
   getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined>;
   setSessionSnapshot(accountId: string, sessionId: string, ciphertext: string): Promise<SessionSnapshotRecord>;
   deleteSessionSnapshot(accountId: string, sessionId: string): Promise<void>;
+
+  // Durable session↔machine correlation for rebuild-after-teardown (Gap 1).
+  getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined>;
+  listSessionCorrelations(accountId: string): Promise<SessionCorrelation[]>;
+  setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation>;
+  deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void>;
+
+  // Case B: find an indexed session for a GitHub issue so an inbound comment/issue
+  // CONTINUES it instead of starting a new one. Matches session_index.source
+  // ("issue:owner/repo#N"). Covers sessions on currently-enrolled nodes; a session
+  // whose node was already torn down is rebuilt via the device send path (Gap 1).
+  findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined>;
+
+  // Gap 3: escrowed session ROOM KEY for HOSTED (device-offline) rebuild. Sealed
+  // at rest with the per-account hosted-provisioning key (hosted-crypto), keyed by
+  // the reusable eph-* node id, NOT FK-cascaded off nodes so it survives teardown.
+  // Written ONLY for hosted-provisioning accounts (the control plane already holds
+  // their provider/GitHub creds); device-launched sessions keep the room key
+  // device-only and never escrow. Never exposed to any client.
+  getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined>;
+  setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void>;
 
   // GitHub App private-key vault (issue #88), per-app — see GithubAppVault above.
   // A node lists every app the account has a vault for (it may not hold all of
