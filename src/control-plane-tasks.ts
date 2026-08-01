@@ -174,6 +174,12 @@ export class ControlPlaneTaskPoller {
     void this.tick();
   }
 
+  /** Number of queue items currently running on this node. Lets an ephemeral
+   *  machine's self-teardown avoid exiting while it's mid-work. */
+  inFlightCount(): number {
+    return this.inFlight.size;
+  }
+
   /**
    * Replace the routing labels this live poller serves.
    *

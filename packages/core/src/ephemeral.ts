@@ -19,7 +19,7 @@
 // control-plane's cold-start relay in services/control-plane/src/index.ts).
 // See docs/ephemeral-sessions.md#adding-a-new-provider for the full checklist.
 
-import { b64, b64url } from "./base64.js";
+import { b64, b64url, unb64url } from "./base64.js";
 import type { LocalStore } from "./local-store.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -77,6 +77,21 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
     links: [
       { label: "Sprites account & tokens", url: "https://sprites.dev/account" },
       { label: "Sprites docs", url: "https://docs.sprites.dev/" },
+    ],
+  },
+  {
+    id: "e2b",
+    name: "E2B",
+    tokenLabel: "E2B API key",
+    blurb: "A managed sandbox that ends itself: after a server-enforced timeout it pauses to ~$0 (resume with state intact) — no device needed to keep it in check.",
+    steps: [
+      "Sign in at e2b.dev and open your dashboard.",
+      "Go to Team → API Keys and create a key.",
+      "Copy the key and paste it below. It stays on this device.",
+    ],
+    links: [
+      { label: "E2B dashboard & API keys", url: "https://e2b.dev/dashboard" },
+      { label: "E2B docs", url: "https://e2b.dev/docs" },
     ],
   },
   {
@@ -604,6 +619,7 @@ export const ALLOWED_HOSTS = [
   "api.machines.dev",
   "api.fly.io",
   "api.sprites.dev",
+  "api.e2b.app",
   "ec2.us-east-1.amazonaws.com",
   "ec2.us-west-2.amazonaws.com",
   "ec2.eu-west-1.amazonaws.com",
@@ -682,6 +698,21 @@ export interface BootstrapOpts {
    *  (exports BIVY_HOSTED_MINT) instead of carrying a static token — the hosted
    *  GitHub App path, so no long-lived credential ever lands on the machine. */
   hostedMint?: boolean;
+  /** The ephemeral provider this machine runs on (`fly`/`hetzner`/`aws`/…). Lets
+   *  the daemon learn it's disposable and, for destroy-lane providers, end the
+   *  machine itself once idle — see `bivyBootstrapExports`/src/ephemeral-teardown.ts.
+   *  Suspend-to-zero providers (Sprites/E2B) are kept, so no self-teardown env is
+   *  emitted for them. */
+  provider?: string;
+  /** Ask the daemon to tear the machine down promptly after the agent finishes
+   *  (a short grace), not just at the idle window — the server-side equivalent of
+   *  the device's "Destroy when the agent finishes" toggle, so it no longer needs
+   *  the launching device to stay online. */
+  teardownOnAgentFinish?: boolean;
+  /** Rebuild-resume (Gap B): the session id to restore from its control-plane
+   *  snapshot on boot (exported as `BIVY_RESTORE`). The machine reuses this
+   *  session's node id + room key so it can fetch and decrypt the snapshot. */
+  restoreSessionId?: string;
 }
 
 /** Clamp a requested TTL into a sane 5-minute…24-hour window (default 60). A
@@ -711,6 +742,10 @@ function bivyRelayJson(opts: BootstrapOpts): string {
  *  the cloud-init (Hetzner/EC2) and Fly bootstraps so a node's env is identical
  *  however it was launched. */
 function bivyBootstrapExports(opts: BootstrapOpts): string[] {
+  // Destroy-lane providers learn they're disposable so the daemon can end the
+  // machine itself once idle (src/ephemeral-teardown.ts). Suspend-to-zero
+  // providers (Sprites/E2B) are KEPT, so they get no self-teardown env.
+  const ephemeral = Boolean(opts.provider) && !ephemeralProviderSuspendsWhenIdle(opts.provider as string);
   return [
     "export BIVY_DATA_DIR=/etc/bivy",
     opts.repo ? `export BIVY_REPO=${shq(opts.repo)}` : "",
@@ -718,6 +753,11 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
     opts.nodeLabel ? `export BIVY_NODE_LABEL=${shq(opts.nodeLabel)}` : "",
     opts.githubToken ? `export BIVY_GITHUB_TOKEN=${shq(opts.githubToken)}` : "",
     opts.hostedMint ? `export BIVY_HOSTED_MINT=1` : "",
+    ephemeral ? `export BIVY_EPHEMERAL=1` : "",
+    ephemeral ? `export BIVY_EPHEMERAL_PROVIDER=${shq(opts.provider)}` : "",
+    ephemeral ? `export BIVY_EPHEMERAL_TTL_MIN=${clampTtlMinutes(opts.ttlMinutes)}` : "",
+    ephemeral && opts.teardownOnAgentFinish ? `export BIVY_TEARDOWN_ON_FINISH=1` : "",
+    ephemeral && opts.restoreSessionId ? `export BIVY_RESTORE=${shq(opts.restoreSessionId)}` : "",
   ].filter(Boolean);
 }
 
@@ -1175,10 +1215,15 @@ const fly: ProviderAdapter = {
     // self-destructs before it ever installs Bivy (that's the "app has no
     // machines" / node-offline symptom). Instead we materialize the same
     // relay.json + start.sh via `files` and run them ourselves as a blocking
-    // foreground init process. `auto_destroy` then does the right thing: the
-    // machine is torn down only once the daemon exits (agent finished or the TTL
-    // `timeout` fires), which is exactly the "destroy when the agent finishes"
-    // contract. Falls back to user_data only if no structured bootstrap is given.
+    // foreground init process. `auto_destroy` then tears the machine down once
+    // the daemon exits — but note the daemon (`bivy start`) is a persistent
+    // session process that stays alive across turns to serve follow-ups, so it
+    // does NOT exit on a single `agent_end`. In practice this fires only when the
+    // TTL `timeout` elapses (or the daemon crashes) — i.e. it implements the TTL
+    // safety fallback, NOT the per-turn "destroy when the agent finishes"
+    // contract. That per-turn teardown is device-driven (the launching browser
+    // issues the destroy on `agent_end`; see controller.maybeTeardownFinishedEphemeral).
+    // Falls back to user_data only if no structured bootstrap is given.
     const machineInit = bootstrap ? flyInit(bootstrap) : { init: { user_data: userData } };
     const machine = await call(exec, {
       method: "POST",
@@ -1782,9 +1827,10 @@ function bivySpritesServiceScript(installUrl: string): string {
   ].join("\n");
 }
 
-/** The env the `bivy` service runs with — relay enrollment (base64) plus the
- *  same optional BIVY_* switches the other providers export. */
-function spritesServiceEnv(opts: BootstrapOpts): Record<string, string> {
+/** The env a managed-sandbox daemon runs with — relay enrollment (base64) plus
+ *  the same optional BIVY_* switches the other providers export. Shared by the
+ *  Fly Sprites service and the E2B template bootstrap. */
+function bivyNodeEnv(opts: BootstrapOpts): Record<string, string> {
   const env: Record<string, string> = {
     BIVY_DATA_DIR: "/etc/bivy",
     BIVY_RELAY_JSON_B64: b64(utf8.encode(bivyRelayJson(opts))),
@@ -1828,7 +1874,7 @@ const sprites: ProviderAdapter = {
       method: "PUT",
       url: `${SPRITES_HOST}/v1/sprites/${encodeURIComponent(name)}/services/${SPRITES_SERVICE}`,
       headers: { ...bearer(token), "content-type": "application/json" },
-      body: { cmd: "bash", args: ["-lc", bivySpritesServiceScript(installUrl)], env: spritesServiceEnv(bootstrap) },
+      body: { cmd: "bash", args: ["-lc", bivySpritesServiceScript(installUrl)], env: bivyNodeEnv(bootstrap) },
     });
     if (svc.status >= 300) throw new Error(providerError(svc, "register bivy service"));
     // 3. Start the service — boots the daemon now, and is the same call `wake`
@@ -1881,7 +1927,138 @@ const sprites: ProviderAdapter = {
   },
 };
 
-const ADAPTERS: Record<string, ProviderAdapter> = { hetzner, fly, aws, sprites };
+// --- E2B: managed agent sandboxes with a deterministic idle timeout ----------
+//
+// E2B (https://e2b.dev) is the other "managed sandbox" substrate alongside Fly
+// Sprites: a REST API (host api.e2b.app, `X-API-Key` auth) that creates a
+// Firecracker microVM for agent workloads. Its lifecycle is enforced
+// SERVER-SIDE by E2B, not by a Bivy device or node: every sandbox carries a
+// `timeout`, and when it elapses E2B either KILLS the sandbox or — with
+// `autoPause` — PAUSES it to ~$0 with full filesystem + memory state, resumable
+// later (~1s) with everything intact.
+//
+// We model E2B as a suspend-when-idle provider (like Sprites): the sandbox is
+// KEPT and woken via `wake` (resume) when the user reopens its session, rather
+// than destroy-when-done + TTL self-shutdown. Unlike Sprites, E2B's pause is
+// DETERMINISTIC — driven by the server-enforced timeout, not by an external
+// idle heuristic — so it doesn't depend on the daemon's relay socket looking
+// "idle" (see docs/ephemeral-sessions.md on the Sprites idle-suspend caveat).
+//
+// PROTOTYPE — written against E2B's documented REST shape and unit-tested with
+// an injected transport, but NOT yet confirmed against a live key, and it
+// depends on an external artifact. Before GA (tracked in
+// docs/ephemeral-sessions.md#e2b):
+//   1. Bootstrap needs published `bivy-<size>` E2B templates that install Bivy
+//      and run `bivy start`, reading relay enrollment from the env vars we pass
+//      at create — E2B runs a template's start command and (unlike Sprites)
+//      can't take an arbitrary boot script at create time.
+//   2. Endpoint paths / field names (`/v2/sandboxes`, `autoPause`, `envVars`,
+//      `sandboxID`, `/resume`) need live confirmation.
+//   3. The timeout is wall-clock, not activity-based: to keep a long ACTIVE
+//      session warm someone must refresh it (device-online vs. a control-plane
+//      keepalive) — the same lifecycle question the BYO lane tracks. For now we
+//      set a generous fixed window and let autoPause preserve state if it
+//      elapses mid-session.
+const E2B_HOST = "https://api.e2b.app";
+const E2B_TEMPLATE_PREFIX = "bivy-"; // published templates: bivy-1x2, bivy-2x4, ...
+// Window (seconds) before E2B auto-pauses the sandbox to ~$0.
+const E2B_TIMEOUT_S = 3600;
+
+function e2bAuth(token: string): Record<string, string> {
+  return { "X-API-Key": String(token || "").trim() };
+}
+
+// E2B sandbox resources come from the template, so each size maps to a distinct
+// published template (E2B_TEMPLATE_PREFIX + size id). Prices are indicative
+// USD/hr while ACTIVE, derived from E2B's per-second vCPU + RAM rates; a paused
+// sandbox costs ~$0 (snapshot storage aside), surfaced via `suspendsWhenIdle`.
+const E2B_SIZES: ProviderSize[] = [
+  { id: "1x2", label: "1 vCPU · 2 GB", pricePerHour: 0.08 },
+  { id: "2x4", label: "2 vCPU · 4 GB", pricePerHour: 0.17 },
+  { id: "4x8", label: "4 vCPU · 8 GB", pricePerHour: 0.33 },
+  { id: "8x16", label: "8 vCPU · 16 GB", pricePerHour: 0.66 },
+];
+
+function mapE2bStatus(s: string): string {
+  const v = String(s || "").toLowerCase();
+  if (/(kill|delet|destroy|gone)/.test(v)) return "gone";
+  if (/(paus|susp|stop|sleep)/.test(v)) return "stopped";
+  if (/(run|ready)/.test(v)) return "running";
+  return "starting"; // creating / pending / resuming / unknown
+}
+
+const e2b: ProviderAdapter = {
+  id: "e2b",
+  name: "E2B",
+  currency: "USD",
+  suspendsWhenIdle: true,
+  regions: [{ id: "us", label: "United States" }],
+  defaultRegion: "us",
+  sizes: E2B_SIZES,
+  defaultSize: "2x4",
+  async provision({ exec, token, config, bootstrap }) {
+    if (!bootstrap) throw new Error("E2B bootstrap missing");
+    const size = (config.size as string) || e2b.defaultSize;
+    // Relay enrollment + optional switches ride as env vars the published
+    // `bivy-<size>` template's start command reads to run `bivy start`.
+    const created = await call(exec, {
+      method: "POST",
+      url: `${E2B_HOST}/v2/sandboxes`,
+      headers: { ...e2bAuth(token), "content-type": "application/json" },
+      body: {
+        templateID: `${E2B_TEMPLATE_PREFIX}${size}`,
+        timeout: E2B_TIMEOUT_S,
+        autoPause: true,
+        metadata: { bivy: "1", slug: String(config.slug || "") },
+        envVars: bivyNodeEnv(bootstrap),
+      },
+    });
+    if (created.status >= 300 && created.status !== 409) throw new Error(providerError(created, "create sandbox"));
+    const id = String(created.body?.sandboxID || created.body?.sandboxId || created.body?.id || "");
+    if (!id) throw new Error("E2B create returned no sandbox id");
+    return {
+      id,
+      provider: "e2b",
+      app: id,
+      name: `bivy-${config.slug}`,
+      region: e2b.defaultRegion,
+      status: "starting",
+      ip: null,
+      createdAt: nowIso(),
+    };
+  },
+  async status({ exec, token, machine }) {
+    const res = await call(exec, {
+      method: "GET",
+      url: `${E2B_HOST}/v2/sandboxes/${encodeURIComponent(machine.app || machine.id)}`,
+      headers: e2bAuth(token),
+    });
+    if (res.status === 404) return "gone";
+    if (res.status >= 300) throw new Error(providerError(res, "get sandbox"));
+    return mapE2bStatus(res.body?.state || res.body?.status);
+  },
+  async destroy({ exec, token, machine }) {
+    const res = await call(exec, {
+      method: "DELETE",
+      url: `${E2B_HOST}/v2/sandboxes/${encodeURIComponent(machine.app || machine.id)}`,
+      headers: e2bAuth(token),
+    });
+    if (res.status >= 300 && res.status !== 404) throw new Error(providerError(res, "kill sandbox"));
+  },
+  async wake({ exec, token, machine }) {
+    // Resume a paused sandbox so it rejoins the relay. A resume on an already
+    // running sandbox may 409/400, which we treat as already-awake.
+    const res = await call(exec, {
+      method: "POST",
+      url: `${E2B_HOST}/v2/sandboxes/${encodeURIComponent(machine.app || machine.id)}/resume`,
+      headers: { ...e2bAuth(token), "content-type": "application/json" },
+      body: { timeout: E2B_TIMEOUT_S, autoPause: true },
+    });
+    if (res.status >= 300 && res.status !== 404 && res.status !== 409) throw new Error(providerError(res, "resume sandbox"));
+  },
+};
+
+const ADAPTERS: Record<string, ProviderAdapter> = { hetzner, fly, aws, sprites, e2b };
 export function ephemeralAdapter(id: string): ProviderAdapter | null {
   return ADAPTERS[String(id || "").trim().toLowerCase()] || null;
 }
@@ -1938,6 +2115,13 @@ export interface LaunchOpts {
    *  these; callers (the queue UI) do, to track/watch what a machine is for. */
   workItemId?: string;
   purpose?: EphemeralMachine["purpose"];
+  /** Rebuild-resume (Gap B): re-provision a torn-down destroy-lane session onto a
+   *  new machine. Reuse the old node id + room key so the launching device still
+   *  reaches it and the daemon can decrypt the session snapshot, and reuse the
+   *  session id so the daemon knows which snapshot to restore on boot. */
+  reuseNodeId?: string;
+  reuseRoomKeyB64?: string;
+  restoreSessionId?: string;
 }
 
 /** The routing-label suffix a hosted-tasks ephemeral node serves, derived from
@@ -2044,7 +2228,10 @@ export async function launchEphemeralMachine(
   const token = await deps.keys.getToken(opts.provider);
   if (!token) throw new Error(`Add a ${adapter.name} token first.`);
 
-  const nodeId = "eph-" + randHex(8);
+  // Rebuild-resume reuses the torn-down session's node id so the launching device
+  // still reaches it (it holds that node's room key) and the daemon knows which
+  // snapshot to restore; a normal launch mints a fresh one.
+  const nodeId = opts.reuseNodeId || "eph-" + randHex(8);
   const enrollBody = JSON.stringify({ nodeId, name: opts.name || `Ephemeral ${adapter.name}` });
   const enrollOnce = async () => {
     const res = await fetchImpl(`${cpBase(deps.store)}/nodes/enroll`, {
@@ -2068,7 +2255,10 @@ export async function launchEphemeralMachine(
   }
   if (!enrollRes.ok || !enroll?.enrollmentToken) throw new Error(enroll?.error || "Could not enroll the machine");
 
-  const roomBytes = crypto.getRandomValues(new Uint8Array(32));
+  // Reuse the old session's room key on rebuild so the device (which already
+  // holds it) reaches the new machine and the daemon can decrypt the snapshot
+  // that was sealed under it; otherwise mint a fresh 32-byte key.
+  const roomBytes = opts.reuseRoomKeyB64 ? unb64url(opts.reuseRoomKeyB64) : crypto.getRandomValues(new Uint8Array(32));
   deps.store.addKey(nodeId, b64url(roomBytes));
 
   const bootstrap: BootstrapOpts = {
@@ -2082,6 +2272,9 @@ export async function launchEphemeralMachine(
     nodeLabel: opts.hostedTasks ? ephemeralNodeLabel(nodeId) : undefined,
     githubToken: opts.githubToken,
     hostedMint: opts.hostedMint,
+    provider: opts.provider,
+    teardownOnAgentFinish: opts.teardownOnAgentFinish,
+    restoreSessionId: opts.restoreSessionId,
   };
   // Both forms of the same boot intent: `userData` is the cloud-init payload VM
   // providers run as-is; `bootstrap` lets a provider that can't run cloud-init
@@ -2158,6 +2351,43 @@ export async function destroyEphemeralMachine(
  *  reconnecting. */
 export function ephemeralProviderSuspendsWhenIdle(provider: string): boolean {
   return ephemeralAdapter(provider)?.suspendsWhenIdle === true;
+}
+
+/** Reconstruct a minimal `EphemeralMachine` from the non-secret provider
+ *  identity carried on an account node registry entry (`AccountNode.ephemeral`).
+ *
+ *  Cross-device resume (docs/ephemeral-sessions.md "Gap A"): the device that
+ *  launched a machine holds its full record in local IndexedDB, but a *second*
+ *  account device does not — so `resumeAndConnectNode` can't tell what to wake
+ *  and silently hangs connecting to an off-relay node. The control-plane node
+ *  registry does carry the machine's identity (provider + machine id + app +
+ *  region — never a credential), so any account device can rebuild enough of the
+ *  machine to call `wakeEphemeralMachine`. Waking still needs the provider token
+ *  on this device; without it the wake surfaces a clear "add the token" error
+ *  instead of the UI hanging.
+ *
+ *  Returns null when the node has no ephemeral identity (a persistent node, or an
+ *  older control plane that doesn't populate the field yet) — callers fall back
+ *  to the existing behaviour. Only the fields needed for wake/reconnect are set;
+ *  status is "stopped" since a node we're being asked to resume is off-relay. */
+export function ephemeralMachineFromNode(node: {
+  id: string;
+  name?: string;
+  ephemeral?: { provider?: string; machineId?: string; app?: string; region?: string };
+}): EphemeralMachine | null {
+  const e = node.ephemeral;
+  if (!e || !e.provider || !e.machineId) return null;
+  return {
+    id: e.machineId,
+    provider: e.provider,
+    name: node.name || e.machineId,
+    region: e.region || "",
+    status: "stopped",
+    ip: null,
+    createdAt: "",
+    app: e.app,
+    nodeId: node.id,
+  };
 }
 
 /** Resume a suspended machine so it rejoins the relay and becomes reachable

@@ -8,7 +8,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import Stripe from "stripe";
 import webpush from "web-push";
 import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid } from "./hosted-crypto.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
@@ -999,6 +999,51 @@ app.get("/devices", requireUser, asyncHandler(async (req, res) => {
   res.json(await store.listPairedDevices(account.id));
 }));
 
+// --- Device→device ephemeral-provider-token vault (P2 / Gap A) --------------
+// Opt-in E2E vault so a second device can wake/reach a machine the first
+// launched. `requireUser` (account session); the caller device identifies itself
+// by its X25519 public key. The control plane only ever stores ciphertext +
+// per-device wrapped keys — never a token or the vault key in the clear. Reading
+// another device's wrapped key is harmless (it's sealed to that device's key).
+app.get("/device-vault", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const devicePub = String(req.query.device ?? "");
+  const rec = devicePub ? await store.getDeviceVaultWrappedKey(account.id, devicePub) : undefined;
+  res.json({
+    ok: true,
+    vault: (await store.getDeviceVault(account.id))?.ciphertext ?? null,
+    wrappedKey: rec ? { wrappedKey: rec.wrappedKey, wrappedByPublicKeyB64: rec.wrappedByPublicKey } : null,
+    requests: devicePub ? (await store.listDeviceVaultKeyRequests(account.id, devicePub)).map((r) => r.devicePublicKey) : [],
+  });
+}));
+
+app.put("/device-vault", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const devicePub = String(req.body?.devicePublicKeyB64 ?? "");
+  const ciphertext = String(req.body?.ciphertext ?? "");
+  if (!devicePub || !ciphertext) { res.status(400).json({ error: "devicePublicKeyB64 and ciphertext required" }); return; }
+  await store.setDeviceVault(account.id, devicePub, ciphertext);
+  res.json({ ok: true });
+}));
+
+app.post("/device-vault/key/request", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const devicePub = String(req.body?.devicePublicKeyB64 ?? "");
+  if (!devicePub) { res.status(400).json({ error: "devicePublicKeyB64 required" }); return; }
+  await store.requestDeviceVaultWrappedKey(account.id, devicePub);
+  res.json({ ok: true });
+}));
+
+app.put("/device-vault/key/wrapped", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const target = String(req.body?.targetDevicePublicKeyB64 ?? "");
+  const wrappedByPublicKey = String(req.body?.wrappedByPublicKeyB64 ?? "");
+  const wrappedKey = String(req.body?.wrappedKey ?? "");
+  if (!target || !wrappedByPublicKey || !wrappedKey) { res.status(400).json({ error: "target, wrappedBy and wrappedKey required" }); return; }
+  await store.setDeviceVaultWrappedKey(account.id, target, wrappedByPublicKey, wrappedKey);
+  res.json({ ok: true });
+}));
+
 // Remove (sign out) a paired device, freeing a device slot. 404 if the account
 // has no such device.
 app.delete("/devices/:id", requireUser, asyncHandler(async (req, res) => {
@@ -1117,6 +1162,45 @@ app.post("/node/name", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const updated = await store.setNodeName(node.id, String(req.body?.name ?? ""));
   res.json({ ok: true, node: updated });
+}));
+
+// --- Durable E2E session snapshots for rebuild-resume (Gap B) ---------------
+// A destroy-lane machine's daemon flushes a sealed snapshot (transcript + git
+// checkpoint + runtime resume token) before teardown; a freshly re-provisioned
+// machine reads it to rebuild the session. `requireNode` (the daemon uses its
+// enrollment token); the control plane only ever stores/serves ciphertext.
+app.put("/node/session-snapshot/:sessionId", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const ciphertext = String(req.body?.ciphertext ?? "");
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  if (!ciphertext || !sessionId) { res.status(400).json({ error: "sessionId and ciphertext required" }); return; }
+  await store.setSessionSnapshot(node.accountId, sessionId, ciphertext);
+  res.json({ ok: true });
+}));
+
+app.get("/node/session-snapshot/:sessionId", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const snap = await store.getSessionSnapshot(node.accountId, String(req.params.sessionId ?? "").trim());
+  if (!snap) { res.status(404).json({ error: "no snapshot" }); return; }
+  res.json({ ok: true, ciphertext: snap.ciphertext, updatedAt: snap.updatedAt });
+}));
+
+app.delete("/node/session-snapshot/:sessionId", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  await store.deleteSessionSnapshot(node.accountId, String(req.params.sessionId ?? "").trim());
+  res.json({ ok: true });
+}));
+
+// A disposable ephemeral machine's daemon calls this once it has gone idle, so
+// the control plane can promptly reap providers that don't self-destruct on
+// daemon exit (Hetzner halts but keeps billing). Non-secret: identifies the node
+// via its enrollment bearer only. Fly/EC2 already self-reap on exit, so this is
+// a harmless backstop for them; device-launched machines aren't tracked
+// server-side → reaped:false. See src/ephemeral-teardown.ts.
+app.post("/node/settled", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const reaped = await reapSettledHostedMachine(store, node.accountId, node.id, provisionEnv()).catch(() => false);
+  res.json({ ok: true, reaped });
 }));
 
 // The node reads its owner's entitlements (plan, node limit, push/relay flags).
@@ -1333,6 +1417,7 @@ const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "api.machines.dev",
   "api.fly.io",
   "api.sprites.dev",
+  "api.e2b.app",
   "ec2.us-east-1.amazonaws.com",
   "ec2.us-west-2.amazonaws.com",
   "ec2.eu-west-1.amazonaws.com",

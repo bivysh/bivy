@@ -16,6 +16,7 @@
 // HostedProvisioning in store.ts). It is gated per account and off by default.
 import {
   launchEphemeralMachine,
+  destroyEphemeralMachine,
   type ExecFn,
   type ExecRequest,
   type LocalStore,
@@ -250,15 +251,84 @@ export async function mintHostedInstallationToken(store: MeshStore, accountId: s
   return minted;
 }
 
+/** Actively destroy one tracked hosted machine at its provider (and unenroll its
+ *  node + forget its record via core's `destroyEphemeralMachine`). This is the
+ *  key path for providers that DON'T self-reap on daemon exit — Hetzner halts but
+ *  the server keeps billing until an explicit DELETE — and is idempotent /
+ *  404-tolerant for Fly/EC2 that may already be gone. */
+export type DestroyFn = typeof destroyEphemeralMachine;
+
+async function destroyOneHostedMachine(
+  store: MeshStore,
+  accountId: string,
+  machine: EphemeralMachine,
+  providerToken: string,
+  env: ProvisionEnv,
+  nowMs: number,
+  destroy: DestroyFn,
+): Promise<void> {
+  const sessionToken = await store.createSession(accountId);
+  const localStore = serverLocalStore({ sessionToken, env, onAddKey: () => {} });
+  await destroy(machine, {
+    store: localStore,
+    exec: directExec(),
+    keys: serverKeyStore(providerToken),
+    machines: serverMachineStore(store, accountId, nowMs),
+  });
+}
+
 /**
- * Server-side lifecycle reconciliation: drop tracking records for hosted
- * machines past their TTL (the VM self-destructs at TTL; this frees the node
- * slot and keeps the dedupe/rate-cap views accurate) and unenroll their nodes.
- * Returns the number reaped. Safe to run on a timer.
+ * A hosted machine reported it has settled (POST /node/settled) once its daemon
+ * went idle — reap it now at the provider. This gives PROMPT teardown for
+ * providers that don't self-destruct on daemon exit (Hetzner), well before the
+ * TTL backstop; for Fly/EC2 (already reaped by daemon exit) it's a harmless,
+ * 404-tolerant no-op. Returns true when a tracked hosted machine existed for the
+ * node (device-launched machines aren't tracked server-side → false, and the
+ * endpoint simply 200s).
  */
-export async function reconcileHostedMachines(store: MeshStore, accountId: string, nowMs = Date.now()): Promise<number> {
+export async function reapSettledHostedMachine(
+  store: MeshStore,
+  accountId: string,
+  nodeId: string,
+  env: ProvisionEnv,
+  nowMs = Date.now(),
+  destroy: DestroyFn = destroyEphemeralMachine,
+): Promise<boolean> {
+  const machines = await store.getHostedMachines(accountId);
+  const record = machines.find((m) => m.nodeId === nodeId);
+  if (!record) return false;
+  const machine = record as unknown as EphemeralMachine;
+  const hosted = await store.getHostedProvisioning(accountId);
+  const providerToken = hosted.providerTokens?.[machine.provider];
+  try {
+    if (providerToken) {
+      await destroyOneHostedMachine(store, accountId, machine, providerToken, env, nowMs, destroy);
+      await audit(store, accountId, { action: "machine_reaped", provider: machine.provider, nodeId, detail: "settled — destroyed" });
+    } else {
+      // No hosted token to authenticate a destroy (unexpected for hosted): at
+      // least forget the record + unenroll so the node slot frees.
+      await store.setHostedMachines(accountId, machines.filter((m) => m.nodeId !== nodeId));
+      await store.removeNode(accountId, nodeId).catch(() => {});
+      await audit(store, accountId, { action: "machine_reaped", nodeId, detail: "settled — no token" });
+    }
+  } catch (e) {
+    await audit(store, accountId, { action: "provision_failed", nodeId, detail: `settled reap: ${String((e as Error)?.message || e).slice(0, 120)}` });
+  }
+  return true;
+}
+
+/**
+ * Server-side lifecycle reconciliation for machines past their TTL grace. When
+ * `env` is supplied and a hosted provider token exists, it ACTIVELY destroys the
+ * machine at the provider (so leak-prone Hetzner servers don't bill past TTL);
+ * otherwise it falls back to bookkeeping only (drop the record + unenroll the
+ * node — the VM self-destructs at its own TTL for Fly/EC2). Returns the number
+ * reaped. Safe to run lazily or on a timer.
+ */
+export async function reconcileHostedMachines(store: MeshStore, accountId: string, nowMs = Date.now(), env?: ProvisionEnv, destroy: DestroyFn = destroyEphemeralMachine): Promise<number> {
   const machines = await store.getHostedMachines(accountId);
   if (!machines.length) return 0;
+  const hosted = env ? await store.getHostedProvisioning(accountId) : null;
   const kept: Array<Record<string, unknown>> = [];
   let reaped = 0;
   for (const m of machines) {
@@ -271,14 +341,22 @@ export async function reconcileHostedMachines(store: MeshStore, accountId: strin
     }
     reaped++;
     const nodeId = typeof m.nodeId === "string" ? m.nodeId : "";
-    if (nodeId) {
+    const provider = typeof m.provider === "string" ? m.provider : "";
+    const providerToken = env && provider ? hosted?.providerTokens?.[provider] : undefined;
+    if (env && providerToken) {
+      try {
+        await destroyOneHostedMachine(store, accountId, m as unknown as EphemeralMachine, providerToken, env, nowMs, destroy);
+      } catch {
+        if (nodeId) await store.removeNode(accountId, nodeId).catch(() => {});
+      }
+    } else if (nodeId) {
       try {
         await store.removeNode(accountId, nodeId);
       } catch {
-        /* best effort — the VM self-destructs regardless */
+        /* best effort — Fly/EC2 self-destruct regardless */
       }
     }
-    await audit(store, accountId, { action: "machine_reaped", nodeId: nodeId || undefined, detail: `ttl ${ttlMin}m elapsed` });
+    await audit(store, accountId, { action: "machine_reaped", nodeId: nodeId || undefined, detail: `ttl ${ttlMin}m elapsed${env && providerToken ? " — destroyed" : ""}` });
   }
   if (reaped) await store.setHostedMachines(accountId, kept);
   return reaped;
@@ -296,9 +374,11 @@ export async function maybeAutoProvision(
   launcher = launchEphemeralMachine,
 ): Promise<EphemeralMachine | null> {
   try {
-    // Lazy lifecycle reconciliation: prune machines past TTL before deciding, so
-    // dedupe/rate-cap see fresh state and node slots are freed.
-    await reconcileHostedMachines(store, accountId).catch(() => {});
+    // Lazy lifecycle reconciliation: prune (and actively destroy leak-prone)
+    // machines past TTL before deciding, so dedupe/rate-cap see fresh state and
+    // node slots are freed. Passing env lets it DELETE the provider resource
+    // (Hetzner) rather than only forgetting the record.
+    await reconcileHostedMachines(store, accountId, Date.now(), env).catch(() => {});
     const plan = await planAutoProvision(store, accountId);
     if (!plan.willProvision || !plan.targetConfigId) return null;
     const configs = await store.getEphemeralConfigs(accountId);

@@ -80,6 +80,7 @@ check("wire-format constants hold their pinned values", () => {
   assert.equal(FRAME_CHUNK_BYTES, 192 * 1024);
   assert.equal(HKDF_INFO.pair, "bivy-pair-v1");
   assert.equal(HKDF_INFO.rotate, "bivy-rotate-v1");
+  assert.equal(HKDF_INFO.deviceVault, "bivy-device-vault-v1");
 });
 
 // The node chunker and browser chunker must use the very same chunk size.

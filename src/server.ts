@@ -51,6 +51,9 @@ import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from "./auth.js";
 import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-client.js";
+import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
+import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
+import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
@@ -6398,10 +6401,145 @@ async function deleteSessionFile(opts: { id?: string; path?: string; fallbackAct
   return { sessionId: deletedSessionId, sessionFile: inRoot ? resolved : undefined };
 }
 
-const idleCloseTimer = setInterval(() => { closeIdleSessions(); pruneGhostSessions(); pruneEmptySessions(); }, idleCloseSweepMs);
+const idleCloseTimer = setInterval(() => { closeIdleSessions(); pruneGhostSessions(); pruneEmptySessions(); evaluateEphemeralTeardown(); }, idleCloseSweepMs);
 idleCloseTimer.unref?.();
 const worktreeCleanupTimer = setInterval(() => void sweepDiskGuardrails(), worktreeCleanupSweepMs);
 worktreeCleanupTimer.unref?.();
+
+// --- server-side ephemeral teardown ----------------------------------------
+// On a disposable machine (bootstrap set BIVY_EPHEMERAL=1) the daemon ends the
+// machine ITSELF once it goes idle, so teardown no longer needs the launching
+// device online. See src/ephemeral-teardown.ts + docs/ephemeral-sessions.md.
+const ephemeralTeardownCfg = readEphemeralTeardownConfig();
+let ephemeralEverBusy = false;
+let ephemeralLastBusyAt = Date.now();
+
+/** Best-effort "I've settled — reap me" signal to the control plane. Non-secret
+ *  (node id via the enrollment bearer); lets a hosted machine whose provider
+ *  can't self-reap on exit (Hetzner) be destroyed server-side. */
+async function signalSettledToControlPlane(): Promise<void> {
+  if (!sessionAdvertiseTarget) return;
+  await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/settled`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
+    body: "{}",
+  }).catch(() => {});
+}
+
+/** Rebuild-resume (Gap B): on a freshly re-provisioned machine booted with
+ *  `BIVY_RESTORE=<sessionId>`, fetch the session's control-plane snapshot,
+ *  decrypt it with this machine's room key (reused from the torn-down session so
+ *  the seal matches), and apply it — restoring the transcript (EventLog) and the
+ *  git checkpoint into a repo the session can open. The runtime process starts
+ *  fresh/seeded from the restored transcript ("reconstructed", not byte-identical
+ *  — see docs/ephemeral-sessions.md). Best-effort: a missing/undecryptable
+ *  snapshot leaves a clean fresh machine. Reuses the standby-replica machinery. */
+async function restoreSessionFromSnapshot(sessionId: string): Promise<void> {
+  if (!sessionAdvertiseTarget) return;
+  const cpBaseUrl = sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "");
+  try {
+    const res = await fetch(`${cpBaseUrl}/node/session-snapshot/${encodeURIComponent(sessionId)}`, {
+      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}` },
+    });
+    if (!res.ok) {
+      console.error(`[restore] no snapshot for ${sessionId} (${res.status})`);
+      return;
+    }
+    const data = (await res.json()) as { ciphertext?: string };
+    if (!data.ciphertext) return;
+    const applied = await applySessionSnapshot(data.ciphertext, pairingStore.roomKey(), {
+      persistRecords: (id, records) => eventLog.rewrite(id, records),
+      applyBundle: async (id, buf) => applyCheckpointBundle(await ensureReplicaRepo(id), id, buf),
+      materialize: async (id) => materializeCheckpoint(await ensureReplicaRepo(id), id),
+    });
+    // Register the rebuilt session so it lists and opens (mirrors the standby's
+    // upsertReplicaMeta); the transcript replays from the restored EventLog.
+    try {
+      metadata.upsertSession({ id: sessionId, source: "restored", status: "saved" });
+    } catch {
+      /* best-effort listing */
+    }
+    console.log(`[restore] session ${sessionId}: ${applied.recordCount} records, checkpoint ${applied.checkpointCommit ?? "none"}`);
+  } catch (e) {
+    console.error(`[restore] session ${sessionId} failed: ${(e as Error)?.message || e}`);
+  }
+}
+
+/** Flush a durable, E2E-encrypted snapshot of each open session to the control
+ *  plane before this disposable machine is torn down, so a destroy-lane session
+ *  can be rebuilt on a fresh machine later (Gap B). Sealed under the node room
+ *  key — the same key that seals the session title — so a restore machine that
+ *  reuses this session's room key can decrypt it; the control plane sees only
+ *  ciphertext. Best-effort per session; never blocks teardown for long. */
+async function flushSessionSnapshots(): Promise<void> {
+  if (!sessionAdvertiseTarget) return;
+  const roomKey = pairingStore.roomKey();
+  const cpBaseUrl = sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "");
+  for (const record of new Set(openSessions.values())) {
+    try {
+      const sealed = await buildSessionSnapshot(record.id, roomKey, {
+        readRecords: (id) => eventLog.entries(id),
+        epochOf: () => 0,
+        checkpointHead: async (id) => {
+          try {
+            return (await harness.checkpoints(id))[0]?.id;
+          } catch {
+            return undefined;
+          }
+        },
+        bundleCheckpoint: async (id, since) => createCheckpointBundle(harnessDirFor(record), id, since),
+        runtimeSessionRef: (id) => openSessions.get(id)?.sessionFile,
+        worktreeSync: () => true,
+      });
+      if (!sealed) continue;
+      await fetch(`${cpBaseUrl}/node/session-snapshot/${encodeURIComponent(record.id)}`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ ciphertext: sealed }),
+      }).catch(() => {});
+    } catch {
+      /* best effort per session — TTL/branch push remain the backstops */
+    }
+  }
+}
+
+let ephemeralTearingDown = false;
+/** Evaluate the quiet condition and self-terminate if the machine is done. Reads
+ *  live session/queue state each call, so it's safe to invoke from the idle
+ *  sweep and from agent_end. No-op on a persistent node (env absent). */
+function evaluateEphemeralTeardown(): void {
+  if (!ephemeralTeardownCfg.enabled || ephemeralTearingDown) return;
+  const records = new Set(openSessions.values());
+  const anyWorking = [...records].some((r) => r.isWorking);
+  const anyRemoteActive = [...records].some((r) => r.remoteActive);
+  const inFlightWork = controlPlanePoller?.inFlightCount() ?? 0;
+  if (anyWorking || anyRemoteActive || inFlightWork > 0) {
+    ephemeralEverBusy = true;
+    ephemeralLastBusyAt = Date.now();
+    return;
+  }
+  const idleForMs = Date.now() - ephemeralLastBusyAt;
+  if (!shouldSelfTeardown(ephemeralTeardownCfg, { everBusy: ephemeralEverBusy, anyWorking, anyRemoteActive, inFlightWork, idleForMs })) return;
+  ephemeralTearingDown = true;
+  void (async () => {
+    // Persist a rebuild snapshot BEFORE the machine goes away (Gap B), then reap.
+    await flushSessionSnapshots();
+    await performSelfTeardown({
+      provider: ephemeralTeardownCfg.provider,
+      signalSettled: signalSettledToControlPlane,
+      shutdown: () => { try { spawnSync("shutdown", ["-h", "now"], { stdio: "ignore" }); } catch { /* TTL backstops */ } },
+    });
+  })();
+}
+
+if (ephemeralTeardownCfg.enabled) {
+  // Sample often enough to honour the finish grace (~10s) without waiting for the
+  // 1–5min idle sweep. Ephemeral-only, so no cost on a persistent node.
+  const ephemeralEvalMs = Math.max(2_000, Math.min(ephemeralTeardownCfg.finishGraceMs, 15_000));
+  const ephemeralTeardownTimer = setInterval(() => evaluateEphemeralTeardown(), ephemeralEvalMs);
+  ephemeralTeardownTimer.unref?.();
+  console.log(`[ephemeral-teardown] armed: provider=${ephemeralTeardownCfg.provider} onFinish=${ephemeralTeardownCfg.onFinish} ttl=${ephemeralTeardownCfg.ttlMin}m`);
+}
 setTimeout(() => void sweepDiskGuardrails(), 30_000).unref?.();
 // One sweep shortly after boot clears ghosts left by a previous run before any
 // client paints its sidebar; the idle timer keeps it clean thereafter.
@@ -6633,6 +6771,9 @@ function attachSessionListeners(record: SessionRecord) {
       // itself (gh/API/web) so the badge lights up.
       void maybePushWorktreeBranch(record)
         .then(() => maybeDetectPullRequest(record));
+      // On a disposable machine, a finished turn with nobody watching is the cue
+      // to consider self-teardown promptly (the idle sweep is the backstop).
+      evaluateEphemeralTeardown();
     }
     const sessionEventPayload = { type: "session.event", sessionId: record.id, event };
     if (event.type === "message_update") {
@@ -9691,6 +9832,9 @@ const server = app.listen(port, host, async () => {
   console.log(`Agent data dir: ${piDir}`);
   console.log(`Workspace: ${defaultWorkspace}`);
   startRelayIfConfigured();
+  // Rebuild-resume (Gap B): if this machine was re-provisioned to restore a
+  // torn-down session, pull + apply its snapshot before serving. Non-blocking.
+  if (process.env.BIVY_RESTORE) void restoreSessionFromSnapshot(String(process.env.BIVY_RESTORE));
   startModelAuthWatcher();
   startGithubAppSyncWatcher();
   await startGitHubTasksIfConfigured();

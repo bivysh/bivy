@@ -66,10 +66,14 @@ import {
   destroyEphemeralMachine,
   wakeEphemeralMachine,
   ephemeralProviderSuspendsWhenIdle,
+  ephemeralMachineFromNode,
+  createDeviceVaultKeyStore,
+  deviceKeypair,
   listEphemeralSizes,
   ephemeralNodeLabel,
   type TranscriptCache,
-  type EphemeralKeyStore,
+  type DeviceVaultKeyStore,
+  type DeviceVaultRemote,
   type EphemeralModelKeyStore,
   type EphemeralModelKeyInfo,
   type EphemeralPrefsStore,
@@ -512,6 +516,10 @@ export class AppController {
     this.local.s = token;
     if (!this.local.cp) this.local.cp = location.origin;
     this.store.setSignedIn(true);
+    // Reconcile the device vault once on sign-in: a producer device satisfies any
+    // pending wrapped-key requests from the account's other devices; a consumer
+    // device pulls its wrapped key so a synced token is ready to wake a machine.
+    void this.syncDeviceVault();
     this.connect();
   }
 
@@ -1911,7 +1919,16 @@ export class AppController {
 
   // --- Ephemeral machines ------------------------------------------------
 
-  private ephemeralKeys: EphemeralKeyStore = createEphemeralKeyStore();
+  // Provider tokens are device-local by default. When cross-device sync is opted
+  // in (Settings), they're additionally synced to the account's other devices
+  // through an E2E device vault so a second device can wake/reach a machine the
+  // first launched (P2 / Gap A) — the control plane only ever sees ciphertext.
+  private ephemeralKeys: DeviceVaultKeyStore = createDeviceVaultKeyStore({
+    local: createEphemeralKeyStore(),
+    remote: this.deviceVaultRemote(),
+    device: () => deviceKeypair(this.local),
+    enabled: () => this.deviceTokenSyncEnabled(),
+  });
   private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
   private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
@@ -1946,6 +1963,60 @@ export class AppController {
   }
   removeEphemeralToken(id: string): Promise<void> {
     return this.ephemeralKeys.remove(id);
+  }
+
+  // --- Cross-device provider-token sync (P2 / Gap A) ---------------------
+  // Opt-in, off by default (per the CLOUD.md credential-widening precedent). When
+  // on, ephemeral provider tokens are E2E-synced to the account's other devices
+  // so a second device can wake/reach a machine the first launched.
+  private deviceTokenSyncEnabled(): boolean {
+    try {
+      return !this.direct && !!this.local.s && localStorage.getItem("bivy_device_token_sync") === "1";
+    } catch {
+      return false;
+    }
+  }
+  getDeviceTokenSync(): boolean {
+    return this.deviceTokenSyncEnabled();
+  }
+  setDeviceTokenSync(enabled: boolean): void {
+    try {
+      localStorage.setItem("bivy_device_token_sync", enabled ? "1" : "0");
+    } catch {
+      /* noop */
+    }
+    if (enabled) void this.syncDeviceVault();
+  }
+  /** Reconcile the device vault (consume a wrapped key, or publish + satisfy
+   *  peers' requests). Safe/no-op when disabled. */
+  syncDeviceVault(): Promise<void> {
+    return this.ephemeralKeys.sync().catch(() => {});
+  }
+  /** Fetch-backed control-plane transport for the device vault. Ciphertext +
+   *  wrapped keys only — never a token. */
+  private deviceVaultRemote(): DeviceVaultRemote {
+    const base = () => (this.local.cp || (typeof location !== "undefined" ? location.origin : "")).replace(/\/$/, "");
+    const jsonAuth = () => ({ authorization: `Bearer ${this.local.s}`, "content-type": "application/json" });
+    return {
+      get: async () => {
+        const dev = await deviceKeypair(this.local);
+        const res = await fetch(`${base()}/device-vault?device=${encodeURIComponent(dev.pub)}`, { headers: { authorization: `Bearer ${this.local.s}` } });
+        if (!res.ok) throw new Error(`device-vault get failed (${res.status})`);
+        const data = (await res.json()) as { vault?: string | null; wrappedKey?: { wrappedKey: string; wrappedByPublicKeyB64: string } | null; requests?: string[] };
+        return { vault: data.vault ?? null, wrappedKey: data.wrappedKey ?? null, requests: Array.isArray(data.requests) ? data.requests : [] };
+      },
+      putVault: async (ciphertext: string) => {
+        const dev = await deviceKeypair(this.local);
+        await fetch(`${base()}/device-vault`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub, ciphertext }) });
+      },
+      requestKey: async () => {
+        const dev = await deviceKeypair(this.local);
+        await fetch(`${base()}/device-vault/key/request`, { method: "POST", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub }) });
+      },
+      putWrapped: async (target: string, wrappedKey: string, wrappedByPublicKeyB64: string) => {
+        await fetch(`${base()}/device-vault/key/wrapped`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ targetDevicePublicKeyB64: target, wrappedKey, wrappedByPublicKeyB64 }) });
+      },
+    };
   }
   /** Per-provider saved launch preferences (region/size/TTL/repo) configured in
    *  Settings → Ephemeral machines; used to pre-fill the launch flow. */
@@ -2017,9 +2088,14 @@ export class AppController {
   }
   /** Destroy a configured ephemeral machine shortly after agent_end. The short
    * grace period lets final transcript/PR metadata flush first. A queued
-   * follow-up suppresses teardown; its eventual agent_end will try again. This
-   * is device-driven, so the machine's TTL remains the safety fallback when the
-   * browser goes offline. */
+   * follow-up suppresses teardown; its eventual agent_end will try again.
+   *
+   * This is the device-driven FAST PATH, kept for snappy teardown while a device
+   * is watching. It is no longer the sole authority: the machine's own daemon now
+   * self-terminates once idle (BIVY_EPHEMERAL — see src/ephemeral-teardown.ts) and
+   * the control-plane reconciler reaps leak-prone providers, so teardown happens
+   * even with no device online. Provider destroy is idempotent/404-tolerant, so
+   * these paths race harmlessly; TTL remains the final backstop. */
   private async maybeTeardownFinishedEphemeral(sessionId: string): Promise<void> {
     if (this.direct || this.store.getFollowups(sessionId).length > 0) return;
     const nodeId = this.local.cur;
@@ -2093,7 +2169,14 @@ export class AppController {
    */
   async resumeAndConnectNode(nodeId: string, timeoutMs = 90_000): Promise<void> {
     try {
-      const machine = (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId);
+      // The launching device holds the machine record locally; a second account
+      // device doesn't, so fall back to the non-secret machine identity carried
+      // on the account node registry entry (cross-device resume — Gap A in
+      // docs/ephemeral-sessions.md). Reconstructing it lets this device wake a
+      // suspended node instead of hanging while connecting to it off-relay.
+      const machine =
+        (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
+        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId });
       if (machine && ephemeralProviderSuspendsWhenIdle(machine.provider)) {
         await this.wakeEphemeral(machine);
       }
@@ -2101,6 +2184,43 @@ export class AppController {
     } catch (e) {
       // Surface a wake/connect failure (bad token, provider hiccup, slow resume)
       // to the error toast rather than leaving the UI silently at "connecting".
+      this.store.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Rebuild-resume (Gap B): re-provision a torn-down destroy-lane session onto a
+   * NEW machine and restore it from its control-plane snapshot. Reuses the old
+   * node id + room key (this device holds it) so the new machine can decrypt the
+   * snapshot, and the old session id so its daemon knows what to restore. The
+   * machine's shape comes from its device-local record (or the node registry).
+   */
+  async reprovisionEphemeral(nodeId: string, sessionId: string): Promise<void> {
+    try {
+      const roomKeyB64 = this.local.keys()[nodeId];
+      if (!roomKeyB64) throw new Error("This device no longer holds this session's key, so it can't rebuild it.");
+      const machine =
+        (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
+        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId });
+      if (!machine) throw new Error("No record of the machine to rebuild — re-launch it from Ephemeral settings.");
+      if (ephemeralProviderSuspendsWhenIdle(machine.provider)) {
+        // A suspend provider is never destroyed — just wake it.
+        await this.resumeAndConnectNode(nodeId);
+        return;
+      }
+      await this.launchEphemeral({
+        provider: machine.provider,
+        region: machine.region || undefined,
+        ttlMinutes: machine.ttlMinutes,
+        repo: machine.repo,
+        setupId: machine.setupId,
+        teardownOnAgentFinish: machine.teardownOnAgentFinish,
+        reuseNodeId: nodeId,
+        reuseRoomKeyB64: roomKeyB64,
+        restoreSessionId: sessionId,
+      });
+      await this.connectToNode(nodeId, 120_000);
+    } catch (e) {
       this.store.setError(e instanceof Error ? e.message : String(e));
     }
   }

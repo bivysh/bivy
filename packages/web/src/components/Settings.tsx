@@ -2706,7 +2706,30 @@ function EphemeralPanel() {
           );
         })}
       </div>
+      <EphemeralTokenSync />
       <EphemeralModelKeys />
+    </div>
+  );
+}
+
+// Opt-in: sync provider tokens to the account's OTHER devices via an E2E device
+// vault, so a second device can wake/reach a machine this one launched (P2 /
+// Gap A). Off by default; the control plane only ever stores ciphertext.
+function EphemeralTokenSync() {
+  const [on, setOn] = useState(false);
+  useEffect(() => { setOn(controller.getDeviceTokenSync()); }, []);
+  return (
+    <div className="settings-form" style={{ marginTop: "1rem" }}>
+      <Toggle
+        checked={on}
+        onChange={(v) => { controller.setDeviceTokenSync(v); setOn(v); }}
+        label="Sync provider tokens across my devices"
+      />
+      <p className="muted small">
+        End-to-end encrypted, opt-in. Lets your other signed-in devices wake and reach machines you launch here without
+        re-entering the token — the control plane only ever stores ciphertext. A brand-new device receives the token the
+        next time an existing device is opened.
+      </p>
     </div>
   );
 }
