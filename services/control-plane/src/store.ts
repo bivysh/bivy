@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHash } from "node:crypto";
+import type { SecretEnvelope } from "./hosted-crypto.js";
 
 /**
  * Control plane data store.
@@ -369,7 +370,7 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "credential_rotated" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped";
+  action: "credential_updated" | "credential_rotated" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "room_key_escrowed" | "room_key_reused";
   provider?: string;
   configId?: string;
   nodeId?: string;
@@ -1078,6 +1079,15 @@ export interface MeshStore {
   // ("issue:owner/repo#N"). Covers sessions on currently-enrolled nodes; a session
   // whose node was already torn down is rebuilt via the device send path (Gap 1).
   findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined>;
+
+  // Gap 3: escrowed session ROOM KEY for HOSTED (device-offline) rebuild. Sealed
+  // at rest with the per-account hosted-provisioning key (hosted-crypto), keyed by
+  // the reusable eph-* node id, NOT FK-cascaded off nodes so it survives teardown.
+  // Written ONLY for hosted-provisioning accounts (the control plane already holds
+  // their provider/GitHub creds); device-launched sessions keep the room key
+  // device-only and never escrow. Never exposed to any client.
+  getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined>;
+  setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void>;
 
   // GitHub App private-key vault (issue #88), per-app — see GithubAppVault above.
   // A node lists every app the account has a vault for (it may not hold all of

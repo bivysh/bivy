@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
-import { encryptSecret, decryptSecret, isSecretEnvelope } from "./hosted-crypto.js";
+import { encryptSecret, decryptSecret, isSecretEnvelope, type SecretEnvelope } from "./hosted-crypto.js";
 import {
   type Account,
   type DeviceLoginStatus,
@@ -430,6 +430,20 @@ export class PostgresStore implements MeshStore {
         app         TEXT,
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, session_id)
+      );
+
+      -- Escrowed session ROOM KEY for HOSTED (device-offline) rebuild (Gap 3).
+      -- Sealed at rest with the per-account hosted-provisioning key (hosted-crypto),
+      -- keyed by the reusable eph-* node id and deliberately NOT FK-cascaded off
+      -- nodes so it survives teardown/unenroll. Only written for hosted-provisioning
+      -- accounts (whose provider/GitHub creds the control plane already holds); a
+      -- device-launched session keeps its room key device-only and never escrows.
+      CREATE TABLE IF NOT EXISTS node_room_keys (
+        account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        node_id      TEXT NOT NULL,
+        room_key_enc JSONB NOT NULL,
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, node_id)
       );
 
       -- Inbound hooks (route a GitHub/Slack webhook to an account) + work queue
@@ -1783,6 +1797,22 @@ export class PostgresStore implements MeshStore {
 
   async deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void> {
     await this.query(`DELETE FROM session_correlation WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+  }
+
+  async getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined> {
+    const { rows } = await this.query(`SELECT room_key_enc FROM node_room_keys WHERE account_id = $1 AND node_id = $2`, [accountId, nodeId]);
+    if (!rows[0]) return undefined;
+    const raw = rows[0].room_key_enc;
+    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
+  }
+
+  async setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void> {
+    await this.query(
+      `INSERT INTO node_room_keys (account_id, node_id, room_key_enc, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id, node_id) DO UPDATE SET room_key_enc = EXCLUDED.room_key_enc, updated_at = now()`,
+      [accountId, nodeId, JSON.stringify(enc)],
+    );
   }
 
   async findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined> {
