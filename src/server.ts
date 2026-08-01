@@ -3562,7 +3562,14 @@ function startRelayIfConfigured() {
   terminals.dropClient(RELAY_CLIENT_ID);
   relay = new RelayConnector(config, (msg) => void handleRelayMessage(msg), {
     pairing: pairingStore,
-    onWorkAvailable: () => controlPlanePoller?.poke(),
+    onWorkAvailable: () => {
+      controlPlanePoller?.poke();
+      // A relay wake also means "something changed for this account" — kick a
+      // (debounced) model-auth sync so a peer node answers any pending vault-key
+      // request from a freshly-launched ephemeral runner without waiting for its
+      // 30s poll. Cheap and idempotent; coalesced to at most one sync per burst.
+      triggerModelAuthSyncSoon();
+    },
   });
   relay.start();
   if (config.controlPlaneUrl && config.enrollmentToken) {
@@ -3680,6 +3687,61 @@ async function modelAuthFetch(pathname: string, init: RequestInit = {}) {
   return fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}${pathname}`, { ...init, headers });
 }
 
+// Debounced model-auth sync trigger. A relay wake (`work.available`) fires this
+// so peers answer a new node's vault-key request promptly (event-driven) instead
+// of on the steady 30s poll. Coalesces a burst of wakes into one sync.
+let modelAuthSyncSoonTimer: ReturnType<typeof setTimeout> | undefined;
+function triggerModelAuthSyncSoon() {
+  if (modelAuthSyncSoonTimer) return;
+  modelAuthSyncSoonTimer = setTimeout(() => {
+    modelAuthSyncSoonTimer = undefined;
+    void syncModelAuthFromControlPlane();
+  }, 250);
+  modelAuthSyncSoonTimer.unref?.();
+}
+
+// Cold-start fast-retry. A freshly-launched node (typically a short-lived
+// ephemeral runner) that holds vault ciphertext but no wrapped key yet must wait
+// for a peer node to answer its key request. The 30s steady poll is too slow for
+// a machine that may only live a minute, so once we've requested the key we
+// re-sync on a brief bounded cadence until the wrapped key arrives (a peer
+// answered) or we give up and let the steady poll continue. Peer-only by design:
+// the key is always answered by another node over the E2E wrap — nothing ever
+// transits the device or control plane in the clear.
+const MODEL_AUTH_COLDSTART_INTERVAL_MS = 2_000;
+const MODEL_AUTH_COLDSTART_MAX_ATTEMPTS = 30; // ~60s bounded
+let modelAuthColdStartActive = false;
+let modelAuthColdStartAttempts = 0;
+let modelAuthColdStartTimer: ReturnType<typeof setTimeout> | undefined;
+function stopModelAuthColdStart() {
+  modelAuthColdStartActive = false;
+  modelAuthColdStartAttempts = 0;
+  if (modelAuthColdStartTimer) {
+    clearTimeout(modelAuthColdStartTimer);
+    modelAuthColdStartTimer = undefined;
+  }
+}
+function ensureModelAuthColdStart() {
+  if (modelAuthColdStartActive) return; // already retrying
+  modelAuthColdStartActive = true;
+  modelAuthColdStartAttempts = 0;
+  const tick = () => {
+    modelAuthColdStartTimer = undefined;
+    if (!modelAuthColdStartActive) return;
+    // A concurrent sync may have already landed the key — stop as soon as we have it.
+    if (readLocalModelAuthVaultKey() || modelAuthColdStartAttempts >= MODEL_AUTH_COLDSTART_MAX_ATTEMPTS) {
+      stopModelAuthColdStart();
+      return;
+    }
+    modelAuthColdStartAttempts++;
+    void syncModelAuthFromControlPlane();
+    modelAuthColdStartTimer = setTimeout(tick, MODEL_AUTH_COLDSTART_INTERVAL_MS);
+    modelAuthColdStartTimer.unref?.();
+  };
+  modelAuthColdStartTimer = setTimeout(tick, MODEL_AUTH_COLDSTART_INTERVAL_MS);
+  modelAuthColdStartTimer.unref?.();
+}
+
 async function syncModelAuthFromControlPlane() {
   if (!sessionAdvertiseTarget) return;
   try {
@@ -3703,9 +3765,16 @@ async function syncModelAuthFromControlPlane() {
       await writePiModelsProjection();
       await broadcastLocalModels();
       lastPushedModelAuthCiphertext = data.vault.ciphertext;
+      // Got the key and imported the vault (incl. any subscription-OAuth logins) —
+      // the cold-start race is over.
+      stopModelAuthColdStart();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
     } else if (data.vault?.ciphertext && !vaultKeyB64) {
       await modelAuthFetch("/node/model-auth-key/request", { method: "POST", body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64() }) });
+      // No peer has wrapped our key yet. Fast-retry (bounded) so a short-lived
+      // ephemeral runner picks up the key within seconds of a peer answering,
+      // rather than waiting for its next 30s poll.
+      ensureModelAuthColdStart();
     } else if (
       Object.keys(await exportProviderAuth(credsDir)).length > 0 ||
       Object.keys(exportLocalModels(localModelsDir)).length > 0
