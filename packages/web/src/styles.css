@@ -1056,10 +1056,17 @@ button.action-sheet-item:last-child { border-bottom: 0; }
      gap above the keyboard (worst in draft mode, where the composer also
      carries the repo/sandbox pill row). --keyboard-h (viewport.ts) is how much
      the keyboard covers; subtract it so the reservation melts away as the
-     keyboard rises, down to a small 8px gap — the list then extends to just
+     keyboard rises, down to a small gap — the list then extends to just
      above the keyboard. Keyboard down (--keyboard-h: 0) keeps the full
-     clearance, unchanged. */
-  --sheet-clear: max(8px, calc(var(--composer-h, 108px) + 8px - var(--keyboard-h, 0px)));
+     clearance, unchanged.
+     The floor clears the bottom safe area (home indicator), not a bare 8px:
+     when the composer is hidden the sheet has no other bottom clearance, so on
+     first-run onboarding an 8px floor jammed the last row under the home
+     indicator with no room to scroll to it. The composer's own measured height
+     already includes safe-area padding, so where it's present that term still
+     dominates and this floor is inert; with the keyboard up the inset reports 0,
+     so the tuned ~8px keyboard gap is preserved. */
+  --sheet-clear: max(calc(env(safe-area-inset-bottom, 0px) + 8px), calc(var(--composer-h, 108px) + 8px - var(--keyboard-h, 0px)));
   position: relative; width: 100%; max-width: 520px; margin: 0 12px var(--sheet-clear);
   /* Bound the body by the visible viewport too, so a long list can't overflow
      past the top of the keyboard-shrunk area (which would push the search field
