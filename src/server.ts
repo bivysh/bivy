@@ -27,6 +27,7 @@ import { provisionAgentRun } from "./runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
 import { suggestNameFromSelectedModel } from "./runtime/model-namer.js";
 import { isNativeOAuthProvider, loginModelOAuth, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
+import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
 import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } from "./runtime/codex-sessions.js";
 import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
@@ -867,6 +868,35 @@ let relay: RelayConnector | undefined;
 const clients = new Set<WebSocket>();
 const commandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const oauthLogins = new Map<string, OAuthLoginState>();
+// A browser-initiated subscription login parks the node on `manualCodePromise`
+// until the remote device pastes the code (`provider.oauth.code`). If the user
+// abandons it, the entry — AND its local callback http.Server — would otherwise
+// linger until the process exits. That matters especially on a short-lived
+// ephemeral node. Sweep periodically: abort (which closes the callback server,
+// see startCallbackServer) + drop any in-flight login past its TTL, and drop a
+// finished one after a short grace so clients can still read the final status.
+const OAUTH_LOGIN_TTL_MS = 10 * 60_000;
+const OAUTH_LOGIN_DONE_GRACE_MS = 2 * 60_000;
+function sweepOauthLogins(now = Date.now()): void {
+  for (const [id, login] of oauthLogins.entries()) {
+    const { drop, abort } = decideOAuthLoginSweep(login.status, now - login.createdAt, {
+      ttlMs: OAUTH_LOGIN_TTL_MS,
+      graceMs: OAUTH_LOGIN_DONE_GRACE_MS,
+    });
+    if (!drop) continue;
+    if (abort) {
+      login.cancelled = true;
+      try { login.abort.abort(); } catch { /* already settled */ }
+    }
+    oauthLogins.delete(id);
+  }
+}
+let oauthLoginSweepTimer: ReturnType<typeof setInterval> | undefined;
+function startOAuthLoginSweeper(): void {
+  if (oauthLoginSweepTimer) return;
+  oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
+  oauthLoginSweepTimer.unref?.();
+}
 type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController };
 
 // Options for createSession. `worktree` runs the session in an isolated git
@@ -5361,6 +5391,9 @@ async function startOAuthLogin(provider: string) {
   // wildcard so browsers resolving localhost to ::1 can reach the callback.
   process.env.PI_OAUTH_CALLBACK_HOST ||= "::";
 
+  // Opportunistically drop stale/abandoned logins whenever a new one starts, so a
+  // long-lived node doesn't accumulate them between sweeps (and tests can drive it).
+  sweepOauthLogins();
   const id = randomUUID();
   const abort = new AbortController();
   const state: OAuthLoginState = { id, provider, status: "starting", abort, createdAt: Date.now(), progress: [] };
@@ -9998,6 +10031,7 @@ const server = app.listen(port, host, async () => {
   // torn-down session, pull + apply its snapshot before serving. Non-blocking.
   if (process.env.BIVY_RESTORE) void restoreSessionFromSnapshot(String(process.env.BIVY_RESTORE));
   startModelAuthWatcher();
+  startOAuthLoginSweeper();
   startGithubAppSyncWatcher();
   await startGitHubTasksIfConfigured();
   startControlPlaneTasksIfConfigured();
