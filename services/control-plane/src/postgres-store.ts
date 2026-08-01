@@ -35,6 +35,9 @@ import {
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
+  type DeviceVault,
+  type DeviceVaultWrappedKeyRecord,
+  type DeviceVaultKeyRequest,
   type GithubAppVault,
   type GithubAppWrappedKey,
   type GithubAppKeyRequest,
@@ -361,6 +364,36 @@ export class PostgresStore implements MeshStore {
         public_key  TEXT NOT NULL,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, app_id, node_id)
+      );
+
+      -- Device→device ephemeral-provider-token vault (P2 / Gap A). Same E2E shape
+      -- as the model-auth vault above — the control plane holds ciphertext plus
+      -- per-recipient wrapped keys, never a plaintext token — but the recipients
+      -- are the account's paired DEVICES (identified by their X25519 public key,
+      -- the PK of paired_devices), not nodes. So a second device can wake/reach an
+      -- ephemeral machine the first launched. See createDeviceVaultKeyStore in
+      -- packages/core/src/device-vault.ts.
+      CREATE TABLE IF NOT EXISTS device_vaults (
+        account_id         TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        ciphertext         TEXT NOT NULL,
+        updated_by_device  TEXT NOT NULL,
+        updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS device_vault_wrapped_keys (
+        account_id             TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        device_pub             TEXT NOT NULL,
+        wrapped_key            TEXT NOT NULL,
+        wrapped_by_public_key  TEXT NOT NULL,
+        updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, device_pub)
+      );
+
+      CREATE TABLE IF NOT EXISTS device_vault_key_requests (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        device_pub  TEXT NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, device_pub)
       );
 
       -- Inbound hooks (route a GitHub/Slack webhook to an account) + work queue
@@ -1583,6 +1616,63 @@ export class PostgresStore implements MeshStore {
       wrappedByPublicKey: row.wrapped_by_public_key,
       updatedAt: new Date(row.updated_at).toISOString(),
     };
+  }
+
+  // --- Device→device provider-token vault (P2 / Gap A) -----------------
+
+  async getDeviceVault(accountId: string): Promise<DeviceVault | undefined> {
+    const { rows } = await this.query(`SELECT * FROM device_vaults WHERE account_id = $1`, [accountId]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString() };
+  }
+
+  async setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string): Promise<DeviceVault> {
+    const { rows } = await this.query(
+      `INSERT INTO device_vaults (account_id, ciphertext, updated_by_device, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_device = EXCLUDED.updated_by_device, updated_at = now()
+       RETURNING *`,
+      [accountId, ciphertext, byDevicePublicKey],
+    );
+    return { ciphertext: rows[0].ciphertext, updatedByDevice: rows[0].updated_by_device, updatedAt: new Date(rows[0].updated_at).toISOString() };
+  }
+
+  async getDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<DeviceVaultWrappedKeyRecord | undefined> {
+    const { rows } = await this.query(`SELECT * FROM device_vault_wrapped_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, devicePublicKey]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return { devicePublicKey: row.device_pub, wrappedKey: row.wrapped_key, wrappedByPublicKey: row.wrapped_by_public_key, updatedAt: new Date(row.updated_at).toISOString() };
+  }
+
+  async requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void> {
+    if (await this.getDeviceVaultWrappedKey(accountId, devicePublicKey)) return;
+    await this.query(
+      `INSERT INTO device_vault_key_requests (account_id, device_pub, created_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (account_id, device_pub) DO UPDATE SET created_at = now()`,
+      [accountId, devicePublicKey],
+    );
+  }
+
+  async listDeviceVaultKeyRequests(accountId: string, exceptDevicePublicKey: string): Promise<DeviceVaultKeyRequest[]> {
+    const { rows } = await this.query(
+      `SELECT device_pub, created_at FROM device_vault_key_requests WHERE account_id = $1 AND device_pub <> $2 ORDER BY created_at ASC`,
+      [accountId, exceptDevicePublicKey],
+    );
+    return rows.map((row: any) => ({ devicePublicKey: row.device_pub, createdAt: new Date(row.created_at).toISOString() }));
+  }
+
+  async setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<DeviceVaultWrappedKeyRecord> {
+    const { rows } = await this.query(
+      `INSERT INTO device_vault_wrapped_keys (account_id, device_pub, wrapped_key, wrapped_by_public_key, updated_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (account_id, device_pub) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, updated_at = now()
+       RETURNING *`,
+      [accountId, targetDevicePublicKey, wrappedKey, wrappedByPublicKey],
+    );
+    await this.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, targetDevicePublicKey]);
+    return { devicePublicKey: rows[0].device_pub, wrappedKey: rows[0].wrapped_key, wrappedByPublicKey: rows[0].wrapped_by_public_key, updatedAt: new Date(rows[0].updated_at).toISOString() };
   }
 
   // --- Inbound hooks + work queue (E2/E4) ------------------------------

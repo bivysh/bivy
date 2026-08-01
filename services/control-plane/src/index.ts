@@ -999,6 +999,51 @@ app.get("/devices", requireUser, asyncHandler(async (req, res) => {
   res.json(await store.listPairedDevices(account.id));
 }));
 
+// --- Device→device ephemeral-provider-token vault (P2 / Gap A) --------------
+// Opt-in E2E vault so a second device can wake/reach a machine the first
+// launched. `requireUser` (account session); the caller device identifies itself
+// by its X25519 public key. The control plane only ever stores ciphertext +
+// per-device wrapped keys — never a token or the vault key in the clear. Reading
+// another device's wrapped key is harmless (it's sealed to that device's key).
+app.get("/device-vault", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const devicePub = String(req.query.device ?? "");
+  const rec = devicePub ? await store.getDeviceVaultWrappedKey(account.id, devicePub) : undefined;
+  res.json({
+    ok: true,
+    vault: (await store.getDeviceVault(account.id))?.ciphertext ?? null,
+    wrappedKey: rec ? { wrappedKey: rec.wrappedKey, wrappedByPublicKeyB64: rec.wrappedByPublicKey } : null,
+    requests: devicePub ? (await store.listDeviceVaultKeyRequests(account.id, devicePub)).map((r) => r.devicePublicKey) : [],
+  });
+}));
+
+app.put("/device-vault", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const devicePub = String(req.body?.devicePublicKeyB64 ?? "");
+  const ciphertext = String(req.body?.ciphertext ?? "");
+  if (!devicePub || !ciphertext) { res.status(400).json({ error: "devicePublicKeyB64 and ciphertext required" }); return; }
+  await store.setDeviceVault(account.id, devicePub, ciphertext);
+  res.json({ ok: true });
+}));
+
+app.post("/device-vault/key/request", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const devicePub = String(req.body?.devicePublicKeyB64 ?? "");
+  if (!devicePub) { res.status(400).json({ error: "devicePublicKeyB64 required" }); return; }
+  await store.requestDeviceVaultWrappedKey(account.id, devicePub);
+  res.json({ ok: true });
+}));
+
+app.put("/device-vault/key/wrapped", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const target = String(req.body?.targetDevicePublicKeyB64 ?? "");
+  const wrappedByPublicKey = String(req.body?.wrappedByPublicKeyB64 ?? "");
+  const wrappedKey = String(req.body?.wrappedKey ?? "");
+  if (!target || !wrappedByPublicKey || !wrappedKey) { res.status(400).json({ error: "target, wrappedBy and wrappedKey required" }); return; }
+  await store.setDeviceVaultWrappedKey(account.id, target, wrappedByPublicKey, wrappedKey);
+  res.json({ ok: true });
+}));
+
 // Remove (sign out) a paired device, freeing a device slot. 404 if the account
 // has no such device.
 app.delete("/devices/:id", requireUser, asyncHandler(async (req, res) => {

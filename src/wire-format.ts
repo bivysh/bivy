@@ -30,6 +30,10 @@ export const HKDF_INFO = {
   modelAuthVault: "bivy-model-auth-vault-v1",
   /** GitHub App private-key vault delivery (node-only, opt-in — issue #88). */
   githubAppVault: "bivy-github-app-vault-v1",
+  /** Device→device ephemeral-provider-token vault delivery (opt-in). Unlike the
+   *  node vaults above, the recipients are the account's paired DEVICES, so a
+   *  second device can wake/reach a machine the first launched. */
+  deviceVault: "bivy-device-vault-v1",
 } as const;
 
 /** Version byte stamped into every sealed frame's authenticated plaintext. */

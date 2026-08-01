@@ -67,10 +67,13 @@ import {
   wakeEphemeralMachine,
   ephemeralProviderSuspendsWhenIdle,
   ephemeralMachineFromNode,
+  createDeviceVaultKeyStore,
+  deviceKeypair,
   listEphemeralSizes,
   ephemeralNodeLabel,
   type TranscriptCache,
-  type EphemeralKeyStore,
+  type DeviceVaultKeyStore,
+  type DeviceVaultRemote,
   type EphemeralModelKeyStore,
   type EphemeralModelKeyInfo,
   type EphemeralPrefsStore,
@@ -513,6 +516,10 @@ export class AppController {
     this.local.s = token;
     if (!this.local.cp) this.local.cp = location.origin;
     this.store.setSignedIn(true);
+    // Reconcile the device vault once on sign-in: a producer device satisfies any
+    // pending wrapped-key requests from the account's other devices; a consumer
+    // device pulls its wrapped key so a synced token is ready to wake a machine.
+    void this.syncDeviceVault();
     this.connect();
   }
 
@@ -1912,7 +1919,16 @@ export class AppController {
 
   // --- Ephemeral machines ------------------------------------------------
 
-  private ephemeralKeys: EphemeralKeyStore = createEphemeralKeyStore();
+  // Provider tokens are device-local by default. When cross-device sync is opted
+  // in (Settings), they're additionally synced to the account's other devices
+  // through an E2E device vault so a second device can wake/reach a machine the
+  // first launched (P2 / Gap A) — the control plane only ever sees ciphertext.
+  private ephemeralKeys: DeviceVaultKeyStore = createDeviceVaultKeyStore({
+    local: createEphemeralKeyStore(),
+    remote: this.deviceVaultRemote(),
+    device: () => deviceKeypair(this.local),
+    enabled: () => this.deviceTokenSyncEnabled(),
+  });
   private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
   private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
@@ -1947,6 +1963,60 @@ export class AppController {
   }
   removeEphemeralToken(id: string): Promise<void> {
     return this.ephemeralKeys.remove(id);
+  }
+
+  // --- Cross-device provider-token sync (P2 / Gap A) ---------------------
+  // Opt-in, off by default (per the CLOUD.md credential-widening precedent). When
+  // on, ephemeral provider tokens are E2E-synced to the account's other devices
+  // so a second device can wake/reach a machine the first launched.
+  private deviceTokenSyncEnabled(): boolean {
+    try {
+      return !this.direct && !!this.local.s && localStorage.getItem("bivy_device_token_sync") === "1";
+    } catch {
+      return false;
+    }
+  }
+  getDeviceTokenSync(): boolean {
+    return this.deviceTokenSyncEnabled();
+  }
+  setDeviceTokenSync(enabled: boolean): void {
+    try {
+      localStorage.setItem("bivy_device_token_sync", enabled ? "1" : "0");
+    } catch {
+      /* noop */
+    }
+    if (enabled) void this.syncDeviceVault();
+  }
+  /** Reconcile the device vault (consume a wrapped key, or publish + satisfy
+   *  peers' requests). Safe/no-op when disabled. */
+  syncDeviceVault(): Promise<void> {
+    return this.ephemeralKeys.sync().catch(() => {});
+  }
+  /** Fetch-backed control-plane transport for the device vault. Ciphertext +
+   *  wrapped keys only — never a token. */
+  private deviceVaultRemote(): DeviceVaultRemote {
+    const base = () => (this.local.cp || (typeof location !== "undefined" ? location.origin : "")).replace(/\/$/, "");
+    const jsonAuth = () => ({ authorization: `Bearer ${this.local.s}`, "content-type": "application/json" });
+    return {
+      get: async () => {
+        const dev = await deviceKeypair(this.local);
+        const res = await fetch(`${base()}/device-vault?device=${encodeURIComponent(dev.pub)}`, { headers: { authorization: `Bearer ${this.local.s}` } });
+        if (!res.ok) throw new Error(`device-vault get failed (${res.status})`);
+        const data = (await res.json()) as { vault?: string | null; wrappedKey?: { wrappedKey: string; wrappedByPublicKeyB64: string } | null; requests?: string[] };
+        return { vault: data.vault ?? null, wrappedKey: data.wrappedKey ?? null, requests: Array.isArray(data.requests) ? data.requests : [] };
+      },
+      putVault: async (ciphertext: string) => {
+        const dev = await deviceKeypair(this.local);
+        await fetch(`${base()}/device-vault`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub, ciphertext }) });
+      },
+      requestKey: async () => {
+        const dev = await deviceKeypair(this.local);
+        await fetch(`${base()}/device-vault/key/request`, { method: "POST", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub }) });
+      },
+      putWrapped: async (target: string, wrappedKey: string, wrappedByPublicKeyB64: string) => {
+        await fetch(`${base()}/device-vault/key/wrapped`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ targetDevicePublicKeyB64: target, wrappedKey, wrappedByPublicKeyB64 }) });
+      },
+    };
   }
   /** Per-provider saved launch preferences (region/size/TTL/repo) configured in
    *  Settings → Ephemeral machines; used to pre-fill the launch flow. */
