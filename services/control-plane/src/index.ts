@@ -10,6 +10,7 @@ import webpush from "web-push";
 import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
+import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
@@ -1270,7 +1271,10 @@ app.post("/node/sessions", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const sessions = sessionAdvertsFrom(req.body?.sessions);
   const newRuns = await store.replaceNodeSessions(node.accountId, node.id, sessions);
-  if (newRuns > 0) recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
+  if (newRuns > 0) {
+    recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
+    await correlateHostedSessions(store, node, sessions);
+  }
   res.json({ ok: true, count: sessions.length });
 }));
 
@@ -1308,7 +1312,10 @@ app.put("/internal/nodes/:nodeId/sessions/:sessionId", requireNode, asyncHandler
   const advert = sessionAdvertsFrom([{ ...req.body, sessionId: req.params.sessionId }]);
   let newRuns = 0;
   for (const s of advert) if (await store.upsertNodeSession(node.accountId, node.id, s)) newRuns += 1;
-  if (newRuns > 0) recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
+  if (newRuns > 0) {
+    recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
+    await correlateHostedSessions(store, node, advert);
+  }
   res.json({ ok: true, count: advert.length });
 }));
 
