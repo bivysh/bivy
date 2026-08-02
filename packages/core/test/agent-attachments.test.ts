@@ -35,6 +35,21 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
     expect(t[0]!.attachments).toEqual([{ kind: "image", name: "chart.png", size: 1234, mimeType: "image/png", hash: HASH }]);
   });
 
+  it("groups MULTIPLE attachments from one turn under the final bubble, in emit order", () => {
+    const csv = { hash: "b".repeat(64), name: "data.csv", mimeType: "text/csv", size: 5, kind: "file" as const };
+    const store = play([
+      { type: "attachment", id: "a1", ref: imageRef }, // before the reply
+      { type: "message_start", message: { role: "assistant", content: "" } },
+      { type: "message_end", message: { role: "assistant", content: "Two files:" } },
+      { type: "attachment", id: "a2", ref: csv }, // after the reply
+      { type: "agent_end" },
+    ]);
+    const t = store.getState().transcript;
+    expect(t).toHaveLength(1);
+    expect(t[0]!.text).toBe("Two files:");
+    expect(t[0]!.attachments?.map((a) => a.hash)).toEqual([HASH, "b".repeat(64)]);
+  });
+
   it("falls back to a standalone entry (keeping the caption) when the turn has no prose", () => {
     const store = play([
       { type: "attachment", id: "att1", ref: imageRef, caption: "just a file" },
@@ -77,6 +92,19 @@ describe("agent attachment — history render (grouped onto the final bubble)", 
     expect(entries).toHaveLength(1);
     expect(entries[0]!.text).toBe("Done — see below.");
     expect(entries[0]!.attachments?.map((a) => a.hash)).toEqual([HASH]);
+  });
+
+  it("groups MULTIPLE attachments onto the final message, preserving order", () => {
+    const csv = { hash: "b".repeat(64), name: "data.csv", mimeType: "text/csv", size: 5, kind: "file" as const };
+    const entries = renderHistory([
+      { role: "user", content: "give me both" },
+      { role: "assistant", content: [{ type: "bivy_attachment", ref: imageRef }] },
+      { role: "assistant", content: [{ type: "bivy_attachment", ref: csv }] },
+      { role: "assistant", content: [{ type: "text", text: "Here are both." }] },
+    ]);
+    expect(entries.map((e) => e.role)).toEqual(["user", "assistant"]);
+    expect(entries[1]!.text).toBe("Here are both.");
+    expect(entries[1]!.attachments?.map((a) => a.hash)).toEqual([HASH, "b".repeat(64)]);
   });
 
   it("keeps a lone attachment (no prose in its turn) as a standalone entry", () => {
