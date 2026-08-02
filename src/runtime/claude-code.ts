@@ -46,6 +46,7 @@ import { depCacheEnv } from "../harness/dep-cache.js";
 import os from "node:os";
 import path from "node:path";
 import { sandboxTier, claudePermissionModeFor, type SandboxTier } from "../harness/sandbox.js";
+import { autoAttachToolImagesEnabled, PassiveImageBudget } from "../harness/tool-image-attachments.js";
 import { anthropicCredentialPreflight, describeAnthropicError, isAnthropicAuthError } from "./anthropic-preflight.js";
 import { toModelInfo as sharedToModelInfo } from "./normalize.js";
 import { hasLiveProcessForCwd } from "./native-process-scan.js";
@@ -288,6 +289,32 @@ function toolResultText(block: any): string {
     .filter((part: any) => part?.type === "text" && typeof part.text === "string")
     .map((part: any) => part.text)
     .join("");
+}
+
+/** One base64-encoded image pulled out of a tool_result block. */
+interface ToolResultImage {
+  mimeType: string;
+  data: string;
+}
+
+/** Sibling of toolResultText that keeps what that one discards: the `image`
+ *  content parts of a tool_result (e.g. a Playwright/screenshot MCP tool's
+ *  output), so they can be passively surfaced as chat attachments (issue #292)
+ *  instead of silently vanishing. Only base64-sourced images are collected — a
+ *  `url`-sourced image block (rare for a local tool) is skipped rather than
+ *  fetched, since this passive path must never make its own network call. */
+function toolResultImages(block: any): ToolResultImage[] {
+  const content = block?.content;
+  if (!Array.isArray(content)) return [];
+  const out: ToolResultImage[] = [];
+  for (const part of content) {
+    if (part?.type !== "image") continue;
+    const source = part.source;
+    if (!source || source.type !== "base64" || typeof source.data !== "string" || !source.data) continue;
+    const mimeType = typeof source.media_type === "string" && source.media_type ? source.media_type : "image/png";
+    out.push({ mimeType, data: source.data });
+  }
+  return out;
 }
 
 /** Sums per-model token usage (SDK's ModelUsage) into a single totals object. */
@@ -618,6 +645,14 @@ class ClaudeSession implements RuntimeSession {
    *  and on a real abort() (a user Stop must never be silenced by a stale flag). */
   private suppressNextInterrupt = false;
 
+  /** tool_use id → tool name, learned as "assistant" turns emit tool_use blocks.
+   *  Used only to label a passively-surfaced tool_image (see #292); never
+   *  cleared mid-session since a tool_use_id is unique for the session's life. */
+  private readonly toolNamesByUseId = new Map<string, string>();
+  /** This turn's passive-image noise guard (see PassiveImageBudget); replaced
+   *  with a fresh budget at the start of every prompt(). */
+  private passiveImageBudget = new PassiveImageBudget();
+
   /** The agent's own slash commands for this session, learned from the SDK's
    *  system/init message (slash_commands + skills). Empty until the first turn's
    *  init arrives; getCommands() exposes them and a `runtime.commands` event lets
@@ -895,6 +930,33 @@ class ClaudeSession implements RuntimeSession {
     this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
   }
 
+  /**
+   * Passively surface any images riding home on a tool_result (issue #292) —
+   * e.g. a Playwright/screenshot MCP tool's output, which toolResultText above
+   * deliberately drops. Gated by autoAttachToolImagesEnabled() at the call site
+   * and bounded here by this turn's PassiveImageBudget so a chatty tool can't
+   * flood the transcript; a drop is logged (with the responsible tool's name)
+   * rather than silently discarded. Emits one `tool_image` RuntimeEvent per
+   * admitted image; src/server.ts's session listener does the actual
+   * store+persist+broadcast, the same way an explicit `bivy attach` does.
+   */
+  private emitPassiveToolImages(block: any): void {
+    const images = toolResultImages(block);
+    if (!images.length) return;
+    const toolUseId = String(block.tool_use_id ?? "");
+    const toolName = this.toolNamesByUseId.get(toolUseId) ?? "tool";
+    for (const image of images) {
+      const byteLength = Buffer.byteLength(image.data, "base64");
+      if (!this.passiveImageBudget.admit(byteLength)) {
+        console.warn(
+          `[claude-code] dropped a passively-surfaced tool image from "${toolName}" (tool_use_id=${toolUseId}, ~${byteLength} bytes): ${this.passiveImageBudget.droppedSummary()}`,
+        );
+        continue;
+      }
+      this.emit({ type: "tool_image", toolUseId, toolName, mimeType: image.mimeType, data: image.data });
+    }
+  }
+
   private handle(message: any): void {
     switch (message?.type) {
       case "stream_event": {
@@ -931,6 +993,7 @@ class ClaudeSession implements RuntimeSession {
         for (const block of content) {
           if (block?.type === "tool_use") {
             this.emit({ type: "tool_call", toolName: block.name, input: block.input, toolUseId: block.id });
+            if (typeof block.id === "string" && typeof block.name === "string") this.toolNamesByUseId.set(block.id, block.name);
           }
         }
         const text = extractText(message.message);
@@ -973,6 +1036,7 @@ class ClaudeSession implements RuntimeSession {
           for (const block of toolResults) {
             this.runningTools.delete(String(block.tool_use_id));
             this.emit({ type: "tool_result", toolUseId: block.tool_use_id, result: toolResultText(block), isError: Boolean(block.is_error) });
+            if (autoAttachToolImagesEnabled()) this.emitPassiveToolImages(block);
           }
           this.emit({ type: "user", raw: message });
           break;
@@ -1074,6 +1138,9 @@ class ClaudeSession implements RuntimeSession {
     const content = claudeUserContent(prompt, options);
     const hasImages = Boolean(options?.images?.length);
     if (!prompt && !hasImages) return;
+    // Fresh per-turn noise-guard budget (see PassiveImageBudget) — a prior
+    // turn's usage must never carry over and eat into this one's allowance.
+    this.passiveImageBudget = new PassiveImageBudget();
     // Credential preflight (first turn only): if no Anthropic credential will
     // reach the SDK, surface an actionable message instead of letting it spawn
     // and fail its first request with an opaque `401 Unauthorized`.

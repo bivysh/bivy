@@ -2367,6 +2367,7 @@ function NodesPanel({ state }: { state: AppState }) {
         worktreeSync: form.worktreeSync,
         syncStandbyNodeId: form.syncStandbyNodeId ?? "",
         sessionResumeMode: form.sessionResumeMode,
+        autoAttachToolImages: form.autoAttachToolImages,
       });
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
@@ -2550,6 +2551,25 @@ function NodesPanel({ state }: { state: AppState }) {
                 ? "Interrupted sessions wait for you to tap Resume — nothing runs on its own. GitHub issue automation still resumes automatically."
                 : "The agent picks up an interrupted turn on its own after the node restarts."}
             </p>
+          </section>
+
+          <section className="settings-section">
+            <h4 className="settings-subhead">Attachments</h4>
+            <div className="settings-toggle-row">
+              <div className="settings-toggle-text">
+                <span className="settings-toggle-title">Auto-attach images from tool results</span>
+                <span className="muted small">
+                  When a tool the agent runs returns an image — a screenshot from a browser-automation tool, say —
+                  show it in the chat automatically, with no explicit attach step. Bounded per turn so a chatty tool
+                  can't flood the chat.
+                </span>
+              </div>
+              <Toggle
+                checked={form.autoAttachToolImages}
+                onChange={(v) => setForm({ ...form, autoAttachToolImages: v })}
+                label="Enable auto-attach for tool images"
+              />
+            </div>
           </section>
 
           <section className="settings-section">

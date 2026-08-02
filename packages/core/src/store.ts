@@ -522,6 +522,10 @@ export interface NodeSettings {
    *  re-drives the interrupted turn on boot, "manual" waits for a one-tap Resume.
    *  Governs interactive sessions only — issue automation always auto-resumes. */
   sessionResumeMode: "auto" | "manual";
+  /** Passively surface images a tool produces (e.g. a screenshot MCP tool's
+   *  output) into the chat as attachments, with no explicit "attach" call
+   *  (issue #292). Off by default; bounded per-turn regardless once enabled. */
+  autoAttachToolImages: boolean;
 }
 
 export interface AppState {

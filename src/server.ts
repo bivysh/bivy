@@ -66,6 +66,7 @@ import { initSharedDepCache, sharedDepCacheRoot } from "./harness/dep-cache.js";
 import { evictToCap, dirSizeBytes } from "./harness/cache-evict.js";
 import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
+import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
 import { injectMcpProxyForSession } from "./harness/mcp-inject.js";
 import { parseRepo, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
@@ -112,7 +113,7 @@ import { normalizeMessages } from "./session/transcript-normal.js";
 import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog } from "./session/event-log.js";
 import { AttachmentStore, isValidAttachmentHash, type AttachmentRef } from "./session/attachment-store.js";
-import { planAttachment, isAttachPlanError } from "./session/attach-to-chat.js";
+import { planAttachment, isAttachPlanError, MAX_AGENT_ATTACHMENT_BYTES } from "./session/attach-to-chat.js";
 import { ReplicationService } from "./session/replication-service.js";
 import type { ReplWireFrame } from "./session/replicator.js";
 import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
@@ -897,7 +898,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -1178,13 +1179,44 @@ function materializeAttachments(record: SessionRecord, files: DecodedAttachment[
 }
 
 /**
+ * Store attachment bytes, persist a durable outbound reference anchored at the
+ * current transcript position (so a reload or another device shows it), and
+ * emit the live `attachment` event so attached devices render the chip/
+ * thumbnail immediately. The common tail of both `attachToChat` (an explicit
+ * `bivy attach`) and `handlePassiveToolImage` (an image a tool produced,
+ * surfaced with no explicit attach call — see issue #292); the only difference
+ * between the two callers is how the bytes were obtained. Records the stored
+ * hash onto `record.seenAttachmentHashes` so a later passive image with
+ * identical bytes de-dupes against this one for free.
+ */
+function recordAttachment(
+  record: SessionRecord,
+  bytes: Buffer,
+  opts: { name: string; mimeType: string; kind: "image" | "file"; caption?: string },
+): { ref: AttachmentRef } | { error: string } {
+  let ref: AttachmentRef;
+  try {
+    ref = attachmentStore.put(bytes, { name: opts.name, mimeType: opts.mimeType, kind: opts.kind });
+  } catch (error) {
+    return { error: `Could not store the attachment: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  (record.seenAttachmentHashes ??= new Set()).add(ref.hash);
+  const entryId = `att-${randomBytes(8).toString("hex")}`;
+  const caption = opts.caption ? String(opts.caption).slice(0, 2000) : undefined;
+  // Anchor at the current base length so history replay interleaves the
+  // attachment where it was emitted (see event-log outbound projection).
+  const afterMessageCount = record.session.getMessages().length;
+  eventLog.appendOutboundAttachment(record.id, { afterMessageCount, id: entryId, ref, caption });
+  broadcast({ type: "session.event", sessionId: record.id, event: { type: "attachment", id: entryId, ref, caption } });
+  return { ref };
+}
+
+/**
  * Surface an AGENT-produced file into the chat as an attachment (image or file)
  * — the reverse of the composer paperclip. Confines to the session workspace,
- * stores the bytes in the content-addressed AttachmentStore, persists a durable
- * outbound reference anchored at the current transcript position (so a reload or
- * another device shows it), and emits the live `attachment` event so attached
- * devices render the chip/thumbnail immediately. Shared by the HTTP endpoint and
- * the `bivy attach` CLI. Returns the stored ref, or a human-readable error.
+ * then hands off to recordAttachment for the store+persist+broadcast. Shared by
+ * the HTTP endpoint and the `bivy attach` CLI. Returns the stored ref, or a
+ * human-readable error.
  */
 function attachToChat(
   record: SessionRecord,
@@ -1197,20 +1229,49 @@ function attachToChat(
     name: opts.name,
   });
   if (isAttachPlanError(plan)) return { error: plan.error };
-  let ref: AttachmentRef;
+  return recordAttachment(record, plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind, caption: opts.caption });
+}
+
+/** Extension guess for a passively-surfaced tool image, from its mime type. */
+function extFromImageMime(mimeType: string): string {
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/gif") return "gif";
+  if (mimeType === "image/webp") return "webp";
+  if (mimeType === "image/svg+xml") return "svg";
+  return "png";
+}
+
+/**
+ * Handle a `tool_image` RuntimeEvent — a runtime adapter (see
+ * src/runtime/claude-code.ts's emitPassiveToolImages) noticed an image inside a
+ * tool_result and, gated on autoAttachToolImagesEnabled() and bounded by its own
+ * per-turn budget, forwarded the raw bytes here. Stores it exactly like an
+ * explicit `bivy attach` (see recordAttachment), except de-duplicated against
+ * anything already surfaced in this session — explicit or passive — by content
+ * hash, so identical bytes (a tool that returns the same screenshot twice, or a
+ * tool result that duplicates bytes the agent already attached) never produce a
+ * second chip. Best-effort: a malformed or oversized payload is dropped with a
+ * warning rather than erroring the turn.
+ */
+function handlePassiveToolImage(record: SessionRecord, event: Record<string, unknown>): void {
+  const dataB64 = typeof event.data === "string" ? event.data : "";
+  if (!dataB64) return;
+  let bytes: Buffer;
   try {
-    ref = attachmentStore.put(plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind });
-  } catch (error) {
-    return { error: `Could not store the attachment: ${error instanceof Error ? error.message : String(error)}` };
+    bytes = Buffer.from(dataB64, "base64");
+  } catch {
+    return;
   }
-  const entryId = `att-${randomBytes(8).toString("hex")}`;
-  const caption = opts.caption ? String(opts.caption).slice(0, 2000) : undefined;
-  // Anchor at the current base length so history replay interleaves the
-  // attachment where it was emitted (see event-log outbound projection).
-  const afterMessageCount = record.session.getMessages().length;
-  eventLog.appendOutboundAttachment(record.id, { afterMessageCount, id: entryId, ref, caption });
-  broadcast({ type: "session.event", sessionId: record.id, event: { type: "attachment", id: entryId, ref, caption } });
-  return { ref };
+  if (!bytes.length || bytes.length > MAX_AGENT_ATTACHMENT_BYTES) return;
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  if (record.seenAttachmentHashes?.has(hash)) return;
+  const mimeType = typeof event.mimeType === "string" && event.mimeType ? event.mimeType : "image/png";
+  const toolName = typeof event.toolName === "string" && event.toolName.trim() ? event.toolName.trim() : "tool";
+  const name = sanitizeAttachmentFilename(`${toolName}-${hash.slice(0, 8)}.${extFromImageMime(mimeType)}`);
+  const result = recordAttachment(record, bytes, { name, mimeType, kind: "image", caption: `From ${toolName}` });
+  if ("error" in result) {
+    console.warn("[attachments] failed to store a passively-surfaced tool image:", result.error);
+  }
 }
 
 function approvalModeFrom(value: unknown): ApprovalMode | undefined {
@@ -1351,6 +1412,12 @@ type NodeSettings = {
    *  "auto" re-drives the interrupted turn on boot; "manual" leaves it for the
    *  user to resume with one tap. Issue automation always auto-resumes regardless. */
   sessionResumeMode: "auto" | "manual";
+  /** Passively surface images a tool produces (e.g. a screenshot MCP tool's
+   *  output) into the chat as attachments, with no explicit `bivy attach` call
+   *  (issue #292). Off by default — bounded per-turn regardless (see
+   *  src/harness/tool-image-attachments.ts) so a chatty tool can't flood the
+   *  transcript even once enabled. */
+  autoAttachToolImages: boolean;
 };
 
 /** The node's default model for new sessions, or null (= use the runtime default). */
@@ -1410,6 +1477,7 @@ function nodeSettingsSnapshot(): NodeSettings {
       return typeof v === "string" && v.trim() ? v.trim() : undefined;
     })(),
     sessionResumeMode: nodeSessionResumeMode(),
+    autoAttachToolImages: readSettings().autoAttachToolImages === true,
   };
 }
 
@@ -1463,6 +1531,10 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   if ("sessionResumeMode" in patch) {
     settings.sessionResumeMode = patch.sessionResumeMode === "manual" ? "manual" : "auto";
   }
+  if ("autoAttachToolImages" in patch) {
+    settings.autoAttachToolImages = patch.autoAttachToolImages === true;
+    setConfiguredAutoAttachToolImages(settings.autoAttachToolImages);
+  }
   writeSettings(settings);
   const snapshot = nodeSettingsSnapshot();
   broadcast({ type: "node.settings", settings: snapshot });
@@ -1470,8 +1542,11 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
 }
 
 // Apply persisted node settings at boot: seed the effective sandbox tier and the
-// default runtime from settings.json (env still wins for the sandbox).
+// default runtime from settings.json (env still wins for the sandbox), plus the
+// passive tool-image-attachment gate (issue #292; BIVY_AUTO_ATTACH_TOOL_IMAGES
+// still wins — see src/harness/tool-image-attachments.ts).
 setConfiguredSandboxTier(readSettings().defaultSandbox);
+setConfiguredAutoAttachToolImages(readSettings().autoAttachToolImages);
 {
   const savedAgent = readSettings().defaultAgent;
   if (typeof savedAgent === "string" && savedAgent.trim()) {
@@ -6844,6 +6919,15 @@ function attachSessionListeners(record: SessionRecord) {
     // coalesced update first, so a tool_call / message_end never overtakes the
     // text the user is watching stream in.
     if (event.type !== "message_update") sessionEvents.flush(record.id);
+    if (event.type === "tool_image") {
+      // A runtime adapter (e.g. Claude Code) noticed an image inside a
+      // tool_result and forwarded the raw bytes — store/persist/broadcast it as
+      // a chat attachment (see handlePassiveToolImage) instead of the generic
+      // session.event wrap below, which would otherwise ship the raw base64
+      // payload to every client.
+      handlePassiveToolImage(record, event as Record<string, unknown>);
+      return;
+    }
     const currentSessionFile = record.session.sessionFile;
     if (currentSessionFile && currentSessionFile !== record.sessionFile) {
       record.sessionFile = currentSessionFile;
