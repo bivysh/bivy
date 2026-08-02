@@ -168,6 +168,35 @@ export interface ToolProvider {
   invoke(toolName: string, toolCallId: string, params: unknown, signal?: AbortSignal): Promise<ToolResult>;
 }
 
+/** A durable reference to an outbound attachment, returned by AttachToChatFn.
+ *  Structurally identical to (and satisfied by) AttachmentRef in
+ *  src/session/attachment-store.ts — kept as its own minimal shape here so this
+ *  runtime-agnostic module never imports from src/session. */
+export interface AttachToChatRef {
+  hash: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: "image" | "file";
+}
+
+/**
+ * Push a workspace file/image into the chat as an attachment for a given
+ * session id — the daemon-side implementation behind every agent-native "attach
+ * to chat" tool surface (Claude's SDK tool, Pi's ToolProvider tool; issue #291).
+ * Takes a session id rather than being bound to one session because the
+ * runtime/tool-provider is built *before* the specific session that will use it
+ * exists (see ClaudeCodeRuntimeOptions.attachToChat and
+ * IntegrationManager.toolProvider) — the daemon resolves the live session from
+ * its own registry (openSessions) when the callback actually fires, instead of
+ * closing over a session record directly, which would be a circular per-session
+ * dependency (build the tools -> need the session -> need the tools).
+ */
+export type AttachToChatFn = (
+  sessionId: string,
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+) => { ref: AttachToChatRef } | { error: string };
+
 /** Lightweight session listing (maps to Pi's SessionManager.listAll). */
 export interface SessionSummary {
   id: string;

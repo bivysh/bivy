@@ -102,7 +102,7 @@ import {
 } from "./github-tasks.js";
 import { buildLinearTaskPrompt, getLinearIssue, linearBranchName } from "./linear-tasks.js";
 import { PairingStore } from "./device-registry.js";
-import { IntegrationManager } from "./integrations/index.js";
+import { IntegrationManager, type SessionIdRef } from "./integrations/index.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession, type PrRef } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
@@ -591,7 +591,7 @@ function resolveApproval(id: string, approved: boolean) {
   }
   return ok;
 }
-const integrations = new IntegrationManager(appDir);
+const integrations = new IntegrationManager(appDir, undefined, attachToChatForSession);
 const terminals = new TerminalManager();
 // Per-session agents: a node holds one AgentRuntime instance *per agent id*,
 // built lazily and cached, instead of a single global runtime. `defaultRuntimeId`
@@ -599,7 +599,7 @@ const terminals = new TerminalManager();
 // be swapped under a live conversation, so the agent is chosen at session creation
 // and fixed for that session's life; switching agents in the UI starts a new one.
 let defaultRuntimeId = (process.env.BIVY_RUNTIME ?? "pi").toLowerCase();
-const runtimeHost = new RuntimeHost({ credsDir, piDir, sessionsDir });
+const runtimeHost = new RuntimeHost({ credsDir, piDir, sessionsDir, attachToChat: attachToChatForSession });
 
 // In-session model reroute (docs/rulesets.md). Opt-in: set
 // BIVY_SESSION_MODEL_FALLBACK to a comma-separated model list and a session that
@@ -1272,6 +1272,25 @@ function handlePassiveToolImage(record: SessionRecord, event: Record<string, unk
   if ("error" in result) {
     console.warn("[attachments] failed to store a passively-surfaced tool image:", result.error);
   }
+}
+
+/**
+ * Session-id-keyed wrapper around attachToChat, handed to runtime adapters as
+ * the `attachToChat` callback that backs each agent's native "attach to chat"
+ * tool surface (Claude's SDK tool, Pi's ToolProvider tool — issue #291). Those
+ * tools are wired at runtime/tool-provider construction time, before the
+ * specific session that will run them exists — a per-session circular
+ * dependency (build the tools -> need the session -> need the tools) — so the
+ * callback takes a session id and resolves the live record from openSessions
+ * when it actually fires, exactly like the HTTP endpoint below does by path.
+ */
+function attachToChatForSession(
+  sessionId: string,
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+): { ref: AttachmentRef } | { error: string } {
+  const record = openSessions.get(sessionId);
+  if (!record) return { error: "Session not found" };
+  return attachToChat(record, opts);
 }
 
 function approvalModeFrom(value: unknown): ApprovalMode | undefined {
@@ -7069,7 +7088,9 @@ async function refreshRecordAfterTui(record: SessionRecord) {
     record.unsubscribe = undefined;
     const rt = await ensureRuntimeAvailable(record.runtimeId);
     const workspace = record.worktree?.path || oldSession.cwd || record.workspace;
-    const runtimeSessionOptions = { workspace, toolProvider: integrations.toolProvider(), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+    // Refreshing an EXISTING record: its id is already known, so attach_to_chat
+    // (see toolProvider's SessionIdRef doc) can be wired live, not deferred.
+    const runtimeSessionOptions = { workspace, toolProvider: integrations.toolProvider({ current: record.id }), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
     const { session, warning } = await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: record.sessionFile });
     record.session = session;
     record.sessionFile = session.sessionFile ?? record.sessionFile;
@@ -7590,7 +7611,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
     );
   }
 
-  const runtimeSessionOptions = { workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+  // A brand-new session's id isn't known until runtimeHost.{create,open}Session
+  // resolves below, but the ToolProvider (and its attach_to_chat tool) must be
+  // built now, up front — so hand it this box instead of a session id and fill
+  // `.current` in the moment `sessionId` is (see toolProvider's SessionIdRef doc).
+  const attachSessionIdRef: SessionIdRef = {};
+  const runtimeSessionOptions = { workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(attachSessionIdRef), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
   // Stage 2/3: prefer re-attaching to a still-live remote session — routed to its
   // OWN agent service — over re-opening a fresh copy from disk. Falls back to
   // open/create when nothing live is there.
@@ -7608,6 +7634,10 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
       ? await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: requestedSessionFile })
       : await runtimeHost.createSession(rt, runtimeSessionOptions));
   const sessionId = session.id;
+  // Now that it's known, unblock any attach_to_chat call this session's agent
+  // makes (see attachSessionIdRef above) — set synchronously, well before any
+  // prompt (and so any tool call) can reach this session.
+  attachSessionIdRef.current = sessionId;
   // Resuming an existing session: restore Bivy's canonical name onto the runtime
   // session when the runtime didn't itself (the Claude Code adapter resumes by id
   // and starts nameless). Without this getName() is undefined, so opening a
