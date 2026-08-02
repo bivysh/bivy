@@ -57,7 +57,7 @@ process, so the daemon, agents and helper scripts all agree.
 | Path | Contents | Written by |
 | --- | --- | --- |
 | `cli.json` | Workspace, port, `service` flag, and an `env` block of persisted environment variables. Mode `0600` | `bivy setup`, `bivy service install/uninstall`, `bivy github:connect`, `bivy github:app-connect`, and the node when you connect/disconnect a GitHub App from the web app |
-| `settings.json` | Agent-neutral node settings: `defaultAgent`, `defaultModel`, `defaultSandbox`, `approvalMode`, `githubMaxConcurrent`, `githubIssuePrompt` | The node, from the web app's Settings screen |
+| `settings.json` | Agent-neutral node settings: `defaultAgent`, `defaultModel`, `defaultSandbox`, `approvalMode`, `githubMaxConcurrent`, `githubIssuePrompt`, `sessionSync`, `worktreeSync`, `syncStandbyNodeId`, `sessionResumeMode`, `autoAttachToolImages` | The node, from the web app's Settings screen |
 | `relay.json` | Relay URL, control-plane URL, client base URL, node enrollment token. Mode `0600` | `bivy relay:setup` |
 | `nodes.json` | Direct-node registry (`name` → `{url, token}`) for `bivy run --node` | `bivy nodes add/remove` |
 | `shims.json` | Installed agent shims | `bivy shim install/uninstall` |
@@ -120,6 +120,7 @@ For the three settings that also exist in `settings.json`:
 | Sandbox tier | per-session override → `BIVY_SANDBOX` → `settings.json` `defaultSandbox` → `workspace-write` |
 | Approval mode | `BIVY_APPROVAL_MODE` → `settings.json` `approvalMode` → `autonomous` |
 | Default agent | `BIVY_RUNTIME` (process env, then `cli.json`) → `settings.json` `defaultAgent` → `pi` |
+| Auto-attach tool images | `BIVY_AUTO_ATTACH_TOOL_IMAGES` → `settings.json` `autoAttachToolImages` → off |
 
 CLI flags always win over both, for the commands that have them
 (`bivy exec --agent`, `bivy relay:setup --control-plane`, `bivy prune
@@ -136,7 +137,7 @@ Value parsing is not uniform across variables:
   `BIVY_REQUIRE_LOCAL_AUTH`, `BIVY_MULTI_USER_HOST`.
 - Plain truthiness (**any** non-empty value enables, including `"0"` and
   `"false"`): `BIVY_EGRESS_PROXY`, `BIVY_MCP_PROXY`, `BIVY_WORKTREE_COW_CLONE`,
-  `BIVY_DEBUG`.
+  `BIVY_DEBUG`, `BIVY_AUTO_ATTACH_TOOL_IMAGES`.
 - Numeric knobs that honour `0` as "off/zero": `BIVY_SESSION_IDLE_CLOSE_MS`,
   `BIVY_MAX_OPEN_SESSIONS`, `BIVY_MAX_RUN_TERMINALS`,
   `BIVY_WORKTREE_RETENTION_MS`, `BIVY_WORKTREE_SOFT_CAP_BYTES`,

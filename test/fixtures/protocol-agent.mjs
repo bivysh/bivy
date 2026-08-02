@@ -76,6 +76,13 @@ rl.on('line', (line) => {
     send({ replyTo: msg.id, ok: true, runtimeSessionRef: ref });
     if (typeof msg.resume === 'string' && msg.resume) send({ type: 'session.resumed', sessionId: msg.sessionId, runtimeSessionRef: ref });
     else send({ type: 'session.started', sessionId: msg.sessionId, runtimeSessionRef: ref });
+    // Echo what the host actually injected into this subprocess's env, so a
+    // test can prove BIVY_SESSION_ID (issue #290 — `bivy attach` resolves its
+    // session from this var) reached the protocol agent. Sent as an
+    // unrecognized event type so it rides ProtocolSession's verbatim
+    // passthrough (handleEvent's default case in src/runtime/protocol.ts)
+    // without needing a dedicated message type.
+    send({ type: 'env.info', sessionId: msg.sessionId, bivySessionId: process.env.BIVY_SESSION_ID ?? null });
     return;
   }
   if (msg.type === 'model.set') {
