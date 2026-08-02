@@ -116,11 +116,13 @@ export interface ClaudeCodeRuntimeOptions {
  * this short: it rides on every turn's system prompt.
  */
 export const BIVY_ATTACH_SYSTEM_PROMPT =
-  "Sending files to the user: the person you're talking to is in a chat UI and cannot see files you only write to disk. " +
-  "To deliver a file or image to them — a report, screenshot, generated artifact, or a file they asked for — run " +
+  "Sending files and images to the user: the person you're talking to is in a chat UI. They cannot see files you only " +
+  "write to disk, and the chat cannot load remote image URLs or workspace file paths. " +
+  "To show them a file or image — a report, screenshot, chart, or a file they asked for — run " +
   '`bivy attach <path> [--caption "short note"]` in your shell. ' +
   "An image renders inline in the chat; any other file shows as a downloadable chip. The path must be inside the session " +
-  "workspace. Prefer this over pasting large file contents or just describing where a file lives on disk.";
+  "workspace. Do NOT use markdown image syntax like ![](path) to show a local file or a URL — it will not render; always " +
+  "use `bivy attach`. Prefer this over pasting large file contents or describing where a file lives on disk.";
 
 export function claudeRuntimeFromEnv(): ClaudeCodeRuntimeOptions {
   return {
