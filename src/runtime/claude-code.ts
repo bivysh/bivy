@@ -107,6 +107,21 @@ export interface ClaudeCodeRuntimeOptions {
   sdkLoader?: () => Promise<any>;
 }
 
+/**
+ * Appended to the Claude Code system prompt so the agent DISCOVERS the outbound
+ * attachment capability. `bivy attach` is just a shell command — without this the
+ * agent has no way to know it exists and, when asked to "send a file", concludes
+ * it can't (it looks for a tool, finds none). BIVY_SESSION_ID is injected into the
+ * subprocess env (see spawnQuery), so the bare command resolves the session. Keep
+ * this short: it rides on every turn's system prompt.
+ */
+export const BIVY_ATTACH_SYSTEM_PROMPT =
+  "Sending files to the user: the person you're talking to is in a chat UI and cannot see files you only write to disk. " +
+  "To deliver a file or image to them — a report, screenshot, generated artifact, or a file they asked for — run " +
+  '`bivy attach <path> [--caption "short note"]` in your shell. ' +
+  "An image renders inline in the chat; any other file shows as a downloadable chip. The path must be inside the session " +
+  "workspace. Prefer this over pasting large file contents or just describing where a file lives on disk.";
+
 export function claudeRuntimeFromEnv(): ClaudeCodeRuntimeOptions {
   return {
     defaultModel: process.env.BIVY_CLAUDE_MODEL?.trim() || undefined,
@@ -743,6 +758,10 @@ class ClaudeSession implements RuntimeSession {
       permissionMode,
       canUseTool,
       env,
+      // Keep the default Claude Code prompt, appending the note that teaches the
+      // agent how to send a file to the user (`bivy attach`) — otherwise the
+      // capability is undiscoverable and "send me X as an attachment" fails.
+      systemPrompt: { type: "preset", preset: "claude_code", append: BIVY_ATTACH_SYSTEM_PROMPT },
     };
     if (resumeId) options.resume = resumeId;
     else options.sessionId = this.id;
