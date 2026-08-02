@@ -115,6 +115,15 @@ function planLabel(plan: string | null | undefined): string {
   return PLAN_LABELS[plan] ?? plan;
 }
 
+/** Render the baked-in PWA build timestamp (see __APP_BUILD_TIME__) as a short
+ *  local date+time, or "" when it isn't a parseable ISO string. */
+function formatBuildTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
 /**
  * POST the GitHub App manifest to GitHub. The manifest is too large/nested for a
  * query string, so it must ride as a form field — we build a form and submit it,
@@ -332,6 +341,12 @@ export function Settings({
               );
             })}
           </nav>
+          <div className="settings-nav-version" title="The version of the Bivy app running on this device">
+            <span>Bivy v{__APP_VERSION__}</span>
+            {formatBuildTime(__APP_BUILD_TIME__) && (
+              <span className="settings-nav-version-updated">Updated {formatBuildTime(__APP_BUILD_TIME__)}</span>
+            )}
+          </div>
         </aside>
 
         <section className="settings-content">
