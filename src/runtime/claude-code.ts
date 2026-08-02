@@ -49,6 +49,7 @@ import { sandboxTier, claudePermissionModeFor, type SandboxTier } from "../harne
 import { anthropicCredentialPreflight, describeAnthropicError, isAnthropicAuthError } from "./anthropic-preflight.js";
 import { toModelInfo as sharedToModelInfo } from "./normalize.js";
 import { hasLiveProcessForCwd } from "./native-process-scan.js";
+import { bivySessionEnv } from "./session-env.js";
 
 /** Binary names a live Claude Code process could be running under (see
  *  native-process-scan.ts's best-effort cwd match). */
@@ -744,9 +745,9 @@ class ClaudeSession implements RuntimeSession {
     Object.assign(env, credEnv);
     // Let the agent's own shell surface a file into the chat via `bivy attach`
     // (POST /api/session/:id/attach). The session id is otherwise invisible to
-    // the subprocess. Other runtimes should set this the same way to enable the
-    // universal attach path for their agents.
-    env.BIVY_SESSION_ID = this.id;
+    // the subprocess. Shared with process.ts and protocol.ts via bivySessionEnv
+    // (see session-env.ts) so every CLI-spawning adapter injects it the same way.
+    Object.assign(env, bivySessionEnv(this.id));
     this.spawnedToken = authTokenFromEnv(credEnv);
 
     const options: Record<string, unknown> = {
