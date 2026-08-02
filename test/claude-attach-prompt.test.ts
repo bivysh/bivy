@@ -10,6 +10,11 @@
 import assert from "node:assert/strict";
 import { ClaudeCodeRuntime, BIVY_ATTACH_SYSTEM_PROMPT } from "../src/runtime/claude-code.js";
 
+// prompt() runs an Anthropic credential preflight and refuses to spawn the query
+// (so no options to inspect) when none is present. A CI runner has no credential;
+// give it a dummy so the first turn actually spawns. `||=` keeps a real one.
+process.env.ANTHROPIC_API_KEY ||= "test-key-for-preflight";
+
 function makeSdk() {
   const queries: any[] = [];
   const sdk = {
