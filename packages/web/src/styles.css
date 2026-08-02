@@ -1193,6 +1193,25 @@ button.action-sheet-item:last-child { border-bottom: 0; }
   .automations-main { flex: 1; min-width: 0; }
   .automations-aside { flex: none; width: 280px; }
 }
+/* Automations schedule builder: natural-language field + preset chips + a
+   live human-readable preview of the resulting cron, with the raw cron tucked
+   behind an "Edit cron expression" disclosure for power users. */
+.schedule-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.schedule-preset {
+  font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); cursor: pointer;
+}
+.schedule-preset:hover { color: var(--fg); border-color: var(--muted); }
+.schedule-preset.active { color: var(--accent); border-color: var(--accent); background: var(--surface); }
+.schedule-hint { margin: 8px 0 0; font-size: 13px; line-height: 1.35; }
+.schedule-hint.ok { color: var(--muted); }
+.schedule-hint.warn { color: var(--warn, var(--accent)); }
+.schedule-advanced-toggle {
+  align-self: flex-start; margin-top: 8px; padding: 2px 0; border: 0; background: none;
+  color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.schedule-advanced-toggle:hover { color: var(--fg); }
+.schedule-cron-input { margin-top: 6px; font-family: var(--mono, ui-monospace, monospace); font-size: 13px; }
 .settings-form code { font-size: 11px; padding: 1px 5px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); }
 .settings-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .queue-head { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
