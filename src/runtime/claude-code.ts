@@ -22,6 +22,7 @@ import type {
   AgentCommand,
   AgentRuntime,
   AgentCredentialStore,
+  AttachToChatFn,
   CatalogProvider,
   DiscoveredNativeSession,
   ForkHistoryMessage,
@@ -45,6 +46,7 @@ import fs from "node:fs";
 import { depCacheEnv } from "../harness/dep-cache.js";
 import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
 import { sandboxTier, claudePermissionModeFor, type SandboxTier } from "../harness/sandbox.js";
 import { anthropicCredentialPreflight, describeAnthropicError, isAnthropicAuthError } from "./anthropic-preflight.js";
 import { toModelInfo as sharedToModelInfo } from "./normalize.js";
@@ -102,6 +104,14 @@ export interface ClaudeCodeRuntimeOptions {
   credentialProvider?: string;
   /** Per-session sandbox tier override (maps to the SDK permission mode). */
   sandbox?: SandboxTier;
+  /**
+   * Backs the native `attach_to_chat` tool (issue #291) — registered as an
+   * in-process MCP server (via the SDK's createSdkMcpServer/tool) so the agent
+   * sees it in its tool list instead of having to shell out to `bivy attach`.
+   * Absent = the tool isn't registered and the session falls back to the
+   * discoverability prompt hint alone (BIVY_ATTACH_SYSTEM_PROMPT).
+   */
+  attachToChat?: AttachToChatFn;
   /** Override for the SDK loader (tests inject a fake `query()`); defaults to
    *  importing the real optional SDK package. */
   sdkLoader?: () => Promise<any>;
@@ -123,6 +133,51 @@ export const BIVY_ATTACH_SYSTEM_PROMPT =
   "An image renders inline in the chat; any other file shows as a downloadable chip. The path must be inside the session " +
   "workspace. Do NOT use markdown image syntax like ![](path) to show a local file or a URL — it will not render; always " +
   "use `bivy attach`. Prefer this over pasting large file contents or describing where a file lives on disk.";
+
+/** Name of the in-process MCP server the native attach tool is registered
+ *  under (see buildAttachMcpServer) — the SDK namespaces the tool the agent
+ *  sees as `mcp__<server>__<tool>`. */
+export const BIVY_ATTACH_MCP_SERVER_NAME = "bivy";
+/** The tool's own name, unnamespaced (see BIVY_ATTACH_MCP_SERVER_NAME). */
+export const BIVY_ATTACH_TOOL_NAME = "attach_to_chat";
+
+/**
+ * Build the in-process MCP server that exposes `attach_to_chat` as a native
+ * tool call (issue #291) — the stronger sibling of BIVY_ATTACH_SYSTEM_PROMPT's
+ * shell-out hint: the agent sees this in its actual tool list instead of having
+ * to discover a shell command from prose. Bound to one session's id so the
+ * handler always attaches into the conversation that called it, regardless of
+ * how many Claude sessions this node is running concurrently.
+ *
+ * `sdk` is the already-loaded SDK module (see loadSdk) — `tool`/
+ * createSdkMcpServer are read off it dynamically for the same reason the rest
+ * of this adapter never imports SDK values statically: the package is
+ * optional, and a static import would force every Bivy install to have it.
+ * Returns undefined if this SDK build doesn't export the MCP builder helpers
+ * (older/trimmed installs) — the caller degrades to prompt-only discoverability.
+ */
+function buildAttachMcpServer(sdk: any, sessionId: string, attachToChat: AttachToChatFn): unknown {
+  if (typeof sdk?.tool !== "function" || typeof sdk?.createSdkMcpServer !== "function") return undefined;
+  const attachTool = sdk.tool(
+    BIVY_ATTACH_TOOL_NAME,
+    "Push a file or image from the session workspace into the chat as an attachment, exactly like the CLI `bivy attach` " +
+      "or the composer's paperclip upload but as a direct tool call. Use this — not markdown image syntax, not describing " +
+      "where a file lives — whenever the user should see a report, screenshot, chart, or a file they asked for; they " +
+      "cannot see files you only write to disk. The path must be inside the session workspace.",
+    {
+      filePath: z.string().describe("Path to the file, absolute or relative to the session workspace."),
+      caption: z.string().optional().describe("Short caption shown next to the attachment in the chat."),
+    },
+    async (args: { filePath: string; caption?: string }) => {
+      const result = attachToChat(sessionId, { filePath: args.filePath, caption: args.caption });
+      if ("error" in result) return { content: [{ type: "text", text: result.error }], isError: true };
+      return {
+        content: [{ type: "text", text: `Attached ${result.ref.name} (${result.ref.kind}, ${result.ref.mimeType}) to the chat.` }],
+      };
+    },
+  );
+  return sdk.createSdkMcpServer({ name: BIVY_ATTACH_MCP_SERVER_NAME, tools: [attachTool] });
+}
 
 export function claudeRuntimeFromEnv(): ClaudeCodeRuntimeOptions {
   return {
@@ -763,11 +818,23 @@ class ClaudeSession implements RuntimeSession {
       // Keep the default Claude Code prompt, appending the note that teaches the
       // agent how to send a file to the user (`bivy attach`) — otherwise the
       // capability is undiscoverable and "send me X as an attachment" fails.
+      // Kept even when the native tool below is also registered: it's a cheap,
+      // harmless fallback for a shell/subprocess the agent spawns that can't
+      // reach the in-process MCP tool directly.
       systemPrompt: { type: "preset", preset: "claude_code", append: BIVY_ATTACH_SYSTEM_PROMPT },
     };
     if (resumeId) options.resume = resumeId;
     else options.sessionId = this.id;
     if (this.desiredModel) options.model = this.desiredModel;
+    // Native attach_to_chat tool (issue #291) — the stronger, tool-based sibling
+    // of the system-prompt hint above. Wired only when the daemon handed us a
+    // callback (see ClaudeCodeRuntimeOptions.attachToChat); absent in a few
+    // deliberately minimal test harnesses, and gracefully degrades to the prompt
+    // hint alone if this SDK build lacks the MCP builder helpers.
+    if (this.runtimeOptions.attachToChat) {
+      const attachServer = buildAttachMcpServer(sdk, this.id, this.runtimeOptions.attachToChat);
+      if (attachServer) options.mcpServers = { [BIVY_ATTACH_MCP_SERVER_NAME]: attachServer };
+    }
 
     const q = sdk.query({ prompt: this.input, options });
     this.query = q;

@@ -41,7 +41,7 @@ import { ensureCodexAuth } from "./codex-auth.js";
 import { parserFactoryFor } from "./cli-parsers.js";
 import { sandboxTier, sandboxArgsFor, codexSandboxPolicy, type SandboxTier } from "../harness/sandbox.js";
 import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv, type ProtocolRuntimeOptions } from "./protocol.js";
-import type { AgentRuntime, RuntimeCapabilities } from "./types.js";
+import type { AgentRuntime, AttachToChatFn, RuntimeCapabilities } from "./types.js";
 
 export * from "./types.js";
 export { NodeCredentialResolver, createCredentialStore } from "./credentials.js";
@@ -51,6 +51,13 @@ export interface RuntimeFactoryOptions extends PiRuntimeOptions {
   runtime?: string;
   /** Per-session sandbox tier override (else the node default is used). */
   sandbox?: SandboxTier;
+  /**
+   * Backs each runtime's native "attach to chat" tool surface (issue #291) —
+   * threaded to the Claude adapter's ClaudeCodeRuntimeOptions.attachToChat.
+   * Absent = no native tool is registered (the node falls back to whatever
+   * discoverability hint that runtime carries, e.g. Claude's system-prompt note).
+   */
+  attachToChat?: AttachToChatFn;
 }
 
 export type RuntimeStatus = "available" | "planned" | "external";
@@ -1620,7 +1627,7 @@ export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
     case "claude-code-sdk":
       // Share the node's provider logins (the shared vault) so the user doesn't
       // re-auth Anthropic for this agent.
-      return new ClaudeCodeRuntime({ ...claudeRuntimeFromEnv(), credentials: createCredentialStore(options.credsDir), sandbox: options.sandbox });
+      return new ClaudeCodeRuntime({ ...claudeRuntimeFromEnv(), credentials: createCredentialStore(options.credsDir), sandbox: options.sandbox, attachToChat: options.attachToChat });
     default:
       // Every CLI agent in CLI_AGENT_SPECS is dispatched here as data — no per-id
       // case to maintain. Anything that isn't a known CLI agent throws below.

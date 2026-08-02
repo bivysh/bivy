@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Native `attach_to_chat` tool** for Claude and Pi sessions — the stronger,
+  tool-based sibling of #297's discoverability hint. Claude sees it as a real
+  MCP tool (an in-process server registered via the SDK's
+  `createSdkMcpServer`/`tool`); Pi sees it through the same node-hosted
+  `ToolProvider` mechanism connected integrations already use. Both call the
+  same `attachToChat()` helper `bivy attach`/`POST /api/session/:id/attach` use,
+  so a native tool call renders identically to the CLI path and goes through the
+  same approval governance as any other tool call. No wiring needed per agent —
+  the daemon threads one `attachToChat(sessionId, opts)` callback through both.
+
 ### Changed
 
 - Agent-sent chat attachments now render **grouped under the turn's final
