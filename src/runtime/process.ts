@@ -7,6 +7,7 @@ import { stripAnsi } from "./ansi.js";
 import { buildAgentCredentialEnv } from "./credentials.js";
 import { egressEnv } from "../harness/egress.js";
 import { depCacheEnv } from "../harness/dep-cache.js";
+import { bivySessionEnv } from "./session-env.js";
 import type { CliParser, CliParserFactory } from "./cli-parsers.js";
 import type {
   AgentRuntime,
@@ -426,7 +427,10 @@ class ProcessSession implements RuntimeSession {
       cwd: this.cwd,
       // egressEnv() routes this agent's outbound traffic through the harness
       // network broker when BIVY_EGRESS_PROXY is enabled (else it's {}).
-      env: { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env, ...credentialEnv, ...prepareEnv, ...egressEnv() },
+      // bivySessionEnv() lets the agent's own shell resolve its session for
+      // `bivy attach <path>` (see session-env.ts); spread last so it can never
+      // be shadowed by an operator-configured env var of the same name.
+      env: { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env, ...credentialEnv, ...prepareEnv, ...egressEnv(), ...bivySessionEnv(this.id) },
       stdio: "pipe",
       // Detached so the child becomes the leader of its own process group
       // (POSIX) — see killProcessGroup() / abort() below, which kill that whole

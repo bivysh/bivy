@@ -38,6 +38,7 @@ import { resolveSessionsLimit, truncateSavedSessions } from "./sessions-list.mjs
 import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForShell } from "./shim-path.mjs";
 import { removeExcept } from "./uninstall-paths.mjs";
 import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
+import { resolveAttachSessionId } from "./attach-session-id.mjs";
 
 const selfScript = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(selfScript);
@@ -1977,16 +1978,19 @@ async function cmdSend(args = []) {
 // `bivy attach <file> [--caption "…"] [--session <id>]` — surface a file the
 // agent produced into the chat as an image/file attachment (the reverse of the
 // composer paperclip). The universal path: any agent that can run a shell command
-// can call this. The session id defaults to $BIVY_SESSION_ID, which the daemon
-// injects into the agent's subprocess env. The file is resolved to an absolute
-// path here (the CLI's cwd is the agent's workdir) and confined to the session
-// workspace server-side.
+// can call this. The session id defaults to $BIVY_SESSION_ID, which every
+// runtime adapter injects into the agent's subprocess env (see
+// src/runtime/session-env.ts) — except pi, whose SDK exposes its own
+// $PI_SESSION_ID instead (same id, different var name; see
+// resolveAttachSessionId). The file is resolved to an absolute path here (the
+// CLI's cwd is the agent's workdir) and confined to the session workspace
+// server-side.
 async function cmdAttach(args = []) {
   const flag = (name) => {
     const i = args.indexOf(name);
     return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
   };
-  const sessionId = flag("--session") || process.env.BIVY_SESSION_ID;
+  const sessionId = resolveAttachSessionId({ sessionFlag: flag("--session"), env: process.env });
   const caption = flag("--caption");
   const name = flag("--name");
   const mimeType = flag("--mime") || flag("--mimeType");
