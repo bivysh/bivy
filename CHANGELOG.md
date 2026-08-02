@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — falling back to a standalone entry only when a turn has no prose to hang them
   on. Client-only change (no wire/node change).
 
+### Fixed
+
+- Claude agents can now **discover** how to send a file/image to the user. The
+  outbound attachment path (`bivy attach`) is a shell command with no tool, so
+  the agent had no way to know it existed — "send me X as an attachment" was
+  answered "I have no way to do that". The Claude Code system prompt now carries a
+  short note teaching the agent to run `bivy attach <path> [--caption "…"]`, which
+  pairs with the `BIVY_SESSION_ID` the node injects into the agent subprocess.
+
 ## [0.4.0] - 2026-08-01
 
 ### Added
