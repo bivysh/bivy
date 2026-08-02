@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
 import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
+import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
 import { FollowupQueue } from "./FollowupQueue.js";
 import { SANDBOX_TIERS } from "./Settings.js";
@@ -281,13 +283,9 @@ export function Composer({
     });
   }, []);
 
-  // Escape closes the image viewer.
-  useEffect(() => {
-    if (!viewing) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setViewing(null); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [viewing]);
+  // Escape closes the image viewer — coordinated through the shared modal stack
+  // so only the topmost open layer responds (matches the pickers/sheets).
+  useModalEscape(() => setViewing(null), Boolean(viewing));
 
   // Pull the voice-input config once so we can point the user at Settings when
   // they try to dictate with no provider key stored, instead of prompting for
@@ -735,13 +733,21 @@ export function Composer({
       {picker === "sandbox" && <SandboxPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "agent" && <AgentPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "model" && modelSelectable && <ModelPicker state={state} onClose={() => setPicker(null)} />}
-      {viewing && (
+      {/* Portal to <body>. Like the pickers' Sheet, the viewer is
+          `position: fixed` but rendered from deep inside the `.chat` scroll
+          container. On iOS a fixed element does NOT escape a scrolling ancestor
+          — it anchors to the scrolled content, and its stale compositor layer
+          keeps swallowing taps on the composer after it closes, so the
+          attachment thumbnails become unclickable ("can't reopen"). At <body>
+          it is truly viewport-fixed and tears down cleanly. */}
+      {viewing && createPortal(
         <div className="image-viewer" role="dialog" aria-modal="true" onClick={() => setViewing(null)}>
           <img className="image-viewer-img" src={viewing} alt="Attachment preview" onClick={(e) => e.stopPropagation()} />
           <button type="button" className="image-viewer-close" onClick={() => setViewing(null)} aria-label="Close preview">
             ×
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
