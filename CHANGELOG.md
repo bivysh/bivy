@@ -16,9 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on close), so codex/gemini/opencode/aider/… discover `attach_to_chat` in their
   own tool list instead of having to be told about a shell command. The tool
   POSTs to the same `POST /api/session/:id/attach` endpoint `bivy attach` uses.
-  Claude and Pi keep their native in-process registration; tool-interception
-  runtimes are skipped to avoid a duplicate. Codex TOML / Goose YAML configs are
-  a follow-up.
+  Injected into JSON MCP configs (claude/gemini/opencode/generic `.mcp.json`) and
+  Codex's TOML (`~/.codex/config.toml`, `[mcp_servers.bivy]`). Claude and Pi keep
+  their native in-process registration; tool-interception runtimes are skipped to
+  avoid a duplicate. Goose YAML config is a follow-up.
 
 - **Native `attach_to_chat` tool** for Claude and Pi sessions — the stronger,
   tool-based sibling of #297's discoverability hint. Claude sees it as a real
