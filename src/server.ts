@@ -67,7 +67,7 @@ import { evictToCap, dirSizeBytes } from "./harness/cache-evict.js";
 import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
-import { injectMcpProxyForSession } from "./harness/mcp-inject.js";
+import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
 import { parseRepo, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
@@ -7686,6 +7686,30 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
       }
     } catch {
       // Injection is best-effort; never block session creation.
+    }
+  }
+  // Bivy-owned tools (attach_to_chat, …): make them discoverable to non-SDK
+  // agents by adding a `bivy` server (run via `bivy mcp-serve`) to the agent's
+  // config. Default-on (not gated on BIVY_MCP_PROXY) — it only ADDS a safe,
+  // session-scoped, restored capability the agent already has via env, so the
+  // chat can receive files. Claude/Pi expose these natively (in-process SDK MCP
+  // server / integration ToolProvider), so the tool-interception runtimes are
+  // skipped to avoid a duplicate registration.
+  if (!rt.capabilities.toolInterception) {
+    try {
+      const res = injectBivyToolsForSession(rt.id, {
+        workspace: sessionWorkspace,
+        home: os.homedir(),
+        sessionId,
+        endpoint: process.env.BIVY_MCP_ENDPOINT,
+      });
+      if (res.injected.length) {
+        const prev = record.mcpRestore;
+        record.mcpRestore = () => { try { res.restore(); } finally { prev?.(); } };
+        console.log(`MCP tools: added bivy server to ${res.injected.length} config(s) for session ${sessionId}`);
+      }
+    } catch {
+      // Best-effort; never block session creation.
     }
   }
   rememberSession(record);

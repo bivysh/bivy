@@ -124,6 +124,31 @@ export function parseProxiedArgs(args: string[]): { server?: string; command: st
 }
 
 // ---------------------------------------------------------------------------
+// Bivy-owned tools server — the mirror of the proxy above. routeThroughProxy
+// wraps the agent's OWN servers; this ADDS a `bivy` server (run via `bivy
+// mcp-serve`) so the agent discovers Bivy's chat tools (attach_to_chat, …) in
+// its own tool list. Session id + node URL ride in its env so the tool can post
+// back to the right session.
+
+/** The server spec that launches `bivy mcp-serve` for a session. */
+export function bivyToolsServerSpec(opts: { sessionId: string; endpoint?: string; bivyCommand?: string }): McpServerSpec {
+  const env: Record<string, string> = { BIVY_SESSION_ID: opts.sessionId };
+  if (opts.endpoint) env.BIVY_MCP_ENDPOINT = opts.endpoint;
+  return { command: opts.bivyCommand ?? "bivy", args: ["mcp-serve"], env };
+}
+
+/**
+ * Insert the Bivy tools server under `mcpServers.<name>` (default "bivy").
+ * Idempotent: an existing entry of that name is left untouched (returns
+ * `added: false`), so a re-inject or a user's own `bivy` server never doubles up.
+ */
+export function withBivyToolsServer(config: McpConfig, spec: McpServerSpec, name = "bivy"): { config: McpConfig; added: boolean } {
+  const servers = config.mcpServers ?? {};
+  if (servers[name]) return { config, added: false };
+  return { config: { ...config, mcpServers: { ...servers, [name]: spec } }, added: true };
+}
+
+// ---------------------------------------------------------------------------
 // Phase 2b — auto-injection into an agent's on-disk MCP config.
 //
 // The transform above is universal; the only per-agent bit is *where* the JSON
