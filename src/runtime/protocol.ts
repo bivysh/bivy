@@ -4,6 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { buildAgentCredentialEnv } from "./credentials.js";
+import { bivySessionEnv } from "./session-env.js";
 import type {
   AgentCommand,
   AgentRuntime,
@@ -336,7 +337,10 @@ class ProtocolSession implements RuntimeSession {
       : {};
     const child = spawn(this.runtimeOptions.command, this.runtimeOptions.args ?? [], {
       cwd: this.cwd,
-      env: { ...process.env, ...this.runtimeOptions.env, ...credentialEnv },
+      // bivySessionEnv() lets the agent's own shell resolve its session for
+      // `bivy attach <path>` (see session-env.ts); spread last so it can never
+      // be shadowed by an operator-configured env var of the same name.
+      env: { ...process.env, ...this.runtimeOptions.env, ...credentialEnv, ...bivySessionEnv(this.id) },
       stdio: "pipe",
     });
     this.child = child;
