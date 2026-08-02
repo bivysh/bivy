@@ -2407,6 +2407,20 @@ export function ephemeralMachineFromCorrelation(c: SessionCorrelation): Ephemera
   };
 }
 
+/** True when a node is an ephemeral machine (Sprite/E2B/Fly) rather than a
+ *  persistent one. Two independent signals, either sufficient: the `eph-*` node
+ *  id every ephemeral machine is launched with (see `launchEphemeral`), or the
+ *  non-secret `ephemeral` identity block the control-plane registry attaches
+ *  (see `ephemeralMachineFromNode`). A persistent node has neither, and must
+ *  never be swept into the ephemeral wake/rebuild path — it reconnects on its
+ *  own when its daemon rejoins the relay. */
+export function isEphemeralNode(node: {
+  id: string;
+  ephemeral?: { provider?: string; machineId?: string };
+}): boolean {
+  return node.id.startsWith("eph-") || !!(node.ephemeral?.provider && node.ephemeral?.machineId);
+}
+
 export function ephemeralMachineFromNode(node: {
   id: string;
   name?: string;
