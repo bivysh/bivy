@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Agent-sent chat attachments now render **grouped under the turn's final
+  assistant message** instead of as a standalone entry at the point `bivy attach`
+  ran (which could strand a chip mid-turn, between tool cards and the reply). Both
+  the live reducer and history replay attach the chip(s) to the final reply
+  bubble — mirroring how the composer renders your own uploads under your message
+  — falling back to a standalone entry only when a turn has no prose to hang them
+  on. Client-only change (no wire/node change).
+
 ## [0.4.0] - 2026-08-01
 
 ### Added

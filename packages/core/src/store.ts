@@ -832,6 +832,11 @@ export class SessionStore {
   private state: AppState = initialState();
   private listeners = new Set<() => void>();
   private draft: Draft = freshDraft();
+  /** Agent-sent attachments buffered during the current turn. Flushed at the
+   *  turn boundary onto the turn's final assistant bubble (see
+   *  flushPendingAgentAttachments) so a chip reads as part of the reply, not as a
+   *  standalone entry stranded mid-turn where `bivy attach` happened to run. */
+  private pendingAgentAttachments: Array<{ attachment: PromptAttachment; caption: string }> = [];
   /** The user's last-used model, remembered across sessions and reloads. Honored
    *  by the models.list reducer *only* while no session is active (a fresh
    *  draft), so a new session opens on the same model the user last picked. The
@@ -2562,6 +2567,8 @@ export class SessionStore {
     // A connection drop mid-open will never deliver the history it was waiting
     // on, so stop the spinner rather than leaving the pane blank indefinitely.
     if (this.state.opening) this.set({ opening: false });
+    // A turn cut short still shows any attachments it managed to emit.
+    this.flushPendingAgentAttachments();
     if (this.draft.finalized) return;
     this.finishDrafts();
     this.draft.finalized = true;
@@ -2581,6 +2588,45 @@ export class SessionStore {
 
   private pushEntry(entry: TranscriptEntry): void {
     this.set({ transcript: [...this.state.transcript, entry] });
+  }
+
+  /**
+   * Flush this turn's buffered agent attachments (see pendingAgentAttachments)
+   * onto the turn's FINAL assistant prose bubble — the last assistant text entry
+   * since the most recent user message — so the chips read as part of the reply.
+   * Falls back to a standalone entry (carrying the caption) when the turn has no
+   * prose bubble to hang them on. Idempotent: a no-op once the buffer is drained,
+   * so it's safe to call at both turn_end and agent_end. Mirrors the durable
+   * grouping renderHistory applies on reload (groupAgentAttachments).
+   */
+  private flushPendingAgentAttachments(): void {
+    const buffered = this.pendingAgentAttachments;
+    if (!buffered.length) return;
+    this.pendingAgentAttachments = [];
+    const transcript = this.state.transcript;
+    // Turn boundary: the last user message. The final bubble must belong to THIS
+    // turn, never an earlier turn's reply.
+    let turnStart = -1;
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      if (transcript[i]!.role === "user") { turnStart = i; break; }
+    }
+    // Final assistant prose bubble of the turn: assistant role, has text, not a
+    // tool card, and not itself an attachment entry.
+    let target = -1;
+    for (let i = transcript.length - 1; i > turnStart; i--) {
+      const e = transcript[i]!;
+      if (e.role === "assistant" && !e.tool && e.text && !(e.attachments && e.attachments.length)) { target = i; break; }
+    }
+    const chips = buffered.map((b) => b.attachment);
+    if (target >= 0) {
+      this.set({
+        transcript: transcript.map((e, i) => (i === target ? { ...e, attachments: [...(e.attachments ?? []), ...chips] } : e)),
+      });
+    } else {
+      // No prose this turn — keep each attachment as its own entry (with caption),
+      // preserving the pre-grouping behaviour for the caption-only case.
+      this.set({ transcript: [...transcript, ...buffered.map((b) => ({ id: nextId(), role: "assistant" as const, text: b.caption, attachments: [b.attachment] }))] });
+    }
   }
 
   /** Fold a live field update (status, branch, PR link, …) onto a session-list
@@ -2708,20 +2754,16 @@ export class SessionStore {
         }
         return;
       case "attachment": {
-        // An agent-sent attachment (image or file). Land it as its own assistant
-        // entry so it renders as a chip/thumbnail, reusing the same
-        // PromptAttachment path user uploads use. Seal any in-flight prose first
-        // so a caption the agent wrote above the attachment stays above it rather
-        // than merging into this bubble. Durable history reproduces the identical
-        // entry via the outbound-attachment overlay (see renderHistory).
+        // An agent-sent attachment (image or file). Buffer it and render it at the
+        // turn boundary under the turn's final assistant bubble, rather than as a
+        // standalone entry at the moment `bivy attach` ran — which lands mid-turn,
+        // between tool cards and the reply, reading as detached. Grouping matches
+        // how user uploads render under their own message. Durable history
+        // reproduces the same grouping (see groupAgentAttachments in renderHistory).
         const ref = (event as any).ref;
         if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return;
-        this.commitPendingThinking();
-        this.commitPendingProse();
-        this.finishDrafts();
         const caption = typeof (event as any).caption === "string" ? (event as any).caption : "";
-        const id = (event as any).id ? String((event as any).id) : nextId();
-        this.pushEntry({ id, role: "assistant", text: caption, attachments: [attachmentFromRef(ref)] });
+        this.pendingAgentAttachments.push({ attachment: attachmentFromRef(ref), caption });
         return;
       }
       case "message_update":
@@ -2812,10 +2854,15 @@ export class SessionStore {
         });
         return;
       case "turn_end":
+        // Land any attachments emitted this turn under its final assistant bubble.
+        this.flushPendingAgentAttachments();
         this.setWorking("Planning next step…");
         return;
       case "agent_end":
         this.finishDrafts();
+        // finishDrafts sealed the final prose bubble; now group this turn's
+        // attachments onto it (no-op if turn_end already flushed them).
+        this.flushPendingAgentAttachments();
         this.closeRunningTools();
         // Clear the prose accumulator so a next turn that opens straight into a
         // tool (no message_start first) can't re-commit this turn's prose above
