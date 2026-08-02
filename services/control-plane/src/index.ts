@@ -1097,6 +1097,25 @@ app.post("/nodes/enroll", requireUser, asyncHandler(async (req, res) => {
   res.json({ ok: true, ...result });
 }));
 
+// A node is reported online if its stored flag says so OR it was confirmed online
+// within this window. The stored `online` flag is flipped fire-and-forget by the
+// relay on socket connect/close with no ordering guard, so a late/duplicate/stale
+// `false` (out-of-order reconnect, or a stale relay replica's close) can pin a
+// genuinely-connected node offline until some later reconnect happens to win. The
+// daemon's periodic `/node/heartbeat` keeps `last_seen_at` fresh while it's really
+// connected, so this fallback treats such a node as online and the race self-heals.
+// Must comfortably exceed the daemon heartbeat interval (NODE_HEARTBEAT_MS in
+// src/server.ts, 30s) so a couple of missed beats don't flap a healthy node.
+const NODE_ONLINE_TTL_MS = 90_000;
+
+/** Effective online = stored flag OR a recent `last_seen_at` (see NODE_ONLINE_TTL_MS). */
+function withEffectiveOnline<T extends { online: boolean; lastSeenAt: string | null }>(node: T): T {
+  if (node.online) return node;
+  const seen = node.lastSeenAt ? Date.parse(node.lastSeenAt) : NaN;
+  const recentlySeen = Number.isFinite(seen) && Date.now() - seen < NODE_ONLINE_TTL_MS;
+  return recentlySeen ? { ...node, online: true } : node;
+}
+
 // Lists the caller's nodes. Accepts an account session (all nodes), a
 // node-scoped link grant from a linking QR (only that one node), or a node's own
 // enrollment token (its account's nodes — so `bivy nodes` on an installed node
@@ -1108,13 +1127,13 @@ async function listClientNodes(req: Request, res: Response) {
   if (client) {
     const nodes = await store.listNodes(client.accountId);
     const scoped = client.nodeId ? nodes.filter((node) => node.id === client.nodeId) : nodes;
-    return res.json(scoped.map(({ enrollmentTokenHash: _hash, ...node }) => node));
+    return res.json(scoped.map(({ enrollmentTokenHash: _hash, ...node }) => withEffectiveOnline(node)));
   }
   // Fall back to node-token auth: an enrolled node listing its account's nodes.
   const node = await store.nodeFromEnrollmentToken(token);
   if (node) {
     const nodes = await store.listNodes(node.accountId);
-    return res.json(nodes.map(({ enrollmentTokenHash: _hash, ...n }) => n));
+    return res.json(nodes.map(({ enrollmentTokenHash: _hash, ...n }) => withEffectiveOnline(n)));
   }
   return res.status(401).json({ error: "Unauthorized" });
 }
@@ -1996,7 +2015,7 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
     const slug = hook.botMention || "";
     const servingNode = hook.servingNodeId ? nodes.find((n) => n.id === hook.servingNodeId) : undefined;
     const servedBy = servingNode
-      ? { id: servingNode.id, name: servingNode.name, online: Boolean(servingNode.online), lastSeenAt: servingNode.lastSeenAt }
+      ? { id: servingNode.id, name: servingNode.name, online: withEffectiveOnline(servingNode).online, lastSeenAt: servingNode.lastSeenAt }
       : null;
     return {
       connected: true,

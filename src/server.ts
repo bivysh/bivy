@@ -3763,6 +3763,17 @@ function startRelayIfConfigured() {
     if (advertiseResyncTimer) clearInterval(advertiseResyncTimer);
     advertiseResyncTimer = setInterval(() => scheduleAdvertise(), 60_000);
     advertiseResyncTimer.unref?.();
+    // Periodic online heartbeat. The relay flips the node's `online` flag
+    // fire-and-forget on socket connect/close with no ordering guard, so a
+    // late/racing `false` can pin a genuinely-connected node offline in the
+    // registry until some later reconnect wins. Re-affirming online on a steady
+    // interval keeps `last_seen_at` fresh and self-heals a lost race (the control
+    // plane treats a recent heartbeat as online — see NODE_ONLINE_TTL_MS). Fire one
+    // immediately so a reconnect corrects a stale `false` without waiting a full tick.
+    if (nodeHeartbeatTimer) clearInterval(nodeHeartbeatTimer);
+    void sendNodeHeartbeat();
+    nodeHeartbeatTimer = setInterval(() => void sendNodeHeartbeat(), NODE_HEARTBEAT_MS);
+    nodeHeartbeatTimer.unref?.();
   }
   console.log("[relay] connector enabled");
   return true;
@@ -4266,6 +4277,28 @@ function startModelAuthWatcher() {
 let sessionAdvertiseTarget: { controlPlaneUrl: string; enrollmentToken: string } | undefined;
 let advertiseTimer: ReturnType<typeof setTimeout> | undefined;
 let advertiseResyncTimer: ReturnType<typeof setInterval> | undefined;
+
+// How often the node re-affirms it's online to the control plane. Kept well
+// under the control plane's NODE_ONLINE_TTL_MS (90s) so a missed beat or two
+// doesn't flap a healthy node's status.
+const NODE_HEARTBEAT_MS = 30_000;
+let nodeHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Re-affirm this node's online status so the registry self-heals a lost
+ *  relay connect/close race (see the heartbeat wiring in the relay connector
+ *  and NODE_ONLINE_TTL_MS in the control plane). Best-effort: a missed beat is
+ *  covered by the next tick and the TTL window. */
+async function sendNodeHeartbeat() {
+  if (!sessionAdvertiseTarget) return;
+  try {
+    await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/heartbeat`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}` },
+    });
+  } catch {
+    // best effort; the next tick retries
+  }
+}
 
 
 async function advertiseNodeName(name: string, prevName?: string) {

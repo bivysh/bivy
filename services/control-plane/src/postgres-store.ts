@@ -1050,10 +1050,25 @@ export class PostgresStore implements MeshStore {
   }
 
   async setNodeOnline(nodeId: string, online: boolean): Promise<void> {
-    await this.query(
-      `UPDATE nodes SET online = $2, last_seen_at = now() WHERE id = $1`,
-      [nodeId, online],
-    );
+    // Only bump `last_seen_at` when marking ONLINE. This makes the column mean
+    // "last time we confirmed the node online", which the read path (`GET /nodes`)
+    // uses as a TTL fallback: a stale/racing `online=false` write (fire-and-forget
+    // from a relay socket close, possibly out of order with a fresh reconnect's
+    // `true`, or from a stale replica) must NOT refresh `last_seen_at`, or it would
+    // keep a genuinely-offline node looking recently-seen. Paired with the daemon's
+    // periodic `/node/heartbeat`, a connected node's `last_seen_at` stays fresh so a
+    // lost connect/close race self-heals instead of pinning the node offline.
+    if (online) {
+      await this.query(
+        `UPDATE nodes SET online = true, last_seen_at = now() WHERE id = $1`,
+        [nodeId],
+      );
+    } else {
+      await this.query(
+        `UPDATE nodes SET online = false WHERE id = $1`,
+        [nodeId],
+      );
+    }
   }
 
   async setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void> {
