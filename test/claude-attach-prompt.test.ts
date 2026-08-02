@@ -17,7 +17,17 @@ process.env.ANTHROPIC_API_KEY ||= "test-key-for-preflight";
 
 function makeSdk() {
   const queries: any[] = [];
+  const tools: any[] = [];
   const sdk = {
+    // In-process MCP server helpers the runtime uses to register `attach_to_chat`.
+    tool(name: string, description: string, inputSchema: unknown, handler: unknown) {
+      const t = { name, description, inputSchema, handler };
+      tools.push(t);
+      return t;
+    },
+    createSdkMcpServer(opts: { name: string; version?: string; tools: unknown[] }) {
+      return { type: "sdk", name: opts.name, tools: opts.tools };
+    },
     query({ options }: { prompt: unknown; options: any }) {
       const q = {
         options,
@@ -35,7 +45,7 @@ function makeSdk() {
       return q;
     },
   };
-  return { sdk, queries };
+  return { sdk, queries, tools };
 }
 
 async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
@@ -46,7 +56,7 @@ async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
   }
 }
 
-const { sdk, queries } = makeSdk();
+const { sdk, queries, tools } = makeSdk();
 const runtime = new ClaudeCodeRuntime({ sdkLoader: async () => sdk });
 const { session } = await runtime.createSession({ workspace: process.cwd() });
 await session.prompt("send me the readme");
@@ -60,5 +70,15 @@ assert.deepEqual(
 );
 assert.match(BIVY_ATTACH_SYSTEM_PROMPT, /bivy attach/, "the hint must name the command the agent should run");
 assert.equal(opts.env.BIVY_SESSION_ID, session.id, "the session id must be in the subprocess env so `bivy attach` resolves it");
+
+// The first-class tool: every query registers the in-process `bivy` MCP server
+// exposing `attach_to_chat`, so the capability is in the tool list — not just the
+// prose hint — and (unlike the system prompt) it re-applies on a resume too.
+assert.ok(opts.mcpServers?.bivy, "the query must register the in-process `bivy` MCP server");
+assert.equal(opts.mcpServers.bivy.type, "sdk", "it is an in-process SDK MCP server");
+assert.ok(
+  tools.some((t) => t.name === "attach_to_chat"),
+  "the `bivy` server must expose the attach_to_chat tool",
+);
 
 console.log("claude attach discoverability OK");

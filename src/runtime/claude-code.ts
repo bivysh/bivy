@@ -51,6 +51,7 @@ import { anthropicCredentialPreflight, describeAnthropicError, isAnthropicAuthEr
 import { toModelInfo as sharedToModelInfo } from "./normalize.js";
 import { hasLiveProcessForCwd } from "./native-process-scan.js";
 import { bivySessionEnv } from "./session-env.js";
+import { ATTACH_TOOL_NAME, ATTACH_TOOL_DESCRIPTION, attachToolInputShape, runAttachTool, DEFAULT_ATTACH_ENDPOINT } from "../harness/attach-tool.js";
 
 /** Binary names a live Claude Code process could be running under (see
  *  native-process-scan.ts's best-effort cwd match). */
@@ -125,6 +126,29 @@ export const BIVY_ATTACH_SYSTEM_PROMPT =
   "An image renders inline in the chat; any other file shows as a downloadable chip. The path must be inside the session " +
   "workspace. Do NOT use markdown image syntax like ![](path) to show a local file or a URL — it will not render; always " +
   "use `bivy attach`. Prefer this over pasting large file contents or describing where a file lives on disk.";
+
+/**
+ * Build the in-process `bivy` SDK MCP server exposing the `attach_to_chat` tool
+ * (issue #290), or undefined when the loaded SDK is too old to host one
+ * (`createSdkMcpServer`/`tool` absent — the test fake omits them to exercise the
+ * fallback). The handler runs in this process and POSTs to the node's attach
+ * endpoint (`BIVY_MCP_ENDPOINT`, else the loopback default) for `sessionId`, so
+ * it reuses the same confinement/storage/broadcast path as `bivy attach`.
+ */
+function buildAttachMcpServer(sdk: any, sessionId: string): unknown {
+  if (typeof sdk?.createSdkMcpServer !== "function" || typeof sdk?.tool !== "function") return undefined;
+  const endpoint = process.env.BIVY_MCP_ENDPOINT || DEFAULT_ATTACH_ENDPOINT;
+  const attach = sdk.tool(
+    ATTACH_TOOL_NAME,
+    ATTACH_TOOL_DESCRIPTION,
+    attachToolInputShape,
+    async (args: { path: string; caption?: string }) => {
+      const result = await runAttachTool({ endpoint, sessionId, path: args.path, caption: args.caption });
+      return { content: [{ type: "text", text: result.text }], isError: result.isError };
+    },
+  );
+  return sdk.createSdkMcpServer({ name: "bivy", version: "1.0.0", tools: [attach] });
+}
 
 export function claudeRuntimeFromEnv(): ClaudeCodeRuntimeOptions {
   return {
@@ -801,6 +825,13 @@ class ClaudeSession implements RuntimeSession {
       // capability is undiscoverable and "send me X as an attachment" fails.
       systemPrompt: { type: "preset", preset: "claude_code", append: BIVY_ATTACH_SYSTEM_PROMPT },
     };
+    // Register `attach_to_chat` as a first-class tool (issue #290). Rebuilt on
+    // every spawn — including a resume, where the system-prompt append above does
+    // NOT re-apply — so the capability is always in the tool list, not just as a
+    // prose hint the model may overlook. In-process SDK server: the handler runs
+    // right here in the daemon and POSTs to the node's own attach endpoint.
+    const attachServer = buildAttachMcpServer(sdk, this.id);
+    if (attachServer) options.mcpServers = { bivy: attachServer };
     if (resumeId) options.resume = resumeId;
     else options.sessionId = this.id;
     if (this.desiredModel) options.model = this.desiredModel;
