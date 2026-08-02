@@ -217,7 +217,45 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
       }
     }
   }
-  return entries;
+  return groupAgentAttachments(entries);
+}
+
+/**
+ * Group agent-sent attachment entries onto the FINAL assistant prose bubble of
+ * their turn, so a chip reads as part of the reply instead of standing alone
+ * wherever `bivy attach` happened to run in the turn. An "attachment entry" is an
+ * assistant entry carrying `attachments` (only agent attachments put attachments
+ * on an assistant entry); the "final bubble" is the last assistant text entry in
+ * the same turn (turns are delimited by user messages). When a turn has no prose
+ * bubble to hang them on (the agent only attached), the attachment entries are
+ * left as-is. This is the durable-history twin of the live reducer's
+ * flushPendingAgentAttachments, so a reload matches what streamed.
+ */
+export function groupAgentAttachments(entries: TranscriptEntry[]): TranscriptEntry[] {
+  const isAttachmentEntry = (e: TranscriptEntry) => e.role === "assistant" && !e.tool && !!e.attachments && e.attachments.length > 0;
+  const isProseBubble = (e: TranscriptEntry) => e.role === "assistant" && !e.tool && !!e.text && !(e.attachments && e.attachments.length);
+  const out = entries.slice();
+  const remove = new Set<number>();
+  let i = 0;
+  while (i < out.length) {
+    if (out[i]!.role === "user") { i++; continue; }
+    // A turn is the maximal run of non-user entries starting at i.
+    let j = i;
+    while (j < out.length && out[j]!.role !== "user") j++;
+    let target = -1;
+    const attachmentIdxs: number[] = [];
+    for (let k = i; k < j; k++) {
+      if (isAttachmentEntry(out[k]!)) attachmentIdxs.push(k);
+      else if (isProseBubble(out[k]!)) target = k; // last prose bubble wins
+    }
+    if (attachmentIdxs.length && target >= 0) {
+      const chips = attachmentIdxs.flatMap((k) => out[k]!.attachments!);
+      out[target] = { ...out[target]!, attachments: [...(out[target]!.attachments ?? []), ...chips] };
+      for (const k of attachmentIdxs) remove.add(k);
+    }
+    i = j;
+  }
+  return remove.size ? out.filter((_, idx) => !remove.has(idx)) : out;
 }
 
 /**

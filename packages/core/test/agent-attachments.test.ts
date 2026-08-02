@@ -9,62 +9,125 @@ import { SessionStore, renderHistory, toHtml } from "../src/index.js";
 const HASH = "a".repeat(64);
 const imageRef = { hash: HASH, name: "chart.png", mimeType: "image/png", size: 1234, kind: "image" as const };
 
-describe("agent attachment — live reducer", () => {
-  it("an `attachment` event lands as an assistant entry with a rehydratable chip", () => {
+describe("agent attachment — live reducer (grouped onto the final bubble)", () => {
+  const play = (events: unknown[]) => {
     const store = new SessionStore();
-    store.apply({ type: "attachment", id: "att1", ref: imageRef, caption: "Here's the chart" } as never);
+    for (const e of events) store.apply(e as never);
+    return store;
+  };
+
+  it("is buffered until the turn ends (no standalone entry mid-turn)", () => {
+    const store = play([{ type: "attachment", id: "att1", ref: imageRef, caption: "cap" }]);
+    expect(store.getState().transcript).toHaveLength(0);
+  });
+
+  it("lands under the turn's final assistant bubble, even when attached before the reply", () => {
+    const store = play([
+      { type: "attachment", id: "att1", ref: imageRef, caption: "cap" }, // agent attaches mid-turn…
+      { type: "message_start", message: { role: "assistant", content: "" } },
+      { type: "message_end", message: { role: "assistant", content: "Here it is." } }, // …then writes the reply
+      { type: "agent_end" },
+    ]);
     const t = store.getState().transcript;
     expect(t).toHaveLength(1);
     expect(t[0]!.role).toBe("assistant");
-    expect(t[0]!.text).toBe("Here's the chart");
+    expect(t[0]!.text).toBe("Here it is.");
     expect(t[0]!.attachments).toEqual([{ kind: "image", name: "chart.png", size: 1234, mimeType: "image/png", hash: HASH }]);
   });
 
-  it("seals in-flight prose before the attachment so a caption above it stays above it", () => {
-    const store = new SessionStore();
-    store.apply({ type: "message_start", message: { role: "assistant", content: "" } } as never);
-    store.apply({ type: "message_end", message: { role: "assistant", content: "Rendering it now." } } as never);
-    store.apply({ type: "attachment", id: "att1", ref: imageRef } as never);
-    const roles = store.getState().transcript.map((e) => ({ role: e.role, text: e.text, hasAttach: !!e.attachments }));
-    expect(roles).toEqual([
-      { role: "assistant", text: "Rendering it now.", hasAttach: false },
-      { role: "assistant", text: "", hasAttach: true },
+  it("groups MULTIPLE attachments from one turn under the final bubble, in emit order", () => {
+    const csv = { hash: "b".repeat(64), name: "data.csv", mimeType: "text/csv", size: 5, kind: "file" as const };
+    const store = play([
+      { type: "attachment", id: "a1", ref: imageRef }, // before the reply
+      { type: "message_start", message: { role: "assistant", content: "" } },
+      { type: "message_end", message: { role: "assistant", content: "Two files:" } },
+      { type: "attachment", id: "a2", ref: csv }, // after the reply
+      { type: "agent_end" },
     ]);
+    const t = store.getState().transcript;
+    expect(t).toHaveLength(1);
+    expect(t[0]!.text).toBe("Two files:");
+    expect(t[0]!.attachments?.map((a) => a.hash)).toEqual([HASH, "b".repeat(64)]);
   });
 
-  it("ignores a malformed attachment event (no ref / non-string hash / bad kind)", () => {
-    const store = new SessionStore();
-    store.apply({ type: "attachment", id: "w" } as never); // no ref
-    store.apply({ type: "attachment", id: "x", ref: { hash: 123, kind: "image" } } as never); // non-string hash
-    store.apply({ type: "attachment", id: "y", ref: { hash: HASH, kind: "video" } } as never); // bad kind
+  it("falls back to a standalone entry (keeping the caption) when the turn has no prose", () => {
+    const store = play([
+      { type: "attachment", id: "att1", ref: imageRef, caption: "just a file" },
+      { type: "agent_end" },
+    ]);
+    const t = store.getState().transcript;
+    expect(t).toHaveLength(1);
+    expect(t[0]!.role).toBe("assistant");
+    expect(t[0]!.text).toBe("just a file");
+    expect(t[0]!.attachments?.[0]?.hash).toBe(HASH);
+  });
+
+  it("ignores malformed attachment events (no entry even after the turn ends)", () => {
+    const store = play([
+      { type: "attachment", id: "w" }, // no ref
+      { type: "attachment", id: "x", ref: { hash: 123, kind: "image" } }, // non-string hash
+      { type: "attachment", id: "y", ref: { hash: HASH, kind: "video" } }, // bad kind
+      { type: "agent_end" },
+    ]);
     expect(store.getState().transcript).toHaveLength(0);
   });
 });
 
-describe("agent attachment — history render", () => {
-  it("renders a bivy_attachment block into an assistant entry with a chip", () => {
+describe("agent attachment — history render (grouped onto the final bubble)", () => {
+  it("groups an attachment emitted before the final message onto that message", () => {
+    const entries = renderHistory([
+      { role: "user", content: "make a chart" },
+      { role: "assistant", content: [{ type: "bivy_attachment", ref: imageRef, caption: "cap" }] }, // mid-turn attach
+      { role: "assistant", content: [{ type: "text", text: "Here's your chart." }] }, // final reply
+    ]);
+    expect(entries.map((e) => e.role)).toEqual(["user", "assistant"]);
+    expect(entries[1]!.text).toBe("Here's your chart.");
+    expect(entries[1]!.attachments?.map((a) => a.hash)).toEqual([HASH]);
+  });
+
+  it("groups an attachment mixed into the same message onto that message's prose", () => {
+    const entries = renderHistory([
+      { role: "assistant", content: [{ type: "text", text: "Done — see below." }, { type: "bivy_attachment", ref: imageRef }] },
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.text).toBe("Done — see below.");
+    expect(entries[0]!.attachments?.map((a) => a.hash)).toEqual([HASH]);
+  });
+
+  it("groups MULTIPLE attachments onto the final message, preserving order", () => {
+    const csv = { hash: "b".repeat(64), name: "data.csv", mimeType: "text/csv", size: 5, kind: "file" as const };
+    const entries = renderHistory([
+      { role: "user", content: "give me both" },
+      { role: "assistant", content: [{ type: "bivy_attachment", ref: imageRef }] },
+      { role: "assistant", content: [{ type: "bivy_attachment", ref: csv }] },
+      { role: "assistant", content: [{ type: "text", text: "Here are both." }] },
+    ]);
+    expect(entries.map((e) => e.role)).toEqual(["user", "assistant"]);
+    expect(entries[1]!.text).toBe("Here are both.");
+    expect(entries[1]!.attachments?.map((a) => a.hash)).toEqual([HASH, "b".repeat(64)]);
+  });
+
+  it("keeps a lone attachment (no prose in its turn) as a standalone entry", () => {
     const entries = renderHistory([
       { role: "assistant", content: [{ type: "bivy_attachment", ref: imageRef, caption: "the chart" }] },
     ]);
     expect(entries).toHaveLength(1);
-    expect(entries[0]!.role).toBe("assistant");
     expect(entries[0]!.text).toBe("the chart");
     expect(entries[0]!.attachments?.[0]?.hash).toBe(HASH);
   });
 
-  it("keeps prose above the attachment when a message mixes both", () => {
+  it("does not group across turns", () => {
     const entries = renderHistory([
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Done — see below." },
-          { type: "bivy_attachment", ref: imageRef },
-        ],
-      },
+      { role: "user", content: "q1" },
+      { role: "assistant", content: [{ type: "text", text: "a1" }] },
+      { role: "user", content: "q2" },
+      { role: "assistant", content: [{ type: "bivy_attachment", ref: imageRef }] }, // turn 2 has no prose
     ]);
-    expect(entries.map((e) => ({ text: e.text, hasAttach: !!e.attachments }))).toEqual([
-      { text: "Done — see below.", hasAttach: false },
-      { text: "", hasAttach: true },
+    expect(entries.map((e) => ({ role: e.role, text: e.text, att: e.attachments?.length ?? 0 }))).toEqual([
+      { role: "user", text: "q1", att: 0 },
+      { role: "assistant", text: "a1", att: 0 }, // untouched — different turn
+      { role: "user", text: "q2", att: 0 },
+      { role: "assistant", text: "", att: 1 }, // standalone (no prose to hang it on)
     ]);
   });
 });
