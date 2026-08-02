@@ -67,6 +67,7 @@ import {
   wakeEphemeralMachine,
   ephemeralProviderSuspendsWhenIdle,
   ephemeralMachineFromNode,
+  isEphemeralNode,
   ephemeralMachineFromCorrelation,
   type SessionCorrelation,
   createDeviceVaultKeyStore,
@@ -2392,9 +2393,13 @@ export class AppController {
     }
     if (!hasKey) return false;
     const node = this.store.getState().nodes.find((n) => n.id === nodeId);
-    // Enrolled but offline → resumable (wake). Absent from the registry → resumable
-    // only if a durable correlation lets us rebuild it.
-    if (node) return !node.online;
+    // Enrolled but offline → resumable ONLY when it's actually an ephemeral machine
+    // we can wake. A persistent node that's merely offline is NOT resumable from this
+    // device: it reconnects on its own when its daemon rejoins the relay, and sweeping
+    // it into the ephemeral wake/rebuild path throws a misleading "no record of the
+    // machine to rebuild" error (reprovisionEphemeral). Absent from the registry →
+    // resumable only if a durable correlation lets us rebuild it.
+    if (node) return !node.online && isEphemeralNode(node);
     return this.ephemeralCorrelations.some((c) => c.nodeId === nodeId);
   }
   private shouldAutoResume(): boolean {
