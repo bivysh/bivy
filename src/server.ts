@@ -8475,6 +8475,9 @@ app.get("/api/status", (_req, res) => {
     ok: true,
     nodeId: identity.nodeId,
     name: identity.name,
+    // The running daemon's package version, so `bivy status` (and any client)
+    // can report which build the node is on.
+    version: currentVersion() ?? null,
     port,
     workspace: defaultWorkspace,
     appDir,

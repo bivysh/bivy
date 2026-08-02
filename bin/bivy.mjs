@@ -3468,6 +3468,7 @@ async function cmdStatus(args = []) {
   }
   console.log(c.bold("\n  Bivy node\n"));
   console.log(`  url:       ${url(config)}  ${reachable ? c.green("● reachable") : c.dim("○ not reachable")}`);
+  if (status?.version) console.log(`  version:   ${status.version}`);
   console.log(`  workspace: ${status?.workspace || config.workspace}`);
   console.log(`  ${serviceStatusLine()}`);
   const relay = loadRelayConfig();
@@ -3506,6 +3507,10 @@ async function cmdStatus(args = []) {
     console.log(`  devices:   ${status.devices?.paired ?? 0} paired remote, ${status.devices?.localTokens ?? 0} local token(s)`);
     console.log(`  approvals: ${status.approvals?.pending ?? 0} pending`);
     console.log(`  guard:     ${status.approvalMode || "autonomous"} (${status.guardrails?.workspaceBoundary ? "workspace boundary on" : "boundary unknown"})`);
+    if (status.updatedAt) {
+      const when = new Date(status.updatedAt);
+      console.log(`  updated:   ${Number.isNaN(when.getTime()) ? status.updatedAt : when.toLocaleString()}`);
+    }
   }
   console.log("");
 }
