@@ -17,7 +17,9 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   agentMcpConfigTargets,
+  bivyToolsServerSpec,
   routeThroughProxy,
+  withBivyToolsServer,
   type McpConfig,
   type McpConfigContext,
   type ProxyLauncher,
@@ -110,6 +112,63 @@ export function injectMcpConfigFile(filePath: string, launcher: ProxyLauncher): 
     injected: true,
     restore: () => {
       try { fs.writeFileSync(filePath, original); } catch { /* best-effort */ }
+    },
+  };
+}
+
+/** Context for injecting the Bivy tools server: the session it serves + node URL. */
+export interface BivyToolsContext extends McpConfigContext {
+  sessionId: string;
+  /** Node URL the tool posts back to (BIVY_MCP_ENDPOINT); default loopback. */
+  endpoint?: string;
+}
+
+/**
+ * Add the `bivy` tools server (attach_to_chat …) to an agent's session-local
+ * JSON MCP config so the agent DISCOVERS it as a tool. Unlike the proxy inject
+ * (which only rewrites servers a file already has), this CREATES the config when
+ * absent — the session-local file only, never a global ~/.config one — so an
+ * agent that ships no MCP config still gets the tool. restore() deletes a file it
+ * created and rewrites the exact original bytes of one it modified. Best-effort;
+ * never throws. Returns a no-op when the agent's config isn't JSON (Codex TOML /
+ * Goose YAML are a follow-up) or the server is already present.
+ */
+export function injectBivyToolsForSession(agentId: string, ctx: BivyToolsContext, bivyCommand = "bivy"): InjectResult {
+  const target = agentMcpConfigTargets(agentId, ctx).find((t) => path.extname(t).toLowerCase() === ".json");
+  if (!target) return { injected: [], restore: () => {} };
+  const spec = bivyToolsServerSpec({ sessionId: ctx.sessionId, endpoint: ctx.endpoint, bivyCommand });
+
+  const existed = fs.existsSync(target);
+  let original: string | undefined;
+  let parsed: McpConfig = {};
+  if (existed) {
+    try {
+      original = fs.readFileSync(target, "utf8");
+      parsed = JSON.parse(original) as McpConfig;
+    } catch {
+      // A config we can't read/parse is not ours to rewrite — leave it be.
+      return { injected: [], restore: () => {} };
+    }
+  }
+
+  const { config, added } = withBivyToolsServer(parsed, spec);
+  if (!added) return { injected: [], restore: () => {} };
+
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`);
+  } catch {
+    return { injected: [], restore: () => {} };
+  }
+  return {
+    injected: [target],
+    restore: () => {
+      try {
+        if (existed && original !== undefined) fs.writeFileSync(target, original);
+        else fs.rmSync(target, { force: true });
+      } catch {
+        // Restore is best-effort.
+      }
     },
   };
 }
