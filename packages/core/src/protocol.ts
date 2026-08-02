@@ -127,6 +127,11 @@ export interface PromptAttachment {
  * `session.history` event as `[messageText, AttachmentRef[]]` pairs so a client
  * that never sent the attachment (a reload, or a different device) can still
  * render it by hash. Mirrors the node's AttachmentRef in src/session/attachment-store.ts.
+ *
+ * Also the ref type for a resolved *inline* markdown image (`![alt](https://…)`,
+ * see InlineImageEvent below) — `session.history` carries those as
+ * `[url, AttachmentRef]` pairs on `inlineImageRefs`, one ref per URL rather than
+ * an array (a URL only ever resolves to one image).
  */
 export interface AttachmentRef {
   hash: string;
@@ -150,6 +155,24 @@ export interface AttachmentEvent {
   id: string;
   ref: AttachmentRef;
   caption?: string;
+}
+
+/**
+ * The inner event of a `session.event` the node emits when it finishes fetching
+ * a remote image an agent referenced with markdown syntax (`![alt](https://…)`,
+ * see #293 / src/session/inline-image-fetch.ts). Carried live so an
+ * already-open chat can hydrate the placeholder `<img data-remote-src>`
+ * markdown.ts renders into a `blob:` URL immediately (via
+ * `controller.fetchAttachment(ref.hash)`), without waiting for a reload; durable
+ * history reproduces the same url→ref mapping via `inlineImageRefs` on
+ * `session.history`, so a reload resolves it from the log instead of re-fetching.
+ * `url` is the exact `https://` string the markdown referenced — the client
+ * matches it back onto the `data-remote-src` attribute(s) that need it.
+ */
+export interface InlineImageEvent {
+  type: "inlineImage";
+  url: string;
+  ref: AttachmentRef;
 }
 
 /**

@@ -113,6 +113,13 @@ import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog } from "./session/event-log.js";
 import { AttachmentStore, isValidAttachmentHash, type AttachmentRef } from "./session/attachment-store.js";
 import { planAttachment, isAttachPlanError } from "./session/attach-to-chat.js";
+import {
+  extractInlineImageUrls,
+  assistantTextForImageScan,
+  fetchInlineImage,
+  isFetchImageError,
+  inlineImageDisplayName,
+} from "./session/inline-image-fetch.js";
 import { ReplicationService } from "./session/replication-service.js";
 import type { ReplWireFrame } from "./session/replicator.js";
 import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
@@ -2410,6 +2417,65 @@ function persistTranscriptSnapshot(record: SessionRecord): void {
   eventLog.appendBaseSnapshot(record.id, base);
 }
 
+// In-flight dedupe so two sessions (or two turns) referencing the same remote
+// image URL only ever trigger one outbound fetch. Process-lifetime only — a
+// restart just means the first re-encounter fetches again, which is fine.
+const inlineImageFetchInFlight = new Map<string, Promise<void>>();
+// A URL that failed (bad host, timeout, not-an-image, …) is not retried for a
+// cooldown window, so a persistently broken URL in a long-lived session can't
+// turn every subsequent message_end into a wasted fetch attempt.
+const inlineImageFailedAt = new Map<string, number>();
+const INLINE_IMAGE_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * Scan a session's just-finalized assistant messages for remote markdown images
+ * (`![alt](https://…)`) and, for any URL not already resolved or in flight,
+ * fetch it (SSRF-guarded, size-capped — see inline-image-fetch.ts), store the
+ * bytes in the content-addressed AttachmentStore, persist the durable url→ref
+ * mapping, and broadcast it live so an already-open chat hydrates the image
+ * without waiting for a reload. Fire-and-forget: called from the session event
+ * listener, which must not block on a network fetch.
+ */
+function resolveInlineImages(record: SessionRecord): void {
+  const messages = record.session.getMessages();
+  const urls = new Set<string>();
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    for (const url of extractInlineImageUrls(assistantTextForImageScan(m.content))) urls.add(url);
+  }
+  if (!urls.size) return;
+  const alreadyResolved = new Set(eventLog.readInlineImages(record.id).map(([url]) => url));
+  for (const url of urls) {
+    if (alreadyResolved.has(url) || inlineImageFetchInFlight.has(url)) continue;
+    const failedAt = inlineImageFailedAt.get(url);
+    if (failedAt !== undefined && Date.now() - failedAt < INLINE_IMAGE_RETRY_COOLDOWN_MS) continue;
+    const task = (async () => {
+      try {
+        const result = await fetchInlineImage(url);
+        if (isFetchImageError(result)) {
+          console.warn(`[inline-image] ${url}: ${result.error}`);
+          inlineImageFailedAt.set(url, Date.now());
+          return;
+        }
+        const ref = attachmentStore.put(result.bytes, {
+          name: inlineImageDisplayName(url, result.mimeType),
+          mimeType: result.mimeType,
+          kind: "image",
+        });
+        eventLog.appendInlineImage(record.id, { url, ref });
+        eventLog.flush(record.id);
+        broadcast({ type: "session.event", sessionId: record.id, event: { type: "inlineImage", url, ref } });
+      } catch (error) {
+        console.warn(`[inline-image] ${url}:`, error instanceof Error ? error.message : String(error));
+        inlineImageFailedAt.set(url, Date.now());
+      } finally {
+        inlineImageFetchInFlight.delete(url);
+      }
+    })();
+    inlineImageFetchInFlight.set(url, task);
+  }
+}
+
 // Append the tool-activity entry to the log. The id-merge and last-500 cap the old
 // store applied are now applied by `foldTool` on replay.
 function upsertToolActivityMessage(sessionId: string, entry: ToolActivityMessage) {
@@ -2545,6 +2611,11 @@ function buildHistoryEvent(opts: {
     // Durable attachment references (text→refs), so a client that never sent the
     // attachment (a reload, or a different device) rehydrates thumbnails by hash.
     attachmentRefs: opts.sessionId ? eventLog.readAttachments(opts.sessionId) : [],
+    // Durable url→ref map for remote markdown images the node has already
+    // fetched (see resolveInlineImages) — lets a reload resolve a
+    // `data-remote-src` placeholder straight to its attachment hash instead of
+    // waiting on a fresh (redundant) fetch.
+    inlineImageRefs: opts.sessionId ? eventLog.readInlineImages(opts.sessionId) : [],
   };
 }
 
@@ -6877,6 +6948,15 @@ function attachSessionListeners(record: SessionRecord) {
     // still keeps it); message_end/turn_end capture the assistant reply.
     if (event.type === "turn_start" || event.type === "message_end" || event.type === "turn_end") {
       persistTranscriptSnapshot(record);
+    }
+    // A finalized assistant message may reference a remote image via markdown
+    // (`![alt](https://…)`) — fetch and store it now so the chat can render it
+    // (see resolveInlineImages). Checked on both events: message_end is the
+    // precise "this assistant message is done" signal most runtimes emit, but
+    // turn_end is a safety net for one that only surfaces the final text there.
+    // Fire-and-forget and internally deduped, so checking on both costs nothing.
+    if (event.type === "message_end" || event.type === "turn_end") {
+      resolveInlineImages(record);
     }
     // Durably persist the throttled sidecars at the turn boundary so a crash
     // loses at most the in-flight turn's UI detail, not the whole turn.

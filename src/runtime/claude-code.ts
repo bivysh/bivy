@@ -114,15 +114,24 @@ export interface ClaudeCodeRuntimeOptions {
  * it can't (it looks for a tool, finds none). BIVY_SESSION_ID is injected into the
  * subprocess env (see spawnQuery), so the bare command resolves the session. Keep
  * this short: it rides on every turn's system prompt.
+ *
+ * The chat still has no route to a LOCAL/workspace file path, so that half of the
+ * guidance (use `bivy attach`, not markdown, for those) stands. A REMOTE
+ * `https://` image URL is different: the node now fetches it server-side and
+ * serves it back to the chat (see src/session/inline-image-fetch.ts, issue #293),
+ * so plain markdown is the right tool there — `bivy attach` only works on files
+ * already inside the workspace, which a URL by definition isn't.
  */
 export const BIVY_ATTACH_SYSTEM_PROMPT =
   "Sending files and images to the user: the person you're talking to is in a chat UI. They cannot see files you only " +
-  "write to disk, and the chat cannot load remote image URLs or workspace file paths. " +
-  "To show them a file or image — a report, screenshot, chart, or a file they asked for — run " +
+  "write to disk, and the chat has no route to a workspace file path. " +
+  "To show them a LOCAL file or image — a report, screenshot, chart, or a file they asked for — run " +
   '`bivy attach <path> [--caption "short note"]` in your shell. ' +
   "An image renders inline in the chat; any other file shows as a downloadable chip. The path must be inside the session " +
-  "workspace. Do NOT use markdown image syntax like ![](path) to show a local file or a URL — it will not render; always " +
-  "use `bivy attach`. Prefer this over pasting large file contents or describing where a file lives on disk.";
+  "workspace. Do NOT use markdown image syntax like ![](path) for a local file or workspace path — it will not render; " +
+  "always use `bivy attach` for those. A REMOTE image you already have a URL for is different: plain markdown " +
+  "`![alt](https://...)` renders it inline, no attach needed. Prefer `bivy attach` / markdown links over pasting large " +
+  "file contents or describing where a file lives on disk.";
 
 export function claudeRuntimeFromEnv(): ClaudeCodeRuntimeOptions {
   return {
