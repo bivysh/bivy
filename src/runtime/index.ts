@@ -1250,6 +1250,16 @@ function codexAppServerRuntime(credsDir: string, tier?: SandboxTier): AgentRunti
     args: [shim],
     ...(policy ? { env: { BIVY_CODEX_SANDBOX: policy.sandbox, BIVY_CODEX_APPROVAL_POLICY: policy.approvalPolicy } } : {}),
     credentials: createCredentialStore(credsDir),
+    // Mint ~/.codex/auth.json from the vault before the app-server spawns, then
+    // preflight — mirroring the `codex` exec path (see below). Without this the
+    // shim would launch uncredentialed and 401 on its first /responses call with
+    // no actionable message. `prepare` runs pre-spawn (the shim reads auth.json at
+    // launch); `preflight` backstops the genuinely uncredentialed case.
+    prepare: async (): Promise<Record<string, string>> => {
+      const home = await ensureCodexAuth(credsDir);
+      return home ? { CODEX_HOME: home } : {};
+    },
+    preflight: (env: Record<string, string | undefined>) => codexCredentialPreflight(env),
     // Session-less catalog contribution: Codex runs OpenAI models under a ChatGPT
     // subscription (provider id "openai-codex"). The authoritative per-session
     // list comes from the app-server; this is the picker preview.
