@@ -173,6 +173,8 @@ export interface ModelInfo {
 
 export interface RuntimeInfo {
   id: string;
+  /** Default communication path: structured protocol/SDK, JSON pipe, plain pipe, or native terminal. */
+  executionMode?: "protocol" | "structured-pipe" | "pipe" | "pty";
   displayName?: string;
   name?: string;
   [k: string]: unknown;
