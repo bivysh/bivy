@@ -67,6 +67,8 @@ import {
   destroyEphemeralMachine,
   wakeEphemeralMachine,
   ephemeralProviderSuspendsWhenIdle,
+  ephemeralAdapter,
+  ephemeralCatalogEntry,
   ephemeralMachineFromNode,
   isEphemeralNode,
   ephemeralMachineFromCorrelation,
@@ -813,6 +815,17 @@ export class AppController {
     if (this.direct || !this.signedIn) return;
     if (Date.now() - this.lastNodeRefreshAt < 10_000) return;
     void this.refreshNodes();
+  }
+
+  /**
+   * Pick a saved ephemeral runner as the target for the next new session. No
+   * machine is created and nothing on the current pane is torn down — the draft
+   * simply remembers this runner, and the first `sendPrompt` launches it and
+   * binds the session (see `launchDraftRunnerAndBind`). Selecting an actual node
+   * (switchNode) clears this.
+   */
+  pickDraftEphemeralRunner(config: EphemeralNodeConfig): void {
+    this.store.setDraftEphemeralConfig(config);
   }
 
   /** Switch to another node without a full reload. */
@@ -1667,8 +1680,59 @@ export class AppController {
     // Keep the exact frame so a post-reconnect retry re-sends it byte-identically.
     const frame: Command = { kind: "session.new", requestId: rid, title: trimmed || undefined, ...this.draftSessionFields() };
     this.pendingPrompt = { text: trimmed, requestId: rid, clientMessageId: cmid, attachments: files, frame };
+    // The draft targets a saved ephemeral runner that has no machine yet: sending
+    // IS the launch. Provision a fresh machine from the config, bind this session
+    // to it, and let the existing pendingPrompt/onReconnected replay fire
+    // session.new once it's online — no "launch machine" button, no modal. Guarded
+    // to the picked-runner case so ordinary sessions are completely unaffected.
+    const runner = this.store.getState().draftEphemeralConfig;
+    if (runner) {
+      void this.launchDraftRunnerAndBind(runner, trimmed, cmid, files);
+      return;
+    }
     this.store.addUserMessage(trimmed, cmid, files);
     this.send(frame);
+  }
+
+  /**
+   * First-message launch of a picked-but-unlaunched ephemeral runner. Provisions
+   * a fresh machine from the saved config, then binds the draft session to the
+   * new `eph-` node via switchNode. The stashed `pendingPrompt` survives the
+   * switch; once the node pairs, `onReconnected` → `retryPendingSessionNew` fires
+   * the `session.new` on it and `maybeFlushPendingPrompt` flushes this prompt.
+   * The exact analogue of the resume-on-send path, for a not-yet-created session.
+   */
+  private async launchDraftRunnerAndBind(
+    config: EphemeralNodeConfig,
+    text: string,
+    cmid: string,
+    files?: PromptAttachment[],
+  ): Promise<void> {
+    // Instant feedback on the current pane while the provider API call runs
+    // (switchNode below resets the pane, so we re-show it after).
+    this.store.addUserMessage(text, cmid, files);
+    try {
+      const machine = await this.launchEphemeral({
+        provider: config.provider,
+        region: config.region ?? undefined,
+        size: config.size ?? undefined,
+        ttlMinutes: config.ttlMinutes ?? undefined,
+        teardownOnAgentFinish: config.teardownOnAgentFinish === true,
+        name: config.name,
+        setupId: config.id,
+      });
+      // Bind the draft to the freshly-enrolled node and connect. switchNode resets
+      // the pane (clearing draftEphemeralConfig too) but leaves pendingPrompt.
+      if (!machine.nodeId) throw new Error("machine launched without a node id");
+      this.switchNode(machine.nodeId);
+      // Re-show the message + a status note now that the pane was reset, so the
+      // send doesn't visually vanish while the machine boots.
+      this.store.addUserMessage(text, cmid, files);
+      this.store.pushSystemMessage(`Starting ${config.name} — it'll come online shortly, then your message runs.`);
+    } catch (e) {
+      this.pendingPrompt = null;
+      this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`);
+    }
   }
 
   /**
@@ -2066,8 +2130,44 @@ export class AppController {
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralKeys.getToken(id);
   }
-  setEphemeralToken(id: string, token: string): Promise<void> {
-    return this.ephemeralKeys.setToken(id, token);
+  async setEphemeralToken(id: string, token: string): Promise<void> {
+    await this.ephemeralKeys.setToken(id, token);
+    // Connecting a provider should be enough to start — auto-create one sensible
+    // default runner so it appears in the node picker immediately, without a
+    // separate "define a machine" step. No-op if the provider already has one.
+    void this.ensureDefaultRunner(id);
+  }
+  /** Save a provider token and return the provider's default runner (creating one
+   *  if needed), so the connect UI can immediately pick it for the draft session. */
+  async connectEphemeralProvider(providerId: string, token: string): Promise<EphemeralNodeConfig | null> {
+    await this.ephemeralKeys.setToken(providerId, token);
+    return this.ensureDefaultRunner(providerId);
+  }
+  /** The provider's default runner (creating one if needed) — for the connect
+   *  UI's "use this runner" action on an already-connected provider. */
+  defaultEphemeralRunner(providerId: string): Promise<EphemeralNodeConfig | null> {
+    return this.ensureDefaultRunner(providerId);
+  }
+  /** The provider's default ephemeral runner (account config), creating one if it
+   *  has none yet — so a freshly-connected provider is immediately pickable. */
+  private async ensureDefaultRunner(providerId: string): Promise<EphemeralNodeConfig | null> {
+    try {
+      const configs = await this.listEphemeralConfigs();
+      const existing = configs.find((c) => c.provider === providerId);
+      if (existing) return existing;
+      const adapter = ephemeralAdapter(providerId);
+      const name = ephemeralCatalogEntry(providerId)?.name ?? providerId;
+      return await this.createEphemeralConfig({
+        provider: providerId,
+        name: `${name} runner`,
+        region: adapter?.defaultRegion ?? null,
+        size: adapter?.defaultSize ?? null,
+        // Suspend-to-zero providers keep the machine; destroy-lane providers get
+        // a 1h TTL + teardown-on-finish so a forgotten machine can't bill on.
+        ttlMinutes: adapter?.suspendsWhenIdle ? null : 60,
+        teardownOnAgentFinish: !adapter?.suspendsWhenIdle,
+      });
+    } catch { /* best effort — the user can still create one in Settings */ return null; }
   }
   removeEphemeralToken(id: string): Promise<void> {
     return this.ephemeralKeys.remove(id);
