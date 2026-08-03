@@ -302,13 +302,18 @@ Add integration coverage for:
 - a failed structured/protocol launch falling back or failing explicitly;
 - cancellation of the complete process group.
 
-Roll out in this order:
+Implemented rollout:
 
-1. command PTY opt-out behind a node flag;
-2. diagnostics and metrics;
-3. automatic pipe/structured selection for already validated agents;
-4. ACP promotion through the unified resolver;
-5. enable automatic mode selection by default.
+1. command PTY selection is conditional via `requiresTty`;
+2. execution mode and capabilities are exposed in the runtime catalog;
+3. the UI displays Protocol, Structured, or Chat pipe;
+4. automatic CLI selection prefers ACP, then structured pipes, then plain pipes;
+5. `BIVY_AGENT_MODE=auto|protocol|structured|pipe|pty` and
+   `BIVY_<ID>_MODE` provide explicit overrides; unavailable explicit modes fail
+   closed.
+
+Remaining rollout work is instrumentation and live validation across installed
+agent versions.
 
 Useful metrics include process-tree RSS/CPU, PTY count, output bytes/sec,
 transport frames/sec, parser errors, protocol handshake failures, and time to
@@ -324,16 +329,14 @@ first visible event. Compare identical prompts and agent versions in each mode.
 - **Phase 5:** avoid as a transport-switch feature; use existing resume/takeover
   flows instead.
 
-A useful first release is therefore small: make the short-lived command wrapper
-conditional, add mode/capability reporting, and document that governed agent
-sessions already use pipes while native `bivy run` sessions intentionally use
-PTYs. The broader automatic resolver is moderate effort, but it builds directly
-on existing abstractions rather than requiring a new agent framework.
+The implementation remains intentionally small: it reuses the existing process,
+protocol, parser, ACP, and terminal abstractions rather than introducing a new
+agent framework.
 
 ## Recommendation
 
-Proceed. Start with Phase 1 and instrumentation, then add explicit execution-mode
-metadata and resolver logic. Do not remove PTYs from native run-terminals: they
-are the general compatibility path and the reason remote users can drive an
-arbitrary CLI. The strategic target should be protocol or structured pipes for
-chat, with PTY reserved for interactive terminal sessions and fallback.
+Keep validating agent versions and add process-tree/output metrics. Do not
+remove PTYs from native run-terminals: they are the general compatibility path
+and the reason remote users can drive an arbitrary CLI. The strategic target is
+protocol or structured pipes for chat, with PTY reserved for interactive terminal
+sessions and fallback.

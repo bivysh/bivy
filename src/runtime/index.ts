@@ -1087,11 +1087,21 @@ function cliAgentInfo(id: CliAgentId): RuntimeInfo {
   let modelSelection = Boolean(cliModelConfig(id));
   const usageReporting = cliUsageReporting(id);
   const structuredPref = process.env.BIVY_AGENT_STRUCTURED;
-  const structured = Boolean(process.env.BIVY_AGENT_PARSER || spec.parserId) && (!spec.parserUnverified || structuredPref === "1") && structuredPref !== "0";
+  const structuredAvailable = Boolean(process.env.BIVY_AGENT_PARSER || spec.parserId) && (!spec.parserUnverified || structuredPref === "1") && structuredPref !== "0";
   // When the agent is promoted to ACP (spec.acp + BIVY_<ID>_ACP / BIVY_PREFER_ACP),
   // it runs through the governed ProtocolRuntime — so it honestly gains per-tool
   // approvals and resume. Reflect that in the catalog the picker reads.
   const acpActive = prefersAcp(id);
+  // Catalog discovery must remain usable even when an operator has configured
+  // an invalid mode. The actual launch path resolves strictly and reports the
+  // actionable error; the picker falls back to the honest default here.
+  let executionMode: Exclude<CliExecutionMode, "auto">;
+  try {
+    executionMode = resolveCliExecutionMode({ requested: requestedCliExecutionMode(id), protocolAvailable: Boolean(spec.acp), structuredAvailable, protocolPreferred: acpActive });
+  } catch {
+    executionMode = structuredAvailable ? "structured-pipe" : "pipe";
+  }
+  const structured = executionMode === "structured-pipe";
   if (acpActive) resume = true;
   // Opt-in self-healing: if the installed binary's --help doesn't evidence a
   // resume/model flag we advertise, downgrade it (never upgrade). Codex keeps its
@@ -1106,7 +1116,7 @@ function cliAgentInfo(id: CliAgentId): RuntimeInfo {
   }
   return {
     id,
-    executionMode: acpActive ? "protocol" : structured ? "structured-pipe" : "pipe",
+    executionMode,
     displayName: spec.displayName,
     description: spec.blurb ?? `Run the local ${spec.displayName} CLI underneath Bivy in the session workspace.`,
     status: installed ? "available" : "external",
@@ -1326,6 +1336,43 @@ function acpRuntimeFromEnv(credsDir?: string): ProtocolRuntimeOptions | null {
 function prefersAcp(id: CliAgentId): boolean {
   if (!CLI_AGENT_SPECS[id].acp) return false;
   return process.env.BIVY_PREFER_ACP === "1" || process.env[`BIVY_${id.toUpperCase()}_ACP`] === "1";
+}
+
+export type CliExecutionMode = "auto" | "protocol" | "structured-pipe" | "pipe" | "pty";
+
+/**
+ * Resolve the communication mode for a CLI agent. This is deliberately pure so
+ * it can be tested without starting a process. PTY is a terminal-launch mode,
+ * not a governed ProcessRuntime mode; callers must handle it explicitly.
+ */
+export function resolveCliExecutionMode(input: {
+  requested?: string;
+  protocolAvailable: boolean;
+  structuredAvailable: boolean;
+  protocolPreferred?: boolean;
+}): Exclude<CliExecutionMode, "auto"> {
+  const raw = input.requested?.trim().toLowerCase() || "auto";
+  const requested = (raw === "structured" ? "structured-pipe" : raw) as CliExecutionMode;
+  if (!["auto", "protocol", "structured-pipe", "pipe", "pty"].includes(requested)) {
+    throw new Error(`Invalid agent execution mode "${input.requested}". Use auto, protocol, structured-pipe, pipe, or pty.`);
+  }
+  if (requested === "pty") return "pty";
+  if (requested === "protocol") {
+    if (!input.protocolAvailable) throw new Error("Protocol execution was requested, but this agent has no configured protocol adapter.");
+    return "protocol";
+  }
+  if (requested === "structured-pipe") {
+    if (!input.structuredAvailable) throw new Error("Structured pipe execution was requested, but this agent has no available structured parser.");
+    return "structured-pipe";
+  }
+  if (requested === "pipe") return "pipe";
+  if (input.protocolAvailable && input.protocolPreferred) return "protocol";
+  if (input.structuredAvailable) return "structured-pipe";
+  return "pipe";
+}
+
+function requestedCliExecutionMode(id: CliAgentId): string | undefined {
+  return process.env[`BIVY_${id.toUpperCase()}_MODE`] ?? process.env.BIVY_AGENT_MODE;
 }
 
 function acpInfo(): RuntimeInfo {
@@ -1657,23 +1704,25 @@ export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
 function makeCliRuntime(id: CliAgentId, options: RuntimeFactoryOptions): AgentRuntime {
       const spec = CLI_AGENT_SPECS[id];
       if (!commandAvailable(spec.command)) throw new Error(`${spec.displayName} command not found on PATH: ${spec.command}`);
-      // ACP promotion: when the agent declares an `acp` mode and it's preferred
-      // (BIVY_<ID>_ACP=1 / BIVY_PREFER_ACP=1), drive it through the governed
-      // ProtocolRuntime (per-tool approvals + streaming + resume) instead of the
-      // one-shot pipe below — the high-capability path, selected as data.
-      if (spec.acp && prefersAcp(id)) {
+      // Resolve the mode before launching anything. ACP and structured parsing
+      // remain data-driven; explicit mode overrides are fail-closed rather than
+      // silently degrading to a less capable path.
+      const structuredPref = process.env.BIVY_AGENT_STRUCTURED;
+      const structuredAvailable = Boolean(process.env.BIVY_AGENT_PARSER || spec.parserId) && (!spec.parserUnverified || structuredPref === "1") && structuredPref !== "0";
+      const executionMode = resolveCliExecutionMode({
+        requested: requestedCliExecutionMode(id),
+        protocolAvailable: Boolean(spec.acp),
+        structuredAvailable,
+        protocolPreferred: prefersAcp(id),
+      });
+      if (executionMode === "pty") {
+        throw new Error(`PTY mode is for interactive terminal launches. Use 'bivy run ${spec.command}' instead of a governed chat session.`);
+      }
+      if (executionMode === "protocol") {
+        if (!spec.acp) throw new Error(`${spec.displayName} does not declare an ACP/protocol launch mode.`);
         return new ProtocolRuntime(acpRuntimeOptions({ id, displayName: spec.displayName, command: spec.command, agentArgs: spec.acp.args, credsDir: options.credsDir }));
       }
-      // Phase 4 — structured mode ON by default when the agent has a VALIDATED JSON
-      // parser: launch with its native JSON flags and parse stdout into normalized
-      // events. BIVY_AGENT_STRUCTURED=0 forces the dumb-pipe fallback everywhere;
-      // BIVY_AGENT_STRUCTURED=1 opts INTO structured mode for agents whose parser
-      // is still unverified (spec.parserUnverified — safe default is dumb pipe so a
-      // wrong flag can't regress a working agent). BIVY_AGENT_PARSER overrides the
-      // parser id (e.g. to "bivy-protocol").
-      const structuredPref = process.env.BIVY_AGENT_STRUCTURED;
-      const parserReady = Boolean(spec.parserId) && (!spec.parserUnverified || structuredPref === "1");
-      const structured = parserReady && structuredPref !== "0";
+      const structured = executionMode === "structured-pipe";
       const parserId = process.env.BIVY_AGENT_PARSER || (structured ? spec.parserId : undefined);
       const tier = sandboxTier(options.sandbox);
       // BIVY_<ID>_ARGS overrides the launch flags for a CLI version we haven't

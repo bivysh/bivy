@@ -58,6 +58,7 @@ import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } 
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
+import { commandLaunch } from "./command-launch.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
 import { createWorktree, removeWorktree, branchSlug, gitRepoRoot, type Worktree } from "./worktree.js";
 import { HarnessManager } from "./harness/manager.js";
@@ -5487,10 +5488,6 @@ function stripAnsi(text: string) {
     .replace(/\r/g, "\n");
 }
 
-function wrapWithSystemPty(spawnCommand: string, args: string[]) {
-  return { command: pythonCommand, args: [ptyRunnerScript, spawnCommand, ...args] };
-}
-
 function shellQuote(value: string) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -5637,9 +5634,7 @@ function runNativeCommand(command: MeshCommand) {
   // terminal UI. Everything else uses ordinary pipes: this avoids an extra
   // Python process and PTY relay for non-interactive commands while preserving
   // the old behavior for commands that genuinely require terminal semantics.
-  const launch = command.spawn.requiresTty
-    ? wrapWithSystemPty(command.spawn.command, command.spawn.args)
-    : { command: command.spawn.command, args: command.spawn.args };
+  const launch = commandLaunch(command.spawn.command, command.spawn.args, command.spawn.requiresTty, pythonCommand, ptyRunnerScript);
   const child = spawn(launch.command, launch.args, { cwd: repoRoot, env });
 
   commandProcesses.set(runId, child);
