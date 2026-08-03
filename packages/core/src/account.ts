@@ -10,6 +10,7 @@
 
 import { linkPayloadFromText } from "./linking.js";
 import type { LocalStore } from "./local-store.js";
+import type { InboxAdvert } from "./inbox.js";
 
 export interface LinkPayload {
   session?: string;
@@ -239,6 +240,7 @@ export interface AccountSessionAdvert {
   titleEnc?: string;
   branch?: string;
   updatedAt?: string;
+  attention?: InboxAdvert[];
   [k: string]: unknown;
 }
 

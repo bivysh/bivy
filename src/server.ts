@@ -516,13 +516,14 @@ const approvals = new ApprovalManager();
 const questionManager = new QuestionManager();
 questionManager.onRequest((request) => {
   scheduleAdvertise();
-  broadcast({ type: "session.question", sessionId: request.sessionId, requestId: request.id, questions: request.questions });
+  broadcast({ type: "session.question", sessionId: request.sessionId, requestId: request.id, questions: request.questions, createdAt: request.createdAt });
   // Notify unconditionally: a clarifying question always fires mid-turn (the
   // session is "working"), and it's a hard blocker the user must see to unblock
   // — matching the pre-refactor behavior.
   void sendNotificationHint({
     kind: "question_asked",
     sessionId: request.sessionId,
+    attentionId: request.id,
     title: "Bivy needs your input",
     body: `${sessionNotifyLabel(resolveSession(request.sessionId))} is asking a question — tap to answer.`,
   });
@@ -898,7 +899,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -4351,7 +4352,7 @@ function sessionNotifyLabel(record: SessionRecord | undefined, fallback = "A ses
   return agent || branch || fallback;
 }
 
-async function sendNotificationHint(input: { kind: string; sessionId?: string; title?: string; body?: string; targetSessionId?: string }) {
+async function sendNotificationHint(input: { kind: string; sessionId?: string; title?: string; body?: string; targetSessionId?: string; attentionId?: string }) {
   if (!sessionAdvertiseTarget) return;
   try {
     await modelAuthFetch("/internal/notifications/hints", { method: "POST", body: JSON.stringify(input) });
@@ -4474,16 +4475,37 @@ async function advertiseSessions() {
     // dropped; and with the remote flag off the map is empty, so the payload is
     // byte-identical to before.
     const agentServiceAddress = sessionAgentServiceAddress(record) ?? (record ? undefined : (await inMemorySessionLocations.lookup(s.id).catch(() => undefined))?.agentServiceAddress);
+    const approvalAttention = approvals.list()
+      .filter((a) => a.sessionId === s.id && a.status === "pending")
+      .map((a) => ({
+        id: a.id,
+        kind: "approval" as const,
+        severity: a.risk === "critical" ? "critical" as const : a.risk === "high" ? "error" as const : "warning" as const,
+        createdAt: new Date(a.createdAt).toISOString(),
+      }));
+    const questionAttention = questionManager.list()
+      .filter((q) => q.sessionId === s.id && q.status === "pending")
+      .map((q) => ({ id: q.id, kind: "question" as const, severity: "warning" as const, createdAt: new Date(q.createdAt).toISOString() }));
+    const failureAt = record?.lastFailureAt || (meta?.status === "failed" ? Date.parse(meta.updatedAt) : 0);
+    const failureAttention = failureAt
+      ? [{
+          id: "last-failure",
+          kind: (record?.source || meta?.source ? "automation" : "session") as "automation" | "session",
+          severity: "error" as const,
+          createdAt: new Date(failureAt).toISOString(),
+        }]
+      : [];
     return {
       sessionId: s.id,
-      status: pendingApproval ? "needs_action" : (record ? (sessionBusy(record) ? "working" : "idle") : "saved"),
-      needsAction: pendingApproval,
+      status: pendingApproval || failureAttention.length ? "needs_action" : (record ? (sessionBusy(record) ? "working" : "idle") : "saved"),
+      needsAction: pendingApproval || failureAttention.length > 0,
       source: record?.source || meta?.source,
       titleEnc: name ? relay!.sealString(name) : undefined,
       branch: record?.worktree?.branch || meta?.branch,
       agentServiceAddress,
       githubIssueUrl: record?.githubIssueUrl,
       prUrl: record?.prUrl,
+      attention: [...approvalAttention, ...questionAttention, ...failureAttention],
     };
   }));
   try {
@@ -6867,6 +6889,8 @@ function markSessionWorking(record: SessionRecord, activity: unknown) {
   record.isWorking = true;
   record.lastActivity = activity;
   record.workingStartedAt ||= Date.now();
+  // A new attempt resolves the prior turn's failure condition at its source.
+  record.lastFailureAt = undefined;
   metadata.touchSession(record.id, "working");
   if (!wasWorking) scheduleAdvertise(); // idle → working transition
 }
@@ -7073,6 +7097,9 @@ function attachSessionListeners(record: SessionRecord) {
           },
         });
       } else if (turnError) {
+        record.lastFailureAt = Date.now();
+        metadata.touchSession(record.id, "failed");
+        scheduleAdvertise();
         broadcast({ type: "session.error", sessionId: record.id, error: turnError });
         void sendNotificationHint({
           kind: "session_error",
@@ -8236,6 +8263,7 @@ approvals.onRequest((request: ApprovalRequest) => {
     void sendNotificationHint({
       kind: "approval_requested",
       sessionId: request.sessionId,
+      attentionId: request.id,
       title: "Approval needed",
       body: `${sessionNotifyLabel(rec)} wants to run something — tap to approve or deny.`,
     });

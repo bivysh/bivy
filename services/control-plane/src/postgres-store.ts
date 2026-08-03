@@ -275,6 +275,7 @@ export class PostgresStore implements MeshStore {
       -- up. Routing metadata like node_id, not E2E payload. ADD COLUMN IF NOT
       -- EXISTS keeps this a safe, idempotent migration on existing databases.
       ALTER TABLE session_index ADD COLUMN IF NOT EXISTS agent_service_address TEXT;
+      ALTER TABLE session_index ADD COLUMN IF NOT EXISTS attention JSONB;
 
       -- Session replication ownership (docs/session-replication.md). Keyed by
       -- session, NOT node, so it survives the wholesale rewrite of session_index
@@ -1172,7 +1173,7 @@ export class PostgresStore implements MeshStore {
         // not unnest($1::text[], ...) — pg-mem, which the whole store is
         // deliberately tested against, doesn't support multi-array unnest.)
         if (sessions.length > 0) {
-          const sessionIndexCols = 8;
+          const sessionIndexCols = 9;
           const sessionIndexValues: unknown[] = [];
           const sessionIndexRows = sessions
             .map((s, i) => {
@@ -1186,12 +1187,13 @@ export class PostgresStore implements MeshStore {
                 s.titleEnc ?? null,
                 s.branch ?? null,
                 s.agentServiceAddress ?? null,
+                JSON.stringify(s.attention ?? []),
               );
-              return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, now())`;
+              return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, now())`;
             })
             .join(", ");
           await client.query(
-            `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, updated_at)
+            `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, attention, updated_at)
              VALUES ${sessionIndexRows}`,
             sessionIndexValues,
           );
@@ -1293,6 +1295,7 @@ export class PostgresStore implements MeshStore {
       titleEnc: row.title_enc ?? undefined,
       branch: row.branch ?? undefined,
       agentServiceAddress: row.agent_service_address ?? undefined,
+      attention: Array.isArray(row.attention) ? row.attention : undefined,
       updatedAt: new Date(row.updated_at).toISOString(),
     }));
   }
@@ -1310,6 +1313,7 @@ export class PostgresStore implements MeshStore {
       titleEnc: row.title_enc ?? undefined,
       branch: row.branch ?? undefined,
       agentServiceAddress: row.agent_service_address ?? undefined,
+      attention: Array.isArray(row.attention) ? row.attention : undefined,
       updatedAt: new Date(row.updated_at).toISOString(),
     }));
   }
