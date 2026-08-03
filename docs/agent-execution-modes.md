@@ -315,6 +315,12 @@ Implemented rollout:
 Remaining rollout work is instrumentation and live validation across installed
 agent versions.
 
+
+The React client also coalesces store notifications during active turns to one
+browser frame, while completed-turn and lifecycle notifications remain
+synchronous. This reduces redundant renders without delaying approvals or final
+messages.
+
 Useful metrics include process-tree RSS/CPU, PTY count, output bytes/sec,
 transport frames/sec, parser errors, protocol handshake failures, and time to
 first visible event. Compare identical prompts and agent versions in each mode.

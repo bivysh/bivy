@@ -870,6 +870,9 @@ function eventThinkingDelta(event: any): { kind: "full" | "delta" | "none"; text
 export class SessionStore {
   private state: AppState = initialState();
   private listeners = new Set<() => void>();
+  /** Coalesce high-frequency streaming state notifications to one browser paint. */
+  private notifyPending = false;
+  private notifyHandle: number | ReturnType<typeof setTimeout> | null = null;
   private draft: Draft = freshDraft();
   /** Agent-sent attachments buffered during the current turn. Flushed at the
    *  turn boundary onto the turn's final assistant bubble (see
@@ -1236,7 +1239,45 @@ export class SessionStore {
 
   private set(next: Partial<AppState>): void {
     this.state = { ...this.state, ...next };
-    for (const l of this.listeners) l();
+    // Streaming events can update the store several times in one transport
+    // tick (draft text, tool state, working label). Delay only while a turn is
+    // active so React subscribers repaint at most once per frame; lifecycle and
+    // completed-turn updates remain synchronous.
+    if (this.state.working) {
+      this.scheduleNotify();
+      return;
+    }
+    this.flushNotify();
+  }
+
+  private scheduleNotify(): void {
+    if (this.notifyPending) return;
+    this.notifyPending = true;
+    const callback = () => {
+      this.notifyPending = false;
+      this.notifyHandle = null;
+      for (const listener of this.listeners) listener();
+    };
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      this.notifyHandle = globalThis.requestAnimationFrame(callback);
+    } else {
+      this.notifyHandle = setTimeout(callback, 16);
+    }
+  }
+
+  private flushNotify(): void {
+    if (!this.notifyPending) {
+      for (const listener of this.listeners) listener();
+      return;
+    }
+    const handle = this.notifyHandle;
+    this.notifyPending = false;
+    this.notifyHandle = null;
+    if (handle !== null) {
+      if (typeof globalThis.cancelAnimationFrame === "function" && typeof handle === "number") globalThis.cancelAnimationFrame(handle);
+      else clearTimeout(handle as ReturnType<typeof setTimeout>);
+    }
+    for (const listener of this.listeners) listener();
   }
 
   /**
