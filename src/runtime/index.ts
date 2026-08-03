@@ -1657,8 +1657,8 @@ const PICKER_RUNTIME_IDS = new Set<string>([
 ]);
 
 function runtimeCertification(runtime: RuntimeInfo): Pick<RuntimeInfo, "certification" | "testedVersion"> {
-  if (runtime.id === "pi") return { certification: "release-tested", testedVersion: "0.82.1" };
-  if (runtime.id === "claude-code-sdk") return { certification: "release-tested", testedVersion: "0.3.218" };
+  if (runtime.id === "pi") return { certification: "release-tested", testedVersion: "0.83.0" };
+  if (runtime.id === "claude-code-sdk") return { certification: "release-tested", testedVersion: "0.3.220" };
   if (runtime.testedVersion) return { certification: "release-tested", testedVersion: runtime.testedVersion };
   return { certification: runtime.supportTier === "beta" ? "adapter-tested" : "unverified" };
 }
