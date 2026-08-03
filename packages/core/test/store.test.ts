@@ -995,6 +995,48 @@ describe("SessionStore", () => {
     expect(store.getState().activeTitle).toBe("Ship the PR");
   });
 
+  it("beginOpen replaces the New-session agent/model pills with session-scoped metadata", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "runtimes.list",
+      current: { id: "claude", displayName: "Claude Code" },
+      runtimes: [
+        { id: "claude", displayName: "Claude Code" },
+        { id: "codex", displayName: "Codex" },
+      ],
+    });
+    store.apply({
+      type: "models.list",
+      runtimeId: "claude",
+      current: { id: "sonnet", provider: "anthropic" },
+      models: [{ id: "sonnet", provider: "anthropic" }],
+    });
+    store.apply({
+      type: "sessions.list",
+      sessions: [{ id: "s2", name: "Codex session", runtimeId: "codex", agentName: "Codex" }],
+    });
+
+    // These are the selections visible on the New session screen.
+    expect(store.getState().currentAgentName).toBe("Claude Code");
+    expect(store.getState().currentModel?.id).toBe("sonnet");
+
+    store.beginOpen("s2");
+    expect(store.getState().currentAgentName).toBe("Codex");
+    expect(store.getState().activeRuntimeId).toBe("codex");
+    expect(store.getState().currentModel).toBeNull();
+    expect(store.getState().models).toEqual([]);
+
+    // The session-scoped refresh fills in that session's actual model.
+    store.apply({
+      type: "models.list",
+      sessionId: "s2",
+      runtimeId: "codex",
+      current: { id: "gpt-5.4", provider: "openai" },
+      models: [{ id: "gpt-5.4", provider: "openai" }],
+    });
+    expect(store.getState().currentModel?.id).toBe("gpt-5.4");
+  });
+
   it("tracks the active session runtime independently from the global agent selection", () => {
     const store = new SessionStore();
     store.setSelectedAgentLocal("pi");
@@ -1837,5 +1879,50 @@ describe("SessionStore", () => {
     expect(store.getState().selectedAgentId).toBe("claude");
     expect(store.getState().currentModel).toBeNull();
     expect(store.getState().models).toEqual([]);
+  });
+});
+
+describe("session.auth_required → sign-in prompt", () => {
+  function focusedStore(): SessionStore {
+    const store = new SessionStore();
+    store.setCurrentNode("node-1");
+    store.beginOpen("s1");
+    return store;
+  }
+
+  it("raises needsModelAuth targeted at the failing provider", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex", reason: "401 Unauthorized" } as never);
+    expect(store.getState().needsModelAuth).toEqual({ nodeId: "node-1", provider: "openai-codex", reason: "401 Unauthorized" });
+  });
+
+  it("ignores an auth_required for a background (non-active) session", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "other", provider: "openai-codex" } as never);
+    expect(store.getState().needsModelAuth).toBeNull();
+  });
+
+  it("does not dismiss a targeted prompt when a DIFFERENT provider connects", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex" } as never);
+    // Anthropic connecting must not satisfy an openai-codex prompt.
+    store.apply({ type: "providers.list", providers: [{ id: "anthropic", configured: true }, { id: "openai-codex", configured: false }] } as never);
+    expect(store.getState().needsModelAuth?.provider).toBe("openai-codex");
+  });
+
+  it("dismisses when the targeted provider connects", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex" } as never);
+    store.apply({ type: "providers.list", providers: [{ id: "openai-codex", configured: true }] } as never);
+    expect(store.getState().needsModelAuth).toBeNull();
+  });
+
+  it("dismisses when the api-key alias (openai) connects for a codex prompt", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex" } as never);
+    // A pasted OpenAI key lands under `openai` (OPENAI_API_KEY), which Codex
+    // reads — that satisfies the openai-codex prompt too.
+    store.apply({ type: "providers.list", providers: [{ id: "openai", configured: true }] } as never);
+    expect(store.getState().needsModelAuth).toBeNull();
   });
 });

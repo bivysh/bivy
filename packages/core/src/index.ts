@@ -11,6 +11,7 @@ export * from "./markdown.js";
 export * from "./tool-activity.js";
 export * from "./tool-format.js";
 export * from "./approval-format.js";
+export * from "./inbox.js";
 export * from "./linking.js";
 export * from "./protocol.js";
 export * from "./local-store.js";

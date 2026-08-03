@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { type GithubQueueItem } from "@bivy/core";
+import { type AccountAutomationRun, type GithubQueueItem, type InboxItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -22,8 +22,10 @@ import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Settings } from "./components/Settings.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
+import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
+import { buildInboxItems, Inbox } from "./components/Inbox.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
 // bundle). It's an on-demand overlay, so load it lazily to keep the initial app
@@ -67,18 +69,28 @@ export function App() {
   // the moment it opens — see #388. Hosted-only: the queue is account-level
   // control-plane state, unavailable in direct mode.
   const [githubQueue, setGithubQueue] = useState<GithubQueueItem[] | null>(null);
+  // Automation runs feed the Inbox's authoritative automation items (runs that
+  // need attention or failed). Same account-level, hosted-only, polled-at-shell
+  // shape as the GitHub queue above.
+  const [automationRuns, setAutomationRuns] = useState<AccountAutomationRun[] | null>(null);
+  const [inboxOpen, setInboxOpen] = useState(false);
   const refreshGithubQueue = useCallback(() => {
     if (controller.direct || !state.signedIn) return;
     controller.fetchGithubQueue().then(setGithubQueue).catch(() => {});
   }, [state.signedIn]);
+  const refreshAutomationRuns = useCallback(() => {
+    if (controller.direct || !state.signedIn) return;
+    controller.fetchAutomationRuns().then(setAutomationRuns).catch(() => {});
+  }, [state.signedIn]);
   useEffect(() => {
     if (controller.direct || !state.signedIn) return;
     refreshGithubQueue();
+    refreshAutomationRuns();
     const id = setInterval(() => {
-      if (document.visibilityState !== "hidden") refreshGithubQueue();
+      if (document.visibilityState !== "hidden") { refreshGithubQueue(); refreshAutomationRuns(); }
     }, 30000);
     return () => clearInterval(id);
-  }, [refreshGithubQueue]);
+  }, [refreshGithubQueue, refreshAutomationRuns]);
   // sessionId → the run that produced it, joined from the queue's evidence.
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
@@ -146,7 +158,10 @@ export function App() {
   // When the node is an offline-but-resumable ephemeral machine (a suspended
   // Sprite we hold the key for), keep the composer usable: sending IS the resume
   // gesture — controller.sendPrompt wakes the machine and replays the message.
-  const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable()) && !activeTuiLocked;
+  // A picked-but-unlaunched ephemeral runner also keeps the composer usable:
+  // sending IS the launch — controller.sendPrompt provisions the machine, binds
+  // the session, and replays the message once it's online (no launch button).
+  const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable() || Boolean(state.draftEphemeralConfig)) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
   useEdgeSwipe({ isOpen: drawerOpen, onOpen: () => setDrawerOpen(true), onClose: () => setDrawerOpen(false) });
@@ -250,12 +265,26 @@ export function App() {
     if (state.activeSessionId) controller.closeSessionTui(state.activeSessionId);
   }, [state.activeSessionId]);
 
+  // Push taps and copied inbox links use the same `attention` target. Wait until
+  // the owning session's live card has arrived, then reveal and focus it.
+  useEffect(() => {
+    const attention = new URLSearchParams(location.search).get("attention");
+    if (!attention || !state.activeSessionId) return;
+    const target = document.getElementById(`attention-${encodeURIComponent(attention)}`);
+    if (!target) return;
+    target.scrollIntoView({ block: "center" });
+    target.setAttribute("tabindex", "-1");
+    target.focus({ preventScroll: true });
+  }, [state.activeSessionId, state.approvals, state.questions]);
+
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
   // instant the token lands — no page reload needed. `direct` (local/loopback
   // mode) never gates on a control-plane session.
   const needsAuth = !controller.direct && !state.signedIn;
-  const needsNode = !controller.direct && state.signedIn && !state.currentNodeId;
+  // Picking an ephemeral runner counts as having chosen where to run, even
+  // before its machine exists — show the composer, not the onboarding screen.
+  const needsNode = !controller.direct && state.signedIn && !state.currentNodeId && !state.draftEphemeralConfig;
 
   // Hosted control plane, not signed in yet: show the sign-in screen instead of a
   // dead shell. Once signed in we always render the normal app — a node is picked
@@ -307,6 +336,32 @@ export function App() {
   // no sessionId are treated as global and shown everywhere.
   const activeApprovals = state.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSessionId);
   const activeQuestions = state.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSessionId);
+  const inboxItems = buildInboxItems({
+    sessions: state.sessions,
+    approvals: state.approvals,
+    questions: state.questions,
+    nodes: state.nodes,
+    queue: githubQueue ?? [],
+    runs: automationRuns ?? [],
+  });
+  const openInboxItem = (item: InboxItem) => {
+    setInboxOpen(false);
+    closeDrawer();
+    if (item.sessionId) {
+      controller.openSessionOnNode(item.sessionId, undefined, item.nodeId);
+      if (item.kind === "approval" || item.kind === "question") {
+        const conditionId = item.targetId;
+        if (!conditionId) return;
+        const params = new URLSearchParams(location.search);
+        params.set("attention", conditionId);
+        history.replaceState(null, "", `${location.pathname}?${params.toString()}${location.hash}`);
+        setTimeout(() => document.getElementById(`attention-${encodeURIComponent(conditionId)}`)?.scrollIntoView({ block: "center" }), 500);
+      }
+      return;
+    }
+    if (item.source === "queue") openSettings("queue");
+    else if (item.source === "provider") openSettings("providers");
+  };
 
   return (
     <div className="app">
@@ -358,6 +413,18 @@ export function App() {
             everything else moved inside the Settings modal. */}
         <div className="sidebar-foot">
           <button
+            className="inbox-button"
+            onClick={() => { setInboxOpen(true); closeDrawer(); }}
+            title="Inbox"
+            aria-label={`Inbox, ${inboxItems.length} unresolved items`}
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+              <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+            </svg>
+            {inboxItems.length > 0 && <span className="inbox-count" aria-hidden>{inboxItems.length}</span>}
+          </button>
+          <button
             className="settings-gear"
             onClick={() => {
               openSettings();
@@ -370,7 +437,6 @@ export function App() {
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
-            <span className="settings-gear-label">Settings</span>
           </button>
         </div>
       </aside>
@@ -590,7 +656,14 @@ export function App() {
           }
         />
       )}
+      {inboxOpen && (
+        <>
+          <div className="scrim inbox-scrim" onClick={() => setInboxOpen(false)} />
+          <Inbox items={inboxItems} onOpen={openInboxItem} onClose={() => setInboxOpen(false)} />
+        </>
+      )}
       {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
+      {state.needsModelAuth && <FirstRunModelAuthSheet state={state} />}
       {terminalNodePicker && (
         <NodePicker
           state={state}

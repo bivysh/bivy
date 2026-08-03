@@ -187,15 +187,44 @@ const EntryView = memo(function EntryView({
     () => (entry.role === "assistant" && !entry.streaming ? entry.html ?? toHtml(entry.text) : ""),
     [entry.role, entry.streaming, entry.html, entry.text],
   );
-  // Syntax-highlight fenced code blocks once the assistant HTML is in the DOM.
-  // Re-runs as streaming replaces the markup; hooks stay above the role branches.
+  // Syntax-highlight fenced code blocks once the assistant HTML is in the DOM,
+  // and hydrate any remote markdown images this entry now has a resolved ref
+  // for (see TranscriptEntry.imageRefs / packages/core/src/markdown.ts). Re-runs
+  // as streaming replaces the markup, AND when imageRefs grows live (a node
+  // "inlineImage" event patches a new ref onto this entry with no text/html
+  // change — see store.ts) so a just-resolved image hydrates without a reload.
+  // All three helpers are idempotent against re-running on already-processed
+  // DOM, so bundling them in one effect is safe either way.
   const bodyRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (entry.role === "assistant") {
-      highlightCode(bodyRef.current);
-      decorateCodeBlocks(bodyRef.current);
-    }
-  }, [entry.role, html]);
+    if (entry.role !== "assistant") return;
+    highlightCode(bodyRef.current);
+    decorateCodeBlocks(bodyRef.current);
+    const container = bodyRef.current;
+    if (!container || !entry.imageRefs) return;
+    let cancelled = false;
+    const created: string[] = [];
+    const imgs = container.querySelectorAll<HTMLImageElement>("img.md-image[data-remote-src]");
+    imgs.forEach((img) => {
+      const url = img.dataset.remoteSrc;
+      if (!url || img.dataset.hydrated === "1") return;
+      const ref = entry.imageRefs?.[url];
+      if (!ref) return; // not resolved yet — stays a placeholder until it is
+      img.dataset.hydrated = "1";
+      void controller.fetchAttachment(ref.hash).then((res) => {
+        if (cancelled || !res) return;
+        const blobUrl = base64ToBlobUrl(res.data, res.mimeType || ref.mimeType);
+        if (blobUrl) {
+          img.src = blobUrl;
+          created.push(blobUrl);
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+      created.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [entry.role, html, entry.imageRefs]);
   if (entry.role === "system")
     return (
       <div className="msg system">

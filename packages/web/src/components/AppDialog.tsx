@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import { useModalEscape } from "../modalStack.js";
 
 export function ConfirmDialog({
@@ -28,7 +29,9 @@ export function ConfirmDialog({
   useEffect(() => { cancelRef.current?.focus(); }, []);
   // Unique id per instance — a hardcoded id collides if two dialogs ever mount.
   const titleId = useId();
-  return (
+  // Dialogs can be opened from the transformed mobile sidebar. Portal them so
+  // position:fixed remains relative to the viewport rather than the drawer.
+  return createPortal(
     <div className="app-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <div className="app-dialog-backdrop" onClick={onCancel} />
       <div className="app-dialog-body">
@@ -39,7 +42,8 @@ export function ConfirmDialog({
           <button className={danger ? "btn danger" : "btn primary"} onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -68,7 +72,7 @@ export function RenameDialog({
     if (next && next !== initialValue) onSave(next);
     else onCancel();
   };
-  return (
+  return createPortal(
     <div className="app-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <div className="app-dialog-backdrop" onClick={onCancel} />
       <form className="app-dialog-body" onSubmit={submit}>
@@ -79,6 +83,7 @@ export function RenameDialog({
           <button className="btn primary" type="submit" disabled={!value.trim()}>Save</button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }

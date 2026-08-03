@@ -80,7 +80,9 @@ export const MODEL_OAUTH_PROVIDERS: Record<string, ModelOAuthProvider> = {
       codex_cli_simplified_flow: "true",
       originator: "pi",
     },
-    refreshSkewMs: 0,
+    // Refresh a little early (like Anthropic/xAI) so Codex never bakes an
+    // already-expired access token into ~/.codex/auth.json and 401s mid-turn.
+    refreshSkewMs: 5 * 60 * 1000,
     refreshRotates: true,
     accountIdClaim: { path: "https://api.openai.com/auth", field: "chatgpt_account_id" },
   },
