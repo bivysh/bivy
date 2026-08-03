@@ -403,6 +403,11 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    large remote image can't blow out the chat column; rounded to match chips. */
 .msg.assistant img { max-width: 100%; height: auto; border-radius: 10px; }
 .msg.assistant img.md-image { max-height: 420px; object-fit: contain; }
+/* Before ChatView's hydrate effect resolves data-remote-src to a fetched blob:
+   URL (or if the node's fetch fails/is disallowed), the element has no `src` and
+   would otherwise collapse to nothing — give it a visible placeholder box so a
+   pending/failed remote image still reads as "an image was here". */
+.msg.assistant img.md-image:not([src]) { display: inline-block; min-width: 120px; min-height: 80px; background: var(--surface-2, rgba(127, 127, 127, 0.12)); border-radius: 10px; }
 /* An agent-sent attachment block sits in the assistant row above any caption. */
 .assistant-row > .msg-attachments { width: 100%; }
 .msg.assistant li.task-list-item { list-style: none; margin-left: -1.2em; }
