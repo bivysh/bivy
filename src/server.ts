@@ -58,6 +58,7 @@ import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } 
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
+import { commandLaunch } from "./command-launch.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
 import { createWorktree, removeWorktree, branchSlug, gitRepoRoot, type Worktree } from "./worktree.js";
 import { HarnessManager } from "./harness/manager.js";
@@ -67,7 +68,7 @@ import { evictToCap, dirSizeBytes } from "./harness/cache-evict.js";
 import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
-import { injectMcpProxyForSession } from "./harness/mcp-inject.js";
+import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
 import { parseRepo, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
@@ -102,7 +103,7 @@ import {
 } from "./github-tasks.js";
 import { buildLinearTaskPrompt, getLinearIssue, linearBranchName } from "./linear-tasks.js";
 import { PairingStore } from "./device-registry.js";
-import { IntegrationManager } from "./integrations/index.js";
+import { IntegrationManager, type SessionIdRef } from "./integrations/index.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession, type PrRef } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
@@ -477,7 +478,7 @@ type MeshCommand = {
   description: string;
   kind: "server" | "native";
   run?: () => Promise<unknown> | unknown;
-  spawn?: { command: string; args: string[] };
+  spawn?: { command: string; args: string[]; requiresTty?: boolean };
 };
 
 type OAuthLoginState = {
@@ -523,13 +524,14 @@ const approvals = new ApprovalManager();
 const questionManager = new QuestionManager();
 questionManager.onRequest((request) => {
   scheduleAdvertise();
-  broadcast({ type: "session.question", sessionId: request.sessionId, requestId: request.id, questions: request.questions });
+  broadcast({ type: "session.question", sessionId: request.sessionId, requestId: request.id, questions: request.questions, createdAt: request.createdAt });
   // Notify unconditionally: a clarifying question always fires mid-turn (the
   // session is "working"), and it's a hard blocker the user must see to unblock
   // — matching the pre-refactor behavior.
   void sendNotificationHint({
     kind: "question_asked",
     sessionId: request.sessionId,
+    attentionId: request.id,
     title: "Bivy needs your input",
     body: `${sessionNotifyLabel(resolveSession(request.sessionId))} is asking a question — tap to answer.`,
   });
@@ -598,7 +600,7 @@ function resolveApproval(id: string, approved: boolean) {
   }
   return ok;
 }
-const integrations = new IntegrationManager(appDir);
+const integrations = new IntegrationManager(appDir, undefined, attachToChatForSession);
 const terminals = new TerminalManager();
 // Per-session agents: a node holds one AgentRuntime instance *per agent id*,
 // built lazily and cached, instead of a single global runtime. `defaultRuntimeId`
@@ -606,7 +608,7 @@ const terminals = new TerminalManager();
 // be swapped under a live conversation, so the agent is chosen at session creation
 // and fixed for that session's life; switching agents in the UI starts a new one.
 let defaultRuntimeId = (process.env.BIVY_RUNTIME ?? "pi").toLowerCase();
-const runtimeHost = new RuntimeHost({ credsDir, piDir, sessionsDir });
+const runtimeHost = new RuntimeHost({ credsDir, piDir, sessionsDir, attachToChat: attachToChatForSession });
 
 // In-session model reroute (docs/rulesets.md). Opt-in: set
 // BIVY_SESSION_MODEL_FALLBACK to a comma-separated model list and a session that
@@ -905,7 +907,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -1281,6 +1283,25 @@ function handlePassiveToolImage(record: SessionRecord, event: Record<string, unk
   }
 }
 
+/**
+ * Session-id-keyed wrapper around attachToChat, handed to runtime adapters as
+ * the `attachToChat` callback that backs each agent's native "attach to chat"
+ * tool surface (Claude's SDK tool, Pi's ToolProvider tool — issue #291). Those
+ * tools are wired at runtime/tool-provider construction time, before the
+ * specific session that will run them exists — a per-session circular
+ * dependency (build the tools -> need the session -> need the tools) — so the
+ * callback takes a session id and resolves the live record from openSessions
+ * when it actually fires, exactly like the HTTP endpoint below does by path.
+ */
+function attachToChatForSession(
+  sessionId: string,
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+): { ref: AttachmentRef } | { error: string } {
+  const record = openSessions.get(sessionId);
+  if (!record) return { error: "Session not found" };
+  return attachToChat(record, opts);
+}
+
 function approvalModeFrom(value: unknown): ApprovalMode | undefined {
   return value === "never" || value === "risky" || value === "always" || value === "autonomous" ? value : undefined;
 }
@@ -1580,12 +1601,12 @@ const commands: MeshCommand[] = [
   { name: "/help", description: "Show quick chat help.", kind: "server", run: () => ({
     text: "Use /commands to open the command list. Press Cmd/Ctrl+Enter to send a prompt. Attach files/images with the + button or by dragging them into the message box.",
   }) },
-  { name: "/login", description: "Connect a model provider in Terminal.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/login"] } },
-  { name: "/model", description: "Open the searchable model selector.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/model"] } },
-  { name: "/terminal", description: "Start the terminal agent in this workspace and stream its output.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix] } },
-  { name: "/config", description: "Show agent configuration.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "config"] } },
-  { name: "/list", description: "List installed agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "list"] } },
-  { name: "/update", description: "Update agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "update"] } },
+  { name: "/login", description: "Connect a model provider in Terminal.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/login"], requiresTty: true } },
+  { name: "/model", description: "Open the searchable model selector.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/model"], requiresTty: true } },
+  { name: "/terminal", description: "Start the terminal agent in this workspace and stream its output.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix], requiresTty: true } },
+  { name: "/config", description: "Show agent configuration.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "config"], requiresTty: true } },
+  { name: "/list", description: "List installed agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "list"], requiresTty: true } },
+  { name: "/update", description: "Update agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "update"], requiresTty: true } },
 ];
 
 // A local client whose send buffer has grown past this is behind on reads (slow
@@ -3815,6 +3836,17 @@ function startRelayIfConfigured() {
     if (advertiseResyncTimer) clearInterval(advertiseResyncTimer);
     advertiseResyncTimer = setInterval(() => scheduleAdvertise(), 60_000);
     advertiseResyncTimer.unref?.();
+    // Periodic online heartbeat. The relay flips the node's `online` flag
+    // fire-and-forget on socket connect/close with no ordering guard, so a
+    // late/racing `false` can pin a genuinely-connected node offline in the
+    // registry until some later reconnect wins. Re-affirming online on a steady
+    // interval keeps `last_seen_at` fresh and self-heals a lost race (the control
+    // plane treats a recent heartbeat as online — see NODE_ONLINE_TTL_MS). Fire one
+    // immediately so a reconnect corrects a stale `false` without waiting a full tick.
+    if (nodeHeartbeatTimer) clearInterval(nodeHeartbeatTimer);
+    void sendNodeHeartbeat();
+    nodeHeartbeatTimer = setInterval(() => void sendNodeHeartbeat(), NODE_HEARTBEAT_MS);
+    nodeHeartbeatTimer.unref?.();
   }
   console.log("[relay] connector enabled");
   return true;
@@ -4319,6 +4351,28 @@ let sessionAdvertiseTarget: { controlPlaneUrl: string; enrollmentToken: string }
 let advertiseTimer: ReturnType<typeof setTimeout> | undefined;
 let advertiseResyncTimer: ReturnType<typeof setInterval> | undefined;
 
+// How often the node re-affirms it's online to the control plane. Kept well
+// under the control plane's NODE_ONLINE_TTL_MS (90s) so a missed beat or two
+// doesn't flap a healthy node's status.
+const NODE_HEARTBEAT_MS = 30_000;
+let nodeHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Re-affirm this node's online status so the registry self-heals a lost
+ *  relay connect/close race (see the heartbeat wiring in the relay connector
+ *  and NODE_ONLINE_TTL_MS in the control plane). Best-effort: a missed beat is
+ *  covered by the next tick and the TTL window. */
+async function sendNodeHeartbeat() {
+  if (!sessionAdvertiseTarget) return;
+  try {
+    await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/heartbeat`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}` },
+    });
+  } catch {
+    // best effort; the next tick retries
+  }
+}
+
 
 async function advertiseNodeName(name: string, prevName?: string) {
   if (!sessionAdvertiseTarget) return;
@@ -4370,7 +4424,7 @@ function sessionNotifyLabel(record: SessionRecord | undefined, fallback = "A ses
   return agent || branch || fallback;
 }
 
-async function sendNotificationHint(input: { kind: string; sessionId?: string; title?: string; body?: string; targetSessionId?: string }) {
+async function sendNotificationHint(input: { kind: string; sessionId?: string; title?: string; body?: string; targetSessionId?: string; attentionId?: string }) {
   if (!sessionAdvertiseTarget) return;
   try {
     await modelAuthFetch("/internal/notifications/hints", { method: "POST", body: JSON.stringify(input) });
@@ -4493,16 +4547,37 @@ async function advertiseSessions() {
     // dropped; and with the remote flag off the map is empty, so the payload is
     // byte-identical to before.
     const agentServiceAddress = sessionAgentServiceAddress(record) ?? (record ? undefined : (await inMemorySessionLocations.lookup(s.id).catch(() => undefined))?.agentServiceAddress);
+    const approvalAttention = approvals.list()
+      .filter((a) => a.sessionId === s.id && a.status === "pending")
+      .map((a) => ({
+        id: a.id,
+        kind: "approval" as const,
+        severity: a.risk === "critical" ? "critical" as const : a.risk === "high" ? "error" as const : "warning" as const,
+        createdAt: new Date(a.createdAt).toISOString(),
+      }));
+    const questionAttention = questionManager.list()
+      .filter((q) => q.sessionId === s.id && q.status === "pending")
+      .map((q) => ({ id: q.id, kind: "question" as const, severity: "warning" as const, createdAt: new Date(q.createdAt).toISOString() }));
+    const failureAt = record?.lastFailureAt || (meta?.status === "failed" ? Date.parse(meta.updatedAt) : 0);
+    const failureAttention = failureAt
+      ? [{
+          id: "last-failure",
+          kind: (record?.source || meta?.source ? "automation" : "session") as "automation" | "session",
+          severity: "error" as const,
+          createdAt: new Date(failureAt).toISOString(),
+        }]
+      : [];
     return {
       sessionId: s.id,
-      status: pendingApproval ? "needs_action" : (record ? (sessionBusy(record) ? "working" : "idle") : "saved"),
-      needsAction: pendingApproval,
+      status: pendingApproval || failureAttention.length ? "needs_action" : (record ? (sessionBusy(record) ? "working" : "idle") : "saved"),
+      needsAction: pendingApproval || failureAttention.length > 0,
       source: record?.source || meta?.source,
       titleEnc: name ? relay!.sealString(name) : undefined,
       branch: record?.worktree?.branch || meta?.branch,
       agentServiceAddress,
       githubIssueUrl: record?.githubIssueUrl,
       prUrl: record?.prUrl,
+      attention: [...approvalAttention, ...questionAttention, ...failureAttention],
     };
   }));
   try {
@@ -5484,10 +5559,6 @@ function stripAnsi(text: string) {
     .replace(/\r/g, "\n");
 }
 
-function wrapWithSystemPty(spawnCommand: string, args: string[]) {
-  return { command: pythonCommand, args: [ptyRunnerScript, spawnCommand, ...args] };
-}
-
 function shellQuote(value: string) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -5622,18 +5693,20 @@ function runNativeCommand(command: MeshCommand) {
   const runId = `cmd-${Date.now()}`;
   broadcast({ type: "command.started", runId, command: command.name });
 
-  const wrapped = wrapWithSystemPty(command.spawn.command, command.spawn.args);
-  const child = spawn(wrapped.command, wrapped.args, {
-    cwd: repoRoot,
-    env: {
-      ...process.env,
-      PI_CODING_AGENT_DIR: piDir,
-      BIVY_WORKSPACE: active?.workspace ?? defaultWorkspace,
-      TERM: "xterm-256color",
-      FORCE_COLOR: "0",
-      NO_COLOR: "1",
-    },
-  });
+  const env = {
+    ...process.env,
+    PI_CODING_AGENT_DIR: piDir,
+    BIVY_WORKSPACE: active?.workspace ?? defaultWorkspace,
+    TERM: "xterm-256color",
+    FORCE_COLOR: "0",
+    NO_COLOR: "1",
+  };
+  // Native commands (login/model/config/etc.) need a TTY for prompts and the
+  // terminal UI. Everything else uses ordinary pipes: this avoids an extra
+  // Python process and PTY relay for non-interactive commands while preserving
+  // the old behavior for commands that genuinely require terminal semantics.
+  const launch = commandLaunch(command.spawn.command, command.spawn.args, command.spawn.requiresTty, pythonCommand, ptyRunnerScript);
+  const child = spawn(launch.command, launch.args, { cwd: repoRoot, env });
 
   commandProcesses.set(runId, child);
   child.stdout.on("data", (data) => {
@@ -6886,6 +6959,8 @@ function markSessionWorking(record: SessionRecord, activity: unknown) {
   record.isWorking = true;
   record.lastActivity = activity;
   record.workingStartedAt ||= Date.now();
+  // A new attempt resolves the prior turn's failure condition at its source.
+  record.lastFailureAt = undefined;
   metadata.touchSession(record.id, "working");
   if (!wasWorking) scheduleAdvertise(); // idle → working transition
 }
@@ -7101,6 +7176,9 @@ function attachSessionListeners(record: SessionRecord) {
           },
         });
       } else if (turnError) {
+        record.lastFailureAt = Date.now();
+        metadata.touchSession(record.id, "failed");
+        scheduleAdvertise();
         broadcast({ type: "session.error", sessionId: record.id, error: turnError });
         void sendNotificationHint({
           kind: "session_error",
@@ -7149,7 +7227,9 @@ async function refreshRecordAfterTui(record: SessionRecord) {
     record.unsubscribe = undefined;
     const rt = await ensureRuntimeAvailable(record.runtimeId);
     const workspace = record.worktree?.path || oldSession.cwd || record.workspace;
-    const runtimeSessionOptions = { workspace, toolProvider: integrations.toolProvider(), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+    // Refreshing an EXISTING record: its id is already known, so attach_to_chat
+    // (see toolProvider's SessionIdRef doc) can be wired live, not deferred.
+    const runtimeSessionOptions = { workspace, toolProvider: integrations.toolProvider({ current: record.id }), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
     const { session, warning } = await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: record.sessionFile });
     record.session = session;
     record.sessionFile = session.sessionFile ?? record.sessionFile;
@@ -7670,7 +7750,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
     );
   }
 
-  const runtimeSessionOptions = { workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+  // A brand-new session's id isn't known until runtimeHost.{create,open}Session
+  // resolves below, but the ToolProvider (and its attach_to_chat tool) must be
+  // built now, up front — so hand it this box instead of a session id and fill
+  // `.current` in the moment `sessionId` is (see toolProvider's SessionIdRef doc).
+  const attachSessionIdRef: SessionIdRef = {};
+  const runtimeSessionOptions = { workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(attachSessionIdRef), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
   // Stage 2/3: prefer re-attaching to a still-live remote session — routed to its
   // OWN agent service — over re-opening a fresh copy from disk. Falls back to
   // open/create when nothing live is there.
@@ -7688,6 +7773,10 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
       ? await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: requestedSessionFile })
       : await runtimeHost.createSession(rt, runtimeSessionOptions));
   const sessionId = session.id;
+  // Now that it's known, unblock any attach_to_chat call this session's agent
+  // makes (see attachSessionIdRef above) — set synchronously, well before any
+  // prompt (and so any tool call) can reach this session.
+  attachSessionIdRef.current = sessionId;
   // Resuming an existing session: restore Bivy's canonical name onto the runtime
   // session when the runtime didn't itself (the Claude Code adapter resumes by id
   // and starts nameless). Without this getName() is undefined, so opening a
@@ -7736,6 +7825,30 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
       }
     } catch {
       // Injection is best-effort; never block session creation.
+    }
+  }
+  // Bivy-owned tools (attach_to_chat, …): make them discoverable to non-SDK
+  // agents by adding a `bivy` server (run via `bivy mcp-serve`) to the agent's
+  // config. Default-on (not gated on BIVY_MCP_PROXY) — it only ADDS a safe,
+  // session-scoped, restored capability the agent already has via env, so the
+  // chat can receive files. Claude/Pi expose these natively (in-process SDK MCP
+  // server / integration ToolProvider), so the tool-interception runtimes are
+  // skipped to avoid a duplicate registration.
+  if (!rt.capabilities.toolInterception) {
+    try {
+      const res = injectBivyToolsForSession(rt.id, {
+        workspace: sessionWorkspace,
+        home: os.homedir(),
+        sessionId,
+        endpoint: process.env.BIVY_MCP_ENDPOINT,
+      });
+      if (res.injected.length) {
+        const prev = record.mcpRestore;
+        record.mcpRestore = () => { try { res.restore(); } finally { prev?.(); } };
+        console.log(`MCP tools: added bivy server to ${res.injected.length} config(s) for session ${sessionId}`);
+      }
+    } catch {
+      // Best-effort; never block session creation.
     }
   }
   rememberSession(record);
@@ -8229,6 +8342,7 @@ approvals.onRequest((request: ApprovalRequest) => {
     void sendNotificationHint({
       kind: "approval_requested",
       sessionId: request.sessionId,
+      attentionId: request.id,
       title: "Approval needed",
       body: `${sessionNotifyLabel(rec)} wants to run something — tap to approve or deny.`,
     });
@@ -8501,6 +8615,9 @@ app.get("/api/status", (_req, res) => {
     ok: true,
     nodeId: identity.nodeId,
     name: identity.name,
+    // The running daemon's package version, so `bivy status` (and any client)
+    // can report which build the node is on.
+    version: currentVersion() ?? null,
     port,
     workspace: defaultWorkspace,
     appDir,

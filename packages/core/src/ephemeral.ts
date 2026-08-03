@@ -709,6 +709,9 @@ export interface BootstrapOpts {
    *  the device's "Destroy when the agent finishes" toggle, so it no longer needs
    *  the launching device to stay online. */
   teardownOnAgentFinish?: boolean;
+  /** DEBUG: disable Fly `auto_destroy` so a boot-failed machine stays (stopped)
+   *  with its logs retained, instead of vanishing. Staging diagnosis only. */
+  debugKeepMachine?: boolean;
   /** Rebuild-resume (Gap B): the session id to restore from its control-plane
    *  snapshot on boot (exported as `BIVY_RESTORE`). The machine reuses this
    *  session's node id + room key so it can fetch and decrypt the snapshot. */
@@ -1233,7 +1236,9 @@ const fly: ProviderAdapter = {
         region: config.region || "iad",
         config: {
           image: config.image || "ubuntu:24.04",
-          auto_destroy: true,
+          // DEBUG: when keeping failed machines, don't auto-destroy — a boot
+          // failure then stops the machine (logs retained) instead of vanishing.
+          auto_destroy: bootstrap?.debugKeepMachine ? false : true,
           restart: { policy: "no" },
           guest: { cpu_kind: "shared", cpus: Number(config.cpus) || guest.cpus, memory_mb: Number(config.memoryMb) || guest.memoryMb },
           metadata: { bivy: "ephemeral" },
@@ -2099,6 +2104,9 @@ export interface LaunchOpts {
   setupId?: string;
   /** Destroy this machine when the agent emits agent_end. */
   teardownOnAgentFinish?: boolean;
+  /** DEBUG: keep a boot-failed machine alive for log inspection (disables Fly
+   *  `auto_destroy`). See `EPHEMERAL_KEEP_FAILED_MACHINES` in the web flags. */
+  debugKeepMachine?: boolean;
   /** Opt the machine into the hosted GitHub work queue on boot (see
    *  `BootstrapOpts.hostedTasks`). Off by default so a plain "Launch machine"
    *  from the Ephemeral sheet keeps its pre-#532 behavior. */
@@ -2274,6 +2282,7 @@ export async function launchEphemeralMachine(
     hostedMint: opts.hostedMint,
     provider: opts.provider,
     teardownOnAgentFinish: opts.teardownOnAgentFinish,
+    debugKeepMachine: opts.debugKeepMachine,
     restoreSessionId: opts.restoreSessionId,
   };
   // Both forms of the same boot intent: `userData` is the cloud-init payload VM
@@ -2405,6 +2414,20 @@ export function ephemeralMachineFromCorrelation(c: SessionCorrelation): Ephemera
     setupId: c.setupId,
     repo: c.repo,
   };
+}
+
+/** True when a node is an ephemeral machine (Sprite/E2B/Fly) rather than a
+ *  persistent one. Two independent signals, either sufficient: the `eph-*` node
+ *  id every ephemeral machine is launched with (see `launchEphemeral`), or the
+ *  non-secret `ephemeral` identity block the control-plane registry attaches
+ *  (see `ephemeralMachineFromNode`). A persistent node has neither, and must
+ *  never be swept into the ephemeral wake/rebuild path — it reconnects on its
+ *  own when its daemon rejoins the relay. */
+export function isEphemeralNode(node: {
+  id: string;
+  ephemeral?: { provider?: string; machineId?: string };
+}): boolean {
+  return node.id.startsWith("eph-") || !!(node.ephemeral?.provider && node.ephemeral?.machineId);
 }
 
 export function ephemeralMachineFromNode(node: {

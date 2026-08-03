@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { injectTomlMcp, injectYamlMcp } from "../src/harness/mcp-config-formats.js";
+import { injectTomlMcp, injectYamlMcp, insertTomlServer, hasTomlServer } from "../src/harness/mcp-config-formats.js";
 
 let failures = 0;
 function check(name: string, fn: () => void) {
@@ -101,6 +101,37 @@ check("yaml: block-sequence args are left untouched (safe no-op on cmd only)", (
 
 check("yaml: no extensions → no-op", () => {
   assert.deepEqual(injectYamlMcp("provider: openai\nmodel: gpt-4o\n", launcher).rewritten, []);
+});
+
+// ---- insertTomlServer (Bivy's OWN server, #290) --------------------------
+const bivySpec = { command: "bivy", args: ["mcp-serve"], env: { BIVY_SESSION_ID: "s1", BIVY_MCP_ENDPOINT: "http://127.0.0.1:4317" } };
+
+check("insertToml: appends an [mcp_servers.bivy] table to existing content", () => {
+  const src = `model = "o3"\n\n[mcp_servers.fs]\ncommand = "mcp-fs"\nargs = []\n`;
+  const out = insertTomlServer(src, "bivy", bivySpec);
+  assert.equal(out.inserted, true);
+  assert.ok(out.content.startsWith(src), "existing content is preserved verbatim");
+  assert.match(out.content, /\[mcp_servers\.bivy\]/);
+  assert.match(out.content, /command = "bivy"/);
+  assert.match(out.content, /args = \["mcp-serve"\]/);
+  assert.match(out.content, /env = \{ BIVY_SESSION_ID = "s1", BIVY_MCP_ENDPOINT = "http:\/\/127\.0\.0\.1:4317" \}/);
+  assert.ok(out.content.endsWith("\n"));
+});
+
+check("insertToml: creates content from empty (no leading blank line)", () => {
+  const out = insertTomlServer("", "bivy", { command: "bivy", args: ["mcp-serve"] });
+  assert.equal(out.inserted, true);
+  assert.ok(out.content.startsWith("[mcp_servers.bivy]"));
+  assert.doesNotMatch(out.content, /env =/, "no env line when spec has no env");
+});
+
+check("insertToml: idempotent when the server table already exists", () => {
+  const src = `[mcp_servers.bivy]\ncommand = "bivy"\nargs = ["mcp-serve"]\n`;
+  const out = insertTomlServer(src, "bivy", bivySpec);
+  assert.equal(out.inserted, false);
+  assert.equal(out.content, src, "untouched");
+  assert.equal(hasTomlServer(src, "bivy"), true);
+  assert.equal(hasTomlServer(src, "other"), false);
 });
 
 if (failures > 0) {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
-import { ephemeralMachineFromNode } from "../src/index.js";
+import { ephemeralMachineFromNode, isEphemeralNode } from "../src/index.js";
 
 describe("ephemeralMachineFromNode (cross-device resume — Gap A)", () => {
   it("reconstructs a wakeable machine from a node's non-secret ephemeral identity", () => {
@@ -43,5 +43,31 @@ describe("ephemeralMachineFromNode (cross-device resume — Gap A)", () => {
   it("marks the reconstructed machine as stopped so the resume path wakes it", () => {
     const machine = ephemeralMachineFromNode({ id: "eph-w", ephemeral: { provider: "sprites", machineId: "m" } });
     expect(machine?.status).toBe("stopped");
+  });
+});
+
+describe("isEphemeralNode (persistent nodes must not enter the ephemeral resume path)", () => {
+  it("recognises an ephemeral node by its eph-* id alone", () => {
+    expect(isEphemeralNode({ id: "eph-abc123" })).toBe(true);
+  });
+
+  it("recognises an ephemeral node by its control-plane identity block alone", () => {
+    // A non-`eph-` id but a populated ephemeral block still counts.
+    expect(isEphemeralNode({ id: "node-1", ephemeral: { provider: "sprites", machineId: "m" } })).toBe(true);
+  });
+
+  it("returns false for a persistent node (no eph- id, no ephemeral block)", () => {
+    expect(isEphemeralNode({ id: "node-1", name: "laptop" } as { id: string })).toBe(false);
+  });
+
+  it("returns false for an offline persistent node so a send does not trigger an impossible rebuild", () => {
+    // Regression: an offline persistent node was misclassified as resumable and
+    // swept into reprovisionEphemeral, throwing "No record of the machine to rebuild".
+    expect(isEphemeralNode({ id: "srv-prod-01" } as { id: string })).toBe(false);
+  });
+
+  it("returns false when the ephemeral block is incomplete on a non-eph- id", () => {
+    expect(isEphemeralNode({ id: "node-2", ephemeral: { provider: "sprites" } })).toBe(false);
+    expect(isEphemeralNode({ id: "node-3", ephemeral: { machineId: "sbx" } })).toBe(false);
   });
 });

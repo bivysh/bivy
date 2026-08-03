@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`attach_to_chat` reaches every agent, not just Claude/Pi** (#290). A new
+  Bivy-owned MCP server, `bivy mcp-serve`, exposes the outbound-attachment
+  capability as a first-class tool. It's auto-injected into a non-SDK agent's
+  session-local JSON MCP config at session start (created when absent, restored
+  on close), so codex/gemini/opencode/aider/… discover `attach_to_chat` in their
+  own tool list instead of having to be told about a shell command. The tool
+  POSTs to the same `POST /api/session/:id/attach` endpoint `bivy attach` uses.
+  Injected into JSON MCP configs (claude/gemini/opencode/generic `.mcp.json`) and
+  Codex's TOML (`~/.codex/config.toml`, `[mcp_servers.bivy]`). Claude and Pi keep
+  their native in-process registration; tool-interception runtimes are skipped to
+  avoid a duplicate. Goose YAML config is a follow-up.
+
+- **Native `attach_to_chat` tool** for Claude and Pi sessions — the stronger,
+  tool-based sibling of #297's discoverability hint. Claude sees it as a real
+  MCP tool (an in-process server registered via the SDK's
+  `createSdkMcpServer`/`tool`); Pi sees it through the same node-hosted
+  `ToolProvider` mechanism connected integrations already use. Both call the
+  same `attachToChat()` helper `bivy attach`/`POST /api/session/:id/attach` use,
+  so a native tool call renders identically to the CLI path and goes through the
+  same approval governance as any other tool call. No wiring needed per agent —
+  the daemon threads one `attachToChat(sessionId, opts)` callback through both.
+
+## [0.5.0] - 2026-08-02
+
 ### Changed
 
 - Agent-sent chat attachments now render **grouped under the turn's final

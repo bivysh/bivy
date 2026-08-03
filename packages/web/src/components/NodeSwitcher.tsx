@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
-import { EphemeralSheet } from "./Ephemeral.js";
 import { AddNodeSheet } from "./AddNodeSheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { useModalEscape } from "../modalStack.js";
@@ -16,10 +15,8 @@ import type { EphemeralNodeConfig, EphemeralMachine } from "@bivy/core";
  * there is only one node.
  */
 export function NodeSwitcher() {
-  const { nodes, currentNodeId, status, activeSessionId, sessions } = useAppState();
+  const { nodes, currentNodeId, status, activeSessionId, sessions, draftEphemeralConfig } = useAppState();
   const [open, setOpen] = useState(false);
-  const [ephemeralOpen, setEphemeralOpen] = useState(false);
-  const [ephemeralConfig, setEphemeralConfig] = useState<EphemeralNodeConfig | undefined>();
   const [ephemeralConfigs, setEphemeralConfigs] = useState<EphemeralNodeConfig[]>([]);
   const [ephemeralMachines, setEphemeralMachines] = useState<EphemeralMachine[]>([]);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
@@ -51,7 +48,11 @@ export function NodeSwitcher() {
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId);
   const sessionNodeId = activeSession?.nodeId || currentNodeId;
   const current = nodes.find((n) => n.id === sessionNodeId);
-  const label = current?.name || sessionNodeId || "Node";
+  // A runner picked for the (not-yet-created) draft session shows as the current
+  // selection — offline/pending until the first message launches it.
+  const draftRunner = !activeSessionId ? draftEphemeralConfig : null;
+  const label = draftRunner ? draftRunner.name : current?.name || sessionNodeId || "Node";
+  const showOnline = draftRunner ? false : current?.online;
   // Ephemeral machines enroll as real account nodes (id `eph-…`) once they boot,
   // so they'd otherwise show up twice: here under "Your nodes" AND under the
   // ephemeral section for their configured setup. Keep them out of the
@@ -92,10 +93,10 @@ export function NodeSwitcher() {
             dot, sometimes a spinner) with no text — invisible to screen
             readers and easy to miss for colorblind users. */}
         <span
-          className={`node-dot${reconnecting ? " connecting" : current?.online ? " online" : ""}`}
+          className={`node-dot${reconnecting ? " connecting" : showOnline ? " online" : ""}`}
           aria-hidden
         />
-        <span className="sr-only">{reconnecting ? "Reconnecting" : current?.online ? "Online" : "Offline"} — </span>
+        <span className="sr-only">{reconnecting ? "Reconnecting" : showOnline ? "Online" : "Offline"} — </span>
         <span className="node-switcher-name">{label}</span>
         {!locked && <span className="node-switcher-caret">▾</span>}
       </button>
@@ -130,31 +131,32 @@ export function NodeSwitcher() {
             <>
               <div className="node-menu-head">Ephemeral machines</div>
               {ephemeralConfigs.map((config) => {
-                // Each config is a node template. Picking it here launches a
-                // fresh machine bound to the new session; if its machine is
-                // already initialized and owned by a session, the config is "in
-                // use" and can't be selected for another session.
+                // Each runner is a template. Picking it just targets the draft at
+                // it — the first message launches a fresh machine bound to the new
+                // session (no "launch" button). If its machine is already owned by
+                // a session, it's "in use" and can't be picked for another.
                 const inUse = configInUse(config.id);
+                const picked = config.id === draftRunner?.id;
                 return (
                   <button
                     key={config.id}
-                    className="node-menu-item"
+                    className={`node-menu-item${picked ? " active" : ""}`}
                     role="menuitem"
                     disabled={inUse}
-                    title={inUse ? "In use by another session — a config runs one machine per session" : undefined}
+                    title={inUse ? "In use by another session — a runner runs one machine per session" : undefined}
                     onClick={() => {
                       if (inUse) return;
                       setOpen(false);
-                      setEphemeralConfig(config);
-                      setEphemeralOpen(true);
+                      controller.pickDraftEphemeralRunner(config);
                     }}
                   >
                     <span className="node-dot" aria-hidden />
-                    <span className="sr-only">{inUse ? "In use — " : "Available — "}</span>
+                    <span className="sr-only">{inUse ? "In use — " : picked ? "Selected — " : "Available — "}</span>
                     <span className="node-menu-name">{config.name}</span>
                     {inUse
-                      ? <span className="chip" title="This config's machine belongs to another session">In use</span>
+                      ? <span className="chip" title="This runner's machine belongs to another session">In use</span>
                       : <span className="chip">{config.provider}</span>}
+                    {picked && <span className="node-menu-check">✓</span>}
                   </button>
                 );
               })}
@@ -191,7 +193,6 @@ export function NodeSwitcher() {
           onConfirm={() => { setConfirmSignOut(false); controller.signOut(); }}
         />
       )}
-      {ephemeralOpen && <EphemeralSheet config={ephemeralConfig} onClose={() => setEphemeralOpen(false)} />}
       {addNodeOpen && <AddNodeSheet onClose={() => setAddNodeOpen(false)} />}
     </div>
   );

@@ -15,7 +15,8 @@
 // this correct baseline, not prerequisites for it.
 
 import type { AttachmentRef, ConnectionStatus, PromptAttachment, ServerEvent } from "./protocol.js";
-import type { AccountNode } from "./account.js";
+import type { AccountNode, EphemeralNodeConfig } from "./account.js";
+import type { InboxAdvert } from "./inbox.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml, extractRemoteImageUrls } from "./markdown.js";
 import { eventKind, normalizeEventType, toolCallId, toolInput, toolName } from "./tool-activity.js";
@@ -126,6 +127,8 @@ export interface SessionSummary {
    *  session or a cold sessions.list snapshot never reads as a finished run
    *  someone hasn't looked at yet. */
   finishedAt?: number;
+  /** Content-free unresolved conditions from the account session index. */
+  attention?: InboxAdvert[];
 }
 
 export type ToolStatus = "running" | "done";
@@ -179,6 +182,8 @@ export interface ModelInfo {
 
 export interface RuntimeInfo {
   id: string;
+  /** Default communication path: structured protocol/SDK, JSON pipe, plain pipe, or native terminal. */
+  executionMode?: "protocol" | "structured-pipe" | "pipe" | "pty";
   displayName?: string;
   name?: string;
   [k: string]: unknown;
@@ -246,6 +251,7 @@ export interface UserQuestionRequest {
   id: string;
   sessionId?: string;
   questions: UserQuestionItem[];
+  createdAt?: number;
 }
 
 /** Reasoning/thinking capability of the current model. */
@@ -608,6 +614,12 @@ export interface AppState {
   draftBranch: string | null;
   /** Sandbox tier chosen for the next new session (draft only); null = node default. */
   draftSandbox: SandboxTier | null;
+  /** An ephemeral runner (saved config) chosen as the target for the next new
+   *  session, before any machine exists. Null = run on the currently-connected
+   *  node. When set, the first message launches a fresh machine from this config
+   *  and binds the session to it — no explicit "launch" step. Cleared once the
+   *  machine is launched (the draft then targets a real node) or the draft resets. */
+  draftEphemeralConfig: EphemeralNodeConfig | null;
   /** Current node's settings (Settings → Nodes), or null until fetched. */
   nodeSettings: NodeSettings | null;
   providers: ProviderInfo[];
@@ -621,6 +633,12 @@ export interface AppState {
   /** Voice-input config (preferred provider + stored keys), or null until fetched. */
   sttConfig: SttConfig | null;
   oauth: OauthState | null;
+  /** A launched ephemeral runner came online with no usable model credentials
+   *  (nothing to seed from this device, no peer vault, no hosted escrow) — the
+   *  first-run subscription-OAuth prompt. `nodeId` scopes it to the runner that
+   *  needs it; cleared automatically once any provider becomes configured (that
+   *  same login is then escrowed so future runners inherit it). Null otherwise. */
+  needsModelAuth: { nodeId: string; provider: string } | null;
   githubApp: GithubAppState | null;
   /** Cost/token/plan-quota for the active session (display-only), or null. */
   usage: Usage | null;
@@ -743,6 +761,7 @@ export function initialState(): AppState {
     branchesLoading: false,
     draftBranch: null,
     draftSandbox: null,
+    draftEphemeralConfig: null,
     nodeSettings: null,
     providers: [],
     providerAuth: null,
@@ -751,6 +770,7 @@ export function initialState(): AppState {
     rulesets: [],
     sttConfig: null,
     oauth: null,
+    needsModelAuth: null,
     githubApp: null,
     usage: null,
     nodeStats: null,
@@ -844,12 +864,23 @@ function eventThinkingDelta(event: any): { kind: "full" | "delta" | "none"; text
 export class SessionStore {
   private state: AppState = initialState();
   private listeners = new Set<() => void>();
+  /** Coalesce high-frequency streaming state notifications to one browser paint. */
+  private notifyPending = false;
+  private notifyHandle: number | ReturnType<typeof setTimeout> | null = null;
   private draft: Draft = freshDraft();
   /** Agent-sent attachments buffered during the current turn. Flushed at the
    *  turn boundary onto the turn's final assistant bubble (see
    *  flushPendingAgentAttachments) so a chip reads as part of the reply, not as a
    *  standalone entry stranded mid-turn where `bivy attach` happened to run. */
   private pendingAgentAttachments: Array<{ attachment: PromptAttachment; caption: string }> = [];
+  /** Every agent-sent attachment ever shown for a session, keyed by content hash
+   *  (append-only — an agent can't "unsend" one). A later history snapshot that
+   *  omits one — a resume-race reconcile, or any transcript built from raw runtime
+   *  messages without the durable outbound-attachment overlay — is therefore
+   *  lossy, and must not be allowed to erase the chip. withStickyAgentAttachments
+   *  re-applies any missing ones; keying by hash also de-dupes a re-broadcast of a
+   *  live `attachment` event the transcript already carries. */
+  private knownAgentAttachmentsBySession = new Map<string, Map<string, { attachment: PromptAttachment; caption: string }>>();
   /** The user's last-used model, remembered across sessions and reloads. Honored
    *  by the models.list reducer *only* while no session is active (a fresh
    *  draft), so a new session opens on the same model the user last picked. The
@@ -1194,6 +1225,21 @@ export class SessionStore {
     this.set({
       activeSessionId: sessionId,
       activeRuntimeId: known?.runtimeId ?? null,
+      // The composer is shared by drafts and live sessions. Replace the draft's
+      // agent/model paint as soon as an existing row is opened; otherwise the
+      // pills keep claiming that this session uses whatever was last selected
+      // on the New session screen until the history/models round-trips arrive.
+      // The row already has authoritative agent metadata. Model metadata is not
+      // part of sessions.list, so show the neutral loading/default state until
+      // the session-scoped models.list response supplies the real selection.
+      currentAgentName:
+        known?.agentName ||
+        agentLabel(this.state.runtimes.find((r) => r.id === known?.runtimeId)) ||
+        "",
+      currentModel: null,
+      currentModelId: null,
+      models: [],
+      modelsRuntimeId: known?.runtimeId ?? null,
       // Opening a row is how the user "sees" it — stamp lastSeenAt right away
       // so a finished-but-unseen row's indicator clears the instant they look,
       // rather than waiting on a node round-trip to confirm anything.
@@ -1233,7 +1279,45 @@ export class SessionStore {
 
   private set(next: Partial<AppState>): void {
     this.state = { ...this.state, ...next };
-    for (const l of this.listeners) l();
+    // Streaming events can update the store several times in one transport
+    // tick (draft text, tool state, working label). Delay only while a turn is
+    // active so React subscribers repaint at most once per frame; lifecycle and
+    // completed-turn updates remain synchronous.
+    if (this.state.working) {
+      this.scheduleNotify();
+      return;
+    }
+    this.flushNotify();
+  }
+
+  private scheduleNotify(): void {
+    if (this.notifyPending) return;
+    this.notifyPending = true;
+    const callback = () => {
+      this.notifyPending = false;
+      this.notifyHandle = null;
+      for (const listener of this.listeners) listener();
+    };
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      this.notifyHandle = globalThis.requestAnimationFrame(callback);
+    } else {
+      this.notifyHandle = setTimeout(callback, 16);
+    }
+  }
+
+  private flushNotify(): void {
+    if (!this.notifyPending) {
+      for (const listener of this.listeners) listener();
+      return;
+    }
+    const handle = this.notifyHandle;
+    this.notifyPending = false;
+    this.notifyHandle = null;
+    if (handle !== null) {
+      if (typeof globalThis.cancelAnimationFrame === "function" && typeof handle === "number") globalThis.cancelAnimationFrame(handle);
+      else clearTimeout(handle as ReturnType<typeof setTimeout>);
+    }
+    for (const listener of this.listeners) listener();
   }
 
   /**
@@ -1531,6 +1615,12 @@ export class SessionStore {
       followupsBySession: {},
       error: null,
       notice: null,
+      // First-run model-auth prompt is scoped to a specific runner; a node
+      // switch means it no longer applies to whatever we're now looking at.
+      needsModelAuth: null,
+      // A node switch (incl. binding a freshly-launched ephemeral runner) means
+      // the "launch this runner on first send" intent is spent/irrelevant.
+      draftEphemeralConfig: null,
       // Per-node settings (name, default agent/model, GitHub prompt, sync
       // config, …) must never survive a switch — otherwise a still-editable
       // form can keep showing the *previous* node's settings under the
@@ -1547,6 +1637,12 @@ export class SessionStore {
   /** Show (or clear, with "") a transient success/confirmation banner. */
   setNotice(message: string): void {
     this.set({ notice: message });
+  }
+
+  /** Set (or clear, with null) the first-run "sign in to your model" prompt for a
+   *  freshly-launched ephemeral runner. See `AppState.needsModelAuth`. */
+  setNeedsModelAuth(v: { nodeId: string; provider: string } | null): void {
+    this.set({ needsModelAuth: v });
   }
 
   /** Append a local system message to the active transcript (client-only, not
@@ -1570,6 +1666,11 @@ export class SessionStore {
   }
 
   /** Repo chosen for the next new session (cleared once the session is created). */
+  /** Pick (or clear, with null) the ephemeral runner the next new session will
+   *  launch on its first message. See `AppState.draftEphemeralConfig`. */
+  setDraftEphemeralConfig(config: EphemeralNodeConfig | null): void {
+    this.set({ draftEphemeralConfig: config });
+  }
   setDraftRepo(slug: string | null): void {
     this.set({ draftRepo: slug });
   }
@@ -1726,6 +1827,8 @@ export class SessionStore {
       usage: null,
       changes: null,
       checkpoints: [],
+      // A brand-new draft hasn't picked an ephemeral runner yet.
+      draftEphemeralConfig: null,
     });
   }
 
@@ -1954,6 +2057,7 @@ export class SessionStore {
         });
         if (sid) this.dropSessionCommands(sid);
         if (sid) this.dropFollowups(sid);
+        if (sid) this.knownAgentAttachmentsBySession.delete(sid);
         if (sid && sid === this.state.activeSessionId) this.resetActiveSession();
         return;
       }
@@ -2130,7 +2234,7 @@ export class SessionStore {
         // Same reasoning as approval.created above: a clarifying question is a
         // "needs your response" moment worth surfacing at the top of the list.
         this.updateSessionRow(e.sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
-        const request: UserQuestionRequest = { id, sessionId: e.sessionId ? String(e.sessionId) : undefined, questions };
+        const request: UserQuestionRequest = { id, sessionId: e.sessionId ? String(e.sessionId) : undefined, questions, createdAt: Number(e.createdAt) || Date.now() };
         this.set({ questions: [...this.state.questions.filter((q) => q.id !== id), request] });
         return;
       }
@@ -2281,6 +2385,13 @@ export class SessionStore {
         const providers = Array.isArray(e.providers) ? (e.providers as ProviderInfo[]) : [];
         // A configured provider we were managing → refresh its auth detail too.
         this.set({ providers });
+        // The runner now has a usable model provider — the first-run OAuth prompt
+        // (if it was showing) is satisfied, whether the login just completed here
+        // or a peer/hosted-escrow sync landed the vault. Auto-dismiss it so a
+        // transient "no creds yet" prompt disappears once creds arrive.
+        if (this.state.needsModelAuth && providers.some((p) => p.configured)) {
+          this.set({ needsModelAuth: null });
+        }
         return;
       }
       case "provider.auth": {
@@ -2576,8 +2687,15 @@ export class SessionStore {
       this.historyRaw.set(sessionId, { messages: full, count, historyHash });
       if (historyHash) this.onHistoryPersist?.(sessionId, full, count, historyHash);
     }
-    const rendered = this.withInlineImageRefs(this.withCachedAttachments(renderHistory(full)));
-    if (sessionId) this.cacheTranscript(sessionId, rendered);
+    const rendered = this.withCachedAttachments(renderHistory(full));
+    // Record the agent attachments this snapshot carries, then re-apply any it
+    // dropped: agent attachments are append-only, so a snapshot missing one the
+    // session already showed (a resume-race reconcile, or a transcript built from
+    // raw runtime messages without the outbound-attachment overlay) is lossy and
+    // must not erase the chip.
+    this.rememberAgentAttachments(sessionId, rendered);
+    const withAttachments = this.withInlineImageRefs(this.withStickyAgentAttachments(sessionId, rendered));
+    if (sessionId) this.cacheTranscript(sessionId, withAttachments);
     // A history snapshot can arrive for a session the user has already switched
     // away from (slow radio + fast taps): its request was in flight when they
     // opened another. Refresh that session's caches above, but never let it
@@ -2612,7 +2730,7 @@ export class SessionStore {
       activeTitle: e.name || this.state.activeTitle,
       currentAgentName: e.agentName || this.state.currentAgentName,
       github: githubContext(e),
-      transcript: this.withPendingUserEntries(rendered),
+      transcript: this.withPendingUserEntries(withAttachments),
       working: Boolean(e.isStreaming),
       opening: false,
       usage: normalizeUsage(e.usage),
@@ -2667,29 +2785,85 @@ export class SessionStore {
     if (!buffered.length) return;
     this.pendingAgentAttachments = [];
     const transcript = this.state.transcript;
-    // Turn boundary: the last user message. The final bubble must belong to THIS
-    // turn, never an earlier turn's reply.
+    // Skip any whose bytes the transcript already carries (a reconnect/resume that
+    // re-broadcasts a live `attachment` event history already grouped in) so a
+    // replay never doubles the chip.
+    const present = this.attachmentHashesIn(transcript);
+    const fresh = buffered.filter((b) => !b.attachment.hash || !present.has(b.attachment.hash));
+    const next = this.placeAgentAttachments(transcript, fresh);
+    if (next !== transcript) this.set({ transcript: next });
+    this.rememberAgentAttachments(this.state.activeSessionId, this.state.transcript);
+  }
+
+  /** The set of attachment content hashes present anywhere in a transcript. */
+  private attachmentHashesIn(transcript: TranscriptEntry[]): Set<string> {
+    const hashes = new Set<string>();
+    for (const e of transcript) for (const a of e.attachments ?? []) if (a.hash) hashes.add(a.hash);
+    return hashes;
+  }
+
+  /** Index of the assistant prose bubble agent attachments hang on: the last
+   *  attachment-free assistant text entry since the most recent user message (the
+   *  turn's final reply). -1 when the turn has no such bubble. */
+  private agentAttachmentTarget(transcript: TranscriptEntry[]): number {
     let turnStart = -1;
     for (let i = transcript.length - 1; i >= 0; i--) {
       if (transcript[i]!.role === "user") { turnStart = i; break; }
     }
-    // Final assistant prose bubble of the turn: assistant role, has text, not a
-    // tool card, and not itself an attachment entry.
-    let target = -1;
     for (let i = transcript.length - 1; i > turnStart; i--) {
       const e = transcript[i]!;
-      if (e.role === "assistant" && !e.tool && e.text && !(e.attachments && e.attachments.length)) { target = i; break; }
+      if (e.role === "assistant" && !e.tool && e.text && !(e.attachments && e.attachments.length)) return i;
     }
-    const chips = buffered.map((b) => b.attachment);
+    return -1;
+  }
+
+  /** Group `items` onto the turn's final assistant bubble, or append them as their
+   *  own caption-carrying entries when the turn has no prose bubble. Returns the
+   *  same array reference unchanged when there is nothing to place. */
+  private placeAgentAttachments(
+    transcript: TranscriptEntry[],
+    items: Array<{ attachment: PromptAttachment; caption: string }>,
+  ): TranscriptEntry[] {
+    if (!items.length) return transcript;
+    const chips = items.map((b) => b.attachment);
+    const target = this.agentAttachmentTarget(transcript);
     if (target >= 0) {
-      this.set({
-        transcript: transcript.map((e, i) => (i === target ? { ...e, attachments: [...(e.attachments ?? []), ...chips] } : e)),
-      });
-    } else {
-      // No prose this turn — keep each attachment as its own entry (with caption),
-      // preserving the pre-grouping behaviour for the caption-only case.
-      this.set({ transcript: [...transcript, ...buffered.map((b) => ({ id: nextId(), role: "assistant" as const, text: b.caption, attachments: [b.attachment] }))] });
+      return transcript.map((e, i) => (i === target ? { ...e, attachments: [...(e.attachments ?? []), ...chips] } : e));
     }
+    // No prose this turn — keep each attachment as its own entry (with caption),
+    // preserving the pre-grouping behaviour for the caption-only case.
+    return [...transcript, ...items.map((b) => ({ id: nextId(), role: "assistant" as const, text: b.caption, attachments: [b.attachment] }))];
+  }
+
+  /** Record every agent-sent attachment in a rendered transcript into the durable
+   *  per-session map, keyed by hash (append-only). Only assistant entries carry
+   *  agent attachments; user uploads live on user entries and are ignored. */
+  private rememberAgentAttachments(sessionId: string | null, transcript: TranscriptEntry[]): void {
+    if (!sessionId) return;
+    let map = this.knownAgentAttachmentsBySession.get(sessionId);
+    for (const e of transcript) {
+      if (e.role !== "assistant" || !e.attachments) continue;
+      for (const a of e.attachments) {
+        if (!a.hash) continue;
+        if (!map) { map = new Map(); this.knownAgentAttachmentsBySession.set(sessionId, map); }
+        // Caption only matters for the standalone (no-prose-in-turn) fallback; a
+        // grouped chip's entry text is the reply prose, not a caption, so default
+        // to empty rather than risk re-adding prose as a caption.
+        if (!map.has(a.hash)) map.set(a.hash, { attachment: a, caption: "" });
+      }
+    }
+  }
+
+  /** Re-apply any known agent attachment a (possibly lossy) snapshot dropped, so a
+   *  reconcile that lacks the outbound-attachment overlay can't erase a chip the
+   *  session already showed. No-op once every known hash is present. */
+  private withStickyAgentAttachments(sessionId: string | null, transcript: TranscriptEntry[]): TranscriptEntry[] {
+    if (!sessionId) return transcript;
+    const known = this.knownAgentAttachmentsBySession.get(sessionId);
+    if (!known || known.size === 0) return transcript;
+    const present = this.attachmentHashesIn(transcript);
+    const missing = [...known.values()].filter((k) => k.attachment.hash && !present.has(k.attachment.hash));
+    return this.placeAgentAttachments(transcript, missing);
   }
 
   /** Fold a live field update (status, branch, PR link, …) onto a session-list

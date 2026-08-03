@@ -18,6 +18,7 @@ import {
   fetchMe,
   fetchGithubApp,
   fetchGithubQueue,
+  fetchAutomationRuns,
   assignWorkItem,
   deleteWorkItem,
   clearWorkQueue,
@@ -66,7 +67,10 @@ import {
   destroyEphemeralMachine,
   wakeEphemeralMachine,
   ephemeralProviderSuspendsWhenIdle,
+  ephemeralAdapter,
+  ephemeralCatalogEntry,
   ephemeralMachineFromNode,
+  isEphemeralNode,
   ephemeralMachineFromCorrelation,
   type SessionCorrelation,
   createDeviceVaultKeyStore,
@@ -113,7 +117,7 @@ import {
   unb64url,
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
-import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 
 /**
  * Bounded discovery metadata for a provider-native session Bivy did not start
@@ -165,6 +169,17 @@ function clientMessageId(): string {
 }
 
 const LOOPBACK = /^(localhost|127\.0\.0\.1|\[?::1\]?)$/;
+
+/** How long to wait after a launched ephemeral runner comes online before
+ *  concluding it has no model credentials and raising the first-run sign-in
+ *  prompt — long enough for hosted-escrow / peer-vault sync to land first. */
+const FIRST_RUN_MODEL_AUTH_GRACE_MS = 8000;
+
+/** How long to wait for a freshly-launched ephemeral runner to come online before
+ *  telling the user it likely failed to boot — generous, since a bare VM installs
+ *  from scratch (1–3 min), but bounded so a self-destructed machine doesn't leave
+ *  the session spinning "Reconnecting…" forever. */
+const RUNNER_BOOT_TIMEOUT_MS = 4 * 60 * 1000;
 
 /**
  * Same rule as the legacy client: a same-origin/loopback node (or explicit
@@ -808,6 +823,17 @@ export class AppController {
     void this.refreshNodes();
   }
 
+  /**
+   * Pick a saved ephemeral runner as the target for the next new session. No
+   * machine is created and nothing on the current pane is torn down — the draft
+   * simply remembers this runner, and the first `sendPrompt` launches it and
+   * binds the session (see `launchDraftRunnerAndBind`). Selecting an actual node
+   * (switchNode) clears this.
+   */
+  pickDraftEphemeralRunner(config: EphemeralNodeConfig): void {
+    this.store.setDraftEphemeralConfig(config);
+  }
+
   /** Switch to another node without a full reload. */
   switchNode(nodeId: string): void {
     if (nodeId === this.local.cur && this.store.getState().status === "online") return;
@@ -1236,7 +1262,8 @@ export class AppController {
           source: s.source || previous?.source,
           branch: s.branch || previous?.branch,
           status: s.status,
-          updatedAt: previous?.updatedAt || s.updatedAt,
+          attention: Array.isArray(s.attention) ? s.attention : previous?.attention,
+          updatedAt: s.updatedAt || previous?.updatedAt,
         };
       }));
       const live = sessions.filter((s) => s.sessionId && s.nodeId);
@@ -1383,6 +1410,11 @@ export class AppController {
     // pane blanks) until the network answers.
     this.store.beginOpen(sessionId);
     this.send({ kind: "session.open", sessionId, path });
+    // beginOpen deliberately clears the New-session draft model. Resolve the
+    // opened session's actual model in session scope immediately, rather than
+    // leaving the draft selection in the shared composer (or waiting for the
+    // user to open the model picker to trigger a refresh).
+    this.listModels();
     // Seed from the persistent cache first (paints even before the node answers),
     // then request history with the cursor so the node sends only the new tail.
     void this.seedAndRequestHistory(sessionId);
@@ -1422,6 +1454,10 @@ export class AppController {
     // If this is a machine we just launched, seed its vault with the model API
     // keys held on this device (closes the cold-start gap — see the method doc).
     void this.seedEphemeralNodeIfNeeded();
+    // First-run subscription-OAuth: a launched runner that ends up with no model
+    // credentials at all (nothing seeded, no peer vault, no hosted escrow) needs
+    // the user to sign in once. See the method doc.
+    void this.maybePromptFirstRunModelAuth();
     // Pull durable session↔machine correlations so a torn-down session stays
     // rebuildable (Gap 1); then record one for the machine we're on, if owned.
     void this.refreshEphemeralCorrelations();
@@ -1655,8 +1691,79 @@ export class AppController {
     // Keep the exact frame so a post-reconnect retry re-sends it byte-identically.
     const frame: Command = { kind: "session.new", requestId: rid, title: trimmed || undefined, ...this.draftSessionFields() };
     this.pendingPrompt = { text: trimmed, requestId: rid, clientMessageId: cmid, attachments: files, frame };
+    // The draft targets a saved ephemeral runner that has no machine yet: sending
+    // IS the launch. Provision a fresh machine from the config, bind this session
+    // to it, and let the existing pendingPrompt/onReconnected replay fire
+    // session.new once it's online — no "launch machine" button, no modal. Guarded
+    // to the picked-runner case so ordinary sessions are completely unaffected.
+    const runner = this.store.getState().draftEphemeralConfig;
+    if (runner) {
+      void this.launchDraftRunnerAndBind(runner, trimmed, cmid, files);
+      return;
+    }
     this.store.addUserMessage(trimmed, cmid, files);
     this.send(frame);
+  }
+
+  /**
+   * First-message launch of a picked-but-unlaunched ephemeral runner. Provisions
+   * a fresh machine from the saved config, then binds the draft session to the
+   * new `eph-` node via switchNode. The stashed `pendingPrompt` survives the
+   * switch; once the node pairs, `onReconnected` → `retryPendingSessionNew` fires
+   * the `session.new` on it and `maybeFlushPendingPrompt` flushes this prompt.
+   * The exact analogue of the resume-on-send path, for a not-yet-created session.
+   */
+  private async launchDraftRunnerAndBind(
+    config: EphemeralNodeConfig,
+    text: string,
+    cmid: string,
+    files?: PromptAttachment[],
+  ): Promise<void> {
+    // Instant feedback on the current pane while the provider API call runs
+    // (switchNode below resets the pane, so we re-show it after).
+    this.store.addUserMessage(text, cmid, files);
+    try {
+      const machine = await this.launchEphemeral({
+        provider: config.provider,
+        region: config.region ?? undefined,
+        size: config.size ?? undefined,
+        ttlMinutes: config.ttlMinutes ?? undefined,
+        teardownOnAgentFinish: config.teardownOnAgentFinish === true,
+        name: config.name,
+        setupId: config.id,
+      });
+      // Bind the draft to the freshly-enrolled node and connect. switchNode resets
+      // the pane (clearing draftEphemeralConfig too) but leaves pendingPrompt.
+      if (!machine.nodeId) throw new Error("machine launched without a node id");
+      this.switchNode(machine.nodeId);
+      // Re-show the message + a status note now that the pane was reset, so the
+      // send doesn't visually vanish while the machine boots.
+      this.store.addUserMessage(text, cmid, files);
+      this.store.pushSystemMessage(`Starting ${config.name} — it'll come online shortly, then your message runs.`);
+      this.watchRunnerBoot(machine.nodeId, config.name, config.provider);
+    } catch (e) {
+      this.pendingPrompt = null;
+      this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`);
+    }
+  }
+
+  /**
+   * Surface a boot failure instead of an endless "Reconnecting…". A bare ephemeral
+   * VM installs from scratch and, if any step fails, self-destructs (Fly
+   * `auto_destroy`) — so the device would otherwise dial a node that no longer
+   * exists forever. If the runner isn't online within the boot window, drop a
+   * clear system note. Non-fatal: a slower-than-expected boot still connects and
+   * runs (pendingPrompt is left intact), the note just may arrive early.
+   */
+  private watchRunnerBoot(nodeId: string, name: string, provider: string): void {
+    this.waitForOnline(RUNNER_BOOT_TIMEOUT_MS).catch(() => {
+      // Moved to another node, or it actually came online right at the edge.
+      if (this.local.cur !== nodeId || this.store.getState().status === "online") return;
+      const mins = Math.round(RUNNER_BOOT_TIMEOUT_MS / 60000);
+      this.store.pushSystemMessage(
+        `${name} still isn't online after ${mins} min. A temporary machine self-destructs if its boot install fails, so it may be gone — check your ${provider} dashboard for a "bivy-…" app and its logs. Start a new session to try again.`,
+      );
+    });
   }
 
   /**
@@ -1941,6 +2048,11 @@ export class AppController {
   fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> {
     return fetchGithubQueue(this.local, limit);
   }
+  /** Recent automation runs (account-wide), newest first. The Inbox reads these
+   *  to surface runs that need attention or failed their final attempt. */
+  fetchAutomationRuns(limit = 50): ReturnType<typeof fetchAutomationRuns> {
+    return fetchAutomationRuns(this.local, limit);
+  }
   /** Set (empty string clears) the default node for untagged GitHub work. Without
    *  an appId it covers every connected app — it's an account-level preference. */
   setGithubAppDefaultNode(node: string, appId?: string): Promise<string | undefined> {
@@ -2025,6 +2137,9 @@ export class AppController {
    *  session, so a reconnect doesn't re-push (the node write is idempotent
    *  regardless). See `seedEphemeralNodeIfNeeded`. */
   private seededEphemeralNodes = new Set<string>();
+  /** Launched ephemeral node ids we've already run the first-run model-auth
+   *  check for this session, so a reconnect doesn't re-schedule it. */
+  private firstRunAuthNodes = new Set<string>();
   /** Machines already scheduled for finish-triggered teardown. */
   private finishingEphemeralMachines = new Set<string>();
 
@@ -2046,8 +2161,44 @@ export class AppController {
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralKeys.getToken(id);
   }
-  setEphemeralToken(id: string, token: string): Promise<void> {
-    return this.ephemeralKeys.setToken(id, token);
+  async setEphemeralToken(id: string, token: string): Promise<void> {
+    await this.ephemeralKeys.setToken(id, token);
+    // Connecting a provider should be enough to start — auto-create one sensible
+    // default runner so it appears in the node picker immediately, without a
+    // separate "define a machine" step. No-op if the provider already has one.
+    void this.ensureDefaultRunner(id);
+  }
+  /** Save a provider token and return the provider's default runner (creating one
+   *  if needed), so the connect UI can immediately pick it for the draft session. */
+  async connectEphemeralProvider(providerId: string, token: string): Promise<EphemeralNodeConfig | null> {
+    await this.ephemeralKeys.setToken(providerId, token);
+    return this.ensureDefaultRunner(providerId);
+  }
+  /** The provider's default runner (creating one if needed) — for the connect
+   *  UI's "use this runner" action on an already-connected provider. */
+  defaultEphemeralRunner(providerId: string): Promise<EphemeralNodeConfig | null> {
+    return this.ensureDefaultRunner(providerId);
+  }
+  /** The provider's default ephemeral runner (account config), creating one if it
+   *  has none yet — so a freshly-connected provider is immediately pickable. */
+  private async ensureDefaultRunner(providerId: string): Promise<EphemeralNodeConfig | null> {
+    try {
+      const configs = await this.listEphemeralConfigs();
+      const existing = configs.find((c) => c.provider === providerId);
+      if (existing) return existing;
+      const adapter = ephemeralAdapter(providerId);
+      const name = ephemeralCatalogEntry(providerId)?.name ?? providerId;
+      return await this.createEphemeralConfig({
+        provider: providerId,
+        name: `${name} runner`,
+        region: adapter?.defaultRegion ?? null,
+        size: adapter?.defaultSize ?? null,
+        // Suspend-to-zero providers keep the machine; destroy-lane providers get
+        // a 1h TTL + teardown-on-finish so a forgotten machine can't bill on.
+        ttlMinutes: adapter?.suspendsWhenIdle ? null : 60,
+        teardownOnAgentFinish: !adapter?.suspendsWhenIdle,
+      });
+    } catch { /* best effort — the user can still create one in Settings */ return null; }
   }
   removeEphemeralToken(id: string): Promise<void> {
     return this.ephemeralKeys.remove(id);
@@ -2174,6 +2325,59 @@ export class AppController {
       this.send({ kind: "provider.apiKey", provider, key });
     }
   }
+  /**
+   * First-run model access for a launched ephemeral runner.
+   *
+   * The vault-sync paths (device API-key seed, peer node→node wrap, hosted
+   * escrow) cover every case where the account *already has* a model login
+   * somewhere. The one they can't cover is the genuine first run — a phone-only
+   * account whose very first runner has no device key to seed, no peer online,
+   * and nothing escrowed yet. That runner boots with no model credentials and
+   * would silently fail on the first turn. Here we detect that and raise the
+   * `needsModelAuth` prompt so the user signs in once (over the existing
+   * `provider.oauth.start` paste-back on this same node); the node then escrows
+   * the login so every future runner inherits it with no prompt.
+   *
+   * Timing: model-auth can arrive a beat after connect (escrow/peer sync), so we
+   * wait a grace before concluding "no creds", and the store auto-dismisses the
+   * prompt the moment any provider becomes configured — so a slow sync that
+   * lands during the grace just means the prompt never shows (or briefly shows
+   * then clears), never a wrong dead-end.
+   */
+  private async maybePromptFirstRunModelAuth(): Promise<void> {
+    if (!EPHEMERAL_MACHINES_ENABLED || this.direct) return;
+    const nodeId = this.local.cur;
+    if (!nodeId || this.firstRunAuthNodes.has(nodeId)) return;
+    // Only a machine THIS device launched — never a normal persistent node,
+    // which manages its own logins through Settings.
+    const machines = await this.ephemeralMachines.list().catch(() => [] as EphemeralMachine[]);
+    if (!machines.some((m) => m.nodeId === nodeId)) return;
+    this.firstRunAuthNodes.add(nodeId);
+    // Ask the node for its provider status now; the freshest list will have
+    // arrived well before the grace elapses.
+    this.listProviders();
+    setTimeout(() => {
+      const st = this.store.getState();
+      // Bail if we've moved on, a login is already in flight, the prompt is
+      // already up, or creds have since landed.
+      if (st.status !== "online" || this.local.cur !== nodeId) return;
+      if (st.needsModelAuth || st.oauth) return;
+      if (st.providers.some((p) => p.configured)) return;
+      // Prefer an OAuth-capable provider (Anthropic first — subscription login
+      // is the whole point here), falling back to anthropic by id.
+      const provider =
+        st.providers.find((p) => p.oauth && p.id === "anthropic")?.id ??
+        st.providers.find((p) => p.oauth)?.id ??
+        "anthropic";
+      this.store.setNeedsModelAuth({ nodeId, provider });
+    }, FIRST_RUN_MODEL_AUTH_GRACE_MS);
+  }
+
+  /** Dismiss the first-run model-auth prompt (user chose to handle it later). */
+  dismissModelAuthPrompt(): void {
+    this.store.setNeedsModelAuth(null);
+  }
+
   /** Destroy a configured ephemeral machine shortly after agent_end. The short
    * grace period lets final transcript/PR metadata flush first. A queued
    * follow-up suppresses teardown; its eventual agent_end will try again.
@@ -2225,7 +2429,7 @@ export class AppController {
     // device-local GitHub token during bootstrap so its very first repo picker,
     // clone, push, and PR work instead of failing after the machine boots.
     const githubToken = opts.githubToken ?? await this.githubTaskToken.get();
-    const machine = await launchEphemeralMachine({ ...opts, repo, githubToken: githubToken || undefined }, {
+    const machine = await launchEphemeralMachine({ ...opts, repo, githubToken: githubToken || undefined, debugKeepMachine: EPHEMERAL_KEEP_FAILED_MACHINES }, {
       store: this.local,
       exec: cloudExec(this.local),
       keys: this.ephemeralKeys,
@@ -2392,9 +2596,13 @@ export class AppController {
     }
     if (!hasKey) return false;
     const node = this.store.getState().nodes.find((n) => n.id === nodeId);
-    // Enrolled but offline → resumable (wake). Absent from the registry → resumable
-    // only if a durable correlation lets us rebuild it.
-    if (node) return !node.online;
+    // Enrolled but offline → resumable ONLY when it's actually an ephemeral machine
+    // we can wake. A persistent node that's merely offline is NOT resumable from this
+    // device: it reconnects on its own when its daemon rejoins the relay, and sweeping
+    // it into the ephemeral wake/rebuild path throws a misleading "no record of the
+    // machine to rebuild" error (reprovisionEphemeral). Absent from the registry →
+    // resumable only if a durable correlation lets us rebuild it.
+    if (node) return !node.online && isEphemeralNode(node);
     return this.ephemeralCorrelations.some((c) => c.nodeId === nodeId);
   }
   private shouldAutoResume(): boolean {
