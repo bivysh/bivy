@@ -416,7 +416,10 @@ function nodeBindHost() {
 
 function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: "inherit", ...opts });
+    // Intentionally execute an argv vector with Node's default shell:false. Some
+    // callers use process.execPath/installed absolute paths; treating those as a
+    // shell string would be unsafe, but spawn does not parse metacharacters.
+    const child = spawn(cmd, args, { stdio: "inherit", ...opts, shell: false }); // lgtm[js/shell-command-injection-from-environment]
     child.on("exit", (code) => resolve(code ?? 0));
     child.on("error", (error) => {
       console.error(c.red(`Failed to run ${cmd}: ${error.message}`));

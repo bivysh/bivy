@@ -38,16 +38,44 @@ export function looksRiskyBash(command: string): boolean {
   );
 }
 
+/** Parse dangerous recursive rm targets without a nested-quantifier regex. The
+ * input is user/agent controlled, so this intentionally stays linear-time. */
+function catastrophicRm(command: string): boolean {
+  const systemRoots = ["/etc", "/usr", "/home", "/var", "/opt", "/boot", "/root", "/bin", "/sbin", "/lib", "/lib64"];
+  for (const segment of command.split(/[;\n|&]+/)) {
+    const tokens = segment.trim().split(/\s+/).map((token) => token.replace(/^["']|["']$/g, ""));
+    const rmIndex = tokens.lastIndexOf("rm");
+    if (rmIndex < 0) continue;
+    let recursive = false;
+    let force = false;
+    const targets: string[] = [];
+    for (const token of tokens.slice(rmIndex + 1)) {
+      if (token === "--recursive") recursive = true;
+      else if (token === "--force") force = true;
+      else if (token.startsWith("-") && !token.startsWith("--")) {
+        recursive ||= token.includes("r") || token.includes("R");
+        force ||= token.includes("f");
+      } else if (!token.startsWith("--")) targets.push(token);
+    }
+    if (!recursive || !force) continue;
+    for (const rawTarget of targets) {
+      const target = rawTarget.length > 1 ? rawTarget.replace(/\/+$/, "") : rawTarget;
+      if (target === "/" || target === "~" || target === "$home" || target === "/*") return true;
+      if (systemRoots.some((root) => target === root || target.startsWith(`${root}/`))) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Catastrophic, irreversible, system-wide actions. Blocked OUTRIGHT in every mode
  * — the boundary that makes unattended autonomy safe rather than reckless.
  */
 export function looksCatastrophic(command: string): boolean {
-  const c = command.trim().toLowerCase();
+  const c = command.trim().toLowerCase().slice(0, 100_000);
   if (!c) return false;
   return (
-    /\brm\s+(-\S*[rf]\S*\s+)+(\/|~|\$home|\/\*)(\s|$|\/)/.test(c) || // rm -rf / | ~ | /*
-    /\brm\s+(-\S*[rf]\S*\s+)+\/(etc|usr|home|var|opt|boot|root|bin|sbin|lib|lib64)(\/|\s|$)/.test(c) ||
+    catastrophicRm(c) || // rm -rf / | ~ | system roots
     /\bmkfs(\.\w+)?\b/.test(c) ||
     /\bdd\b[^\n]*\bof=\/dev\/(sd|nvme|hd|disk)/.test(c) ||
     />\s*\/dev\/(sd|nvme|hd|disk)/.test(c) ||

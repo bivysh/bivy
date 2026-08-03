@@ -27,6 +27,7 @@ check("catastrophic: ordinary commands are not catastrophic", () => {
   assert.equal(looksCatastrophic("rm -rf node_modules"), false);
   assert.equal(looksCatastrophic("ls -la"), false);
   assert.equal(looksCatastrophic("npm install"), false);
+  assert.equal(looksCatastrophic(`rm ${"-f ".repeat(20_000)}node_modules`), false, "repeated flags remain linear-time and non-catastrophic");
 });
 
 check("backstop: publish/deploy/force-push/send/sudo", () => {
