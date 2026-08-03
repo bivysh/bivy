@@ -23,6 +23,20 @@ const TTL_OPTIONS = [
   { v: 480, label: "8 hours" },
 ];
 
+/** Present an account-level ephemeral config (the record the node picker and
+ *  Settings both manage) as the launch form's `EphemeralSetup` shape. Repo is
+ *  never a machine setting — it comes from the new-session composer at launch —
+ *  so it's always null here. */
+function configToSetup(config: EphemeralNodeConfig): EphemeralSetup {
+  return {
+    id: config.id, provider: config.provider, name: config.name,
+    region: config.region ?? null, size: config.size ?? null,
+    ttlMinutes: config.ttlMinutes ?? null, repo: null,
+    teardownOnAgentFinish: Boolean(config.teardownOnAgentFinish),
+    createdAt: config.createdAt, updatedAt: config.updatedAt,
+  };
+}
+
 export function EphemeralSheet({ onClose, setupId, config, firstRun = false }: { onClose: () => void; setupId?: string; config?: EphemeralNodeConfig; firstRun?: boolean }) {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
   const [setups, setSetups] = useState<EphemeralSetup[]>([]);
@@ -37,26 +51,23 @@ export function EphemeralSheet({ onClose, setupId, config, firstRun = false }: {
     // config is presented as a one-item "saved setup" via a synthetic record so
     // the launch form and machine-record correlation work unchanged.
     if (config) {
-      const synthetic: EphemeralSetup = {
-        id: config.id, provider: config.provider, name: config.name,
-        region: config.region ?? null, size: config.size ?? null,
-        ttlMinutes: config.ttlMinutes ?? null, repo: null,
-        teardownOnAgentFinish: Boolean(config.teardownOnAgentFinish),
-        createdAt: config.createdAt, updatedAt: config.updatedAt,
-      };
+      const synthetic = configToSetup(config);
       setSetups([synthetic]);
       setSelectedSetup(synthetic);
       setProvider(config.provider);
       return;
     }
-    controller.listEphemeralSetups().then((rows) => {
-      setSetups(rows);
-      const selected = setupId ? rows.find((s) => s.id === setupId) : undefined;
+    // Saved setups are the account's ephemeral configs (the same records the
+    // node picker and Settings manage), presented in the launch form's shape.
+    controller.listEphemeralConfigs().then((rows) => {
+      const list = rows.map(configToSetup);
+      setSetups(list);
+      const selected = setupId ? list.find((s) => s.id === setupId) : undefined;
       if (selected) {
         setSelectedSetup(selected);
         setProvider(selected.provider);
       }
-    });
+    }).catch(() => {});
   }, [setupId, config]);
 
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === provider);
