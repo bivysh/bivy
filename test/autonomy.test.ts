@@ -17,6 +17,8 @@ const noRisky = (_tool: string) => false;
 check("catastrophic: rm -rf /", () => {
   assert.equal(looksCatastrophic("rm -rf /"), true);
   assert.equal(looksCatastrophic("sudo rm -rf ~"), true);
+  assert.equal(looksCatastrophic("rm -rf /etc"), true);
+  assert.equal(looksCatastrophic("rm --recursive --force /home/user"), true);
   assert.equal(looksCatastrophic("mkfs.ext4 /dev/sda1"), true);
   assert.equal(looksCatastrophic(":(){ :|:& };:"), true);
 });
@@ -73,6 +75,8 @@ check("floor is case-insensitive (claude-code sends Bash/Write/Edit)", () => {
   // The Claude Code SDK passes tool names verbatim as Bash/Write/Edit. The hard
   // floor must still fire — a case-sensitive compare silently disabled it.
   assert.equal(guardToolCall("/ws", "Bash", { command: "rm -rf /" }, "never", noRisky).decision, "deny");
+  assert.equal(guardToolCall("/ws", "shell", { cmd: "rm -rf /etc" }, "never", noRisky).decision, "deny");
+  assert.equal(guardToolCall("/ws", "run_command", { script: "reboot" }, "autonomous", noRisky).decision, "deny");
   assert.equal(guardToolCall("/ws", "Write", { file_path: "../../etc/passwd" }, "autonomous", noRisky).decision, "deny");
   assert.equal(guardToolCall("/ws", "Edit", { file_path: "/etc/passwd" }, "always", noRisky).decision, "deny");
   // MultiEdit/NotebookEdit also write via file_path and must respect the boundary.

@@ -186,6 +186,10 @@ export interface RuntimeInfo {
   executionMode?: "protocol" | "structured-pipe" | "pipe" | "pty";
   displayName?: string;
   name?: string;
+  supportTier?: "supported" | "beta" | "experimental" | "planned";
+  protectionLevel?: "native-sandbox" | "tool-controls" | "mcp-controls" | "user-permissions";
+  protectionLabel?: string;
+  protectionDetail?: string;
   [k: string]: unknown;
 }
 

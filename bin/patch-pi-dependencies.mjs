@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 /**
- * pi-coding-agent 0.82.1 publishes an npm-shrinkwrap that pins the vulnerable
- * brace-expansion 5.0.7 below its own node_modules. npm overrides update the
- * outer lockfile/audit result but do not replace the shrinkwrapped files during
- * installation. Replace that one nested package with our direct, exact 5.0.9
- * dependency until pi publishes a corrected shrinkwrap.
+ * pi-coding-agent 0.82.1 publishes an npm-shrinkwrap that pins vulnerable
+ * transitive packages below its own node_modules. npm overrides update the outer
+ * lockfile/audit result but do not replace those shrinkwrapped files during
+ * installation. Replace the affected nested packages with direct, exact patched
+ * dependencies until pi publishes a corrected shrinkwrap.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -27,18 +27,24 @@ function findDependency(relativePath) {
   }
 }
 
-const source = findDependency("brace-expansion");
 const piPackage = findDependency(path.join("@earendil-works", "pi-coding-agent"));
-const target = piPackage && path.join(piPackage, "node_modules", "brace-expansion");
+if (!piPackage) process.exit(0);
 
-if (!target || !fs.existsSync(target)) process.exit(0);
-if (!source) throw new Error("Security patch source brace-expansion@5.0.9 is missing");
+const patches = [
+  { name: "brace-expansion", version: "5.0.9" },
+  { name: "undici", version: "8.9.0" },
+];
 
-const sourcePackage = JSON.parse(fs.readFileSync(path.join(source, "package.json"), "utf8"));
-if (sourcePackage.version !== "5.0.9") {
-  throw new Error(`Refusing dependency patch from unexpected brace-expansion ${sourcePackage.version}`);
+for (const patch of patches) {
+  const source = findDependency(patch.name);
+  const target = path.join(piPackage, "node_modules", patch.name);
+  if (!fs.existsSync(target)) continue;
+  if (!source) throw new Error(`Security patch source ${patch.name}@${patch.version} is missing`);
+  const sourcePackage = JSON.parse(fs.readFileSync(path.join(source, "package.json"), "utf8"));
+  if (sourcePackage.version !== patch.version) {
+    throw new Error(`Refusing dependency patch from unexpected ${patch.name} ${sourcePackage.version}`);
+  }
+  fs.rmSync(target, { recursive: true, force: true });
+  fs.cpSync(source, target, { recursive: true });
+  console.log(`Patched pi-coding-agent's nested ${patch.name} to ${patch.version}`);
 }
-
-fs.rmSync(target, { recursive: true, force: true });
-fs.cpSync(source, target, { recursive: true });
-console.log("Patched pi-coding-agent's nested brace-expansion to 5.0.9");

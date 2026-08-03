@@ -222,22 +222,29 @@ Revoking the node itself is done from the control plane (Account → Your nodes)
 
 ## The approval gate
 
-Bivy's safety model is a **hard floor plus a configurable prompt level**
-(`src/guard.ts`, `src/policy/policy-engine.ts`).
+For runtimes that expose structured tool calls, Bivy's policy model is a
+**heuristic floor plus a configurable prompt level** (`src/guard.ts`,
+`src/policy/policy-engine.ts`). The runtime picker reports the effective
+protection mechanism for the selected path.
 
-The hard floor applies in **every** mode, including `never`:
+Within an intercepted tool path, the floor applies in **every approval mode**,
+including `never`:
 
-- Catastrophic bash commands are denied outright: `rm -rf /` (and `~`, `/*`),
-  `mkfs`, `dd of=/dev/sd*`, redirects to raw block devices, the classic fork
-  bomb, `chmod -R 777 /`, and `shutdown`/`reboot`/`halt`/`poweroff`.
-- `write` and `edit` calls whose resolved path escapes the session workspace are
-  denied outright.
+- Known catastrophic shell commands are denied outright: `rm -rf /` (and key
+  system roots), `mkfs`, `dd of=/dev/sd*`, redirects to raw block devices, the
+  classic fork bomb, `chmod -R 777 /`, and shutdown commands.
+- Structured `write` and `edit` calls whose resolved path escapes the session
+  workspace are denied outright.
+
+This floor does not apply to operations Bivy cannot observe. A process adapter
+without structured interception can shell out or write as the OS user. The
+heuristics catch common accidents; they are not an adversarial boundary.
 
 Above the floor, `approvalMode` decides how often it asks:
 
 | Mode | Behaviour |
 | --- | --- |
-| `never` | No prompting. Hard floor still applies. |
+| `never` | No prompting. Heuristic floor still applies on intercepted tool paths only. |
 | `risky` | Heuristically risky bash (`rm`, `mv`, `chmod`, `sudo`, `curl`, `git commit/push/reset`, package installs, output redirection, …) plus all `write`/`edit` calls prompt. |
 | `always` | Every `bash`/`write`/`edit` call prompts. |
 | `autonomous` | Runs unattended, but "backstop" actions still prompt: force-push, push to `main`/`master`, `npm publish`, `kubectl/terraform apply`, `docker push`, `fly/vercel/netlify deploy`, `gh release create`, sending mail from the shell, and `sudo`. |
@@ -249,8 +256,8 @@ Pending approvals expire after 5 minutes and expire **denied**
 (`src/approval.ts`).
 
 Choosing `never` grants any connected client unattended code execution on the
-node, bounded only by the hard floor. That is a real decision — make it
-deliberately.
+node. On a non-intercepted runtime that is bounded only by the runtime's own
+sandbox and OS permissions. That is a real decision—make it deliberately.
 
 ## Sandboxing
 

@@ -73,3 +73,12 @@ The existing `GithubQueueItem` evidence, checks, events, checkpoint diff, PR det
 A runtime may be implemented and available without being Recommended. Recommended requires a tested version and a current release-candidate check covering auth, streaming, tool control, stop, reconnect/resume, attachments, and the advertised protection behavior.
 
 **Reason:** Fast-moving external CLIs can drift while static adapters and unit tests remain green.
+
+## D-009 — Patch shrinkwrapped Pi dependencies from exact top-level packages
+
+**Date:** 2026-08-03
+**Status:** Accepted, temporary
+
+`pi-coding-agent` 0.82.1 shrinkwraps vulnerable `brace-expansion` and `undici` versions. Bivy carries exact patched top-level versions, npm overrides, a postinstall replacement, lockfile audit metadata, and a CI assertion of the installed nested versions. Remove this mechanism as soon as Pi publishes a corrected shrinkwrap.
+
+**Reason:** Downgrading Pi to the audit tool's suggested older version would regress the integrated agent. Same-major exact replacements close the current advisories while CI verifies the actual installed tree.

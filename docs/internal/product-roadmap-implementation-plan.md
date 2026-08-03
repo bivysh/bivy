@@ -26,47 +26,47 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 ### A1. Release integrity
 
-- [ ] Resolve all high-severity production dependency advisories or record a time-bounded, exploitability-reviewed exception.
-- [ ] Keep `npm audit --omit=dev --audit-level=high` in CI.
-- [ ] Disable failed ephemeral-machine retention in production; make diagnostics an explicit build/env opt-in.
-- [ ] Reconcile ephemeral feature comments, runtime maturity, local-mode, and safety documentation with behavior.
+- [x] Resolve all high-severity production dependency advisories or record a time-bounded, exploitability-reviewed exception.
+- [x] Keep `npm audit --omit=dev --audit-level=high` in CI.
+- [x] Disable failed ephemeral-machine retention in production; make diagnostics an explicit build/env opt-in.
+- [x] Reconcile ephemeral feature comments, runtime maturity, local-mode, and safety documentation with behavior.
 
 ### A2. Runtime truth and safe defaults
 
 - [ ] Extend the existing runtime catalog/manifest with an authoritative enforcement summary and tested-version/certification fields.
-- [ ] Group the picker into Recommended and More agents instead of one equal alphabetical list.
-- [ ] Surface support tier and protection in customer language.
-- [ ] Require informed confirmation for unattended/full-access execution where Bivy lacks a native or external isolation boundary.
-- [ ] Harden catastrophic-command accident prevention while explicitly documenting its heuristic limits.
+- [x] Group the picker into Recommended and More agents instead of one equal alphabetical list.
+- [x] Surface support tier and protection in customer language.
+- [x] Require informed confirmation for unattended/full-access execution where Bivy lacks a native or external isolation boundary.
+- [x] Harden catastrophic-command accident prevention while explicitly documenting its heuristic limits.
 
 ### A3. Bounded execution and durable failure
 
-- [ ] Add a configurable per-turn watchdog for interactive and automation turns.
-- [ ] Abort the runtime/process group on timeout and emit a durable, visible timed-out outcome.
-- [ ] Ensure a timed-out turn releases ephemeral teardown and queue ownership.
-- [ ] Distinguish missing event logs from unreadable/corrupt logs.
-- [ ] Surface event-log write failures, retain pending records for retry, and expose health in diagnostics.
+- [x] Add a configurable per-turn watchdog for interactive and automation turns.
+- [x] Abort the runtime/process group on timeout and emit a durable, visible timed-out outcome.
+- [x] Ensure a timed-out turn releases ephemeral teardown and queue ownership.
+- [x] Distinguish missing event logs from unreadable/corrupt logs.
+- [x] Surface event-log write failures, retain pending records for retry, and expose health in diagnostics.
 
 ### A4. Explicit cost and acknowledged mutations
 
 - [ ] Move queue auto-provisioning out of component-mount effects into the queue/control-plane policy path.
 - [ ] Show provider, region, rate hint, TTL, and teardown policy when enabling/launching billable runners.
 - [ ] Require confirmation for the first interactive billable launch.
-- [ ] Await and display provider/API-key save acknowledgements in every entry point.
+- [x] Await and display provider/API-key save acknowledgements in every entry point.
 - [ ] Remove swallowed errors from high-value automation and terminal actions.
 
 ### A5. Minimum browser release gate
 
-- [ ] Run browser tests in CI.
-- [ ] Cover one desktop and one mobile critical path, including reconnect and attention navigation.
+- [x] Run browser tests in CI.
+- [x] Cover one desktop and one mobile critical path, including reconnect and attention navigation.
 - [ ] Add an accessibility smoke gate for the app shell and modal focus behavior.
 
 ## Workstream B — Phase 1: first value, attention, and UI confidence
 
 ### B1. One golden onboarding path
 
-- [ ] Offer explicit Local CLI, Bivy Cloud remote, and self-hosted remote modes.
-- [ ] Never require an account for Local CLI mode.
+- [x] Offer explicit Local CLI, Bivy Cloud remote, and self-hosted remote modes.
+- [x] Never require an account for Local CLI mode.
 - [ ] Make setup resumable and report a checklist of node, runtime, credential, repo, and first-task readiness.
 - [ ] Validate model access rather than credential presence alone where a safe provider probe exists.
 - [ ] Do not print setup success as equivalent to agent readiness.
@@ -81,8 +81,8 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 ### B3. Attention loop
 
-- [ ] Preserve the existing global Inbox as the single attention aggregator.
-- [ ] Add document-title and installed-app badge counts.
+- [x] Preserve the existing global Inbox as the single attention aggregator.
+- [x] Add document-title and installed-app badge counts.
 - [ ] Verify push and Inbox deep-links focus the exact approval/question/outcome.
 - [ ] Add clear Needs approval, Needs answer, Failed, and Completed—unreviewed categories.
 - [ ] Keep attention metadata content-free across the hosted boundary.

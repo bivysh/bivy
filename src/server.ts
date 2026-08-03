@@ -56,6 +56,7 @@ import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-cli
 import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
+import { configuredTurnTimeoutMs } from "./session/turn-watchdog.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
@@ -908,7 +909,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -2376,8 +2377,21 @@ function eventLogPath(sessionId: string): string {
 // whole history: overlay detail (reasoning + tool activity) AND the base transcript,
 // the latter as bounded delta/reset records. Written on every event; read via
 // eventLog.deriveHistory. `redactSecrets` scrubs credentials at the single flush
-// choke point before anything lands on the synced-to-PWA disk.
-const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets);
+// choke point before anything lands on the synced-to-PWA disk. I/O/corruption
+// failures are never silently converted into empty history: keep a diagnostic,
+// log loudly, and notify the owning live session while pending appends remain
+// queued for retry.
+const eventLogIssues = new Map<string, { operation: string; message: string; at: number }>();
+const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets, 500, (issue) => {
+  eventLogIssues.set(issue.sessionId, { operation: issue.operation, message: issue.message, at: issue.at });
+  console.error(`[event-log] ${issue.operation} failed for ${issue.sessionId}: ${issue.message}`);
+  const record = openSessions.get(issue.sessionId);
+  if (!record) return;
+  const warning = `Session history storage problem (${issue.operation}): ${issue.message}`;
+  if (record.warning === warning) return;
+  record.warning = warning;
+  broadcast({ type: "session.notice", sessionId: record.id, level: "error", message: warning });
+});
 
 // Global content-addressed store for message attachments (images + files). Unlike
 // the per-session `.bivy-attachments/` worktree copy (kept so the agent can open
@@ -3564,7 +3578,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       record.lastPrompt = agentPrompt;
       record.lastPromptOptions = promptOptionsFor(record, msg.streamingBehavior, images);
       record.reroute?.beginTurn();
-      await record.session.prompt(agentPrompt, record.lastPromptOptions);
+      await promptWithWatchdog(record, agentPrompt, record.lastPromptOptions);
     }).catch((error) => {
       // Mirror the HTTP path (see the /prompt route): a rejected turn after
       // the runtime marked the session working emits no agent_end, so without
@@ -4936,7 +4950,7 @@ async function runSessionTurn(record: SessionRecord, prompt: string): Promise<vo
       }
     });
   });
-  await record.session.prompt(prompt);
+  await promptWithWatchdog(record, prompt);
   await finished;
 }
 
@@ -6954,6 +6968,63 @@ setTimeout(() => void sweepDiskGuardrails(), 30_000).unref?.();
 // client paints its sidebar; the idle timer keeps it clean thereafter.
 setTimeout(pruneGhostSessions, 10_000).unref?.();
 
+const turnTimeoutMs = configuredTurnTimeoutMs();
+if (turnTimeoutMs > 0) console.log(`[turn-watchdog] armed: timeout=${turnTimeoutMs}ms`);
+else console.warn("[turn-watchdog] disabled by BIVY_TURN_TIMEOUT_MS=0");
+
+function turnTimeoutMessage(): string {
+  return `Agent turn timed out after ${Math.round(turnTimeoutMs / 60_000)} minutes and was stopped.`;
+}
+
+function clearTurnWatchdog(record: SessionRecord): void {
+  if (record.turnWatchdog) clearTimeout(record.turnWatchdog);
+  record.turnWatchdog = undefined;
+  record.turnTimeoutSignal = undefined;
+  record.turnTimeoutResolve = undefined;
+}
+
+function armTurnWatchdog(record: SessionRecord): void {
+  clearTurnWatchdog(record);
+  record.turnTimedOut = false;
+  if (turnTimeoutMs <= 0) return;
+  record.turnTimeoutSignal = new Promise<void>((resolve) => { record.turnTimeoutResolve = resolve; });
+  record.turnWatchdog = setTimeout(() => {
+    record.turnWatchdog = undefined;
+    record.turnTimedOut = true;
+    record.lastFailureAt = Date.now();
+    const message = turnTimeoutMessage();
+    record.turnTimeoutResolve?.();
+    record.turnTimeoutResolve = undefined;
+    // Clear/persist first so the session and an ephemeral runner cannot remain
+    // pinned in a false working state if the runtime's abort path fails to emit
+    // agent_end. abort() is still invoked to kill the underlying process group.
+    clearSessionWorking(record);
+    metadata.touchSession(record.id, "failed");
+    broadcast({ type: "session.outcome", sessionId: record.id, status: "timed_out", completedAt: new Date().toISOString(), error: message });
+    broadcast({ type: "session.error", sessionId: record.id, error: message });
+    void record.session.abort().catch((error) => {
+      console.error(`[turn-watchdog] abort failed for ${record.id}:`, error);
+    }).finally(() => evaluateEphemeralTeardown());
+  }, turnTimeoutMs);
+  record.turnWatchdog.unref?.();
+}
+
+async function promptWithWatchdog(record: SessionRecord, prompt: string, options?: ReturnType<typeof promptOptionsFor>): Promise<void> {
+  armTurnWatchdog(record);
+  const timeoutSignal = record.turnTimeoutSignal;
+  try {
+    await Promise.race([
+      record.session.prompt(prompt, options),
+      ...(timeoutSignal ? [timeoutSignal.then(() => { throw new Error(turnTimeoutMessage()); })] : []),
+    ]);
+  } catch (error) {
+    // The timeout callback already cleared/persisted the session. For an ordinary
+    // prompt failure, disarm here and let the caller publish its actionable error.
+    if (!record.turnTimedOut) clearTurnWatchdog(record);
+    throw error;
+  }
+}
+
 function markSessionWorking(record: SessionRecord, activity: unknown) {
   touchSession(record);
   const wasWorking = record.isWorking;
@@ -6967,6 +7038,7 @@ function markSessionWorking(record: SessionRecord, activity: unknown) {
 }
 
 function clearSessionWorking(record: SessionRecord) {
+  clearTurnWatchdog(record);
   touchSession(record);
   record.isWorking = false;
   record.lastActivity = undefined;
@@ -7198,7 +7270,7 @@ function attachSessionListeners(record: SessionRecord) {
           getCurrentModelName: () => record.session.getCurrentModel()?.name,
           setModel: (p, i) => record.session.setModel(p, i),
           reprompt: async () => {
-            await record.session.prompt(record.lastPrompt!, record.lastPromptOptions);
+            await promptWithWatchdog(record, record.lastPrompt!, record.lastPromptOptions);
           },
         });
       } else if (turnError) {
@@ -8583,6 +8655,9 @@ app.delete("/api/devices/:id", (req, res) => {
 });
 
 app.get("/api/node/info", (_req, res) => {
+  const selectedRuntimeId = active?.runtimeId ?? defaultRuntimeId;
+  const runtimeInfo = runtimeList(selectedRuntimeId).find((runtime) => runtime.id === selectedRuntimeId);
+  const structuredControls = runtimeInfo?.protectionLevel === "native-sandbox" || runtimeInfo?.protectionLevel === "tool-controls";
   res.json({
     nodeId: identity.nodeId,
     name: identity.name,
@@ -8593,11 +8668,17 @@ app.get("/api/node/info", (_req, res) => {
     guardrails: {
       mode: approvalMode,
       defaultAllow: approvalMode === "autonomous" || approvalMode === "never",
-      workspaceBoundary: "Writes outside the active workspace/worktree are denied.",
-      denyList: "Catastrophic/destructive commands and privilege escalation are blocked or require approval.",
-      strictApprovalOptIn: "Set approval mode to risky or always for prompt-heavy review.",
+      enforcementLevel: runtimeInfo?.protectionLevel ?? "user-permissions",
+      protection: runtimeInfo?.protectionLabel ?? "Runs as your user",
+      workspaceBoundary: structuredControls
+        ? "Structured file tools are checked against the active workspace; shell commands are not an OS isolation boundary."
+        : "Not guaranteed by Bivy for this runtime. Run it in a container/VM when isolation is required.",
+      denyList: structuredControls
+        ? "Known catastrophic shell commands are heuristically blocked; this catches accidents, not adversarial bypasses."
+        : "No universal Bivy command interception is available for this runtime.",
+      strictApprovalOptIn: "Set approval mode to risky or always for prompt-heavy review where this runtime exposes tool controls.",
     },
-    runtime: runtimeSummary(getRuntime(active?.runtimeId ?? defaultRuntimeId)),
+    runtime: { ...runtimeSummary(getRuntime(selectedRuntimeId)), ...runtimeInfo },
     defaultRuntimeId,
     sandbox: sandboxInfo(),
   });
@@ -8676,6 +8757,8 @@ app.get("/api/status", (_req, res) => {
     },
     devices: { paired: pairingStore.listDevices().length, localTokens: identity.listDevices().length },
     approvals: { pending: approvals.list().filter((a) => a.status === "pending").length, recent: metadata.listApprovals(20) },
+    eventLog: { ...eventLog.health(), affectedSessions: eventLogIssues.size },
+    turnWatchdog: { enabled: turnTimeoutMs > 0, timeoutMs: turnTimeoutMs },
     updatedAt: new Date().toISOString(),
   });
 });
@@ -10187,7 +10270,7 @@ app.post("/api/session/prompt", async (req, res, next) => {
       broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
       void maybeNameSession(record, promptText);
       harnessBeginTurn(record);
-      await session.prompt(agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images));
+      await promptWithWatchdog(record, agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images));
     }).catch((error) => {
       clearSessionWorking(record);
       broadcast({ type: "session.error", sessionId: record.id, error: String(error?.stack ?? error) });

@@ -95,6 +95,31 @@ export function App() {
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
   const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
+  const inboxItems = useMemo(() => buildInboxItems({
+    sessions: state.sessions,
+    approvals: state.approvals,
+    questions: state.questions,
+    nodes: state.nodes,
+    queue: githubQueue ?? [],
+    runs: automationRuns ?? [],
+  }), [state.sessions, state.approvals, state.questions, state.nodes, githubQueue, automationRuns]);
+  // Attention must remain visible when Bivy is a background tab or installed
+  // PWA. The Inbox is authoritative; mirror only its content-free count into
+  // browser chrome and the OS app badge.
+  useEffect(() => {
+    const count = inboxItems.length;
+    document.title = count > 0 ? `(${count}) Bivy` : "Bivy";
+    const badge = navigator as Navigator & {
+      setAppBadge?: (contents?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    const update = count > 0 ? badge.setAppBadge?.(count) : badge.clearAppBadge?.();
+    void update?.catch(() => {}); // unsupported/blocked badge APIs are non-fatal
+    return () => {
+      document.title = "Bivy";
+      void badge.clearAppBadge?.().catch(() => {});
+    };
+  }, [inboxItems.length]);
   // Signed in on the hosted app but no node yet: poll for a newly-installed
   // machine so the empty state advances to the live app the moment the node
   // dials in — the user shouldn't have to hit "Refresh nodes" after running the
@@ -336,14 +361,6 @@ export function App() {
   // no sessionId are treated as global and shown everywhere.
   const activeApprovals = state.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSessionId);
   const activeQuestions = state.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSessionId);
-  const inboxItems = buildInboxItems({
-    sessions: state.sessions,
-    approvals: state.approvals,
-    questions: state.questions,
-    nodes: state.nodes,
-    queue: githubQueue ?? [],
-    runs: automationRuns ?? [],
-  });
   const openInboxItem = (item: InboxItem) => {
     setInboxOpen(false);
     closeDrawer();

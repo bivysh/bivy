@@ -1145,10 +1145,13 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .runtime-meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .runtime-meta-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .runtime-capabilities { display: flex; flex-wrap: wrap; gap: 4px; }
-.runtime-cap, .runtime-tier { border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; font-size: 10px; line-height: 1.5; color: var(--muted); }
+.runtime-cap, .runtime-tier, .runtime-protection { border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; font-size: 10px; line-height: 1.5; color: var(--muted); }
 .runtime-tier.supported { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 65%, var(--line)); font-weight: 700; }
 .runtime-tier.beta { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); font-weight: 700; }
 .runtime-tier.planned, .runtime-tier.experimental { opacity: 0.78; }
+.runtime-protection.native-sandbox, .runtime-protection.tool-controls { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.runtime-protection.mcp-controls { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 60%, var(--line)); }
+.runtime-protection.user-permissions { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); font-weight: 650; }
 .runtime-cap.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
 .runtime-cap.limited { opacity: 0.72; }
 .picker-action { flex: none; background: transparent; border: 1px solid var(--accent); color: var(--accent); border-radius: 8px; padding: 3px 10px; font-size: 12px; font-weight: 600; }

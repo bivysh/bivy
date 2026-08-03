@@ -182,7 +182,7 @@ unless noted.
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
 | `BIVY_SANDBOX` | `read-only` \| `workspace-write` \| `danger-full-access` | `workspace-write` | Supported | Selects the tier each agent enforces in its own native sandbox (Codex `--sandbox`, Gemini `--approval-mode`, Claude `permissionMode`). Agents with no native sandbox (Goose, OpenCode, Aider) are governed by Bivy's filesystem/MCP/network channels instead. Case-insensitive; `_` is normalised to `-`; an unrecognised value is silently ignored |
-| `BIVY_APPROVAL_MODE` | `autonomous` \| `risky` \| `always` \| `never` | `autonomous` | Supported | `autonomous` runs without per-action approval; catastrophic commands and writes outside the workspace are blocked in every mode, and a backstop set (force-push, publish, deploy, sudo) still pauses. `risky`/`always` restore prompt-heavy behaviour |
+| `BIVY_APPROVAL_MODE` | `autonomous` \| `risky` \| `always` \| `never` | `autonomous` | Supported | Controls prompting where the selected runtime exposes structured tool calls. On those paths, heuristic catastrophic-command/workspace checks apply and backstop actions pause. Process runtimes without interception still run with the OS user's permissions; this setting is not an isolation boundary |
 | `BIVY_EGRESS_PROXY` | any non-empty | unset | Supported (opt-in) | Routes CLI-agent outbound traffic through a local governance broker, whose proxy env is merged into every agent subprocess |
 | `BIVY_MCP_PROXY` | any non-empty | unset | Supported (opt-in) | Rewrites the agent's on-disk MCP config so its servers launch through `bivy mcp-proxy`, restored on session close. Skipped for Pi and the Claude SDK, which govern MCP natively. Note: `BIVY_MCP_PROXY=0` **enables** it |
 
@@ -346,7 +346,8 @@ self-contained setups.
 
 | Variable | Type | Default | Status |
 | --- | --- | --- | --- |
-| `BIVY_EXEC_TIMEOUT_MS` | integer ms | `600000` (10 min) | Supported — `bivy exec` turn timeout. `--timeout <seconds>` wins |
+| `BIVY_EXEC_TIMEOUT_MS` | integer ms | `600000` (10 min) | Supported — `bivy exec` client wait timeout. `--timeout <seconds>` wins |
+| `BIVY_TURN_TIMEOUT_MS` | integer ms | `3600000` (60 min) | Supported — daemon-side watchdog for every agent turn. Stops the runtime, marks the session timed out, and releases ephemeral/queue progress. `0` explicitly disables it; values above 24 h are capped |
 | `BIVY_RUN_IDLE_NOTIFY_MS` | integer ms | `30000` | Internal / test tuning |
 | `BIVY_TERM_BELL_QUIET_MS` | integer ms | `8000` | Internal / test tuning — how long since your last keystroke before a terminal bell counts as "you stepped away" |
 | `BIVY_TERM_BELL_COOLDOWN_MS` | integer ms | `45000` | Internal / test tuning — collapses a bell storm into one notification |

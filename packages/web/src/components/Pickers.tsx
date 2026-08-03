@@ -48,11 +48,19 @@ function tierLabel(tier: string): string {
 
 function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string }) {
   const tier = runtimeTier(runtime);
+  const protectionLevel = runtime.protectionLevel || "user-permissions";
+  const protectionLabel = runtime.protectionLabel || "Protection unknown";
   return (
     <span className="runtime-meta">
       {text && <span className="runtime-meta-text">{text}</span>}
-      <span className="runtime-capabilities" aria-label="Runtime support tier and capabilities">
+      <span className="runtime-capabilities" aria-label="Runtime support tier, protection, and capabilities">
         <span className={`runtime-tier ${tier}`}>{tierLabel(tier)}</span>
+        <span
+          className={`runtime-protection ${protectionLevel}`}
+          title={runtime.protectionDetail || "This node did not report a protection description."}
+        >
+          {protectionLabel}
+        </span>
         {runtimeCapabilityChips(runtime).map((chip) => (
           <span key={chip.label} className={`runtime-cap ${chip.ok ? "ok" : "limited"}`} title={chip.ok ? `${chip.label} supported` : `${chip.label} not supported by this runtime`}>
             {chip.ok ? "✓" : "–"} {chip.label}
@@ -246,6 +254,7 @@ function RepoBranchPicker({
 // node default (Settings → Nodes).
 export function SandboxPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const nodeDefault = state.nodeSettings?.defaultSandbox;
+  const [confirmFullAccess, setConfirmFullAccess] = useState(false);
   return (
     <Sheet title="Sandbox mode" onClose={onClose} autoFocusSearch={false}>
       <div className="picker-list">
@@ -258,18 +267,28 @@ export function SandboxPicker({ state, onClose }: { state: AppState; onClose: ()
             onClose();
           }}
         />
-        {SANDBOX_TIERS.map((t) => (
-          <PickerItem
-            key={t.id}
-            active={state.draftSandbox === t.id}
-            title={t.label}
-            meta={t.hint}
-            onClick={() => {
-              controller.setSessionSandbox(t.id);
-              onClose();
-            }}
-          />
-        ))}
+        {SANDBOX_TIERS.map((t) => {
+          const fullAccess = t.id === "danger-full-access";
+          const awaitingConfirmation = fullAccess && confirmFullAccess;
+          return (
+            <PickerItem
+              key={t.id}
+              active={state.draftSandbox === t.id}
+              title={awaitingConfirmation ? "Confirm full computer access" : t.label}
+              meta={awaitingConfirmation
+                ? "This agent can access anything your OS user can. Bivy is not an isolation boundary. Select again to continue."
+                : t.hint}
+              onClick={() => {
+                if (fullAccess && !confirmFullAccess) {
+                  setConfirmFullAccess(true);
+                  return;
+                }
+                controller.setSessionSandbox(t.id);
+                onClose();
+              }}
+            />
+          );
+        })}
       </div>
     </Sheet>
   );
@@ -311,6 +330,7 @@ export function NodePicker({
 // ---- Agent picker ----
 export function AgentPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const [q, setQ] = useState("");
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   useEffect(() => {
     controller.listRuntimes();
   }, []);
@@ -319,12 +339,12 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
     const matched = !query
       ? state.runtimes
       : state.runtimes.filter((a) =>
-          `${a.id} ${a.name || ""} ${a.displayName || ""} ${(a as any).description || ""} ${(a as any).language || ""}`.toLowerCase().includes(query),
+          `${a.id} ${a.name || ""} ${a.displayName || ""} ${(a as any).description || ""} ${(a as any).language || ""} ${a.protectionLabel || ""}`.toLowerCase().includes(query),
         );
-    // Sort the selector by display name, ascending (A→Z, case-insensitive), so the
-    // agent list is predictable regardless of catalog insertion order.
     return [...matched].sort((a, b) => agentLabel(a).localeCompare(agentLabel(b), undefined, { sensitivity: "base" }));
   }, [state.runtimes, q]);
+  const recommended = runtimes.filter((runtime) => runtimeTier(runtime) === "supported");
+  const more = runtimes.filter((runtime) => runtimeTier(runtime) !== "supported");
 
   const cloningActiveSession = Boolean(state.activeSessionId);
   // For an active session, "current" means the runtime that owns that session,
@@ -333,6 +353,67 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
     ? state.activeRuntimeId ?? state.sessions.find((s) => s.sessionId === state.activeSessionId)?.runtimeId ?? null
     : state.selectedAgentId ?? (state.runtimes.find((r) => (r as any).current)?.id || null);
 
+  const renderRuntime = (a: RuntimeInfo) => {
+    const status = String((a as any).status || "available");
+    const available = status === "available";
+    const installable = !available && Boolean((a as any).install);
+    const installing = state.installingRuntimeId === a.id;
+    const active = a.id === selectedAgentId;
+    const needsProtectionConfirmation = !cloningActiveSession && a.protectionLevel === "user-permissions";
+    const confirming = needsProtectionConfirmation && confirmingId === a.id;
+    const chips = [
+      installing ? "setting up…" : null,
+      !available ? status : null,
+      (a as any).language,
+      (a as { authOwner?: string }).authOwner ? `auth: ${(a as { authOwner?: string }).authOwner}` : null,
+    ].filter(Boolean).join(" · ");
+    return (
+      <PickerItem
+        key={a.id}
+        active={active}
+        title={confirming ? `Confirm ${agentLabel(a)}` : agentLabel(a)}
+        meta={
+          <RuntimeMeta
+            runtime={a}
+            text={confirming
+              ? "Runs with your OS user permissions and no Bivy-owned isolation. Use a container/VM for unattended or untrusted work. Select again to continue."
+              : cloningActiveSession
+                ? ["Fork + handoff", chips || (a as any).description].filter(Boolean).join(" · ")
+                : chips || (a as any).description}
+          />
+        }
+        disabled={installing || (!available && !installable)}
+        right={
+          installable && !installing ? (
+            <button
+              type="button"
+              className="picker-action"
+              onClick={(e) => {
+                e.stopPropagation();
+                controller.installAgent(a.id);
+              }}
+            >
+              Install
+            </button>
+          ) : undefined
+        }
+        onClick={() => {
+          if (installable) {
+            controller.installAgent(a.id);
+            return;
+          }
+          if (!available) return;
+          if (needsProtectionConfirmation && !confirming) {
+            setConfirmingId(a.id);
+            return;
+          }
+          controller.chooseAgent(a);
+          onClose();
+        }}
+      />
+    );
+  };
+
   return (
     <Sheet title={cloningActiveSession ? "Hand off to agent" : "Agent"} onClose={onClose} autoFocusSearch={false}>
       {cloningActiveSession && (
@@ -340,62 +421,13 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
           Choosing an agent forks this session with its transcript and working files, then opens the fork in that agent.
         </div>
       )}
-      <input className="picker-search" placeholder="Search agents…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <input className="picker-search" placeholder="Search agents…" value={q} onChange={(e) => { setQ(e.target.value); setConfirmingId(null); }} />
       <div className="picker-list">
         {runtimes.length === 0 && <div className="picker-empty">No agents available.</div>}
-        {runtimes.map((a) => {
-          const status = String((a as any).status || "available");
-          const available = status === "available";
-          const installable = !available && Boolean((a as any).install);
-          const installing = state.installingRuntimeId === a.id;
-          const active = a.id === selectedAgentId;
-          const chips = [
-            installing ? "setting up…" : null,
-            !available ? status : null,
-            (a as any).language,
-            (a as { authOwner?: string }).authOwner ? `auth: ${(a as { authOwner?: string }).authOwner}` : null,
-          ].filter(Boolean).join(" · ");
-          return (
-            <PickerItem
-              key={a.id}
-              active={active}
-              title={agentLabel(a)}
-              meta={
-                <RuntimeMeta
-                  runtime={a}
-                  text={cloningActiveSession
-                    ? ["Fork + handoff", chips || (a as any).description].filter(Boolean).join(" · ")
-                    : chips || (a as any).description}
-                />
-              }
-              disabled={installing || (!available && !installable)}
-              right={
-                installable && !installing ? (
-                  <button
-                    type="button"
-                    className="picker-action"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      controller.installAgent(a.id);
-                    }}
-                  >
-                    Install
-                  </button>
-                ) : undefined
-              }
-              onClick={() => {
-                if (installable) {
-                  controller.installAgent(a.id);
-                  return;
-                }
-                if (available) {
-                  controller.chooseAgent(a);
-                  onClose();
-                }
-              }}
-            />
-          );
-        })}
+        {recommended.length > 0 && <div className="picker-section-label">Recommended</div>}
+        {recommended.map(renderRuntime)}
+        {more.length > 0 && <div className="picker-section-label">More agents</div>}
+        {more.map(renderRuntime)}
       </div>
     </Sheet>
   );

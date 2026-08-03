@@ -77,6 +77,7 @@ export function ProviderConnectForm({
 }) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const provider = state.providers.find((p) => p.id === providerId);
   const name = provider?.name || providerId;
   const keyProvider = apiKeyProvider || providerId;
@@ -98,6 +99,7 @@ export function ProviderConnectForm({
 
   return (
     <div className="settings-form">
+      {error && <div className="banner error inline" role="alert">{error}</div>}
       {provider?.oauth && (
         <button className="btn primary block" onClick={() => controller.startOauth(providerId)}>
           Sign in with {name}
@@ -115,17 +117,21 @@ export function ProviderConnectForm({
         <button
           className="btn primary"
           disabled={!key.trim() || busy}
-          onClick={() => {
+          onClick={async () => {
             setBusy(true);
-            controller.saveApiKey(keyProvider, key.trim());
-            setKey("");
-            // provider.apiKey has no direct ack — re-list so `provider.configured`
-            // above (and the model picker's own providers watch) reflect the
-            // node's real outcome instead of a blind timer either way.
-            setTimeout(() => {
+            setError(null);
+            try {
+              // Await the node's authoritative ack. A timer/re-list can make a
+              // failed save look successful and is especially harmful in the
+              // first-run auth path.
+              await controller.saveApiKey(keyProvider, key.trim());
+              setKey("");
               controller.listProviders();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            } finally {
               setBusy(false);
-            }, 500);
+            }
           }}
         >
           Save key

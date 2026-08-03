@@ -62,6 +62,10 @@ export interface RuntimeFactoryOptions extends PiRuntimeOptions {
 
 export type RuntimeStatus = "available" | "planned" | "external";
 export type RuntimeSupportTier = "supported" | "beta" | "experimental" | "planned";
+/** Customer-facing protection mechanism. This is deliberately factual rather
+ * than a safety score: a native sandbox, structured tool controls, MCP-only
+ * controls, and ordinary user permissions have materially different boundaries. */
+export type RuntimeProtectionLevel = "native-sandbox" | "tool-controls" | "mcp-controls" | "user-permissions";
 
 export interface RuntimeInstallInfo {
   label: string;
@@ -81,6 +85,10 @@ export interface RuntimeInfo {
   language?: string;
   capabilities: Partial<RuntimeCapabilities>;
   supportTier: RuntimeSupportTier;
+  /** Effective protection advertised for this exact configured runtime path. */
+  protectionLevel?: RuntimeProtectionLevel;
+  protectionLabel?: string;
+  protectionDetail?: string;
   /** Who owns the first-run credential/login UX for this runtime. */
   authOwner?: "bivy" | "agent" | "mixed";
   notes?: string;
@@ -1635,6 +1643,34 @@ const PICKER_RUNTIME_IDS = new Set<string>([
   ...CLI_AGENT_IDS.filter((id) => !CLI_AGENT_SPECS[id].hidden),
 ]);
 
+function runtimeProtection(runtime: RuntimeInfo): Pick<RuntimeInfo, "protectionLevel" | "protectionLabel" | "protectionDetail"> {
+  // Native SDK/CLI sandboxes receive the requested read-only/workspace/full tier
+  // in their own process boundary. The governed Codex path has both native
+  // sandbox flags and Bivy interception; label the stronger containment source.
+  const nativeSandbox = runtime.id === "claude-code-sdk" || runtime.id === "codex-approvals"
+    || (isCliAgentId(runtime.id) && Boolean(CLI_AGENT_SPECS[runtime.id].composeArgs));
+  if (nativeSandbox) return {
+    protectionLevel: "native-sandbox",
+    protectionLabel: "Native sandbox",
+    protectionDetail: "This agent enforces Bivy's selected access tier in its native sandbox. Bivy tool controls may add approvals, but are not an OS jail of their own.",
+  };
+  if (runtime.capabilities.toolInterception) return {
+    protectionLevel: "tool-controls",
+    protectionLabel: "Bivy tool controls",
+    protectionDetail: "Structured tool calls pass through Bivy policy and approvals. Shell heuristics prevent accidents, not adversarial escape.",
+  };
+  if (runtime.capabilities.mcpToolApprovals) return {
+    protectionLevel: "mcp-controls",
+    protectionLabel: "MCP tools only",
+    protectionDetail: "Bivy governs MCP tool calls, but the agent's built-in shell and file operations still run with your user permissions.",
+  };
+  return {
+    protectionLevel: "user-permissions",
+    protectionLabel: "Runs as your user",
+    protectionDetail: "No Bivy-owned isolation or complete tool interception. Use a container/VM for unattended or untrusted work.",
+  };
+}
+
 export function listRuntimes(currentId?: string): (RuntimeInfo & { current: boolean })[] {
   return RUNTIME_CATALOG
     // Keep the current runtime visible even if hidden, so a session pinned to a
@@ -1650,7 +1686,7 @@ export function listRuntimes(currentId?: string): (RuntimeInfo & { current: bool
       if (runtime.id === "bivy-agent-protocol") return protocolInfo();
       if (runtime.id === "acp") return acpInfo();
       return runtime;
-    }).map((runtime) => ({ ...runtime, current: runtime.id === currentId }));
+    }).map((runtime) => ({ ...runtime, ...runtimeProtection(runtime), current: runtime.id === currentId }));
 }
 
 export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {

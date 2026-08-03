@@ -105,10 +105,12 @@ jobs:
       - run: npm ci
       # Verify the temporary postinstall repair for pi-coding-agent's published
       # shrinkwrap actually changed the on-disk package, not only npm's lockfile.
-      - name: Verify patched pi dependency
+      - name: Verify patched pi dependencies
         run: |
-          actual="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion/package.json').version")"
-          test "$actual" = "5.0.9"
+          brace="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion/package.json').version")"
+          undici="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/node_modules/undici/package.json').version")"
+          test "$brace" = "5.0.9"
+          test "$undici" = "8.9.0"
       # Production dependencies ship to users; do not release a known
       # high/critical advisory.
       - run: npm audit --omit=dev --audit-level=high
@@ -133,6 +135,22 @@ jobs:
       # (which is exactly what happened for a day). Catch that class here, at PR
       # time, instead of only in the deploy pipeline.
       - run: npm run build:release
+
+  # The PWA is a principal product client. Run its browser contract at desktop
+  # and mobile widths in CI instead of relying only on reducer/unit coverage.
+  browser:
+    needs: changes
+    if: inputs.force_all || needs.changes.outputs.root == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
 
   # Cheap, dependency-free check: no `npm ci` needed since scripts/check-links.mjs
   # only uses node:fs/node:path. Gated on its own `docs` filter (not `root`) so a
@@ -218,7 +236,7 @@ jobs:
   # leaves a required check unreported and blocking the PR.
   ci-ok:
     if: ${{ always() }}
-    needs: [changes, core, docs-links, services, remote-e2e]
+    needs: [changes, core, browser, docs-links, services, remote-e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Verify no required job failed

@@ -45,7 +45,13 @@ for (const runtime of listRuntimes()) {
   assert.ok(runtime.supportTier, `${runtime.id} must declare a supportTier`);
   assert.ok(runtime.description && runtime.description.length > 0, `${runtime.id} must have a description`);
   assert.ok(runtime.capabilities, `${runtime.id} must declare capabilities`);
+  assert.ok(runtime.protectionLevel, `${runtime.id} must declare its effective protection mechanism`);
+  assert.ok(runtime.protectionLabel && runtime.protectionDetail, `${runtime.id} must explain its protection in customer language`);
 }
+assert.equal(listRuntimes().find((r) => r.id === "pi")!.protectionLevel, "tool-controls");
+assert.equal(listRuntimes().find((r) => r.id === "claude-code-sdk")!.protectionLevel, "native-sandbox");
+assert.equal(listRuntimes().find((r) => r.id === "gemini")!.protectionLevel, "native-sandbox");
+assert.equal(listRuntimes().find((r) => r.id === "opencode")!.protectionLevel, "user-permissions");
 
 // Honesty invariant (docs/agents-not-fully-supported.md): the CLI ProcessRuntime
 // adapters govern at the effect level and stream stdout — they must NOT advertise
