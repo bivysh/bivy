@@ -278,6 +278,19 @@ export interface BranchInfo {
   [k: string]: unknown;
 }
 
+/**
+ * The provider id an *API key* for `provider` should be stored under. A few
+ * providers sign in via OAuth under one id but read a pasted key from another
+ * provider's env var: Codex authenticates as `openai-codex` (the ChatGPT
+ * subscription) yet reads a plain key from `openai`'s OPENAI_API_KEY. Used by the
+ * sign-in sheet (where to save the key) and the auto-dismiss (which provider
+ * becoming configured satisfies the prompt). OAuth sign-in still uses the
+ * original id.
+ */
+export function modelAuthApiKeyProvider(provider: string): string {
+  return provider === "openai-codex" ? "openai" : provider;
+}
+
 export interface ProviderInfo {
   id: string;
   name?: string;
@@ -635,10 +648,12 @@ export interface AppState {
   oauth: OauthState | null;
   /** A launched ephemeral runner came online with no usable model credentials
    *  (nothing to seed from this device, no peer vault, no hosted escrow) — the
-   *  first-run subscription-OAuth prompt. `nodeId` scopes it to the runner that
-   *  needs it; cleared automatically once any provider becomes configured (that
-   *  same login is then escrowed so future runners inherit it). Null otherwise. */
-  needsModelAuth: { nodeId: string; provider: string } | null;
+   *  first-run subscription-OAuth prompt. Also raised mid-session when a running
+   *  agent's credential is missing/expired and it 401s (`reason` carries the
+   *  failure text so the sheet can explain a re-auth vs a first sign-in). `nodeId`
+   *  scopes it to the runner that needs it; cleared once the *targeted* provider
+   *  becomes configured. Null otherwise. */
+  needsModelAuth: { nodeId: string; provider: string; reason?: string } | null;
   githubApp: GithubAppState | null;
   /** Cost/token/plan-quota for the active session (display-only), or null. */
   usage: Usage | null;
@@ -1641,7 +1656,7 @@ export class SessionStore {
 
   /** Set (or clear, with null) the first-run "sign in to your model" prompt for a
    *  freshly-launched ephemeral runner. See `AppState.needsModelAuth`. */
-  setNeedsModelAuth(v: { nodeId: string; provider: string } | null): void {
+  setNeedsModelAuth(v: { nodeId: string; provider: string; reason?: string } | null): void {
     this.set({ needsModelAuth: v });
   }
 
@@ -2196,6 +2211,20 @@ export class SessionStore {
         }
         return;
       }
+      case "session.auth_required": {
+        // The node reported an auth failure for `provider` (no credential, or an
+        // expired/invalid one that 401'd). Raise the "Sign in to your model" sheet
+        // targeted at that provider — the same one the inline error bubble above
+        // describes — so the user can re-authenticate in place. Focus-gated like
+        // session.error so a background session doesn't hijack the sheet.
+        const e = event as any;
+        if (this.isForeignSessionEvent(e.sessionId)) return;
+        const provider = String(e.provider || "");
+        if (provider && this.state.currentNodeId) {
+          this.setNeedsModelAuth({ nodeId: this.state.currentNodeId, provider, reason: String(e.reason || "") });
+        }
+        return;
+      }
       case "approval.created": {
         const approval = (event as any).approval || event;
         // Needing a response is one of the few things worth reordering the
@@ -2385,12 +2414,17 @@ export class SessionStore {
         const providers = Array.isArray(e.providers) ? (e.providers as ProviderInfo[]) : [];
         // A configured provider we were managing → refresh its auth detail too.
         this.set({ providers });
-        // The runner now has a usable model provider — the first-run OAuth prompt
-        // (if it was showing) is satisfied, whether the login just completed here
-        // or a peer/hosted-escrow sync landed the vault. Auto-dismiss it so a
-        // transient "no creds yet" prompt disappears once creds arrive.
-        if (this.state.needsModelAuth && providers.some((p) => p.configured)) {
-          this.set({ needsModelAuth: null });
+        // The prompt is satisfied once the *targeted* provider becomes configured
+        // (login completed here, or a peer/hosted-escrow sync landed the vault).
+        // Check the specific provider, not just "any provider configured": a
+        // mid-session prompt for e.g. openai-codex must not be dismissed just
+        // because anthropic is already connected.
+        const pendingAuth = this.state.needsModelAuth;
+        if (pendingAuth) {
+          const alias = modelAuthApiKeyProvider(pendingAuth.provider);
+          if (providers.some((p) => (p.id === pendingAuth.provider || p.id === alias) && p.configured)) {
+            this.set({ needsModelAuth: null });
+          }
         }
         return;
       }

@@ -17,6 +17,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { isModelAuthError } from "./auth-errors.js";
+
 export interface AnthropicPreflightDeps {
   /** Existence check (injectable for tests). Defaults to fs.existsSync. */
   fileExists?: (p: string) => boolean;
@@ -84,7 +86,7 @@ export function anthropicCredentialPreflight(env: Record<string, string | undefi
 
 /** True when a raw error string looks like an Anthropic auth failure (401 etc.). */
 export function isAnthropicAuthError(raw: string): boolean {
-  return /\b401\b|unauthorized|authentication|invalid x-api-key|(missing|invalid).*(bearer|api[\s_-]?key|token)/i.test(raw);
+  return isModelAuthError(raw);
 }
 
 /**
