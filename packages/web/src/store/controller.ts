@@ -167,6 +167,11 @@ function clientMessageId(): string {
 
 const LOOPBACK = /^(localhost|127\.0\.0\.1|\[?::1\]?)$/;
 
+/** How long to wait after a launched ephemeral runner comes online before
+ *  concluding it has no model credentials and raising the first-run sign-in
+ *  prompt — long enough for hosted-escrow / peer-vault sync to land first. */
+const FIRST_RUN_MODEL_AUTH_GRACE_MS = 8000;
+
 /**
  * Same rule as the legacy client: a same-origin/loopback node (or explicit
  * `?local=1`) talks directly; a hosted control plane (app.bivy.sh) talks to a
@@ -1423,6 +1428,10 @@ export class AppController {
     // If this is a machine we just launched, seed its vault with the model API
     // keys held on this device (closes the cold-start gap — see the method doc).
     void this.seedEphemeralNodeIfNeeded();
+    // First-run subscription-OAuth: a launched runner that ends up with no model
+    // credentials at all (nothing seeded, no peer vault, no hosted escrow) needs
+    // the user to sign in once. See the method doc.
+    void this.maybePromptFirstRunModelAuth();
     // Pull durable session↔machine correlations so a torn-down session stays
     // rebuildable (Gap 1); then record one for the machine we're on, if owned.
     void this.refreshEphemeralCorrelations();
@@ -2026,6 +2035,9 @@ export class AppController {
    *  session, so a reconnect doesn't re-push (the node write is idempotent
    *  regardless). See `seedEphemeralNodeIfNeeded`. */
   private seededEphemeralNodes = new Set<string>();
+  /** Launched ephemeral node ids we've already run the first-run model-auth
+   *  check for this session, so a reconnect doesn't re-schedule it. */
+  private firstRunAuthNodes = new Set<string>();
   /** Machines already scheduled for finish-triggered teardown. */
   private finishingEphemeralMachines = new Set<string>();
 
@@ -2175,6 +2187,59 @@ export class AppController {
       this.send({ kind: "provider.apiKey", provider, key });
     }
   }
+  /**
+   * First-run model access for a launched ephemeral runner.
+   *
+   * The vault-sync paths (device API-key seed, peer node→node wrap, hosted
+   * escrow) cover every case where the account *already has* a model login
+   * somewhere. The one they can't cover is the genuine first run — a phone-only
+   * account whose very first runner has no device key to seed, no peer online,
+   * and nothing escrowed yet. That runner boots with no model credentials and
+   * would silently fail on the first turn. Here we detect that and raise the
+   * `needsModelAuth` prompt so the user signs in once (over the existing
+   * `provider.oauth.start` paste-back on this same node); the node then escrows
+   * the login so every future runner inherits it with no prompt.
+   *
+   * Timing: model-auth can arrive a beat after connect (escrow/peer sync), so we
+   * wait a grace before concluding "no creds", and the store auto-dismisses the
+   * prompt the moment any provider becomes configured — so a slow sync that
+   * lands during the grace just means the prompt never shows (or briefly shows
+   * then clears), never a wrong dead-end.
+   */
+  private async maybePromptFirstRunModelAuth(): Promise<void> {
+    if (!EPHEMERAL_MACHINES_ENABLED || this.direct) return;
+    const nodeId = this.local.cur;
+    if (!nodeId || this.firstRunAuthNodes.has(nodeId)) return;
+    // Only a machine THIS device launched — never a normal persistent node,
+    // which manages its own logins through Settings.
+    const machines = await this.ephemeralMachines.list().catch(() => [] as EphemeralMachine[]);
+    if (!machines.some((m) => m.nodeId === nodeId)) return;
+    this.firstRunAuthNodes.add(nodeId);
+    // Ask the node for its provider status now; the freshest list will have
+    // arrived well before the grace elapses.
+    this.listProviders();
+    setTimeout(() => {
+      const st = this.store.getState();
+      // Bail if we've moved on, a login is already in flight, the prompt is
+      // already up, or creds have since landed.
+      if (st.status !== "online" || this.local.cur !== nodeId) return;
+      if (st.needsModelAuth || st.oauth) return;
+      if (st.providers.some((p) => p.configured)) return;
+      // Prefer an OAuth-capable provider (Anthropic first — subscription login
+      // is the whole point here), falling back to anthropic by id.
+      const provider =
+        st.providers.find((p) => p.oauth && p.id === "anthropic")?.id ??
+        st.providers.find((p) => p.oauth)?.id ??
+        "anthropic";
+      this.store.setNeedsModelAuth({ nodeId, provider });
+    }, FIRST_RUN_MODEL_AUTH_GRACE_MS);
+  }
+
+  /** Dismiss the first-run model-auth prompt (user chose to handle it later). */
+  dismissModelAuthPrompt(): void {
+    this.store.setNeedsModelAuth(null);
+  }
+
   /** Destroy a configured ephemeral machine shortly after agent_end. The short
    * grace period lets final transcript/PR metadata flush first. A queued
    * follow-up suppresses teardown; its eventual agent_end will try again.
