@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 
-import type { AccountNode, GithubQueueItem } from "./account.js";
+import type { AccountAutomationRun, AccountNode, GithubQueueItem } from "./account.js";
 import type { ApprovalRequest, SessionSummary, UserQuestionRequest } from "./store.js";
 
 export type InboxItemKind =
@@ -92,8 +92,9 @@ function timestampMs(value: number | string | undefined): number {
 
 /**
  * Normalize every source of attention (session/account adverts, live
- * approval + question pushes, the GitHub/Slack work queue, and node provider
- * auth) into one deduplicated, content-free InboxItem[]. Pure and
+ * approval + question pushes, the GitHub/Slack work queue, the control-plane
+ * automation-run feed, and node provider auth) into one deduplicated,
+ * content-free InboxItem[]. Pure and
  * framework-agnostic so it's unit-testable without mounting any UI, and
  * reusable by any future client (web today, Expo later — see #152).
  *
@@ -107,6 +108,7 @@ export function buildInboxItems(input: {
   questions: UserQuestionRequest[];
   nodes: AccountNode[];
   queue: GithubQueueItem[];
+  runs?: AccountAutomationRun[];
   now?: number;
 }): InboxItem[] {
   const now = input.now ?? Date.now();
@@ -114,9 +116,25 @@ export function buildInboxItems(input: {
   const sessions = new Map(input.sessions.map((session) => [session.sessionId, session]));
   const items: InboxItem[] = [];
 
+  // The control-plane automation-run feed is the authoritative source for an
+  // automation that needs attention or failed its final attempt. When a run
+  // links to a session we let it supersede that session's node-advertised
+  // failure heuristic below, so one stuck automation shows up once — as a real
+  // run, with a stable run id — not twice.
+  const runs = input.runs ?? [];
+  const runSessionIds = new Set(
+    runs
+      .filter((run) => run.status === "needs_attention" || run.status === "failed")
+      .map((run) => run.output?.sessionId)
+      .filter((id): id is string => Boolean(id)),
+  );
+
   for (const session of input.sessions) {
     for (const advert of session.attention ?? []) {
       const source = advert.kind === "automation" ? "automation" : "session";
+      // A real automation run already covers this session — skip the node's
+      // source-derived automation stand-in so we don't double-count it.
+      if (advert.kind === "automation" && runSessionIds.has(session.sessionId)) continue;
       const updatedAt = advert.updatedAt || advert.createdAt;
       const node = session.nodeId ? nodes.get(session.nodeId) : undefined;
       const stale = node?.online === false || (session.updatedAt ? now - timestampMs(session.updatedAt) > STALE_AFTER_MS : false);
@@ -174,6 +192,32 @@ export function buildInboxItems(input: {
       createdAt: queueItem.createdAt, updatedAt: queueItem.createdAt,
     });
   }
+  for (const run of runs) {
+    if (run.status !== "needs_attention" && run.status !== "failed") continue;
+    const sessionId = run.output?.sessionId;
+    const session = sessionId ? sessions.get(sessionId) : undefined;
+    const node = session?.nodeId ? nodes.get(session.nodeId) : undefined;
+    const updatedAt = run.completedAt || run.startedAt || run.createdAt;
+    items.push({
+      // Keyed by run + status so a run advancing (needs_attention → failed)
+      // replaces rather than duplicates the earlier row via dedupeInboxItems.
+      id: inboxItemId("automation", run.id, run.status),
+      kind: "automation",
+      severity: run.status === "failed" ? "error" : "warning",
+      source: "automation",
+      state: "unresolved",
+      nodeId: session?.nodeId,
+      sessionId,
+      runId: run.id,
+      targetId: sessionId,
+      title: run.status === "failed" ? "Automation run failed" : inboxKindTitle("automation"),
+      detail: run.title,
+      createdAt: run.createdAt,
+      updatedAt,
+      stale: node?.online === false,
+    });
+  }
+
   for (const node of input.nodes) {
     for (const provider of node.providers ?? []) {
       if (!provider.configured || !provider.expiresAt || provider.expiresAt > now) continue;

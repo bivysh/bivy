@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { type GithubQueueItem, type InboxItem } from "@bivy/core";
+import { type AccountAutomationRun, type GithubQueueItem, type InboxItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -68,19 +68,28 @@ export function App() {
   // the moment it opens — see #388. Hosted-only: the queue is account-level
   // control-plane state, unavailable in direct mode.
   const [githubQueue, setGithubQueue] = useState<GithubQueueItem[] | null>(null);
+  // Automation runs feed the Inbox's authoritative automation items (runs that
+  // need attention or failed). Same account-level, hosted-only, polled-at-shell
+  // shape as the GitHub queue above.
+  const [automationRuns, setAutomationRuns] = useState<AccountAutomationRun[] | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
   const refreshGithubQueue = useCallback(() => {
     if (controller.direct || !state.signedIn) return;
     controller.fetchGithubQueue().then(setGithubQueue).catch(() => {});
   }, [state.signedIn]);
+  const refreshAutomationRuns = useCallback(() => {
+    if (controller.direct || !state.signedIn) return;
+    controller.fetchAutomationRuns().then(setAutomationRuns).catch(() => {});
+  }, [state.signedIn]);
   useEffect(() => {
     if (controller.direct || !state.signedIn) return;
     refreshGithubQueue();
+    refreshAutomationRuns();
     const id = setInterval(() => {
-      if (document.visibilityState !== "hidden") refreshGithubQueue();
+      if (document.visibilityState !== "hidden") { refreshGithubQueue(); refreshAutomationRuns(); }
     }, 30000);
     return () => clearInterval(id);
-  }, [refreshGithubQueue]);
+  }, [refreshGithubQueue, refreshAutomationRuns]);
   // sessionId → the run that produced it, joined from the queue's evidence.
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
@@ -327,6 +336,7 @@ export function App() {
     questions: state.questions,
     nodes: state.nodes,
     queue: githubQueue ?? [],
+    runs: automationRuns ?? [],
   });
   const openInboxItem = (item: InboxItem) => {
     setInboxOpen(false);

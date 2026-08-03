@@ -18,6 +18,7 @@ import {
   fetchMe,
   fetchGithubApp,
   fetchGithubQueue,
+  fetchAutomationRuns,
   assignWorkItem,
   deleteWorkItem,
   clearWorkQueue,
@@ -1942,6 +1943,11 @@ export class AppController {
   /** Recent incoming work items (the GitHub queue), newest first. */
   fetchGithubQueue(limit = 30): ReturnType<typeof fetchGithubQueue> {
     return fetchGithubQueue(this.local, limit);
+  }
+  /** Recent automation runs (account-wide), newest first. The Inbox reads these
+   *  to surface runs that need attention or failed their final attempt. */
+  fetchAutomationRuns(limit = 50): ReturnType<typeof fetchAutomationRuns> {
+    return fetchAutomationRuns(this.local, limit);
   }
   /** Set (empty string clears) the default node for untagged GitHub work. Without
    *  an appId it covers every connected app — it's an account-level preference. */

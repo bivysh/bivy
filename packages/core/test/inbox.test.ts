@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 import { describe, expect, it } from "vitest";
 import { buildInboxItems, dedupeInboxItems, inboxItemId, isInboxAdvert, type InboxItem } from "../src/inbox.js";
-import type { AccountNode, GithubQueueItem } from "../src/account.js";
+import type { AccountAutomationRun, AccountNode, GithubQueueItem } from "../src/account.js";
 import type { ApprovalRequest, SessionSummary, UserQuestionRequest } from "../src/store.js";
 
 function item(updatedAt: string, title = "old"): InboxItem {
@@ -102,6 +102,37 @@ describe("buildInboxItems", () => {
     const items = buildInboxItems({ sessions: [], approvals: [], questions: [], nodes: [], queue: [pending, claimed], now: NOW });
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "queue", queueItemId: "q1" });
+  });
+
+  it("surfaces an automation run that needs attention or failed, keyed by run id, and ignores healthy runs", () => {
+    const runs: AccountAutomationRun[] = [
+      { id: "run-1", triggerKind: "github", status: "needs_attention", title: "Nightly deploy", createdAt: "2026-01-01T00:03:00.000Z", output: { sessionId: "s9" } },
+      { id: "run-2", triggerKind: "schedule", status: "failed", title: "Sync issues", createdAt: "2026-01-01T00:04:00.000Z", completedAt: "2026-01-01T00:06:00.000Z" },
+      { id: "run-3", triggerKind: "github", status: "succeeded", title: "All good", createdAt: "2026-01-01T00:05:00.000Z" },
+    ];
+    const sessions = [session({ sessionId: "s9", nodeId: "node-a" })];
+    const items = buildInboxItems({ sessions, approvals: [], questions: [], nodes: [], queue: [], runs, now: NOW });
+    const automation = items.filter((i) => i.kind === "automation");
+    expect(automation).toHaveLength(2);
+    expect(automation.find((i) => i.runId === "run-1")).toMatchObject({ source: "automation", severity: "warning", sessionId: "s9", nodeId: "node-a" });
+    expect(automation.find((i) => i.runId === "run-2")).toMatchObject({ source: "automation", severity: "error", id: inboxItemId("automation", "run-2", "failed") });
+    expect(automation.some((i) => i.runId === "run-3")).toBe(false);
+  });
+
+  it("lets a real automation run supersede a session's source-derived failure advert — counted once", () => {
+    const sessions = [
+      session({
+        sessionId: "s9", nodeId: "node-a", source: "issue:#7",
+        attention: [{ id: "last-failure", kind: "automation", severity: "error", createdAt: "2026-01-01T00:05:00.000Z" }],
+      }),
+    ];
+    const runs: AccountAutomationRun[] = [
+      { id: "run-9", triggerKind: "github", status: "failed", title: "Fix #7", createdAt: "2026-01-01T00:05:30.000Z", output: { sessionId: "s9" } },
+    ];
+    const items = buildInboxItems({ sessions, approvals: [], questions: [], nodes: [], queue: [], runs, now: NOW });
+    const automation = items.filter((i) => i.kind === "automation");
+    expect(automation).toHaveLength(1);
+    expect(automation[0]).toMatchObject({ runId: "run-9", sessionId: "s9" });
   });
 
   it("flags an expired provider auth as blocking work, but not one still valid or unconfigured", () => {
