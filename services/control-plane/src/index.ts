@@ -81,6 +81,9 @@ function assertProductionConfig() {
     // and leak the single-use login token. Require it in production.
     problems.push("PUBLIC_CONTROL_PLANE_URL must be set in production (sign-in link URLs must not be derived from request headers)");
   }
+  if (Boolean(process.env.JANITOR_SERVICE_URL) !== Boolean(process.env.JANITOR_PROXY_SECRET)) {
+    problems.push("JANITOR_SERVICE_URL and JANITOR_PROXY_SECRET must be configured together");
+  }
   if (problems.length > 0) {
     console.error("Refusing to start: insecure production configuration:\n  - " + problems.join("\n  - "));
     process.exit(1);
@@ -431,6 +434,36 @@ app.get("/readyz", asyncHandler(async (_req, res) => {
 }));
 function noStorePwaShell(res: Response) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
+}
+
+// Janitor is deployed as a private Kamal accessory. The control plane is its
+// only public ingress: API/artifact requests require the user's existing Bivy
+// bearer token, and the accessory receives only the resolved account id plus a
+// server-to-server secret. Model keys never pass through the browser.
+const janitorServiceUrl = process.env.JANITOR_SERVICE_URL?.replace(/\/$/, "");
+const janitorProxySecret = process.env.JANITOR_PROXY_SECRET;
+if (janitorServiceUrl && janitorProxySecret) {
+  app.all(/^\/janitor(?:\/.*)?$/, asyncHandler(async (req, res) => {
+    const protectedPath = req.path === "/janitor/api" || req.path.startsWith("/janitor/api/") || req.path.startsWith("/janitor/artifacts/");
+    const account = protectedPath ? await store.accountFromSession(bearer(req)) : null;
+    if (protectedPath && !account) return res.status(401).json({ error: "Sign in to Bivy to use Janitor." });
+    const suffix = req.originalUrl.slice("/janitor".length) || "/";
+    const headers: Record<string, string> = {
+      accept: String(req.headers.accept ?? "*/*"),
+      "x-janitor-proxy-secret": janitorProxySecret,
+      "x-bivy-account-id": account?.id ?? "public-shell",
+    };
+    let body: string | undefined;
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      headers["content-type"] = "application/json";
+      body = JSON.stringify(req.body ?? {});
+    }
+    const upstream = await fetch(`${janitorServiceUrl}${suffix}`, { method: req.method, headers, body, signal: AbortSignal.timeout(210_000) });
+    for (const name of ["content-type", "cache-control", "etag", "last-modified"]) {
+      const value = upstream.headers.get(name); if (value) res.setHeader(name, value);
+    }
+    res.status(upstream.status).send(Buffer.from(await upstream.arrayBuffer()));
+  }));
 }
 
 // Serve the React/Vite PWA (@bivy/web) — Bivy's single web client — at the root

@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { listRuntimes, refineCapabilitiesFromHelp } from "../src/runtime/index.js";
+import { listRuntimes, refineCapabilitiesFromHelp, resolveCliExecutionMode } from "../src/runtime/index.js";
 
 let failures = 0;
 function check(name: string, fn: () => void) {
@@ -59,6 +59,22 @@ check("refine: empty resumeTokens never downgrades (can't tell)", () => {
 check("refine: never UPGRADES (off stays off even if the flag appears)", () => {
   const out = refineCapabilitiesFromHelp("--resume --model", { resume: false, modelSelection: false }, { resumeTokens: ["--resume"], modelFlag: "--model" });
   assert.deepEqual(out, { resume: false, modelSelection: false });
+});
+
+// --- execution mode resolution ----------------------------------------------
+
+check("mode: auto prefers protocol, then structured pipe, then plain pipe", () => {
+  assert.equal(resolveCliExecutionMode({ protocolAvailable: true, structuredAvailable: true, protocolPreferred: true }), "protocol");
+  assert.equal(resolveCliExecutionMode({ protocolAvailable: false, structuredAvailable: true }), "structured-pipe");
+  assert.equal(resolveCliExecutionMode({ protocolAvailable: false, structuredAvailable: false }), "pipe");
+});
+
+check("mode: explicit choices are honored and unavailable modes fail closed", () => {
+  assert.equal(resolveCliExecutionMode({ requested: "structured", protocolAvailable: false, structuredAvailable: true }), "structured-pipe");
+  assert.equal(resolveCliExecutionMode({ requested: "pipe", protocolAvailable: true, structuredAvailable: true }), "pipe");
+  assert.throws(() => resolveCliExecutionMode({ requested: "protocol", protocolAvailable: false, structuredAvailable: true }), /no configured protocol/);
+  assert.throws(() => resolveCliExecutionMode({ requested: "structured-pipe", protocolAvailable: false, structuredAvailable: false }), /no available structured parser/);
+  assert.throws(() => resolveCliExecutionMode({ requested: "wat", protocolAvailable: false, structuredAvailable: false }), /Invalid agent execution mode/);
 });
 
 // --- end-to-end, env-gated, via a stub `--help` on PATH ----------------------

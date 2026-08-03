@@ -51,7 +51,7 @@ export default defineConfig({
       // generate a precache-only worker. `generateSW` gave us no hook for the
       // `push`/`notificationclick` handlers Web Push needs, so notifications
       // never displayed. The app-shell precache + navigation fallback (incl. the
-      // /api, /ws, /auth denylist) are reproduced inside sw.ts.
+      // /api, /ws, /auth, /janitor denylist) are reproduced inside sw.ts.
       strategies: "injectManifest",
       srcDir: "src",
       filename: "sw.ts",

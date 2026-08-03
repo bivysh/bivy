@@ -173,6 +173,8 @@ export interface ModelInfo {
 
 export interface RuntimeInfo {
   id: string;
+  /** Default communication path: structured protocol/SDK, JSON pipe, plain pipe, or native terminal. */
+  executionMode?: "protocol" | "structured-pipe" | "pipe" | "pty";
   displayName?: string;
   name?: string;
   [k: string]: unknown;
@@ -853,6 +855,9 @@ function eventThinkingDelta(event: any): { kind: "full" | "delta" | "none"; text
 export class SessionStore {
   private state: AppState = initialState();
   private listeners = new Set<() => void>();
+  /** Coalesce high-frequency streaming state notifications to one browser paint. */
+  private notifyPending = false;
+  private notifyHandle: number | ReturnType<typeof setTimeout> | null = null;
   private draft: Draft = freshDraft();
   /** Agent-sent attachments buffered during the current turn. Flushed at the
    *  turn boundary onto the turn's final assistant bubble (see
@@ -1165,6 +1170,21 @@ export class SessionStore {
     this.set({
       activeSessionId: sessionId,
       activeRuntimeId: known?.runtimeId ?? null,
+      // The composer is shared by drafts and live sessions. Replace the draft's
+      // agent/model paint as soon as an existing row is opened; otherwise the
+      // pills keep claiming that this session uses whatever was last selected
+      // on the New session screen until the history/models round-trips arrive.
+      // The row already has authoritative agent metadata. Model metadata is not
+      // part of sessions.list, so show the neutral loading/default state until
+      // the session-scoped models.list response supplies the real selection.
+      currentAgentName:
+        known?.agentName ||
+        agentLabel(this.state.runtimes.find((r) => r.id === known?.runtimeId)) ||
+        "",
+      currentModel: null,
+      currentModelId: null,
+      models: [],
+      modelsRuntimeId: known?.runtimeId ?? null,
       // Opening a row is how the user "sees" it — stamp lastSeenAt right away
       // so a finished-but-unseen row's indicator clears the instant they look,
       // rather than waiting on a node round-trip to confirm anything.
@@ -1204,7 +1224,45 @@ export class SessionStore {
 
   private set(next: Partial<AppState>): void {
     this.state = { ...this.state, ...next };
-    for (const l of this.listeners) l();
+    // Streaming events can update the store several times in one transport
+    // tick (draft text, tool state, working label). Delay only while a turn is
+    // active so React subscribers repaint at most once per frame; lifecycle and
+    // completed-turn updates remain synchronous.
+    if (this.state.working) {
+      this.scheduleNotify();
+      return;
+    }
+    this.flushNotify();
+  }
+
+  private scheduleNotify(): void {
+    if (this.notifyPending) return;
+    this.notifyPending = true;
+    const callback = () => {
+      this.notifyPending = false;
+      this.notifyHandle = null;
+      for (const listener of this.listeners) listener();
+    };
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      this.notifyHandle = globalThis.requestAnimationFrame(callback);
+    } else {
+      this.notifyHandle = setTimeout(callback, 16);
+    }
+  }
+
+  private flushNotify(): void {
+    if (!this.notifyPending) {
+      for (const listener of this.listeners) listener();
+      return;
+    }
+    const handle = this.notifyHandle;
+    this.notifyPending = false;
+    this.notifyHandle = null;
+    if (handle !== null) {
+      if (typeof globalThis.cancelAnimationFrame === "function" && typeof handle === "number") globalThis.cancelAnimationFrame(handle);
+      else clearTimeout(handle as ReturnType<typeof setTimeout>);
+    }
+    for (const listener of this.listeners) listener();
   }
 
   /**
