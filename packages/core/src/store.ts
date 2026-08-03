@@ -15,7 +15,7 @@
 // this correct baseline, not prerequisites for it.
 
 import type { AttachmentRef, ConnectionStatus, PromptAttachment, ServerEvent } from "./protocol.js";
-import type { AccountNode } from "./account.js";
+import type { AccountNode, EphemeralNodeConfig } from "./account.js";
 import type { InboxAdvert } from "./inbox.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml } from "./markdown.js";
@@ -603,6 +603,12 @@ export interface AppState {
   draftBranch: string | null;
   /** Sandbox tier chosen for the next new session (draft only); null = node default. */
   draftSandbox: SandboxTier | null;
+  /** An ephemeral runner (saved config) chosen as the target for the next new
+   *  session, before any machine exists. Null = run on the currently-connected
+   *  node. When set, the first message launches a fresh machine from this config
+   *  and binds the session to it — no explicit "launch" step. Cleared once the
+   *  machine is launched (the draft then targets a real node) or the draft resets. */
+  draftEphemeralConfig: EphemeralNodeConfig | null;
   /** Current node's settings (Settings → Nodes), or null until fetched. */
   nodeSettings: NodeSettings | null;
   providers: ProviderInfo[];
@@ -744,6 +750,7 @@ export function initialState(): AppState {
     branchesLoading: false,
     draftBranch: null,
     draftSandbox: null,
+    draftEphemeralConfig: null,
     nodeSettings: null,
     providers: [],
     providerAuth: null,
@@ -1498,6 +1505,9 @@ export class SessionStore {
       // First-run model-auth prompt is scoped to a specific runner; a node
       // switch means it no longer applies to whatever we're now looking at.
       needsModelAuth: null,
+      // A node switch (incl. binding a freshly-launched ephemeral runner) means
+      // the "launch this runner on first send" intent is spent/irrelevant.
+      draftEphemeralConfig: null,
       // Per-node settings (name, default agent/model, GitHub prompt, sync
       // config, …) must never survive a switch — otherwise a still-editable
       // form can keep showing the *previous* node's settings under the
@@ -1543,6 +1553,11 @@ export class SessionStore {
   }
 
   /** Repo chosen for the next new session (cleared once the session is created). */
+  /** Pick (or clear, with null) the ephemeral runner the next new session will
+   *  launch on its first message. See `AppState.draftEphemeralConfig`. */
+  setDraftEphemeralConfig(config: EphemeralNodeConfig | null): void {
+    this.set({ draftEphemeralConfig: config });
+  }
   setDraftRepo(slug: string | null): void {
     this.set({ draftRepo: slug });
   }
@@ -1699,6 +1714,8 @@ export class SessionStore {
       usage: null,
       changes: null,
       checkpoints: [],
+      // A brand-new draft hasn't picked an ephemeral runner yet.
+      draftEphemeralConfig: null,
     });
   }
 
