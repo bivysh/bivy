@@ -22,6 +22,7 @@ import { InMemoryLocationRegistry } from "./runtime/location-registry.js";
 import { ControlPlaneSessionLocationRegistry, LayeredSessionLocationRegistry, type NodeSessionRow } from "./runtime/control-plane-location.js";
 import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption.js";
 import { createCredentialStore } from "./runtime/credentials.js";
+import { isModelAuthError, authProviderForSession } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { provisionAgentRun } from "./runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
@@ -900,7 +901,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -6975,6 +6976,22 @@ function terminalTurnError(event: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+/**
+ * When a surfaced error looks like a model auth failure (no credential, or an
+ * expired/invalid one that 401'd upstream), tell the client which provider to
+ * (re)authenticate so it can pop the "Sign in to your model" sheet instead of
+ * leaving a bare error bubble. Fires at most once per turn (reset on turn_start)
+ * so a retry storm — e.g. Codex's repeated websocket 401s — raises the sheet once.
+ */
+function maybeSignalAuthRequired(record: SessionRecord, errorText: string): void {
+  if (record.authRequiredSignaled) return;
+  if (!isModelAuthError(errorText)) return;
+  const provider = authProviderForSession(record.runtimeId, record.session.getCurrentModel()?.provider);
+  if (!provider) return;
+  record.authRequiredSignaled = true;
+  broadcast({ type: "session.auth_required", sessionId: record.id, provider, reason: errorText.slice(0, 400) });
+}
+
 function attachSessionListeners(record: SessionRecord) {
   record.unsubscribe?.();
   // In-session model reroute controller (inert unless BIVY_SESSION_MODEL_FALLBACK
@@ -7024,6 +7041,9 @@ function attachSessionListeners(record: SessionRecord) {
     ].includes(event.type)) {
       markSessionWorking(record, event);
     }
+    // A fresh turn re-arms the once-per-turn auth-required signal, so a credential
+    // that was fixed (or newly broke) is re-evaluated on the next prompt.
+    if (event.type === "turn_start") record.authRequiredSignaled = false;
     if (event.type === "message_update" && (event as Record<string, unknown>).message && ((event as Record<string, { role?: unknown }>).message?.role === "assistant")) {
       persistIntermediateFromEvent(record, event as Record<string, unknown>, false);
     }
@@ -7052,6 +7072,12 @@ function attachSessionListeners(record: SessionRecord) {
       // only via the focus-gated session.event wrap below.
       const e = event as { level?: unknown; message?: unknown; action?: unknown };
       broadcast({ type: "session.notice", sessionId: record.id, level: e.level ?? "info", message: String(e.message ?? ""), ...(e.action ? { action: e.action } : {}) });
+    }
+    if (event.type === "session.error") {
+      // A runtime-emitted auth failure (Codex's app-server websocket 401, or a
+      // ProcessRuntime/ProtocolRuntime credential preflight) — raise the sign-in
+      // sheet for the right provider alongside the inline error bubble.
+      maybeSignalAuthRequired(record, String((event as { error?: unknown }).error ?? ""));
     }
     if (event.type === "runtime.commands") {
       // The agent learned its own slash commands mid-session (e.g. Claude Code's
@@ -7100,6 +7126,9 @@ function attachSessionListeners(record: SessionRecord) {
         metadata.touchSession(record.id, "failed");
         scheduleAdvertise();
         broadcast({ type: "session.error", sessionId: record.id, error: turnError });
+        // If the terminal error is an auth failure (expired key/token → 4xx),
+        // also raise the sign-in sheet for the failing provider.
+        maybeSignalAuthRequired(record, turnError);
         void sendNotificationHint({
           kind: "session_error",
           sessionId: record.id,
