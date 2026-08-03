@@ -315,6 +315,7 @@ Implemented rollout:
 Remaining rollout work is instrumentation and live validation across installed
 agent versions.
 
+
 The React client also coalesces store notifications during active turns to one
 browser frame, while completed-turn and lifecycle notifications remain
 synchronous. This reduces redundant renders without delaying approvals or final
