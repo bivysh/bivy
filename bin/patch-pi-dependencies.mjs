@@ -5,7 +5,7 @@
  * pi-coding-agent 0.82.1 publishes an npm-shrinkwrap that pins the vulnerable
  * brace-expansion 5.0.7 below its own node_modules. npm overrides update the
  * outer lockfile/audit result but do not replace the shrinkwrapped files during
- * installation. Replace that one nested package with our direct, exact 5.0.8
+ * installation. Replace that one nested package with our direct, exact 5.0.9
  * dependency until pi publishes a corrected shrinkwrap.
  */
 import fs from "node:fs";
@@ -32,13 +32,13 @@ const piPackage = findDependency(path.join("@earendil-works", "pi-coding-agent")
 const target = piPackage && path.join(piPackage, "node_modules", "brace-expansion");
 
 if (!target || !fs.existsSync(target)) process.exit(0);
-if (!source) throw new Error("Security patch source brace-expansion@5.0.8 is missing");
+if (!source) throw new Error("Security patch source brace-expansion@5.0.9 is missing");
 
 const sourcePackage = JSON.parse(fs.readFileSync(path.join(source, "package.json"), "utf8"));
-if (sourcePackage.version !== "5.0.8") {
+if (sourcePackage.version !== "5.0.9") {
   throw new Error(`Refusing dependency patch from unexpected brace-expansion ${sourcePackage.version}`);
 }
 
 fs.rmSync(target, { recursive: true, force: true });
 fs.cpSync(source, target, { recursive: true });
-console.log("Patched pi-coding-agent's nested brace-expansion to 5.0.8");
+console.log("Patched pi-coding-agent's nested brace-expansion to 5.0.9");
