@@ -18,3 +18,15 @@
  * auto-provision options.
  */
 export const EPHEMERAL_MACHINES_ENABLED = true;
+
+/**
+ * DEBUG: keep a boot-failed ephemeral machine alive instead of letting it
+ * self-destruct, so its boot logs survive for inspection (Fly `auto_destroy` is
+ * disabled at provision when set). A failed boot otherwise vanishes the machine
+ * and its logs, which is why "it never starts" is currently undebuggable.
+ *
+ * Trade-off while on: a machine that boots fine also won't self-reap on exit, so
+ * it lingers until torn down manually — acceptable for staging diagnosis only.
+ * Turn OFF before shipping to users.
+ */
+export const EPHEMERAL_KEEP_FAILED_MACHINES = true;
