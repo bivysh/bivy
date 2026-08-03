@@ -49,10 +49,10 @@ jobs:
     steps:
       # Actions execute privileged workflow code; pin them to immutable commits
       # rather than mutable major-version tags.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: filter
         with:
           filters: |
@@ -97,8 +97,8 @@ jobs:
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
           cache: npm
@@ -112,8 +112,13 @@ jobs:
           test "$brace" = "5.0.9"
           test "$undici" = "8.9.0"
       # Production dependencies ship to users; do not release a known
-      # high/critical advisory.
-      - run: npm audit --omit=dev --audit-level=high
+      # high/critical advisory. `audit:prod` is `npm audit --omit=dev
+      # --audit-level=high` plus a narrow, documented allowlist
+      # (scripts/audit-prod.mjs) for advisories we have reviewed and accepted —
+      # currently the undici pair shrinkwrapped inside pi-coding-agent, which no
+      # override or upstream release can yet move. Any other high/critical still
+      # fails here.
+      - run: npm run audit:prod
       - run: npm run check:licenses
       # Scan the working tree for committed credentials. History is deliberately
       # excluded here: the public repo starts from a fresh commit, and scanning
@@ -160,8 +165,8 @@ jobs:
     if: inputs.force_all || needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
       - run: node scripts/check-links.mjs
@@ -178,8 +183,8 @@ jobs:
     name: relay + control-plane
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
           cache: npm
@@ -215,8 +220,8 @@ jobs:
     name: Remote path + pairing e2e
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
           cache: npm
