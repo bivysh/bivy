@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { listRuntimes, RUNTIME_CATALOG } from "../src/runtime/index.js";
 
 // The agent picker must offer exactly the most-used coding agents, all driven
@@ -47,7 +48,15 @@ for (const runtime of listRuntimes()) {
   assert.ok(runtime.capabilities, `${runtime.id} must declare capabilities`);
   assert.ok(runtime.protectionLevel, `${runtime.id} must declare its effective protection mechanism`);
   assert.ok(runtime.protectionLabel && runtime.protectionDetail, `${runtime.id} must explain its protection in customer language`);
+  assert.ok(runtime.certification, `${runtime.id} must report certification confidence`);
+  if (runtime.supportTier === "supported") {
+    assert.equal(runtime.certification, "release-tested", `${runtime.id} cannot be Recommended without release certification`);
+    assert.ok(runtime.testedVersion, `${runtime.id} must name the exact release-tested dependency version`);
+  }
 }
+const lock = JSON.parse(fs.readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
+assert.equal(listRuntimes().find((r) => r.id === "pi")!.testedVersion, lock.packages["node_modules/@earendil-works/pi-coding-agent"].version);
+assert.equal(listRuntimes().find((r) => r.id === "claude-code-sdk")!.testedVersion, lock.packages["node_modules/@anthropic-ai/claude-agent-sdk"].version);
 assert.equal(listRuntimes().find((r) => r.id === "pi")!.protectionLevel, "tool-controls");
 assert.equal(listRuntimes().find((r) => r.id === "claude-code-sdk")!.protectionLevel, "native-sandbox");
 assert.equal(listRuntimes().find((r) => r.id === "gemini")!.protectionLevel, "native-sandbox");

@@ -49,6 +49,7 @@ export interface WorkItem {
   // (mapWorkItem); typed here so it isn't silently dropped.
   targetKind?: "new_session" | "existing_session";
   targetSessionId?: string;
+  leaseExpiresAt?: string;
 }
 
 /** Sanitized-on-arrival at the control plane (services/control-plane/src/run-evidence.ts);
@@ -111,6 +112,11 @@ export async function fetchPendingWork(cfg: ControlPlaneTaskConfig): Promise<Wor
 /** Atomically claim an item. Returns true only if THIS node won the claim. */
 export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promise<boolean> {
   const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/claim`);
+  return res.ok;
+}
+
+export async function renewWorkLease(cfg: ControlPlaneTaskConfig, id: string): Promise<boolean> {
+  const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/heartbeat`);
   return res.ok;
 }
 
@@ -236,10 +242,14 @@ export class ControlPlaneTaskPoller {
   }
 
   private async runOne(item: WorkItem): Promise<void> {
+    let leaseHeartbeat: NodeJS.Timeout | undefined;
     try {
       // Claim first so only one node runs it; skip if another node won (no
-      // claim → not ours → don't run or complete it).
+      // claim → not ours → don't run or complete it). A heartbeat keeps the
+      // finite lease alive; process death stops it and makes the item reclaimable.
       if (!(await claimWork(this.cfg, item.id))) return;
+      leaseHeartbeat = setInterval(() => void renewWorkLease(this.cfg, item.id), 30_000);
+      leaseHeartbeat.unref?.();
       const report = (patch: EvidencePatch) => reportEvidence(this.cfg, item.id, patch);
       await transitionWork(this.cfg, item.id, "running");
       console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
@@ -250,6 +260,7 @@ export class ControlPlaneTaskPoller {
       await report({ routingReason: item.runtimeId || item.model ? "manual override" : "queue label" });
       await this.runWithPolicy(item, report);
     } finally {
+      if (leaseHeartbeat) clearInterval(leaseHeartbeat);
       this.inFlight.delete(item.id);
     }
   }

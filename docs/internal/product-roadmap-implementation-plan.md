@@ -33,7 +33,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 ### A2. Runtime truth and safe defaults
 
-- [ ] Extend the existing runtime catalog/manifest with an authoritative enforcement summary and tested-version/certification fields.
+- [x] Extend the existing runtime catalog/manifest with an authoritative enforcement summary and tested-version/certification fields.
 - [x] Group the picker into Recommended and More agents instead of one equal alphabetical list.
 - [x] Surface support tier and protection in customer language.
 - [x] Require informed confirmation for unattended/full-access execution where Bivy lacks a native or external isolation boundary.
@@ -49,9 +49,9 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 ### A4. Explicit cost and acknowledged mutations
 
-- [ ] Move queue auto-provisioning out of component-mount effects into the queue/control-plane policy path.
-- [ ] Show provider, region, rate hint, TTL, and teardown policy when enabling/launching billable runners.
-- [ ] Require confirmation for the first interactive billable launch.
+- [x] Move queue auto-provisioning out of component-mount effects into the queue/control-plane policy path.
+- [x] Show provider, region, rate hint, TTL, and teardown policy when enabling/launching billable runners.
+- [x] Require confirmation for the first interactive billable launch.
 - [x] Await and display provider/API-key save acknowledgements in every entry point.
 - [ ] Remove swallowed errors from high-value automation and terminal actions.
 
@@ -59,7 +59,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 - [x] Run browser tests in CI.
 - [x] Cover one desktop and one mobile critical path, including reconnect and attention navigation.
-- [ ] Add an accessibility smoke gate for the app shell and modal focus behavior.
+- [x] Add an accessibility smoke gate for the app shell and modal focus behavior.
 
 ## Workstream B — Phase 1: first value, attention, and UI confidence
 
@@ -67,29 +67,29 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 - [x] Offer explicit Local CLI, Bivy Cloud remote, and self-hosted remote modes.
 - [x] Never require an account for Local CLI mode.
-- [ ] Make setup resumable and report a checklist of node, runtime, credential, repo, and first-task readiness.
+- [x] Make setup resumable and report a checklist of node, runtime, credential, repo, and first-task readiness.
 - [ ] Validate model access rather than credential presence alone where a safe provider probe exists.
-- [ ] Do not print setup success as equivalent to agent readiness.
-- [ ] Provide a low-risk starter task and direct remediation for each failed stage.
+- [x] Do not print setup success as equivalent to agent readiness.
+- [x] Provide a low-risk starter task and direct remediation for each failed stage.
 
 ### B2. Progressive disclosure
 
 - [ ] Reduce first-session context to machine, repo, agent/model, and protection.
-- [ ] Hide filters and advanced catalog entries until they are useful.
-- [ ] Reorganize Settings around Models & agents, Machines, Integrations, Automation & policy, App, and Account.
-- [ ] Make Settings search include field names and common synonyms.
+- [x] Hide filters and advanced catalog entries until they are useful.
+- [x] Reorganize Settings around Models & agents, Machines, Integrations, Automation & policy, App, and Account.
+- [x] Make Settings search include field names and common synonyms.
 
 ### B3. Attention loop
 
 - [x] Preserve the existing global Inbox as the single attention aggregator.
 - [x] Add document-title and installed-app badge counts.
 - [ ] Verify push and Inbox deep-links focus the exact approval/question/outcome.
-- [ ] Add clear Needs approval, Needs answer, Failed, and Completed—unreviewed categories.
-- [ ] Keep attention metadata content-free across the hosted boundary.
+- [x] Add clear Needs approval, Needs answer, Failed, and Completed—unreviewed categories.
+- [x] Keep attention metadata content-free across the hosted boundary.
 
 ### B4. UI quality and diagnostics
 
-- [ ] Add critical Playwright flows at desktop/mobile widths to CI.
+- [x] Add critical Playwright flows at desktop/mobile widths to CI.
 - [ ] Add axe, keyboard/focus, light/dark visual, service-worker update, and reconnect tests.
 - [ ] Add long-transcript and initial-bundle budgets.
 - [ ] Eliminate React hook warnings and fail CI on new production warnings.
@@ -99,16 +99,16 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 ### C1. Outcome contract
 
-- [ ] Define one shared outcome vocabulary: changes ready, PR open, checks failed, needs review, no changes, agent failed, timed out, cancelled.
-- [ ] Fold existing queue evidence and session checkpoint/PR state into that vocabulary.
-- [ ] Never map `agent_end` alone to success.
+- [x] Define one shared outcome vocabulary: changes ready, PR open, checks failed, needs review, no changes, agent failed, timed out, cancelled.
+- [x] Fold existing queue evidence and session checkpoint/PR state into that vocabulary.
+- [x] Never map `agent_end` alone to success.
 - [ ] Show duration, cost, policy/enforcement, checks, artifact, and retry path.
 
 ### C2. Deterministic checks
 
-- [ ] Allow automations to declare bounded required checks.
-- [ ] Run checks after the turn under explicit timeout/output limits.
-- [ ] Store only privacy-safe check metadata in hosted evidence.
+- [x] Allow automations to declare bounded required checks.
+- [x] Run checks after the turn under explicit timeout/output limits.
+- [x] Store only privacy-safe check metadata in hosted evidence.
 - [ ] Mark checks failed independently of agent prose and offer retry/fix/fork actions.
 
 ### C3. Review surface
@@ -120,17 +120,17 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 ### C4. Reliable automation ownership
 
-- [ ] Add queue claim leases/heartbeats, expiry, and safe reclaim.
+- [x] Add queue claim leases/heartbeats, expiry, and safe reclaim.
 - [ ] Make external effects idempotent across retry/reclaim.
 - [ ] Represent waiting/rate-limited work separately from running work.
 - [ ] Certify GitHub issue/comment → worktree → checks → PR as the first unattended golden path.
 
 ### C5. Bounded durable storage
 
-- [ ] Enforce per-file, per-request, and global attachment limits on client and node.
-- [ ] Add reference-aware attachment garbage collection and a retention policy.
-- [ ] Expose attachment/transcript disk usage and cleanup in doctor/settings.
-- [ ] Use atomic blob/sidecar writes and repair partial state at startup.
+- [x] Enforce per-file, per-request, and global attachment limits on client and node.
+- [x] Add reference-aware attachment garbage collection and a retention policy.
+- [x] Expose attachment/transcript disk usage and cleanup in doctor/settings.
+- [x] Use atomic blob/sidecar writes and repair partial state at startup.
 
 ## Cross-phase acceptance metrics
 

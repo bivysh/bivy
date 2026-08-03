@@ -282,9 +282,15 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(canonical?.routing.nodeLabel, "bivy");
     assert.equal(canonical?.title, "A");
     assert.equal(claimed?.status, "claimed");
-    assert.equal(await store.claimWorkItem(acct.id, node.id, a.id), undefined); // second claim loses
+    assert.ok(claimed?.leaseExpiresAt && Date.parse(claimed.leaseExpiresAt) > Date.now(), "claim has a finite future lease");
+    const renewed = await store.renewWorkItemLease(acct.id, node.id, a.id);
+    assert.ok(renewed?.leaseExpiresAt, "the owning node can renew its lease");
+    assert.equal(await store.renewWorkItemLease(acct.id, "other-node", a.id), undefined, "a non-owner cannot renew");
+    assert.equal(await store.claimWorkItem(acct.id, node.id, a.id), undefined); // second live claim loses
     await store.completeWorkItem(acct.id, a.id);
-    assert.equal((await store.listWorkItems(acct.id)).find((w) => w.id === a.id)?.status, "succeeded");
+    const completed = (await store.listWorkItems(acct.id)).find((w) => w.id === a.id);
+    assert.equal(completed?.status, "succeeded");
+    assert.equal(completed?.leaseExpiresAt, undefined, "terminal work releases its lease");
   });
 
   // Issue #153: every run gets a readable trigger→claim→attempt→outcome

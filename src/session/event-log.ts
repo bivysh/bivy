@@ -28,6 +28,7 @@
 // interleaved in any order on disk; each replay reads only its own kind.
 
 import fs from "node:fs";
+import path from "node:path";
 
 import { normalizedIntermediateText, thinkingTextFromContent, mergeTranscript, type SidecarMessage } from "./transcript-merge.js";
 import type { RuntimeMessage } from "../runtime/types.js";
@@ -373,6 +374,26 @@ export class EventLog {
 
   health(): { ok: boolean; lastIssue?: EventLogIssue; pendingSessions: number } {
     return { ok: !this.lastIssue, ...(this.lastIssue ? { lastIssue: { ...this.lastIssue } } : {}), pendingSessions: this.pending.size };
+  }
+
+  diskUsage(): { files: number; bytes: number } {
+    if (!fs.existsSync(this.dir)) return { files: 0, bytes: 0 };
+    let files = 0;
+    let bytes = 0;
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile()) {
+          try {
+            files += 1;
+            bytes += fs.statSync(full).size;
+          } catch { /* raced cleanup */ }
+        }
+      }
+    };
+    try { walk(this.dir); } catch (error) { this.report("*", "read", error); }
+    return { files, bytes };
   }
 
   private load(id: string): LogRecord[] {

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 
 import type { AccountAutomationRun, AccountNode, GithubQueueItem } from "./account.js";
+import { deriveRunOutcome } from "./outcome.js";
 import type { ApprovalRequest, SessionSummary, UserQuestionRequest } from "./store.js";
 
 export type InboxItemKind =
@@ -9,6 +10,7 @@ export type InboxItemKind =
   | "question"
   | "session"
   | "automation"
+  | "outcome"
   | "queue"
   | "provider";
 export type InboxSeverity = "info" | "warning" | "error" | "critical";
@@ -63,6 +65,7 @@ export function inboxKindTitle(kind: InboxItemKind): string {
     case "approval": return "Approval needed";
     case "question": return "Question waiting";
     case "automation": return "Automation needs attention";
+    case "outcome": return "Completed — review outcome";
     case "queue": return "Queue item needs assignment";
     case "provider": return "Provider is blocking work";
     default: return "Session needs attention";
@@ -184,12 +187,35 @@ export function buildInboxItems(input: {
     });
   }
   for (const queueItem of input.queue) {
-    if (queueItem.status !== "pending") continue;
+    if (queueItem.status === "pending") {
+      items.push({
+        id: inboxItemId("queue", queueItem.id, "assignment"),
+        kind: "queue", severity: "warning", source: "queue", state: "unresolved",
+        queueItemId: queueItem.id, title: inboxKindTitle("queue"), detail: queueItem.title,
+        createdAt: queueItem.createdAt, updatedAt: queueItem.createdAt,
+      });
+      continue;
+    }
+    // A successful/done process is not necessarily a reviewed customer outcome.
+    // Keep recent reviewable results in the Inbox until the owning session has
+    // been opened after completion. This uses client-local lastSeenAt, so no
+    // transcript/read receipt crosses the hosted boundary.
+    if (queueItem.status !== "succeeded" && queueItem.status !== "done") continue;
+    const outcome = deriveRunOutcome(queueItem);
+    const completedAt = queueItem.completedAt;
+    const sessionId = queueItem.output?.sessionId;
+    const session = sessionId ? sessions.get(sessionId) : undefined;
+    const completedMs = timestampMs(completedAt);
+    if (!outcome.reviewable || !completedAt || !sessionId || !session) continue;
+    if (now - completedMs > 7 * 24 * 60 * 60_000 || (session.lastSeenAt ?? 0) >= completedMs) continue;
     items.push({
-      id: inboxItemId("queue", queueItem.id, "assignment"),
-      kind: "queue", severity: "warning", source: "queue", state: "unresolved",
-      queueItemId: queueItem.id, title: inboxKindTitle("queue"), detail: queueItem.title,
-      createdAt: queueItem.createdAt, updatedAt: queueItem.createdAt,
+      id: inboxItemId("queue", queueItem.id, `outcome:${outcome.kind}`),
+      kind: "outcome", severity: outcome.tone === "danger" ? "error" : "info",
+      source: "queue", state: "unresolved", queueItemId: queueItem.id,
+      sessionId, nodeId: session.nodeId, targetId: sessionId,
+      title: `${outcome.label} — review outcome`, detail: queueItem.title,
+      createdAt: queueItem.createdAt, updatedAt: completedAt,
+      stale: session.nodeId ? nodes.get(session.nodeId)?.online === false : false,
     });
   }
   for (const run of runs) {

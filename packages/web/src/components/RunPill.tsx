@@ -14,7 +14,7 @@
 // usage) — the card is the same, the information applies.
 
 import { useState } from "react";
-import { type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
+import { deriveRunOutcome, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { SourceGlyph } from "./SourceMark.js";
 import { PrBadge, GhMark } from "./SessionList.js";
@@ -141,6 +141,7 @@ export function RunPill({
   // that out in the sheet, where there's room; the terse pill/sidebar keep "Open".
   const sheetStatus = statusLabel === "Open" ? "Open on node" : statusLabel;
 
+  const outcome = evidence ? deriveRunOutcome(evidence) : null;
   const counts = evidence ? checkCounts(evidence) : null;
   const duration = evidence ? runDuration(evidence) : null;
   const finished = typeof finishedAt === "number" ? formatWhen(finishedAt) : "";
@@ -207,6 +208,7 @@ export function RunPill({
 
             {evidence && (
               <div className="run-sheet-rows">
+                {outcome && <Row k="Outcome"><span className={`chip outcome-${outcome.tone}`}>{outcome.label}</span></Row>}
                 {counts && (
                   <Row k="Checks">
                     <Checks item={evidence} />

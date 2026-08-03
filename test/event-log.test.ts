@@ -391,6 +391,7 @@ test("missing logs are empty, but malformed logs and append failures are reporte
     assert.equal(issues.length, 0, "ENOENT is the only normal empty-log state");
 
     fs.writeFileSync(path.join(dir, "corrupt.jsonl"), "{not-json}\n");
+    assert.deepEqual(missing.diskUsage(), { files: 1, bytes: Buffer.byteLength("{not-json}\n") });
     assert.deepEqual(missing.read("corrupt"), []);
     assert.equal(issues.at(-1)?.operation, "parse");
     assert.equal(missing.health().ok, false);

@@ -15,6 +15,8 @@ import { controller } from "../store/useStore.js";
 type Picker = "repo" | "agent" | "model" | "sandbox" | null;
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_ATTACHMENTS = 12;
+const MAX_ATTACHMENTS_BYTES = 40 * 1024 * 1024;
 const TEXT_ATTACHMENT_BYTES = 512 * 1024;
 const TEXT_EXT = /\.(md|txt|json|ya?ml|csv|ts|tsx|js|jsx|css|html|xml|py|rb|go|rs|java|c|cpp|h|hpp|sh|sql)$/i;
 
@@ -335,11 +337,23 @@ export function Composer({
     setReadingCount((n) => n + 1);
     try {
       const next: PromptAttachment[] = [];
+      let acceptedBytes = attachments.reduce((sum, attachment) => sum + Number(attachment.size || 0), 0);
+      let acceptedCount = attachments.length;
       for (const file of Array.from(files)) {
+        if (acceptedCount >= MAX_ATTACHMENTS) {
+          onError?.(`A message can include at most ${MAX_ATTACHMENTS} attachments.`);
+          break;
+        }
         if (file.size > MAX_ATTACHMENT_BYTES) {
           onError?.(`${file.name} is larger than ${fmtBytes(MAX_ATTACHMENT_BYTES)} and was not attached.`);
           continue;
         }
+        if (acceptedBytes + file.size > MAX_ATTACHMENTS_BYTES) {
+          onError?.(`Attachments are limited to ${fmtBytes(MAX_ATTACHMENTS_BYTES)} per message.`);
+          continue;
+        }
+        acceptedBytes += file.size;
+        acceptedCount += 1;
         try {
           if (file.type.startsWith("image/")) {
             const url = await readDataUrl(file);
@@ -367,6 +381,8 @@ export function Composer({
             truncated: body.length > TEXT_ATTACHMENT_BYTES,
           });
         } catch {
+          acceptedBytes -= file.size;
+          acceptedCount -= 1;
           onError?.(`Could not read ${file.name}.`);
         }
       }

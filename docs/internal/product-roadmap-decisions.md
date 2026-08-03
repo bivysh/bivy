@@ -82,3 +82,57 @@ A runtime may be implemented and available without being Recommended. Recommende
 `pi-coding-agent` 0.82.1 shrinkwraps vulnerable `brace-expansion` and `undici` versions. Bivy carries exact patched top-level versions, npm overrides, a postinstall replacement, lockfile audit metadata, and a CI assertion of the installed nested versions. Remove this mechanism as soon as Pi publishes a corrected shrinkwrap.
 
 **Reason:** Downgrading Pi to the audit tool's suggested older version would regress the integrated agent. Same-major exact replacements close the current advisories while CI verifies the actual installed tree.
+
+## D-010 — Queue ownership uses renewable leases
+
+**Date:** 2026-08-03
+**Status:** Accepted
+
+A claimed automation receives a two-minute lease. The node renews it every 30 seconds while work is active, terminal transitions release it, and an expired claim can be atomically reclaimed. Explicit expiry timestamps are stored instead of relying on database interval expressions.
+
+**Reason:** Permanent claims turn a node crash into permanently lost work. Explicit timestamps keep the contract deterministic across PostgreSQL and the in-memory test implementation.
+
+## D-011 — Deterministic checks are package-script based and privacy-minimal
+
+**Date:** 2026-08-03
+**Status:** Accepted
+
+Unattended issue runs execute a bounded allowlist of existing package scripts after the agent turn. The default declaration is `test`, `lint`, and `typecheck`; operators can override it. Hosted evidence receives the check name, command hash, status, duration, and exit code, but never command text or output.
+
+**Reason:** Repository-owned scripts are predictable and do not require Bivy to infer a project's build system. Hash-only evidence proves which declared command ran without moving repository content across the hosted boundary.
+
+## D-012 — Ambiguous completion is “Needs review,” never success
+
+**Date:** 2026-08-03
+**Status:** Accepted
+
+The shared outcome derivation prefers a PR, changed artifact, deterministic check result, or explicit no-change evidence. A process that merely ends successfully without one of those signals is `Needs review`. The same vocabulary drives the run pill, Inbox, and queue report.
+
+**Reason:** Agent prose and process exit are not reliable proof of a useful outcome. Conservative classification protects unattended trust while preserving the work for human review.
+
+## D-013 — Attachment capacity is a soft cap for referenced history
+
+**Date:** 2026-08-03
+**Status:** Accepted
+
+Composer and node request limits are hard. Durable storage rejects new unique blobs at a configurable global admission cap. Its retention sweep removes only unreferenced blobs, oldest first, and reports an over-cap condition rather than deleting referenced history when an operator later lowers the cap. Blob and sidecar writes are atomic.
+
+**Reason:** Bounded disk use matters, but silently breaking a transcript is worse than temporarily exceeding the cap. Operators can see both attachment and event-log usage in `bivy doctor` and adjust retention or remove old sessions deliberately.
+
+## D-014 — Billable runner intent is confirmed before it becomes a send target
+
+**Date:** 2026-08-03
+**Status:** Accepted
+
+Interactive ephemeral runners show provider, region/size, available rate estimate, TTL, and teardown behavior before selection. The first message remains the launch gesture, but it can only launch a runner the user explicitly confirmed. Unattended hosted provisioning has a separate enable confirmation.
+
+**Reason:** Confirming at runner selection preserves the simple composer while preventing a normal-looking Send action from being the first disclosure of spend.
+
+## D-015 — Setup success distinguishes node readiness from reply readiness
+
+**Date:** 2026-08-03
+**Status:** Accepted
+
+Setup is idempotent, offers model login inline where Bivy owns authentication, prints a stage checklist, and labels a running node with missing model access as incomplete rather than successful. The starter task asks for repository explanation and one low-risk improvement.
+
+**Reason:** Installation is not activation. The user should know the exact failed stage and have a safe path to a useful first response.

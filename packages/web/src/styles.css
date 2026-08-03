@@ -1163,6 +1163,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 /* Divides a picker list into groups (e.g. the model picker's connected vs.
    "Other models" — unconnected, offered with an inline Connect action). */
 .picker-section-label { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 12px 12px 4px; }
+.picker-section-toggle { width: 100%; display: flex; justify-content: space-between; border: 0; background: none; color: var(--muted); font: inherit; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 12px 12px 6px; cursor: pointer; }
 
 .reasoning-wrap { position: relative; }
 .reasoning-pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink); border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; }
@@ -1303,6 +1304,10 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .queue-run-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .queue-run-field select, .queue-run-field input { font-size: 13px; }
 .queue-run-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chip.outcome-success { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.chip.outcome-warning { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.chip.outcome-danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+
 /* Run evidence / outcome reports (issue #153). */
 .evidence-list { display: flex; flex-direction: column; gap: 8px; }
 .evidence-report { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--surface-2); }

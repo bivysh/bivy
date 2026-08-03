@@ -559,6 +559,7 @@ export interface RunCheck {
   commandHash?: string;
   status: "passed" | "failed" | "skipped";
   exitCode?: number;
+  durationMs?: number;
 }
 /** Sanitized, allowlisted patch a node may report against its own claimed run.
  *  `checks`/`events` are treated as INCREMENTAL — appended to, never replacing,
@@ -641,6 +642,7 @@ export interface AutomationRun {
   createdAt: string;
   claimedByNodeId?: string;
   claimedAt?: string;
+  leaseExpiresAt?: string;
   startedAt?: string;
   completedAt?: string;
 }
@@ -659,6 +661,7 @@ export interface WorkItem {
   createdAt: string;
   claimedByNodeId?: string;
   claimedAt?: string;
+  leaseExpiresAt?: string;
   completedAt?: string;
   dedupeKey?: string; // idempotency key (e.g. "gh:<delivery-id>"); unique per account
   // Collapse key: while an item is still pending, a second enqueue with the same
@@ -1210,6 +1213,8 @@ export interface MeshStore {
   // Recent work items for the account (any status) — powers the incoming-queue UI.
   listWorkItems(accountId: string, limit?: number): Promise<WorkItem[]>;
   claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
+  /** Extend a claimed/running item's lease only when this node still owns it. */
+  renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined>;
   // Record that a run STARTED, keyed by its session id (idempotent: recording the
   // same `(accountId, sessionId)` twice is a no-op, so reconnects and repeated
   // session advertises never double-count). `runKey` is the distinct-run identifier

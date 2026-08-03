@@ -13,8 +13,9 @@ The domain separates four records:
   key. GitHub delivery IDs and equivalent source keys remain unique per account.
 - An **automation run** is the durable lifecycle and routing record. Its states
   are `pending`, `claimed`, `running`, `needs_attention`, `succeeded`, `failed`,
-  and `cancelled`. A conditional `pending` to `claimed` update provides one
-  winner when nodes race.
+  and `cancelled`. A conditional claim provides one winner when nodes race. The
+  winner renews a finite lease every 30 seconds; if it crashes, the control plane
+  makes the item reclaimable after the two-minute lease expires.
 - An **attempt** is represented explicitly on the run and starts at one. A run's
   evidence timeline (below) can record a `retry`/`fallback` event with a bounded
   reason and an incremented attempt number.
@@ -54,6 +55,18 @@ fields, all allowlisted and bounded by
   reason), branch creation, and PR opened — plus `output` references
   (`checkpoint`/`commit` in addition to the existing session/branch/PR/
   artifact/failure fields).
+
+For unattended issue work, the node also runs declared standard package scripts
+(`test`, `lint`, and `typecheck` when present; configurable with
+`BIVY_AUTOMATION_CHECKS`) after the agent turn. Each check has a bounded timeout.
+Command text and output stay on the node; hosted evidence receives only its name,
+SHA-256 command identity, status, duration, and exit code. Failed required checks fail the
+run even if the agent claimed success or already opened a pull request.
+
+The client derives one customer outcome from this evidence: `PR open`, `Changes
+ready`, `Checks failed`, `Needs review`, `No changes`, `Agent failed`, `Timed
+out`, or `Cancelled`. Process completion with no artifact/check/no-change evidence
+becomes `Needs review`, never silent success.
 
 The evidence endpoint requires the reporting node to be the run's current
 claimant and rejects (400, not a silent drop) any field that looks like a

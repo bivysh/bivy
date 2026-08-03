@@ -341,6 +341,9 @@ self-contained setups.
 | `BIVY_WORKTREE_COW_CLONE` | any non-empty | unset | Supported (opt-in, experimental) | Copy-on-write cloning of installed dirs (`node_modules` etc.) from a sibling worktree. Requires filesystem CoW support; silently disabled otherwise |
 | `BIVY_SHARED_DEP_CACHE` | `1`/`true`, **or a path** | unset | Supported (opt-in) | Points npm/yarn/pip/cargo/go *caches* at one directory for every agent and terminal. `1`/`true` uses `<data-dir>/dep-cache`; any other value is taken as an explicit path. Cache-only — never changes a project's lockfile or install location |
 | `BIVY_SHARED_DEP_CACHE_MAX_BYTES` | integer bytes | `21474836480` (20 GiB) | Supported | LRU eviction cap for the shared cache. `0` disables eviction |
+| `BIVY_ATTACHMENT_MAX_FILE_BYTES` | integer bytes | `26214400` (25 MiB) | Supported | Node-side hard limit for a durably stored attachment; composer uploads have a stricter 10 MiB limit |
+| `BIVY_ATTACHMENT_STORE_MAX_BYTES` | integer bytes | `2147483648` (2 GiB) | Supported | Global admission cap for new blobs. GC removes only unreferenced blobs; if a lowered cap is already exceeded by referenced history, it is retained and an over-cap warning is reported |
+| `BIVY_ATTACHMENT_RETENTION_MS` | integer ms | `2592000000` (30 days) | Supported | Minimum age before an unreferenced attachment is collected during the disk sweep |
 
 ## Terminals and notifications
 
@@ -348,6 +351,8 @@ self-contained setups.
 | --- | --- | --- | --- |
 | `BIVY_EXEC_TIMEOUT_MS` | integer ms | `600000` (10 min) | Supported — `bivy exec` client wait timeout. `--timeout <seconds>` wins |
 | `BIVY_TURN_TIMEOUT_MS` | integer ms | `3600000` (60 min) | Supported — daemon-side watchdog for every agent turn. Stops the runtime, marks the session timed out, and releases ephemeral/queue progress. `0` explicitly disables it; values above 24 h are capped |
+| `BIVY_AUTOMATION_CHECKS` | JSON array or comma list of package-script names | `test,lint,typecheck` | Supported | Deterministic checks run after unattended issue work when those scripts exist. Only name/hash/status/exit are reported; command text/output stay on the node |
+| `BIVY_AUTOMATION_CHECK_TIMEOUT_MS` | integer ms | `600000` (10 min) | Supported | Per-check timeout, clamped to 1 s–30 min |
 | `BIVY_RUN_IDLE_NOTIFY_MS` | integer ms | `30000` | Internal / test tuning |
 | `BIVY_TERM_BELL_QUIET_MS` | integer ms | `8000` | Internal / test tuning — how long since your last keystroke before a terminal bell counts as "you stepped away" |
 | `BIVY_TERM_BELL_COOLDOWN_MS` | integer ms | `45000` | Internal / test tuning — collapses a bell storm into one notification |

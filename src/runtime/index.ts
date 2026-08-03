@@ -66,6 +66,7 @@ export type RuntimeSupportTier = "supported" | "beta" | "experimental" | "planne
  * than a safety score: a native sandbox, structured tool controls, MCP-only
  * controls, and ordinary user permissions have materially different boundaries. */
 export type RuntimeProtectionLevel = "native-sandbox" | "tool-controls" | "mcp-controls" | "user-permissions";
+export type RuntimeCertification = "release-tested" | "adapter-tested" | "unverified";
 
 export interface RuntimeInstallInfo {
   label: string;
@@ -89,6 +90,10 @@ export interface RuntimeInfo {
   protectionLevel?: RuntimeProtectionLevel;
   protectionLabel?: string;
   protectionDetail?: string;
+  /** Release confidence, separate from whether an adapter merely exists. */
+  certification?: RuntimeCertification;
+  /** Exact external package/CLI version exercised when release-tested. */
+  testedVersion?: string;
   /** Who owns the first-run credential/login UX for this runtime. */
   authOwner?: "bivy" | "agent" | "mixed";
   notes?: string;
@@ -244,6 +249,8 @@ type CliAgentSpec = {
   install?: CliInstall;
   /** Support tier surfaced in the picker. Defaults to "beta". */
   supportTier?: RuntimeSupportTier;
+  /** Exact CLI version last exercised by release certification, when pinned. */
+  testedVersion?: string;
   /** Who owns the first-run credential/login UX. Defaults to "agent". */
   authOwner?: "bivy" | "agent" | "mixed";
   /** One-line human blurb for the catalog; falls back to a generic sentence. */
@@ -872,6 +879,9 @@ export function cliAgentManifest(): Array<{
   label: string;
   command: string;
   hidden: boolean;
+  supportTier: RuntimeSupportTier;
+  certification: RuntimeCertification;
+  testedVersion?: string;
   headlessFlags: string[];
   install: CliInstall | null;
 }> {
@@ -888,6 +898,9 @@ export function cliAgentManifest(): Array<{
       label: spec.displayName,
       command: spec.command,
       hidden: Boolean(spec.hidden),
+      supportTier: spec.supportTier ?? "beta",
+      certification: spec.testedVersion ? "release-tested" : (spec.supportTier ?? "beta") === "beta" ? "adapter-tested" : "unverified",
+      ...(spec.testedVersion ? { testedVersion: spec.testedVersion } : {}),
       headlessFlags: [...headless].filter((a) => !a.includes("{")),
       install: spec.install ?? null,
     };
@@ -1643,6 +1656,13 @@ const PICKER_RUNTIME_IDS = new Set<string>([
   ...CLI_AGENT_IDS.filter((id) => !CLI_AGENT_SPECS[id].hidden),
 ]);
 
+function runtimeCertification(runtime: RuntimeInfo): Pick<RuntimeInfo, "certification" | "testedVersion"> {
+  if (runtime.id === "pi") return { certification: "release-tested", testedVersion: "0.82.1" };
+  if (runtime.id === "claude-code-sdk") return { certification: "release-tested", testedVersion: "0.3.218" };
+  if (runtime.testedVersion) return { certification: "release-tested", testedVersion: runtime.testedVersion };
+  return { certification: runtime.supportTier === "beta" ? "adapter-tested" : "unverified" };
+}
+
 function runtimeProtection(runtime: RuntimeInfo): Pick<RuntimeInfo, "protectionLevel" | "protectionLabel" | "protectionDetail"> {
   // Native SDK/CLI sandboxes receive the requested read-only/workspace/full tier
   // in their own process boundary. The governed Codex path has both native
@@ -1686,7 +1706,7 @@ export function listRuntimes(currentId?: string): (RuntimeInfo & { current: bool
       if (runtime.id === "bivy-agent-protocol") return protocolInfo();
       if (runtime.id === "acp") return acpInfo();
       return runtime;
-    }).map((runtime) => ({ ...runtime, ...runtimeProtection(runtime), current: runtime.id === currentId }));
+    }).map((runtime) => ({ ...runtime, ...runtimeProtection(runtime), ...runtimeCertification(runtime), current: runtime.id === currentId }));
 }
 
 export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {

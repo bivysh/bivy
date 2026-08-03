@@ -67,6 +67,9 @@ import {
   SESSION_TTL_MS,
 } from "./store.js";
 
+const WORK_LEASE_MS = 2 * 60 * 1000;
+const workLeaseExpiry = (): string => new Date(Date.now() + WORK_LEASE_MS).toISOString();
+
 /**
  * The control plane's single store implementation, backed by Postgres — a durable
  * database when `DATABASE_URL` is set, or an in-memory Postgres (pg-mem) for
@@ -515,6 +518,7 @@ export class PostgresStore implements MeshStore {
         url                TEXT,
         claimed_by_node_id TEXT,
         claimed_at         TIMESTAMPTZ,
+        lease_expires_at   TIMESTAMPTZ,
         completed_at       TIMESTAMPTZ,
         created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
         dedupe_key         TEXT,
@@ -530,6 +534,7 @@ export class PostgresStore implements MeshStore {
       -- GitHub App installation the node should mint a token for (flavor A).
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS installation_id TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS app_id TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
       -- Collapse the many webhook deliveries one issue emits (opened/labeled/edited)
       -- into a single PENDING item, while still allowing a fresh run after the prior
       -- one finished. default_routed marks shared-queue items re-routable when the
@@ -2340,9 +2345,13 @@ export class PostgresStore implements MeshStore {
       `UPDATE work_items SET status = $3,
        started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
        completed_at = CASE WHEN $4 THEN COALESCE(completed_at, now()) ELSE completed_at END,
+       lease_expires_at = CASE
+         WHEN $4 OR $3 = 'needs_attention' THEN NULL
+         WHEN $3 = 'running' THEN $7
+         ELSE lease_expires_at END,
        output = COALESCE($5, output)
        WHERE account_id = $1 AND id = $2 AND status = ANY($6) RETURNING *`,
-      [accountId, id, status, terminal, output ? JSON.stringify(output) : null, from[status]],
+      [accountId, id, status, terminal, output ? JSON.stringify(output) : null, from[status], workLeaseExpiry()],
     );
     if (!rows[0]) return undefined;
     if (!event) return mapAutomationRun(rows[0]);
@@ -2406,7 +2415,8 @@ export class PostgresStore implements MeshStore {
     if (labels.length === 0) return [];
     const { rows } = await this.query(
       `SELECT * FROM work_items
-       WHERE account_id = $1 AND status = 'pending' AND label = ANY($2)
+       WHERE account_id = $1 AND label = ANY($2)
+         AND (status = 'pending' OR (status IN ('claimed', 'running') AND lease_expires_at < now()))
        ORDER BY created_at ASC`,
       [accountId, labels],
     );
@@ -2422,13 +2432,17 @@ export class PostgresStore implements MeshStore {
   }
 
   async claimWorkItem(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
-    // Conditional UPDATE makes the claim atomic: only the row still pending flips.
+    // Conditional UPDATE makes both first claim and stale-lease reclaim atomic.
+    // A crashed node cannot strand work forever; a live node renews below.
     const { rows } = await this.query(
       `UPDATE work_items
-       SET status = 'claimed', claimed_by_node_id = $3, claimed_at = now()
-       WHERE id = $2 AND account_id = $1 AND status = 'pending'
+       SET status = 'claimed', claimed_by_node_id = $3, claimed_at = now(),
+           lease_expires_at = $4,
+           attempt = CASE WHEN status = 'pending' THEN COALESCE(attempt, 1) ELSE COALESCE(attempt, 1) + 1 END
+       WHERE id = $2 AND account_id = $1
+         AND (status = 'pending' OR (status IN ('claimed', 'running') AND lease_expires_at < now()))
        RETURNING *`,
-      [accountId, id, nodeId],
+      [accountId, id, nodeId, workLeaseExpiry()],
     );
     if (!rows[0]) return undefined;
     // Best-effort timeline entry (issue #153) — read-then-write, same rationale
@@ -2441,6 +2455,18 @@ export class PostgresStore implements MeshStore {
       [accountId, id, JSON.stringify(events)],
     );
     return mapWorkItem(withEvent[0] ?? rows[0]);
+  }
+
+  async renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
+    const { rows } = await this.query(
+      `UPDATE work_items
+       SET lease_expires_at = $4
+       WHERE account_id = $1 AND id = $2 AND claimed_by_node_id = $3
+         AND status IN ('claimed', 'running')
+       RETURNING *`,
+      [accountId, id, nodeId, workLeaseExpiry()],
+    );
+    return rows[0] ? mapWorkItem(rows[0]) : undefined;
   }
 
   async recordRunStart(accountId: string, runKey: string): Promise<boolean> {
@@ -2577,6 +2603,7 @@ function mapWorkItem(row: any): WorkItem {
     createdAt: new Date(row.created_at).toISOString(),
     claimedByNodeId: row.claimed_by_node_id ?? undefined,
     claimedAt: row.claimed_at ? new Date(row.claimed_at).toISOString() : undefined,
+    leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at).toISOString() : undefined,
     completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
     dedupeKey: row.dedupe_key ?? undefined,
     collapseKey: row.collapse_key ?? undefined,
@@ -2674,6 +2701,7 @@ function mapAutomationRun(row: any): AutomationRun {
     createdAt: new Date(row.created_at).toISOString(),
     claimedByNodeId: row.claimed_by_node_id ?? undefined,
     claimedAt: row.claimed_at ? new Date(row.claimed_at).toISOString() : undefined,
+    leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at).toISOString() : undefined,
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
     completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
     ...mapEvidenceFields(row),

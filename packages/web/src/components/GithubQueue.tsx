@@ -2,11 +2,11 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  deriveRunOutcome,
   githubIssueRefFromSource,
   isGithubQueueSource,
   type AccountNode,
   type EphemeralNodeConfig,
-  type QueueRouting,
   type GithubAppInfo,
   type GithubQueueItem,
   type ProviderKeyInfo,
@@ -202,16 +202,6 @@ export function GithubQueuePanel({
   const [hasGithubTaskToken, setHasGithubTaskToken] = useState(false);
   const [savingToken, setSavingToken] = useState(false);
 
-  // The account's queue-level "auto-provision an ephemeral runner" default. It's
-  // configured over in GitHub App settings (GithubPanel); here we only read it to
-  // drive the auto-launch behavior below.
-  const [queueRouting, setQueueRoutingState] = useState<QueueRouting | null>(null);
-  // Guards a single auto-launch attempt per mount, so a slow/failed launch (or a
-  // re-render while one is in flight) can't fire it twice.
-  const autoLaunchTried = useRef(false);
-  const [autoLaunching, setAutoLaunching] = useState(false);
-  const [autoLaunchErr, setAutoLaunchErr] = useState<string | null>(null);
-
   useEffect(() => {
     if (!canQuery) return;
     controller.fetchGithubApp().then(setAppInfo).catch(() => setAppInfo(null));
@@ -228,7 +218,6 @@ export function GithubQueuePanel({
     controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
     if (EPHEMERAL_MACHINES_ENABLED) controller.listEphemeralConfigs().then(setEphemeralConfigs).catch(() => {});
     controller.getGithubTaskToken().then((t) => setHasGithubTaskToken(Boolean(t))).catch(() => {});
-    if (EPHEMERAL_MACHINES_ENABLED) controller.getQueueRouting().then(setQueueRoutingState).catch(() => setQueueRoutingState(null));
   }, [canQuery]);
 
   const configuredProviders = useMemo(() => ephemeralKeys.filter((k) => k.configured), [ephemeralKeys]);
@@ -388,52 +377,10 @@ export function GithubQueuePanel({
   // served independently, so this counts rather than tests a single flag.
   const apps = appInfo?.apps ?? [];
   const unservedApps = apps.filter((a) => a.servedBy === null);
-  // No persistent node online at all (any hosted-queue setup, not just GitHub
-  // App) — the signal the ephemeral-queue-default watches for.
-  const anyNodeOnline = useMemo(() => nodes.some((n) => n.online), [nodes]);
-  // The config the account's QueueRouting wants provisioned when nothing
-  // persistent is online: an ephemeral-config primary provisions itself; a
-  // persistent-node primary provisions its fallback config (the node is offline
-  // in this branch). Shared / node-without-fallback → nothing to auto-provision.
-  const autoProvisionConfig = useMemo(() => {
-    const primary = queueRouting?.primary;
-    if (primary?.kind === "config") return configById.get(primary.configId);
-    if (primary?.kind === "node" && queueRouting?.fallback) return configById.get(queueRouting.fallback.configId);
-    return undefined;
-  }, [queueRouting, configById]);
-  const autoProvisionProviderReady = Boolean(
-    autoProvisionConfig && ephemeralKeys.find((k) => k.id === autoProvisionConfig.provider)?.configured,
-  );
-
-  // Issue #532: when the account's routing points at an ephemeral config (as a
-  // primary, or as a persistent node's fallback), this device has a saved token
-  // for that config's provider, nothing persistent is online, and items are
-  // actually waiting, provision that config to pick the work up. Tries once per
-  // mount; a failure clears the guard so a later render (e.g. after the user
-  // fixes a missing token) can retry rather than wedging for the session.
-  useEffect(() => {
-    if (!EPHEMERAL_MACHINES_ENABLED) return;
-    if (!canQuery || !workQueueEnabled) return;
-    if (!autoProvisionConfig || !autoProvisionProviderReady) return;
-    if (anyNodeOnline || !waiting || waiting.length === 0) return;
-    if (autoLaunchTried.current || autoLaunching) return;
-    autoLaunchTried.current = true;
-    setAutoLaunching(true);
-    setAutoLaunchErr(null);
-    controller
-      .launchEphemeralQueueWorker({
-        provider: autoProvisionConfig.provider,
-        region: autoProvisionConfig.region,
-        size: autoProvisionConfig.size,
-        ttlMinutes: autoProvisionConfig.ttlMinutes,
-        configId: autoProvisionConfig.id,
-      })
-      .catch((e) => {
-        autoLaunchTried.current = false;
-        setAutoLaunchErr(`Couldn't auto-provision a runner: ${e instanceof Error ? e.message : String(e)}`);
-      })
-      .finally(() => setAutoLaunching(false));
-  }, [canQuery, workQueueEnabled, autoProvisionConfig, autoProvisionProviderReady, anyNodeOnline, waiting, autoLaunching]);
+  // Automatic queue provisioning is deliberately absent from this component.
+  // Once the user enables hosted provisioning and queue routing, the control
+  // plane's maybeAutoProvision policy owns launch/dedupe/rate-cap/teardown. A UI
+  // render must never be the causal trigger for a billable machine.
 
   return (
       <div className="settings-form">
@@ -572,12 +519,6 @@ export function GithubQueuePanel({
 
             {queueActionErr && <div className="banner error inline">{queueActionErr}</div>}
 
-            {EPHEMERAL_MACHINES_ENABLED && autoLaunching && (
-              <p className="muted" style={{ marginBottom: 10 }}>⚡ Provisioning an ephemeral runner to pick these up…</p>
-            )}
-            {EPHEMERAL_MACHINES_ENABLED && !autoLaunching && autoLaunchErr && (
-              <div className="banner warn inline">{autoLaunchErr}</div>
-            )}
 
             {waiting === null ? (
               <p className="muted">—</p>
@@ -733,12 +674,13 @@ export function GithubQueuePanel({
             <div className="queue-head"><h4 className="settings-subhead">Outcome reports</h4></div>
             <div className="evidence-list">
               {reports.map((item) => {
-                const outcomeClass = item.status === "failed" ? "err" : item.status === "succeeded" ? "ok" : item.status === "needs_attention" ? "warn" : "";
+                const outcome = deriveRunOutcome(item);
+                const outcomeClass = outcome.tone === "danger" ? "err" : outcome.tone === "success" ? "ok" : outcome.tone === "warning" ? "warn" : "";
                 return (
                   <details className="evidence-report" key={item.id}>
                     <summary>
                       <span>{item.repo}{item.issueNumber ? ` #${item.issueNumber}` : ""} · {queueItemSourceLabel(item.source)}</span>
-                      <span className={`chip ${outcomeClass}`}>{item.status.replace(/_/g, " ")}</span>
+                      <span className={`chip ${outcomeClass}`}>{outcome.label}</span>
                     </summary>
                     <div className="evidence-meta">
                       <span>Trigger: {item.triggerKind ?? item.source}</span>
@@ -766,7 +708,7 @@ export function GithubQueuePanel({
                     {item.checks && item.checks.length > 0 && (
                       <ul className="evidence-checks">
                         {item.checks.map((check, index) => (
-                          <li key={`${check.name}-${index}`}>{check.name}: {check.status}{check.exitCode !== undefined ? ` (exit ${check.exitCode})` : ""}</li>
+                          <li key={`${check.name}-${index}`}>{check.name}: {check.status}{check.exitCode !== undefined ? ` (exit ${check.exitCode})` : ""}{check.durationMs !== undefined ? ` · ${(check.durationMs / 1000).toFixed(1)}s` : ""}</li>
                         ))}
                       </ul>
                     )}

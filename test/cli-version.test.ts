@@ -65,10 +65,11 @@ test("NO_COLOR wins even when FORCE_COLOR is set", () => {
   assert.ok(!(r.stdout + r.stderr).includes("\u001b["), "NO_COLOR output should not contain ANSI escapes");
 });
 
-test("`bivy setup --help` describes remote enrollment", () => {
+test("`bivy setup --help` describes optional remote and account-free local mode", () => {
   const r = runCli(["setup", "--help"]);
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
-  assert.match(r.stdout + r.stderr, /remote access \+ sign-in/i);
+  assert.match(r.stdout + r.stderr, /optional remote access/i);
+  assert.match(r.stdout + r.stderr, /Local CLI mode requires no Bivy account/i);
 });
 
 test("`bivy --help` lists every built-in 'bivy run' agent, not a stale subset", () => {

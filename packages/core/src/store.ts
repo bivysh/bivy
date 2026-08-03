@@ -190,6 +190,8 @@ export interface RuntimeInfo {
   protectionLevel?: "native-sandbox" | "tool-controls" | "mcp-controls" | "user-permissions";
   protectionLabel?: string;
   protectionDetail?: string;
+  certification?: "release-tested" | "adapter-tested" | "unverified";
+  testedVersion?: string;
   [k: string]: unknown;
 }
 

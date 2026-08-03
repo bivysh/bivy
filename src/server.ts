@@ -57,6 +57,7 @@ import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } 
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
 import { configuredTurnTimeoutMs } from "./session/turn-watchdog.js";
+import { runRequiredAutomationChecks } from "./automation-checks.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
@@ -1082,18 +1083,29 @@ interface DecodedAttachment {
  *                    with its normal file tools. Any file type is supported;
  *                    binary files arrive as base64 `data`.
  */
+const MAX_PROMPT_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_PROMPT_ATTACHMENTS_BYTES = 40 * 1024 * 1024;
+
 function attachmentsFrom(value: unknown): { images: PromptImage[]; imageNotes: string[]; imageRefs: AttachmentRef[]; files: DecodedAttachment[] } {
   if (!Array.isArray(value)) return { images: [], imageNotes: [], imageRefs: [], files: [] };
   const images: PromptImage[] = [];
   const imageNotes: string[] = [];
   const imageRefs: AttachmentRef[] = [];
   const files: DecodedAttachment[] = [];
-  for (const raw of value.slice(0, 12) as unknown[]) {
+  let totalBytes = 0;
+  if (value.length > 12) throw new Error("A message can include at most 12 attachments");
+  for (const raw of value as unknown[]) {
     if (!raw || typeof raw !== "object") continue;
     const attachment = raw as PromptAttachment;
     const name = safeAttachmentName(attachment.name);
     const size = Number(attachment.size || 0);
     const mimeType = typeof attachment.mimeType === "string" && attachment.mimeType ? attachment.mimeType : undefined;
+    const encodedBytes = typeof attachment.data === "string" ? Math.floor(attachment.data.length * 3 / 4) : 0;
+    const textBytes = attachment.kind === "file" && typeof attachment.text === "string" ? Buffer.byteLength(attachment.text) : 0;
+    const actualBytes = encodedBytes || textBytes;
+    if (actualBytes > MAX_PROMPT_ATTACHMENT_BYTES) throw new Error(`${name} exceeds the 10 MiB attachment limit`);
+    totalBytes += actualBytes;
+    if (totalBytes > MAX_PROMPT_ATTACHMENTS_BYTES) throw new Error("Attachments exceed the 40 MiB per-message limit");
     if (attachment.kind === "image" && typeof attachment.data === "string") {
       const imgMime = mimeType ?? "image/png";
       images.push({ type: "image", data: attachment.data, mimeType: imgMime });
@@ -2398,7 +2410,32 @@ const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets, 500, (is
 // files with its tools), this is durable, session-independent, and re-findable:
 // the transcript references blobs by hash, and clients rehydrate thumbnails by
 // hash after a reload or on another device. See src/session/attachment-store.ts.
-const attachmentStore = new AttachmentStore(path.join(appDir, "attachments"));
+const positiveEnvNumber = (name: string, fallback: number): number => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+};
+const attachmentStore = new AttachmentStore(path.join(appDir, "attachments"), {
+  maxFileBytes: positiveEnvNumber("BIVY_ATTACHMENT_MAX_FILE_BYTES", 25 * 1024 * 1024),
+  maxStoreBytes: positiveEnvNumber("BIVY_ATTACHMENT_STORE_MAX_BYTES", 2 * 1024 * 1024 * 1024),
+  retentionMs: positiveEnvNumber("BIVY_ATTACHMENT_RETENTION_MS", 30 * 24 * 60 * 60 * 1000),
+});
+let attachmentGcStats = attachmentStore.stats();
+
+function referencedAttachmentHashes(): Set<string> | null {
+  // If transcript history is unreadable, collecting nothing would make its
+  // still-referenced blobs look orphaned. Fail closed and skip destructive GC.
+  if (!eventLog.health().ok) return null;
+  const hashes = new Set<string>();
+  const ids = new Set(metadata.listSessions().map((session) => session.id));
+  for (const record of new Set(openSessions.values())) ids.add(record.id);
+  for (const id of ids) {
+    for (const entry of eventLog.entries(id)) {
+      if (entry.bivyKind === "attachment") for (const ref of entry.refs) hashes.add(ref.hash);
+      else if (entry.bivyKind === "outbound-attachment" || entry.bivyKind === "inline-image") hashes.add(entry.ref.hash);
+    }
+  }
+  return eventLog.health().ok ? hashes : null;
+}
 
 // --- Warm session replication (docs/session-replication.md) -----------------
 // A standby's replica repo lives under appDir/replicas/<id>: a self-contained git
@@ -4671,16 +4708,26 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
     // evidence trail — the branch/PR references and a bounded summary only,
     // never file lists or error details (those stay in `message`/`extra`,
     // which are broadcast to the live session but never sent to onEvidence).
-    const kind = stage === "pr_opened" ? "pull_request" : stage === "started" ? "branch" : stage === "failed" ? "completed" : undefined;
+    const kind = stage === "pr_opened" ? "pull_request"
+      : stage === "started" || stage === "pushed" ? "branch"
+        : stage === "failed" || stage === "checks_failed" || stage === "no_changes" ? "completed"
+          : undefined;
     if (kind) {
+      const summary = stage === "pr_opened" ? "Pull request opened."
+        : stage === "started" ? "Working branch and session created."
+          : stage === "pushed" ? "Changes pushed; no pull request is open."
+            : stage === "no_changes" ? "Run completed with no file changes."
+              : stage === "checks_failed" ? "Deterministic validation checks failed."
+                : "Execution failed. Detailed diagnostics remain on the node.";
       void overrides.onEvidence?.({
         output: { sessionId: record.id, branch, prUrl: typeof extra.prUrl === "string" ? extra.prUrl : undefined },
         events: [{
           at: new Date().toISOString(),
           kind,
-          summary: stage === "pr_opened" ? "Pull request opened." : stage === "started" ? "Working branch and session created." : "Execution failed. Detailed diagnostics remain on the node.",
+          summary,
           ref: branch,
           url: typeof extra.prUrl === "string" ? extra.prUrl : undefined,
+          ...(stage === "checks_failed" || stage === "failed" ? { status: "failed" } : {}),
         }],
       });
     }
@@ -4694,7 +4741,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   // which now adopts the existing remote branch rather than colliding.
   const existing = findIssueSession(source);
   if (existing?.worktree && fs.existsSync(existing.worktree.path)) {
-    return runIssueFollowUp(cfg, issue, existing, emit);
+    return runIssueFollowUp(cfg, issue, existing, emit, overrides);
   }
 
   // Idempotency guard against the duplicate-PR regression: if this issue's
@@ -4776,8 +4823,8 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   try {
     emit(record, "started", `Started work on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
     await runSessionTurn(record, buildTaskPrompt(issue, nodeGithubIssuePrompt()));
-    emit(record, "agent_done", `Agent finished issue #${issue.number}; checking for changes.`);
-    await reportIssueOutcome(cfg, issue, record, emit, { followUp: false });
+    emit(record, "agent_done", `Agent finished issue #${issue.number}; running deterministic checks.`);
+    await reportIssueOutcome(cfg, issue, record, emit, { followUp: false, onEvidence: overrides.onEvidence });
   } catch (error) {
     emit(record, "failed", `GitHub issue #${issue.number} failed: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
@@ -4790,7 +4837,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
  * the new comment as another turn in the same worktree, then report the outcome
  * the same way a fresh pickup does.
  */
-async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, record: SessionRecord, emit: IssueEmit) {
+async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, record: SessionRecord, emit: IssueEmit, overrides: RunIssueOverrides = {}) {
   const wt = record.worktree;
   if (!wt) throw new Error("issue session has no worktree");
   try {
@@ -4819,8 +4866,8 @@ async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, recor
     }
 
     await runSessionTurn(record, buildFollowUpPrompt(issue));
-    emit(record, "agent_done", `Agent handled the follow-up on issue #${issue.number}; checking for changes.`);
-    await reportIssueOutcome(cfg, issue, record, emit, { followUp: true });
+    emit(record, "agent_done", `Agent handled the follow-up on issue #${issue.number}; running deterministic checks.`);
+    await reportIssueOutcome(cfg, issue, record, emit, { followUp: true, onEvidence: overrides.onEvidence });
   } catch (error) {
     emit(record, "failed", `GitHub issue #${issue.number} follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
@@ -4847,10 +4894,31 @@ async function reportIssueOutcome(
   issue: GitHubIssue,
   record: SessionRecord,
   emit: IssueEmit,
-  opts: { followUp: boolean },
+  opts: { followUp: boolean; onEvidence?: RunIssueOverrides["onEvidence"] },
 ) {
   const wt = record.worktree;
   if (!wt) throw new Error("issue session has no worktree");
+
+  // Customer success is not `agent_end`. Run the repository's declared standard
+  // checks under local time/output bounds and report only privacy-safe metadata
+  // (name/hash/status/exit), never command text or output, to the control plane.
+  const checks = runRequiredAutomationChecks(wt.path);
+  if (checks.length > 0) {
+    const failed = checks.filter((check) => check.status === "failed");
+    await opts.onEvidence?.({
+      checks,
+      events: [{
+        at: new Date().toISOString(),
+        kind: "completed",
+        summary: failed.length ? `${failed.length} deterministic check(s) failed.` : `${checks.length} deterministic check(s) passed.`,
+        status: failed.length ? "failed" : "passed",
+      }],
+    });
+    if (failed.length) {
+      emit(record, "checks_failed", `${failed.map((check) => check.name).join(", ")} failed; the run needs review.`);
+      throw new Error(`Required checks failed: ${failed.map((check) => check.name).join(", ")}`);
+    }
+  }
 
   const commitMessage = opts.followUp ? `Follow-up on #${issue.number}` : `${issue.title} (#${issue.number})`;
   await commitAll(wt.path, commitMessage);
@@ -6607,6 +6675,12 @@ async function sweepDiskGuardrails() {
   await cleanupOldWorktrees();
   evictSharedDepCacheIfNeeded();
   warnOversizedWorktrees();
+  const attachmentRefs = referencedAttachmentHashes();
+  if (attachmentRefs) attachmentGcStats = attachmentStore.gc(attachmentRefs);
+  else console.warn("[attachments] skipping garbage collection because event-log references are not healthy");
+  if ((attachmentGcStats.overCapBytes ?? 0) > 0) {
+    console.warn(`[attachments] store remains ${attachmentGcStats.overCapBytes} bytes over cap because referenced history is retained`);
+  }
 }
 
 /**
@@ -8721,6 +8795,9 @@ function sandboxInfo() {
 
 app.get("/api/status", (_req, res) => {
   const relayConfig = loadRelayConfig(appDir);
+  const selectedRuntimeId = active?.runtimeId ?? defaultRuntimeId;
+  const runtimeInfo = runtimeList(selectedRuntimeId).find((runtime) => runtime.id === selectedRuntimeId);
+  const workspaceBoundary = runtimeInfo?.protectionLevel === "native-sandbox" || runtimeInfo?.protectionLevel === "tool-controls";
   res.json({
     ok: true,
     nodeId: identity.nodeId,
@@ -8735,7 +8812,9 @@ app.get("/api/status", (_req, res) => {
     approvalMode,
     guardrails: {
       autonomousDefault: approvalMode === "autonomous",
-      workspaceBoundary: true,
+      workspaceBoundary,
+      enforcementLevel: runtimeInfo?.protectionLevel ?? "user-permissions",
+      protection: runtimeInfo?.protectionLabel ?? "Runs as your user",
       strictApprovalOptIn: true,
     },
     relay: {
@@ -8757,7 +8836,8 @@ app.get("/api/status", (_req, res) => {
     },
     devices: { paired: pairingStore.listDevices().length, localTokens: identity.listDevices().length },
     approvals: { pending: approvals.list().filter((a) => a.status === "pending").length, recent: metadata.listApprovals(20) },
-    eventLog: { ...eventLog.health(), affectedSessions: eventLogIssues.size },
+    eventLog: { ...eventLog.diskUsage(), ...eventLog.health(), affectedSessions: eventLogIssues.size },
+    attachments: attachmentGcStats,
     turnWatchdog: { enabled: turnTimeoutMs > 0, timeoutMs: turnTimeoutMs },
     updatedAt: new Date().toISOString(),
   });

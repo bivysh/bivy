@@ -58,8 +58,33 @@ export function isValidAttachmentHash(value: unknown): value is string {
  * a turn, so a write failure surfaces as a thrown error the caller degrades to a
  * text note rather than a crash.
  */
+export interface AttachmentStoreOptions {
+  /** Reject a single blob above this size before touching disk. */
+  maxFileBytes?: number;
+  /** Soft global cap enforced by reference-aware gc(). */
+  maxStoreBytes?: number;
+  /** Unreferenced blobs younger than this survive ordinary retention GC. */
+  retentionMs?: number;
+}
+
+export interface AttachmentStoreStats {
+  blobs: number;
+  bytes: number;
+  removedBlobs?: number;
+  removedBytes?: number;
+  overCapBytes?: number;
+}
+
 export class AttachmentStore {
-  constructor(private dir: string) {}
+  private readonly maxFileBytes: number;
+  private readonly maxStoreBytes: number;
+  private readonly retentionMs: number;
+
+  constructor(private dir: string, options: AttachmentStoreOptions = {}) {
+    this.maxFileBytes = options.maxFileBytes ?? 25 * 1024 * 1024;
+    this.maxStoreBytes = options.maxStoreBytes ?? 2 * 1024 * 1024 * 1024;
+    this.retentionMs = options.retentionMs ?? 30 * 24 * 60 * 60 * 1000;
+  }
 
   /** `<dir>/ab/cd` for a hash beginning `abcd…`. */
   private shardDir(hash: string): string {
@@ -81,21 +106,97 @@ export class AttachmentStore {
    * sidecar is written only the first time so the earliest name/mime wins.
    */
   put(bytes: Buffer, opts: { name: string; mimeType: string; kind: "image" | "file" }): AttachmentRef {
+    if (bytes.length > this.maxFileBytes) throw new Error(`Attachment exceeds the ${this.maxFileBytes}-byte node limit`);
     const hash = crypto.createHash("sha256").update(bytes).digest("hex");
     const ref: AttachmentRef = { hash, name: opts.name, mimeType: opts.mimeType, size: bytes.length, kind: opts.kind };
     fs.mkdirSync(this.shardDir(hash), { recursive: true });
     const blob = this.blobPath(hash);
-    if (!fs.existsSync(blob)) fs.writeFileSync(blob, bytes);
+    if (!fs.existsSync(blob)) {
+      const usage = this.stats();
+      if (usage.bytes + bytes.length > this.maxStoreBytes) {
+        throw new Error(`Attachment store would exceed its ${this.maxStoreBytes}-byte capacity`);
+      }
+      this.atomicWrite(blob, bytes);
+    }
     if (!fs.existsSync(this.metaPath(hash))) {
       const meta: AttachmentMeta = { ...ref, createdAt: Date.now() };
       try {
-        fs.writeFileSync(this.metaPath(hash), JSON.stringify(meta));
+        this.atomicWrite(this.metaPath(hash), Buffer.from(JSON.stringify(meta)));
       } catch {
         // A missing sidecar only costs us the remembered name/mime — the blob is
         // what matters, so never let a sidecar write failure fail the store.
       }
     }
     return ref;
+  }
+
+  private atomicWrite(destination: string, bytes: Buffer): void {
+    const tmp = `${destination}.tmp-${process.pid}-${crypto.randomUUID()}`;
+    try {
+      fs.writeFileSync(tmp, bytes, { flag: "wx" });
+      fs.renameSync(tmp, destination);
+    } finally {
+      try { fs.unlinkSync(tmp); } catch { /* rename succeeded or cleanup best effort */ }
+    }
+  }
+
+  private blobEntries(): Array<{ hash: string; path: string; size: number; mtimeMs: number }> {
+    if (!fs.existsSync(this.dir)) return [];
+    const entries: Array<{ hash: string; path: string; size: number; mtimeMs: number }> = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile() && isValidAttachmentHash(entry.name)) {
+          try {
+            const stat = fs.statSync(full);
+            entries.push({ hash: entry.name, path: full, size: stat.size, mtimeMs: stat.mtimeMs });
+          } catch { /* raced deletion */ }
+        } else if (entry.isFile() && entry.name.includes(".tmp-")) {
+          // Repair an interrupted atomic write after a conservative grace period.
+          try {
+            const stat = fs.statSync(full);
+            if (Date.now() - stat.mtimeMs > 60 * 60 * 1000) fs.unlinkSync(full);
+          } catch { /* best effort */ }
+        }
+      }
+    };
+    walk(this.dir);
+    return entries;
+  }
+
+  stats(): AttachmentStoreStats {
+    const entries = this.blobEntries();
+    return { blobs: entries.length, bytes: entries.reduce((sum, entry) => sum + entry.size, 0) };
+  }
+
+  /** Delete only unreferenced blobs. Retention removes old orphans first; when
+   * over the global cap, oldest remaining orphans are removed until under cap.
+   * Referenced history is never sacrificed to satisfy the soft cap. */
+  gc(referenced: ReadonlySet<string>, now = Date.now()): AttachmentStoreStats {
+    const entries = this.blobEntries().sort((a, b) => a.mtimeMs - b.mtimeMs);
+    let bytes = entries.reduce((sum, entry) => sum + entry.size, 0);
+    let removedBlobs = 0;
+    let removedBytes = 0;
+    const remove = (entry: (typeof entries)[number]) => {
+      try {
+        fs.unlinkSync(entry.path);
+        try { fs.unlinkSync(this.metaPath(entry.hash)); } catch { /* sidecar optional */ }
+        bytes -= entry.size;
+        removedBlobs += 1;
+        removedBytes += entry.size;
+      } catch { /* best-effort sweep */ }
+    };
+    for (const entry of entries) {
+      if (!referenced.has(entry.hash) && now - entry.mtimeMs >= this.retentionMs) remove(entry);
+    }
+    if (bytes > this.maxStoreBytes) {
+      for (const entry of entries) {
+        if (bytes <= this.maxStoreBytes) break;
+        if (!referenced.has(entry.hash) && fs.existsSync(entry.path)) remove(entry);
+      }
+    }
+    return { blobs: entries.length - removedBlobs, bytes, removedBlobs, removedBytes, overCapBytes: Math.max(0, bytes - this.maxStoreBytes) };
   }
 
   /** The blob's metadata, or null if the hash is unknown/malformed. */

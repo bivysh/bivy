@@ -54,7 +54,14 @@ function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string })
     <span className="runtime-meta">
       {text && <span className="runtime-meta-text">{text}</span>}
       <span className="runtime-capabilities" aria-label="Runtime support tier, protection, and capabilities">
-        <span className={`runtime-tier ${tier}`}>{tierLabel(tier)}</span>
+        <span
+          className={`runtime-tier ${tier}`}
+          title={runtime.certification === "release-tested"
+            ? `Release-tested${runtime.testedVersion ? ` with version ${runtime.testedVersion}` : ""}`
+            : runtime.certification === "adapter-tested" ? "Adapter tests pass; live CLI compatibility is not release-certified" : "Not release-certified"}
+        >
+          {tierLabel(tier)}{runtime.testedVersion ? ` · ${runtime.testedVersion}` : ""}
+        </span>
         <span
           className={`runtime-protection ${protectionLevel}`}
           title={runtime.protectionDetail || "This node did not report a protection description."}
@@ -330,6 +337,7 @@ export function NodePicker({
 // ---- Agent picker ----
 export function AgentPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const [q, setQ] = useState("");
+  const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   useEffect(() => {
     controller.listRuntimes();
@@ -426,8 +434,12 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
         {runtimes.length === 0 && <div className="picker-empty">No agents available.</div>}
         {recommended.length > 0 && <div className="picker-section-label">Recommended</div>}
         {recommended.map(renderRuntime)}
-        {more.length > 0 && <div className="picker-section-label">More agents</div>}
-        {more.map(renderRuntime)}
+        {more.length > 0 && (
+          <button type="button" className="picker-section-toggle" onClick={() => setMoreOpen((open) => !open)} aria-expanded={moreOpen || Boolean(q.trim())}>
+            More agents <span aria-hidden>{moreOpen || q.trim() ? "▾" : "▸"}</span>
+          </button>
+        )}
+        {(moreOpen || Boolean(q.trim())) && more.map(renderRuntime)}
       </div>
     </Sheet>
   );

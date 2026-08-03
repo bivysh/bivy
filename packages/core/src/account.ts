@@ -699,6 +699,7 @@ export interface GithubQueueItem {
   createdAt: string;
   claimedAt?: string;
   claimedByNodeId?: string;
+  leaseExpiresAt?: string;
   completedAt?: string;
   triggerId?: string;
   triggerKind?: "github" | "slack" | "manual" | "webhook" | "schedule";
@@ -722,7 +723,7 @@ export interface GithubQueueItem {
    *  secret, token, or raw command/tool output; only bounded summaries,
    *  identifiers, and URLs. */
   routingReason?: string;
-  checks?: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; exitCode?: number }>;
+  checks?: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; exitCode?: number; durationMs?: number }>;
   events?: Array<{
     at: string;
     kind: "triggered" | "routed" | "claimed" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
@@ -765,6 +766,7 @@ export interface AccountAutomationRun {
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
+  leaseExpiresAt?: string;
   output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
 }
 
