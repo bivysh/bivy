@@ -22,9 +22,12 @@ const THINKING_LABELS: Record<string, string> = {
 
 function runtimeCapabilityChips(a: RuntimeInfo): Array<{ label: string; ok: boolean }> {
   const caps = (a.capabilities || {}) as Record<string, unknown>;
+  const mode = String((a as { executionMode?: unknown }).executionMode || "");
+  const modeLabel = mode === "protocol" ? "Protocol" : mode === "structured-pipe" ? "Structured" : mode === "pipe" ? "Chat pipe" : mode === "pty" ? "Terminal" : "";
   // "Approvals" is on for native per-tool interception OR the MCP-proxy gate
   // (which governs the agent's MCP tool calls through the same Approve/Deny flow).
   return [
+    ...(modeLabel ? [{ label: modeLabel, ok: true }] : []),
     { label: "Approvals", ok: Boolean(caps.toolInterception) || Boolean(caps.mcpToolApprovals) },
     { label: "Resume", ok: Boolean(caps.resume) },
     { label: "Models", ok: Boolean(caps.modelSelection) },

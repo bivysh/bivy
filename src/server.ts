@@ -470,7 +470,7 @@ type MeshCommand = {
   description: string;
   kind: "server" | "native";
   run?: () => Promise<unknown> | unknown;
-  spawn?: { command: string; args: string[] };
+  spawn?: { command: string; args: string[]; requiresTty?: boolean };
 };
 
 type OAuthLoginState = {
@@ -1593,12 +1593,12 @@ const commands: MeshCommand[] = [
   { name: "/help", description: "Show quick chat help.", kind: "server", run: () => ({
     text: "Use /commands to open the command list. Press Cmd/Ctrl+Enter to send a prompt. Attach files/images with the + button or by dragging them into the message box.",
   }) },
-  { name: "/login", description: "Connect a model provider in Terminal.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/login"] } },
-  { name: "/model", description: "Open the searchable model selector.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/model"] } },
-  { name: "/terminal", description: "Start the terminal agent in this workspace and stream its output.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix] } },
-  { name: "/config", description: "Show agent configuration.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "config"] } },
-  { name: "/list", description: "List installed agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "list"] } },
-  { name: "/update", description: "Update agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "update"] } },
+  { name: "/login", description: "Connect a model provider in Terminal.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/login"], requiresTty: true } },
+  { name: "/model", description: "Open the searchable model selector.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/model"], requiresTty: true } },
+  { name: "/terminal", description: "Start the terminal agent in this workspace and stream its output.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix], requiresTty: true } },
+  { name: "/config", description: "Show agent configuration.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "config"], requiresTty: true } },
+  { name: "/list", description: "List installed agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "list"], requiresTty: true } },
+  { name: "/update", description: "Update agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "update"], requiresTty: true } },
 ];
 
 // A local client whose send buffer has grown past this is behind on reads (slow
@@ -5625,18 +5625,22 @@ function runNativeCommand(command: MeshCommand) {
   const runId = `cmd-${Date.now()}`;
   broadcast({ type: "command.started", runId, command: command.name });
 
-  const wrapped = wrapWithSystemPty(command.spawn.command, command.spawn.args);
-  const child = spawn(wrapped.command, wrapped.args, {
-    cwd: repoRoot,
-    env: {
-      ...process.env,
-      PI_CODING_AGENT_DIR: piDir,
-      BIVY_WORKSPACE: active?.workspace ?? defaultWorkspace,
-      TERM: "xterm-256color",
-      FORCE_COLOR: "0",
-      NO_COLOR: "1",
-    },
-  });
+  const env = {
+    ...process.env,
+    PI_CODING_AGENT_DIR: piDir,
+    BIVY_WORKSPACE: active?.workspace ?? defaultWorkspace,
+    TERM: "xterm-256color",
+    FORCE_COLOR: "0",
+    NO_COLOR: "1",
+  };
+  // Native commands (login/model/config/etc.) need a TTY for prompts and the
+  // terminal UI. Everything else uses ordinary pipes: this avoids an extra
+  // Python process and PTY relay for non-interactive commands while preserving
+  // the old behavior for commands that genuinely require terminal semantics.
+  const launch = command.spawn.requiresTty
+    ? wrapWithSystemPty(command.spawn.command, command.spawn.args)
+    : { command: command.spawn.command, args: command.spawn.args };
+  const child = spawn(launch.command, launch.args, { cwd: repoRoot, env });
 
   commandProcesses.set(runId, child);
   child.stdout.on("data", (data) => {

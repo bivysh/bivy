@@ -72,6 +72,8 @@ export interface RuntimeInstallInfo {
 
 export interface RuntimeInfo {
   id: string;
+  /** How the default governed session communicates with the agent. */
+  executionMode?: "protocol" | "structured-pipe" | "pipe" | "pty";
   displayName: string;
   description: string;
   status: RuntimeStatus;
@@ -125,6 +127,7 @@ function claudeCodeInfo(): RuntimeInfo {
   const installed = claudeSdkInstalled();
   return {
     id: "claude-code-sdk",
+    executionMode: "protocol",
     displayName: "Claude Code SDK",
     description: "Anthropic's Claude Agent SDK driven as a Bivy runtime: streaming turns, model picker, and tool approvals via the SDK permission callback.",
     status: installed ? "available" : "planned",
@@ -163,6 +166,7 @@ function genericCliInfo(): RuntimeInfo {
   const resume = Boolean(options?.resumeArgs);
   return {
     id: "generic-cli",
+    executionMode: "pipe",
     displayName: process.env.BIVY_AGENT_NAME?.trim() || "Generic CLI Agent",
     description: "Run any local agent CLI underneath Bivy by spawning a configured process and streaming stdout/stderr.",
     status: configured ? "available" : "planned",
@@ -1082,6 +1086,8 @@ function cliAgentInfo(id: CliAgentId): RuntimeInfo {
   let resume = id === "codex" || Boolean(cliResumeTemplate(id));
   let modelSelection = Boolean(cliModelConfig(id));
   const usageReporting = cliUsageReporting(id);
+  const structuredPref = process.env.BIVY_AGENT_STRUCTURED;
+  const structured = Boolean(process.env.BIVY_AGENT_PARSER || spec.parserId) && (!spec.parserUnverified || structuredPref === "1") && structuredPref !== "0";
   // When the agent is promoted to ACP (spec.acp + BIVY_<ID>_ACP / BIVY_PREFER_ACP),
   // it runs through the governed ProtocolRuntime — so it honestly gains per-tool
   // approvals and resume. Reflect that in the catalog the picker reads.
@@ -1100,6 +1106,7 @@ function cliAgentInfo(id: CliAgentId): RuntimeInfo {
   }
   return {
     id,
+    executionMode: acpActive ? "protocol" : structured ? "structured-pipe" : "pipe",
     displayName: spec.displayName,
     description: spec.blurb ?? `Run the local ${spec.displayName} CLI underneath Bivy in the session workspace.`,
     status: installed ? "available" : "external",
@@ -1133,6 +1140,7 @@ function codexApprovalsInfo(): RuntimeInfo {
   const installed = commandAvailable("codex");
   return {
     id: "codex-approvals",
+    executionMode: "protocol",
     displayName: "Codex",
     description: "Codex driven through its app-server: every shell command or file change it proposes is gated through Bivy's Approve/Deny before it runs (not just the exec jail), and sessions resume with full history.",
     status: installed ? "available" : "external",
@@ -1324,6 +1332,7 @@ function acpInfo(): RuntimeInfo {
   const configured = Boolean(process.env.BIVY_ACP_COMMAND?.trim());
   return {
     id: "acp",
+    executionMode: "protocol",
     displayName: process.env.BIVY_ACP_NAME?.trim() || "ACP Agent",
     description: "Any Agent Client Protocol (ACP) agent, driven through Bivy's shim for per-tool approvals, streaming, and resume.",
     status: configured ? "available" : "planned",
@@ -1377,6 +1386,7 @@ function openClawInfo(): RuntimeInfo {
   const installCommand = `npm install --global --prefix ${npmPrefix} openclaw`;
   return {
     id: "openclaw",
+    executionMode: "pipe",
     displayName: options.displayName,
     description: "Run the local OpenClaw CLI underneath Bivy in the session workspace.",
     status: installed ? "available" : "external",
@@ -1404,6 +1414,7 @@ function protocolInfo(): RuntimeInfo {
   const commands = protocolCommandsFromEnv();
   return {
     id: "bivy-agent-protocol",
+    executionMode: "protocol",
     displayName: process.env.BIVY_PROTOCOL_NAME?.trim() || "Bivy Protocol",
     description: "JSON-lines process protocol for any agent to expose structured events, tool calls, approvals, models, and sessions without a bespoke Bivy adapter.",
     status: configured ? "available" : "planned",
@@ -1421,6 +1432,7 @@ function protocolInfo(): RuntimeInfo {
 export const RUNTIME_CATALOG: RuntimeInfo[] = [
   {
     id: "pi",
+    executionMode: "protocol",
     displayName: "Pi",
     description: "Native Bivy/Pi coding agent runtime with packages, approvals, and model picker.",
     status: "available",
