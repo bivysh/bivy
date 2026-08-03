@@ -416,15 +416,29 @@ function nodeBindHost() {
 
 function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    // Intentionally execute an argv vector with Node's default shell:false. Some
-    // callers use process.execPath/installed absolute paths; treating those as a
-    // shell string would be unsafe, but spawn does not parse metacharacters.
-    // lgtm[js/command-line-injection]
-    // lgtm[js/shell-command-injection-from-environment]
-    const child = spawn(cmd, args, { stdio: "inherit", ...opts, shell: false });
+    const child = spawn(cmd, args, { stdio: "inherit", ...opts });
     child.on("exit", (code) => resolve(code ?? 0));
     child.on("error", (error) => {
       console.error(c.red(`Failed to run ${cmd}: ${error.message}`));
+      resolve(1);
+    });
+  });
+}
+
+/** Fixed executable + fixed entry point for setup's inline model-auth stage.
+ * Keep this separate from the generic CLI forwarding helper: no user-provided
+ * command or argv value reaches this process boundary. */
+function runSetupModelLogin(config) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, nodeScriptArgs(bivyLoginEntry), {
+      stdio: "inherit",
+      cwd: repoRoot,
+      env: startEnv(config),
+      shell: false,
+    });
+    child.on("exit", (code) => resolve(code ?? 0));
+    child.on("error", (error) => {
+      console.error(c.red(`Failed to start model login: ${error.message}`));
       resolve(1);
     });
   });
@@ -3301,7 +3315,7 @@ async function cmdSetup(args = []) {
     const signInNow = await askYesNo("Sign in to a model now so your first task can run?", true);
     if (signInNow) {
       rl.pause();
-      const loginCode = await run(nodeBin, nodeScriptArgs(bivyLoginEntry), { cwd: repoRoot, env: startEnv(config) });
+      const loginCode = await runSetupModelLogin(config);
       rl.resume();
       if (loginCode !== 0 || !hasModelConfig(loadConfig())) {
         console.log(c.yellow("Model sign-in did not complete. The node can start, but an agent reply still requires 'bivy login'."));
