@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueItem, type PrRef, type RunTerminalSummary } from "@bivy/core";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
@@ -227,8 +228,11 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
           onConfirm={() => { controller.deleteSession(sessionId); setDeleting(false); }}
         />
       )}
-      {open && (
-        <div className="action-sheet" role="dialog" aria-label={`Actions for ${name}`} onClick={(e) => e.stopPropagation()}>
+      {/* The mobile sidebar is transformed into an off-canvas drawer. A fixed
+          descendant of a transformed element is fixed to that element, not the
+          viewport, so keep the full-screen sheet at the document root. */}
+      {open && createPortal(
+        <div className="action-sheet" role="dialog" aria-modal="true" aria-label={`Actions for ${name}`} onClick={(e) => e.stopPropagation()}>
           <div className="action-sheet-backdrop" onClick={close} />
           <div className="action-sheet-body">
             <div className="action-sheet-head">
@@ -265,7 +269,8 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
               Delete
             </button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

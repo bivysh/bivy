@@ -412,8 +412,16 @@ export function App() {
         {/* One entry point now — a ChatGPT-style gear. Theme, GitHub Queue, and
             everything else moved inside the Settings modal. */}
         <div className="sidebar-foot">
-          <button className="inbox-button" onClick={() => { setInboxOpen(true); closeDrawer(); }} aria-label={`Inbox, ${inboxItems.length} unresolved items`}>
-            <span>Inbox</span>
+          <button
+            className="inbox-button"
+            onClick={() => { setInboxOpen(true); closeDrawer(); }}
+            title="Inbox"
+            aria-label={`Inbox, ${inboxItems.length} unresolved items`}
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+              <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+            </svg>
             {inboxItems.length > 0 && <span className="inbox-count" aria-hidden>{inboxItems.length}</span>}
           </button>
           <button
@@ -429,7 +437,6 @@ export function App() {
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
-            <span className="settings-gear-label">Settings</span>
           </button>
         </div>
       </aside>
@@ -440,9 +447,6 @@ export function App() {
         <header className="topbar">
           <button className="icon-btn only-mobile" onClick={() => setDrawerOpen(true)} aria-label="Open sessions">
             ☰
-          </button>
-          <button className="icon-btn only-mobile inbox-mobile" onClick={() => setInboxOpen(true)} aria-label={`Inbox, ${inboxItems.length} unresolved items`}>
-            ◉{inboxItems.length > 0 && <span className="inbox-count">{inboxItems.length}</span>}
           </button>
           <div className="topbar-title">
             <div className="topbar-title-row">

@@ -18,7 +18,7 @@ import type { AttachmentRef, ConnectionStatus, PromptAttachment, ServerEvent } f
 import type { AccountNode, EphemeralNodeConfig } from "./account.js";
 import type { InboxAdvert } from "./inbox.js";
 import { type SlashCommand } from "./slash.js";
-import { toHtml } from "./markdown.js";
+import { toHtml, extractRemoteImageUrls } from "./markdown.js";
 import { eventKind, normalizeEventType, toolCallId, toolInput, toolName } from "./tool-activity.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import { attachmentFromRef, contentThinking, contentToText, mergeToolInto, nextId, renderHistory, toolEntriesFromContent } from "./store-render.js";
@@ -163,6 +163,15 @@ export interface TranscriptEntry {
    *  as an inline action button on a system entry so the suggestion is tappable
    *  instead of just describing a command the user would have to type. */
   action?: string;
+  /** Resolved AttachmentRefs for this (assistant) entry's remote markdown images
+   *  (`![alt](https://…)`), keyed by the exact URL the markdown referenced — see
+   *  inlineImagesByUrl / withInlineImageRefs below. ChatView's hydrate effect
+   *  looks up each `<img data-remote-src>` here to fetch its bytes and swap in a
+   *  `blob:` URL (the deployed CSP blocks a literal remote `src`). Populated at
+   *  render time from durable history (`foldInlineImageRefs`) and patched in
+   *  live as the node resolves more (see the "inlineImage" case below) — a new
+   *  object identity on that patch is what makes the hydrate effect re-run. */
+  imageRefs?: Record<string, AttachmentRef>;
 }
 
 export interface ModelInfo {
@@ -173,6 +182,8 @@ export interface ModelInfo {
 
 export interface RuntimeInfo {
   id: string;
+  /** Default communication path: structured protocol/SDK, JSON pipe, plain pipe, or native terminal. */
+  executionMode?: "protocol" | "structured-pipe" | "pipe" | "pty";
   displayName?: string;
   name?: string;
   [k: string]: unknown;
@@ -265,6 +276,19 @@ export interface RepoInfo {
 export interface BranchInfo {
   name: string;
   [k: string]: unknown;
+}
+
+/**
+ * The provider id an *API key* for `provider` should be stored under. A few
+ * providers sign in via OAuth under one id but read a pasted key from another
+ * provider's env var: Codex authenticates as `openai-codex` (the ChatGPT
+ * subscription) yet reads a plain key from `openai`'s OPENAI_API_KEY. Used by the
+ * sign-in sheet (where to save the key) and the auto-dismiss (which provider
+ * becoming configured satisfies the prompt). OAuth sign-in still uses the
+ * original id.
+ */
+export function modelAuthApiKeyProvider(provider: string): string {
+  return provider === "openai-codex" ? "openai" : provider;
 }
 
 export interface ProviderInfo {
@@ -624,10 +648,12 @@ export interface AppState {
   oauth: OauthState | null;
   /** A launched ephemeral runner came online with no usable model credentials
    *  (nothing to seed from this device, no peer vault, no hosted escrow) — the
-   *  first-run subscription-OAuth prompt. `nodeId` scopes it to the runner that
-   *  needs it; cleared automatically once any provider becomes configured (that
-   *  same login is then escrowed so future runners inherit it). Null otherwise. */
-  needsModelAuth: { nodeId: string; provider: string } | null;
+   *  first-run subscription-OAuth prompt. Also raised mid-session when a running
+   *  agent's credential is missing/expired and it 401s (`reason` carries the
+   *  failure text so the sheet can explain a re-auth vs a first sign-in). `nodeId`
+   *  scopes it to the runner that needs it; cleared once the *targeted* provider
+   *  becomes configured. Null otherwise. */
+  needsModelAuth: { nodeId: string; provider: string; reason?: string } | null;
   githubApp: GithubAppState | null;
   /** Cost/token/plan-quota for the active session (display-only), or null. */
   usage: Usage | null;
@@ -853,6 +879,9 @@ function eventThinkingDelta(event: any): { kind: "full" | "delta" | "none"; text
 export class SessionStore {
   private state: AppState = initialState();
   private listeners = new Set<() => void>();
+  /** Coalesce high-frequency streaming state notifications to one browser paint. */
+  private notifyPending = false;
+  private notifyHandle: number | ReturnType<typeof setTimeout> | null = null;
   private draft: Draft = freshDraft();
   /** Agent-sent attachments buffered during the current turn. Flushed at the
    *  turn boundary onto the turn's final assistant bubble (see
@@ -919,6 +948,14 @@ export class SessionStore {
    *  Bounded like HTML_CACHE so a long session can't grow it without limit. */
   private attachmentsByText = new Map<string, PromptAttachment[]>();
   private static readonly ATTACHMENTS_CACHE_MAX = 100;
+  /** Resolved AttachmentRefs for remote markdown images, keyed by the exact
+   *  `https://` URL the markdown referenced — the client-side twin of the
+   *  node's inline-image event log (src/session/inline-image-fetch.ts). Filled
+   *  from durable history (`foldInlineImageRefs`) and grown live as the node
+   *  resolves more (the "inlineImage" case in applyStreamEvent below). Unbounded
+   *  like the durable log itself is per-session already bounded by how many
+   *  distinct remote images a session's messages actually reference. */
+  private inlineImagesByUrl = new Map<string, AttachmentRef>();
   /** Per-session rendered transcript, so switching back paints instantly. */
   private transcriptCache = new Map<string, TranscriptEntry[]>();
   private static readonly CACHE_MAX = 30;
@@ -975,7 +1012,7 @@ export class SessionStore {
   seedHistory(sessionId: string, messages: any[], count: number, historyHash: string): void {
     if (!sessionId || !historyHash || !Array.isArray(messages)) return;
     this.historyRaw.set(sessionId, { messages, count, historyHash });
-    const transcript = this.withCachedAttachments(renderHistory(messages));
+    const transcript = this.withInlineImageRefs(this.withCachedAttachments(renderHistory(messages)));
     this.cacheTranscript(sessionId, transcript);
     if (this.state.activeSessionId === sessionId && this.state.transcript.length === 0) {
       this.set({ transcript, opening: false });
@@ -1134,6 +1171,44 @@ export class SessionStore {
     return changed ? next : transcript;
   }
 
+  /** Fold the durable url→ref map a `session.history` event carries
+   *  (`inlineImageRefs`, persisted by the node's inline-image event log — see
+   *  src/session/inline-image-fetch.ts) into the in-memory cache, so a reload
+   *  resolves a remote markdown image from the log instead of waiting on a fresh
+   *  fetch. Mirrors foldAttachmentRefs; last entry per URL wins (matches the
+   *  log's own last-write-wins replay). */
+  foldInlineImageRefs(entries: Array<[string, AttachmentRef]> | undefined): void {
+    if (!entries || !entries.length) return;
+    for (const [url, ref] of entries) {
+      if (!url || !ref) continue;
+      this.inlineImagesByUrl.set(url, ref);
+    }
+  }
+
+  /** Attach resolved inline-image refs onto assistant entries whose markdown
+   *  references a now-cached URL — see TranscriptEntry.imageRefs. A no-op for a
+   *  URL not yet resolved (the placeholder just stays unhydrated until it is). */
+  private withInlineImageRefs(transcript: TranscriptEntry[]): TranscriptEntry[] {
+    if (this.inlineImagesByUrl.size === 0) return transcript;
+    let changed = false;
+    const next = transcript.map((e) => {
+      if (e.role !== "assistant" || !e.text) return e;
+      const urls = extractRemoteImageUrls(e.text);
+      if (!urls.length) return e;
+      let patch: Record<string, AttachmentRef> | undefined;
+      for (const url of urls) {
+        const ref = this.inlineImagesByUrl.get(url);
+        if (!ref || e.imageRefs?.[url]) continue;
+        patch ??= { ...(e.imageRefs ?? {}) };
+        patch[url] = ref;
+      }
+      if (!patch) return e;
+      changed = true;
+      return { ...e, imageRefs: patch };
+    });
+    return changed ? next : transcript;
+  }
+
   private cacheTranscript(sessionId: string, transcript: TranscriptEntry[]): void {
     if (!sessionId) return;
     // Re-insert to refresh recency (insertion-ordered Map → oldest evicted).
@@ -1219,7 +1294,45 @@ export class SessionStore {
 
   private set(next: Partial<AppState>): void {
     this.state = { ...this.state, ...next };
-    for (const l of this.listeners) l();
+    // Streaming events can update the store several times in one transport
+    // tick (draft text, tool state, working label). Delay only while a turn is
+    // active so React subscribers repaint at most once per frame; lifecycle and
+    // completed-turn updates remain synchronous.
+    if (this.state.working) {
+      this.scheduleNotify();
+      return;
+    }
+    this.flushNotify();
+  }
+
+  private scheduleNotify(): void {
+    if (this.notifyPending) return;
+    this.notifyPending = true;
+    const callback = () => {
+      this.notifyPending = false;
+      this.notifyHandle = null;
+      for (const listener of this.listeners) listener();
+    };
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      this.notifyHandle = globalThis.requestAnimationFrame(callback);
+    } else {
+      this.notifyHandle = setTimeout(callback, 16);
+    }
+  }
+
+  private flushNotify(): void {
+    if (!this.notifyPending) {
+      for (const listener of this.listeners) listener();
+      return;
+    }
+    const handle = this.notifyHandle;
+    this.notifyPending = false;
+    this.notifyHandle = null;
+    if (handle !== null) {
+      if (typeof globalThis.cancelAnimationFrame === "function" && typeof handle === "number") globalThis.cancelAnimationFrame(handle);
+      else clearTimeout(handle as ReturnType<typeof setTimeout>);
+    }
+    for (const listener of this.listeners) listener();
   }
 
   /**
@@ -1543,7 +1656,7 @@ export class SessionStore {
 
   /** Set (or clear, with null) the first-run "sign in to your model" prompt for a
    *  freshly-launched ephemeral runner. See `AppState.needsModelAuth`. */
-  setNeedsModelAuth(v: { nodeId: string; provider: string } | null): void {
+  setNeedsModelAuth(v: { nodeId: string; provider: string; reason?: string } | null): void {
     this.set({ needsModelAuth: v });
   }
 
@@ -2098,6 +2211,20 @@ export class SessionStore {
         }
         return;
       }
+      case "session.auth_required": {
+        // The node reported an auth failure for `provider` (no credential, or an
+        // expired/invalid one that 401'd). Raise the "Sign in to your model" sheet
+        // targeted at that provider — the same one the inline error bubble above
+        // describes — so the user can re-authenticate in place. Focus-gated like
+        // session.error so a background session doesn't hijack the sheet.
+        const e = event as any;
+        if (this.isForeignSessionEvent(e.sessionId)) return;
+        const provider = String(e.provider || "");
+        if (provider && this.state.currentNodeId) {
+          this.setNeedsModelAuth({ nodeId: this.state.currentNodeId, provider, reason: String(e.reason || "") });
+        }
+        return;
+      }
       case "approval.created": {
         const approval = (event as any).approval || event;
         // Needing a response is one of the few things worth reordering the
@@ -2287,12 +2414,17 @@ export class SessionStore {
         const providers = Array.isArray(e.providers) ? (e.providers as ProviderInfo[]) : [];
         // A configured provider we were managing → refresh its auth detail too.
         this.set({ providers });
-        // The runner now has a usable model provider — the first-run OAuth prompt
-        // (if it was showing) is satisfied, whether the login just completed here
-        // or a peer/hosted-escrow sync landed the vault. Auto-dismiss it so a
-        // transient "no creds yet" prompt disappears once creds arrive.
-        if (this.state.needsModelAuth && providers.some((p) => p.configured)) {
-          this.set({ needsModelAuth: null });
+        // The prompt is satisfied once the *targeted* provider becomes configured
+        // (login completed here, or a peer/hosted-escrow sync landed the vault).
+        // Check the specific provider, not just "any provider configured": a
+        // mid-session prompt for e.g. openai-codex must not be dismissed just
+        // because anthropic is already connected.
+        const pendingAuth = this.state.needsModelAuth;
+        if (pendingAuth) {
+          const alias = modelAuthApiKeyProvider(pendingAuth.provider);
+          if (providers.some((p) => (p.id === pendingAuth.provider || p.id === alias) && p.configured)) {
+            this.set({ needsModelAuth: null });
+          }
         }
         return;
       }
@@ -2559,6 +2691,10 @@ export class SessionStore {
     // so a reload / another device rehydrates thumbnails by hash instead of a bare
     // "[Image attachment: …]" placeholder. Must precede withCachedAttachments.
     if (Array.isArray(e.attachmentRefs)) this.foldAttachmentRefs(e.attachmentRefs as Array<[string, AttachmentRef[]]>);
+    // Durable url→ref map for remote markdown images the node has already
+    // resolved (see resolveInlineImages on the node) — must also precede the
+    // render below so a reload shows resolved images immediately.
+    if (Array.isArray(e.inlineImageRefs)) this.foldInlineImageRefs(e.inlineImageRefs as Array<[string, AttachmentRef]>);
     const incoming: any[] = Array.isArray(e.messages) ? e.messages : [];
     const prev = sessionId ? this.historyRaw.get(sessionId) : undefined;
     const isAppend = e.mode === "append" && prev && (e.baseCount === undefined || e.baseCount === prev.count);
@@ -2592,7 +2728,7 @@ export class SessionStore {
     // raw runtime messages without the outbound-attachment overlay) is lossy and
     // must not erase the chip.
     this.rememberAgentAttachments(sessionId, rendered);
-    const withAttachments = this.withStickyAgentAttachments(sessionId, rendered);
+    const withAttachments = this.withInlineImageRefs(this.withStickyAgentAttachments(sessionId, rendered));
     if (sessionId) this.cacheTranscript(sessionId, withAttachments);
     // A history snapshot can arrive for a session the user has already switched
     // away from (slow radio + fast taps): its request was in flight when they
@@ -2899,6 +3035,28 @@ export class SessionStore {
         if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return;
         const caption = typeof (event as any).caption === "string" ? (event as any).caption : "";
         this.pendingAgentAttachments.push({ attachment: attachmentFromRef(ref), caption });
+        return;
+      }
+      case "inlineImage": {
+        // The node finished fetching a remote markdown image (#293). Cache the
+        // ref, then patch it onto any already-rendered assistant entry whose raw
+        // markdown references this exact URL — a new object identity for that
+        // entry is what makes ChatView's hydrate effect notice and swap in a
+        // blob: URL. A URL nobody's current transcript mentions yet (already
+        // scrolled past the initial window, or a race with the render) still
+        // ends up correct once withInlineImageRefs runs on the next full render,
+        // since the cache itself was updated either way.
+        const url = (event as any).url;
+        const ref = (event as any).ref;
+        if (typeof url !== "string" || !url || !ref || typeof ref.hash !== "string") return;
+        this.inlineImagesByUrl.set(url, ref);
+        let changed = false;
+        const transcript = this.state.transcript.map((e) => {
+          if (e.role !== "assistant" || !e.text || e.imageRefs?.[url] || !e.text.includes(url)) return e;
+          changed = true;
+          return { ...e, imageRefs: { ...(e.imageRefs ?? {}), [url]: ref } };
+        });
+        if (changed) this.set({ transcript });
         return;
       }
       case "message_update":

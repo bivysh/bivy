@@ -117,7 +117,7 @@ import {
   unb64url,
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
-import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 
 /**
  * Bounded discovery metadata for a provider-native session Bivy did not start
@@ -174,6 +174,12 @@ const LOOPBACK = /^(localhost|127\.0\.0\.1|\[?::1\]?)$/;
  *  concluding it has no model credentials and raising the first-run sign-in
  *  prompt — long enough for hosted-escrow / peer-vault sync to land first. */
 const FIRST_RUN_MODEL_AUTH_GRACE_MS = 8000;
+
+/** How long to wait for a freshly-launched ephemeral runner to come online before
+ *  telling the user it likely failed to boot — generous, since a bare VM installs
+ *  from scratch (1–3 min), but bounded so a self-destructed machine doesn't leave
+ *  the session spinning "Reconnecting…" forever. */
+const RUNNER_BOOT_TIMEOUT_MS = 4 * 60 * 1000;
 
 /**
  * Same rule as the legacy client: a same-origin/loopback node (or explicit
@@ -1734,10 +1740,30 @@ export class AppController {
       // send doesn't visually vanish while the machine boots.
       this.store.addUserMessage(text, cmid, files);
       this.store.pushSystemMessage(`Starting ${config.name} — it'll come online shortly, then your message runs.`);
+      this.watchRunnerBoot(machine.nodeId, config.name, config.provider);
     } catch (e) {
       this.pendingPrompt = null;
       this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`);
     }
+  }
+
+  /**
+   * Surface a boot failure instead of an endless "Reconnecting…". A bare ephemeral
+   * VM installs from scratch and, if any step fails, self-destructs (Fly
+   * `auto_destroy`) — so the device would otherwise dial a node that no longer
+   * exists forever. If the runner isn't online within the boot window, drop a
+   * clear system note. Non-fatal: a slower-than-expected boot still connects and
+   * runs (pendingPrompt is left intact), the note just may arrive early.
+   */
+  private watchRunnerBoot(nodeId: string, name: string, provider: string): void {
+    this.waitForOnline(RUNNER_BOOT_TIMEOUT_MS).catch(() => {
+      // Moved to another node, or it actually came online right at the edge.
+      if (this.local.cur !== nodeId || this.store.getState().status === "online") return;
+      const mins = Math.round(RUNNER_BOOT_TIMEOUT_MS / 60000);
+      this.store.pushSystemMessage(
+        `${name} still isn't online after ${mins} min. A temporary machine self-destructs if its boot install fails, so it may be gone — check your ${provider} dashboard for a "bivy-…" app and its logs. Start a new session to try again.`,
+      );
+    });
   }
 
   /**
@@ -2403,7 +2429,7 @@ export class AppController {
     // device-local GitHub token during bootstrap so its very first repo picker,
     // clone, push, and PR work instead of failing after the machine boots.
     const githubToken = opts.githubToken ?? await this.githubTaskToken.get();
-    const machine = await launchEphemeralMachine({ ...opts, repo, githubToken: githubToken || undefined }, {
+    const machine = await launchEphemeralMachine({ ...opts, repo, githubToken: githubToken || undefined, debugKeepMachine: EPHEMERAL_KEEP_FAILED_MACHINES }, {
       store: this.local,
       exec: cloudExec(this.local),
       keys: this.ephemeralKeys,
