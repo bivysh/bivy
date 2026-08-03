@@ -62,6 +62,25 @@ export interface ProtocolRuntimeOptions {
    * vars, so one Bivy sign-in serves this agent too.
    */
   credentials?: AgentCredentialStore;
+  /**
+   * Credential preflight (mirrors ProcessRuntime). Returns a human-readable error
+   * when the agent has no usable credential, so Bivy surfaces a clear, actionable
+   * message instead of spawning a shim whose first turn dies with an opaque
+   * upstream 401. Returning undefined = proceed. Run per prompt, before the first
+   * turn opens.
+   */
+  preflight?: (
+    env: Record<string, string | undefined>,
+    ctx: { provider?: string },
+  ) => string | undefined;
+  /**
+   * Optional preparation run before the child spawns (mirrors ProcessRuntime) —
+   * e.g. Codex mints its `auth.json` from Bivy's vault and pins `CODEX_HOME`, so a
+   * subscription connected in the app satisfies the preflight and the run. Returns
+   * an env patch merged into the spawn env. Best-effort: a throw/rejection is
+   * swallowed and treated as no patch.
+   */
+  prepare?: (env: Record<string, string | undefined>) => Promise<Record<string, string> | void> | Record<string, string> | void;
   /** Session-less provider/model catalog this agent contributes to the unified picker. */
   catalog?: CatalogProvider[];
   /**
@@ -295,6 +314,9 @@ class ProtocolSession implements RuntimeSession {
   private currentModelId?: string;
   /** Provider of the selected model — scopes custom base-URL env injection. */
   private currentModelProvider?: string;
+  /** Env patch from the last `prepare` run (e.g. Codex's minted CODEX_HOME),
+   *  applied to the spawned child and reused by the per-turn preflight. */
+  private prepareEnv: Record<string, string> = {};
   getModels(): ModelInfo[] { return this.models; }
   getCurrentModel(): ModelInfo | undefined {
     if (!this.currentModelId) return undefined;
@@ -335,12 +357,19 @@ class ProtocolSession implements RuntimeSession {
     const credentialEnv = this.runtimeOptions.credentials
       ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider).catch(() => ({}))
       : {};
+    // Optional prepare step, run before the child spawns because a shim reads its
+    // credential at launch (e.g. Codex mints ~/.codex/auth.json from the vault and
+    // pins CODEX_HOME). Stored so the per-turn preflight sees the same env. Best-
+    // effort: a throw is swallowed and treated as no patch.
+    this.prepareEnv = this.runtimeOptions.prepare
+      ? (await Promise.resolve(this.runtimeOptions.prepare({ ...process.env, ...this.runtimeOptions.env, ...credentialEnv })).catch(() => undefined)) ?? {}
+      : {};
     const child = spawn(this.runtimeOptions.command, this.runtimeOptions.args ?? [], {
       cwd: this.cwd,
       // bivySessionEnv() lets the agent's own shell resolve its session for
       // `bivy attach <path>` (see session-env.ts); spread last so it can never
       // be shadowed by an operator-configured env var of the same name.
-      env: { ...process.env, ...this.runtimeOptions.env, ...credentialEnv, ...bivySessionEnv(this.id) },
+      env: { ...process.env, ...this.runtimeOptions.env, ...credentialEnv, ...this.prepareEnv, ...bivySessionEnv(this.id) },
       stdio: "pipe",
     });
     this.child = child;
@@ -563,6 +592,41 @@ class ProtocolSession implements RuntimeSession {
   async prompt(text: string, options?: PromptOptions): Promise<void> {
     const wasStarted = this.started;
     await this.open();
+    // Per-turn prepare + credential preflight, mirroring ProcessRuntime. Unlike a
+    // fresh-process runtime, the protocol child is long-lived, so a credential
+    // connected AFTER it spawned (a mid-session sign-in from the "Sign in to your
+    // model" sheet) would never be materialized by start()'s one-shot prepare.
+    // Re-run prepare here so e.g. Codex mints ~/.codex/auth.json from the just-
+    // completed sign-in before this turn — the app-server reads the default auth
+    // file, so it recovers on the next prompt instead of staying stuck on the
+    // initial 401. Then preflight backstops the genuinely uncredentialed case with
+    // an actionable error instead of an opaque upstream 401. ensureCodexAuth is
+    // idempotent (it no-ops once auth.json exists), so the repeat is cheap.
+    if (this.runtimeOptions.prepare || this.runtimeOptions.preflight) {
+      const credentialEnv = this.runtimeOptions.credentials
+        ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider).catch(() => ({}))
+        : {};
+      if (this.runtimeOptions.prepare) {
+        this.prepareEnv =
+          (await Promise.resolve(this.runtimeOptions.prepare({ ...process.env, ...this.runtimeOptions.env, ...credentialEnv })).catch(() => undefined)) ??
+          this.prepareEnv;
+      }
+      const preflightError = this.runtimeOptions.preflight?.(
+        { ...process.env, ...this.runtimeOptions.env, ...credentialEnv, ...this.prepareEnv },
+        { provider: this.currentModelProvider },
+      );
+      if (preflightError) {
+        this.streaming = false;
+        const message = { role: "assistant", content: "", errorMessage: preflightError };
+        this.messages.push(message);
+        this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
+        this.emit({ type: "session.error", error: preflightError });
+        this.emit({ type: "message_end", message });
+        this.emit({ type: "turn_end" });
+        this.emit({ type: "agent_end", code: 1, signal: null });
+        return;
+      }
+    }
     if (!wasStarted) this.emit({ type: "agent_start" });
     const prompt = text.trim();
     // Multimodal input: the daemon hands image attachments through PromptOptions

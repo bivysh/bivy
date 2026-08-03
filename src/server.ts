@@ -22,6 +22,7 @@ import { InMemoryLocationRegistry } from "./runtime/location-registry.js";
 import { ControlPlaneSessionLocationRegistry, LayeredSessionLocationRegistry, type NodeSessionRow } from "./runtime/control-plane-location.js";
 import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption.js";
 import { createCredentialStore } from "./runtime/credentials.js";
+import { isModelAuthError, authProviderForSession } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { provisionAgentRun } from "./runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
@@ -58,6 +59,7 @@ import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } 
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
+import { commandLaunch } from "./command-launch.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
 import { createWorktree, removeWorktree, branchSlug, gitRepoRoot, type Worktree } from "./worktree.js";
 import { HarnessManager } from "./harness/manager.js";
@@ -114,6 +116,13 @@ import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog } from "./session/event-log.js";
 import { AttachmentStore, isValidAttachmentHash, type AttachmentRef } from "./session/attachment-store.js";
 import { planAttachment, isAttachPlanError, MAX_AGENT_ATTACHMENT_BYTES } from "./session/attach-to-chat.js";
+import {
+  extractInlineImageUrls,
+  assistantTextForImageScan,
+  fetchInlineImage,
+  isFetchImageError,
+  inlineImageDisplayName,
+} from "./session/inline-image-fetch.js";
 import { ReplicationService } from "./session/replication-service.js";
 import type { ReplWireFrame } from "./session/replicator.js";
 import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
@@ -470,7 +479,7 @@ type MeshCommand = {
   description: string;
   kind: "server" | "native";
   run?: () => Promise<unknown> | unknown;
-  spawn?: { command: string; args: string[] };
+  spawn?: { command: string; args: string[]; requiresTty?: boolean };
 };
 
 type OAuthLoginState = {
@@ -899,7 +908,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -1593,12 +1602,12 @@ const commands: MeshCommand[] = [
   { name: "/help", description: "Show quick chat help.", kind: "server", run: () => ({
     text: "Use /commands to open the command list. Press Cmd/Ctrl+Enter to send a prompt. Attach files/images with the + button or by dragging them into the message box.",
   }) },
-  { name: "/login", description: "Connect a model provider in Terminal.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/login"] } },
-  { name: "/model", description: "Open the searchable model selector.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/model"] } },
-  { name: "/terminal", description: "Start the terminal agent in this workspace and stream its output.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix] } },
-  { name: "/config", description: "Show agent configuration.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "config"] } },
-  { name: "/list", description: "List installed agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "list"] } },
-  { name: "/update", description: "Update agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "update"] } },
+  { name: "/login", description: "Connect a model provider in Terminal.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/login"], requiresTty: true } },
+  { name: "/model", description: "Open the searchable model selector.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/model"], requiresTty: true } },
+  { name: "/terminal", description: "Start the terminal agent in this workspace and stream its output.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix], requiresTty: true } },
+  { name: "/config", description: "Show agent configuration.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "config"], requiresTty: true } },
+  { name: "/list", description: "List installed agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "list"], requiresTty: true } },
+  { name: "/update", description: "Update agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "update"], requiresTty: true } },
 ];
 
 // A local client whose send buffer has grown past this is behind on reads (slow
@@ -2505,6 +2514,65 @@ function persistTranscriptSnapshot(record: SessionRecord): void {
   eventLog.appendBaseSnapshot(record.id, base);
 }
 
+// In-flight dedupe so two sessions (or two turns) referencing the same remote
+// image URL only ever trigger one outbound fetch. Process-lifetime only — a
+// restart just means the first re-encounter fetches again, which is fine.
+const inlineImageFetchInFlight = new Map<string, Promise<void>>();
+// A URL that failed (bad host, timeout, not-an-image, …) is not retried for a
+// cooldown window, so a persistently broken URL in a long-lived session can't
+// turn every subsequent message_end into a wasted fetch attempt.
+const inlineImageFailedAt = new Map<string, number>();
+const INLINE_IMAGE_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * Scan a session's just-finalized assistant messages for remote markdown images
+ * (`![alt](https://…)`) and, for any URL not already resolved or in flight,
+ * fetch it (SSRF-guarded, size-capped — see inline-image-fetch.ts), store the
+ * bytes in the content-addressed AttachmentStore, persist the durable url→ref
+ * mapping, and broadcast it live so an already-open chat hydrates the image
+ * without waiting for a reload. Fire-and-forget: called from the session event
+ * listener, which must not block on a network fetch.
+ */
+function resolveInlineImages(record: SessionRecord): void {
+  const messages = record.session.getMessages();
+  const urls = new Set<string>();
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    for (const url of extractInlineImageUrls(assistantTextForImageScan(m.content))) urls.add(url);
+  }
+  if (!urls.size) return;
+  const alreadyResolved = new Set(eventLog.readInlineImages(record.id).map(([url]) => url));
+  for (const url of urls) {
+    if (alreadyResolved.has(url) || inlineImageFetchInFlight.has(url)) continue;
+    const failedAt = inlineImageFailedAt.get(url);
+    if (failedAt !== undefined && Date.now() - failedAt < INLINE_IMAGE_RETRY_COOLDOWN_MS) continue;
+    const task = (async () => {
+      try {
+        const result = await fetchInlineImage(url);
+        if (isFetchImageError(result)) {
+          console.warn(`[inline-image] ${url}: ${result.error}`);
+          inlineImageFailedAt.set(url, Date.now());
+          return;
+        }
+        const ref = attachmentStore.put(result.bytes, {
+          name: inlineImageDisplayName(url, result.mimeType),
+          mimeType: result.mimeType,
+          kind: "image",
+        });
+        eventLog.appendInlineImage(record.id, { url, ref });
+        eventLog.flush(record.id);
+        broadcast({ type: "session.event", sessionId: record.id, event: { type: "inlineImage", url, ref } });
+      } catch (error) {
+        console.warn(`[inline-image] ${url}:`, error instanceof Error ? error.message : String(error));
+        inlineImageFailedAt.set(url, Date.now());
+      } finally {
+        inlineImageFetchInFlight.delete(url);
+      }
+    })();
+    inlineImageFetchInFlight.set(url, task);
+  }
+}
+
 // Append the tool-activity entry to the log. The id-merge and last-500 cap the old
 // store applied are now applied by `foldTool` on replay.
 function upsertToolActivityMessage(sessionId: string, entry: ToolActivityMessage) {
@@ -2640,6 +2708,11 @@ function buildHistoryEvent(opts: {
     // Durable attachment references (text→refs), so a client that never sent the
     // attachment (a reload, or a different device) rehydrates thumbnails by hash.
     attachmentRefs: opts.sessionId ? eventLog.readAttachments(opts.sessionId) : [],
+    // Durable url→ref map for remote markdown images the node has already
+    // fetched (see resolveInlineImages) — lets a reload resolve a
+    // `data-remote-src` placeholder straight to its attachment hash instead of
+    // waiting on a fresh (redundant) fetch.
+    inlineImageRefs: opts.sessionId ? eventLog.readInlineImages(opts.sessionId) : [],
   };
 }
 
@@ -5487,10 +5560,6 @@ function stripAnsi(text: string) {
     .replace(/\r/g, "\n");
 }
 
-function wrapWithSystemPty(spawnCommand: string, args: string[]) {
-  return { command: pythonCommand, args: [ptyRunnerScript, spawnCommand, ...args] };
-}
-
 function shellQuote(value: string) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -5625,18 +5694,20 @@ function runNativeCommand(command: MeshCommand) {
   const runId = `cmd-${Date.now()}`;
   broadcast({ type: "command.started", runId, command: command.name });
 
-  const wrapped = wrapWithSystemPty(command.spawn.command, command.spawn.args);
-  const child = spawn(wrapped.command, wrapped.args, {
-    cwd: repoRoot,
-    env: {
-      ...process.env,
-      PI_CODING_AGENT_DIR: piDir,
-      BIVY_WORKSPACE: active?.workspace ?? defaultWorkspace,
-      TERM: "xterm-256color",
-      FORCE_COLOR: "0",
-      NO_COLOR: "1",
-    },
-  });
+  const env = {
+    ...process.env,
+    PI_CODING_AGENT_DIR: piDir,
+    BIVY_WORKSPACE: active?.workspace ?? defaultWorkspace,
+    TERM: "xterm-256color",
+    FORCE_COLOR: "0",
+    NO_COLOR: "1",
+  };
+  // Native commands (login/model/config/etc.) need a TTY for prompts and the
+  // terminal UI. Everything else uses ordinary pipes: this avoids an extra
+  // Python process and PTY relay for non-interactive commands while preserving
+  // the old behavior for commands that genuinely require terminal semantics.
+  const launch = commandLaunch(command.spawn.command, command.spawn.args, command.spawn.requiresTty, pythonCommand, ptyRunnerScript);
+  const child = spawn(launch.command, launch.args, { cwd: repoRoot, env });
 
   commandProcesses.set(runId, child);
   child.stdout.on("data", (data) => {
@@ -6976,6 +7047,22 @@ function terminalTurnError(event: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+/**
+ * When a surfaced error looks like a model auth failure (no credential, or an
+ * expired/invalid one that 401'd upstream), tell the client which provider to
+ * (re)authenticate so it can pop the "Sign in to your model" sheet instead of
+ * leaving a bare error bubble. Fires at most once per turn (reset on turn_start)
+ * so a retry storm — e.g. Codex's repeated websocket 401s — raises the sheet once.
+ */
+function maybeSignalAuthRequired(record: SessionRecord, errorText: string): void {
+  if (record.authRequiredSignaled) return;
+  if (!isModelAuthError(errorText)) return;
+  const provider = authProviderForSession(record.runtimeId, record.session.getCurrentModel()?.provider);
+  if (!provider) return;
+  record.authRequiredSignaled = true;
+  broadcast({ type: "session.auth_required", sessionId: record.id, provider, reason: errorText.slice(0, 400) });
+}
+
 function attachSessionListeners(record: SessionRecord) {
   record.unsubscribe?.();
   // In-session model reroute controller (inert unless BIVY_SESSION_MODEL_FALLBACK
@@ -7025,6 +7112,9 @@ function attachSessionListeners(record: SessionRecord) {
     ].includes(event.type)) {
       markSessionWorking(record, event);
     }
+    // A fresh turn re-arms the once-per-turn auth-required signal, so a credential
+    // that was fixed (or newly broke) is re-evaluated on the next prompt.
+    if (event.type === "turn_start") record.authRequiredSignaled = false;
     if (event.type === "message_update" && (event as Record<string, unknown>).message && ((event as Record<string, { role?: unknown }>).message?.role === "assistant")) {
       persistIntermediateFromEvent(record, event as Record<string, unknown>, false);
     }
@@ -7037,6 +7127,15 @@ function attachSessionListeners(record: SessionRecord) {
     // still keeps it); message_end/turn_end capture the assistant reply.
     if (event.type === "turn_start" || event.type === "message_end" || event.type === "turn_end") {
       persistTranscriptSnapshot(record);
+    }
+    // A finalized assistant message may reference a remote image via markdown
+    // (`![alt](https://…)`) — fetch and store it now so the chat can render it
+    // (see resolveInlineImages). Checked on both events: message_end is the
+    // precise "this assistant message is done" signal most runtimes emit, but
+    // turn_end is a safety net for one that only surfaces the final text there.
+    // Fire-and-forget and internally deduped, so checking on both costs nothing.
+    if (event.type === "message_end" || event.type === "turn_end") {
+      resolveInlineImages(record);
     }
     // Durably persist the throttled sidecars at the turn boundary so a crash
     // loses at most the in-flight turn's UI detail, not the whole turn.
@@ -7053,6 +7152,12 @@ function attachSessionListeners(record: SessionRecord) {
       // only via the focus-gated session.event wrap below.
       const e = event as { level?: unknown; message?: unknown; action?: unknown };
       broadcast({ type: "session.notice", sessionId: record.id, level: e.level ?? "info", message: String(e.message ?? ""), ...(e.action ? { action: e.action } : {}) });
+    }
+    if (event.type === "session.error") {
+      // A runtime-emitted auth failure (Codex's app-server websocket 401, or a
+      // ProcessRuntime/ProtocolRuntime credential preflight) — raise the sign-in
+      // sheet for the right provider alongside the inline error bubble.
+      maybeSignalAuthRequired(record, String((event as { error?: unknown }).error ?? ""));
     }
     if (event.type === "runtime.commands") {
       // The agent learned its own slash commands mid-session (e.g. Claude Code's
@@ -7101,6 +7206,9 @@ function attachSessionListeners(record: SessionRecord) {
         metadata.touchSession(record.id, "failed");
         scheduleAdvertise();
         broadcast({ type: "session.error", sessionId: record.id, error: turnError });
+        // If the terminal error is an auth failure (expired key/token → 4xx),
+        // also raise the sign-in sheet for the failing provider.
+        maybeSignalAuthRequired(record, turnError);
         void sendNotificationHint({
           kind: "session_error",
           sessionId: record.id,

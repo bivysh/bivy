@@ -1881,3 +1881,48 @@ describe("SessionStore", () => {
     expect(store.getState().models).toEqual([]);
   });
 });
+
+describe("session.auth_required → sign-in prompt", () => {
+  function focusedStore(): SessionStore {
+    const store = new SessionStore();
+    store.setCurrentNode("node-1");
+    store.beginOpen("s1");
+    return store;
+  }
+
+  it("raises needsModelAuth targeted at the failing provider", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex", reason: "401 Unauthorized" } as never);
+    expect(store.getState().needsModelAuth).toEqual({ nodeId: "node-1", provider: "openai-codex", reason: "401 Unauthorized" });
+  });
+
+  it("ignores an auth_required for a background (non-active) session", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "other", provider: "openai-codex" } as never);
+    expect(store.getState().needsModelAuth).toBeNull();
+  });
+
+  it("does not dismiss a targeted prompt when a DIFFERENT provider connects", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex" } as never);
+    // Anthropic connecting must not satisfy an openai-codex prompt.
+    store.apply({ type: "providers.list", providers: [{ id: "anthropic", configured: true }, { id: "openai-codex", configured: false }] } as never);
+    expect(store.getState().needsModelAuth?.provider).toBe("openai-codex");
+  });
+
+  it("dismisses when the targeted provider connects", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex" } as never);
+    store.apply({ type: "providers.list", providers: [{ id: "openai-codex", configured: true }] } as never);
+    expect(store.getState().needsModelAuth).toBeNull();
+  });
+
+  it("dismisses when the api-key alias (openai) connects for a codex prompt", () => {
+    const store = focusedStore();
+    store.apply({ type: "session.auth_required", sessionId: "s1", provider: "openai-codex" } as never);
+    // A pasted OpenAI key lands under `openai` (OPENAI_API_KEY), which Codex
+    // reads — that satisfies the openai-codex prompt too.
+    store.apply({ type: "providers.list", providers: [{ id: "openai", configured: true }] } as never);
+    expect(store.getState().needsModelAuth).toBeNull();
+  });
+});

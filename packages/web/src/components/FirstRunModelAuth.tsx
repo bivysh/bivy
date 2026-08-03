@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import type { AppState } from "@bivy/core";
+import { modelAuthApiKeyProvider } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { Sheet } from "./Sheet.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
@@ -29,15 +30,19 @@ export function FirstRunModelAuthSheet({ state }: { state: AppState }) {
   if (!req || req.nodeId !== state.currentNodeId) return null;
   const provider = state.providers.find((p) => p.id === req.provider);
   const name = provider?.name || req.provider;
+  // A `reason` means an already-running agent hit an auth failure mid-session
+  // (missing/expired credential → 401), not a fresh ephemeral runner. Explain the
+  // re-auth rather than the first-run "future runners inherit it" story.
+  const reauth = Boolean(req.reason);
   return (
     <Sheet title="Sign in to your model" onClose={() => controller.dismissModelAuthPrompt()}>
       <div className="settings-form">
         <p className="muted settings-intro">
-          This temporary machine needs a model to run your task. Sign in once with {name} — it stays
-          on the runner, and every future runner you launch inherits it automatically, so you won&apos;t
-          be asked again.
+          {reauth
+            ? `Your agent couldn't reach ${name} — its credential is missing or expired. Sign in again to keep going.`
+            : `This temporary machine needs a model to run your task. Sign in once with ${name} — it stays on the runner, and every future runner you launch inherits it automatically, so you won't be asked again.`}
         </p>
-        <ProviderConnectForm state={state} providerId={req.provider} />
+        <ProviderConnectForm state={state} providerId={req.provider} apiKeyProvider={modelAuthApiKeyProvider(req.provider)} />
       </div>
     </Sheet>
   );

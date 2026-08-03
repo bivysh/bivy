@@ -90,8 +90,28 @@ export interface OutboundAttachmentLogEntry {
   caption?: string;
 }
 
+/**
+ * One appended INLINE-IMAGE record: the durable result of the node fetching a
+ * remote `https://` image an agent referenced with markdown syntax
+ * (`![alt](url)`) and storing it in the content-addressed AttachmentStore (see
+ * src/session/inline-image-fetch.ts). A fourth, independent projection — like
+ * `AttachmentLogEntry` it is a lookup table (here url→ref, one entry per URL
+ * rather than text→refs[]) that `mergeTranscript` never sees; the client folds
+ * it in to resolve a `data-remote-src` placeholder (see
+ * packages/core/src/markdown.ts) into a fetchable attachment hash. Persisting
+ * this is what makes a resolved inline image survive a reload instead of
+ * re-fetching (or re-showing unresolved) every time.
+ */
+export interface InlineImageLogEntry {
+  bivyKind: "inline-image";
+  createdAt: number;
+  /** The `https://` URL the markdown referenced. */
+  url: string;
+  ref: AttachmentRef;
+}
+
 /** Any record the log can hold. */
-export type LogRecord = EventLogEntry | BaseLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry;
+export type LogRecord = EventLogEntry | BaseLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry;
 
 /** Content-block type carried by a folded outbound attachment. MUST match
  *  `AGENT_ATTACHMENT_BLOCK` in packages/core/src/store-render.ts — the client's
@@ -129,8 +149,20 @@ function isOutboundAttachment(value: unknown): value is OutboundAttachmentLogEnt
   );
 }
 
+function isInlineImage(value: unknown): value is InlineImageLogEntry {
+  if (!value || typeof value !== "object") return false;
+  const record = value as { bivyKind?: unknown; url?: unknown; ref?: unknown };
+  return (
+    record.bivyKind === "inline-image" &&
+    typeof record.url === "string" &&
+    !!record.ref &&
+    typeof record.ref === "object" &&
+    typeof (record.ref as { hash?: unknown }).hash === "string"
+  );
+}
+
 function isRecord(value: unknown): value is LogRecord {
-  return isOverlay(value) || isBase(value) || isAttachment(value) || isOutboundAttachment(value);
+  return isOverlay(value) || isBase(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value);
 }
 
 /**
@@ -151,6 +183,23 @@ export function replayAttachments(entries: readonly LogRecord[]): Array<[string,
     byText.set(entry.text, entry.refs);
   }
   return [...byText.entries()];
+}
+
+/**
+ * Fold inline-image records into a url→ref list: last write wins per URL
+ * (a re-resolved URL — e.g. after a retry — re-keys onto the newest ref),
+ * preserving first-seen order. Mirrors replayAttachments' shape exactly, one
+ * level simpler (a single ref instead of an array) since one URL is one image.
+ */
+export function replayInlineImages(entries: readonly LogRecord[]): Array<[string, AttachmentRef]> {
+  const byUrl = new Map<string, AttachmentRef>();
+  for (const entry of entries) {
+    if (entry.bivyKind !== "inline-image") continue;
+    if (!entry.url) continue;
+    byUrl.delete(entry.url);
+    byUrl.set(entry.url, entry.ref);
+  }
+  return [...byUrl.entries()];
 }
 
 /**
@@ -397,6 +446,23 @@ export class EventLog {
       ...(entry.caption ? { caption: entry.caption } : {}),
     };
     this.enqueue(id, `oa:${entry.id}`, record);
+  }
+
+  /**
+   * Record the durable ref for a fetched inline (remote markdown) image,
+   * keyed by its source URL. Coalesces on the URL so a re-resolve (retry after
+   * a transient failure) updates in place rather than appending a duplicate line.
+   */
+  appendInlineImage(id: string, entry: { url: string; ref: AttachmentRef }): void {
+    if (!entry.url) return;
+    this.load(id);
+    const record: InlineImageLogEntry = { bivyKind: "inline-image", createdAt: Date.now(), url: entry.url, ref: { ...entry.ref } };
+    this.enqueue(id, `ii:${entry.url}`, record);
+  }
+
+  /** Replay the inline-image records (disk + pending) into a url→ref list. */
+  readInlineImages(id: string): Array<[string, AttachmentRef]> {
+    return replayInlineImages(this.entries(id));
   }
 
   /** Replay the overlay entries (disk + pending) into the flat `extras` list. */

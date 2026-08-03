@@ -145,10 +145,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .sidebar-head-actions { display: flex; align-items: center; gap: 8px; }
 .brand { font-weight: 700; letter-spacing: 0.02em; }
-.sidebar-foot { margin-top: auto; padding: 12px; border-top: 1px solid var(--line); }
-.inbox-button { width: 100%; min-height: 42px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; padding: 8px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--ink); font: inherit; font-weight: 650; text-align: left; }
-.inbox-button:hover { background: var(--surface-2); }
-.inbox-count { min-width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; border-radius: 999px; background: var(--danger); color: white; font-size: 11px; font-weight: 750; }
+.sidebar-foot { margin-top: auto; padding: 12px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+.inbox-button { position: relative; flex: 1; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); color: var(--ink); font: inherit; }
+.inbox-button:hover { border-color: var(--line-strong); background: var(--surface-3); }
+.inbox-button svg { flex: none; color: var(--muted); }
+.inbox-button:hover svg { color: var(--ink); }
+.inbox-count { position: absolute; top: -6px; right: -6px; min-width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; border-radius: 999px; background: var(--danger); color: white; font-size: 11px; font-weight: 750; }
 .inbox { position: fixed; z-index: 101; inset: 5vh max(16px, calc((100vw - 760px) / 2)); max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 20px 70px rgba(0,0,0,.28); }
 .inbox-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px; border-bottom: 1px solid var(--line); }
 .inbox-head h2, .inbox-head p { margin: 0; }
@@ -403,6 +405,11 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    large remote image can't blow out the chat column; rounded to match chips. */
 .msg.assistant img { max-width: 100%; height: auto; border-radius: 10px; }
 .msg.assistant img.md-image { max-height: 420px; object-fit: contain; }
+/* Before ChatView's hydrate effect resolves data-remote-src to a fetched blob:
+   URL (or if the node's fetch fails/is disallowed), the element has no `src` and
+   would otherwise collapse to nothing — give it a visible placeholder box so a
+   pending/failed remote image still reads as "an image was here". */
+.msg.assistant img.md-image:not([src]) { display: inline-block; min-width: 120px; min-height: 80px; background: var(--surface-2, rgba(127, 127, 127, 0.12)); border-radius: 10px; }
 /* An agent-sent attachment block sits in the assistant row above any caption. */
 .assistant-row > .msg-attachments { width: 100%; }
 .msg.assistant li.task-list-item { list-style: none; margin-left: -1.2em; }
@@ -1406,8 +1413,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .inbox-filters { display: grid; grid-template-columns: 1fr 1fr; }
   .inbox-filters select { width: 100%; }
   .inbox-item { grid-template-columns: 1fr; min-height: 64px; }
-  .inbox-mobile { position: relative; }
-  .inbox-mobile .inbox-count { position: absolute; top: -5px; right: -5px; }
   .settings-modal { align-items: stretch; }
   .settings-panel {
     width: 100%; height: 100%; border: 0; border-radius: 0; animation: sheet-up 0.18s ease;
@@ -1743,14 +1748,13 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .icon-btn { border: 0; background: transparent; color: var(--ink); font-size: 20px; }
 /* ---- Sidebar settings gear (single entry point, ChatGPT-style) ---- */
 .settings-gear {
-  display: inline-flex; align-items: center; gap: 10px; position: relative;
+  display: inline-flex; align-items: center; justify-content: center; position: relative;
   border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
-  border-radius: 10px; padding: 9px 12px; width: 100%; font-size: 13px; font-weight: 600;
+  border-radius: 10px; padding: 9px 12px; flex: 1; min-height: 42px; font-size: 13px; font-weight: 600;
 }
 .settings-gear:hover { border-color: var(--line-strong); background: var(--surface-3); }
 .settings-gear svg { flex: none; color: var(--muted); }
 .settings-gear:hover svg { color: var(--ink); }
-.settings-gear-label { color: var(--ink); }
 
 /* ---- Usage bar ---- */
 
