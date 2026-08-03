@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-03
+
 ### Added
 
 - **`attach_to_chat` reaches every agent, not just Claude/Pi** (#290). A new
@@ -30,6 +32,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a native tool call renders identically to the CLI path and goes through the
   same approval governance as any other tool call. No wiring needed per agent —
   the daemon threads one `attachToChat(sessionId, opts)` callback through both.
+
+### Changed
+
+- **Dependency updates** (batched Dependabot bumps). Production: `@anthropic-ai/claude-agent-sdk`
+  0.3.199 → 0.3.220, and `@earendil-works/pi-ai` / `@earendil-works/pi-coding-agent`
+  0.82.1 → 0.83.0. Services: control-plane `stripe` 22.2.2 → 22.4.0; relay
+  `@sentry/node` 10.67.0 → 10.69.0 (control-plane was already on 10.69.0). Tooling:
+  `@types/node` → 26.1.2 and `tsx` → 4.23.1 in both services; transitive `postcss`
+  → 8.5.25. CI actions: `actions/checkout` → v7.0.1, `actions/setup-node` → v7.0.0,
+  `dorny/paths-filter` → v4.0.2.
+
+### Security
+
+- Bumped `fast-uri` → 3.1.5 and `ip-address` → 10.4.0 to clear their high-severity
+  advisories in the production tree.
+- The production audit gate now runs through `scripts/audit-prod.mjs` (wired into
+  CI's `core` job as `npm run audit:prod`). It is `npm audit --omit=dev
+  --audit-level=high` with a small, documented allowlist: it still fails on any
+  high/critical advisory except the two `undici` advisories
+  (GHSA-8xcm-r25x-g524, GHSA-4cwx-7wf7-3272) that are shrinkwrapped inside
+  `@earendil-works/pi-coding-agent@0.83.0`, which no npm `override` or current
+  upstream release can move. Scheduled for review by 2026-09-03; remove the
+  allowlist entries once pi-coding-agent ships a patched `undici`.
 
 ## [0.5.0] - 2026-08-02
 
