@@ -1404,6 +1404,11 @@ export class AppController {
     // pane blanks) until the network answers.
     this.store.beginOpen(sessionId);
     this.send({ kind: "session.open", sessionId, path });
+    // beginOpen deliberately clears the New-session draft model. Resolve the
+    // opened session's actual model in session scope immediately, rather than
+    // leaving the draft selection in the shared composer (or waiting for the
+    // user to open the model picker to trigger a refresh).
+    this.listModels();
     // Seed from the persistent cache first (paints even before the node answers),
     // then request history with the cursor so the node sends only the new tail.
     void this.seedAndRequestHistory(sessionId);
