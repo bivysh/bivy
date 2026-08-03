@@ -16,6 +16,7 @@
 
 import type { AttachmentRef, ConnectionStatus, PromptAttachment, ServerEvent } from "./protocol.js";
 import type { AccountNode } from "./account.js";
+import type { InboxAdvert } from "./inbox.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml } from "./markdown.js";
 import { eventKind, normalizeEventType, toolCallId, toolInput, toolName } from "./tool-activity.js";
@@ -126,6 +127,8 @@ export interface SessionSummary {
    *  session or a cold sessions.list snapshot never reads as a finished run
    *  someone hasn't looked at yet. */
   finishedAt?: number;
+  /** Content-free unresolved conditions from the account session index. */
+  attention?: InboxAdvert[];
 }
 
 export type ToolStatus = "running" | "done";
@@ -237,6 +240,7 @@ export interface UserQuestionRequest {
   id: string;
   sessionId?: string;
   questions: UserQuestionItem[];
+  createdAt?: number;
 }
 
 /** Reasoning/thinking capability of the current model. */
@@ -2084,7 +2088,7 @@ export class SessionStore {
         // Same reasoning as approval.created above: a clarifying question is a
         // "needs your response" moment worth surfacing at the top of the list.
         this.updateSessionRow(e.sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
-        const request: UserQuestionRequest = { id, sessionId: e.sessionId ? String(e.sessionId) : undefined, questions };
+        const request: UserQuestionRequest = { id, sessionId: e.sessionId ? String(e.sessionId) : undefined, questions, createdAt: Number(e.createdAt) || Date.now() };
         this.set({ questions: [...this.state.questions.filter((q) => q.id !== id), request] });
         return;
       }
