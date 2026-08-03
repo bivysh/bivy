@@ -40,6 +40,10 @@ function argValue(flag) {
 }
 // Where to emit the self-hosted tarball + manifest. Empty = don't (npm-only run).
 const packDir = argValue("--pack");
+// npm dist-tag to publish under. Defaults to "latest" (a production release).
+// The staging channel passes `--tag staging` so continuous per-merge builds
+// land on the `staging` tag and never move `latest`. See docs/releasing.md.
+const distTag = argValue("--tag") ?? "latest";
 
 const root = path.resolve(new URL("..", import.meta.url).pathname);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-release-"));
@@ -113,9 +117,22 @@ const releasePkg = JSON.parse(fs.readFileSync(path.join(app, "package.json"), "u
 // self-managed Ed25519 release signature -- users verify with
 // `npm audit signatures` instead of a key we have to guard forever.
 if (doPublish) {
-  const publishArgs = ["publish", "--access", "public"];
+  const publishArgs = ["publish", "--access", "public", "--tag", distTag];
   const canAttest = process.env.GITHUB_ACTIONS === "true" && process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
   if (canAttest) {
+    // npm cross-checks the attestation against package.json's repository URL and
+    // rejects the upload (E422) if it is missing or points elsewhere. The staged
+    // manifest inherits this from the root package.json, so a drop there only
+    // ever surfaces here -- after a full build, and for production after the CI
+    // gate and the approval. Fail with the actual reason instead.
+    const repoUrl = releasePkg.repository?.url ?? releasePkg.repository ?? "";
+    if (!repoUrl) {
+      throw new Error(
+        "Publishing with provenance, but the staged package.json has no `repository` field.\n" +
+        "npm verifies the attestation against it and will reject the publish. Add it to the\n" +
+        "root package.json (curateManifest passes it through).",
+      );
+    }
     publishArgs.push("--provenance");
   } else if (!dryRunPublish) {
     console.warn(
@@ -125,7 +142,11 @@ if (doPublish) {
   }
   if (dryRunPublish) publishArgs.push("--dry-run");
   run("npm", publishArgs, { cwd: app });
-  console.log(dryRunPublish ? "npm publish --dry-run complete" : "Published to npm");
+  console.log(
+    dryRunPublish
+      ? `npm publish --dry-run complete (tag ${distTag})`
+      : `Published to npm under dist-tag "${distTag}"`,
+  );
 }
 
 // Self-hosted download channel: tar the staged `bivy/` dir and write a manifest

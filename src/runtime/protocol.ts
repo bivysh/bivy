@@ -4,12 +4,14 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { buildAgentCredentialEnv } from "./credentials.js";
+import { bivySessionEnv } from "./session-env.js";
 import type {
   AgentCommand,
   AgentRuntime,
   AgentCredentialStore,
   CatalogProvider,
   DiscoveredNativeSession,
+  ForkHistoryMessage,
   ModelInfo,
   OpenSessionOptions,
   OpenSessionResult,
@@ -83,6 +85,16 @@ export interface ProtocolRuntimeOptions {
    * counterpart to `loadHistory`. Best-effort; must not throw for a missing file.
    */
   deleteHistory?: (runtimeSessionRef: string) => void;
+  /**
+   * Optional: materialise a **cross-runtime** fork's portable `{role, text}`
+   * history into this agent's own resumable store, returning the new resume ref
+   * + id, so a fork *into* this agent is a true replay rather than a seeded
+   * summary (backs `capabilities.forkHistoryImport` + `importHistoryForFork`; for
+   * Codex this is `writeCodexRollout`). The write-side counterpart to
+   * `loadHistory`. Best-effort — the fork engine falls back to a seeded prompt if
+   * this throws. Absent = no history import for this agent.
+   */
+  writeHistory?: (history: ForkHistoryMessage[], ctx: { workspace: string; cwd: string }) => { sessionFile: string; id: string };
   /** Runtime-specific, side-effect-free title request (for example `codex exec --ephemeral`). */
   suggestName?: (firstPrompt: string, context: { cwd: string; model?: string }) => Promise<string | undefined>;
   /**
@@ -325,7 +337,10 @@ class ProtocolSession implements RuntimeSession {
       : {};
     const child = spawn(this.runtimeOptions.command, this.runtimeOptions.args ?? [], {
       cwd: this.cwd,
-      env: { ...process.env, ...this.runtimeOptions.env, ...credentialEnv },
+      // bivySessionEnv() lets the agent's own shell resolve its session for
+      // `bivy attach <path>` (see session-env.ts); spread last so it can never
+      // be shadowed by an operator-configured env var of the same name.
+      env: { ...process.env, ...this.runtimeOptions.env, ...credentialEnv, ...bivySessionEnv(this.id) },
       stdio: "pipe",
     });
     this.child = child;
@@ -599,6 +614,9 @@ export class ProtocolRuntime implements AgentRuntime {
     // A resumable runtime advertises resume even before the handshake, so the UI
     // and takeover treat it as resumable up front (the ProcessRuntime convention).
     if (options.resumable) this.capabilities.resume = true;
+    // A runtime that can write its own resumable store from portable history
+    // (Codex's rollout) supports true cross-runtime replay forks INTO it.
+    if (options.writeHistory) this.capabilities.forkHistoryImport = true;
     if (options.capabilities) Object.assign(this.capabilities, options.capabilities);
   }
 
@@ -628,6 +646,21 @@ export class ProtocolRuntime implements AgentRuntime {
   // hydrating history on reopen), when the runtime knows how to read them.
   readMessages(sessionFile: string): RuntimeMessage[] | undefined {
     return this.options.loadHistory?.(sessionFile);
+  }
+
+  /**
+   * Materialise a cross-runtime fork's portable history into this agent's own
+   * resumable store (fidelity "replayed"), delegating to the runtime-specific
+   * `writeHistory` hook (Codex's `writeCodexRollout`). Only present in effect
+   * when configured; the fork engine gates on `capabilities.forkHistoryImport`
+   * and falls back to a seeded prompt if this throws.
+   */
+  async importHistoryForFork(
+    history: ForkHistoryMessage[],
+    ctx: { workspace: string; cwd: string },
+  ): Promise<{ sessionFile: string; id: string }> {
+    if (!this.options.writeHistory) throw new Error(`${this.displayName} does not support history import.`);
+    return this.options.writeHistory(history, ctx);
   }
 
   /** See ProtocolRuntimeOptions.discoverNativeSessions (issue #156). */

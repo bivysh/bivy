@@ -25,6 +25,10 @@ export type MetadataSession = {
   name?: string;
   workspace?: string;
   source?: string;
+  /** The parent session's id, when this session was materialized from a fork
+   *  bundle (see src/session/fork.ts). A bare identifier — never a prompt,
+   *  transcript, or diff — so it's safe to persist and surface in the UI. */
+  forkedFrom?: string;
   runtimeId?: string;
   /** Per-session sandbox tier override ("read-only" | "workspace-write" |
    *  "danger-full-access"), so resume rebuilds the runtime at the same tier. */

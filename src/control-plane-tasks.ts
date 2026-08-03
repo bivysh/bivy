@@ -29,12 +29,13 @@ export interface ControlPlaneTaskConfig {
 export interface WorkItem {
   id: string;
   label: string;
-  source: string; // "github:issue" | "github:comment" | "slack"
+  source: string; // "github:issue" | "github:comment" | "linear:issue" | "slack"
   status: string;
   title: string;
   body?: string;
   repo?: string; // "owner/repo"
   issueNumber?: number;
+  externalId?: string; // provider-native id, e.g. Linear issue UUID
   url?: string;
   runtimeId?: string; // agent/runtime override chosen via the queue "Run…" action
   model?: string; // model override chosen via the queue "Run…" action
@@ -42,6 +43,12 @@ export interface WorkItem {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)
+  // Case B: the control plane sets this to "existing_session" + a sessionId when an
+  // inbound issue/comment matches an already-indexed session, so the node continues
+  // that thread instead of starting fresh (see runWorkItem). Already on the wire
+  // (mapWorkItem); typed here so it isn't silently dropped.
+  targetKind?: "new_session" | "existing_session";
+  targetSessionId?: string;
 }
 
 /** Sanitized-on-arrival at the control plane (services/control-plane/src/run-evidence.ts);
@@ -63,13 +70,11 @@ export function resolveControlPlaneTaskConfig(
   env: NodeJS.ProcessEnv = process.env,
   nodeName?: string,
 ): ControlPlaneTaskConfig | null {
-  // Opt-in: only poll the hosted queue when enrolled AND issue pickup is enabled
-  // (the same switch as github-tasks, so a node doesn't poll unexpectedly).
+  // Enrollment opts the node into the hosted work queue. This cannot be gated
+  // on GitHub configuration: Slack, signed webhooks, schedules, and manually
+  // dispatched runs use the same queue and may be the only integration enabled.
   if (!relay?.controlPlaneUrl || !relay.enrollmentToken) return null;
-  const explicit = Boolean(env.BIVY_GITHUB_TOKEN?.trim() && env.BIVY_GITHUB_REPO?.trim());
-  const hostedOptIn = env.BIVY_GITHUB_HOSTED_TASKS === "1" || env.BIVY_GITHUB_TASKS === "1";
-  const appConfigured = Boolean(env.BIVY_GITHUB_APP_ID?.trim()); // GitHub App = hosted queue
-  if (!hostedOptIn && !explicit && !appConfigured) return null;
+
   const base = (env.BIVY_GITHUB_LABEL?.trim() || "bivy");
   // The label the node serves for its own name, e.g. name "hetzner" → "bivy/hetzner".
   const nameLabel = nodeName?.trim() ? `${base}/${nodeName.trim()}` : undefined;
@@ -173,6 +178,29 @@ export class ControlPlaneTaskPoller {
   /** Trigger an immediate fetch after a relay push says work may be available. */
   poke(): void {
     void this.tick();
+  }
+
+  /** Number of queue items currently running on this node. Lets an ephemeral
+   *  machine's self-teardown avoid exiting while it's mid-work. */
+  inFlightCount(): number {
+    return this.inFlight.size;
+  }
+
+  /**
+   * Replace the routing labels this live poller serves.
+   *
+   * Node names are editable while the daemon is running, and targeted queue
+   * labels are derived from that name (`bivy/<name>`). Keeping the startup-time
+   * labels forever leaves work routed to a renamed node pending until the daemon
+   * restarts. Update in place so already-running queue jobs are not disturbed,
+   * then poll immediately for work addressed to the new name.
+   */
+  setLabels(labels: string[]): void {
+    const next = Array.from(new Set(labels.map((label) => label.trim()).filter(Boolean)));
+    if (!next.length || (next.length === this.cfg.labels.length && next.every((label, i) => label === this.cfg.labels[i]))) return;
+    this.cfg.labels = next;
+    console.log(`[control-plane-tasks] now watching hosted queue for labels [${next.join(", ")}]`);
+    this.poke();
   }
 
   stop(): void {

@@ -16,6 +16,7 @@ get shell completion.
 | Rejoin the last session | `bivy resume` |
 | Ask one question and get one answer | `bivy exec "…"` |
 | Continue an existing session non-interactively | `bivy send <id> "…"` |
+| Send a file/image from the agent into the chat | `bivy attach <file>` |
 | Stop a session | `bivy kill <id>` |
 | Use the web/PWA app | `bivy relay:setup` then `bivy open` |
 | Pair my phone | `bivy link` |
@@ -96,12 +97,15 @@ your terminal, but because the node owns the PTY the same live session is
 visible and drivable from the web/PWA app, and resumable later with
 `bivy resume`.
 
-Built-in agent ids: `pi`, `claude`, `codex`, `opencode`, `aider`, `hermes`,
-`openclaw`, `goose`, `gemini`, `qwen`, `cline`, `crush`.
+Built-in runnable agent ids: `pi`, `claude`, `openclaw`, `codex`, `opencode`,
+`aider`, `hermes`, `goose`, `gemini`, `qwen`, `cline`, `crush`, `cursor`,
+`copilot`, `grok`, `amp`, `auggie`, `droid`, `continue`, `kilocode`, `rovodev`,
+and `codebuff`. Run `bivy agents` for the live list, installation status, and
+binary names; the web picker intentionally hides experimental agents that do not
+yet meet its headless-session requirements.
 
-If the agent's CLI is not installed and Bivy knows its npm package
-(`claude`, `hermes`, `gemini`, `qwen`, `cline`, `crush`), it is installed on
-first use into `~/.local`.
+If an agent's CLI is missing and its manifest declares an npm package, Bivy
+installs it on first use into `~/.local`. Other agents must already be on PATH.
 
 Flags (consumed by Bivy; everything else is forwarded to the agent):
 
@@ -191,6 +195,25 @@ the same client `bivy exec` uses, with `--session <id>`.
 
 ```bash
 bivy send 3f1c9a02-… "now add a test for that"
+```
+
+### `bivy attach <file> [--caption "…"] [--session <id>]`
+
+Surfaces a file the agent produced into the chat as an attachment — an image
+renders inline as a thumbnail, anything else as a downloadable file chip (the
+reverse of the composer paperclip). Meant to be run **by the agent itself**: any
+agent that can run a shell command can call it, so it works across runtimes. The
+session id defaults to `$BIVY_SESSION_ID`, which the daemon injects into the
+agent's subprocess environment; pass `--session` to target another session.
+
+The file is resolved against the current directory and **confined to the session
+workspace** — a path (or symlink) that escapes the workspace is refused, so this
+can't be turned into a file-exfiltration primitive. On a single-user host the
+loopback auth bypass means no token is needed.
+
+```bash
+bivy attach ./out/chart.png --caption "Revenue by month"
+bivy attach report.pdf
 ```
 
 ### `bivy takeover <termId|session-id>`
@@ -334,6 +357,24 @@ machine and register this node there with `bivy nodes add`.
 ```bash
 bivy token
 ```
+
+### `bivy rename <name>`
+
+Renames **this** node. Alias: `bivy node:rename`.
+
+```bash
+bivy rename "staging-agent"
+```
+
+The name is persisted to `<data-dir>/node.json` and takes effect immediately —
+no restart. The daemon trims and collapses whitespace and caps the length at 80
+characters. Renaming live-updates relay presence and the GitHub work-queue
+routing label (`bivy/<node-name>`).
+
+If the name is already used by another node on your account, the control plane
+auto-adjusts it to stay unique (e.g. `staging-agent-2`); run `bivy status` to
+confirm the name that stuck. This is the CLI equivalent of renaming from the app
+(Settings → node) or `POST /api/node/name`.
 
 ### `bivy nodes [add|remove] …`
 
@@ -622,19 +663,28 @@ bivy logs --lines 500
 
 ## Maintenance
 
-### `bivy update [--force|--no-wait]`
+### `bivy update [--force|--no-wait] [--staging|--stable|--channel <name>]`
 
 Updates Bivy, reinstalls dependencies, installs bundled agents, and restarts the
 service. Waits for busy sessions first unless `--force`/`--no-wait`.
 
-What it actually does depends on how Bivy was installed:
+**Release channel.** Update follows the channel recorded at install time — the
+npm dist-tag you installed from (`BIVY_CHANNEL`, default `latest`) — instead of
+always jumping to `latest`. So a box installed with `BIVY_CHANNEL=staging` stays
+on the `staging` build (published on every merge to core `main`) across updates.
+Switch channels deliberately with `--staging`, `--stable` (= `latest`), or
+`--channel <name>`; the choice is remembered for future `bivy update`s. (Only the
+tag-tracking installs carry a channel; an exact `BIVY_VERSION=x.y.z` pin does
+not.)
+
+What it actually does depends on how Bivy was installed (`<ch>` = the channel):
 
 - **git checkout** — `git pull --ff-only`, then `npm ci`/`npm install`.
-- **`npm i -g bivy`** — `npm install -g bivy@latest`.
+- **`npm i -g @bivy/bivy`** — `npm install -g @bivy/bivy@<ch>`.
 - **`npx bivy`** — nothing; explains that npx always fetches the latest.
 - **installer tarball** — re-runs `curl -fsSL https://bivy.sh/install.sh | bash`
-  with `BIVY_HOME` pointing at the current install. The restart happens inside
-  the installer.
+  with `BIVY_CHANNEL=<ch>` and `BIVY_HOME` pointing at the current install. The
+  restart happens inside the installer.
 
 Inside a Bivy web/PWA terminal (`BIVY_TERMINAL=1`) the update re-execs itself
 detached, logs to `<data-dir>/update.log`, and mirrors live progress into the
@@ -644,6 +694,8 @@ the detached process survives the restart and finishes the update.
 ```bash
 bivy update
 bivy update --force
+bivy update --staging        # switch to (and stay on) the staging channel
+bivy update --stable         # switch back to the latest/stable channel
 ```
 
 ### `bivy update:log [-f]`

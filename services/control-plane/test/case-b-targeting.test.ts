@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (c) 2026 Petter André Sjulstad
+//
+// Case B: an inbound issue/comment should CONTINUE an already-indexed session
+// (target existing_session) rather than start a fresh one. Covers the store-level
+// lookup (findSessionByIssue over session_index.source) and that the work-item
+// target round-trips through enqueue.
+import assert from "node:assert/strict";
+import { createPgMemStore } from "../src/pg-mem-store.js";
+
+async function makeStore() {
+  const store = createPgMemStore();
+  await store.init();
+  return store;
+}
+
+let passed = 0;
+async function test(name: string, fn: () => Promise<void>) {
+  await fn();
+  passed += 1;
+  console.log(`✓ ${name}`);
+}
+
+await test("findSessionByIssue matches the node's issue: source", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("a@example.com");
+  await store.enrollNode(acct.id, "node-1", "Laptop");
+  await store.replaceNodeSessions(acct.id, "node-1", [
+    { sessionId: "sess-42", status: "idle", source: "issue:acme/widgets#42" },
+    { sessionId: "sess-other", status: "idle", source: "issue:acme/widgets#7" },
+  ]);
+  const hit = await store.findSessionByIssue(acct.id, "acme/widgets", 42);
+  assert.deepEqual(hit, { sessionId: "sess-42", nodeId: "node-1" });
+  // A different issue number / repo does not match.
+  assert.equal(await store.findSessionByIssue(acct.id, "acme/widgets", 999), undefined);
+  assert.equal(await store.findSessionByIssue(acct.id, "acme/other", 42), undefined);
+});
+
+await test("findSessionByIssue is account-scoped", async () => {
+  const store = await makeStore();
+  const a = await store.findOrCreateAccount("a2@example.com");
+  const b = await store.findOrCreateAccount("b2@example.com");
+  await store.enrollNode(a.id, "na", "A");
+  await store.replaceNodeSessions(a.id, "na", [{ sessionId: "s1", status: "idle", source: "issue:o/r#1" }]);
+  assert.ok(await store.findSessionByIssue(a.id, "o/r", 1));
+  assert.equal(await store.findSessionByIssue(b.id, "o/r", 1), undefined);
+});
+
+await test("enqueue carries an existing_session target end-to-end", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("c@example.com");
+  const item = await store.enqueueWorkItem(acct.id, {
+    label: "bivy", source: "github:comment", title: "GitHub issue #42",
+    repo: "acme/widgets", issueNumber: 42,
+    target: { kind: "existing_session", sessionId: "sess-42" },
+  });
+  assert.equal(item.targetKind, "existing_session");
+  assert.equal(item.targetSessionId, "sess-42");
+  // And the default (no target) stays new_session.
+  const fresh = await store.enqueueWorkItem(acct.id, { label: "bivy", source: "github:issue", title: "New" });
+  assert.equal(fresh.targetKind, "new_session");
+  assert.equal(fresh.targetSessionId, undefined);
+});
+
+console.log(`case-b-targeting: ${passed} test(s) passed`);

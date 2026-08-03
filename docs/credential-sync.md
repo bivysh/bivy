@@ -21,6 +21,7 @@ Current model:
 - When hosted model-auth sync is enabled, the node encrypts a model-auth vault snapshot locally before uploading it to the control plane.
 - The control plane stores ciphertext plus node public-key wrapping metadata.
 - Another enrolled node requests a wrapped vault key; an existing node wraps the key to the requesting node public key.
+- That request now **wakes the account's peer nodes over the relay** (the same `work.available` signal used for queued work), so a peer answers the wrapped-key request within seconds rather than on its 30s poll. The requesting node fast-retries (bounded) until the key lands, then falls back to the steady poll. This makes the vault — including supported subscription-OAuth logins — usable almost immediately on a short-lived ephemeral runner, while staying **peer-only**: the key is always wrapped node→node and never transits the device or control plane in the clear.
 - Bivy Cloud never receives plaintext model credentials.
 
 If you lose every node and device that can unwrap the vault, the stored

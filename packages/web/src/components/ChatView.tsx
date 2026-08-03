@@ -5,6 +5,7 @@ import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolAc
 import { ToolGroup } from "./ToolGroup.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { writeClipboard } from "../clipboard.js";
+import { controller } from "../store/useStore.js";
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -25,13 +26,16 @@ function base64ToBlobUrl(base64: string, mimeType: string): string | null {
 
 /**
  * A single attachment the user sent with this message, shown as a clickable
- * thumbnail (image) or file chip so they can re-open what they attached. The
- * node never echoes real attachment bytes back (only a text placeholder), so
- * this only ever has content to show on the client that actually sent it —
- * see attachmentsByText in packages/core/src/store.ts.
+ * thumbnail (image) or file chip so they can re-open what they attached. Two
+ * sources of bytes: inline `data`/`text` (present on the client that just sent
+ * it), or — for an attachment rehydrated from history — a content `hash` whose
+ * bytes are fetched from the node's durable attachment store on demand. The hash
+ * path is what makes attachments re-findable after a reload or on another device
+ * (see AttachmentStore / controller.fetchAttachment).
  */
 function AttachmentChip({ attachment }: { attachment: PromptAttachment }) {
-  const url = useMemo(() => {
+  // Synchronous URL for inline content — bytes we already hold in memory.
+  const inlineUrl = useMemo(() => {
     if (attachment.omitted) return null;
     if (attachment.kind === "image" && attachment.data) return base64ToBlobUrl(attachment.data, attachment.mimeType);
     if (attachment.text !== undefined) {
@@ -47,9 +51,30 @@ function AttachmentChip({ attachment }: { attachment: PromptAttachment }) {
 
   useEffect(() => {
     return () => {
-      if (url) URL.revokeObjectURL(url);
+      if (inlineUrl) URL.revokeObjectURL(inlineUrl);
     };
-  }, [url]);
+  }, [inlineUrl]);
+
+  // Lazily fetch bytes for a hash-only attachment (rehydrated from history) and
+  // turn them into a blob URL, revoking it on unmount / hash change.
+  const [fetchedUrl, setFetchedUrl] = useState<string | null>(null);
+  useEffect(() => {
+    setFetchedUrl(null);
+    if (inlineUrl || attachment.omitted || !attachment.hash) return;
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    void controller.fetchAttachment(attachment.hash).then((res) => {
+      if (cancelled || !res) return;
+      objectUrl = base64ToBlobUrl(res.data, res.mimeType || attachment.mimeType);
+      if (objectUrl) setFetchedUrl(objectUrl);
+    });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [inlineUrl, attachment.hash, attachment.omitted, attachment.mimeType]);
+
+  const url = inlineUrl ?? fetchedUrl;
 
   if (attachment.kind === "image" && url) {
     return (
@@ -152,12 +177,15 @@ const EntryView = memo(function EntryView({
   // a long session slow and blocking) — history entries arrive as plain `text`,
   // so we render markdown here. Because only the mounted window ever calls this,
   // the cost scales with what's on screen, not with the conversation length.
-  // A streaming/optimistic entry already carries `html`, so we reuse it. Hooks
-  // must run unconditionally, so this sits above the role branches; the ternary
-  // keeps the (unused) markdown pass off the non-assistant roles.
+  // A finished assistant entry carries pre-rendered `html`; otherwise we render
+  // its markdown here. A *streaming* assistant entry is shown as plain text and
+  // is skipped entirely — running the markdown pass on every coalesced update is
+  // the O(n²) churn the store avoids by not pre-rendering it (see previewPendingProse).
+  // Hooks must run unconditionally, so this sits above the role branches; the
+  // ternary keeps the (unused) markdown pass off streaming and non-assistant roles.
   const html = useMemo(
-    () => (entry.role === "assistant" ? entry.html ?? toHtml(entry.text) : ""),
-    [entry.role, entry.html, entry.text],
+    () => (entry.role === "assistant" && !entry.streaming ? entry.html ?? toHtml(entry.text) : ""),
+    [entry.role, entry.streaming, entry.html, entry.text],
   );
   // Syntax-highlight fenced code blocks once the assistant HTML is in the DOM.
   // Re-runs as streaming replaces the markup; hooks stay above the role branches.
@@ -211,14 +239,34 @@ const EntryView = memo(function EntryView({
       </div>
     );
   }
+  if (entry.streaming)
+    // Live prose: plain text (whitespace preserved via .streaming-text) so it
+    // updates cheaply; it seals into the markdown bubble below at message_end.
+    return (
+      <div className="assistant-row">
+        <div ref={bodyRef} className="msg assistant streaming streaming-text">
+          {entry.text}
+        </div>
+      </div>
+    );
+  // An agent-sent attachment (image/file) lands as an assistant entry carrying
+  // `attachments` (and an optional caption in `text`). Render the chip(s) the same
+  // way user uploads render, above any caption bubble. Reuses AttachmentChip, so
+  // hash-only refs rehydrate their bytes on demand exactly like inbound ones.
+  const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
   return (
     <div className="assistant-row">
-      <div
-        ref={bodyRef}
-        className={`msg assistant${entry.streaming ? " streaming" : ""}`}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-      {!entry.streaming && entry.text && <CopyButton text={entry.text} />}
+      {hasAttachments && (
+        <div className="msg-attachments">
+          {entry.attachments!.map((a, i) => (
+            <AttachmentChip key={`${a.name}-${i}`} attachment={a} />
+          ))}
+        </div>
+      )}
+      {(entry.text || !hasAttachments) && (
+        <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
+      )}
+      {entry.text && <CopyButton text={entry.text} />}
     </div>
   );
 });

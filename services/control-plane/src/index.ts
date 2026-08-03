@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
-import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine } from "./ephemeral-provisioner.js";
+import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
+import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
@@ -18,14 +21,18 @@ import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
 import {
   verifyGithubSignature,
+  verifyLinearSignature,
+  parseLinearIssueEvent,
   parseGithubIssueEvent,
   pickIssueRoutingLabel,
+  pickRoutingLabel,
   parseGithubCommentEvent,
   pickCommentRoutingLabel,
   parseInstallationId,
   verifySlackSignature,
   parseSlackCommand,
   applyDefaultNode,
+  meetsTriggerAccess,
   verifyAutomationSignature,
   parseAutomationEvent,
   renderAutomationInstruction,
@@ -62,6 +69,9 @@ function assertProductionConfig() {
   }
   if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_WEBHOOK_SECRET) {
     problems.push("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set (webhooks would be unverifiable)");
+  }
+  if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_PRICE_PRO) {
+    problems.push("STRIPE_PRICE_PRO is required when Stripe billing is enabled");
   }
   if (!process.env.PUBLIC_CONTROL_PLANE_URL) {
     // Without a fixed public URL, baseUrl() falls back to the request's
@@ -145,6 +155,9 @@ async function notifyRelaysWorkAvailable(accountId: string, item: { id: string; 
       });
     }),
   );
+  // Unattended provisioning: any enqueued work triggers a hosted-provisioning
+  // check (gated + deduped inside). Fire-and-forget; never blocks the notify.
+  void maybeAutoProvision(store, accountId, provisionEnv());
 }
 if (relayShardUrls.length > 1) {
   console.log(`[relay] sharding across ${relayShardUrls.length} relays: ${relayShardUrls.join(", ")}`);
@@ -157,34 +170,36 @@ function normalizePublicUrl(value: string): string {
 }
 
 const publicControlPlaneUrl = process.env.PUBLIC_CONTROL_PLANE_URL ? normalizePublicUrl(process.env.PUBLIC_CONTROL_PLANE_URL) : undefined;
+
+// Bootstrap URLs the control plane bakes into a machine it launches itself.
+// These must be PUBLIC (the VM reaches them); without PUBLIC_CONTROL_PLANE_URL a
+// hosted machine can't reach us, so hosted provisioning is effectively off.
+const provisionEnv = (): { cpBaseUrl: string; relayUrl: string } => ({
+  cpBaseUrl: publicControlPlaneUrl ?? `http://localhost:${process.env.PORT ?? 8080}`,
+  relayUrl: relayPublicUrl,
+});
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const vapidPublicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY || "";
 const vapidPrivateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY || process.env.VAPID_PRIVATE_KEY || "";
 const vapidSubject = process.env.WEB_PUSH_SUBJECT || "mailto:support@bivy.sh";
 const webPushEnabled = Boolean(vapidPublicKey && vapidPrivateKey);
 if (webPushEnabled) webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
-// Whether paid-plan entitlements are enforced (Bivy Cloud). Mirrors the relay's
-// flag (services/relay/src/index.ts). When it's off — the self-host / no-billing
-// default (see docs/self-host.md, ENFORCE_ENTITLEMENTS=0) — there is no paid tier
-// to gate against and every signed-in account is "free", so gating push on
-// `pushEnabled` would make Web Push impossible to use on a self-hosted stack even
-// with VAPID keys configured. Off ⇒ push is available to any account (still
-// requires VAPID keys / webPushEnabled); on ⇒ push stays gated to paid plans.
-const enforceEntitlements = process.env.ENFORCE_ENTITLEMENTS === "1";
-// Observe-only mode for the free run cap: keep COUNTING and reporting runs (so the
-// UI still shows "used / limit" and ops can watch the real runs-per-window
-// distribution), but never actually block a run. Lets Bivy Cloud gather data and
-// tune the number/window before flipping enforcement on, without walling anyone
-// during the observation window. Only meaningful when entitlements are enforced;
-// self-host is unlimited either way.
-const observeRunLimitOnly = process.env.RUN_LIMIT_OBSERVE_ONLY === "1";
+// A Stripe-backed deployment is a billed hosted service, so entitlement
+// enforcement is always on there and cannot be accidentally disabled by a stale
+// environment flag. Self-hosted/no-billing stacks retain their explicit opt-in
+// behavior and remain unlimited by default.
+const enforceEntitlements = Boolean(stripe) || process.env.ENFORCE_ENTITLEMENTS === "1";
+// Observe-only mode is retained for no-billing staging: count and report jobs but
+// do not block them. A Stripe-backed deployment always hard-enforces, so a stale
+// staging flag cannot silently disable the paid plan boundary in production.
+const observeRunLimitOnly = !stripe && process.env.RUN_LIMIT_OBSERVE_ONLY === "1";
 const enforceRunLimit = enforceEntitlements && !observeRunLimitOnly;
 async function accountPushAllowed(accountId: string): Promise<boolean> {
   if (!enforceEntitlements) return true;
   return (await store.entitlements(accountId)).pushEnabled;
 }
 
-// How many days back the free-tier run window looks. A ROLLING window (not a
+// How many days back the free-tier automation window looks. A ROLLING window (not a
 // calendar week) — capacity frees up gradually as individual runs age out the far
 // edge, which fits bursty dev work far better than a hard periodic reset.
 const RUN_WINDOW_DAYS = 7;
@@ -204,18 +219,19 @@ function runWindowStartIso(): string {
 // so the courtesy naturally recurs as the window slides.
 const RUN_GRACE = 1;
 
-// The account's run allowance for the current rolling window, counted across EVERY
-// source (manual, app, work queue, ephemeral). `limit` is the plan cap
-// (undefined ⇒ unlimited — paid plans), `used` the runs started in the window,
+// The account's unattended-automation allowance for the current rolling window.
+// Only `automation:*` starts (GitHub, Slack, webhook, scheduled) count; interactive
+// CLI/app sessions stay unlimited. `limit` is the plan cap (undefined means paid),
+// `used` is the queued automation started in the window,
 // `warn` whether this run is in the grace band (over the limit but still allowed),
 // `exhausted` whether a new run must be refused (over limit + grace). Blocking is
 // only in effect under `ENFORCE_ENTITLEMENTS=1` AND not `RUN_LIMIT_OBSERVE_ONLY=1`
 // (see enforceRunLimit); otherwise both flags stay false so runners go unlimited,
-// but `used` is ALWAYS reported for display. One distinct run (session) = one run.
+// but `used` is always reported for display. One queued work item = one automation run.
 async function runAllowance(accountId: string): Promise<{ limit?: number; used: number; warn: boolean; exhausted: boolean }> {
   const limit = (await store.entitlements(accountId)).weeklyRunLimit;
   if (typeof limit !== "number") return { limit: undefined, used: 0, warn: false, exhausted: false };
-  const used = await store.countRunStartsSince(accountId, runWindowStartIso());
+  const used = await store.countRunStartsSince(accountId, runWindowStartIso(), "automation:");
   if (!enforceRunLimit) return { limit, used, warn: false, exhausted: false };
   return { limit, used, warn: used >= limit && used < limit + RUN_GRACE, exhausted: used >= limit + RUN_GRACE };
 }
@@ -223,6 +239,57 @@ const stripePrices: Partial<Record<Plan, string>> = {
   pro: process.env.STRIPE_PRICE_PRO,
   team: process.env.STRIPE_PRICE_TEAM,
 };
+
+export interface PublicPlanPrice {
+  id: string;
+  currency: string;
+  unitAmount: number | null;
+  interval?: string;
+  intervalCount?: number;
+  label: string;
+}
+
+let planPriceCache: { expiresAt: number; value: Partial<Record<Plan, PublicPlanPrice>> } | undefined;
+
+function stripeAmountLabel(price: Stripe.Price): string {
+  if (price.unit_amount == null) return "Contact us";
+  const currency = price.currency.toUpperCase();
+  const fractionDigits = new Intl.NumberFormat("en-US", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
+  const amount = price.unit_amount / 10 ** fractionDigits;
+  const formatted = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: amount % 1 === 0 ? 0 : fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(amount);
+  const recurring = price.recurring;
+  if (!recurring) return formatted;
+  const count = recurring.interval_count;
+  const interval = recurring.interval === "month" ? "mo" : recurring.interval === "year" ? "yr" : recurring.interval;
+  return count === 1 ? `${formatted}/${interval}` : `${formatted}/${count} ${interval}`;
+}
+
+async function publicPlanPrices(): Promise<Partial<Record<Plan, PublicPlanPrice>>> {
+  if (!stripe) return {};
+  if (planPriceCache && planPriceCache.expiresAt > Date.now()) return planPriceCache.value;
+  const entries = await Promise.all(
+    Object.entries(stripePrices).map(async ([plan, id]) => {
+      if (!id) return undefined;
+      const price = await stripe.prices.retrieve(id);
+      return [plan as Plan, {
+        id: price.id,
+        currency: price.currency,
+        unitAmount: price.unit_amount,
+        interval: price.recurring?.interval,
+        intervalCount: price.recurring?.interval_count,
+        label: stripeAmountLabel(price),
+      } satisfies PublicPlanPrice] as const;
+    }),
+  );
+  const value = Object.fromEntries(entries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))) as Partial<Record<Plan, PublicPlanPrice>>;
+  planPriceCache = { expiresAt: Date.now() + 5 * 60_000, value };
+  return value;
+}
 
 // Plan ids arrive from two places whose version we do not control: the published
 // CLI (packages/core's billingCheckout) and the dev-mode billing webhook used by
@@ -434,33 +501,18 @@ function validEmail(email: string): boolean {
   return /^[^@\s]+@[^@\s]+$/.test(email);
 }
 
-// Lightweight in-memory fixed-window rate limiter for the unauthenticated,
-// side-effecting auth endpoints — they send email (Resend) and provision an
-// account for any supplied address, so without a cap one source can flood third-
-// party inboxes and create unbounded rows. Per single control-plane instance;
-// good enough to blunt abuse from one origin. (Per-account quotas across the
-// fleet remain a documented 0.1 limitation — see docs/security-model.md.)
-const rateBuckets = new Map<string, { count: number; resetAt: number }>();
-function rateLimited(bucket: string, key: string, limit: number, windowMs: number): boolean {
-  const now = Date.now();
-  if (rateBuckets.size > 10_000) {
-    for (const [k, v] of rateBuckets) if (now >= v.resetAt) rateBuckets.delete(k);
-  }
-  const id = `${bucket}:${key}`;
-  const entry = rateBuckets.get(id);
-  if (!entry || now >= entry.resetAt) {
-    rateBuckets.set(id, { count: 1, resetAt: now + windowMs });
-    return false;
-  }
-  entry.count += 1;
-  return entry.count > limit;
-}
+// Fleet-wide fixed-window limits for unauthenticated, side-effecting auth
+// endpoints. The shared Postgres counter means adding replicas cannot multiply
+// the email/OAuth allowance and requests need no load-balancer affinity.
 function clientIp(req: Request): string {
   return String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket.remoteAddress || "unknown";
 }
 /** True (and responds 429) if this IP or email has exceeded the auth-email budget. */
-function authEmailRateLimited(req: Request, res: Response, email: string): boolean {
-  if (rateLimited("auth-email-ip", clientIp(req), 20, 60_000) || rateLimited("auth-email-addr", email, 5, 60_000)) {
+async function authEmailRateLimited(req: Request, res: Response, email: string): Promise<boolean> {
+  if (
+    await store.rateLimitExceeded("auth-email-ip", clientIp(req), 20, 60_000) ||
+    await store.rateLimitExceeded("auth-email-addr", email, 5, 60_000)
+  ) {
     res.status(429).json({ error: "Too many requests. Please wait a minute and try again." });
     return true;
   }
@@ -659,35 +711,9 @@ const githubClientId = process.env.GITHUB_OAUTH_CLIENT_ID || process.env.BIVY_GI
 const githubClientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET || process.env.BIVY_GITHUB_OAUTH_CLIENT_SECRET;
 const githubConfigured = Boolean(githubClientId && githubClientSecret);
 
-// Short-lived CSRF/login state. In-memory is fine for a single instance; a
-// multi-instance deployment should move this to the store (follow-up).
-//
-// GET /auth/github/start is unauthenticated and (unlike magic-link start)
-// previously had no rate limit, so every hit — including bots/scanners that
-// never complete the flow — minted an entry here with no cleanup path other
-// than a matching callback (takeOauthState). That is an unbounded, trivially
-// triggerable memory leak: on staging it presented as steadily growing
-// resident memory (pushing the container into swap) and rising CPU from GC
-// working harder to reclaim a heap that keeps growing. Bound it the same way
-// rateBuckets bounds itself below (self-sweep once the map gets large) and
-// rate-limit the endpoint like every other unauthenticated auth-start route.
-const githubOauthStates = new Map<string, { deviceId?: string; returnPath?: string; expiresAt: number }>();
-function rememberOauthState(deviceId?: string, returnPath?: string): string {
-  const now = Date.now();
-  if (githubOauthStates.size > 10_000) {
-    for (const [k, v] of githubOauthStates) if (now >= v.expiresAt) githubOauthStates.delete(k);
-  }
-  const state = randomBytes(24).toString("base64url");
-  githubOauthStates.set(state, { deviceId, returnPath, expiresAt: now + 10 * 60_000 });
-  return state;
-}
-function takeOauthState(state: string): { deviceId?: string; returnPath?: string } | undefined {
-  const rec = githubOauthStates.get(state);
-  if (!rec) return undefined;
-  githubOauthStates.delete(state); // single use
-  if (rec.expiresAt < Date.now()) return undefined;
-  return { deviceId: rec.deviceId, returnPath: rec.returnPath };
-}
+// Short-lived CSRF/login state lives in Postgres, not process memory: GitHub may
+// return the callback to any healthy control-plane replica behind the load
+// balancer. Consumption is atomic and single-use in the store.
 
 // Why a GitHub sign-in couldn't resolve an email. `token-exchange` means we never
 // got a usable access token (bad client secret, redirect_uri/PUBLIC_CONTROL_PLANE_URL
@@ -769,7 +795,7 @@ const requireNode = asyncHandler(async (req, res, next) => {
 app.post("/auth/magic-link/start", asyncHandler(async (req, res) => {
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   if (!validEmail(email)) return res.status(400).json({ error: "Invalid email" });
-  if (authEmailRateLimited(req, res, email)) return;
+  if (await authEmailRateLimited(req, res, email)) return;
 
   const loginToken = await store.createLoginToken(email);
   const loginUrl = `${baseUrl(req)}/auth/magic-link/consume?token=${encodeURIComponent(loginToken)}`;
@@ -811,7 +837,7 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
 app.post("/auth/device/start", asyncHandler(async (req, res) => {
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   if (!validEmail(email)) return res.status(400).json({ error: "Invalid email" });
-  if (authEmailRateLimited(req, res, email)) return;
+  if (await authEmailRateLimited(req, res, email)) return;
 
   const loginToken = await store.createLoginToken(email);
   const { deviceId, deviceSecret } = await store.createDeviceLogin();
@@ -851,12 +877,11 @@ app.post("/auth/device/poll", asyncHandler(async (req, res) => {
 
 // Begin GitHub OAuth. `?device=<id>` ties the login to a hands-free device login
 // (CLI / app) created via createDeviceLogin; otherwise it's a browser sign-in.
-app.get("/auth/github/start", (req, res) => {
+app.get("/auth/github/start", asyncHandler(async (req, res) => {
   if (!githubConfigured) return res.status(501).type("html").send("<h1>GitHub sign-in is not configured</h1><p>Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.</p>");
-  // Unauthenticated and side-effecting (mints a githubOauthStates entry below),
-  // same shape as /auth/magic-link/start — cap it the same way so a bot can't
-  // mint entries faster than the map's self-sweep can reclaim them.
-  if (rateLimited("oauth-github-start-ip", clientIp(req), 20, 60_000)) {
+  // Unauthenticated and side-effecting, same shape as magic-link start. The
+  // shared counter applies one allowance across the whole replica fleet.
+  if (await store.rateLimitExceeded("oauth-github-start-ip", clientIp(req), 20, 60_000)) {
     return res.status(429).type("html").send("<h1>Too many requests</h1><p>Please wait a minute and try again.</p>");
   }
   const deviceId = String(req.query.device ?? "").trim() || undefined;
@@ -864,7 +889,7 @@ app.get("/auth/github/start", (req, res) => {
   // sub-path) instead of always dumping to root. Ignored for the device flow,
   // which finishes in-place via polling rather than a redirect.
   const returnPath = deviceId ? undefined : safeReturnPath(req.query.return, "/");
-  const state = rememberOauthState(deviceId, returnPath);
+  const state = await store.createOAuthState({ deviceId, returnPath });
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", githubClientId!);
   url.searchParams.set("redirect_uri", `${baseUrl(req)}/auth/github/callback`);
@@ -872,13 +897,13 @@ app.get("/auth/github/start", (req, res) => {
   url.searchParams.set("state", state);
   url.searchParams.set("allow_signup", "true");
   res.redirect(url.toString());
-});
+}));
 
 app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   if (!githubConfigured) return res.status(501).json({ error: "GitHub sign-in not configured" });
   const code = String(req.query.code ?? "").trim();
   const state = String(req.query.state ?? "").trim();
-  const stored = takeOauthState(state);
+  const stored = await store.consumeOAuthState(state);
   if (!code || !stored) {
     // No usable state means no trustworthy return path, so land on root — but
     // still return the user to the sign-in card (with a reason) rather than a
@@ -975,6 +1000,51 @@ app.get("/devices", requireUser, asyncHandler(async (req, res) => {
   res.json(await store.listPairedDevices(account.id));
 }));
 
+// --- Device→device ephemeral-provider-token vault (P2 / Gap A) --------------
+// Opt-in E2E vault so a second device can wake/reach a machine the first
+// launched. `requireUser` (account session); the caller device identifies itself
+// by its X25519 public key. The control plane only ever stores ciphertext +
+// per-device wrapped keys — never a token or the vault key in the clear. Reading
+// another device's wrapped key is harmless (it's sealed to that device's key).
+app.get("/device-vault", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const devicePub = String(req.query.device ?? "");
+  const rec = devicePub ? await store.getDeviceVaultWrappedKey(account.id, devicePub) : undefined;
+  res.json({
+    ok: true,
+    vault: (await store.getDeviceVault(account.id))?.ciphertext ?? null,
+    wrappedKey: rec ? { wrappedKey: rec.wrappedKey, wrappedByPublicKeyB64: rec.wrappedByPublicKey } : null,
+    requests: devicePub ? (await store.listDeviceVaultKeyRequests(account.id, devicePub)).map((r) => r.devicePublicKey) : [],
+  });
+}));
+
+app.put("/device-vault", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const devicePub = String(req.body?.devicePublicKeyB64 ?? "");
+  const ciphertext = String(req.body?.ciphertext ?? "");
+  if (!devicePub || !ciphertext) { res.status(400).json({ error: "devicePublicKeyB64 and ciphertext required" }); return; }
+  await store.setDeviceVault(account.id, devicePub, ciphertext);
+  res.json({ ok: true });
+}));
+
+app.post("/device-vault/key/request", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const devicePub = String(req.body?.devicePublicKeyB64 ?? "");
+  if (!devicePub) { res.status(400).json({ error: "devicePublicKeyB64 required" }); return; }
+  await store.requestDeviceVaultWrappedKey(account.id, devicePub);
+  res.json({ ok: true });
+}));
+
+app.put("/device-vault/key/wrapped", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const target = String(req.body?.targetDevicePublicKeyB64 ?? "");
+  const wrappedByPublicKey = String(req.body?.wrappedByPublicKeyB64 ?? "");
+  const wrappedKey = String(req.body?.wrappedKey ?? "");
+  if (!target || !wrappedByPublicKey || !wrappedKey) { res.status(400).json({ error: "target, wrappedBy and wrappedKey required" }); return; }
+  await store.setDeviceVaultWrappedKey(account.id, target, wrappedByPublicKey, wrappedKey);
+  res.json({ ok: true });
+}));
+
 // Remove (sign out) a paired device, freeing a device slot. 404 if the account
 // has no such device.
 app.delete("/devices/:id", requireUser, asyncHandler(async (req, res) => {
@@ -995,6 +1065,7 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
       planUpdatedAt: account.planUpdatedAt,
     },
     entitlements: await store.entitlements(account.id),
+    pricing: await publicPlanPrices(),
     counts: {
       nodes: (await store.listNodes(account.id)).length,
       devices: await store.countPairedDevices(account.id),
@@ -1004,9 +1075,9 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
         await store.listAccountSessions(account.id),
         await store.listNodes(account.id),
       ),
-      // Runs started in the current rolling window across every source (manual,
-      // app, work queue, ephemeral). Paired with entitlements.weeklyRunLimit so the
-      // UI can show "used / limit" and prompt an upgrade when a free account runs out.
+      // Unattended automation started in the current rolling window. The legacy
+      // property name stays compatible with existing clients; interactive sessions
+      // are excluded and unlimited on every plan.
       runsThisWeek: (await runAllowance(account.id)).used,
     },
   });
@@ -1026,6 +1097,25 @@ app.post("/nodes/enroll", requireUser, asyncHandler(async (req, res) => {
   res.json({ ok: true, ...result });
 }));
 
+// A node is reported online if its stored flag says so OR it was confirmed online
+// within this window. The stored `online` flag is flipped fire-and-forget by the
+// relay on socket connect/close with no ordering guard, so a late/duplicate/stale
+// `false` (out-of-order reconnect, or a stale relay replica's close) can pin a
+// genuinely-connected node offline until some later reconnect happens to win. The
+// daemon's periodic `/node/heartbeat` keeps `last_seen_at` fresh while it's really
+// connected, so this fallback treats such a node as online and the race self-heals.
+// Must comfortably exceed the daemon heartbeat interval (NODE_HEARTBEAT_MS in
+// src/server.ts, 30s) so a couple of missed beats don't flap a healthy node.
+const NODE_ONLINE_TTL_MS = 90_000;
+
+/** Effective online = stored flag OR a recent `last_seen_at` (see NODE_ONLINE_TTL_MS). */
+function withEffectiveOnline<T extends { online: boolean; lastSeenAt: string | null }>(node: T): T {
+  if (node.online) return node;
+  const seen = node.lastSeenAt ? Date.parse(node.lastSeenAt) : NaN;
+  const recentlySeen = Number.isFinite(seen) && Date.now() - seen < NODE_ONLINE_TTL_MS;
+  return recentlySeen ? { ...node, online: true } : node;
+}
+
 // Lists the caller's nodes. Accepts an account session (all nodes), a
 // node-scoped link grant from a linking QR (only that one node), or a node's own
 // enrollment token (its account's nodes — so `bivy nodes` on an installed node
@@ -1037,13 +1127,13 @@ async function listClientNodes(req: Request, res: Response) {
   if (client) {
     const nodes = await store.listNodes(client.accountId);
     const scoped = client.nodeId ? nodes.filter((node) => node.id === client.nodeId) : nodes;
-    return res.json(scoped.map(({ enrollmentTokenHash: _hash, ...node }) => node));
+    return res.json(scoped.map(({ enrollmentTokenHash: _hash, ...node }) => withEffectiveOnline(node)));
   }
   // Fall back to node-token auth: an enrolled node listing its account's nodes.
   const node = await store.nodeFromEnrollmentToken(token);
   if (node) {
     const nodes = await store.listNodes(node.accountId);
-    return res.json(nodes.map(({ enrollmentTokenHash: _hash, ...n }) => n));
+    return res.json(nodes.map(({ enrollmentTokenHash: _hash, ...n }) => withEffectiveOnline(n)));
   }
   return res.status(401).json({ error: "Unauthorized" });
 }
@@ -1092,6 +1182,76 @@ app.post("/node/name", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const updated = await store.setNodeName(node.id, String(req.body?.name ?? ""));
   res.json({ ok: true, node: updated });
+}));
+
+// --- Durable E2E session snapshots for rebuild-resume (Gap B) ---------------
+// A destroy-lane machine's daemon flushes a sealed snapshot (transcript + git
+// checkpoint + runtime resume token) before teardown; a freshly re-provisioned
+// machine reads it to rebuild the session. `requireNode` (the daemon uses its
+// enrollment token); the control plane only ever stores/serves ciphertext.
+app.put("/node/session-snapshot/:sessionId", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const ciphertext = String(req.body?.ciphertext ?? "");
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  if (!ciphertext || !sessionId) { res.status(400).json({ error: "sessionId and ciphertext required" }); return; }
+  await store.setSessionSnapshot(node.accountId, sessionId, ciphertext);
+  res.json({ ok: true });
+}));
+
+app.get("/node/session-snapshot/:sessionId", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const snap = await store.getSessionSnapshot(node.accountId, String(req.params.sessionId ?? "").trim());
+  if (!snap) { res.status(404).json({ error: "no snapshot" }); return; }
+  res.json({ ok: true, ciphertext: snap.ciphertext, updatedAt: snap.updatedAt });
+}));
+
+app.delete("/node/session-snapshot/:sessionId", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  await store.deleteSessionSnapshot(node.accountId, String(req.params.sessionId ?? "").trim());
+  res.json({ ok: true });
+}));
+
+// --- Session↔machine correlation for rebuild-after-teardown (Gap 1) ---------
+// Non-secret routing/identity (reusable eph-* node id + launch params) that lets
+// a device rebuild a torn-down destroy-lane session after its node has dropped
+// from the registry. `requireUser` (the device that launched it, or any account
+// device). Never carries a credential — the escrowed room key for hosted rebuild
+// lives in node_room_keys (Gap 3) and is never exposed here.
+app.get("/session-correlation", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.json({ ok: true, correlations: await store.listSessionCorrelations(account.id) });
+}));
+
+app.put("/session-correlation/:sessionId", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  const nodeId = String(req.body?.nodeId ?? "").trim();
+  const provider = String(req.body?.provider ?? "").trim();
+  if (!sessionId || !nodeId || !provider) { res.status(400).json({ error: "sessionId, nodeId and provider required" }); return; }
+  const num = (v: unknown) => (v == null || v === "" ? undefined : Number(v));
+  const str = (v: unknown) => (v == null || v === "" ? undefined : String(v));
+  const rec = await store.setSessionCorrelation(account.id, {
+    sessionId, nodeId, provider,
+    region: str(req.body?.region),
+    ttlMinutes: num(req.body?.ttlMinutes),
+    repo: str(req.body?.repo),
+    setupId: str(req.body?.setupId),
+    machineId: str(req.body?.machineId),
+    app: str(req.body?.app),
+  });
+  res.json({ ok: true, correlation: rec });
+}));
+
+// A disposable ephemeral machine's daemon calls this once it has gone idle, so
+// the control plane can promptly reap providers that don't self-destruct on
+// daemon exit (Hetzner halts but keeps billing). Non-secret: identifies the node
+// via its enrollment bearer only. Fly/EC2 already self-reap on exit, so this is
+// a harmless backstop for them; device-launched machines aren't tracked
+// server-side → reaped:false. See src/ephemeral-teardown.ts.
+app.post("/node/settled", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const reaped = await reapSettledHostedMachine(store, node.accountId, node.id, provisionEnv()).catch(() => false);
+  res.json({ ok: true, reaped });
 }));
 
 // The node reads its owner's entitlements (plan, node limit, push/relay flags).
@@ -1152,7 +1312,10 @@ app.post("/node/sessions", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const sessions = sessionAdvertsFrom(req.body?.sessions);
   const newRuns = await store.replaceNodeSessions(node.accountId, node.id, sessions);
-  if (newRuns > 0) recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
+  if (newRuns > 0) {
+    recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
+    await correlateHostedSessions(store, node, sessions);
+  }
   res.json({ ok: true, count: sessions.length });
 }));
 
@@ -1190,7 +1353,10 @@ app.put("/internal/nodes/:nodeId/sessions/:sessionId", requireNode, asyncHandler
   const advert = sessionAdvertsFrom([{ ...req.body, sessionId: req.params.sessionId }]);
   let newRuns = 0;
   for (const s of advert) if (await store.upsertNodeSession(node.accountId, node.id, s)) newRuns += 1;
-  if (newRuns > 0) recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
+  if (newRuns > 0) {
+    recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
+    await correlateHostedSessions(store, node, advert);
+  }
   res.json({ ok: true, count: advert.length });
 }));
 
@@ -1332,6 +1498,8 @@ const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "api.hetzner.cloud",
   "api.machines.dev",
   "api.fly.io",
+  "api.sprites.dev",
+  "api.e2b.app",
   "ec2.us-east-1.amazonaws.com",
   "ec2.us-west-2.amazonaws.com",
   "ec2.eu-west-1.amazonaws.com",
@@ -1346,20 +1514,13 @@ const EPHEMERAL_ALLOWED_HOSTS = new Set([
   "ssm.ap-northeast-1.amazonaws.com",
 ]);
 app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
-  // Quick ephemeral servers are available on every plan (the persistent installer
-  // is also free). A launched runner is a run, so a free account that has spent its
-  // rolling run allowance can't cold-start another one. Only bites under
-  // ENFORCE_ENTITLEMENTS (Bivy Cloud); self-host is unlimited. Mirrors the client
-  // gate in EphemeralSheet — this is the authoritative check.
+  // Quick ephemeral servers are available on every plan. Interactive runner
+  // launches do not consume the automation allowance; a runner serving queued work
+  // is metered when that work enters `running`, like every other automation job.
   const account = (req as Request & { account: Account }).account;
   const ent = await store.entitlements(account.id);
   if (enforceEntitlements && !ent.ephemeralEnabled) {
     return res.status(403).json({ error: "Ephemeral servers aren't available on your plan." });
-  }
-  const allowance = await runAllowance(account.id);
-  if (allowance.exhausted) {
-    recordFunnelEvent("quota_blocked", "ephemeral", account.plan);
-    return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
   }
   const url = String(req.body?.url ?? "");
   let host: string;
@@ -1398,12 +1559,40 @@ app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
 // enrolled nodes with a vault key the control plane never sees.
 app.get("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
+  // Hosted escrow (node-less inheritance): for a hosted-provisioning account, hand
+  // the vault key straight to the node so a lone hosted ephemeral can decrypt the
+  // synced vault without a peer to wrap it. Served ONLY when hosted is enabled;
+  // non-hosted accounts get null here and stay fully peer-wrapped (CP-blind).
+  let hostedKey: string | null = null;
+  try {
+    if ((await store.getHostedProvisioning(node.accountId)).enabled) {
+      const enc = await store.getHostedModelAuthVaultKey(node.accountId);
+      if (enc) hostedKey = decryptSecret(node.accountId, enc);
+    }
+  } catch { /* best effort — fall back to peer wrapping */ }
   res.json({
     ok: true,
     vault: await store.getModelAuthVault(node.accountId) ?? null,
     wrappedKey: await store.getModelAuthWrappedKey(node.accountId, node.id) ?? null,
+    hostedKey,
     requests: await store.listModelAuthKeyRequests(node.accountId, node.id),
   });
+}));
+
+app.put("/node/model-auth-key/hosted-escrow", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const vaultKeyB64 = String(req.body?.vaultKeyB64 ?? "").trim();
+  if (!vaultKeyB64 || Buffer.from(vaultKeyB64, "base64").length !== 32) {
+    return res.status(400).json({ error: "Missing/invalid vaultKeyB64" });
+  }
+  // Hosted-provisioning accounts only — otherwise the CP would hold a key it must
+  // not (E2E is preserved for everyone else). A non-hosted node never calls this
+  // (gated node-side on BIVY_GITHUB_HOSTED_TASKS); reject defensively regardless.
+  if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
+    return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
+  }
+  await store.setHostedModelAuthVaultKey(node.accountId, encryptSecret(node.accountId, vaultKeyB64));
+  res.json({ ok: true });
 }));
 
 app.put("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => {
@@ -1427,6 +1616,13 @@ app.post("/node/model-auth-key/request", requireNode, asyncHandler(async (req, r
   const publicKey = String(req.body?.publicKey ?? "").trim();
   if (!publicKey) return res.status(400).json({ error: "Missing publicKey" });
   await store.requestModelAuthWrappedKey(node.accountId, node.id, publicKey);
+  // Event-driven vault-key hand-off: wake the account's other (peer) nodes over
+  // the relay so one of them runs a model-auth sync and answers this request now,
+  // instead of on its 30s poll. Critical for short-lived ephemeral runners. Best
+  // effort — the requester's fast-retry + fallback poll still guarantee pickup if
+  // no relay/peer is reachable. Peer-only: the CP only relays a wake signal and
+  // never sees the vault key or any credential.
+  void notifyRelaysWorkAvailable(node.accountId, { id: "model-auth", label: "model-auth" }).catch(() => {});
   res.json({ ok: true });
 }));
 
@@ -1521,12 +1717,108 @@ app.put("/node/provider-summary", requireNode, asyncHandler(async (req, res) => 
 // The control plane only routes metadata — the node runs the work with its own
 // token, so issue/agent content never reaches us.
 
-// Register (or rotate) an inbound hook for the signed-in account. Returns the
-// webhook URL + secret to paste into GitHub ("Payload URL" + "Secret") or Slack.
+function publicSlackHook(req: Request, hook: Awaited<ReturnType<typeof store.getInboundHook>>) {
+  if (!hook) return undefined;
+  return {
+    id: hook.id,
+    endpoint: `${baseUrl(req)}/webhooks/slack/${hook.id}`,
+    enabled: hook.enabled !== false,
+    defaultNode: hook.defaultNode,
+    createdAt: hook.createdAt,
+    updatedAt: hook.updatedAt,
+  };
+}
+
+// Slack creates the signing secret; Bivy stores it only for request signature
+// verification and never returns it. The endpoint is then pasted into a Slack
+// app's slash-command Request URL.
+app.get("/account/slack-hook", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const hook = (await store.listInboundHooks(account.id, "slack"))[0];
+  res.json({ hook: publicSlackHook(req, hook) ?? null });
+}));
+
+app.post("/account/slack-hook", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const signingSecret = String(req.body?.signingSecret ?? "").trim();
+  const defaultNode = String(req.body?.defaultNode ?? "").trim();
+  if (signingSecret.length < 16 || signingSecret.length > 256) {
+    return res.status(400).json({ error: "Enter the Signing Secret from Slack's Basic Information page." });
+  }
+  if (defaultNode && !/^[A-Za-z0-9._-]+$/.test(defaultNode)) {
+    return res.status(400).json({ error: "Default node contains invalid characters." });
+  }
+  let hook = await store.createInboundHook(account.id, "slack");
+  hook = (await store.setInboundHookSecret(account.id, hook.id, signingSecret)) ?? hook;
+  if (defaultNode) hook = (await store.setInboundHookDefaultNode(account.id, hook.id, defaultNode)) ?? hook;
+  res.status(201).json({ hook: publicSlackHook(req, hook) });
+}));
+
+app.delete("/account/slack-hook", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  for (const hook of await store.listInboundHooks(account.id, "slack")) {
+    await store.deleteInboundHook(account.id, hook.id);
+  }
+  res.json({ ok: true });
+}));
+
+function publicLinearHook(req: Request, hook: Awaited<ReturnType<typeof store.getInboundHook>>) {
+  if (!hook) return undefined;
+  return {
+    id: hook.id,
+    endpoint: `${baseUrl(req)}/webhooks/linear/${hook.id}`,
+    enabled: hook.enabled !== false,
+    defaultNode: hook.defaultNode,
+    createdAt: hook.createdAt,
+    updatedAt: hook.updatedAt,
+  };
+}
+
+// Linear generates its signing secret only after the webhook URL is created.
+// POST without a secret creates a disabled endpoint; POST again with Linear's
+// signing secret enables it. The secret is never returned to the client.
+app.get("/account/linear-hook", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const hook = (await store.listInboundHooks(account.id, "linear"))[0];
+  res.json({ hook: publicLinearHook(req, hook) ?? null });
+}));
+
+app.post("/account/linear-hook", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const signingSecret = String(req.body?.signingSecret ?? "").trim();
+  const defaultNode = String(req.body?.defaultNode ?? "").trim();
+  if (signingSecret && (signingSecret.length < 16 || signingSecret.length > 1_000)) {
+    return res.status(400).json({ error: "Enter the signing secret generated by Linear." });
+  }
+  if (defaultNode && !/^[A-Za-z0-9._-]+$/.test(defaultNode)) {
+    return res.status(400).json({ error: "Default node contains invalid characters." });
+  }
+  let hook = (await store.listInboundHooks(account.id, "linear"))[0];
+  if (!hook) {
+    hook = await store.createInboundHook(account.id, "linear");
+    hook = (await store.updateInboundHook(account.id, hook.id, { enabled: false })) ?? hook;
+  }
+  if (signingSecret) {
+    hook = (await store.setInboundHookSecret(account.id, hook.id, signingSecret)) ?? hook;
+    hook = (await store.updateInboundHook(account.id, hook.id, { enabled: true })) ?? hook;
+  }
+  hook = (await store.setInboundHookDefaultNode(account.id, hook.id, defaultNode || undefined)) ?? hook;
+  res.status(signingSecret ? 200 : 201).json({ hook: publicLinearHook(req, hook) });
+}));
+
+app.delete("/account/linear-hook", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  for (const hook of await store.listInboundHooks(account.id, "linear")) {
+    await store.deleteInboundHook(account.id, hook.id);
+  }
+  res.json({ ok: true });
+}));
+
+// Legacy generic hook creation retained for node/older-client compatibility.
 app.post("/account/hooks", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const kind = String(req.body?.kind ?? "github").trim().toLowerCase();
-  if (kind !== "github" && kind !== "github_app" && kind !== "slack") return res.status(400).json({ error: "kind must be 'github', 'github_app', or 'slack'" });
+  if (kind !== "github" && kind !== "github_app" && kind !== "linear" && kind !== "slack") return res.status(400).json({ error: "kind must be 'github', 'github_app', 'linear', or 'slack'" });
   const hook = await store.createInboundHook(account.id, kind);
   const url = `${baseUrl(req)}/webhooks/${kind}/${hook.id}`;
   res.json({ ok: true, id: hook.id, kind, secret: hook.secret, url });
@@ -1628,10 +1920,22 @@ app.delete("/account/automation-hooks/:id", requireUser, asyncHandler(async (req
 // `bivy relay:setup`; let that node create an account-scoped inbound hook so
 // GitHub issue setup can be completed from the machine that will run the work,
 // without requiring a separate browser/user bearer token in the CLI.
+// Replace a hook's verifier secret with one generated by the provider. Linear
+// generates its signing secret after the endpoint is created, so setup is
+// necessarily create URL → create Linear webhook → adopt displayed secret.
+app.post("/account/hooks/:id/secret", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const secret = String(req.body?.secret ?? "").trim();
+  if (!secret || secret.length > 1_000) return res.status(400).json({ error: "Missing or invalid secret" });
+  const hook = await store.setInboundHookSecret(account.id, String(req.params.id), secret);
+  if (!hook) return res.status(404).json({ error: "Unknown hook" });
+  res.json({ ok: true, id: hook.id, kind: hook.kind });
+}));
+
 app.post("/node/hooks", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const kind = String(req.body?.kind ?? "github").trim().toLowerCase();
-  if (kind !== "github" && kind !== "github_app" && kind !== "slack") return res.status(400).json({ error: "kind must be 'github', 'github_app', or 'slack'" });
+  if (kind !== "github" && kind !== "github_app" && kind !== "linear" && kind !== "slack") return res.status(400).json({ error: "kind must be 'github', 'github_app', 'linear', or 'slack'" });
   const hook = await store.createInboundHook(node.accountId, kind);
   const url = `${baseUrl(req)}/webhooks/${kind}/${hook.id}`;
   res.json({ ok: true, id: hook.id, kind, secret: hook.secret, url });
@@ -1736,7 +2040,7 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
     const slug = hook.botMention || "";
     const servingNode = hook.servingNodeId ? nodes.find((n) => n.id === hook.servingNodeId) : undefined;
     const servedBy = servingNode
-      ? { id: servingNode.id, name: servingNode.name, online: Boolean(servingNode.online), lastSeenAt: servingNode.lastSeenAt }
+      ? { id: servingNode.id, name: servingNode.name, online: withEffectiveOnline(servingNode).online, lastSeenAt: servingNode.lastSeenAt }
       : null;
     return {
       connected: true,
@@ -1763,6 +2067,9 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
       // The node-label suffix (e.g. "macbook") that untagged/generic `bivy`-routed
       // work defaults to. undefined = no default (shared-queue behavior).
       defaultNode: hook.defaultNode,
+      // Who may `@`-mention-trigger a run (issue #259). undefined = "everyone",
+      // the behavior before this setting existed.
+      triggerAccess: hook.triggerAccess,
       // The node currently servicing the app (holds the key), or null if none — the
       // signal that lets the UI say "no node is running this app; connect one".
       servedBy,
@@ -1799,6 +2106,32 @@ app.post("/account/github-app/default-node", asyncHandler(async (req, res) => {
   const rerouted = await store.rerouteDefaultRoutedPending(client.accountId, applyDefaultNode("bivy", updated?.defaultNode));
   for (const item of rerouted) void notifyRelaysWorkAvailable(client.accountId, item);
   res.json({ ok: true, defaultNode: updated?.defaultNode, rerouted: rerouted.length });
+}));
+
+// Set who may `@`-mention-trigger a run: "everyone" (default), "contributor"
+// (any prior relationship with the repo), or "collaborator" (push access
+// only). Issue #259 — a public repo otherwise lets any GitHub user trigger a
+// run. Account-wide preference stored per hook, same shape as default-node:
+// without an appId it applies to every connected app.
+app.post("/account/github-app/trigger-access", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const raw = typeof req.body?.triggerAccess === "string" ? req.body.triggerAccess.trim() : "";
+  if (raw && raw !== "everyone" && raw !== "contributor" && raw !== "collaborator") {
+    return res.status(400).json({ error: "triggerAccess must be 'everyone', 'contributor', or 'collaborator'" });
+  }
+  const triggerAccess = raw === "contributor" || raw === "collaborator" ? raw : undefined;
+  const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
+  const hooks = appId
+    ? [await store.getGithubAppHook(client.accountId, appId)].filter(Boolean as unknown as (h: unknown) => boolean)
+    : await store.listGithubAppHooks(client.accountId);
+  const targets = hooks as Array<{ id: string }>;
+  if (!targets.length) return res.status(404).json({ error: "No GitHub App connected" });
+  let updated: { triggerAccess?: string } | undefined;
+  for (const target of targets) {
+    updated = (await store.setInboundHookTriggerAccess(client.accountId, target.id, triggerAccess)) ?? updated;
+  }
+  res.json({ ok: true, triggerAccess: updated?.triggerAccess ?? "everyone" });
 }));
 
 // Disconnect the account's GitHub App: drop the inbound hook so it stops routing
@@ -2058,6 +2391,152 @@ app.put("/account/ephemeral-default", asyncHandler(async (req, res) => {
   res.json(await store.setEphemeralQueueDefault(client.accountId, patch));
 }));
 
+// Account-level ephemeral node configs (reusable runner templates). CRUD via
+// read-modify-write of the JSONB array — low write frequency, so no locking.
+app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.getEphemeralConfigs(client.accountId));
+}));
+
+app.post("/account/ephemeral-configs", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const provider = typeof body.provider === "string" ? body.provider.trim() : "";
+  if (!name) return res.status(400).json({ error: "Config name is required" });
+  if (!provider) return res.status(400).json({ error: "Provider is required" });
+  const now = new Date().toISOString();
+  const config: EphemeralNodeConfig = {
+    id: `cfg-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+    name, provider, createdAt: now, updatedAt: now,
+  };
+  if (typeof body.region === "string" && body.region.trim()) config.region = body.region.trim();
+  if (typeof body.size === "string" && body.size.trim()) config.size = body.size.trim();
+  if (typeof body.ttlMinutes === "number") config.ttlMinutes = body.ttlMinutes;
+  if (body.teardownOnAgentFinish === true) config.teardownOnAgentFinish = true;
+  const current = await store.getEphemeralConfigs(client.accountId);
+  const saved = await store.setEphemeralConfigs(client.accountId, [...current, config]);
+  res.json(saved.find((c) => c.id === config.id) ?? config);
+}));
+
+app.put("/account/ephemeral-configs/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const id = String(req.params.id);
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const current = await store.getEphemeralConfigs(client.accountId);
+  const existing = current.find((c) => c.id === id);
+  if (!existing) return res.status(404).json({ error: "Config not found" });
+  const next: EphemeralNodeConfig = { ...existing, updatedAt: new Date().toISOString() };
+  if (typeof body.name === "string" && body.name.trim()) next.name = body.name.trim();
+  if (typeof body.provider === "string" && body.provider.trim()) next.provider = body.provider.trim();
+  if (typeof body.region === "string") next.region = body.region.trim() || undefined;
+  if (typeof body.size === "string") next.size = body.size.trim() || undefined;
+  if (typeof body.ttlMinutes === "number") next.ttlMinutes = body.ttlMinutes;
+  if (typeof body.teardownOnAgentFinish === "boolean") next.teardownOnAgentFinish = body.teardownOnAgentFinish || undefined;
+  const saved = await store.setEphemeralConfigs(client.accountId, current.map((c) => (c.id === id ? next : c)));
+  res.json(saved.find((c) => c.id === id) ?? next);
+}));
+
+app.delete("/account/ephemeral-configs/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const id = String(req.params.id);
+  const current = await store.getEphemeralConfigs(client.accountId);
+  const saved = await store.setEphemeralConfigs(client.accountId, current.filter((c) => c.id !== id));
+  res.json({ ok: true, configs: saved });
+}));
+
+app.get("/account/queue-routing", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.getQueueRouting(client.accountId));
+}));
+
+app.put("/account/queue-routing", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.setQueueRouting(client.accountId, (req.body ?? {}) as QueueRouting));
+}));
+
+// Hosted (control-plane-orchestrated) provisioning. GET returns a redacted
+// status (never tokens). SECURITY: enabling this stores repo/cloud credentials
+// on the control plane — see store.ts.
+app.get("/account/hosted-provisioning", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const status = await store.getHostedProvisioningStatus(client.accountId);
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
+}));
+
+app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  // Fail closed: never accept secrets to store unless encryption is configured.
+  const providerTokens = body.providerTokens as Record<string, unknown> | undefined;
+  const settingSecret =
+    (typeof body.githubToken === "string" && body.githubToken.trim() !== "")
+    || (providerTokens && typeof providerTokens === "object" && Object.values(providerTokens).some((v) => typeof v === "string" && v))
+    || (body.githubApp != null && typeof body.githubApp === "object");
+  if (settingSecret && !hostedEncryptionAvailable()) {
+    return res.status(503).json({ error: "Credential encryption is not configured (set HOSTED_CREDENTIAL_KEY). Refusing to store secrets in plaintext." });
+  }
+  const patch: Partial<HostedProvisioning> = {};
+  if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
+  if (typeof body.githubToken === "string") patch.githubToken = body.githubToken;
+  if (body.githubApp != null && typeof body.githubApp === "object") patch.githubApp = body.githubApp as HostedProvisioning["githubApp"];
+  if (providerTokens && typeof providerTokens === "object") patch.providerTokens = providerTokens as Record<string, string>;
+  await store.setHostedProvisioning(client.accountId, patch);
+  await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_updated", detail: Object.keys(patch).join(",") || "none" });
+  const status = await store.getHostedProvisioningStatus(client.accountId);
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
+}));
+
+// Audit trail of hosted-credential use (never contains secrets).
+app.get("/account/hosted-audit", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  res.json(await store.listHostedAudit(client.accountId, 50));
+}));
+
+// Re-seal this account's hosted credentials under the current primary key
+// (key rotation): a decrypt-with-old-kid + encrypt-with-primary round-trip.
+app.post("/account/hosted-provisioning/rotate", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  if (!hostedEncryptionAvailable()) return res.status(503).json({ error: "No encryption key configured" });
+  await store.setHostedProvisioning(client.accountId, {}); // re-encrypts under the primary key
+  await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_rotated", detail: `kid ${hostedPrimaryKid() ?? ""}` });
+  const status = await store.getHostedProvisioningStatus(client.accountId);
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
+}));
+
+// Inspect or trigger the provisioning decision. Dry-run by default (returns the
+// plan); pass { execute: true } to actually launch when the plan says so.
+app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const plan = await planAutoProvision(store, client.accountId);
+  if (req.body?.execute === true && plan.willProvision) {
+    const machine = await maybeAutoProvision(store, client.accountId, provisionEnv());
+    return res.json({ plan, provisioned: machine ? { id: machine.id, nodeId: machine.nodeId } : null });
+  }
+  res.json({ plan });
+}));
+
+// Mint-on-demand: a hosted machine's git credential helper fetches a fresh
+// installation token per git op (so long sessions never hold a stale/long-lived
+// token). Authenticated by the node's enrollment token.
+app.post("/node/hosted-git-credential", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const minted = await mintHostedInstallationToken(store, node.accountId);
+  if (!minted) return res.status(404).json({ error: "No hosted GitHub App configured" });
+  res.json({ token: minted.token, expiresAt: minted.expiresAt });
+}));
+
 // Clear the whole queue: remove every *pending* item (the "Clear queue" action).
 // Registered before the :id route so "clear" can't be read as an item id.
 app.delete("/account/work-items", asyncHandler(async (req, res) => {
@@ -2195,11 +2674,22 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     const triggerLogin = (hook.botMention || process.env.BIVY_GITHUB_BOT_MENTION || "bivy").trim();
     const comment = parseGithubCommentEvent(payload, triggerLogin);
     if (!comment) return res.json({ ok: true, enqueued: false });
+    // Issue #259: on a public repo, anyone can `@`-mention the bot in a comment —
+    // gate on the commenter's GitHub `author_association` per the account's
+    // configured access level (Settings → GitHub App). Ack 200 so GitHub doesn't
+    // retry; just enqueue nothing.
+    if (!meetsTriggerAccess(comment.authorAssociation, hook.triggerAccess)) {
+      return res.json({ ok: true, enqueued: false, reason: "access" });
+    }
     const rawLabel = pickCommentRoutingLabel(comment.instruction, comment.issueLabels, triggerLogin);
     const label = applyDefaultNode(rawLabel, hook.defaultNode);
+    // Case B: if this issue already has an indexed session, CONTINUE it rather than
+    // starting a fresh one, so a follow-up comment lands in the same thread.
+    const existingSession = await store.findSessionByIssue(hook.accountId, comment.repo, comment.issueNumber).catch(() => undefined);
     const item = await store.enqueueWorkItem(hook.accountId, {
       label,
       source: "github:comment",
+      target: existingSession ? { kind: "existing_session", sessionId: existingSession.sessionId } : undefined,
       // Issue #153: the control plane no longer retains issue/comment title or
       // body — the claiming node fetches the live comment directly from GitHub
       // (see getIssueCommentBody in src/github-tasks.ts) immediately before use.
@@ -2226,9 +2716,20 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   const rawLabel = issue ? pickIssueRoutingLabel(issue, triggerLogin) : undefined;
   const label = rawLabel ? applyDefaultNode(rawLabel, hook.defaultNode) : undefined;
   if (!issue || !label || !rawLabel) return res.json({ ok: true, enqueued: false });
+  // Issue #259: a `bivy`/`bivy/<node>` LABEL already implies collaborator/triage
+  // access (GitHub itself restricts who can apply a label), so only the body-
+  // mention path — anyone can open an issue on a public repo — needs gating on
+  // the author's `author_association`.
+  const isLabelRouted = Boolean(pickRoutingLabel(issue.labels));
+  if (!isLabelRouted && !meetsTriggerAccess(issue.authorAssociation, hook.triggerAccess)) {
+    return res.json({ ok: true, enqueued: false, reason: "access" });
+  }
+  // Case B: continue an existing session for this issue if one is already indexed.
+  const existingIssueSession = await store.findSessionByIssue(hook.accountId, issue.repo, issue.issueNumber).catch(() => undefined);
   const item = await store.enqueueWorkItem(hook.accountId, {
     label,
     source: "github:issue",
+    target: existingIssueSession ? { kind: "existing_session", sessionId: existingIssueSession.sessionId } : undefined,
     // Issue #153: the control plane no longer retains issue title/body — the
     // claiming node fetches the live issue directly from GitHub (getIssue in
     // src/github-tasks.ts) immediately before use.
@@ -2244,6 +2745,43 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     defaultRouted: rawLabel === "bivy",
     installationId,
     appId: hook.appId,
+  });
+  void notifyRelaysWorkAvailable(hook.accountId, item);
+  res.json({ ok: true, enqueued: true, id: item.id, label });
+}));
+
+// Linear Issue webhook. Applying `bivy` or `bivy/<node>` dispatches the issue.
+// Only identifiers/routing metadata are retained; the claiming node retrieves
+// title/description directly from Linear with BIVY_LINEAR_API_KEY.
+app.post("/webhooks/linear/:id", asyncHandler(async (req, res) => {
+  const hook = await store.getInboundHook(String(req.params.id));
+  if (!hook || hook.kind !== "linear") return res.status(404).json({ error: "Unknown hook" });
+  if (hook.enabled === false) return res.status(410).json({ error: "Linear integration is not configured" });
+  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!verifyLinearSignature(hook.secret, raw, req.headers["linear-signature"] as string | undefined)) {
+    return res.status(401).json({ error: "Bad signature" });
+  }
+  if (!(await store.entitlements(hook.accountId)).workQueueEnabled) {
+    return res.json({ ok: true, enqueued: false, reason: "plan" });
+  }
+  let payload: unknown;
+  try { payload = JSON.parse(raw.toString("utf8")); } catch { return res.status(400).json({ error: "Invalid JSON" }); }
+  const issue = parseLinearIssueEvent(payload);
+  if (!issue) return res.json({ ok: true, enqueued: false });
+  const rawLabel = pickRoutingLabel(issue.labels);
+  if (!rawLabel) return res.json({ ok: true, enqueued: false });
+  const label = applyDefaultNode(rawLabel, hook.defaultNode);
+  const deliveryId = String(req.headers["linear-delivery"] ?? "").trim();
+  const item = await store.enqueueWorkItem(hook.accountId, {
+    label,
+    source: "linear:issue",
+    title: `Linear issue ${issue.identifier}`,
+    repo: issue.repo,
+    externalId: issue.id,
+    url: issue.url,
+    dedupeKey: deliveryId ? `linear:${deliveryId}` : undefined,
+    collapseKey: `linear-issue:${issue.id}`,
+    defaultRouted: rawLabel === "bivy",
   });
   void notifyRelaysWorkAvailable(hook.accountId, item);
   res.json({ ok: true, enqueued: true, id: item.id, label });
@@ -2265,13 +2803,24 @@ app.post("/webhooks/slack/:id", asyncHandler(async (req, res) => {
   if (!(await store.entitlements(hook.accountId)).workQueueEnabled) {
     return res.json({ response_type: "ephemeral", text: "The Bivy work queue is a paid feature. Upgrade to the Individual or Team plan to route Slack commands to your nodes." });
   }
+  if (hook.enabled === false) return res.status(410).json({ error: "Slack integration disabled" });
   const form = new URLSearchParams(raw.toString("utf8"));
-  const { node, prompt } = parseSlackCommand(form.get("text") ?? "");
-  if (!prompt) return res.json({ response_type: "ephemeral", text: "Usage: /bivy [on <node>] <what to do>" });
-  const label = node ? `bivy/${node}` : "bivy";
-  const item = await store.enqueueWorkItem(hook.accountId, { label, source: "slack", title: prompt });
+  const { node, repo, prompt } = parseSlackCommand(form.get("text") ?? "");
+  if (!prompt) return res.json({ response_type: "ephemeral", text: "Usage: /bivy [on <node>] [in <owner/repo>] <what to do>" });
+  const rawLabel = node ? `bivy/${node}` : "bivy";
+  const label = applyDefaultNode(rawLabel, hook.defaultNode);
+  const triggerId = form.get("trigger_id") || undefined;
+  const item = await store.enqueueWorkItem(hook.accountId, {
+    label,
+    source: "slack",
+    title: prompt,
+    repo,
+    dedupeKey: triggerId ? `slack:${triggerId}` : undefined,
+    defaultRouted: !node,
+  });
   void notifyRelaysWorkAvailable(hook.accountId, item);
-  res.json({ response_type: "ephemeral", text: `On it — queued for ${label}. I'll open a PR when it's done.` });
+  const destination = repo ? `${repo} on ${label}` : label;
+  res.json({ response_type: "ephemeral", text: `On it — queued for ${destination}.${repo ? " I'll bring back a pull request." : ""}` });
 }));
 
 // A node pulls its pending work. `labels` (comma-separated) is the set it serves
@@ -2283,8 +2832,8 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
     .map((l) => l.trim())
     .filter(Boolean);
   const items = await store.listPendingWorkItems(node.accountId, labels.length ? labels : ["bivy"]);
-  // Free-tier rolling quota: once the window's run allowance (across every source)
-  // is spent, hide pending items so the node stops trying to claim them. They stay
+  // Free-tier rolling automation quota: once the queued-job allowance is spent,
+  // hide pending items so the node stops trying to claim them. They stay
   // queued and become visible again as capacity ages back in (no data lost, no
   // churn). The claim endpoint below is the authoritative backstop for a direct/racing claim.
   if ((await runAllowance(node.accountId)).exhausted) return res.json({ items: [] });
@@ -2294,14 +2843,14 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
 // Claim one item (atomic; only one node wins). Returns the item or 409 if taken.
 app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  // Authoritative free-tier quota gate: the rolling run cap spans every source, so a
-  // work-queue claim is refused once the window's runs (from any source) are spent.
+  // Authoritative free-tier quota gate for unattended automation. Interactive
+  // sessions never reach this endpoint and never consume the allowance.
   // 402 (not 409) so the node can tell "you're out of runs" from "someone else won
   // this item". Only bites under ENFORCE_ENTITLEMENTS; self-host is unlimited.
   const allowance = await runAllowance(node.accountId);
   if (allowance.exhausted) {
     recordFunnelEvent("quota_blocked", "work_queue", (await store.entitlements(node.accountId)).plan);
-    return res.status(402).json({ error: "Weekly run limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
+    return res.status(402).json({ error: "Weekly automation limit reached for your plan.", reason: "quota", limit: allowance.limit, used: allowance.used });
   }
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
@@ -2570,7 +3119,15 @@ app.post("/client/relay-ticket", asyncHandler(async (req, res) => {
   }
 }));
 
-// --- Billing (stub) -----------------------------------------------------
+// --- Billing ------------------------------------------------------------
+
+// Public plan prices are read from the configured Stripe Price objects rather
+// than duplicated in clients or the marketing site. The short cache avoids a
+// Stripe API request on every page load while still reflecting dashboard changes.
+app.get("/billing/plans", asyncHandler(async (_req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", process.env.MARKETING_SITE_URL ?? "https://bivy.sh");
+  res.json({ plans: await publicPlanPrices() });
+}));
 
 app.post("/billing/checkout", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;

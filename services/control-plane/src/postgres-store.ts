@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
+import { encryptSecret, decryptSecret, isSecretEnvelope, type SecretEnvelope } from "./hosted-crypto.js";
 import {
   type Account,
   type DeviceLoginStatus,
@@ -22,9 +23,24 @@ import {
   normalizeNotificationPreferences,
   type EphemeralQueueDefault,
   normalizeEphemeralQueueDefault,
+  type EphemeralNodeConfig,
+  normalizeEphemeralConfigs,
+  type QueueRouting,
+  normalizeQueueRouting,
+  type HostedProvisioning,
+  normalizeHostedProvisioning,
+  DEFAULT_HOSTED_PROVISIONING,
+  type HostedProvisioningStatus,
+  type HostedAuditEvent,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
+  type DeviceVault,
+  type DeviceVaultWrappedKeyRecord,
+  type DeviceVaultKeyRequest,
+  type SessionSnapshotRecord,
+  type SessionCorrelation,
+  type SessionCorrelationInput,
   type GithubAppVault,
   type GithubAppWrappedKey,
   type GithubAppKeyRequest,
@@ -149,6 +165,18 @@ export class PostgresStore implements MeshStore {
       -- queue when no persistent node is online. NULL = disabled (never set).
       -- Non-secret preferences only — see EphemeralQueueDefault in store.ts.
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ephemeral_queue_default JSONB;
+      -- Account-level ephemeral node configs (reusable runner templates) and the
+      -- account's default queue routing (primary runner + optional fallback).
+      -- Non-secret; provider tokens stay device-local. See store.ts.
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ephemeral_configs JSONB;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS queue_routing     JSONB;
+      -- Hosted provisioning: control-plane-held credentials + enable flag, and a
+      -- tracking list of machines the control plane launched itself. Off by
+      -- default; SECURITY: encrypt these at rest in production (see store.ts).
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_provisioning JSONB;
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_machines     JSONB;
+      -- Append-only audit trail of hosted-credential use (capped in app code).
+      ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_audit         JSONB;
       -- The paid single-user plan was renamed 'individual' -> 'pro' to match what
       -- it is sold as. The plan column is plain TEXT with no enum or CHECK, so the
       -- backfill is a straight UPDATE; it is idempotent (the second run matches no
@@ -190,6 +218,24 @@ export class PostgresStore implements MeshStore {
         account_id   TEXT REFERENCES accounts(id) ON DELETE CASCADE,
         expires_at   TIMESTAMPTZ NOT NULL
       );
+
+      -- Shared across control-plane replicas: an OAuth callback need not return
+      -- to the process that initiated it, and auth throttles cannot be bypassed
+      -- by letting the load balancer pick another process.
+      CREATE TABLE IF NOT EXISTS oauth_states (
+        state_hash   TEXT PRIMARY KEY,
+        device_id    TEXT,
+        return_path  TEXT,
+        expires_at   TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS auth_rate_limits (
+        bucket_key_hash TEXT PRIMARY KEY,
+        request_count   INTEGER NOT NULL,
+        reset_at        TIMESTAMPTZ NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_reset ON auth_rate_limits(reset_at);
 
       CREATE TABLE IF NOT EXISTS paired_devices (
         public_key_b64  TEXT PRIMARY KEY,
@@ -282,6 +328,16 @@ export class PostgresStore implements MeshStore {
       );
       ALTER TABLE model_auth_wrapped_keys ADD COLUMN IF NOT EXISTS wrapped_by_public_key TEXT NOT NULL DEFAULT '';
 
+      -- Hosted escrow of the model-auth vault KEY (node-less inheritance). Sealed at
+      -- rest with the per-account hosted key so a LONE hosted ephemeral can decrypt
+      -- the synced vault without a peer to wrap the key. One row per account, written
+      -- and served ONLY for hosted-provisioning accounts (gated at the endpoint).
+      CREATE TABLE IF NOT EXISTS hosted_model_auth_keys (
+        account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        key_enc     JSONB NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
       CREATE TABLE IF NOT EXISTS model_auth_key_requests (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -324,6 +380,83 @@ export class PostgresStore implements MeshStore {
         PRIMARY KEY (account_id, app_id, node_id)
       );
 
+      -- Device→device ephemeral-provider-token vault (P2 / Gap A). Same E2E shape
+      -- as the model-auth vault above — the control plane holds ciphertext plus
+      -- per-recipient wrapped keys, never a plaintext token — but the recipients
+      -- are the account's paired DEVICES (identified by their X25519 public key,
+      -- the PK of paired_devices), not nodes. So a second device can wake/reach an
+      -- ephemeral machine the first launched. See createDeviceVaultKeyStore in
+      -- packages/core/src/device-vault.ts.
+      CREATE TABLE IF NOT EXISTS device_vaults (
+        account_id         TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        ciphertext         TEXT NOT NULL,
+        updated_by_device  TEXT NOT NULL,
+        updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS device_vault_wrapped_keys (
+        account_id             TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        device_pub             TEXT NOT NULL,
+        wrapped_key            TEXT NOT NULL,
+        wrapped_by_public_key  TEXT NOT NULL,
+        updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, device_pub)
+      );
+
+      CREATE TABLE IF NOT EXISTS device_vault_key_requests (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        device_pub  TEXT NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, device_pub)
+      );
+
+      -- Durable, node-independent, E2E-encrypted session snapshots (Gap B). Keyed
+      -- by SESSION (not node) so it outlives the machine's teardown, mirroring
+      -- session_ownership. Opaque ciphertext only (a sealed replication frame),
+      -- like session_index.title_enc — the control plane can't read it. Lets a
+      -- torn-down destroy-lane session be rebuilt onto a fresh machine.
+      CREATE TABLE IF NOT EXISTS session_snapshots (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id  TEXT NOT NULL,
+        ciphertext  TEXT NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, session_id)
+      );
+
+      -- Durable session↔machine correlation (Gap 1). Lets a torn-down destroy-lane
+      -- session be rebuilt AFTER its node is unenrolled and drops from the registry:
+      -- records the reusable eph-* node id + non-secret launch params. Keyed by
+      -- session and deliberately NOT FK-cascaded off nodes, so it outlives teardown
+      -- (like session_snapshots). Never holds a credential.
+      CREATE TABLE IF NOT EXISTS session_correlation (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id  TEXT NOT NULL,
+        node_id     TEXT NOT NULL,
+        provider    TEXT NOT NULL,
+        region      TEXT,
+        ttl_minutes INTEGER,
+        repo        TEXT,
+        setup_id    TEXT,
+        machine_id  TEXT,
+        app         TEXT,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, session_id)
+      );
+
+      -- Escrowed session ROOM KEY for HOSTED (device-offline) rebuild (Gap 3).
+      -- Sealed at rest with the per-account hosted-provisioning key (hosted-crypto),
+      -- keyed by the reusable eph-* node id and deliberately NOT FK-cascaded off
+      -- nodes so it survives teardown/unenroll. Only written for hosted-provisioning
+      -- accounts (whose provider/GitHub creds the control plane already holds); a
+      -- device-launched session keeps its room key device-only and never escrows.
+      CREATE TABLE IF NOT EXISTS node_room_keys (
+        account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        node_id      TEXT NOT NULL,
+        room_key_enc JSONB NOT NULL,
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, node_id)
+      );
+
       -- Inbound hooks (route a GitHub/Slack webhook to an account) + work queue
       -- (E2/E4). The control plane only routes metadata; the node pulls items and
       -- runs them with its own token.
@@ -351,6 +484,11 @@ export class PostgresStore implements MeshStore {
       -- work should default to, so it deterministically lands on one node instead
       -- of racing across every node serving the shared label. Settings -> GitHub App.
       ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS default_node TEXT;
+      -- Who may @-mention-trigger a run via a GitHub issue/comment: NULL/
+      -- 'everyone' (no restriction, the prior behavior), 'contributor' (any
+      -- prior relationship with the repo), or 'collaborator' (push access
+      -- only). See meetsTriggerAccess in webhooks.ts (issue #259).
+      ALTER TABLE inbound_hooks ADD COLUMN IF NOT EXISTS trigger_access TEXT;
       -- The node currently holding this GitHub App's key and servicing it. Cleared
       -- when that node is removed, so the UI shows "no node serving" instead of a
       -- stale "connected" after a node delete/reinstall.
@@ -373,6 +511,7 @@ export class PostgresStore implements MeshStore {
         body               TEXT,
         repo               TEXT,
         issue_number       INTEGER,
+        external_id        TEXT,
         url                TEXT,
         claimed_by_node_id TEXT,
         claimed_at         TIMESTAMPTZ,
@@ -386,6 +525,8 @@ export class PostgresStore implements MeshStore {
       -- Idempotency: a redelivered webhook (same delivery id) must not enqueue a
       -- second item. Partial unique index so items without a key are unconstrained.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
+      -- Provider-native identifier used for just-in-time issue retrieval (Linear).
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS external_id TEXT;
       -- GitHub App installation the node should mint a token for (flavor A).
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS installation_id TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS app_id TEXT;
@@ -628,6 +769,49 @@ export class PostgresStore implements MeshStore {
     await this.query(`DELETE FROM sessions WHERE token_hash = $1`, [hashToken(token)]);
   }
 
+  async createOAuthState(input: { deviceId?: string; returnPath?: string }, ttlMs = 10 * 60_000): Promise<string> {
+    const state = randomBytes(24).toString("base64url");
+    await this.query(
+      `INSERT INTO oauth_states (state_hash, device_id, return_path, expires_at) VALUES ($1, $2, $3, $4)`,
+      [hashToken(state), input.deviceId ?? null, input.returnPath ?? null, new Date(Date.now() + ttlMs)],
+    );
+    return state;
+  }
+
+  async consumeOAuthState(state: string): Promise<{ deviceId?: string; returnPath?: string } | undefined> {
+    if (!state) return undefined;
+    // DELETE ... RETURNING makes the CSRF state single-use even when two
+    // callbacks race on different replicas.
+    const { rows } = await this.query(
+      `DELETE FROM oauth_states WHERE state_hash = $1 RETURNING device_id, return_path, expires_at`,
+      [hashToken(state)],
+    );
+    const rec = rows[0];
+    if (!rec || new Date(rec.expires_at).getTime() < Date.now()) return undefined;
+    return {
+      ...(rec.device_id ? { deviceId: rec.device_id } : {}),
+      ...(rec.return_path ? { returnPath: rec.return_path } : {}),
+    };
+  }
+
+  async rateLimitExceeded(bucket: string, key: string, limit: number, windowMs: number): Promise<boolean> {
+    const bucketKeyHash = hashToken(`${bucket}\u0000${key}`);
+    const resetAt = new Date(Date.now() + Math.max(1, windowMs));
+    // One atomic UPSERT is the fleet-wide fixed-window counter. PostgreSQL locks
+    // the conflicting row, so concurrent requests on different replicas cannot
+    // lose increments.
+    const { rows } = await this.query(
+      `INSERT INTO auth_rate_limits (bucket_key_hash, request_count, reset_at)
+       VALUES ($1, 1, $2)
+       ON CONFLICT (bucket_key_hash) DO UPDATE SET
+         request_count = CASE WHEN auth_rate_limits.reset_at <= now() THEN 1 ELSE auth_rate_limits.request_count + 1 END,
+         reset_at = CASE WHEN auth_rate_limits.reset_at <= now() THEN EXCLUDED.reset_at ELSE auth_rate_limits.reset_at END
+       RETURNING request_count`,
+      [bucketKeyHash, resetAt],
+    );
+    return Number(rows[0]?.request_count ?? 1) > Math.max(0, limit);
+  }
+
   async createDeviceLogin(ttlMs = LOGIN_TOKEN_TTL_MS): Promise<{ deviceId: string; deviceSecret: string }> {
     const deviceId = `dev_${randomUUID()}`;
     const deviceSecret = randomBytes(24).toString("base64url");
@@ -867,10 +1051,25 @@ export class PostgresStore implements MeshStore {
   }
 
   async setNodeOnline(nodeId: string, online: boolean): Promise<void> {
-    await this.query(
-      `UPDATE nodes SET online = $2, last_seen_at = now() WHERE id = $1`,
-      [nodeId, online],
-    );
+    // Only bump `last_seen_at` when marking ONLINE. This makes the column mean
+    // "last time we confirmed the node online", which the read path (`GET /nodes`)
+    // uses as a TTL fallback: a stale/racing `online=false` write (fire-and-forget
+    // from a relay socket close, possibly out of order with a fresh reconnect's
+    // `true`, or from a stale replica) must NOT refresh `last_seen_at`, or it would
+    // keep a genuinely-offline node looking recently-seen. Paired with the daemon's
+    // periodic `/node/heartbeat`, a connected node's `last_seen_at` stays fresh so a
+    // lost connect/close race self-heals instead of pinning the node offline.
+    if (online) {
+      await this.query(
+        `UPDATE nodes SET online = true, last_seen_at = now() WHERE id = $1`,
+        [nodeId],
+      );
+    } else {
+      await this.query(
+        `UPDATE nodes SET online = false WHERE id = $1`,
+        [nodeId],
+      );
+    }
   }
 
   async setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void> {
@@ -1218,11 +1417,156 @@ export class PostgresStore implements MeshStore {
     return merged;
   }
 
+  async getEphemeralConfigs(accountId: string): Promise<EphemeralNodeConfig[]> {
+    const { rows } = await this.query(`SELECT ephemeral_configs FROM accounts WHERE id = $1`, [accountId]);
+    return normalizeEphemeralConfigs(rows[0]?.ephemeral_configs ?? null);
+  }
+
+  async setEphemeralConfigs(accountId: string, configs: EphemeralNodeConfig[]): Promise<EphemeralNodeConfig[]> {
+    const normalized = normalizeEphemeralConfigs(configs);
+    await this.query(`UPDATE accounts SET ephemeral_configs = $2 WHERE id = $1`, [accountId, JSON.stringify(normalized)]);
+    return normalized;
+  }
+
+  async getQueueRouting(accountId: string): Promise<QueueRouting> {
+    const { rows } = await this.query(`SELECT queue_routing FROM accounts WHERE id = $1`, [accountId]);
+    return normalizeQueueRouting(rows[0]?.queue_routing ?? null);
+  }
+
+  async setQueueRouting(accountId: string, routing: QueueRouting): Promise<QueueRouting> {
+    const normalized = normalizeQueueRouting(routing);
+    await this.query(`UPDATE accounts SET queue_routing = $2 WHERE id = $1`, [accountId, JSON.stringify(normalized)]);
+    return normalized;
+  }
+
+  // Seal plaintext hosted credentials into the at-rest form: every secret value
+  // is an AES-256-GCM envelope bound to the account; ids stay in the clear.
+  private sealHosted(accountId: string, h: HostedProvisioning): Record<string, unknown> {
+    const out: Record<string, unknown> = { enabled: h.enabled };
+    if (h.githubToken) out.githubToken = encryptSecret(accountId, h.githubToken);
+    if (h.githubApp) {
+      out.githubApp = {
+        appId: h.githubApp.appId,
+        installationId: h.githubApp.installationId,
+        privateKeyPem: encryptSecret(accountId, h.githubApp.privateKeyPem),
+      };
+    }
+    if (h.providerTokens && Object.keys(h.providerTokens).length) {
+      const enc: Record<string, unknown> = {};
+      for (const [p, t] of Object.entries(h.providerTokens)) enc[p] = encryptSecret(accountId, t);
+      out.providerTokens = enc;
+    }
+    return out;
+  }
+
+  // Open the at-rest form back to plaintext. Tolerates legacy plaintext strings
+  // (pre-encryption) on read; requires the master key for sealed values.
+  private openHosted(accountId: string, stored: unknown): HostedProvisioning {
+    if (!stored || typeof stored !== "object") return { ...DEFAULT_HOSTED_PROVISIONING };
+    const s = stored as Record<string, any>;
+    const dec = (v: unknown): string | undefined => {
+      if (isSecretEnvelope(v)) return decryptSecret(accountId, v);
+      if (typeof v === "string" && v) return v;
+      return undefined;
+    };
+    const out: HostedProvisioning = { enabled: Boolean(s.enabled) };
+    const gt = dec(s.githubToken);
+    if (gt) out.githubToken = gt;
+    if (s.githubApp && typeof s.githubApp === "object") {
+      const pk = dec(s.githubApp.privateKeyPem);
+      if (typeof s.githubApp.appId === "string" && typeof s.githubApp.installationId === "string" && pk) {
+        out.githubApp = { appId: s.githubApp.appId, installationId: s.githubApp.installationId, privateKeyPem: pk };
+      }
+    }
+    if (s.providerTokens && typeof s.providerTokens === "object") {
+      const tokens: Record<string, string> = {};
+      for (const [p, v] of Object.entries(s.providerTokens)) {
+        const t = dec(v);
+        if (t) tokens[p] = t;
+      }
+      if (Object.keys(tokens).length) out.providerTokens = tokens;
+    }
+    return out;
+  }
+
+  async getHostedProvisioning(accountId: string): Promise<HostedProvisioning> {
+    const { rows } = await this.query(`SELECT hosted_provisioning FROM accounts WHERE id = $1`, [accountId]);
+    return this.openHosted(accountId, rows[0]?.hosted_provisioning ?? null);
+  }
+
+  // Non-decrypting status read — reports which credentials are present without
+  // needing the master key, so the settings UI works even if the key rotates.
+  async getHostedProvisioningStatus(accountId: string): Promise<HostedProvisioningStatus> {
+    const { rows } = await this.query(`SELECT hosted_provisioning FROM accounts WHERE id = $1`, [accountId]);
+    const s = (rows[0]?.hosted_provisioning ?? {}) as Record<string, any>;
+    const hasApp = Boolean(s.githubApp && s.githubApp.appId);
+    return {
+      enabled: Boolean(s.enabled),
+      credential: hasApp ? "app" : s.githubToken ? "pat" : "none",
+      githubAppId: hasApp ? String(s.githubApp.appId) : undefined,
+      providers: s.providerTokens && typeof s.providerTokens === "object" ? Object.keys(s.providerTokens) : [],
+    };
+  }
+
+  async setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning> {
+    const current = await this.getHostedProvisioning(accountId);
+    // Merge provider tokens so adding one provider doesn't wipe the others.
+    const merged = normalizeHostedProvisioning({
+      ...current,
+      ...patch,
+      providerTokens: { ...(current.providerTokens ?? {}), ...(patch.providerTokens ?? {}) },
+    });
+    // Encrypt at rest (throws if the master key is unset — fail closed).
+    await this.query(`UPDATE accounts SET hosted_provisioning = $2 WHERE id = $1`, [accountId, JSON.stringify(this.sealHosted(accountId, merged))]);
+    return merged;
+  }
+
+  async getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>> {
+    const { rows } = await this.query(`SELECT hosted_machines FROM accounts WHERE id = $1`, [accountId]);
+    const v = rows[0]?.hosted_machines;
+    return Array.isArray(v) ? v : [];
+  }
+
+  async setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
+    const arr = Array.isArray(machines) ? machines : [];
+    await this.query(`UPDATE accounts SET hosted_machines = $2 WHERE id = $1`, [accountId, JSON.stringify(arr)]);
+    return arr;
+  }
+
+  async appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void> {
+    const { rows } = await this.query(`SELECT hosted_audit FROM accounts WHERE id = $1`, [accountId]);
+    const cur = Array.isArray(rows[0]?.hosted_audit) ? (rows[0].hosted_audit as HostedAuditEvent[]) : [];
+    const next = [...cur, event].slice(-200); // cap the trail
+    await this.query(`UPDATE accounts SET hosted_audit = $2 WHERE id = $1`, [accountId, JSON.stringify(next)]);
+  }
+
+  async listHostedAudit(accountId: string, limit = 50): Promise<HostedAuditEvent[]> {
+    const { rows } = await this.query(`SELECT hosted_audit FROM accounts WHERE id = $1`, [accountId]);
+    const cur = Array.isArray(rows[0]?.hosted_audit) ? (rows[0].hosted_audit as HostedAuditEvent[]) : [];
+    return cur.slice(-limit).reverse();
+  }
+
   async getModelAuthVault(accountId: string): Promise<ModelAuthVault | undefined> {
     const { rows } = await this.query(`SELECT * FROM model_auth_vaults WHERE account_id = $1`, [accountId]);
     const row = rows[0];
     if (!row) return undefined;
     return { ciphertext: row.ciphertext, updatedAt: new Date(row.updated_at).toISOString(), updatedByNodeId: row.updated_by_node_id };
+  }
+
+  async getHostedModelAuthVaultKey(accountId: string): Promise<SecretEnvelope | undefined> {
+    const { rows } = await this.query(`SELECT key_enc FROM hosted_model_auth_keys WHERE account_id = $1`, [accountId]);
+    if (!rows[0]) return undefined;
+    const raw = rows[0].key_enc;
+    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
+  }
+
+  async setHostedModelAuthVaultKey(accountId: string, enc: SecretEnvelope): Promise<void> {
+    await this.query(
+      `INSERT INTO hosted_model_auth_keys (account_id, key_enc, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (account_id) DO UPDATE SET key_enc = EXCLUDED.key_enc, updated_at = now()`,
+      [accountId, JSON.stringify(enc)],
+    );
   }
 
   async setModelAuthVault(accountId: string, nodeId: string, ciphertext: string): Promise<ModelAuthVault> {
@@ -1369,6 +1713,163 @@ export class PostgresStore implements MeshStore {
     };
   }
 
+  // --- Device→device provider-token vault (P2 / Gap A) -----------------
+
+  async getDeviceVault(accountId: string): Promise<DeviceVault | undefined> {
+    const { rows } = await this.query(`SELECT * FROM device_vaults WHERE account_id = $1`, [accountId]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString() };
+  }
+
+  async setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string): Promise<DeviceVault> {
+    const { rows } = await this.query(
+      `INSERT INTO device_vaults (account_id, ciphertext, updated_by_device, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_device = EXCLUDED.updated_by_device, updated_at = now()
+       RETURNING *`,
+      [accountId, ciphertext, byDevicePublicKey],
+    );
+    return { ciphertext: rows[0].ciphertext, updatedByDevice: rows[0].updated_by_device, updatedAt: new Date(rows[0].updated_at).toISOString() };
+  }
+
+  async getDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<DeviceVaultWrappedKeyRecord | undefined> {
+    const { rows } = await this.query(`SELECT * FROM device_vault_wrapped_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, devicePublicKey]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return { devicePublicKey: row.device_pub, wrappedKey: row.wrapped_key, wrappedByPublicKey: row.wrapped_by_public_key, updatedAt: new Date(row.updated_at).toISOString() };
+  }
+
+  async requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void> {
+    if (await this.getDeviceVaultWrappedKey(accountId, devicePublicKey)) return;
+    await this.query(
+      `INSERT INTO device_vault_key_requests (account_id, device_pub, created_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (account_id, device_pub) DO UPDATE SET created_at = now()`,
+      [accountId, devicePublicKey],
+    );
+  }
+
+  async listDeviceVaultKeyRequests(accountId: string, exceptDevicePublicKey: string): Promise<DeviceVaultKeyRequest[]> {
+    const { rows } = await this.query(
+      `SELECT device_pub, created_at FROM device_vault_key_requests WHERE account_id = $1 AND device_pub <> $2 ORDER BY created_at ASC`,
+      [accountId, exceptDevicePublicKey],
+    );
+    return rows.map((row: any) => ({ devicePublicKey: row.device_pub, createdAt: new Date(row.created_at).toISOString() }));
+  }
+
+  async setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<DeviceVaultWrappedKeyRecord> {
+    const { rows } = await this.query(
+      `INSERT INTO device_vault_wrapped_keys (account_id, device_pub, wrapped_key, wrapped_by_public_key, updated_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (account_id, device_pub) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, updated_at = now()
+       RETURNING *`,
+      [accountId, targetDevicePublicKey, wrappedKey, wrappedByPublicKey],
+    );
+    await this.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, targetDevicePublicKey]);
+    return { devicePublicKey: rows[0].device_pub, wrappedKey: rows[0].wrapped_key, wrappedByPublicKey: rows[0].wrapped_by_public_key, updatedAt: new Date(rows[0].updated_at).toISOString() };
+  }
+
+  // --- Durable E2E session snapshots (Gap B) ---------------------------
+
+  async getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined> {
+    const { rows } = await this.query(`SELECT * FROM session_snapshots WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return { sessionId: row.session_id, ciphertext: row.ciphertext, updatedAt: new Date(row.updated_at).toISOString() };
+  }
+
+  async setSessionSnapshot(accountId: string, sessionId: string, ciphertext: string): Promise<SessionSnapshotRecord> {
+    const { rows } = await this.query(
+      `INSERT INTO session_snapshots (account_id, session_id, ciphertext, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id, session_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_at = now()
+       RETURNING *`,
+      [accountId, sessionId, ciphertext],
+    );
+    return { sessionId: rows[0].session_id, ciphertext: rows[0].ciphertext, updatedAt: new Date(rows[0].updated_at).toISOString() };
+  }
+
+  async deleteSessionSnapshot(accountId: string, sessionId: string): Promise<void> {
+    await this.query(`DELETE FROM session_snapshots WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+  }
+
+  // --- Session↔machine correlation for rebuild-after-teardown (Gap 1) --------
+
+  private mapSessionCorrelation(row: any): SessionCorrelation {
+    return {
+      sessionId: String(row.session_id),
+      nodeId: String(row.node_id),
+      provider: String(row.provider),
+      region: row.region ?? undefined,
+      ttlMinutes: row.ttl_minutes != null ? Number(row.ttl_minutes) : undefined,
+      repo: row.repo ?? undefined,
+      setupId: row.setup_id ?? undefined,
+      machineId: row.machine_id ?? undefined,
+      app: row.app ?? undefined,
+      updatedAt: new Date(row.updated_at).toISOString(),
+    };
+  }
+
+  async getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined> {
+    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+    return rows[0] ? this.mapSessionCorrelation(rows[0]) : undefined;
+  }
+
+  async listSessionCorrelations(accountId: string): Promise<SessionCorrelation[]> {
+    const { rows } = await this.query(`SELECT * FROM session_correlation WHERE account_id = $1 ORDER BY updated_at DESC`, [accountId]);
+    return rows.map((r) => this.mapSessionCorrelation(r));
+  }
+
+  async setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation> {
+    const { rows } = await this.query(
+      `INSERT INTO session_correlation
+         (account_id, session_id, node_id, provider, region, ttl_minutes, repo, setup_id, machine_id, app, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+       ON CONFLICT (account_id, session_id) DO UPDATE SET
+         node_id = EXCLUDED.node_id, provider = EXCLUDED.provider, region = EXCLUDED.region,
+         ttl_minutes = EXCLUDED.ttl_minutes, repo = EXCLUDED.repo, setup_id = EXCLUDED.setup_id,
+         machine_id = EXCLUDED.machine_id, app = EXCLUDED.app, updated_at = now()
+       RETURNING *`,
+      [
+        accountId, input.sessionId, input.nodeId, input.provider,
+        input.region ?? null, input.ttlMinutes ?? null, input.repo ?? null,
+        input.setupId ?? null, input.machineId ?? null, input.app ?? null,
+      ],
+    );
+    return this.mapSessionCorrelation(rows[0]);
+  }
+
+  async deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void> {
+    await this.query(`DELETE FROM session_correlation WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
+  }
+
+  async getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined> {
+    const { rows } = await this.query(`SELECT room_key_enc FROM node_room_keys WHERE account_id = $1 AND node_id = $2`, [accountId, nodeId]);
+    if (!rows[0]) return undefined;
+    const raw = rows[0].room_key_enc;
+    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
+  }
+
+  async setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void> {
+    await this.query(
+      `INSERT INTO node_room_keys (account_id, node_id, room_key_enc, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (account_id, node_id) DO UPDATE SET room_key_enc = EXCLUDED.room_key_enc, updated_at = now()`,
+      [accountId, nodeId, JSON.stringify(enc)],
+    );
+  }
+
+  async findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined> {
+    // The node advertises issue sessions with source "issue:owner/repo#N".
+    const source = `issue:${repo}#${issueNumber}`;
+    const { rows } = await this.query(
+      `SELECT session_id, node_id FROM session_index WHERE account_id = $1 AND source = $2 ORDER BY updated_at DESC LIMIT 1`,
+      [accountId, source],
+    );
+    return rows[0] ? { sessionId: String(rows[0].session_id), nodeId: String(rows[0].node_id) } : undefined;
+  }
+
   // --- Inbound hooks + work queue (E2/E4) ------------------------------
 
   async createInboundHook(accountId: string, kind: string): Promise<InboundHook> {
@@ -1479,6 +1980,21 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `UPDATE inbound_hooks SET default_node = $3 WHERE id = $2 AND account_id = $1 RETURNING *`,
       [accountId, id, defaultNode?.trim() || null],
+    );
+    return rows[0] ? mapHook(rows[0]) : undefined;
+  }
+
+  async setInboundHookTriggerAccess(
+    accountId: string,
+    id: string,
+    triggerAccess: "everyone" | "contributor" | "collaborator" | undefined,
+  ): Promise<InboundHook | undefined> {
+    // "everyone" is stored as NULL (same as unset) — it's the no-restriction
+    // default, so there's nothing meaningful to distinguish it from "never set".
+    const value = triggerAccess === "contributor" || triggerAccess === "collaborator" ? triggerAccess : null;
+    const { rows } = await this.query(
+      `UPDATE inbound_hooks SET trigger_access = $3 WHERE id = $2 AND account_id = $1 RETURNING *`,
+      [accountId, id, value],
     );
     return rows[0] ? mapHook(rows[0]) : undefined;
   }
@@ -1723,8 +2239,8 @@ export class PostgresStore implements MeshStore {
       url: input.url,
     };
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox, events)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::jsonb)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox, events)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -1737,6 +2253,7 @@ export class PostgresStore implements MeshStore {
         input.repo ?? null,
         input.issueNumber ?? null,
         input.url ?? null,
+        input.externalId ?? null,
         dedupeKey,
         collapseKey,
         input.defaultRouted ?? null,
@@ -1943,13 +2460,15 @@ export class PostgresStore implements MeshStore {
     return existing.rows.length === 0 && rows.length > 0;
   }
 
-  async countRunStartsSince(accountId: string, sinceIso: string): Promise<number> {
-    // One distinct run_key = one run. started_at is stamped once (first insert
-    // wins), so a run counts exactly once for the window it started in.
+  async countRunStartsSince(accountId: string, sinceIso: string, runKeyPrefix?: string): Promise<number> {
+    // One distinct run_key = one run. A prefix scopes commercial metering to a
+    // class of work without losing the all-source product funnel in this table.
+    // Prefixes are internal class constants (`automation:`), never user input.
+    const prefixClause = runKeyPrefix === undefined ? "" : " AND run_key LIKE $3";
     const { rows } = await this.query(
       `SELECT count(*)::int AS n FROM run_starts
-       WHERE account_id = $1 AND started_at >= $2`,
-      [accountId, sinceIso],
+       WHERE account_id = $1 AND started_at >= $2${prefixClause}`,
+      runKeyPrefix === undefined ? [accountId, sinceIso] : [accountId, sinceIso, `${runKeyPrefix}%`],
     );
     return Number(rows[0]?.n ?? 0);
   }
@@ -1971,10 +2490,12 @@ export class PostgresStore implements MeshStore {
     // there is no cross-table transaction requirement (each row is independently
     // safe to drop once past its own expiry).
     let total = 0;
-    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins"]) {
+    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins", "oauth_states"]) {
       const { rowCount } = await this.query(`DELETE FROM ${table} WHERE expires_at < $1`, [nowIso]);
       total += rowCount ?? 0;
     }
+    const { rowCount } = await this.query(`DELETE FROM auth_rate_limits WHERE reset_at < $1`, [nowIso]);
+    total += rowCount ?? 0;
     return total;
   }
 
@@ -2018,6 +2539,7 @@ function mapHook(row: any): InboundHook {
     installCount: row.install_count ?? undefined,
     installsSyncedAt: row.installs_synced_at ? new Date(row.installs_synced_at).toISOString() : undefined,
     defaultNode: row.default_node ?? undefined,
+    triggerAccess: row.trigger_access === "contributor" || row.trigger_access === "collaborator" ? row.trigger_access : undefined,
     servingNodeId: row.serving_node_id ?? undefined,
     servingNodeSeenAt: row.serving_node_seen_at ? new Date(row.serving_node_seen_at).toISOString() : undefined,
     enabled: row.enabled ?? true,
@@ -2050,6 +2572,7 @@ function mapWorkItem(row: any): WorkItem {
     body: row.body ?? undefined,
     repo: row.repo ?? undefined,
     issueNumber: row.issue_number ?? undefined,
+    externalId: row.external_id ?? undefined,
     url: row.url ?? undefined,
     createdAt: new Date(row.created_at).toISOString(),
     claimedByNodeId: row.claimed_by_node_id ?? undefined,
@@ -2080,6 +2603,7 @@ function mapWorkItem(row: any): WorkItem {
 function triggerKindForSource(explicit: AutomationTriggerKind | undefined, source: string): AutomationTriggerKind {
   if (explicit) return explicit;
   if (source.startsWith("github:")) return "github";
+  if (source.startsWith("linear:")) return "webhook";
   if (source === "slack") return "slack";
   if (source === "manual") return "manual";
   return "webhook";

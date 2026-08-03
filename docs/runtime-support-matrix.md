@@ -2,7 +2,7 @@
 
 Bivy supports multiple agents, but they are not all equally production-ready. The app exposes the same tiers in the agent picker.
 
-The agent **picker** shows the ten most-used coding agents (the rows below with a
+The agent **picker** shows the most-used coding agents (the rows below with a
 non-italic tier). Everything else stays in the catalog and is runnable via
 `BIVY_RUNTIME=<id>`, but is hidden from the picker.
 
@@ -22,11 +22,22 @@ per-agent pages under [docs/agents/](agents/README.md).
 | [Aider](agents/aider.md) | `aider` | Beta | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Bivy/provider or Aider config | `aider --message --yes-always`; git-native, single-turn per prompt. No native "continue session `<id>`" flag upstream — its own `--restore-chat-history` continuity is cwd-scoped, not id-based, so it can't plug into the generic primitive. |
 | [Cline](agents/cline.md) | `cline` | Beta | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Cline CLI | Autonomous (`-y`) single task; best-effort flags, override with `BIVY_CLINE_ARGS`; resumes via `--id <id>`. |
 | [Crush](agents/crush.md) | `crush` | Beta | Yes | Yes | Yes | No | No | Effect-level (FS/MCP/net) | No | Crush CLI | `crush run -q`; best-effort flags, override with `BIVY_CRUSH_ARGS`. No resume flag upstream yet for `crush run` (tracked in charmbracelet/crush#1982, #1015). |
+| [Cursor](agents/cursor.md) | `cursor` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Effect-level (FS/MCP/net) | No | Cursor CLI | `cursor-agent --force -p`; resumes via `--resume=<id>`. |
+| [GitHub Copilot](agents/copilot.md) | `copilot` | Beta | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Copilot CLI/GitHub | `copilot --allow-all-tools -p`; no pinned by-id resume flag yet (`BIVY_COPILOT_RESUME_TEMPLATE`). |
+| [Grok](agents/grok.md) | `grok` | Beta | Yes | Yes | Yes | No | Yes (`-m`) | Effect-level (FS/MCP/net) | No | Grok CLI/xAI | `grok -p` (`@vibe-kit/grok-cli`); superagent `grok-dev` fork adds `-s <id>` resume + `--format json` (enable via env). |
+| [Amp](agents/amp.md) | `amp` | Beta | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Amp CLI/Sourcegraph | `amp -x`; resumes threads via `amp threads continue <id>`. Model is Amp-managed. |
+| [Auggie](agents/auggie.md) | `auggie` | Beta | Yes | Yes | Yes | No | No | Effect-level (FS/MCP/net) | No | Augment CLI | `auggie --quiet --print`; model Augment-managed; no pinned resume flag (`BIVY_AUGGIE_RESUME_TEMPLATE`). |
+| [Droid](agents/droid.md) | `droid` | Beta | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Factory CLI | `droid exec --auto high`; no pinned resume flag yet (`BIVY_DROID_RESUME_TEMPLATE`). |
+| [Continue](agents/continue.md) | `continue` | Beta | Yes | Yes | Yes | No | Yes (`--model`) | Effect-level (FS/MCP/net) | No | Continue CLI | `cn --auto -p`; `--resume` is last-session-only (no by-id form), so resume stays off. |
+| [Kilo Code](agents/kilocode.md) | `kilocode` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Effect-level (FS/MCP/net) | No | Kilo CLI | `kilo run --auto` (OpenCode fork); resumes via `-s <id>`. |
+| [Rovo Dev](agents/rovodev.md) | `rovodev` | Beta | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Atlassian acli | `acli rovodev run --yolo`; resumes via `--restore <id>`. Installed out of band (no auto-install). |
+| [Codebuff](agents/codebuff.md) | `codebuff` | *Experimental* | No | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Codebuff CLI | Hidden: no verified non-TTY headless mode (`@codebuff/sdk` for automation). Resume `--continue <id>` wired for when a headless flag ships. |
 | [Codex (exec)](agents/codex.md) | `codex` | *Supported* | No | Yes | Yes | Yes | No | Effect-level sandbox | No | Codex CLI/OpenAI | Fast no-approval path; superseded in the picker by `codex-approvals`. Runnable via `BIVY_RUNTIME=codex`. Native discovery/adoption lives on `codex-approvals` instead, so an adopted session is governed from the moment it's imported. |
 | Hermes | `hermes` | *Experimental* | No | Yes | Yes | No | No | Boundary only | No | Hermes CLI | Generic process adapter, no structured parser, no documented resume flag. |
 | OpenClaw | `openclaw` | *Experimental* | No | Yes | Yes | No | No | Boundary only | No | OpenClaw CLI | Phase-1 CLI adapter only; resume needs the future Gateway RPC bridge. |
 | Generic CLI | `generic-cli` | *Experimental* | No | Env-configured | Env-configured | Depends | No | Boundary only | No | External CLI | Universal escape hatch; support is best-effort; resumable when `BIVY_AGENT_RESUME_TEMPLATE` is set (same generic primitive as the built-in CLI agents). |
 | Bivy Agent Protocol | `bivy-agent-protocol` | *Experimental* | No | Env-configured | Env-configured | Depends on agent | Depends on agent | Depends on agent | No | Protocol agent | Best path for third-party agents to become fully supported; resumable when the shim advertises `resume: true`. |
+| ACP Agent | `acp` | *Experimental* | No | Env-configured | Env-configured | Yes | No | **Per-tool (Approve/Deny)** | No | ACP agent | Any [Agent Client Protocol](https://agentclientprotocol.com) agent (e.g. `gemini --experimental-acp`) driven through `bin/acp-shim.mjs` → the same governed `ProtocolRuntime` as Codex. Configure with `BIVY_ACP_COMMAND` / `BIVY_ACP_ARGS`. See [agents/acp.md](agents/acp.md). |
 
 Every picker CLI agent's launch flags are overridable per node with
 `BIVY_<ID>_ARGS` (a JSON array), its resume form with `BIVY_<ID>_RESUME_TEMPLATE`
@@ -46,6 +57,23 @@ per-agent runtime code, matching the ProtocolRuntime resume primitive
 (`session.create.resume`) added for Codex/Bivy-agent-protocol. It's `No` only
 where the underlying CLI genuinely has no native "continue session `<id>`" form
 today (Aider, Crush, Hermes) or the adapter itself isn't there yet (OpenClaw).
+
+**ACP promotion** is the same data-driven idea applied to the *approvals*
+column. The `Approvals` values above describe each agent's **default** (pipe)
+path, where governance is effect-level (sandbox tier / FS-MCP-network). But any
+agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+can instead be driven through `bin/acp-shim.mjs` → the governed `ProtocolRuntime`
+— gaining **per-tool Approve/Deny** and **`session/load` resume** with zero
+per-agent code. The picker agents that ship a native ACP server declare it as
+data (an `acp` field in `CLI_AGENT_SPECS`) and are promoted with
+`BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all at once): **Gemini**
+(`--experimental-acp`), **Qwen Code** (`--experimental-acp` / newer `--acp`),
+**OpenCode** (`acp`), **Goose** (`acp`), **Kilo Code** (`acp`), **Cursor**
+(`acp`), **Cline** (`--acp`), and **GitHub Copilot** (`--acp`). Promotion is off
+by default until validated for your installed version; when on, the runtime
+honestly advertises Approvals + Resume in the picker. Agents with no first-party
+ACP mode (Aider, Amp, Crush, Continue, Grok) stay on the pipe until one ships.
+See [agents/acp.md](agents/acp.md).
 
 Beyond start/resume/model/approvals, the shared layer also surfaces, where the
 agent emits it: **token usage** (parsed from the agent's JSON — Gemini/Qwen/Goose
@@ -89,6 +117,38 @@ governed `codex-approvals` shim, not the plain exec runtime) advertise
 discovery today — every other runtime stays hidden from the discovery UI
 until its adapter earns the capability, per the capability-driven design in
 `src/runtime/native-session-discovery.ts` and `src/session/native-import.ts`.
+
+## Getting more capability out of a CLI agent
+
+A CLI agent's ceiling is set by the *interface* it exposes, not by the wrapper.
+Four general, opt-in levers move an agent up that ladder without per-agent code:
+
+- **MCP tool approvals** (`capabilities.mcpToolApprovals`). With `BIVY_MCP_PROXY=1`,
+  Bivy rewrites the agent's MCP config so every stdio server launches through
+  `bivy mcp-proxy`, which asks the daemon (`/api/mcp/decide` → the same
+  `guardianInterceptor` as native approvals) before each `tools/call`. This gives
+  real per-tool Approve/Deny for the agent's **MCP** tools (not its built-in
+  shell/edits — a narrower, honest capability than full `toolInterception`). See
+  `src/harness/mcp-*.ts`.
+- **Structured transcripts** (opt-in JSON parsing). Agents with a JSON/stream-json
+  mode we haven't validated against the binary carry a tolerant parser
+  (`generic-stream-json` / `generic-json`) behind `spec.parserUnverified`: dumb
+  pipe by default (a wrong flag can't regress them), `BIVY_AGENT_STRUCTURED=1` opts
+  in. The parsers never lose output — an unrecognized shape falls back to raw text.
+  Validating one is a one-field spec edit.
+- **Capability probing** (`BIVY_AGENT_PROBE=1`). Runs `<cli> --help` and
+  *downgrades* any advertised resume/model capability the installed binary no
+  longer evidences — self-healing honesty across version drift. It never upgrades.
+- **ACP** (`acp` runtime + per-agent promotion). **The preferred way to wrap any
+  agent that speaks it** — a one-shot pipe can't gate a tool *before* it runs, so
+  ACP is a strict upgrade. Any [Agent Client Protocol](https://agentclientprotocol.com)
+  agent is driven through `bin/acp-shim.mjs` → the governed `ProtocolRuntime`
+  (per-tool approvals + streaming + resume) as data. Use the generic runtime
+  (`BIVY_ACP_COMMAND` / `BIVY_ACP_ARGS`), or promote a specific agent that declares
+  an `acp` field: Gemini CLI already does (`BIVY_GEMINI_ACP=1`; `BIVY_PREFER_ACP=1`
+  promotes every ACP-capable agent). A promoted agent honestly gains Approvals +
+  Resume in the picker. The pipe path is the fallback for agents that only offer a
+  headless print mode. See [agents/acp.md](agents/acp.md).
 
 Definitions:
 

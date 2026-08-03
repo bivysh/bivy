@@ -7,9 +7,42 @@
 
 import { isToolResultBlock, isToolUseBlock, toolCallId, toolInput, toolName } from "./tool-activity.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
+import type { AttachmentRef, PromptAttachment } from "./protocol.js";
 import type { ToolActivity, TranscriptEntry } from "./store.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/** The content-block type an agent-sent attachment is carried as inside a
+ *  synthetic assistant message. The node emits it live as an `attachment`
+ *  session event and, for durable history, folds it into the transcript as a
+ *  time-anchored overlay message carrying exactly this block (see the node's
+ *  event-log outbound-attachment projection). Renders here to a normal
+ *  attachment chip/thumbnail, reusing the same PromptAttachment path user
+ *  uploads use. */
+export const AGENT_ATTACHMENT_BLOCK = "bivy_attachment";
+
+interface AgentAttachmentBlock {
+  type: typeof AGENT_ATTACHMENT_BLOCK;
+  ref: AttachmentRef;
+  caption?: string;
+}
+
+function isAgentAttachmentBlock(block: any): block is AgentAttachmentBlock {
+  return (
+    !!block &&
+    block.type === AGENT_ATTACHMENT_BLOCK &&
+    !!block.ref &&
+    typeof block.ref.hash === "string" &&
+    (block.ref.kind === "image" || block.ref.kind === "file")
+  );
+}
+
+/** A durable AttachmentRef → the (byte-less) PromptAttachment the view renders
+ *  by hash. Shared by history render and the live reducer so both produce an
+ *  identical chip. */
+export function attachmentFromRef(ref: AttachmentRef): PromptAttachment {
+  return { kind: ref.kind, name: ref.name, size: ref.size, mimeType: ref.mimeType, hash: ref.hash };
+}
 
 let idSeq = 0;
 /** Monotonic transcript-entry id. Shared by the render helpers and the reducer so
@@ -157,6 +190,17 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
             pushText(buf.join("\n"));
             buf = [];
             for (const tool of toolEntriesFromContent([block])) mergeToolInto(entries, tool);
+          } else if (isAgentAttachmentBlock(block)) {
+            // Seal any prose before the attachment so a caption the agent wrote
+            // above it stays above it, and the chip lands as its own entry.
+            pushText(buf.join("\n"));
+            buf = [];
+            entries.push({
+              id: nextId(),
+              role: "assistant",
+              text: typeof block.caption === "string" ? block.caption : "",
+              attachments: [attachmentFromRef(block.ref)],
+            });
           } else if (isTextBlock(block)) {
             buf.push(String(block?.text ?? block?.content ?? ""));
           }
@@ -173,7 +217,45 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
       }
     }
   }
-  return entries;
+  return groupAgentAttachments(entries);
+}
+
+/**
+ * Group agent-sent attachment entries onto the FINAL assistant prose bubble of
+ * their turn, so a chip reads as part of the reply instead of standing alone
+ * wherever `bivy attach` happened to run in the turn. An "attachment entry" is an
+ * assistant entry carrying `attachments` (only agent attachments put attachments
+ * on an assistant entry); the "final bubble" is the last assistant text entry in
+ * the same turn (turns are delimited by user messages). When a turn has no prose
+ * bubble to hang them on (the agent only attached), the attachment entries are
+ * left as-is. This is the durable-history twin of the live reducer's
+ * flushPendingAgentAttachments, so a reload matches what streamed.
+ */
+export function groupAgentAttachments(entries: TranscriptEntry[]): TranscriptEntry[] {
+  const isAttachmentEntry = (e: TranscriptEntry) => e.role === "assistant" && !e.tool && !!e.attachments && e.attachments.length > 0;
+  const isProseBubble = (e: TranscriptEntry) => e.role === "assistant" && !e.tool && !!e.text && !(e.attachments && e.attachments.length);
+  const out = entries.slice();
+  const remove = new Set<number>();
+  let i = 0;
+  while (i < out.length) {
+    if (out[i]!.role === "user") { i++; continue; }
+    // A turn is the maximal run of non-user entries starting at i.
+    let j = i;
+    while (j < out.length && out[j]!.role !== "user") j++;
+    let target = -1;
+    const attachmentIdxs: number[] = [];
+    for (let k = i; k < j; k++) {
+      if (isAttachmentEntry(out[k]!)) attachmentIdxs.push(k);
+      else if (isProseBubble(out[k]!)) target = k; // last prose bubble wins
+    }
+    if (attachmentIdxs.length && target >= 0) {
+      const chips = attachmentIdxs.flatMap((k) => out[k]!.attachments!);
+      out[target] = { ...out[target]!, attachments: [...(out[target]!.attachments ?? []), ...chips] };
+      for (const k of attachmentIdxs) remove.add(k);
+    }
+    i = j;
+  }
+  return remove.size ? out.filter((_, idx) => !remove.has(idx)) : out;
 }
 
 /**

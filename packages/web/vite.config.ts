@@ -2,9 +2,22 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { defineConfig } from "vite";
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+
+// The app's own version, read from this package's package.json at build time and
+// baked into the bundle as `__APP_VERSION__`. Surfaced in Settings so a user can
+// tell which build their (offline-capable, precached) PWA is actually running.
+const pkgVersion = ((): string => {
+  try {
+    const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "package.json");
+    return (JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: string }).version ?? "dev";
+  } catch {
+    return "dev";
+  }
+})();
 
 // Bivy's single web client. Both the node daemon and the control plane serve
 // this build at the root; the legacy vanilla client it replaced has been
@@ -16,6 +29,13 @@ export default defineConfig({
     },
   },
   base: "/",
+  define: {
+    __APP_VERSION__: JSON.stringify(pkgVersion),
+    // The moment this bundle was built, baked in so Settings can show when the
+    // running (precached) PWA was last updated — a freshness signal for a
+    // client that keeps working offline off an old cache.
+    __APP_BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [
     react(),
     VitePWA({

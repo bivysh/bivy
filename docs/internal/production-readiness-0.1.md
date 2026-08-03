@@ -54,7 +54,7 @@ and tracked follow-ups.
 Deploy/publish and secret-hygiene items are tracked in the private `bivy-cloud`
 release checklist, not in this repo. The one code-adjacent item to flag here:
 
-- **npm publish with provenance** — the documented `curl … | bash` / `npm i -g bivy`
+- **npm publish with provenance** — the documented `curl … | bash` / `npm i -g @bivy/bivy`
   install path depends on the package being published from CI with provenance
   attestations (see `docs/releasing.md`).
 

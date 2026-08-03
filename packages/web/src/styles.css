@@ -27,6 +27,12 @@
      (working), danger (needs input) or ok/merged (already used by PR state),
      so "something's ready" reads as its own signal at a glance. */
   --unseen: #2563eb;
+  /* Per-source hues for the session/run marks (see sessionSource.ts). Kept
+     clear of the status palette (ok / danger / unseen) so a source is never
+     mistaken for an outcome; `app`/`cli` stay quiet so hand-opened sessions
+     don't shout next to a triggered run. */
+  --s-github: #24292f; --s-slack: #7c2d92; --s-linear: #5e6ad2; --s-schedule: #0e7490;
+  --s-webhook: #6d28d9; --s-manual: #b45309; --s-cli: #3f6212; --s-app: #64748b;
   /* Terminal text selection — a clearly visible tint that keeps glyphs readable
      (the old --surface-3 highlight was invisible against the terminal bg). */
   --term-selection: rgba(37, 99, 235, 0.32);
@@ -42,6 +48,8 @@
   --accent: #f87c18; --accent-contrast: #081028; --accent-hover: #ff9433;
   --danger: #ff4444; --danger-soft: #3a1a1a; --ok: #22aa44; --merged: #a371f7;
   --unseen: #5b9dff;
+  --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;
+  --s-webhook: #b79bf7; --s-manual: #f0a45a; --s-cli: #a3c987; --s-app: #9aa4b2;
   --term-selection: rgba(96, 165, 250, 0.40); --term-selection-inactive: rgba(96, 165, 250, 0.26);
 }
 @media (prefers-color-scheme: dark) {
@@ -181,6 +189,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-actions-btn:hover, .session-actions-btn[aria-expanded="true"] { background: var(--surface-3); }
 .session-actions-menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 190px; z-index: 40; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.28); overflow: hidden; padding: 4px; animation: sheet-up 0.14s ease; }
 .session-actions-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--ink); padding: 9px 12px; font-size: 13px; border-radius: 8px; }
+.session-actions-item:has(svg) { display: flex; align-items: center; gap: 8px; }
+.session-actions-item svg { flex: none; color: var(--muted); }
 .session-actions-item:hover { background: var(--surface-2); }
 .session-actions-item.danger { color: var(--danger); }
 
@@ -375,6 +385,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    instead means children can only overflow *themselves* (the .pre already has
    its own overflow-x:auto), never the parent. */
 .msg.assistant { align-self: stretch; width: 100%; }
+/* Live streaming prose is rendered as plain text (no markdown pass per update);
+   preserve its newlines/indentation and wrap long lines so it reads naturally
+   until the finished markdown bubble replaces it at message_end. */
+.msg.assistant.streaming-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.assistant :where(p, ul, ol, pre, table, blockquote) { margin: 0.5em 0; }
 .msg.assistant :where(p, ul, ol, pre, table, blockquote):first-child { margin-top: 0; }
 .msg.assistant :where(p, ul, ol, pre, table, blockquote):last-child { margin-bottom: 0; }
@@ -385,6 +399,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .msg.assistant h4 { font-size: 1em; }
 .msg.assistant ul, .msg.assistant ol { padding-left: 1.4em; }
 .msg.assistant li { margin: 0.15em 0; }
+/* Inline markdown images an agent embeds via ![alt](https://…). Constrain so a
+   large remote image can't blow out the chat column; rounded to match chips. */
+.msg.assistant img { max-width: 100%; height: auto; border-radius: 10px; }
+.msg.assistant img.md-image { max-height: 420px; object-fit: contain; }
+/* An agent-sent attachment block sits in the assistant row above any caption. */
+.assistant-row > .msg-attachments { width: 100%; }
 .msg.assistant li.task-list-item { list-style: none; margin-left: -1.2em; }
 .msg.assistant li.task-list-item input { margin-right: 6px; vertical-align: middle; }
 /* Belt-and-suspenders for the common case (markdown.ts already unwraps a
@@ -637,7 +657,119 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-pr .gh-icon { width: 10px; height: 10px; }
 .session-pr.merged { border-color: var(--merged); color: var(--merged); }
 .session-pr.closed { border-color: var(--muted); color: var(--muted); }
-.session-pr-text { white-space: nowrap; }
+/* The label is all-caps with no descenders, so within the line box its ink
+   rides above the optical centre and reads high in the fixed-height pill. Nudge
+   it down a touch to sit on the pill's true centre next to the glyph. */
+.session-pr-text { white-space: nowrap; position: relative; top: 0.5px; }
+
+/* ---- Source marks & run pill (see sessionSource.ts / SourceMark.tsx) ----
+   `--sc` is the per-source hue; every mark tints its glyph and a faint fill
+   from it. Set once per source class so the tile, the sidebar mark and the
+   in-session pill all read from the same variable. */
+.src-github-issue, .src-github-mention { --sc: var(--s-github); }
+.src-slack { --sc: var(--s-slack); }
+.src-linear { --sc: var(--s-linear); }
+.src-schedule { --sc: var(--s-schedule); }
+.src-webhook { --sc: var(--s-webhook); }
+.src-manual { --sc: var(--s-manual); }
+.src-cli { --sc: var(--s-cli); }
+.src-app { --sc: var(--s-app); }
+
+/* Standalone tinted tile (run-pill sheet header, and anywhere a source needs a
+   chip). */
+.source-mark {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 8px;
+  color: var(--sc, var(--muted));
+  background: color-mix(in srgb, var(--sc, var(--muted)) 15%, var(--surface));
+}
+.source-mark svg { width: 17px; height: 17px; display: block; }
+.source-mark.sm { width: 22px; height: 22px; border-radius: 6px; }
+.source-mark.sm svg { width: 13px; height: 13px; }
+
+/* Sidebar row leading mark: the source tile with the live status as a corner
+   dot badge. Source = identity, badge = presence. */
+.session-mark {
+  position: relative; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 8px;
+  color: var(--sc, var(--muted));
+  background: color-mix(in srgb, var(--sc, var(--muted)) 14%, var(--surface));
+}
+.session-mark svg { width: 16px; height: 16px; display: block; }
+/* The presence dot. A 2px ring in the sidebar's own surface colour lifts it off
+   the tile; colour/shape mirror the old bare .session-dot states. */
+.mark-badge {
+  position: absolute; right: -3px; bottom: -3px;
+  width: 11px; height: 11px; border-radius: 50%;
+  background: var(--line-strong); box-shadow: 0 0 0 2px var(--surface);
+}
+.mark-badge.working { background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
+.mark-badge.needs-action { background: var(--danger); }
+.mark-badge.saved { background: transparent; border: 1.5px solid var(--muted); }
+.mark-badge.idle { background: var(--line-strong); }
+/* Finished-and-unseen keeps its own colour whichever base state it rode in on,
+   so it must come after .idle. */
+.mark-badge.unseen { background: var(--unseen); }
+
+/* In-session run pill (App.tsx composer band): supersedes the GitHub pill for a
+   triggered session. Source glyph + short label + a status segment. */
+.run-pill {
+  display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+  border-radius: 999px; padding: 4px 11px 4px 5px; font-size: 12px; font-weight: 600;
+}
+.run-pill:hover { border-color: var(--line-strong); background: var(--surface-3); }
+.run-pill-glyph {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 6px;
+  color: var(--sc, var(--muted));
+  background: color-mix(in srgb, var(--sc, var(--muted)) 18%, transparent);
+}
+.run-pill-glyph svg { width: 13px; height: 13px; display: block; }
+.run-pill-label { flex: none; }
+.run-pill-stat {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0;
+  padding-left: 8px; border-left: 1px solid var(--line); color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.run-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
+.run-pill.working .run-pill-stat { color: var(--accent); }
+.run-pill.working .run-dot, .run-sheet-status .run-dot.working { background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
+.run-pill.needs-action .run-pill-stat { color: var(--danger); }
+.run-pill.needs-action .run-dot, .run-sheet-status .run-dot.needs-action { background: var(--danger); }
+.run-pill.saved .run-dot, .run-sheet-status .run-dot.saved { background: transparent; border: 1.5px solid var(--muted); }
+.run-pill.idle .run-dot, .run-sheet-status .run-dot.idle { background: var(--line-strong); }
+
+/* Run-pill action sheet extras (reuses .action-sheet* from the GitHub pill). */
+.run-sheet-title { display: inline-flex; align-items: center; gap: 9px; min-width: 0; font-weight: 700; }
+.run-sheet-status {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; border-bottom: 1px solid var(--line);
+  font-size: 13px; font-weight: 600; color: var(--ink);
+}
+.run-sheet-status .session-pr { margin-left: auto; }
+.action-sheet-empty { padding: 14px 16px; color: var(--muted); font-size: 13px; }
+
+/* Run-pill sheet outcome: the run evidence (checks, attempts, duration,
+   branch/commit, agent) joined from the account queue — see runEvidence.ts. */
+.run-sheet-failure { padding: 11px 16px; border-bottom: 1px solid var(--line); color: var(--danger); font-size: 13px; line-height: 1.4; }
+.run-sheet-rows { display: flex; flex-direction: column; }
+.run-sheet-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.run-sheet-row:last-child { border-bottom: 0; }
+.run-sheet-row .k { flex: none; color: var(--muted); }
+.run-sheet-row .v { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 8px; justify-content: flex-end; align-items: center; color: var(--ink); font-weight: 600; text-align: right; }
+.run-sheet-row code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; padding: 1px 5px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-2); }
+.run-sheet-checks { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+.chk { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.chk.passed { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.chk.failed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.chk.skipped { color: var(--muted); }
+
+/* One-word exception hint on a sidebar row's meta line (failed / needs-you). */
+.row-hint { font-weight: 600; }
+.row-hint.danger { color: var(--danger); }
+.row-hint.warn { color: var(--accent); }
 .action-sheet { position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; justify-content: center; }
 .action-sheet-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.4); }
 .action-sheet-body {
@@ -655,6 +787,14 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 button.action-sheet-item { width: 100%; text-align: left; border-width: 0 0 1px 0; border-style: solid; border-color: var(--line); background: transparent; font: inherit; }
 button.action-sheet-item:last-child { border-bottom: 0; }
 .action-sheet-item.danger { color: var(--danger); }
+/* GitHub links (issue / PR / branch) share one row anatomy: a leading GitHub
+   mark, then the label — so the three read as one coherent group. */
+.action-sheet-item.gh-link { display: flex; align-items: center; gap: 10px; }
+.action-sheet-item.gh-link > span { min-width: 0; overflow-wrap: anywhere; }
+.action-sheet-item.gh-link .gh-icon { width: 15px; height: 15px; flex: none; color: var(--muted); }
+/* GitHub-pill sheet header mark, sized to match the run-pill sheet's glyph. */
+.gh-head-mark { display: inline-flex; }
+.gh-head-mark .gh-icon { width: 16px; height: 16px; color: var(--muted); }
 .action-sheet-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* GitHub pills parked in a band just above the composer: the repo picker on a
@@ -830,8 +970,11 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .ruleset-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
 .ruleset-field-grid .field-label { margin-top: 0; }
 .ruleset-chain { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
-.ruleset-chain-row { display: flex; gap: 6px; align-items: center; }
-.ruleset-chain-row .picker-search { flex: 1; min-width: 0; }
+.ruleset-chain-row { display: flex; gap: 8px; align-items: flex-end; }
+.ruleset-chain-fields { flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.ruleset-chain-field { min-width: 0; display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.ruleset-chain-field .picker-search { min-width: 0; margin: 0; }
+.ruleset-chain-remove { flex: none; margin-bottom: 1px; }
 .ruleset-collapsible { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
 .ruleset-collapsible-body { margin-top: 8px; }
 .attach-chips { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 2px; }
@@ -938,10 +1081,17 @@ button.action-sheet-item:last-child { border-bottom: 0; }
      gap above the keyboard (worst in draft mode, where the composer also
      carries the repo/sandbox pill row). --keyboard-h (viewport.ts) is how much
      the keyboard covers; subtract it so the reservation melts away as the
-     keyboard rises, down to a small 8px gap — the list then extends to just
+     keyboard rises, down to a small gap — the list then extends to just
      above the keyboard. Keyboard down (--keyboard-h: 0) keeps the full
-     clearance, unchanged. */
-  --sheet-clear: max(8px, calc(var(--composer-h, 108px) + 8px - var(--keyboard-h, 0px)));
+     clearance, unchanged.
+     The floor clears the bottom safe area (home indicator), not a bare 8px:
+     when the composer is hidden the sheet has no other bottom clearance, so on
+     first-run onboarding an 8px floor jammed the last row under the home
+     indicator with no room to scroll to it. The composer's own measured height
+     already includes safe-area padding, so where it's present that term still
+     dominates and this floor is inert; with the keyboard up the inset reports 0,
+     so the tuned ~8px keyboard gap is preserved. */
+  --sheet-clear: max(calc(env(safe-area-inset-bottom, 0px) + 8px), calc(var(--composer-h, 108px) + 8px - var(--keyboard-h, 0px)));
   position: relative; width: 100%; max-width: 520px; margin: 0 12px var(--sheet-clear);
   /* Bound the body by the visible viewport too, so a long list can't overflow
      past the top of the keyboard-shrunk area (which would push the search field
@@ -1049,6 +1199,38 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .settings-section { display: flex; flex-direction: column; gap: 10px; }
 .settings-section + .settings-section { margin-top: 8px; padding-top: 18px; border-top: 1px solid var(--line); }
 .settings-section > .settings-subhead { margin-top: 0; }
+
+/* Automations panel: the form/schedule list and the "Recent results" aside.
+   Stacked by default (mobile) so Recent results falls below the list instead of
+   being squeezed into a narrow right rail; side-by-side once there's room. */
+.automations-layout { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.automations-main { display: flex; flex-direction: column; min-width: 0; }
+.automations-aside { min-width: 0; }
+.automations-aside .settings-section { margin-top: 0; padding-top: 0; border-top: 0; }
+@media (min-width: 721px) {
+  .automations-layout { flex-direction: row; align-items: flex-start; gap: 28px; }
+  .automations-main { flex: 1; min-width: 0; }
+  .automations-aside { flex: none; width: 280px; }
+}
+/* Automations schedule builder: natural-language field + preset chips + a
+   live human-readable preview of the resulting cron, with the raw cron tucked
+   behind an "Edit cron expression" disclosure for power users. */
+.schedule-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.schedule-preset {
+  font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); cursor: pointer;
+}
+.schedule-preset:hover { color: var(--fg); border-color: var(--muted); }
+.schedule-preset.active { color: var(--accent); border-color: var(--accent); background: var(--surface); }
+.schedule-hint { margin: 8px 0 0; font-size: 13px; line-height: 1.35; }
+.schedule-hint.ok { color: var(--muted); }
+.schedule-hint.warn { color: var(--warn, var(--accent)); }
+.schedule-advanced-toggle {
+  align-self: flex-start; margin-top: 8px; padding: 2px 0; border: 0; background: none;
+  color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.schedule-advanced-toggle:hover { color: var(--fg); }
+.schedule-cron-input { margin-top: 6px; font-family: var(--mono, ui-monospace, monospace); font-size: 13px; }
 .settings-form code { font-size: 11px; padding: 1px 5px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); }
 .settings-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .queue-head { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
@@ -1169,9 +1351,12 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-nav-item:hover { background: var(--surface-3); }
 .settings-nav-item.active { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent); font-weight: 600; }
 .settings-nav-icon { flex: none; display: inline-flex; color: var(--muted); }
+.settings-nav-icon svg { width: 20px; height: 20px; display: block; }
 .settings-nav-item.active .settings-nav-icon { color: var(--accent); }
 .settings-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-nav-chevron { display: none; flex: none; color: var(--muted); font-size: 18px; }
+.settings-nav-version { flex: none; display: flex; flex-direction: column; gap: 1px; padding: 10px 10px 2px; color: var(--muted); font-size: 12px; letter-spacing: 0.02em; }
+.settings-nav-version-updated { font-size: 11px; opacity: 0.8; }
 
 /* Right content column */
 .settings-content { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
@@ -1239,6 +1424,27 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .settings-nav-chevron { display: inline-flex; }
   .settings-content { padding-top: max(0px, env(safe-area-inset-top)); }
   .settings-back { display: inline-flex; }
+  .settings-body { padding: 14px 12px max(28px, env(safe-area-inset-bottom)); }
+
+  /* Ruleset editing is input-heavy: use the full mobile width, predictable
+     button grids, and stacked fields instead of squeezing desktop rows until
+     their labels/placeholders are unreadable. */
+  .ruleset-rule-card { padding: 14px 12px; gap: 12px; }
+  .ruleset-rule-card .muted, .ruleset-rule-card .field-label, .ruleset-chain-field { color: color-mix(in srgb, var(--ink) 72%, var(--muted)); }
+  .ruleset-rule-head .btn { min-height: 40px; }
+  .ruleset-chip-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .ruleset-chip { min-height: 44px; padding: 8px; line-height: 1.2; color: color-mix(in srgb, var(--ink) 72%, var(--muted)); }
+  .ruleset-rule-card > .seg-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .ruleset-rule-card > .seg-row .seg-btn { min-width: 0; min-height: 44px; padding: 8px 4px; }
+  .ruleset-field-grid { grid-template-columns: 1fr; gap: 12px; }
+  .ruleset-chain { gap: 10px; }
+  .ruleset-chain-row { align-items: stretch; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); flex-direction: column; }
+  .ruleset-chain-fields { grid-template-columns: 1fr; gap: 10px; }
+  .ruleset-chain-field { font-size: 12px; }
+  .ruleset-chain-field .picker-search { min-height: 44px; }
+  .ruleset-chain-remove { align-self: flex-end; min-height: 40px; margin: 0; }
+  .ruleset-chain > .btn { min-height: 44px; }
+  .ruleset-collapsible .link-btn { min-height: 44px; display: flex; align-items: center; }
   .settings-head-title { text-align: center; font-size: 17px; }
   .settings-panel[data-mode="menu"] .settings-content { display: none; }
   .settings-panel[data-mode="panel"] .settings-nav { display: none; }
@@ -1252,7 +1458,13 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 }
 
 /* ---- Connect-a-runner onboarding screen ---- */
-.connect-runner { width: min(560px, 100%); margin: 4px auto 0; padding: 20px 16px 8px; display: flex; flex-direction: column; gap: 20px; }
+/* The ordinary app shell delegates scrolling to the chat pane and therefore
+   clips main itself. First-run onboarding replaces that pane, so give it an
+   explicit flex scrollport; otherwise tall option cards are unreachable on
+   mobile Safari. Hide the inactive session UI so it cannot consume height. */
+.main.needs-node > :not(.topbar):not(.banner):not(.connect-runner-scroll) { display: none; }
+.connect-runner-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.connect-runner { width: min(560px, 100%); margin: 4px auto 0; padding: 20px 16px max(24px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 20px; }
 .connect-hero { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .connect-hero-icon {
   width: 56px; height: 56px; margin-bottom: 6px; display: grid; place-items: center;
@@ -1350,8 +1562,9 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace; }
 
 /* ---- Terminal ---- */
-.term-btn { display: inline-flex; align-items: center; justify-content: center; }
-.term-btn svg { display: block; }
+.term-btn, .eye-btn { display: inline-flex; align-items: center; justify-content: center; }
+.term-btn svg, .eye-btn svg { display: block; }
+.eye-btn[aria-pressed="true"] { color: var(--accent); }
 /* Pin to the *visual* viewport (--app-h/--app-top from viewport.ts), not the
    layout viewport. iOS Safari doesn't shrink the layout viewport when the
    on-screen keyboard opens, so `inset: 0` would leave the overlay full-screen
@@ -1387,6 +1600,14 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .term-attach-chat { border: 0; border-left: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); padding: 10px 14px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .term-attach-chat:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 .term-continue-chat { font-weight: 700; box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+/* Takeover not possible yet — the agent hasn't started its session. Greyed,
+   with a visible caption (mobile has no hover title) telling the user what to
+   do, instead of firing a takeover that would 409. */
+.term-continue-chat:disabled { opacity: 0.5; box-shadow: none; cursor: default; }
+.term-continue-notready { display: inline-flex; flex-direction: column; align-items: stretch; gap: 2px; }
+.term-continue-hint-text { font-size: 10px; line-height: 1.15; color: var(--muted); text-align: center; }
+.term-attach-chat.is-disabled { opacity: 0.55; cursor: default; color: var(--muted); background: transparent; }
+.term-attach-chat.is-disabled:hover { background: transparent; }
 .term-out { flex: 1; min-height: 0; overflow: hidden; padding: 6px 8px; position: relative; }
 /* Suppress the iOS long-press callout / native text-selection UI over the
    canvas — we drive touch selection ourselves (long-press + drag). We also own
@@ -1532,10 +1753,6 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .settings-gear-label { color: var(--ink); }
 
 /* ---- Usage bar ---- */
-.usage-bar { display: flex; align-items: center; gap: 8px; padding: 5px 18px; font-size: 12px; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--line); }
-.usage-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.usage-dismiss { border: 0; background: transparent; color: var(--muted); font-size: 12px; line-height: 1; padding: 2px 4px; flex: none; }
-.usage-dismiss:hover { color: var(--ink); }
 
 /* ---- Banners / toasts ---- */
 .banner { display: flex; align-items: center; gap: 10px; padding: 10px 18px; font-size: 13px; }
@@ -1587,6 +1804,10 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .eph-steps { margin: 4px 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 4px; }
 .code-snippet { margin: 6px 0 0; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--surface); font-size: 12px; }
 .eph-row { display: flex; flex-direction: column; gap: 4px; }
+.first-run-credentials { display: grid; gap: 8px; padding-bottom: 6px; }
+.first-run-credentials .settings-subhead { margin-top: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+.first-run-credentials .settings-subhead:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.first-run-credentials .chip { justify-self: start; }
 select.picker-search { appearance: auto; }
 .node-menu-sep { height: 1px; background: var(--line); margin: 4px 0; }
 /* PrToast, UpdatePrompt (both `.update-toast`), and ErrorToast used to each
@@ -1619,22 +1840,24 @@ select.picker-search { appearance: auto; }
 .update-toast .btn { flex: none; white-space: nowrap; padding: 6px 12px; }
 /* Compact, non-blocking error toast (replaces the raw full-width red banner). */
 .error-toast {
-  display: flex; align-items: flex-start; gap: 10px; max-width: min(92vw, 560px);
-  /* Cap to the viewport so a long error never runs off-screen; scroll instead. */
-  max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto;
+  display: flex; align-items: flex-start; gap: 10px; width: min(92vw, 560px); box-sizing: border-box;
   background: var(--surface); border: 1px solid var(--danger); border-left-width: 3px;
   border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.28);
   animation: sheet-up 0.16s ease;
 }
+/* Only expanded diagnostics scroll. The default toast stays compact instead of
+   turning raw command output into a screen-covering panel on mobile. */
+.error-toast.expanded { max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto; }
 .error-toast-icon { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; background: var(--danger); color: #fff; font-weight: 700; font-size: 12px; display: grid; place-items: center; }
-/* Show the whole message: wrap long lines and honor newlines instead of
-   clipping to a single ellipsized line. */
-.error-toast-text { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.error-toast-content { flex: 1; min-width: 0; display: grid; gap: 5px; }
+.error-toast-text { min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.error-toast.expanded .error-toast-text { display: block; overflow: visible; }
+.error-toast-details { justify-self: start; border: 0; background: transparent; color: var(--accent); padding: 0; font: inherit; font-size: 12px; font-weight: 600; }
 .error-toast-close { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; position: sticky; top: 0; }
 
 /* Success/confirmation toast — same shape as the error toast, positive accent. */
 .notice-toast {
-  display: flex; align-items: flex-start; gap: 10px; max-width: min(92vw, 560px);
+  display: flex; align-items: flex-start; gap: 10px; width: min(92vw, 560px); box-sizing: border-box;
   max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto;
   background: var(--surface); border: 1px solid var(--ok); border-left-width: 3px;
   border-radius: 12px; padding: 10px 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.28);
@@ -1687,9 +1910,9 @@ select.picker-search { appearance: auto; }
 .setup-foot { margin-top: 18px; }
 .btn.block { display: block; width: 100%; text-align: center; text-decoration: none; margin-top: 12px; padding: 11px; }
 .setup-or { color: var(--muted); font-size: 13px; margin: 16px 0 8px; }
-.setup-email { display: flex; gap: 8px; }
-.setup-email input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); color: var(--ink); font: inherit; font-size: 16px; }
-.setup-email .btn { flex: none; white-space: nowrap; }
+.setup-email { display: flex; flex-direction: column; gap: 8px; }
+.setup-email input { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); color: var(--ink); font: inherit; font-size: 16px; }
+.setup-email .btn { width: 100%; white-space: nowrap; }
 .setup-note { margin-top: 10px; word-break: break-word; }
 .setup-error { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--danger); border-left-width: 3px; border-radius: 10px; background: var(--danger-soft, transparent); color: var(--ink); font-size: 13px; line-height: 1.4; text-align: left; }
 .banner.inline { border-radius: 8px; margin: 8px 0; }

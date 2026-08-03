@@ -6,10 +6,16 @@ on:
   pull_request:
     branches: [main]
   # Lets other workflows call this one to run the exact same gate rather than
-  # re-implementing it. Used by release.yml so a tag push runs the full suite
-  # before publishing instead of a hand-rolled subset that can drift from what
-  # a PR actually has to pass.
+  # re-implementing it. Used by release.yml so a production promotion runs the
+  # full suite before publishing, instead of a hand-rolled subset that can drift
+  # from what a PR actually has to pass.
   workflow_call:
+    inputs:
+      force_all:
+        description: Run every gated job regardless of changed-path filters (release tags).
+        required: false
+        type: boolean
+        default: false
 
 # Cancel superseded runs: a new push to the same branch/PR aborts the previous,
 # still-running CI so we don't pay for jobs' worth of runner time on a commit
@@ -41,10 +47,12 @@ jobs:
       e2e: ${{ steps.filter.outputs.e2e }}
       docs: ${{ steps.filter.outputs.docs }}
     steps:
-      - uses: actions/checkout@v4
+      # Actions execute privileged workflow code; pin them to immutable commits
+      # rather than mutable major-version tags.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         id: filter
         with:
           filters: |
@@ -86,15 +94,24 @@ jobs:
 
   core:
     needs: changes
-    if: needs.changes.outputs.root == 'true'
+    if: inputs.force_all || needs.changes.outputs.root == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.19.0'
           cache: npm
       - run: npm ci
+      # Verify the temporary postinstall repair for pi-coding-agent's published
+      # shrinkwrap actually changed the on-disk package, not only npm's lockfile.
+      - name: Verify patched pi dependency
+        run: |
+          actual="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion/package.json').version")"
+          test "$actual" = "5.0.8"
+      # Production dependencies ship to users; do not release a known
+      # high/critical advisory.
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run check:licenses
       # Scan the working tree for committed credentials. History is deliberately
       # excluded here: the public repo starts from a fresh commit, and scanning
@@ -122,11 +139,11 @@ jobs:
   # docs-only PR doesn't also pull in the full lint/typecheck/test `core` job.
   docs-links:
     needs: changes
-    if: needs.changes.outputs.docs == 'true'
+    if: inputs.force_all || needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.19.0'
       - run: node scripts/check-links.mjs
@@ -139,12 +156,12 @@ jobs:
   # changing so neither loses coverage.
   services:
     needs: changes
-    if: needs.changes.outputs.relay == 'true' || needs.changes.outputs.control_plane == 'true'
+    if: inputs.force_all || needs.changes.outputs.relay == 'true' || needs.changes.outputs.control_plane == 'true'
     name: relay + control-plane
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.19.0'
           cache: npm
@@ -153,11 +170,15 @@ jobs:
             services/control-plane/package-lock.json
       - run: npm ci
         working-directory: services/control-plane
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: services/control-plane
       - run: npm run typecheck
         working-directory: services/control-plane
       - run: npm run test:unit
         working-directory: services/control-plane
       - run: npm ci
+        working-directory: services/relay
+      - run: npm audit --omit=dev --audit-level=high
         working-directory: services/relay
       - run: npm run typecheck
         working-directory: services/relay
@@ -172,12 +193,12 @@ jobs:
   # only runs when the transport/pairing/service code it exercises changes.
   remote-e2e:
     needs: changes
-    if: needs.changes.outputs.e2e == 'true'
+    if: inputs.force_all || needs.changes.outputs.e2e == 'true'
     name: Remote path + pairing e2e
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.19.0'
           cache: npm

@@ -260,12 +260,11 @@ bivy logs -f    # look for lines tagged [relay]
 - Self-hosted: confirm the control-plane URL answers and the relay URL is
   `wss://`. `bivy relay:setup` health-checks the control plane before it does
   anything else and tells you if it is unreachable.
-- Work stops being picked up / a run is refused with a quota error: on the free
-  plan you get 10 runs per rolling 7-day window, shared across every source (manual,
-  app, GitHub work queue). The cap is soft — one run past the limit still
-  goes through — but beyond that, wait for capacity to age back in (your oldest runs
-  passing 7 days) or upgrade for unlimited runs. (Self-hosted stacks with
-  `ENFORCE_ENTITLEMENTS` off are unlimited.)
+- Queued work stops being picked up with a quota error: free includes 10 unattended
+  automations per rolling 7-day window across GitHub, Slack, webhooks, and schedules.
+  Interactive CLI/app sessions remain unlimited. The cap is soft — one grace job
+  still runs — but beyond that, wait for older jobs to pass 7 days or upgrade for
+  unlimited automation. Self-hosted stacks with `ENFORCE_ENTITLEMENTS` off are unlimited.
 
 ## Phone can't reach the node
 

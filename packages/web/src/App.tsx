@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { type GithubQueueItem, type InboxItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
@@ -14,7 +14,9 @@ import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { SessionMenu } from "./components/SessionMenu.js";
 import { GithubPill } from "./components/GithubPill.js";
-import { UsageBar } from "./components/UsageBar.js";
+import { RunPill } from "./components/RunPill.js";
+import { classifySource } from "./sessionSource.js";
+import { indexRunEvidence } from "./runEvidence.js";
 import { ChangesCard } from "./components/ChangesCard.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
@@ -68,17 +70,21 @@ export function App() {
   const [githubQueue, setGithubQueue] = useState<GithubQueueItem[] | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
   const refreshGithubQueue = useCallback(() => {
-    if (controller.direct) return;
+    if (controller.direct || !state.signedIn) return;
     controller.fetchGithubQueue().then(setGithubQueue).catch(() => {});
-  }, []);
+  }, [state.signedIn]);
   useEffect(() => {
-    if (controller.direct) return;
+    if (controller.direct || !state.signedIn) return;
     refreshGithubQueue();
     const id = setInterval(() => {
       if (document.visibilityState !== "hidden") refreshGithubQueue();
     }, 30000);
     return () => clearInterval(id);
   }, [refreshGithubQueue]);
+  // sessionId → the run that produced it, joined from the queue's evidence.
+  // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
+  // here (not by activeSession below) so the hook stays above any early return.
+  const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
   // Signed in on the hosted app but no node yet: poll for a newly-installed
   // machine so the empty state advances to the live app the moment the node
   // dials in — the user shouldn't have to hit "Refresh nodes" after running the
@@ -139,7 +145,10 @@ export function App() {
   // send fail with an error, lock the composer and show a banner offering to
   // jump to the terminal or take the session back into chat.
   const activeTuiLocked = Boolean(state.activeSessionId && state.tuiSessions.includes(state.activeSessionId));
-  const canCompose = (online || transientReconnect) && !activeTuiLocked;
+  // When the node is an offline-but-resumable ephemeral machine (a suspended
+  // Sprite we hold the key for), keep the composer usable: sending IS the resume
+  // gesture — controller.sendPrompt wakes the machine and replays the message.
+  const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable()) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
   useEdgeSwipe({ isOpen: drawerOpen, onOpen: () => setDrawerOpen(true), onClose: () => setDrawerOpen(false) });
@@ -280,6 +289,16 @@ export function App() {
 
   const closeDrawer = () => setDrawerOpen(false);
   const activeSession = state.sessions.find((s) => s.sessionId === state.activeSessionId);
+  // Every active session shows the run card (source + live status) in the band
+  // above the composer; `null` for a draft (no session yet) falls back to the
+  // plain GitHub pill.
+  const activeRunSource = activeSession ? classifySource(activeSession.source) : null;
+  // A forked session's sheet gets its own "Forked from" row. The parent's name
+  // is resolved from the local session list when known; it may live on
+  // another node or be gone by now, so this degrades to a bare id.
+  const activeForkedFrom = activeSession?.forkedFrom
+    ? { sessionId: activeSession.forkedFrom, name: state.sessions.find((s) => s.sessionId === activeSession.forkedFrom)?.name }
+    : undefined;
   const activeSessionNodeId = activeSession?.nodeId || state.currentNodeId || undefined;
   const activeSessionNode = state.nodes.find((node) => node.id === activeSessionNodeId);
   const activeSessionNodeLabel = activeSessionNode
@@ -367,6 +386,7 @@ export function App() {
           </div>
         </div>
         <SessionList
+          runEvidence={runEvidence}
           onPick={(id, path, nodeId) => {
             controller.openSessionOnNode(id, path, nodeId);
             closeDrawer();
@@ -400,7 +420,7 @@ export function App() {
 
       {drawerOpen && <div className="scrim" onClick={closeDrawer} />}
 
-      <main className="main">
+      <main className={`main${needsNode ? " needs-node" : ""}`}>
         <header className="topbar">
           <button className="icon-btn only-mobile" onClick={() => setDrawerOpen(true)} aria-label="Open sessions">
             ☰
@@ -431,13 +451,27 @@ export function App() {
             {!controller.direct && <NodeSwitcher />}
           </div>
           <div className="topbar-actions">
-            {online && (
-              <button className="icon-btn term-btn" onClick={() => { setTerminalTarget(null); setTerminalStandalone(false); setTerminalTui(false); setTerminalOpen(true); }} title="Terminal" aria-label="Open terminal">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <rect x="3" y="4" width="18" height="16" rx="2" />
-                  <path d="m7 9 3 3-3 3" />
-                  <path d="M13 15h4" />
-                </svg>
+            {state.activeSessionId && (
+              <button
+                className="icon-btn eye-btn"
+                onClick={toggleCollapsed}
+                title={collapsed ? "Focus view on — show all messages" : "Focus view — hide tool use"}
+                aria-label="Toggle focus view"
+                aria-pressed={collapsed}
+              >
+                {collapsed ? (
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+                    <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+                    <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+                    <line x1="2" x2="22" y1="2" y2="22" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                )}
               </button>
             )}
             {state.activeSessionId && (
@@ -451,8 +485,7 @@ export function App() {
                 worktree={activeSession?.worktree}
                 branch={activeSession?.branch}
                 sessionFile={activeSession?.path}
-                collapsed={collapsed}
-                onToggleCollapsed={toggleCollapsed}
+                onOpenTerminal={online ? () => { setTerminalTarget(null); setTerminalStandalone(false); setTerminalTui(false); setTerminalOpen(true); } : undefined}
                 onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
               />
             )}
@@ -473,16 +506,16 @@ export function App() {
         )}
 
         {needsNode && (
-          <ConnectRunner
-            nodes={state.nodes}
-            ephemeralEnabled={EPHEMERAL_MACHINES_ENABLED}
-            onPickNode={(nodeId) => controller.switchNode(nodeId)}
-            onEphemeral={() => setEphemeralOpen(true)}
-            onRefresh={() => controller.refreshNodes()}
-          />
+          <div className="connect-runner-scroll">
+            <ConnectRunner
+              nodes={state.nodes}
+              ephemeralEnabled={EPHEMERAL_MACHINES_ENABLED}
+              onPickNode={(nodeId) => controller.switchNode(nodeId)}
+              onEphemeral={() => setEphemeralOpen(true)}
+              onRefresh={() => controller.refreshNodes()}
+            />
+          </div>
         )}
-
-        <UsageBar usage={state.usage} sessionKey={state.activeSessionId} />
 
         <ChatView
           entries={state.transcript}
@@ -511,7 +544,25 @@ export function App() {
         <ChangesCard changes={state.changes} checkpoints={state.checkpoints} />
 
         <div className="composer-gh">
-          <GithubPill gh={state.github} />
+          {/* The run card now stands for every active session — an automation
+              trigger, a fork, or a plain hand-opened one — carrying whatever
+              applies: source, live status, token usage, fork lineage, and (in
+              its sheet) the run evidence and GitHub links. Only a draft (no
+              session yet) falls back to the bare GithubPill for repo context. */}
+          {activeSession && activeRunSource ? (
+            <RunPill
+              source={activeRunSource}
+              statusClass={statusClass(activeSession)}
+              statusLabel={statusLabel(activeSession)}
+              gh={state.github}
+              evidence={runEvidence.get(activeSession.sessionId)}
+              finishedAt={activeSession.finishedAt}
+              usage={state.usage}
+              forkedFrom={activeForkedFrom}
+            />
+          ) : (
+            <GithubPill gh={state.github} />
+          )}
           {/* Slash-command pill, pushed to the right so it sits top-right over
               the composer on the same band as the GitHub context. Tapping it
               (re)initializes a closed session so its commands can be fetched,
@@ -591,7 +642,7 @@ export function App() {
           <Inbox items={inboxItems} onOpen={openInboxItem} onClose={() => setInboxOpen(false)} />
         </>
       )}
-      {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} />}
+      {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
       {terminalNodePicker && (
         <NodePicker
           state={state}

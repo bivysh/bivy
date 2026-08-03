@@ -48,7 +48,7 @@ export function ConnectRunner({
   };
 
   return (
-    <section className="connect-runner" role="status" aria-live="polite">
+    <section className="connect-runner" aria-labelledby="connect-runner-title">
       <div className="connect-hero">
         <span className="connect-hero-icon" aria-hidden>
           <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -57,11 +57,11 @@ export function ConnectRunner({
             <path d="M7 8h.01M7 17h.01" />
           </svg>
         </span>
-        <div className="connect-kicker">No runner connected yet</div>
-        <h2 className="connect-title">Connect a computer to get going</h2>
+        <div className="connect-kicker">Signed in — one step left</div>
+        <h2 className="connect-title" id="connect-runner-title">Choose where your first agent runs</h2>
         <p className="connect-sub">
-          Bivy runs agents on machines you control. Pick a way to bring one
-          online — this page updates the moment a runner connects.
+          Use your own computer for an always-ready node, or launch a temporary
+          runner in your cloud account. Bivy never receives your code or keys.
         </p>
       </div>
 
@@ -120,12 +120,12 @@ export function ConnectRunner({
                 </svg>
               </span>
               <div className="connect-option-copy">
-                <h3>No machine handy?</h3>
-                <p>Spin up an ephemeral cloud server with your own provider token. It self-destructs after its TTL. Free plan included.</p>
+                <h3>Launch a temporary cloud runner</h3>
+                <p>Fastest if you don't want to install anything. Connect GitHub, add a model key, then launch with your own Fly.io, Hetzner, or AWS token. Bivy adds no fee.</p>
               </div>
             </div>
             <button type="button" className="btn primary connect-option-cta" onClick={onEphemeral}>
-              Launch ephemeral server
+              Set up cloud runner
             </button>
           </div>
         )}

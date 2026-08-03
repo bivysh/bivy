@@ -1,0 +1,277 @@
+{
+  "agents": [
+    {
+      "id": "codex",
+      "label": "Codex",
+      "command": "codex",
+      "hidden": true,
+      "headlessFlags": [
+        "exec"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "@openai/codex"
+      }
+    },
+    {
+      "id": "opencode",
+      "label": "OpenCode",
+      "command": "opencode",
+      "hidden": false,
+      "headlessFlags": [
+        "run",
+        "-s"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "opencode-ai"
+      }
+    },
+    {
+      "id": "aider",
+      "label": "Aider",
+      "command": "aider",
+      "hidden": false,
+      "headlessFlags": [
+        "--yes-always",
+        "--message"
+      ],
+      "install": {
+        "kind": "pip",
+        "pkg": "aider-chat"
+      }
+    },
+    {
+      "id": "hermes",
+      "label": "Hermes",
+      "command": "hermes",
+      "hidden": true,
+      "headlessFlags": [],
+      "install": {
+        "kind": "npm",
+        "pkg": "hermes-agent"
+      }
+    },
+    {
+      "id": "goose",
+      "label": "Goose",
+      "command": "goose",
+      "hidden": false,
+      "headlessFlags": [
+        "run",
+        "-t",
+        "--output-format",
+        "stream-json",
+        "--resume",
+        "--session-id"
+      ],
+      "install": {
+        "kind": "curl",
+        "display": "curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash",
+        "shell": "mkdir -p \"{bin}\" && curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false GOOSE_BIN_DIR=\"{bin}\" bash"
+      }
+    },
+    {
+      "id": "gemini",
+      "label": "Gemini CLI",
+      "command": "gemini",
+      "hidden": false,
+      "headlessFlags": [
+        "-p",
+        "-o",
+        "json",
+        "-r"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "@google/gemini-cli"
+      }
+    },
+    {
+      "id": "qwen",
+      "label": "Qwen Code",
+      "command": "qwen",
+      "hidden": false,
+      "headlessFlags": [
+        "-p",
+        "--output-format",
+        "json",
+        "--resume"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "@qwen-code/qwen-code"
+      }
+    },
+    {
+      "id": "cline",
+      "label": "Cline",
+      "command": "cline",
+      "hidden": false,
+      "headlessFlags": [
+        "-y",
+        "--id"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "cline"
+      }
+    },
+    {
+      "id": "crush",
+      "label": "Crush",
+      "command": "crush",
+      "hidden": false,
+      "headlessFlags": [
+        "run",
+        "-q"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "@charmland/crush"
+      }
+    },
+    {
+      "id": "cursor",
+      "label": "Cursor",
+      "command": "cursor-agent",
+      "hidden": false,
+      "headlessFlags": [
+        "--force",
+        "-p"
+      ],
+      "install": {
+        "kind": "curl",
+        "display": "curl https://cursor.com/install -fsS | bash",
+        "shell": "curl https://cursor.com/install -fsS | bash"
+      }
+    },
+    {
+      "id": "copilot",
+      "label": "GitHub Copilot",
+      "command": "copilot",
+      "hidden": false,
+      "headlessFlags": [
+        "--allow-all-tools",
+        "-p"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "@github/copilot"
+      }
+    },
+    {
+      "id": "grok",
+      "label": "Grok",
+      "command": "grok",
+      "hidden": false,
+      "headlessFlags": [
+        "-p"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "@vibe-kit/grok-cli"
+      }
+    },
+    {
+      "id": "amp",
+      "label": "Amp",
+      "command": "amp",
+      "hidden": false,
+      "headlessFlags": [
+        "-x",
+        "threads",
+        "continue"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "@sourcegraph/amp"
+      }
+    },
+    {
+      "id": "auggie",
+      "label": "Auggie",
+      "command": "auggie",
+      "hidden": false,
+      "headlessFlags": [
+        "--quiet",
+        "--print"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "@augmentcode/auggie"
+      }
+    },
+    {
+      "id": "droid",
+      "label": "Droid",
+      "command": "droid",
+      "hidden": false,
+      "headlessFlags": [
+        "exec",
+        "--auto",
+        "high"
+      ],
+      "install": {
+        "kind": "curl",
+        "display": "curl -fsSL https://app.factory.ai/cli | sh",
+        "shell": "curl -fsSL https://app.factory.ai/cli | sh"
+      }
+    },
+    {
+      "id": "continue",
+      "label": "Continue",
+      "command": "cn",
+      "hidden": false,
+      "headlessFlags": [
+        "--auto",
+        "-p"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "@continuedev/cli"
+      }
+    },
+    {
+      "id": "kilocode",
+      "label": "Kilo Code",
+      "command": "kilo",
+      "hidden": false,
+      "headlessFlags": [
+        "run",
+        "--auto",
+        "-s"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "@kilocode/cli"
+      }
+    },
+    {
+      "id": "rovodev",
+      "label": "Rovo Dev",
+      "command": "acli",
+      "hidden": false,
+      "headlessFlags": [
+        "rovodev",
+        "run",
+        "--yolo",
+        "--restore"
+      ],
+      "install": null
+    },
+    {
+      "id": "codebuff",
+      "label": "Codebuff",
+      "command": "codebuff",
+      "hidden": true,
+      "headlessFlags": [
+        "--continue"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "codebuff"
+      }
+    }
+  ]
+}

@@ -23,8 +23,26 @@ import {
   clearWorkQueue,
   disconnectGithubApp,
   setGithubAppDefaultNode,
+  setGithubAppTriggerAccess,
   fetchEphemeralQueueDefault,
   setEphemeralQueueDefault,
+  fetchEphemeralConfigs,
+  createEphemeralConfig as apiCreateEphemeralConfig,
+  updateEphemeralConfig as apiUpdateEphemeralConfig,
+  deleteEphemeralConfig as apiDeleteEphemeralConfig,
+  fetchQueueRouting,
+  setQueueRouting as apiSetQueueRouting,
+  fetchHostedProvisioning,
+  setHostedProvisioning as apiSetHostedProvisioning,
+  fetchHostedAudit,
+  rotateHostedProvisioning as apiRotateHostedProvisioning,
+  triggerHostedProvision as apiTriggerHostedProvision,
+  type EphemeralNodeConfig,
+  type EphemeralConfigInput,
+  type QueueRouting,
+  type HostedProvisioningStatus,
+  type HostedProvisioningPatch,
+  type HostedAuditEvent,
   removeAccountNode,
   fetchPairedDevices,
   removePairedDevice,
@@ -46,10 +64,19 @@ import {
   cloudExec,
   launchEphemeralMachine,
   destroyEphemeralMachine,
+  wakeEphemeralMachine,
+  ephemeralProviderSuspendsWhenIdle,
+  ephemeralMachineFromNode,
+  isEphemeralNode,
+  ephemeralMachineFromCorrelation,
+  type SessionCorrelation,
+  createDeviceVaultKeyStore,
+  deviceKeypair,
   listEphemeralSizes,
   ephemeralNodeLabel,
   type TranscriptCache,
-  type EphemeralKeyStore,
+  type DeviceVaultKeyStore,
+  type DeviceVaultRemote,
   type EphemeralModelKeyStore,
   type EphemeralModelKeyInfo,
   type EphemeralPrefsStore,
@@ -166,6 +193,18 @@ export class AppController {
    *  created — queued instead of firing their own `session.new`, then drained
    *  into the one real session by maybeFlushPendingPrompt. See sendPrompt. */
   private pendingFollowups: Array<{ text: string; clientMessageId: string; attachments?: PromptAttachment[] }> = [];
+  /** Prompts sent into a session whose ephemeral node is offline (a suspended
+   *  Sprite or a torn-down machine). Sending IS the resume gesture: the message
+   *  is buffered here, the machine is woken/rebuilt, and these replay once it's
+   *  back online (drainPendingResume in onReconnected). No "resume" button. */
+  private pendingResume: Array<{ sessionId: string; text: string; clientMessageId: string; attachments?: PromptAttachment[] }> = [];
+  /** Guards a resume/rebuild already in flight so repeated sends don't re-launch. */
+  private resumingNode = new Set<string>();
+  // Durable session↔machine correlations fetched from the control plane (Gap 1),
+  // so a torn-down destroy-lane session stays rebuildable after its node drops
+  // from the registry. Refreshed on reconnect; written (deduped) before teardown.
+  private ephemeralCorrelations: SessionCorrelation[] = [];
+  private correlatedSessions = new Set<string>();
   /** Subscribers for terminal / multiplexer events (the terminal overlay). */
   private terminalListeners = new Set<(e: ServerEvent) => void>();
   /** In-flight transcription requests, resolved when the node returns text. */
@@ -180,6 +219,11 @@ export class AppController {
   private pendingAcks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** Persistent transcript cache (IndexedDB) for instant paint + incremental backfill. */
   private transcriptCache: TranscriptCache = createTranscriptCache({ maxSessions: 50 });
+  /** De-dupe in-flight/settled attachment fetches by content hash, so several
+   *  chips referencing the same blob (and re-renders) share one round-trip. Since
+   *  the content is immutable per hash, successful results are cached for the
+   *  session; failures are evicted so a later chip can retry. */
+  private attachmentFetches = new Map<string, Promise<{ mimeType: string; data: string } | null>>();
   /** A GitHub App manifest `code` captured from a redirect, sent once connected. */
   private pendingGithubAppCode: { code: string; state: string } | null = null;
   /** The route the app was loaded on (e.g. a `/sessions/:id` deep link), applied
@@ -487,6 +531,10 @@ export class AppController {
     this.local.s = token;
     if (!this.local.cp) this.local.cp = location.origin;
     this.store.setSignedIn(true);
+    // Reconcile the device vault once on sign-in: a producer device satisfies any
+    // pending wrapped-key requests from the account's other devices; a consumer
+    // device pulls its wrapped key so a synced token is ready to wake a machine.
+    void this.syncDeviceVault();
     this.connect();
   }
 
@@ -688,7 +736,13 @@ export class AppController {
       // merely offline node still appears in the list, so this only clears nodes
       // that are genuinely gone.
       if (this.local.cur && !nodes.some((n) => n.id === this.local.cur)) {
-        this.clearCurrentNode();
+        // A torn-down destroy-lane node is gone from the registry, but if it's
+        // REBUILDABLE (durable correlation + the room key we still hold) we keep it
+        // selected — offline, not dialing — so its session stays open and a send
+        // rebuilds it (Gap 1). Only a genuinely-gone node falls back to the empty
+        // state.
+        if (this.currentNodeIsRebuildable()) this.markCurrentNodeAwaitingRebuild();
+        else this.clearCurrentNode();
       }
       void this.refreshAccountSessions();
     } catch {
@@ -711,6 +765,36 @@ export class AppController {
     this.local.cur = "";
     this.store.setCurrentNode(null);
     this.store.resetSession();
+    this.store.setStatus("offline");
+  }
+
+  /** True when the current node is gone from the registry but this device can
+   *  rebuild it: a durable session↔machine correlation names it and we still hold
+   *  its room key. Distinguishes a torn-down-but-rebuildable node from one that is
+   *  genuinely gone (which should clear to the empty state). */
+  private currentNodeIsRebuildable(): boolean {
+    const nodeId = this.local.cur;
+    if (!nodeId) return false;
+    try {
+      if (!this.local.keys()[nodeId]) return false;
+    } catch {
+      return false;
+    }
+    return this.ephemeralCorrelations.some((c) => c.nodeId === nodeId);
+  }
+
+  /** Keep a torn-down-but-rebuildable node SELECTED without dialing it: stop the
+   *  transport (so the header doesn't spin forever on a gone node / a Forbidden
+   *  pairing reject), but retain `local.cur` + the session pane so the composer
+   *  stays enabled (isCurrentNodeResumable) and a send fires reprovisionEphemeral.
+   *  Idempotent — a repeated refreshNodes while offline just no-ops. */
+  private markCurrentNodeAwaitingRebuild(): void {
+    if (this.store.getState().status === "offline") return; // already parked
+    try {
+      this.transport.close();
+    } catch {
+      /* noop */
+    }
     this.store.setStatus("offline");
   }
 
@@ -827,6 +911,33 @@ export class AppController {
       this.pendingAcks.set(rid, { resolve, reject, timer });
       void this.transport.send({ ...command, requestId: rid });
     });
+  }
+
+  /**
+   * Fetch a stored attachment's bytes by content hash, returning base64 data +
+   * mime (or null if unavailable). Works over both transports: the relay replies
+   * with base64 directly; the direct transport fetches the HTTP endpoint and
+   * re-emits the same `attachment.data` shape (see transport-direct). Used by the
+   * chat to rehydrate a thumbnail whose bytes aren't in the local cache — the
+   * re-findable path after a reload or on another device.
+   */
+  fetchAttachment(hash: string): Promise<{ mimeType: string; data: string } | null> {
+    if (!hash) return Promise.resolve(null);
+    const existing = this.attachmentFetches.get(hash);
+    if (existing) return existing;
+    const p = (async () => {
+      try {
+        const ev = (await this.awaitAck({ kind: "attachment.fetch", hash }, 30000)) as { data?: unknown; mimeType?: unknown };
+        if (ev && typeof ev.data === "string") return { mimeType: String(ev.mimeType || "application/octet-stream"), data: ev.data };
+        this.attachmentFetches.delete(hash);
+        return null;
+      } catch {
+        this.attachmentFetches.delete(hash); // allow a later retry
+        return null;
+      }
+    })();
+    this.attachmentFetches.set(hash, p);
+    return p;
   }
 
   /** Resolve/reject an in-flight awaitAck() call from its matching reply. */
@@ -1130,7 +1241,30 @@ export class AppController {
           updatedAt: s.updatedAt || previous?.updatedAt,
         };
       }));
-      this.store.setSessions(sessions.filter((s) => s.sessionId && s.nodeId));
+      const live = sessions.filter((s) => s.sessionId && s.nodeId);
+      // Gap 1 visibility: a torn-down destroy-lane session cascades out of the
+      // control-plane session index when its node is unenrolled, so it would vanish
+      // from the sidebar — with nothing to open and send into to trigger a rebuild.
+      // Re-add it from the durable correlation (offline, rebuildable), keeping any
+      // name/branch we cached before teardown.
+      const liveIds = new Set(live.map((s) => s.sessionId));
+      const previous = this.store.getState().sessions;
+      const ghosts = this.ephemeralCorrelations
+        .filter((c) => !liveIds.has(c.sessionId) && !!this.local.keys()[c.nodeId])
+        .map((c) => {
+          const prior = previous.find((s) => s.sessionId === c.sessionId);
+          return {
+            ...prior,
+            sessionId: c.sessionId,
+            nodeId: c.nodeId,
+            name: prior?.name || (c.repo ? `${c.repo}` : "Rebuildable session"),
+            source: prior?.source,
+            status: "saved" as const,
+            rebuildable: true,
+            updatedAt: prior?.updatedAt,
+          };
+        });
+      this.store.setSessions([...live, ...ghosts]);
     } catch {
       // Best-effort; the connected node's E2E sessions.list still keeps the app usable.
     }
@@ -1290,6 +1424,9 @@ export class AppController {
     // If this is a machine we just launched, seed its vault with the model API
     // keys held on this device (closes the cold-start gap — see the method doc).
     void this.seedEphemeralNodeIfNeeded();
+    // Pull durable session↔machine correlations so a torn-down session stays
+    // rebuildable (Gap 1); then record one for the machine we're on, if owned.
+    void this.refreshEphemeralCorrelations();
     // Replay a `/sessions/:id` deep link now that a live transport exists — must
     // run before the requestHistory below so the session it opens is the one we
     // refresh. A cross-node selection was already opened just above.
@@ -1298,6 +1435,8 @@ export class AppController {
     if (sid && !openedAfterNodeSwitch) {
       this.requestHistory(sid);
       this.retryStuckFollowups(sid);
+      // Deliver anything the user typed while the node was offline/resuming.
+      this.drainPendingResume(sid);
     }
     // No active session but a session.new is still pending → its session.history
     // was lost to the drop. Re-fire it (idempotent on the node by requestId) so the
@@ -1481,6 +1620,16 @@ export class AppController {
     if (active) {
       if (this.mustQueue(active)) {
         this.store.enqueueFollowup(active, { id: cmid, text: trimmed, attachments: files }, Date.now());
+        return;
+      }
+      // The node is offline but this is an ephemeral machine we can bring back
+      // (a suspended Sprite, or a torn-down destroy-lane machine we hold the key
+      // to rebuild). Sending IS the resume: show the bubble, buffer the prompt,
+      // wake/rebuild the machine, and replay on reconnect — no separate button.
+      if (this.shouldAutoResume()) {
+        this.store.addUserMessage(trimmed, cmid, files);
+        this.pendingResume.push({ sessionId: active, text: trimmed, clientMessageId: cmid, attachments: files });
+        void this.resumeNodeForSession(active);
         return;
       }
       this.store.addUserMessage(trimmed, cmid, files);
@@ -1799,6 +1948,14 @@ export class AppController {
   setGithubAppDefaultNode(node: string, appId?: string): Promise<string | undefined> {
     return setGithubAppDefaultNode(this.local, node, appId);
   }
+  /** Set who may @-mention-trigger a run (issue #259). Without an appId it
+   *  covers every connected app — it's an account-level preference. */
+  setGithubAppTriggerAccess(
+    triggerAccess: "everyone" | "contributor" | "collaborator",
+    appId?: string,
+  ): Promise<"everyone" | "contributor" | "collaborator"> {
+    return setGithubAppTriggerAccess(this.local, triggerAccess, appId);
+  }
   /** Manually dispatch a pending queue item to a chosen node + agent/model. */
   assignWorkItem(id: string, input: { node?: string; runtimeId?: string; model?: string; ephemeral?: boolean }): Promise<void> {
     return assignWorkItem(this.local, id, input);
@@ -1852,7 +2009,16 @@ export class AppController {
 
   // --- Ephemeral machines ------------------------------------------------
 
-  private ephemeralKeys: EphemeralKeyStore = createEphemeralKeyStore();
+  // Provider tokens are device-local by default. When cross-device sync is opted
+  // in (Settings), they're additionally synced to the account's other devices
+  // through an E2E device vault so a second device can wake/reach a machine the
+  // first launched (P2 / Gap A) — the control plane only ever sees ciphertext.
+  private ephemeralKeys: DeviceVaultKeyStore = createDeviceVaultKeyStore({
+    local: createEphemeralKeyStore(),
+    remote: this.deviceVaultRemote(),
+    device: () => deviceKeypair(this.local),
+    enabled: () => this.deviceTokenSyncEnabled(),
+  });
   private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
   private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
@@ -1887,6 +2053,60 @@ export class AppController {
   }
   removeEphemeralToken(id: string): Promise<void> {
     return this.ephemeralKeys.remove(id);
+  }
+
+  // --- Cross-device provider-token sync (P2 / Gap A) ---------------------
+  // Opt-in, off by default (per the CLOUD.md credential-widening precedent). When
+  // on, ephemeral provider tokens are E2E-synced to the account's other devices
+  // so a second device can wake/reach a machine the first launched.
+  private deviceTokenSyncEnabled(): boolean {
+    try {
+      return !this.direct && !!this.local.s && localStorage.getItem("bivy_device_token_sync") === "1";
+    } catch {
+      return false;
+    }
+  }
+  getDeviceTokenSync(): boolean {
+    return this.deviceTokenSyncEnabled();
+  }
+  setDeviceTokenSync(enabled: boolean): void {
+    try {
+      localStorage.setItem("bivy_device_token_sync", enabled ? "1" : "0");
+    } catch {
+      /* noop */
+    }
+    if (enabled) void this.syncDeviceVault();
+  }
+  /** Reconcile the device vault (consume a wrapped key, or publish + satisfy
+   *  peers' requests). Safe/no-op when disabled. */
+  syncDeviceVault(): Promise<void> {
+    return this.ephemeralKeys.sync().catch(() => {});
+  }
+  /** Fetch-backed control-plane transport for the device vault. Ciphertext +
+   *  wrapped keys only — never a token. */
+  private deviceVaultRemote(): DeviceVaultRemote {
+    const base = () => (this.local.cp || (typeof location !== "undefined" ? location.origin : "")).replace(/\/$/, "");
+    const jsonAuth = () => ({ authorization: `Bearer ${this.local.s}`, "content-type": "application/json" });
+    return {
+      get: async () => {
+        const dev = await deviceKeypair(this.local);
+        const res = await fetch(`${base()}/device-vault?device=${encodeURIComponent(dev.pub)}`, { headers: { authorization: `Bearer ${this.local.s}` } });
+        if (!res.ok) throw new Error(`device-vault get failed (${res.status})`);
+        const data = (await res.json()) as { vault?: string | null; wrappedKey?: { wrappedKey: string; wrappedByPublicKeyB64: string } | null; requests?: string[] };
+        return { vault: data.vault ?? null, wrappedKey: data.wrappedKey ?? null, requests: Array.isArray(data.requests) ? data.requests : [] };
+      },
+      putVault: async (ciphertext: string) => {
+        const dev = await deviceKeypair(this.local);
+        await fetch(`${base()}/device-vault`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub, ciphertext }) });
+      },
+      requestKey: async () => {
+        const dev = await deviceKeypair(this.local);
+        await fetch(`${base()}/device-vault/key/request`, { method: "POST", headers: jsonAuth(), body: JSON.stringify({ devicePublicKeyB64: dev.pub }) });
+      },
+      putWrapped: async (target: string, wrappedKey: string, wrappedByPublicKeyB64: string) => {
+        await fetch(`${base()}/device-vault/key/wrapped`, { method: "PUT", headers: jsonAuth(), body: JSON.stringify({ targetDevicePublicKeyB64: target, wrappedKey, wrappedByPublicKeyB64 }) });
+      },
+    };
   }
   /** Per-provider saved launch preferences (region/size/TTL/repo) configured in
    *  Settings → Ephemeral machines; used to pre-fill the launch flow. */
@@ -1958,16 +2178,27 @@ export class AppController {
   }
   /** Destroy a configured ephemeral machine shortly after agent_end. The short
    * grace period lets final transcript/PR metadata flush first. A queued
-   * follow-up suppresses teardown; its eventual agent_end will try again. This
-   * is device-driven, so the machine's TTL remains the safety fallback when the
-   * browser goes offline. */
+   * follow-up suppresses teardown; its eventual agent_end will try again.
+   *
+   * This is the device-driven FAST PATH, kept for snappy teardown while a device
+   * is watching. It is no longer the sole authority: the machine's own daemon now
+   * self-terminates once idle (BIVY_EPHEMERAL — see src/ephemeral-teardown.ts) and
+   * the control-plane reconciler reaps leak-prone providers, so teardown happens
+   * even with no device online. Provider destroy is idempotent/404-tolerant, so
+   * these paths race harmlessly; TTL remains the final backstop. */
   private async maybeTeardownFinishedEphemeral(sessionId: string): Promise<void> {
     if (this.direct || this.store.getFollowups(sessionId).length > 0) return;
     const nodeId = this.local.cur;
     if (!nodeId) return;
     const machine = (await this.ephemeralMachines.list().catch(() => []))
-      .find((m) => m.nodeId === nodeId && m.teardownOnAgentFinish);
+      // Suspend-to-zero machines (Fly Sprites) are kept, never destroyed on
+      // finish — they self-suspend to ~$0 and resume with state intact, which is
+      // the whole point; destroying one would throw away its memory.
+      .find((m) => m.nodeId === nodeId && m.teardownOnAgentFinish && !ephemeralProviderSuspendsWhenIdle(m.provider));
     if (!machine || this.finishingEphemeralMachines.has(machine.id)) return;
+    // Persist the session↔machine correlation BEFORE teardown so this session can
+    // be rebuilt after the node is unenrolled and drops from the registry (Gap 1).
+    void this.recordSessionCorrelation(sessionId, machine);
     this.finishingEphemeralMachines.add(machine.id);
     setTimeout(() => {
       // A follow-up may have been queued during the grace period.
@@ -1992,7 +2223,11 @@ export class AppController {
     // on whatever repo the draft targets. An explicit opts.repo (e.g. a queue
     // caller) still wins.
     const repo = opts.repo ?? (this.store.getState().draftRepo || undefined);
-    const machine = await launchEphemeralMachine({ ...opts, repo }, {
+    // A first-run ephemeral node has no native GitHub login to inherit. Seed the
+    // device-local GitHub token during bootstrap so its very first repo picker,
+    // clone, push, and PR work instead of failing after the machine boots.
+    const githubToken = opts.githubToken ?? await this.githubTaskToken.get();
+    const machine = await launchEphemeralMachine({ ...opts, repo, githubToken: githubToken || undefined }, {
       store: this.local,
       exec: cloudExec(this.local),
       keys: this.ephemeralKeys,
@@ -2009,6 +2244,190 @@ export class AppController {
       machines: this.ephemeralMachines,
     });
     void this.refreshNodes();
+  }
+
+  /** Wake a suspended machine (Fly Sprites) so it rejoins the relay. No-op for
+   *  providers whose machines don't suspend. */
+  async wakeEphemeral(machine: EphemeralMachine): Promise<void> {
+    await wakeEphemeralMachine(machine, { exec: cloudExec(this.local), keys: this.ephemeralKeys });
+    void this.refreshNodes();
+  }
+
+  /**
+   * Open a node that may be a suspended, suspend-to-zero ephemeral machine (Fly
+   * Sprites): wake it first if needed — a suspended machine is off the relay, so
+   * plain `switchNode` would sit at "connecting" forever — then connect and wait
+   * for it to come online. For an already-online node this is just a connect.
+   * This is the "reopen the session to resume it" path behind the node switcher.
+   */
+  async resumeAndConnectNode(nodeId: string, timeoutMs = 90_000): Promise<void> {
+    try {
+      // The launching device holds the machine record locally; a second account
+      // device doesn't, so fall back to the non-secret machine identity carried
+      // on the account node registry entry (cross-device resume — Gap A in
+      // docs/ephemeral-sessions.md). Reconstructing it lets this device wake a
+      // suspended node instead of hanging while connecting to it off-relay.
+      const machine =
+        (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
+        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId });
+      if (machine && ephemeralProviderSuspendsWhenIdle(machine.provider)) {
+        await this.wakeEphemeral(machine);
+      }
+      await this.connectToNode(nodeId, timeoutMs);
+    } catch (e) {
+      // Surface a wake/connect failure (bad token, provider hiccup, slow resume)
+      // to the error toast rather than leaving the UI silently at "connecting".
+      this.store.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Rebuild-resume (Gap B): re-provision a torn-down destroy-lane session onto a
+   * NEW machine and restore it from its control-plane snapshot. Reuses the old
+   * node id + room key (this device holds it) so the new machine can decrypt the
+   * snapshot, and the old session id so its daemon knows what to restore. The
+   * machine's shape comes from its device-local record (or the node registry).
+   */
+  /** Base control-plane URL + bearer for the account-authenticated (`requireUser`)
+   *  session-correlation endpoints. */
+  private correlationApi() {
+    const base = (this.local.cp || (typeof location !== "undefined" ? location.origin : "")).replace(/\/$/, "");
+    return { base, auth: { authorization: `Bearer ${this.local.s}`, "content-type": "application/json" } };
+  }
+
+  /** Pull the account's durable session↔machine correlations so a torn-down
+   *  session stays rebuildable (Gap 1). Best-effort; failures leave the cache. */
+  private async refreshEphemeralCorrelations(): Promise<void> {
+    if (this.direct || !this.local.s) return;
+    try {
+      const { base, auth } = this.correlationApi();
+      const res = await fetch(`${base}/session-correlation`, { headers: { authorization: auth.authorization } });
+      if (!res.ok) return;
+      const data = (await res.json()) as { correlations?: SessionCorrelation[] };
+      if (Array.isArray(data.correlations)) this.ephemeralCorrelations = data.correlations;
+    } catch {
+      // best-effort — keep whatever we had
+    }
+  }
+
+  /** Persist (upsert) the session↔machine correlation for a machine this device
+   *  launched, so it survives the node's teardown/unenroll (Gap 1). Deduped per
+   *  (node, session); updates the local cache so an immediate rebuild sees it. */
+  private async recordSessionCorrelation(sessionId: string, machine: EphemeralMachine): Promise<void> {
+    if (this.direct || !this.local.s || !machine.nodeId || !sessionId) return;
+    const dedupe = `${machine.nodeId}:${sessionId}`;
+    if (this.correlatedSessions.has(dedupe)) return;
+    this.correlatedSessions.add(dedupe);
+    const body: SessionCorrelation = {
+      sessionId,
+      nodeId: machine.nodeId,
+      provider: machine.provider,
+      region: machine.region || undefined,
+      ttlMinutes: machine.ttlMinutes,
+      repo: machine.repo,
+      setupId: machine.setupId,
+      machineId: machine.id,
+      app: machine.app,
+    };
+    try {
+      const { base, auth } = this.correlationApi();
+      await fetch(`${base}/session-correlation/${encodeURIComponent(sessionId)}`, { method: "PUT", headers: auth, body: JSON.stringify(body) });
+      this.ephemeralCorrelations = [body, ...this.ephemeralCorrelations.filter((c) => c.sessionId !== sessionId)];
+    } catch {
+      this.correlatedSessions.delete(dedupe); // let a later attempt retry
+    }
+  }
+
+  async reprovisionEphemeral(nodeId: string, sessionId: string): Promise<void> {
+    try {
+      const roomKeyB64 = this.local.keys()[nodeId];
+      if (!roomKeyB64) throw new Error("This device no longer holds this session's key, so it can't rebuild it.");
+      // Prefer the device-local record; fall back to the registry node; finally,
+      // for a torn-down machine (record + node both gone) fall back to the durable
+      // server-side correlation (Gap 1) matched by node or session.
+      const corr = this.ephemeralCorrelations.find((c) => c.nodeId === nodeId || c.sessionId === sessionId);
+      const machine =
+        (await this.ephemeralMachines.list().catch(() => [])).find((m) => m.nodeId === nodeId) ??
+        ephemeralMachineFromNode(this.store.getState().nodes.find((n) => n.id === nodeId) ?? { id: nodeId }) ??
+        (corr ? ephemeralMachineFromCorrelation(corr) : null);
+      if (!machine) throw new Error("No record of the machine to rebuild — re-launch it from Ephemeral settings.");
+      if (ephemeralProviderSuspendsWhenIdle(machine.provider)) {
+        // A suspend provider is never destroyed — just wake it.
+        await this.resumeAndConnectNode(nodeId);
+        return;
+      }
+      await this.launchEphemeral({
+        provider: machine.provider,
+        region: machine.region || undefined,
+        ttlMinutes: machine.ttlMinutes,
+        repo: machine.repo,
+        setupId: machine.setupId,
+        teardownOnAgentFinish: machine.teardownOnAgentFinish,
+        reuseNodeId: nodeId,
+        reuseRoomKeyB64: roomKeyB64,
+        restoreSessionId: sessionId,
+      });
+      await this.connectToNode(nodeId, 120_000);
+    } catch (e) {
+      this.store.setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * True when the current node is an ephemeral machine this device can bring back
+   * with a send, so it should auto-resume rather than being blocked (drives both
+   * `shouldAutoResume` and the composer's enabled state). Two cases, both requiring
+   * that we still hold the node's room key:
+   *  - a suspended/offline enrolled node (Sprite/E2B) — wake it; or
+   *  - a torn-down destroy-lane node that dropped from the registry but has a
+   *    durable session↔machine correlation (Gap 1) — rebuild it.
+   */
+  isCurrentNodeResumable(): boolean {
+    if (this.direct) return false;
+    const nodeId = this.local.cur;
+    if (!nodeId) return false;
+    let hasKey = false;
+    try {
+      hasKey = !!this.local.keys()[nodeId];
+    } catch {
+      return false;
+    }
+    if (!hasKey) return false;
+    const node = this.store.getState().nodes.find((n) => n.id === nodeId);
+    // Enrolled but offline → resumable ONLY when it's actually an ephemeral machine
+    // we can wake. A persistent node that's merely offline is NOT resumable from this
+    // device: it reconnects on its own when its daemon rejoins the relay, and sweeping
+    // it into the ephemeral wake/rebuild path throws a misleading "no record of the
+    // machine to rebuild" error (reprovisionEphemeral). Absent from the registry →
+    // resumable only if a durable correlation lets us rebuild it.
+    if (node) return !node.online && isEphemeralNode(node);
+    return this.ephemeralCorrelations.some((c) => c.nodeId === nodeId);
+  }
+  private shouldAutoResume(): boolean {
+    return this.isCurrentNodeResumable() && !this.resumingNode.has(this.local.cur);
+  }
+  /** Bring the current session's node back: `reprovisionEphemeral` self-selects
+   *  wake (suspend providers) vs rebuild (destroy providers). Guarded so repeated
+   *  sends while it's coming up don't re-trigger it. */
+  private async resumeNodeForSession(sessionId: string): Promise<void> {
+    const nodeId = this.local.cur;
+    if (!nodeId || this.resumingNode.has(nodeId)) return;
+    this.resumingNode.add(nodeId);
+    try {
+      await this.reprovisionEphemeral(nodeId, sessionId);
+    } finally {
+      this.resumingNode.delete(nodeId);
+    }
+  }
+  /** Replay prompts buffered while the node was offline/resuming, once it's back
+   *  online — the deferred half of the "sending is the resume gesture" flow. */
+  private drainPendingResume(sessionId: string): void {
+    const mine = this.pendingResume.filter((p) => p.sessionId === sessionId);
+    if (!mine.length) return;
+    this.pendingResume = this.pendingResume.filter((p) => p.sessionId !== sessionId);
+    for (const p of mine) {
+      this.send({ kind: "prompt", sessionId, text: p.text, clientMessageId: p.clientMessageId, attachments: p.attachments });
+    }
   }
 
   // --- GitHub work queue on ephemeral servers (issue #532) ----------------
@@ -2040,12 +2459,12 @@ export class AppController {
    */
   async runWorkItemOnEphemeral(
     id: string,
-    opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; runtimeId?: string; model?: string },
+    opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; runtimeId?: string; model?: string; configId?: string },
   ): Promise<EphemeralMachine> {
     if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
     const githubToken = await this.githubTaskToken.get();
     const machine = await launchEphemeralMachine(
-      { ...opts, hostedTasks: true, githubToken: githubToken || undefined, workItemId: id, purpose: "queue-item", name: "Ephemeral queue runner" },
+      { ...opts, setupId: opts.configId, hostedTasks: true, githubToken: githubToken || undefined, workItemId: id, purpose: "queue-item", name: "Ephemeral queue runner" },
       { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines },
     );
     try {
@@ -2066,11 +2485,11 @@ export class AppController {
    * (no specific item), so incoming work can run without a persistent node —
    * the queue-level "auto-provision" default's manual/triggered form.
    */
-  async launchEphemeralQueueWorker(opts: { provider: string; region?: string; size?: string; ttlMinutes?: number }): Promise<EphemeralMachine> {
+  async launchEphemeralQueueWorker(opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; configId?: string }): Promise<EphemeralMachine> {
     if (!this.signedIn) throw new Error("Sign in to launch an ephemeral machine.");
     const githubToken = await this.githubTaskToken.get();
     const machine = await launchEphemeralMachine(
-      { ...opts, hostedTasks: true, githubToken: githubToken || undefined, purpose: "queue-default", name: "Ephemeral queue worker" },
+      { ...opts, setupId: opts.configId, hostedTasks: true, githubToken: githubToken || undefined, purpose: "queue-default", name: "Ephemeral queue worker" },
       { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines },
     );
     void this.refreshNodes();
@@ -2084,6 +2503,42 @@ export class AppController {
   }
   setEphemeralQueueDefault(patch: Partial<EphemeralQueueDefault>): Promise<EphemeralQueueDefault> {
     return setEphemeralQueueDefault(this.local, patch);
+  }
+  /** Account-level ephemeral node configs (shared across the account's devices). */
+  listEphemeralConfigs(): Promise<EphemeralNodeConfig[]> {
+    return fetchEphemeralConfigs(this.local);
+  }
+  createEphemeralConfig(input: EphemeralConfigInput): Promise<EphemeralNodeConfig> {
+    return apiCreateEphemeralConfig(this.local, input);
+  }
+  updateEphemeralConfig(id: string, patch: Partial<EphemeralConfigInput>): Promise<EphemeralNodeConfig> {
+    return apiUpdateEphemeralConfig(this.local, id, patch);
+  }
+  removeEphemeralConfig(id: string): Promise<void> {
+    return apiDeleteEphemeralConfig(this.local, id);
+  }
+  /** The account's default queue routing (primary runner + optional fallback). */
+  getQueueRouting(): Promise<QueueRouting> {
+    return fetchQueueRouting(this.local);
+  }
+  setQueueRouting(routing: QueueRouting): Promise<QueueRouting> {
+    return apiSetQueueRouting(this.local, routing);
+  }
+  /** Hosted (control-plane-orchestrated) provisioning: status, credentials, audit. */
+  getHostedProvisioning(): Promise<HostedProvisioningStatus> {
+    return fetchHostedProvisioning(this.local);
+  }
+  setHostedProvisioning(patch: HostedProvisioningPatch): Promise<HostedProvisioningStatus> {
+    return apiSetHostedProvisioning(this.local, patch);
+  }
+  listHostedAudit(): Promise<HostedAuditEvent[]> {
+    return fetchHostedAudit(this.local);
+  }
+  rotateHostedProvisioning(): Promise<HostedProvisioningStatus> {
+    return apiRotateHostedProvisioning(this.local);
+  }
+  triggerHostedProvision(execute = false) {
+    return apiTriggerHostedProvision(this.local, execute);
   }
 
   // --- Terminal ----------------------------------------------------------

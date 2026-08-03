@@ -64,8 +64,10 @@ and account ownership enforcement.
   [`../../deploy/README.md`](../../deploy/README.md)).
 - **Rate limits.** Frame-size and per-socket message-rate limits are enforced;
   per-account connection caps are not yet.
-- **Horizontal scale.** Rooms are in-process, so a single relay instance serves
-  all traffic. Running multiple instances needs a shared pub/sub (e.g. Redis)
-  keyed by `nodeId`, or sticky routing.
+- **Horizontal scale.** Rooms are in-process, so one room must stay on one relay
+  process. The control plane supports deterministic `nodeId` sharding via
+  `RELAY_SHARD_URLS`, placing a node and all of its clients on the same stable
+  relay hostname without a shared pub/sub backplane. Do not round-robin one
+  shard hostname across active processes. See [`../../docs/scaling.md`](../../docs/scaling.md).
 - **Liveness.** Nodes are marked offline on disconnect; there is no separate
   heartbeat monitor.

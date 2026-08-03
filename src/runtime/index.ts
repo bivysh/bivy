@@ -8,7 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntime, claudeRuntimeFromEnv, claudeSdkInstalled } from "./claude-code.js";
-import { deleteCodexSession, discoverNativeCodexSessions, loadCodexTranscript } from "./codex-sessions.js";
+import { deleteCodexSession, discoverNativeCodexSessions, loadCodexTranscript, writeCodexRollout } from "./codex-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 
 // Args that continue an existing Codex session each prompt. Codex assigns its own
@@ -36,11 +36,12 @@ import type { ModelInfo, RuntimeMessage } from "./types.js";
 import { PiRuntime, type PiRuntimeOptions } from "./pi.js";
 import { ProcessRuntime, processRuntimeFromEnv, type ProcessModelConfig, type ProcessPromptMode, type ProcessThinkingConfig } from "./process.js";
 import { codexCredentialPreflight } from "./codex-preflight.js";
+import { opencodeCredentialPreflight } from "./opencode-preflight.js";
 import { ensureCodexAuth } from "./codex-auth.js";
 import { parserFactoryFor } from "./cli-parsers.js";
 import { sandboxTier, sandboxArgsFor, codexSandboxPolicy, type SandboxTier } from "../harness/sandbox.js";
-import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv } from "./protocol.js";
-import type { AgentRuntime, RuntimeCapabilities } from "./types.js";
+import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv, type ProtocolRuntimeOptions } from "./protocol.js";
+import type { AgentRuntime, AttachToChatFn, RuntimeCapabilities } from "./types.js";
 
 export * from "./types.js";
 export { NodeCredentialResolver, createCredentialStore } from "./credentials.js";
@@ -50,6 +51,13 @@ export interface RuntimeFactoryOptions extends PiRuntimeOptions {
   runtime?: string;
   /** Per-session sandbox tier override (else the node default is used). */
   sandbox?: SandboxTier;
+  /**
+   * Backs each runtime's native "attach to chat" tool surface (issue #291) —
+   * threaded to the Claude adapter's ClaudeCodeRuntimeOptions.attachToChat.
+   * Absent = no native tool is registered (the node falls back to whatever
+   * discoverability hint that runtime carries, e.g. Claude's system-prompt note).
+   */
+  attachToChat?: AttachToChatFn;
 }
 
 export type RuntimeStatus = "available" | "planned" | "external";
@@ -169,13 +177,59 @@ function genericCliInfo(): RuntimeInfo {
   };
 }
 
-type CliAgentId = "codex" | "opencode" | "aider" | "hermes" | "goose" | "gemini" | "qwen" | "cline" | "crush";
+type CliAgentId =
+  | "codex"
+  | "opencode"
+  | "aider"
+  | "hermes"
+  | "goose"
+  | "gemini"
+  | "qwen"
+  | "cline"
+  | "crush"
+  // Second wave — the next tranche of the most-used coding-agent CLIs, all wired
+  // purely as data on the same ProcessRuntime + CliParser path (no bespoke
+  // per-agent code). "codebuff" is defined but hidden from the picker (like
+  // "hermes"): it has no verified non-TTY headless mode upstream yet.
+  | "cursor"
+  | "copilot"
+  | "grok"
+  | "amp"
+  | "auggie"
+  | "droid"
+  | "continue"
+  | "kilocode"
+  | "rovodev"
+  | "codebuff";
+
+/**
+ * Structured install descriptor — the single source of truth consumed by (a) the
+ * catalog "Install" button, (b) the server auto-install endpoint
+ * (`runtimeInstallSpec`), and (c) the terminal CLI's bundled-agent manifest
+ * (`bin/agent-manifest.json`). Absent = installed out of band, so no auto-install
+ * button/spec is offered (honest). `{bin}` in a curl `shell` expands to the
+ * node's `<prefix>/bin` so scripts can drop a binary where PATH already looks.
+ */
+type CliInstall =
+  | { kind: "npm"; pkg: string }
+  | { kind: "pip"; pkg: string }
+  | { kind: "curl"; display: string; shell: string };
 
 type CliAgentSpec = {
   displayName: string;
   command: string;
   packageName: string;
   promptMode: ProcessPromptMode;
+  /**
+   * Hidden from the agent picker (still runnable via `BIVY_RUNTIME=<id>`). The
+   * honest home for an agent whose ProcessRuntime capabilities aren't picker-grade
+   * yet — e.g. `codex` (superseded by the governed `codex-approvals` shim),
+   * `hermes` (no structured parser/resume), and `codebuff` (no verified non-TTY
+   * headless mode). Everything else defaults to visible.
+   */
+  hidden?: boolean;
+  /** Structured, data-driven install descriptor (see CliInstall). */
+  install?: CliInstall;
   /** Support tier surfaced in the picker. Defaults to "beta". */
   supportTier?: RuntimeSupportTier;
   /** Who owns the first-run credential/login UX. Defaults to "agent". */
@@ -223,6 +277,15 @@ type CliAgentSpec = {
   jsonArgs?: string[];
   parserId?: string;
   /**
+   * The `parserId` is a tolerant, format-agnostic parser (generic-stream-json /
+   * generic-json) whose flag+schema we haven't validated against the real binary
+   * yet. Such agents stay on the safe dumb-pipe path by DEFAULT — flipping them to
+   * structured could regress a working agent if a flag is wrong — but an operator
+   * can opt in globally with `BIVY_AGENT_STRUCTURED=1`. Once validated, drop this
+   * flag and the agent gets structured fidelity by default (a one-field edit).
+   */
+  parserUnverified?: boolean;
+  /**
    * Native exec sandbox. When set, builds the full launch args for a given
    * structured-mode + sandbox tier, inserting the agent's native sandbox/approval
    * flags in the right place (the prompt is appended by ProcessRuntime after
@@ -230,7 +293,16 @@ type CliAgentSpec = {
    * omit this and fall back to args/jsonArgs.
    */
   composeArgs?: (opts: { structured: boolean; tier: SandboxTier }) => string[];
-  installCommand?: (npmPrefix: string) => { command: string };
+  /**
+   * The agent speaks the Agent Client Protocol (ACP) — the highest-capability
+   * general wrapping path. `args` launches it in ACP mode (e.g. Gemini's
+   * `["--experimental-acp"]`). When set AND preferred (per-agent `BIVY_<ID>_ACP=1`
+   * or global `BIVY_PREFER_ACP=1`), the agent is driven through bin/acp-shim.mjs →
+   * the governed ProtocolRuntime (per-tool approvals + streaming + resume) INSTEAD
+   * of the one-shot stdout pipe — no other spec change needed. Off by default until
+   * validated for the agent, keeping the pipe path (and honest capabilities) intact.
+   */
+  acp?: { args: string[] };
 };
 
 const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
@@ -252,9 +324,10 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     thinking: { levels: ["minimal", "low", "medium", "high"], default: "medium", template: ["-c", "model_reasoning_effort={level}"], insertAt: 1 },
     packageName: "@openai/codex",
     promptMode: "argv",
-    installCommand: (npmPrefix: string) => ({
-      command: `npm install --global --prefix ${npmPrefix} @openai/codex`,
-    }),
+    // Hidden from the picker: the governed `codex-approvals` app-server shim
+    // supersedes this plain exec path (still runnable via BIVY_RUNTIME=codex).
+    hidden: true,
+    install: { kind: "npm", pkg: "@openai/codex" },
   },
   opencode: {
     displayName: "OpenCode",
@@ -280,9 +353,12 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
         { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google" },
       ],
     },
-    installCommand: (npmPrefix: string) => ({
-      command: `npm install --global --prefix ${npmPrefix} opencode-ai`,
-    }),
+    // OpenCode ships a native ACP server (`opencode acp`, per opencode.ai/docs/acp),
+    // so it can be driven through the governed ProtocolRuntime instead of the pipe —
+    // per-tool approvals + streaming + resume. Opt in with BIVY_OPENCODE_ACP=1 (or
+    // global BIVY_PREFER_ACP=1); off by default until validated for your version.
+    acp: { args: ["acp"] },
+    install: { kind: "npm", pkg: "opencode-ai" },
   },
   aider: {
     displayName: "Aider",
@@ -314,9 +390,7 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // generic id-based primitive, and unsafe to bolt on generically (a second,
     // unrelated session opened in the same workspace would inherit that file's
     // history). See docs/agents-not-fully-supported.md.
-    installCommand: () => ({
-      command: "python3 -m pip install --user aider-chat",
-    }),
+    install: { kind: "pip", pkg: "aider-chat" },
   },
   hermes: {
     displayName: "Hermes",
@@ -325,11 +399,11 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // `hermes` package is an unrelated abandoned segmentio lib.
     packageName: "hermes-agent",
     promptMode: "argv",
-    // No `resume`: dumb-pipe adapter with no validated JSON parser or documented
-    // session/resume flag — see docs/agents-not-fully-supported.md.
-    installCommand: (npmPrefix: string) => ({
-      command: `npm install --global --prefix ${npmPrefix} hermes-agent`,
-    }),
+    // Hidden from the picker: dumb-pipe adapter with no validated JSON parser or
+    // documented session/resume flag (still runnable via BIVY_RUNTIME=hermes).
+    hidden: true,
+    // No `resume`: no documented session/resume flag.
+    install: { kind: "npm", pkg: "hermes-agent" },
   },
   goose: {
     displayName: "Goose",
@@ -344,12 +418,24 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // `goose run --resume --session-id <id> -t "<prompt>"` continues a prior
     // session by id (`--session-id` "Requires --resume", per `goose run --help`).
     resume: { template: ["run", "--output-format", "stream-json", "--resume", "--session-id", "{id}", "-t"] },
+    // Goose exposes a native ACP server (`goose acp`, per the Goose "ACP clients"
+    // guide), so it can be driven through the governed ProtocolRuntime instead of the
+    // stream-json pipe — per-tool approvals + streaming + resume. Opt in with
+    // BIVY_GOOSE_ACP=1 (or global BIVY_PREFER_ACP=1); off by default until validated.
+    acp: { args: ["acp"] },
     promptMode: "argv",
     supportTier: "beta",
     blurb: "Block's open-source agent with a structured stream-json protocol (Goose).",
     // Homebrew isn't present on stock Linux nodes (brew → ENOENT); the official
     // download script installs the goose binary on both Linux and macOS.
-    installCommand: () => ({ command: "curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash" }),
+    // `brew install block/tap/goose` ENOENTs on any node without Homebrew; the
+    // official download script installs the binary into `{bin}` (on PATH) on both
+    // Linux and macOS. `{bin}` expands to `<prefix>/bin` at install time.
+    install: {
+      kind: "curl",
+      display: "curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash",
+      shell: 'mkdir -p "{bin}" && curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false GOOSE_BIN_DIR="{bin}" bash',
+    },
   },
   gemini: {
     displayName: "Gemini CLI",
@@ -379,10 +465,13 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // session UUID also works). `{sandbox}` re-derives --approval-mode from the
     // tier so a resumed turn stays as contained as a fresh one.
     resume: { template: ["-o", "json", "{sandbox}", "-r", "{id}", "-p"] },
+    // Gemini CLI speaks ACP (`--experimental-acp`), so it can be driven through the
+    // governed ProtocolRuntime instead of the one-shot pipe — per-tool approvals +
+    // streaming + resume. Opt in with BIVY_GEMINI_ACP=1 (or global BIVY_PREFER_ACP=1);
+    // off by default until validated for your Gemini version.
+    acp: { args: ["--experimental-acp"] },
     promptMode: "argv",
-    installCommand: (npmPrefix: string) => ({
-      command: `npm install --global --prefix ${npmPrefix} @google/gemini-cli`,
-    }),
+    install: { kind: "npm", pkg: "@google/gemini-cli" },
   },
   qwen: {
     displayName: "Qwen Code",
@@ -409,10 +498,17 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // Gemini-CLI fork: same `--resume <id>` headless resume form (Qwen Code docs,
     // "Headless Mode"). `{sandbox}` re-derives --approval-mode from the tier.
     resume: { template: ["--output-format", "json", "{sandbox}", "--resume", "{id}", "-p"] },
+    // Qwen Code inherits Gemini CLI's ACP server (packages/cli/src/acp-integration),
+    // so it can be driven through the governed ProtocolRuntime instead of the pipe —
+    // per-tool approvals + streaming + resume. Newer builds graduated the flag to
+    // `--acp`, but `--experimental-acp` remains a backward-compatible alias across
+    // versions (deprecation warning goes to stderr, which the shim logs separately,
+    // so it can't corrupt the JSON-RPC stream). Opt in with BIVY_QWEN_ACP=1 (or
+    // global BIVY_PREFER_ACP=1); off by default until validated for your version.
+    // Zed's ACP registry lists qwen-code with `args: ["--acp"]`.
+    acp: { args: ["--experimental-acp"] },
     promptMode: "argv",
-    installCommand: (npmPrefix: string) => ({
-      command: `npm install --global --prefix ${npmPrefix} @qwen-code/qwen-code`,
-    }),
+    install: { kind: "npm", pkg: "@qwen-code/qwen-code" },
   },
   cline: {
     displayName: "Cline",
@@ -429,10 +525,13 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // (`--id <session-id>` "Resume an existing session by ID", per the Cline CLI
     // reference). No native sandbox/approval-mode flag, so no `{sandbox}` here.
     resume: { template: ["--id", "{id}", "-y"] },
+    // The Cline CLI (>2.0.0) speaks ACP via `cline --acp` (per docs.cline.bot ACP
+    // editor integrations), so it can be driven through the governed ProtocolRuntime
+    // instead of the `-y` pipe — per-tool approvals + streaming + resume. Opt in with
+    // BIVY_CLINE_ACP=1 (or global BIVY_PREFER_ACP=1); off by default until validated.
+    acp: { args: ["--acp"] },
     promptMode: "argv",
-    installCommand: (npmPrefix: string) => ({
-      command: `npm install --global --prefix ${npmPrefix} cline`,
-    }),
+    install: { kind: "npm", pkg: "cline" },
   },
   crush: {
     displayName: "Crush",
@@ -448,14 +547,339 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // (charmbracelet/crush#1982, #1015 track adding one) — see
     // docs/agents-not-fully-supported.md.
     promptMode: "argv",
-    installCommand: (npmPrefix: string) => ({
-      command: `npm install --global --prefix ${npmPrefix} @charmland/crush`,
-    }),
+    install: { kind: "npm", pkg: "@charmland/crush" },
+  },
+
+  // ---- Second wave (the next-most-used coding-agent CLIs) --------------------
+  // Each is pure data on the shared ProcessRuntime path — the same "add an agent
+  // = add a spec, not code" mechanism as the block above. Launch/resume/model
+  // flags are validated against each CLI's current docs; every one is overridable
+  // per node with BIVY_<ID>_ARGS / _RESUME_TEMPLATE / _MODELS.
+  cursor: {
+    displayName: "Cursor",
+    command: "cursor-agent",
+    packageName: "cursor (curl https://cursor.com/install)",
+    supportTier: "beta",
+    blurb: "Cursor's standalone terminal coding agent (cursor-agent) — the editor's engine on the CLI.",
+    // `cursor-agent --force -p "<prompt>"` runs one non-interactive print turn and
+    // exits (`-p/--print`); `--force` auto-approves tool/command execution so a
+    // piped run never blocks on approvals. Prompt is the trailing positional arg.
+    args: ["--force", "-p"],
+    // Cursor's `--output-format stream-json` emits a streaming JSON event log; the
+    // tolerant generic parser reads it. Opt-in (unverified schema) — see below.
+    jsonArgs: ["--output-format", "stream-json", "--force", "-p"],
+    parserId: "generic-stream-json",
+    parserUnverified: true,
+    // `cursor-agent --resume=<chatId> …` continues a prior chat by its own id.
+    resume: { template: ["--force", "--resume={id}", "-p"] },
+    // `cursor-agent -m <id> …` — a leading option (insertAt: 0).
+    model: {
+      flag: "-m",
+      models: [
+        { id: "sonnet-4.5", name: "Claude Sonnet 4.5", provider: "anthropic" },
+        { id: "opus-4.1", name: "Claude Opus 4.1", provider: "anthropic" },
+        { id: "gpt-5", name: "GPT-5", provider: "openai" },
+      ],
+    },
+    // Cursor's agent speaks ACP (`cursor-agent acp`, per cursor.com/docs/cli/acp),
+    // so it can be driven through the governed ProtocolRuntime instead of the
+    // `--force -p` pipe — per-tool approvals + streaming + resume. Opt in with
+    // BIVY_CURSOR_ACP=1 (or global BIVY_PREFER_ACP=1); off by default until validated.
+    acp: { args: ["acp"] },
+    promptMode: "argv",
+    // Not on npm — Cursor ships a curl installer that drops `cursor-agent` on PATH.
+    install: { kind: "curl", display: "curl https://cursor.com/install -fsS | bash", shell: "curl https://cursor.com/install -fsS | bash" },
+  },
+  copilot: {
+    displayName: "GitHub Copilot",
+    command: "copilot",
+    packageName: "@github/copilot",
+    supportTier: "beta",
+    blurb: "GitHub's official terminal coding agent (Copilot CLI).",
+    // `copilot --allow-all-tools -p "<prompt>"` runs one programmatic turn and
+    // exits; --allow-all-tools skips per-tool approval so a piped run doesn't
+    // wedge. `-p/--prompt` takes the prompt as its value (kept last so the
+    // trailing prompt lands there).
+    args: ["--allow-all-tools", "-p"],
+    // `copilot --model <id> …`
+    model: {
+      flag: "--model",
+      models: [
+        { id: "claude-sonnet-4.5", name: "Claude Sonnet 4.5", provider: "anthropic" },
+        { id: "gpt-5", name: "GPT-5", provider: "openai" },
+      ],
+    },
+    // No `resume`: Copilot's resume flag isn't pinned to a stable by-id form yet;
+    // wire one with BIVY_COPILOT_RESUME_TEMPLATE if your version documents it.
+    // Copilot CLI ships an ACP server (`copilot --acp`; public preview Jan 2026, per
+    // docs.github.com Copilot CLI reference), so it can be driven through the governed
+    // ProtocolRuntime instead of the `--allow-all-tools -p` pipe — per-tool approvals
+    // + streaming + resume (ACP `session/load` covers the resume the pipe lacks). Opt
+    // in with BIVY_COPILOT_ACP=1 (or global BIVY_PREFER_ACP=1); off by default until
+    // validated for your version.
+    acp: { args: ["--acp"] },
+    promptMode: "argv",
+    install: { kind: "npm", pkg: "@github/copilot" },
+  },
+  grok: {
+    displayName: "Grok",
+    command: "grok",
+    packageName: "@vibe-kit/grok-cli",
+    supportTier: "beta",
+    blurb: "Open-source terminal agent for xAI's Grok models (Grok CLI).",
+    // `grok -p "<prompt>"` runs one prompt and exits (headless); `-m <id>` picks
+    // the model. (The widely-installed @vibe-kit/grok-cli has no by-id resume or
+    // JSON flag; the superagent `grok-dev` fork does — override via env if you run
+    // that one.)
+    args: ["-p"],
+    model: {
+      flag: "-m",
+      models: [
+        { id: "grok-code-fast-1", name: "Grok Code Fast 1", provider: "xai" },
+        { id: "grok-4-latest", name: "Grok 4", provider: "xai" },
+        { id: "grok-3-fast", name: "Grok 3 Fast", provider: "xai" },
+      ],
+    },
+    promptMode: "argv",
+    install: { kind: "npm", pkg: "@vibe-kit/grok-cli" },
+  },
+  amp: {
+    displayName: "Amp",
+    command: "amp",
+    packageName: "@sourcegraph/amp",
+    supportTier: "beta",
+    blurb: "Sourcegraph's autonomous coding agent with persistent threads (Amp).",
+    // `amp -x "<prompt>"` (`--execute`) runs one thread turn and streams to stdout;
+    // Amp doesn't gate tools per-run (governed by its own allowlist config), so no
+    // approval flag is needed. Prompt trails `-x`.
+    args: ["-x"],
+    // Amp's `--stream-json` emits one JSON object per line; the tolerant generic
+    // parser reads it. Opt-in (unverified schema) — see parserUnverified below.
+    jsonArgs: ["--stream-json", "-x"],
+    parserId: "generic-stream-json",
+    parserUnverified: true,
+    // `amp threads continue <id> -x "<prompt>"` continues a prior thread by id.
+    resume: { template: ["threads", "continue", "{id}", "-x"] },
+    // No model flag: Amp manages model selection itself (agent "mode"), so we don't
+    // advertise a picker it can't drive.
+    promptMode: "argv",
+    install: { kind: "npm", pkg: "@sourcegraph/amp" },
+  },
+  auggie: {
+    displayName: "Auggie",
+    command: "auggie",
+    packageName: "@augmentcode/auggie",
+    supportTier: "beta",
+    blurb: "Augment Code's terminal agent backed by its codebase context engine (Auggie).",
+    // `auggie --quiet --print "<prompt>"` runs one non-interactive turn and prints
+    // the final reply (`--print`); `--quiet` drops the UI chatter. Prompt trails.
+    args: ["--quiet", "--print"],
+    // No pinned by-id resume or model flag upstream (Augment manages the model);
+    // override via BIVY_AUGGIE_RESUME_TEMPLATE / _MODELS if your version adds them.
+    promptMode: "argv",
+    install: { kind: "npm", pkg: "@augmentcode/auggie" },
+  },
+  droid: {
+    displayName: "Droid",
+    command: "droid",
+    packageName: "droid (curl https://app.factory.ai/cli)",
+    supportTier: "beta",
+    blurb: "Factory AI's autonomous terminal coding agent (Droid).",
+    // `droid exec --auto high "<prompt>"` runs one headless task at high autonomy
+    // (auto-approves) and streams to stdout. Prompt trails the `exec` subcommand.
+    args: ["exec", "--auto", "high"],
+    // `droid exec --output-format json` prints a final JSON object; the tolerant
+    // generic parser reads it. Opt-in (unverified schema) — see below.
+    jsonArgs: ["exec", "--output-format", "json", "--auto", "high"],
+    parserId: "generic-json",
+    parserUnverified: true,
+    // `droid exec --model <id> …` — after the `exec` subcommand (insertAt: 1).
+    model: {
+      flag: "--model",
+      insertAt: 1,
+      models: [
+        { id: "claude-sonnet-4.5", name: "Claude Sonnet 4.5", provider: "anthropic" },
+        { id: "claude-opus-4.1", name: "Claude Opus 4.1", provider: "anthropic" },
+        { id: "gpt-5-codex", name: "GPT-5 Codex", provider: "openai" },
+      ],
+    },
+    promptMode: "argv",
+    // Not on npm — Factory ships a curl installer that drops `droid` on PATH.
+    install: { kind: "curl", display: "curl -fsSL https://app.factory.ai/cli | sh", shell: "curl -fsSL https://app.factory.ai/cli | sh" },
+  },
+  continue: {
+    displayName: "Continue",
+    command: "cn",
+    packageName: "@continuedev/cli",
+    supportTier: "beta",
+    blurb: "Continue's headless terminal agent (cn) driving configurable assistants.",
+    // `cn --auto -p "<prompt>"` runs one headless turn (`-p` = no TUI) and prints
+    // the final response; `--auto` allows all tools without prompting. Prompt
+    // trails `-p`.
+    args: ["--auto", "-p"],
+    // `cn -p … --format json` prints a final JSON object; the tolerant generic
+    // parser reads it. Opt-in (unverified schema) — see below.
+    jsonArgs: ["--auto", "--format", "json", "-p"],
+    parserId: "generic-json",
+    parserUnverified: true,
+    // `cn --model <slug> …` — Continue Hub owner/model slugs (insertAt: 0).
+    model: {
+      flag: "--model",
+      models: [
+        { id: "anthropic/claude-4-sonnet", name: "Claude Sonnet 4", provider: "anthropic" },
+        { id: "openai/gpt-5", name: "GPT-5", provider: "openai" },
+      ],
+    },
+    // No `resume`: `cn --resume` continues only the last session for the current
+    // terminal — there's no resume-by-id form to plug into the generic primitive.
+    promptMode: "argv",
+    install: { kind: "npm", pkg: "@continuedev/cli" },
+  },
+  kilocode: {
+    displayName: "Kilo Code",
+    command: "kilo",
+    packageName: "@kilocode/cli",
+    supportTier: "beta",
+    blurb: "Kilo Code's terminal CLI (an OpenCode fork) for pipeline-friendly agentic coding.",
+    // `kilo run --auto "<prompt>"` runs one non-interactive turn (`run`) with
+    // auto-approved permissions (`--auto`) and streams to stdout. Prompt trails.
+    args: ["run", "--auto"],
+    // `kilo run --format json` emits raw JSON events; the tolerant generic parser
+    // reads them. Opt-in (unverified schema) — see below.
+    jsonArgs: ["run", "--format", "json", "--auto"],
+    parserId: "generic-stream-json",
+    parserUnverified: true,
+    // `kilo run -s <id> --auto "<prompt>"` continues a session by id.
+    resume: { template: ["run", "-s", "{id}", "--auto"] },
+    // Kilo Code exposes a native ACP server (`kilo acp`, per the Kilo CLI docs —
+    // mirroring OpenCode's design, its upstream). Driven through the governed
+    // ProtocolRuntime instead of the `run --auto` pipe, it gains per-tool approvals +
+    // streaming + resume. Opt in with BIVY_KILOCODE_ACP=1 (or global BIVY_PREFER_ACP=1);
+    // off by default until validated for your version.
+    acp: { args: ["acp"] },
+    // `kilo run -m <provider/model> …` — after the `run` subcommand (insertAt: 1).
+    model: {
+      flag: "-m",
+      insertAt: 1,
+      models: [
+        { id: "anthropic/claude-sonnet-4-20250514", name: "Claude Sonnet 4", provider: "anthropic" },
+        { id: "openai/gpt-5", name: "GPT-5", provider: "openai" },
+      ],
+    },
+    promptMode: "argv",
+    install: { kind: "npm", pkg: "@kilocode/cli" },
+  },
+  rovodev: {
+    displayName: "Rovo Dev",
+    command: "acli",
+    packageName: "atlassian acli (rovodev)",
+    supportTier: "beta",
+    blurb: "Atlassian's Rovo Dev terminal coding agent, run through the acli CLI.",
+    // `acli rovodev run --yolo "<prompt>"` runs one instruction headlessly; --yolo
+    // skips tool-approval prompts. Prompt trails the `rovodev run` subcommand.
+    args: ["rovodev", "run", "--yolo"],
+    // `acli rovodev run --yolo --restore <id> "<prompt>"` restores a prior session.
+    resume: { template: ["rovodev", "run", "--yolo", "--restore", "{id}"] },
+    // No `--model` CLI flag (Atlassian-managed; models switch via the in-session
+    // /models command), so we don't advertise a picker it can't drive.
+    promptMode: "argv",
+    // Ships as part of the Atlassian CLI, not npm — installed out of band.
+  },
+  codebuff: {
+    displayName: "Codebuff",
+    command: "codebuff",
+    packageName: "codebuff",
+    // Hidden from the picker (see PICKER_RUNTIME_IDS). The `codebuff` binary has no
+    // verified non-TTY headless / print-and-exit mode upstream — its trailing-arg
+    // `codebuff "<prompt>"` seeds the interactive TUI, and true automation is meant
+    // to go through @codebuff/sdk. We keep the spec so it's runnable via
+    // BIVY_RUNTIME=codebuff and promotable to the picker (data-only) the moment a
+    // headless flag ships; until then it stays out of the picker to keep it honest.
+    supportTier: "experimental",
+    blurb: "Open-source multi-agent terminal coding assistant (Codebuff). Headless automation is via @codebuff/sdk today.",
+    hidden: true,
+    args: [],
+    // `codebuff --continue <id> "<prompt>"` continues a prior conversation by id.
+    resume: { template: ["--continue", "{id}"] },
+    promptMode: "argv",
+    install: { kind: "npm", pkg: "codebuff" },
   },
 };
 
-function isCliAgentId(id: string): id is CliAgentId {
+export function isCliAgentId(id: string): id is CliAgentId {
   return Object.prototype.hasOwnProperty.call(CLI_AGENT_SPECS, id);
+}
+
+/** Ordered CLI agent ids (spec insertion order) — the manifest's canonical order. */
+export const CLI_AGENT_IDS = Object.keys(CLI_AGENT_SPECS) as CliAgentId[];
+
+/**
+ * The install command for a CLI agent, derived from its structured `install`
+ * descriptor — the SINGLE source of truth shared by the catalog "Install" button,
+ * the server auto-install endpoint, and the terminal CLI manifest. Returns the
+ * executable form (`command`/`args`) plus the human `display` string, or undefined
+ * when the agent installs out of band (no `install`).
+ *
+ * `prefix` is the node's npm/bin prefix (BIVY_NPM_GLOBAL_PREFIX, default ~/.local).
+ * `{bin}` in a curl `shell` expands to `<prefix>/bin`.
+ */
+export function cliInstallSpec(id: CliAgentId, prefix: string): { command: string; args: string[]; display: string } | undefined {
+  const install = CLI_AGENT_SPECS[id].install;
+  if (!install) return undefined;
+  if (install.kind === "npm") {
+    return {
+      command: "npm",
+      args: ["install", "--global", "--prefix", prefix, install.pkg],
+      display: `npm install --global --prefix ${prefix} ${install.pkg}`,
+    };
+  }
+  if (install.kind === "pip") {
+    // Some node images ship a python3 without pip; bootstrap it via ensurepip
+    // (best-effort) before installing, but show users the plain pip line.
+    return {
+      command: "sh",
+      args: ["-c", `python3 -m ensurepip --user >/dev/null 2>&1 || true; python3 -m pip install --user ${install.pkg}`],
+      display: `python3 -m pip install --user ${install.pkg}`,
+    };
+  }
+  // curl / script: `{bin}` → the node's <prefix>/bin so binaries land on PATH.
+  const shell = install.shell.replace(/\{bin\}/g, `${prefix}/bin`);
+  return { command: "sh", args: ["-c", shell], display: install.display };
+}
+
+/**
+ * Serializable agent manifest — the identity/install/visibility subset of
+ * CLI_AGENT_SPECS with no functions, so it can be written to
+ * `bin/agent-manifest.json` and consumed by the plain-JS terminal CLI
+ * (`bin/bivy.mjs`) that can't import this TypeScript module. `scripts/
+ * generate-agent-manifest.mjs` regenerates the JSON; a unit test asserts the file
+ * is in sync so the two never drift.
+ */
+export function cliAgentManifest(): Array<{
+  id: CliAgentId;
+  label: string;
+  command: string;
+  hidden: boolean;
+  headlessFlags: string[];
+  install: CliInstall | null;
+}> {
+  return CLI_AGENT_IDS.map((id) => {
+    const spec = CLI_AGENT_SPECS[id];
+    // The tokens that mean "one-shot / headless" for `bivy run <agent> …` — the
+    // spec's own launch args plus its resume subcommand, deduped. This lets the
+    // terminal detect a human running a one-shot without a hand-maintained list.
+    const headless = new Set<string>();
+    for (const a of spec.args ?? []) if (a.startsWith("-") || /^[a-z]/.test(a)) headless.add(a);
+    if (spec.resume) for (const a of spec.resume.template) if (a.startsWith("-") || /^[a-z]/.test(a)) headless.add(a);
+    return {
+      id,
+      label: spec.displayName,
+      command: spec.command,
+      hidden: Boolean(spec.hidden),
+      headlessFlags: [...headless].filter((a) => !a.includes("{")),
+      install: spec.install ?? null,
+    };
+  });
 }
 
 /**
@@ -583,11 +1007,69 @@ function cliThinkingConfig(id: CliAgentId): ProcessThinkingConfig | undefined {
   };
 }
 
+// --- #4: opt-in capability probing (self-healing honesty) -------------------
+// Our advertised resume/model capabilities are pinned against each CLI's docs at a
+// point in time, so a version that renamed or dropped a flag would keep rendering a
+// control that silently no-ops. `BIVY_AGENT_PROBE=1` turns on a preflight that runs
+// `<cli> --help` once (cached) and DOWNGRADES any capability whose flag the
+// installed binary doesn't actually mention. It never UPGRADES — adding a
+// capability needs the exact arg template, which help text can't safely supply — so
+// probing can only make the catalog MORE honest, never invent a no-op control.
+const HELP_PROBE_CACHE = new Map<string, string | null>();
+function probeHelpText(command: string): string | null {
+  if (HELP_PROBE_CACHE.has(command)) return HELP_PROBE_CACHE.get(command) ?? null;
+  let text: string | null = null;
+  try {
+    const res = spawnSync(command, ["--help"], { encoding: "utf8", timeout: 4000 });
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`.trim();
+    text = out.length > 20 ? out.toLowerCase() : null; // too-short output = not real help
+  } catch {
+    text = null;
+  }
+  HELP_PROBE_CACHE.set(command, text);
+  return text;
+}
+
+// A resume template mixes launch flags (`-p`, `--force`) with the resume-specific
+// token(s) (`--resume`, `threads continue`, `-s`, `--restore`, …). Only the latter
+// evidence resume support, so we match on those — otherwise a shared launch flag
+// appearing in help would mask a genuinely-missing resume flag.
+const RESUME_HINT = /resume|continue|restore|session|thread|^-s$|^-r$|^-c$|^--id$/i;
+/** The resume-indicative flag/subcommand tokens of a resume template. */
+function resumeTokensFor(id: CliAgentId): string[] {
+  const tmpl = cliResumeTemplate(id) ?? [];
+  return tmpl
+    .map((t) => t.replace(/=\{[a-z]+\}/g, "").replace(/\{[a-z]+\}/g, "").trim())
+    .filter((t) => t && !t.startsWith("{") && RESUME_HINT.test(t));
+}
+
+/**
+ * Pure refinement: given an installed CLI's `--help` text, drop any capability the
+ * binary doesn't evidence. Exported for direct unit testing. `resumeTokens` are the
+ * resume form's flag/subcommand words (e.g. `["--resume"]`, `["threads","continue"]`);
+ * if NONE appear in help, resume is downgraded. Likewise the model flag.
+ */
+export function refineCapabilitiesFromHelp(
+  help: string,
+  current: { resume: boolean; modelSelection: boolean },
+  spec: { resumeTokens: string[]; modelFlag?: string },
+): { resume: boolean; modelSelection: boolean } {
+  const h = help.toLowerCase();
+  let { resume, modelSelection } = current;
+  if (resume && spec.resumeTokens.length && !spec.resumeTokens.some((t) => h.includes(t.toLowerCase()))) {
+    resume = false;
+  }
+  if (modelSelection && spec.modelFlag && !h.includes(spec.modelFlag.toLowerCase())) {
+    modelSelection = false;
+  }
+  return { resume, modelSelection };
+}
+
 function cliAgentInfo(id: CliAgentId): RuntimeInfo {
   const spec = CLI_AGENT_SPECS[id];
   const installed = commandAvailable(spec.command);
   const npmPrefix = process.env.BIVY_NPM_GLOBAL_PREFIX || "~/.local";
-  const installCommand = spec.installCommand?.(npmPrefix);
+  const installCommand = cliInstallSpec(id, npmPrefix);
   // Honesty invariant (see docs/agents-not-fully-supported.md): capabilities must
   // reflect what the ProcessRuntime path actually delivers, or the PWA renders a
   // picker that silently no-ops. These CLI adapters stream stdout (structured via
@@ -597,9 +1079,25 @@ function cliAgentInfo(id: CliAgentId): RuntimeInfo {
   // agent has a known resume form (spec.resume or a BIVY_<ID>_RESUME_TEMPLATE
   // override) — Codex is the built-in example; the rest are fresh-process-per-
   // prompt until a resume template is wired.
-  const resume = id === "codex" || Boolean(cliResumeTemplate(id));
-  const modelSelection = Boolean(cliModelConfig(id));
+  let resume = id === "codex" || Boolean(cliResumeTemplate(id));
+  let modelSelection = Boolean(cliModelConfig(id));
   const usageReporting = cliUsageReporting(id);
+  // When the agent is promoted to ACP (spec.acp + BIVY_<ID>_ACP / BIVY_PREFER_ACP),
+  // it runs through the governed ProtocolRuntime — so it honestly gains per-tool
+  // approvals and resume. Reflect that in the catalog the picker reads.
+  const acpActive = prefersAcp(id);
+  if (acpActive) resume = true;
+  // Opt-in self-healing: if the installed binary's --help doesn't evidence a
+  // resume/model flag we advertise, downgrade it (never upgrade). Codex keeps its
+  // native, separately-verified resume path, so it's exempt.
+  if (process.env.BIVY_AGENT_PROBE === "1" && installed && id !== "codex") {
+    const help = probeHelpText(spec.command);
+    if (help) {
+      const refined = refineCapabilitiesFromHelp(help, { resume, modelSelection }, { resumeTokens: resumeTokensFor(id), modelFlag: spec.model?.flag });
+      resume = refined.resume;
+      modelSelection = refined.modelSelection;
+    }
+  }
   return {
     id,
     displayName: spec.displayName,
@@ -607,16 +1105,20 @@ function cliAgentInfo(id: CliAgentId): RuntimeInfo {
     status: installed ? "available" : "external",
     packageName: spec.packageName,
     language: "Process",
-    capabilities: { toolInterception: false, modelSelection, resume, packages: false, fork: false, usageReporting, sessionDiscovery: id === "codex" },
+    // MCP tool calls are gated by real approvals when the proxy shim is enabled
+    // (BIVY_MCP_PROXY) — an honest, narrower capability than full toolInterception
+    // (it governs MCP tools, not the agent's built-in shell/edits). See
+    // src/harness/mcp-inject.ts + governMcpCall in src/server.ts.
+    capabilities: { toolInterception: acpActive, mcpToolApprovals: acpActive || Boolean(process.env.BIVY_MCP_PROXY), modelSelection, resume, packages: false, fork: false, usageReporting, sessionDiscovery: id === "codex" },
     supportTier: spec.supportTier ?? (id === "codex" ? "supported" : "experimental"),
     authOwner: spec.authOwner ?? "agent",
     notes: installed
-      ? `Available on PATH. This process adapter ${spec.parserId ? "parses its native JSON stream into a structured transcript" : "streams stdout/stderr"}; Bivy governs its filesystem/exec/MCP effects at the sandbox tier rather than intercepting each tool call. Override its launch flags with BIVY_${id.toUpperCase()}_ARGS if your CLI version differs.`
+      ? `Available on PATH. This process adapter ${spec.parserId && !spec.parserUnverified ? "parses its native JSON stream into a structured transcript" : spec.parserId ? "streams stdout/stderr (a structured JSON parser is available; opt in with BIVY_AGENT_STRUCTURED=1 once validated for your version)" : "streams stdout/stderr"}; Bivy governs its filesystem/exec/MCP effects at the sandbox tier rather than intercepting each tool call. Override its launch flags with BIVY_${id.toUpperCase()}_ARGS if your CLI version differs.`
       : `${spec.command} was not found on PATH. Install it on this node, then select this agent again.`,
     install: installed || !installCommand ? undefined : {
       label: `Install ${spec.displayName}`,
-      description: `Install ${spec.displayName} on this node now (${installCommand.command}).`,
-      command: installCommand.command,
+      description: `Install ${spec.displayName} on this node now (${installCommand.display}).`,
+      command: installCommand.display,
     },
   };
 }
@@ -752,12 +1254,88 @@ function codexAppServerRuntime(credsDir: string, tier?: SandboxTier): AgentRunti
     resumable: true,
     loadHistory: (sessionId) => loadCodexTranscript(sessionId),
     deleteHistory: (sessionId) => void deleteCodexSession(sessionId),
+    // True cross-runtime replay INTO Codex: synthesise a resumable rollout from
+    // portable history so a fork from another agent opens on a copy of the whole
+    // conversation instead of a seeded summary (best-effort — see writeCodexRollout).
+    writeHistory: (history, ctx) => writeCodexRollout(history, ctx.cwd || ctx.workspace),
     suggestName: suggestCodexSessionName,
     // Native discovery (issue #156): enumerate Codex rollouts on this node that
     // Bivy didn't start, so a pre-existing `codex` session can be adopted here
     // (the governed variant), never the plain exec runtime below.
     discoverNativeSessions: () => discoverNativeCodexSessions(),
   });
+}
+
+// --- #2: the GENERAL ACP adapter (Agent Client Protocol) --------------------
+// Generalizes the app-server shim pattern to the open ACP standard: any ACP agent
+// (e.g. `gemini --experimental-acp`) is driven through bin/acp-shim.mjs → the same
+// ProtocolRuntime that backs Codex approvals, so it gets per-tool Approve/Deny,
+// streaming, and resume with ZERO per-agent code. Configured as data via
+// BIVY_ACP_COMMAND / BIVY_ACP_ARGS (mirrors generic-cli / bivy-agent-protocol);
+// hidden from the picker until validated against a given agent, then promotable
+// with one catalog edit. Returns null when BIVY_ACP_COMMAND isn't set.
+/** Absolute path to the ACP bridge shim. */
+function acpShimPath(): string {
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "acp-shim.mjs");
+}
+
+/**
+ * Build ProtocolRuntime options that drive an ACP agent (`command` + `agentArgs`)
+ * through bin/acp-shim.mjs. Shared by the generic `acp` runtime and the per-agent
+ * ACP promotion path so both wrap agents identically.
+ */
+function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string }): ProtocolRuntimeOptions {
+  return {
+    id: opts.id,
+    displayName: opts.displayName,
+    command: process.execPath,
+    args: [acpShimPath(), "--agent", opts.command, "--", ...opts.agentArgs],
+    // Seed governed+resumable up front so the daemon attaches guardianInterceptor to
+    // the FIRST session (before the shim's hello lands); the hello confirms them.
+    capabilities: { toolInterception: true, resume: true },
+    resumable: true,
+    ...(opts.credsDir ? { credentials: createCredentialStore(opts.credsDir) } : {}),
+  };
+}
+
+function acpRuntimeFromEnv(credsDir?: string): ProtocolRuntimeOptions | null {
+  const command = process.env.BIVY_ACP_COMMAND?.trim();
+  if (!command) return null;
+  let agentArgs: string[] = [];
+  const rawArgs = process.env.BIVY_ACP_ARGS?.trim();
+  if (rawArgs) {
+    try { const p = JSON.parse(rawArgs); if (Array.isArray(p)) agentArgs = p.map(String); } catch { /* ignore malformed */ }
+  }
+  return acpRuntimeOptions({ id: "acp", displayName: process.env.BIVY_ACP_NAME?.trim() || "ACP Agent", command, agentArgs, credsDir });
+}
+
+/**
+ * Whether a CLI agent should be driven through ACP rather than the one-shot pipe:
+ * it declares an `acp` mode AND ACP is preferred for it (per-agent `BIVY_<ID>_ACP=1`
+ * or global `BIVY_PREFER_ACP=1`). This is the data-driven "promote an agent to the
+ * high-capability path" switch — no per-agent code, just a spec field + a flag.
+ */
+function prefersAcp(id: CliAgentId): boolean {
+  if (!CLI_AGENT_SPECS[id].acp) return false;
+  return process.env.BIVY_PREFER_ACP === "1" || process.env[`BIVY_${id.toUpperCase()}_ACP`] === "1";
+}
+
+function acpInfo(): RuntimeInfo {
+  const configured = Boolean(process.env.BIVY_ACP_COMMAND?.trim());
+  return {
+    id: "acp",
+    displayName: process.env.BIVY_ACP_NAME?.trim() || "ACP Agent",
+    description: "Any Agent Client Protocol (ACP) agent, driven through Bivy's shim for per-tool approvals, streaming, and resume.",
+    status: configured ? "available" : "planned",
+    packageName: process.env.BIVY_ACP_COMMAND?.trim() || "Set BIVY_ACP_COMMAND",
+    language: "Process",
+    capabilities: { toolInterception: true, modelSelection: false, resume: true, packages: false, fork: false },
+    supportTier: "experimental",
+    authOwner: "agent",
+    notes: configured
+      ? "Drives an ACP agent via bin/acp-shim.mjs → ProtocolRuntime: per-tool Approve/Deny, streaming transcript, and session/load resume — no per-agent code. Validate against your agent, then promote it into the picker as data."
+      : "Set BIVY_ACP_COMMAND (and optional BIVY_ACP_ARGS, a JSON array) to the ACP agent's launch command, e.g. BIVY_ACP_COMMAND=gemini BIVY_ACP_ARGS='[\"--experimental-acp\"]'.",
+  };
 }
 
 function splitEnvArgs(value: string | undefined, fallback: string[]): string[] {
@@ -853,19 +1431,16 @@ export const RUNTIME_CATALOG: RuntimeInfo[] = [
     authOwner: "bivy",
   },
   genericCliInfo(),
+  // `codex` sits before the governed shim it feeds; the rest of the CLI agents are
+  // derived straight from CLI_AGENT_SPECS (adding a spec = one data edit, no list
+  // to keep in sync here).
   cliAgentInfo("codex"),
   codexApprovalsInfo(),
-  cliAgentInfo("opencode"),
-  cliAgentInfo("aider"),
-  cliAgentInfo("hermes"),
-  cliAgentInfo("goose"),
-  cliAgentInfo("gemini"),
-  cliAgentInfo("qwen"),
-  cliAgentInfo("cline"),
-  cliAgentInfo("crush"),
+  ...CLI_AGENT_IDS.filter((id) => id !== "codex").map(cliAgentInfo),
   openClawInfo(),
   claudeCodeInfo(),
   protocolInfo(),
+  acpInfo(),
   {
     id: "openhands",
     displayName: "OpenHands",
@@ -955,16 +1530,18 @@ export const RUNTIME_CATALOG: RuntimeInfo[] = [
 ];
 
 // Agents Bivy fully integrates today and therefore shows in the agent picker —
-// the ten most-used coding agents, all driven through Bivy's general paths (the
+// the most-used coding agents, all driven through Bivy's general paths (the
 // native Pi/Claude runtimes, the Codex app-server shim, and the data-driven CLI
 // ProcessRuntime + CliParser path) rather than bespoke per-agent code:
 //
 //   pi, claude-code-sdk         — native runtimes (approvals, models, resume)
 //   codex-approvals             — Codex via the app-server shim (approvals + resume)
 //   opencode, gemini, qwen,     — CLI agents on the shared ProcessRuntime path:
-//   goose, aider, cline, crush    structured streaming (JSON parser where the CLI
-//                                 has one), effect-level governance (sandbox tier /
-//                                 FS-MCP-network channels), honest capabilities.
+//   goose, aider, cline, crush,   structured streaming (JSON parser where the CLI
+//   cursor, copilot, grok, amp,   has one), effect-level governance (sandbox tier /
+//   auggie, droid, continue,      FS-MCP-network channels), honest capabilities
+//   kilocode, rovodev             (resume/model advertised only where the CLI
+//                                 actually drives it).
 //
 // "Codex" here is the app-server *shim* runtime (`codex-approvals`): governed
 // (per-tool Approve/Deny) AND resumable (thread/resume by rollout id), which
@@ -975,20 +1552,18 @@ export const RUNTIME_CATALOG: RuntimeInfo[] = [
 // configured via env (generic-cli, bivy-agent-protocol), a niche/phase-1 adapter
 // (hermes, openclaw), or an aspirational "planned" placeholder with no adapter.
 // They are hidden from the picker to keep it honest, but remain fully runnable via
-// `BIVY_RUNTIME=<id>`. To promote one into the picker, give it honest capabilities
-// (no silently-no-op pickers) and add its id here.
+// `BIVY_RUNTIME=<id>`. To promote a CLI agent into the picker, give it honest
+// capabilities (no silently-no-op pickers) and drop its `hidden: true` flag in
+// CLI_AGENT_SPECS — the picker set below derives from that one field.
 // See docs/agents-not-fully-supported.md for the rationale and the promotion path.
-const PICKER_RUNTIME_IDS = new Set([
-  "pi",
-  "claude-code-sdk",
-  "codex-approvals",
-  "opencode",
-  "gemini",
-  "qwen",
-  "goose",
-  "aider",
-  "cline",
-  "crush",
+//
+// The picker = the native/shim runtimes that aren't CLI-agent specs, PLUS every
+// non-hidden CLI agent. Visibility lives on the spec (`hidden`), so promoting or
+// demoting an agent is a single data edit with no id list to drift.
+const NON_CLI_PICKER_IDS = ["pi", "claude-code-sdk", "codex-approvals"];
+const PICKER_RUNTIME_IDS = new Set<string>([
+  ...NON_CLI_PICKER_IDS,
+  ...CLI_AGENT_IDS.filter((id) => !CLI_AGENT_SPECS[id].hidden),
 ]);
 
 export function listRuntimes(currentId?: string): (RuntimeInfo & { current: boolean })[] {
@@ -1004,6 +1579,7 @@ export function listRuntimes(currentId?: string): (RuntimeInfo & { current: bool
       if (runtime.id === "openclaw") return openClawInfo();
       if (runtime.id === "claude-code-sdk") return claudeCodeInfo();
       if (runtime.id === "bivy-agent-protocol") return protocolInfo();
+      if (runtime.id === "acp") return acpInfo();
       return runtime;
     }).map((runtime) => ({ ...runtime, current: runtime.id === currentId }));
 }
@@ -1029,22 +1605,63 @@ export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
       if (!commandAvailable("codex")) throw new Error("Codex command not found on PATH: codex");
       return codexAppServerRuntime(options.credsDir, sandboxTier(options.sandbox));
     }
-    case "codex":
-    case "opencode":
-    case "aider":
-    case "hermes":
-    case "goose":
-    case "gemini":
-    case "qwen":
-    case "cline":
-    case "crush": {
-      const spec = CLI_AGENT_SPECS[id as CliAgentId];
+    case "openclaw": {
+      const openClawOptions = openClawProcessOptions();
+      if (!commandAvailable(openClawOptions.command)) throw new Error(`OpenClaw command not found on PATH: ${openClawOptions.command}`);
+      // OpenClaw owns its own auth profiles by default; Bivy only supervises the
+      // local CLI process in this phase-1 adapter.
+      return new ProcessRuntime(openClawOptions);
+    }
+    case "bivy-agent-protocol": {
+      const protocolOptions = protocolRuntimeFromEnv();
+      if (!protocolOptions) throw new Error("bivy-agent-protocol requires BIVY_PROTOCOL_COMMAND to be set.");
+      return new ProtocolRuntime({ ...protocolOptions, credentials: createCredentialStore(options.credsDir) });
+    }
+    case "acp": {
+      const acpOptions = acpRuntimeFromEnv(options.credsDir);
+      if (!acpOptions) throw new Error("acp requires BIVY_ACP_COMMAND to be set (the ACP agent's launch command, e.g. gemini).");
+      return new ProtocolRuntime(acpOptions);
+    }
+    case "claude":
+    case "claude-code":
+    case "claude-code-sdk":
+      // Share the node's provider logins (the shared vault) so the user doesn't
+      // re-auth Anthropic for this agent.
+      return new ClaudeCodeRuntime({ ...claudeRuntimeFromEnv(), credentials: createCredentialStore(options.credsDir), sandbox: options.sandbox, attachToChat: options.attachToChat });
+    default:
+      // Every CLI agent in CLI_AGENT_SPECS is dispatched here as data — no per-id
+      // case to maintain. Anything that isn't a known CLI agent throws below.
+      if (isCliAgentId(id)) return makeCliRuntime(id, options);
+      throw new Error(`Unknown or unavailable BIVY_RUNTIME "${id}". Available runtimes: pi, openclaw/codex/opencode/aider/hermes/goose/gemini/qwen/cline/crush/cursor/copilot/grok/amp/auggie/droid/continue/kilocode/rovodev/codebuff (when their CLI is installed), generic-cli (when BIVY_AGENT_COMMAND is set), claude-code-sdk (when @anthropic-ai/claude-agent-sdk is installed).`);
+  }
+}
+
+/**
+ * Build a ProcessRuntime for any CLI agent from its CLI_AGENT_SPECS entry — the
+ * single data-driven launch path (structured JSON mode where a parser exists,
+ * effect-level governance, generic resume). Extracted from the makeRuntime switch
+ * so adding an agent stays a pure-data change.
+ */
+function makeCliRuntime(id: CliAgentId, options: RuntimeFactoryOptions): AgentRuntime {
+      const spec = CLI_AGENT_SPECS[id];
       if (!commandAvailable(spec.command)) throw new Error(`${spec.displayName} command not found on PATH: ${spec.command}`);
-      // Phase 4 — structured mode ON by default when the agent has a validated
-      // JSON parser: launch with its native JSON flags and parse stdout into
-      // normalized events. BIVY_AGENT_STRUCTURED=0 forces the dumb-pipe fallback;
-      // BIVY_AGENT_PARSER overrides the parser id (e.g. to "bivy-protocol").
-      const structured = Boolean(spec.parserId) && process.env.BIVY_AGENT_STRUCTURED !== "0";
+      // ACP promotion: when the agent declares an `acp` mode and it's preferred
+      // (BIVY_<ID>_ACP=1 / BIVY_PREFER_ACP=1), drive it through the governed
+      // ProtocolRuntime (per-tool approvals + streaming + resume) instead of the
+      // one-shot pipe below — the high-capability path, selected as data.
+      if (spec.acp && prefersAcp(id)) {
+        return new ProtocolRuntime(acpRuntimeOptions({ id, displayName: spec.displayName, command: spec.command, agentArgs: spec.acp.args, credsDir: options.credsDir }));
+      }
+      // Phase 4 — structured mode ON by default when the agent has a VALIDATED JSON
+      // parser: launch with its native JSON flags and parse stdout into normalized
+      // events. BIVY_AGENT_STRUCTURED=0 forces the dumb-pipe fallback everywhere;
+      // BIVY_AGENT_STRUCTURED=1 opts INTO structured mode for agents whose parser
+      // is still unverified (spec.parserUnverified — safe default is dumb pipe so a
+      // wrong flag can't regress a working agent). BIVY_AGENT_PARSER overrides the
+      // parser id (e.g. to "bivy-protocol").
+      const structuredPref = process.env.BIVY_AGENT_STRUCTURED;
+      const parserReady = Boolean(spec.parserId) && (!spec.parserUnverified || structuredPref === "1");
+      const structured = parserReady && structuredPref !== "0";
       const parserId = process.env.BIVY_AGENT_PARSER || (structured ? spec.parserId : undefined);
       const tier = sandboxTier(options.sandbox);
       // BIVY_<ID>_ARGS overrides the launch flags for a CLI version we haven't
@@ -1061,7 +1678,12 @@ export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
       // `codex login`), `prepare` mints that auth file from the shared vault so
       // the run just works; the preflight still catches the genuinely
       // uncredentialed case with an actionable message instead of an opaque 401.
-      const preflight = id === "codex" ? (env: Record<string, string | undefined>) => codexCredentialPreflight(env) : undefined;
+      const preflight =
+        id === "codex"
+          ? (env: Record<string, string | undefined>) => codexCredentialPreflight(env)
+          : id === "opencode"
+            ? (env: Record<string, string | undefined>, ctx: { provider?: string }) => opencodeCredentialPreflight(env, ctx)
+            : undefined;
       const prepare = id === "codex"
         ? async (): Promise<Record<string, string>> => {
             const home = await ensureCodexAuth(options.credsDir);
@@ -1099,27 +1721,5 @@ export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
                 ),
             }
           : {};
-      return new ProcessRuntime({ id, displayName: spec.displayName, command: spec.command, args: runArgs, promptMode: spec.promptMode, credentials: createCredentialStore(options.credsDir), parserFactory: parserFactoryFor(parserId), preflight, prepare, model: cliModelConfig(id as CliAgentId), thinking: cliThinkingConfig(id as CliAgentId), usageReporting: cliUsageReporting(id as CliAgentId), ...resumeOpts });
-    }
-    case "openclaw": {
-      const openClawOptions = openClawProcessOptions();
-      if (!commandAvailable(openClawOptions.command)) throw new Error(`OpenClaw command not found on PATH: ${openClawOptions.command}`);
-      // OpenClaw owns its own auth profiles by default; Bivy only supervises the
-      // local CLI process in this phase-1 adapter.
-      return new ProcessRuntime(openClawOptions);
-    }
-    case "bivy-agent-protocol": {
-      const protocolOptions = protocolRuntimeFromEnv();
-      if (!protocolOptions) throw new Error("bivy-agent-protocol requires BIVY_PROTOCOL_COMMAND to be set.");
-      return new ProtocolRuntime({ ...protocolOptions, credentials: createCredentialStore(options.credsDir) });
-    }
-    case "claude":
-    case "claude-code":
-    case "claude-code-sdk":
-      // Share the node's provider logins (the shared vault) so the user doesn't
-      // re-auth Anthropic for this agent.
-      return new ClaudeCodeRuntime({ ...claudeRuntimeFromEnv(), credentials: createCredentialStore(options.credsDir), sandbox: options.sandbox });
-    default:
-      throw new Error(`Unknown or unavailable BIVY_RUNTIME "${id}". Available runtimes: pi, openclaw/codex/opencode/aider/hermes/goose/gemini/qwen/cline/crush (when their CLI is installed), generic-cli (when BIVY_AGENT_COMMAND is set), claude-code-sdk (when @anthropic-ai/claude-agent-sdk is installed).`);
-  }
+      return new ProcessRuntime({ id, displayName: spec.displayName, command: spec.command, args: runArgs, promptMode: spec.promptMode, credentials: createCredentialStore(options.credsDir), parserFactory: parserFactoryFor(parserId), preflight, prepare, model: cliModelConfig(id), thinking: cliThinkingConfig(id), usageReporting: cliUsageReporting(id), ...resumeOpts });
 }

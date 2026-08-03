@@ -95,7 +95,11 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env logs -f contr
 ```
 
 See [`../docs/self-host.md`](../docs/self-host.md) for backups, restore drills,
-secret rotation, and health checks.
+secret rotation, and health checks. To run control-plane replicas and relay
+shards across several servers behind an external load balancer, use
+[`docker-compose.cluster.yml`](docker-compose.cluster.yml) and
+[`cluster-node.sh`](cluster-node.sh); the topology and rollout rules are in
+[`../docs/scaling.md`](../docs/scaling.md).
 
 ## 4. Connect your PC as a node
 

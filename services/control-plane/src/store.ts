@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHash } from "node:crypto";
+import type { SecretEnvelope } from "./hosted-crypto.js";
 
 /**
  * Control plane data store.
@@ -39,21 +40,19 @@ export interface Entitlements {
   pushEnabled: boolean;
   relayEnabled: boolean;
   // Hosted GitHub/Slack work queue (label an issue → PR on your node). Available
-  // on every plan; free's usage is bounded by the shared `weeklyRunLimit` below.
+  // on every plan; free automation usage is bounded by `weeklyRunLimit` below.
   workQueueEnabled: boolean;
-  // Runs the plan may START per ROLLING 7-DAY WINDOW ACROSS EVERY SOURCE — manual,
-  // app, GitHub/Slack work queue, and ephemeral servers all count against this one
-  // cap (one distinct session = one run; reconnecting to a live session does not
-  // count). A rolling window (not a calendar week) so capacity frees up gradually
-  // as individual runs age past 7 days — this fits bursty dev work far better than a
-  // hard daily/weekly reset. Optional: `undefined` means UNLIMITED (paid plans omit
-  // it, mirroring `maxNodes`). Free pins this to FREE_WEEKLY_RUNS. Enforced at the
-  // server-observed admission points (work-queue claim, ephemeral launch) and only
-  // when `ENFORCE_ENTITLEMENTS=1` (Bivy Cloud); self-host stacks run unlimited regardless.
+  // AUTOMATION runs the plan may start per rolling 7-day window. Only queued work
+  // (`automation:*` run keys: GitHub, Slack, webhook, and scheduled jobs) consumes
+  // this allowance. Interactive CLI/app sessions are deliberately unlimited on
+  // every plan: remote control is the free adoption surface; Pro monetizes the
+  // differentiated unattended operations layer. A rolling window lets capacity
+  // return gradually as jobs age out. Optional means unlimited (paid plans).
+  // The legacy field name stays wire-compatible with pre-release clients.
   weeklyRunLimit?: number;
   // Quick ephemeral cloud servers brokered from a phone (Fly/Hetzner/AWS/… with the
   // user's own token, proxied through the control-plane cold-start relay). Available
-  // on every plan; a launched runner counts as a run against `weeklyRunLimit`.
+  // on every plan. A runner used by queued work consumes that automation job's run.
   ephemeralEnabled: boolean;
 }
 
@@ -102,6 +101,13 @@ export interface NodeRecord {
 export interface ResolvedClient {
   accountId: string;
   nodeId: string | null; // non-null when the token is scoped to one node
+}
+
+/** Short-lived server-side state for an OAuth redirect. Kept in the shared
+ * store so the callback may land on any control-plane replica. */
+export interface OAuthState {
+  deviceId?: string;
+  returnPath?: string;
 }
 
 // Cross-node session index (option b). The control plane holds ONLY metadata:
@@ -229,6 +235,157 @@ export function normalizeEphemeralQueueDefault(value: unknown): EphemeralQueueDe
   return out;
 }
 
+// Account-level, reusable ephemeral node config ("a config = a selectable
+// node"). Non-secret sizing only; the launching device supplies the provider
+// token. Stored as a JSONB array on the account row.
+export interface EphemeralNodeConfig {
+  id: string;
+  name: string;
+  provider: string;
+  region?: string;
+  size?: string;
+  ttlMinutes?: number;
+  teardownOnAgentFinish?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Normalize a stored/inbound configs array, dropping malformed entries and
+ *  clamping ttlMinutes. */
+export function normalizeEphemeralConfigs(value: unknown): EphemeralNodeConfig[] {
+  if (!Array.isArray(value)) return [];
+  const out: EphemeralNodeConfig[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const v = raw as Record<string, unknown>;
+    const id = typeof v.id === "string" ? v.id.trim() : "";
+    const name = typeof v.name === "string" ? v.name.trim() : "";
+    const provider = typeof v.provider === "string" ? v.provider.trim() : "";
+    if (!id || !name || !provider) continue;
+    const cfg: EphemeralNodeConfig = {
+      id, name, provider,
+      createdAt: typeof v.createdAt === "string" ? v.createdAt : "",
+      updatedAt: typeof v.updatedAt === "string" ? v.updatedAt : "",
+    };
+    if (typeof v.region === "string" && v.region.trim()) cfg.region = v.region.trim();
+    if (typeof v.size === "string" && v.size.trim()) cfg.size = v.size.trim();
+    if (typeof v.ttlMinutes === "number" && Number.isFinite(v.ttlMinutes)) cfg.ttlMinutes = Math.max(5, Math.min(24 * 60, Math.floor(v.ttlMinutes)));
+    if (v.teardownOnAgentFinish === true) cfg.teardownOnAgentFinish = true;
+    out.push(cfg);
+  }
+  return out;
+}
+
+// The account's default queue routing. `primary` names the runner; only a
+// persistent-node primary may carry an ephemeral-config `fallback`.
+export type QueueRunnerTarget =
+  | { kind: "shared" }
+  | { kind: "node"; node: string }
+  | { kind: "config"; configId: string };
+
+export interface QueueRouting {
+  primary: QueueRunnerTarget;
+  fallback?: { kind: "config"; configId: string };
+}
+
+export const DEFAULT_QUEUE_ROUTING: QueueRouting = { primary: { kind: "shared" } };
+
+/** Normalize a stored/inbound routing value; unknown/invalid → shared queue,
+ *  and a fallback is only kept for a persistent-node primary. */
+export function normalizeQueueRouting(value: unknown): QueueRouting {
+  if (!value || typeof value !== "object") return { ...DEFAULT_QUEUE_ROUTING };
+  const v = value as Record<string, any>;
+  const p = v.primary;
+  let primary: QueueRunnerTarget = { kind: "shared" };
+  if (p && typeof p === "object") {
+    if (p.kind === "node" && typeof p.node === "string" && p.node.trim()) primary = { kind: "node", node: p.node.trim() };
+    else if (p.kind === "config" && typeof p.configId === "string" && p.configId.trim()) primary = { kind: "config", configId: p.configId.trim() };
+  }
+  const f = v.fallback;
+  const fallback = f && typeof f === "object" && f.kind === "config" && typeof f.configId === "string" && f.configId.trim()
+    ? { kind: "config" as const, configId: f.configId.trim() }
+    : undefined;
+  return primary.kind === "node" && fallback ? { primary, fallback } : { primary };
+}
+
+// SECURITY / TRUST-MODEL NOTE: enabling hosted provisioning stores repo-capable
+// and cloud-capable credentials on the CONTROL PLANE for the first time — a
+// deliberate departure from "the control plane holds no secrets". It's the price
+// of unattended, device-offline provisioning (the control plane launches an
+// ephemeral machine itself when a webhook arrives and nothing is online). Off by
+// default, per account. Tokens are stored as JSONB here; a production deployment
+// MUST encrypt them at rest (KMS/HSM) and audit every use.
+/** A GitHub App the control plane can mint short-lived installation tokens from
+ *  — preferred over a stored PAT (see docs/hosted-provisioning-trust-model.md). */
+export interface HostedGithubApp {
+  appId: string;
+  installationId: string;
+  privateKeyPem: string;
+}
+
+export interface HostedProvisioning {
+  enabled: boolean;
+  /** GitHub App creds — when set, a fresh installation token is minted per
+   *  launch/op instead of using a stored PAT. Strongly preferred. */
+  githubApp?: HostedGithubApp;
+  /** Fallback long-lived PAT, injected as BIVY_GITHUB_TOKEN. Used only when no
+   *  githubApp is configured. */
+  githubToken?: string;
+  /** Cloud provider tokens keyed by provider id (fly/hetzner/aws), used to launch. */
+  providerTokens?: Record<string, string>;
+}
+
+export const DEFAULT_HOSTED_PROVISIONING: HostedProvisioning = { enabled: false };
+
+export function normalizeHostedProvisioning(value: unknown): HostedProvisioning {
+  if (!value || typeof value !== "object") return { ...DEFAULT_HOSTED_PROVISIONING };
+  const v = value as Record<string, unknown>;
+  const out: HostedProvisioning = { enabled: Boolean(v.enabled) };
+  if (typeof v.githubToken === "string" && v.githubToken.trim()) out.githubToken = v.githubToken.trim();
+  const app = v.githubApp as Record<string, unknown> | undefined;
+  if (app && typeof app === "object"
+    && typeof app.appId === "string" && app.appId.trim()
+    && typeof app.installationId === "string" && app.installationId.trim()
+    && typeof app.privateKeyPem === "string" && app.privateKeyPem.trim()) {
+    out.githubApp = { appId: app.appId.trim(), installationId: app.installationId.trim(), privateKeyPem: app.privateKeyPem };
+  }
+  if (v.providerTokens && typeof v.providerTokens === "object") {
+    const tokens: Record<string, string> = {};
+    for (const [k, val] of Object.entries(v.providerTokens as Record<string, unknown>)) {
+      if (typeof val === "string" && val.trim()) tokens[k.trim()] = val.trim();
+    }
+    if (Object.keys(tokens).length) out.providerTokens = tokens;
+  }
+  return out;
+}
+
+/** Non-secret view of hosted provisioning for GET responses — never leaks tokens. */
+export interface HostedProvisioningStatus {
+  enabled: boolean;
+  credential: "app" | "pat" | "none";
+  githubAppId?: string;
+  providers: string[];
+}
+export function redactHostedProvisioning(h: HostedProvisioning): HostedProvisioningStatus {
+  return {
+    enabled: h.enabled,
+    credential: h.githubApp ? "app" : h.githubToken ? "pat" : "none",
+    githubAppId: h.githubApp?.appId,
+    providers: Object.keys(h.providerTokens ?? {}),
+  };
+}
+
+/** An audit event recording a use of hosted credentials (never contains a secret). */
+export interface HostedAuditEvent {
+  at: string;
+  action: "credential_updated" | "credential_rotated" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "room_key_escrowed" | "room_key_reused";
+  provider?: string;
+  configId?: string;
+  nodeId?: string;
+  workItemId?: string;
+  detail?: string;
+}
+
 // Cross-node model credential snapshot. Nodes push the exact provider auth
 // records their local credential vault uses; other nodes on the same account can pull
 // and import them so model logins/API keys are account-wide instead of per-node.
@@ -251,6 +408,60 @@ export interface ModelAuthKeyRequest {
   publicKey: string;
   createdAt: string;
 }
+
+// Device→device ephemeral-provider-token vault (P2 / Gap A). Same E2E shape as
+// the model-auth vault, but recipients are the account's paired DEVICES (keyed
+// by X25519 public key), so a second device can wake/reach a machine the first
+// launched. The control plane stores only ciphertext + per-device wrapped keys.
+export interface DeviceVault {
+  ciphertext: string;
+  updatedByDevice: string;
+  updatedAt: string;
+}
+
+export interface DeviceVaultWrappedKeyRecord {
+  devicePublicKey: string;
+  wrappedKey: string;
+  wrappedByPublicKey: string;
+  updatedAt: string;
+}
+
+export interface DeviceVaultKeyRequest {
+  devicePublicKey: string;
+  createdAt: string;
+}
+
+// A durable, node-independent, E2E-encrypted session snapshot (Gap B). Keyed by
+// session (not node) so it survives the owning machine's teardown; the control
+// plane stores only opaque ciphertext (a sealed replication frame — transcript +
+// git checkpoint + runtime resume token), never plaintext. Lets a torn-down
+// destroy-lane session be rebuilt onto a fresh machine.
+export interface SessionSnapshotRecord {
+  sessionId: string;
+  ciphertext: string;
+  updatedAt: string;
+}
+
+// Durable session↔machine correlation (Gap 1). Non-secret routing/identity that
+// lets a torn-down destroy-lane session be rebuilt AFTER its node is unenrolled
+// and drops from the node registry: it records the reusable eph-* node id plus
+// the launch params needed to re-provision the same machine. Keyed by session
+// and NOT FK-cascaded off nodes, so it outlives teardown (like session_snapshots).
+// Same trust tier as nodeId — never holds a credential (the escrowed room key for
+// hosted rebuild lives separately in node_room_keys, Gap 3).
+export interface SessionCorrelation {
+  sessionId: string;
+  nodeId: string;
+  provider: string;
+  region?: string;
+  ttlMinutes?: number;
+  repo?: string;
+  setupId?: string;
+  machineId?: string;
+  app?: string;
+  updatedAt: string;
+}
+export type SessionCorrelationInput = Omit<SessionCorrelation, "updatedAt">;
 
 // GitHub App private-key vault (issue #88). Same shape/guarantee as the model-
 // auth vault above — the control plane stores ciphertext plus per-node wrapped
@@ -443,6 +654,7 @@ export interface WorkItem {
   body?: string;
   repo?: string; // "owner/repo"
   issueNumber?: number;
+  externalId?: string; // provider-native id (for example a Linear issue UUID)
   url?: string;
   createdAt: string;
   claimedByNodeId?: string;
@@ -521,7 +733,7 @@ export type WorkItemInput = {
 export interface InboundHook {
   id: string;
   accountId: string;
-  kind: string; // "github" | "github_app" | "slack"
+  kind: string; // "github" | "github_app" | "linear" | "slack"
   secret: string;
   createdAt: string;
   // GitHub App metadata registered by the node at connect time (flavor A). The
@@ -547,6 +759,13 @@ export interface InboundHook {
   // node serving the shared `bivy` label. Set from Settings → GitHub App in the
   // web UI. undefined = no default, keep the shared-queue behavior.
   defaultNode?: string;
+  // Who may `@`-mention-trigger a run via a GitHub issue/comment (issue #259:
+  // on a public repo, anyone can otherwise comment and burn the account's
+  // automation quota). Checked against the triggering author's GitHub
+  // `author_association` — see `meetsTriggerAccess` in webhooks.ts. undefined
+  // (and "everyone") mean no restriction — the behavior before this setting
+  // existed. Set from Settings → GitHub App in the web UI.
+  triggerAccess?: "everyone" | "contributor" | "collaborator";
   // The node that currently holds this GitHub App's private key and services it
   // (set when a node registers app-meta / connects). The control plane can't run
   // the app itself — only a node with the key can — so this is how the UI tells
@@ -634,18 +853,16 @@ export interface PairedDeviceInfo {
   updatedAt: string;
 }
 
-// Free allowance: how many runs a free account may START within any rolling 7-day
-// window across EVERY source combined — manual, app, work queue, ephemeral. The one
-// cap that bounds a free account; everything else (nodes, push, ephemeral) is
-// uncapped. A rolling window fits bursty usage (a busy day doesn't wall you, and an
-// idle stretch quietly refills capacity). Paid plans omit the limit (unlimited).
+// Free allowance for unattended automation (GitHub, Slack, webhook, scheduled).
+// Interactive CLI/app sessions never consume it. This gives the commoditized remote
+// control surface away for adoption and charges for the differentiated ops layer.
+// Paid plans omit the limit (unlimited automation).
 export const FREE_WEEKLY_RUNS = 10;
 
 export const PLAN_ENTITLEMENTS: Record<Plan, Omit<Entitlements, "plan">> = {
-  // Free is now feature-complete: unlimited nodes, push notifications, and
-  // ephemeral cloud runners are all included. The ONLY cap is FREE_WEEKLY_RUNS runs
-  // per rolling 7-day window, counted across every source; paid plans omit the limit
-  // ⇒ unlimited. Every plan omits `maxNodes` ("unlimited nodes" across the board).
+  // Free is feature-complete: unlimited interactive sessions, nodes, push, and
+  // ephemeral runners. The only cap is FREE_WEEKLY_RUNS queued automation jobs per
+  // rolling 7-day window; paid plans omit it. Every plan omits `maxNodes`.
   free: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, weeklyRunLimit: FREE_WEEKLY_RUNS, ephemeralEnabled: true },
   pro: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
   team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
@@ -697,6 +914,13 @@ export interface MeshStore {
   createSession(accountId: string): Promise<string>; // returns raw session token
   accountFromSession(token: string | null): Promise<Account | undefined>;
   revokeSession(token: string): Promise<void>;
+
+  // Fleet-wide auth coordination. OAuth state must survive a callback landing
+  // on another replica; auth throttles must not reset when traffic moves between
+  // replicas. Both are atomic in the shared store.
+  createOAuthState(input: OAuthState, ttlMs?: number): Promise<string>;
+  consumeOAuthState(state: string): Promise<OAuthState | undefined>;
+  rateLimitExceeded(bucket: string, key: string, limit: number, windowMs: number): Promise<boolean>;
 
   // Device login (hands-free CLI sign-in)
   createDeviceLogin(ttlMs?: number): Promise<{ deviceId: string; deviceSecret: string }>;
@@ -809,6 +1033,27 @@ export interface MeshStore {
   getEphemeralQueueDefault(accountId: string): Promise<EphemeralQueueDefault>;
   setEphemeralQueueDefault(accountId: string, patch: Partial<EphemeralQueueDefault>): Promise<EphemeralQueueDefault>;
 
+  // Per-account ephemeral node configs (reusable, named runner templates) and
+  // the account's default queue routing (primary runner + optional fallback).
+  // Both are JSONB on the account row, same getter/full-set shape as above.
+  getEphemeralConfigs(accountId: string): Promise<EphemeralNodeConfig[]>;
+  setEphemeralConfigs(accountId: string, configs: EphemeralNodeConfig[]): Promise<EphemeralNodeConfig[]>;
+  getQueueRouting(accountId: string): Promise<QueueRouting>;
+  setQueueRouting(accountId: string, routing: QueueRouting): Promise<QueueRouting>;
+
+  // Hosted (control-plane-orchestrated) provisioning: per-account credentials +
+  // enable flag, and a tracking list of machines the control plane launched
+  // itself (for dedupe/teardown). Machines are stored as opaque JSONB records.
+  getHostedProvisioning(accountId: string): Promise<HostedProvisioning>;
+  /** Non-decrypting presence view for the settings UI (no master key needed). */
+  getHostedProvisioningStatus(accountId: string): Promise<HostedProvisioningStatus>;
+  setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
+  getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
+  setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
+  // Append-only audit trail of hosted-credential use (capped, newest-first read).
+  appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
+  listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;
+
   // Account-wide model provider credentials, shared across enrolled nodes.
   getModelAuthVault(accountId: string): Promise<ModelAuthVault | undefined>;
   setModelAuthVault(accountId: string, nodeId: string, ciphertext: string): Promise<ModelAuthVault>;
@@ -817,6 +1062,49 @@ export interface MeshStore {
   requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<void>;
   listModelAuthKeyRequests(accountId: string, exceptNodeId: string): Promise<ModelAuthKeyRequest[]>;
   setModelAuthWrappedKey(accountId: string, targetNodeId: string, wrappedByNodeId: string, wrappedByPublicKey: string, wrappedKey: string): Promise<ModelAuthWrappedKey>;
+
+  // Node-less inheritance (hosted): escrow the model-auth vault KEY, sealed at rest
+  // with the per-account hosted key, so a LONE hosted ephemeral can decrypt the
+  // synced vault (incl. subscription OAuth) with no peer to wrap the key. Hosted-
+  // provisioning accounts ONLY (enforced at the endpoint) — CP-readable by design,
+  // the same posture as provider tokens / room-key escrow. Non-hosted accounts stay
+  // fully peer-wrapped (E2E, CP-blind).
+  getHostedModelAuthVaultKey(accountId: string): Promise<SecretEnvelope | undefined>;
+  setHostedModelAuthVaultKey(accountId: string, enc: SecretEnvelope): Promise<void>;
+
+  // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
+  getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;
+  setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string): Promise<DeviceVault>;
+  getDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<DeviceVaultWrappedKeyRecord | undefined>;
+  requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void>;
+  listDeviceVaultKeyRequests(accountId: string, exceptDevicePublicKey: string): Promise<DeviceVaultKeyRequest[]>;
+  setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<DeviceVaultWrappedKeyRecord>;
+
+  // Durable E2E session snapshots for rebuild-resume (Gap B) — opaque ciphertext.
+  getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined>;
+  setSessionSnapshot(accountId: string, sessionId: string, ciphertext: string): Promise<SessionSnapshotRecord>;
+  deleteSessionSnapshot(accountId: string, sessionId: string): Promise<void>;
+
+  // Durable session↔machine correlation for rebuild-after-teardown (Gap 1).
+  getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined>;
+  listSessionCorrelations(accountId: string): Promise<SessionCorrelation[]>;
+  setSessionCorrelation(accountId: string, input: SessionCorrelationInput): Promise<SessionCorrelation>;
+  deleteSessionCorrelation(accountId: string, sessionId: string): Promise<void>;
+
+  // Case B: find an indexed session for a GitHub issue so an inbound comment/issue
+  // CONTINUES it instead of starting a new one. Matches session_index.source
+  // ("issue:owner/repo#N"). Covers sessions on currently-enrolled nodes; a session
+  // whose node was already torn down is rebuilt via the device send path (Gap 1).
+  findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined>;
+
+  // Gap 3: escrowed session ROOM KEY for HOSTED (device-offline) rebuild. Sealed
+  // at rest with the per-account hosted-provisioning key (hosted-crypto), keyed by
+  // the reusable eph-* node id, NOT FK-cascaded off nodes so it survives teardown.
+  // Written ONLY for hosted-provisioning accounts (the control plane already holds
+  // their provider/GitHub creds); device-launched sessions keep the room key
+  // device-only and never escrow. Never exposed to any client.
+  getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined>;
+  setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void>;
 
   // GitHub App private-key vault (issue #88), per-app — see GithubAppVault above.
   // A node lists every app the account has a vault for (it may not hold all of
@@ -870,6 +1158,13 @@ export interface MeshStore {
   // `bivy`-routed work should default to, e.g. "macbook" routes it as
   // `bivy/macbook` instead of the shared queue. Settings → GitHub App in the web UI.
   setInboundHookDefaultNode(accountId: string, id: string, defaultNode: string | undefined): Promise<InboundHook | undefined>;
+  // Set (or clear, with undefined) who may `@`-mention-trigger a run on this
+  // hook. Settings → GitHub App in the web UI.
+  setInboundHookTriggerAccess(
+    accountId: string,
+    id: string,
+    triggerAccess: "everyone" | "contributor" | "collaborator" | undefined,
+  ): Promise<InboundHook | undefined>;
   // The account's GitHub App hook, if one is connected (flavor A: one per
   // account). Prefers a completed hook (one with a registered mention) over an
   // orphan left by an abandoned create flow.
@@ -923,14 +1218,16 @@ export interface MeshStore {
   // True only when the idempotent insert created a new run-start row.
   recordRunStart(accountId: string, runKey: string): Promise<boolean>;
   // How many DISTINCT runs the account has STARTED at/after `sinceIso` (recorded via
-  // recordRunStart). Powers the free-tier rolling run quota — one distinct run key = one run.
-  countRunStartsSince(accountId: string, sinceIso: string): Promise<number>;
+  // recordRunStart). `runKeyPrefix` scopes a meter to a class such as `automation:`;
+  // omitted means all starts (useful for aggregate product metrics).
+  countRunStartsSince(accountId: string, sinceIso: string, runKeyPrefix?: string): Promise<number>;
   // Delete run-start rows older than `beforeIso`. Runs older than the rolling window
   // can never be counted again, so this is pure housekeeping to keep the table lean;
   // called on an interval by the control plane. Returns how many rows were removed.
   pruneRunStartsBefore(beforeIso: string): Promise<number>;
   // Delete expired rows from every short-lived, single-use auth artifact table
-  // (login_tokens, sessions, link_grants, relay_tickets, device_logins). Each of
+  // (login_tokens, sessions, link_grants, relay_tickets, device_logins,
+  // oauth_states, and expired auth_rate_limits). Each of
   // these is normally deleted on successful single-use consumption, but an
   // abandoned attempt (closed tab, retried client, a node that never completes
   // introspection) leaves its row behind with no other cleanup path — called on

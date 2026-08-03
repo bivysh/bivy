@@ -40,7 +40,7 @@ this order:
    is a git checkout (has `.git`). This covers dev checkouts and the
    `install.sh` tarball tree, which are user-owned and preserve `.bivy` across
    updates.
-3. `~/.bivy` otherwise — the `npm i -g bivy` / `npx bivy` case, where the
+3. `~/.bivy` otherwise — the `npm i -g @bivy/bivy` / `npx @bivy/bivy` case, where the
    package directory may be root-owned and is replaced on update.
 
 The CLI then **exports the resolved value as `BIVY_DATA_DIR`** into every child
@@ -57,7 +57,7 @@ process, so the daemon, agents and helper scripts all agree.
 | Path | Contents | Written by |
 | --- | --- | --- |
 | `cli.json` | Workspace, port, `service` flag, and an `env` block of persisted environment variables. Mode `0600` | `bivy setup`, `bivy service install/uninstall`, `bivy github:connect`, `bivy github:app-connect`, and the node when you connect/disconnect a GitHub App from the web app |
-| `settings.json` | Agent-neutral node settings: `defaultAgent`, `defaultModel`, `defaultSandbox`, `approvalMode`, `githubMaxConcurrent`, `githubIssuePrompt` | The node, from the web app's Settings screen |
+| `settings.json` | Agent-neutral node settings: `defaultAgent`, `defaultModel`, `defaultSandbox`, `approvalMode`, `githubMaxConcurrent`, `githubIssuePrompt`, `sessionSync`, `worktreeSync`, `syncStandbyNodeId`, `sessionResumeMode`, `autoAttachToolImages` | The node, from the web app's Settings screen |
 | `relay.json` | Relay URL, control-plane URL, client base URL, node enrollment token. Mode `0600` | `bivy relay:setup` |
 | `nodes.json` | Direct-node registry (`name` → `{url, token}`) for `bivy run --node` | `bivy nodes add/remove` |
 | `shims.json` | Installed agent shims | `bivy shim install/uninstall` |
@@ -120,6 +120,7 @@ For the three settings that also exist in `settings.json`:
 | Sandbox tier | per-session override → `BIVY_SANDBOX` → `settings.json` `defaultSandbox` → `workspace-write` |
 | Approval mode | `BIVY_APPROVAL_MODE` → `settings.json` `approvalMode` → `autonomous` |
 | Default agent | `BIVY_RUNTIME` (process env, then `cli.json`) → `settings.json` `defaultAgent` → `pi` |
+| Auto-attach tool images | `BIVY_AUTO_ATTACH_TOOL_IMAGES` → `settings.json` `autoAttachToolImages` → off |
 
 CLI flags always win over both, for the commands that have them
 (`bivy exec --agent`, `bivy relay:setup --control-plane`, `bivy prune
@@ -136,7 +137,7 @@ Value parsing is not uniform across variables:
   `BIVY_REQUIRE_LOCAL_AUTH`, `BIVY_MULTI_USER_HOST`.
 - Plain truthiness (**any** non-empty value enables, including `"0"` and
   `"false"`): `BIVY_EGRESS_PROXY`, `BIVY_MCP_PROXY`, `BIVY_WORKTREE_COW_CLONE`,
-  `BIVY_DEBUG`.
+  `BIVY_DEBUG`, `BIVY_AUTO_ATTACH_TOOL_IMAGES`.
 - Numeric knobs that honour `0` as "off/zero": `BIVY_SESSION_IDLE_CLOSE_MS`,
   `BIVY_MAX_OPEN_SESSIONS`, `BIVY_MAX_RUN_TERMINALS`,
   `BIVY_WORKTREE_RETENTION_MS`, `BIVY_WORKTREE_SOFT_CAP_BYTES`,
@@ -166,7 +167,7 @@ unless noted.
 
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
-| `PORT` | integer | `4317` | Supported | Node HTTP/WebSocket port |
+| `PORT` | integer | `4317` | Supported | Node HTTP/WebSocket port. `bivy setup` auto-picks the first **free** port at or above `4317`, so a second node on the same machine (staging + production, or one node per OS user) lands on `4318`, `4319`, … without you choosing. Set `PORT` explicitly to override; the daemon exits with a clear error if its port is already taken |
 | `BIVY_HOST` | address | `127.0.0.1` | Supported | Bind address. `HOST` is accepted as a fallback. **This port grants full control of the node with no TLS** — only widen it on a network you trust |
 | `HOST` | address | — | Supported | Second choice for `BIVY_HOST` |
 | `BIVY_PUBLIC_URL` | URL | request-derived, else `http://localhost:<port>` | Supported | External base URL used to build integration OAuth redirect URIs. Set this behind a reverse proxy |
@@ -303,7 +304,7 @@ The hosted endpoints all derive from one domain, so you normally set nothing.
 | `BIVY_NODE_LABEL` | label | unset | Supported override — an **extra** work-queue label this node serves, on top of `<base>` and `<base>/<node-name>`. Accepts `bivy/x` or a bare `x`. Rarely needed; the node name is used automatically |
 | `BIVY_URL` | URL | `http://localhost:<PORT>` | Supported — which node the `bivy exec` / attach clients talk to. `--url` wins |
 | `BIVY_DEVICE_TOKEN` | token | unset | Supported — bearer for those clients. `--token` wins |
-| `BIVY_UPDATE_REGISTRY_URL` | URL | `https://registry.npmjs.org/bivy/latest` | Supported — registry endpoint the node polls for update notices. Point at a mirror or private registry |
+| `BIVY_UPDATE_REGISTRY_URL` | URL | `https://registry.npmjs.org/%40bivy%2Fbivy/latest` | Supported — registry endpoint the node polls for update notices. Point at a mirror or private registry |
 | `BIVY_MODEL_CATALOG_URL` | URL | `https://bivy.sh/api/models/local-catalog.json` | Supported — remote local-model presets. Fetched best-effort with a 2.5 s timeout; failure is silent |
 
 ## GitHub work queue
@@ -425,8 +426,8 @@ unauthenticated dev login enabled.
 | `RELAY_SHARD_URLS` | comma-separated URLs | falls back to `RELAY_PUBLIC_URL`, then `ws://localhost:4500` | Node→shard mapping is by hash of the node id |
 | `DATABASE_POOL_MAX` | integer ≥ 1 | `10` | |
 | `LINK_GRANT_TTL_MS` | integer ms | `2592000000` (30 days) | TTL of the device-linking grant minted from a pairing QR |
-| `ENFORCE_ENTITLEMENTS` | `1` | **off** | When off, plan gates don't apply: every signed-in account runs unlimited (no free-tier run cap). When on, free accounts get `FREE_WEEKLY_RUNS` (10) runs per rolling 7-day window counted across every source (manual, app, work queue), as a soft cap (one grace run past the limit before a hard refusal); paid plans are unlimited |
-| `RUN_LIMIT_OBSERVE_ONLY` | `1` | **off** | Observe-only mode for the free run cap (only meaningful with `ENFORCE_ENTITLEMENTS=1`). Runs are still counted and reported (the UI shows "used / limit"), but never blocked — so you can watch the real runs-per-window distribution and tune `FREE_WEEKLY_RUNS` before turning enforcement on, without walling anyone during the observation window |
+| `ENFORCE_ENTITLEMENTS` | `1` | **off without Stripe; always on with Stripe** | Stripe-backed hosted deployments always enforce plan gates, regardless of this flag. On no-billing/self-hosted stacks this remains opt-in. Interactive CLI/app sessions remain unlimited; free accounts get `FREE_WEEKLY_RUNS` (10) unattended automations per rolling 7-day window across GitHub, Slack, webhooks, and schedules, with one grace job before refusal. Paid plans have unlimited automation. |
+| `RUN_LIMIT_OBSERVE_ONLY` | `1` | **off** | Observe-only mode for no-billing test/staging deployments with `ENFORCE_ENTITLEMENTS=1`. It is ignored when Stripe billing is configured, where the cap is always enforced. |
 
 ## Authentication
 
@@ -538,7 +539,6 @@ Publishing is driven by flags, not environment: `--publish`, `--dry-run`.
 
 | Variable | Where | Default | Notes |
 | --- | --- | --- | --- |
-| `NODE_VERSION` | `render.yaml` | `22.19.0` | Static site build |
 | `GH_ENV` | `scripts/sync-github-env.sh` | `staging` | Target GitHub environment |
 | `BIVY_CODEX_E2E` | `test/codex-approvals-e2e.test.ts` | unset | `1` runs the Codex end-to-end test |
 | `BIVY_TEST_SECRET` | `test/secrets.test.ts` | unset | Test fixture for `env://` resolution |

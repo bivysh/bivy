@@ -90,7 +90,16 @@ export function isStandaloneDisplay(): boolean {
     !!mm?.("(display-mode: minimal-ui)").matches;
   // iOS Safari (pre-display-mode) marks home-screen apps with navigator.standalone.
   const iosStandalone = (globalThis.navigator as { standalone?: boolean } | undefined)?.standalone === true;
-  return displayModeStandalone || iosStandalone;
+  // A native shell (a Capacitor iOS/Android WKWebView) reports none of the above
+  // — its display-mode is "browser" — yet it is exactly the scoped-window case
+  // the device-poll flow exists for: a full-page OAuth redirect escapes the
+  // WebView to the system browser and the finished session never returns to the
+  // app. Treat the native runtime as standalone so sign-in takes the device-poll
+  // path. Pure feature-detect (no import); inert in an ordinary browser where
+  // `Capacitor` is undefined.
+  const capacitorNative =
+    (globalThis as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.() === true;
+  return displayModeStandalone || iosStandalone || capacitorNative;
 }
 
 export interface GithubDeviceLogin {
@@ -206,6 +215,20 @@ export interface AccountNode {
   name?: string;
   online?: boolean;
   providers?: NodeProviderSummary[];
+  /** Non-secret provider identity of an ephemeral (`eph-*`) node, populated by
+   *  the control-plane node registry at launch. Lets a *second* account device —
+   *  which doesn't hold the launching device's local machine record — reconstruct
+   *  the machine so it can wake a suspend-to-zero node (see
+   *  `ephemeralMachineFromNode` and docs/ephemeral-sessions.md "Gap A"). This is
+   *  identity only (a Fly machine id / E2B sandbox id), never a credential. */
+  ephemeral?: {
+    provider: string;
+    /** The provider's machine/sandbox id (the adapter's `EphemeralMachine.id`). */
+    machineId: string;
+    /** The provider "app"/grouping handle, when the adapter uses one (Fly/Sprites). */
+    app?: string;
+    region?: string;
+  };
   [k: string]: unknown;
 }
 
@@ -246,6 +269,15 @@ export async function fetchAccountSessions(store: LocalStore, fetchImpl: typeof 
   return list as AccountSessionAdvert[];
 }
 
+export interface PlanPrice {
+  id: string;
+  currency: string;
+  unitAmount: number | null;
+  interval?: string;
+  intervalCount?: number;
+  label: string;
+}
+
 export interface AccountMe {
   account?: { email?: string; plan?: string };
   entitlements?: {
@@ -255,12 +287,13 @@ export interface AccountMe {
     relayEnabled?: boolean;
     pushEnabled?: boolean;
     workQueueEnabled?: boolean;
-    // Runs allowed per rolling 7-day window across every source
-    // (manual/app/work-queue/ephemeral). Undefined = unlimited (paid plans); free
-    // pins it to a small allowance. Pairs with counts.runsThisWeek to render "used / limit".
+    // Unattended automation jobs allowed per rolling 7-day window. Interactive
+    // CLI/app sessions are unlimited. Undefined = unlimited automation (paid);
+    // pairs with counts.runsThisWeek (legacy wire name) to render used / limit.
     weeklyRunLimit?: number;
     ephemeralEnabled?: boolean;
   };
+  pricing?: { pro?: PlanPrice; team?: PlanPrice };
   counts?: { nodes?: number; sessions?: number; devices?: number; runsThisWeek?: number };
   [k: string]: unknown;
 }
@@ -316,6 +349,11 @@ export interface GithubAppEntry {
   // issues/comments default to, instead of racing across every node serving the
   // shared queue. undefined = no default set.
   defaultNode?: string;
+  // Who may `@`-mention-trigger a run via a GitHub issue/comment (issue #259):
+  // "everyone" (undefined default — anyone, incl. a stranger on a public repo),
+  // "contributor" (any prior relationship with the repo), or "collaborator"
+  // (push access only).
+  triggerAccess?: "everyone" | "contributor" | "collaborator";
   // The node currently holding the app's key and servicing it, or null if none.
   // `connected: true` with `servedBy: null` means the account has the app set up
   // but no live node is running it (e.g. after a node was deleted/reinstalled) —
@@ -395,6 +433,28 @@ export async function setGithubAppDefaultNode(store: LocalStore, node: string, a
   return data.defaultNode as string | undefined;
 }
 
+/**
+ * Set the account's GitHub App trigger-access level (issue #259): who may
+ * `@`-mention-trigger a run via an issue/comment. Without an `appId` it
+ * applies to every connected app, matching the account-level setting in the
+ * UI. Returns the resulting value ("everyone" when unset/cleared).
+ */
+export async function setGithubAppTriggerAccess(
+  store: LocalStore,
+  triggerAccess: "everyone" | "contributor" | "collaborator",
+  appId?: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<"everyone" | "contributor" | "collaborator"> {
+  const res = await fetchImpl(`${cpBase(store)}/account/github-app/trigger-access`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify(appId ? { triggerAccess, appId } : { triggerAccess }),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `set trigger access failed: ${res.status}`);
+  return (data.triggerAccess as "everyone" | "contributor" | "collaborator" | undefined) ?? "everyone";
+}
+
 // The account's saved preference for auto-provisioning an ephemeral runner
 // when the GitHub work queue has pending items and no persistent node online
 // (issue #532). `provider`/`region`/`size`/`ttlMinutes` are non-secret
@@ -434,14 +494,200 @@ export async function setEphemeralQueueDefault(
   return { enabled: Boolean(data?.enabled), provider: data?.provider, region: data?.region, size: data?.size, ttlMinutes: data?.ttlMinutes };
 }
 
+// An account-level, reusable ephemeral node config — "a config = a selectable
+// node" in both the queue router and the new-session picker. Non-secret sizing
+// only; the launching device still supplies the provider token. Account-level
+// (not device-local) so queued work can route to it from any device or,
+// eventually, an unattended orchestrator.
+export interface EphemeralNodeConfig {
+  id: string;
+  name: string;
+  provider: string;
+  region?: string;
+  size?: string;
+  ttlMinutes?: number;
+  teardownOnAgentFinish?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EphemeralConfigInput = {
+  name: string;
+  provider: string;
+  region?: string | null;
+  size?: string | null;
+  ttlMinutes?: number | null;
+  teardownOnAgentFinish?: boolean;
+};
+
+// How the account routes queued work by default. `primary` names the runner;
+// only a persistent-node primary may carry an ephemeral-config `fallback` (used
+// when that node is offline) — an ephemeral-config primary is provisioned on
+// demand and needs none.
+export type QueueRunnerTarget =
+  | { kind: "shared" }
+  | { kind: "node"; node: string }
+  | { kind: "config"; configId: string };
+
+export interface QueueRouting {
+  primary: QueueRunnerTarget;
+  fallback?: { kind: "config"; configId: string };
+}
+
+function coerceConfig(v: any): EphemeralNodeConfig {
+  return {
+    id: String(v?.id ?? ""),
+    name: String(v?.name ?? ""),
+    provider: String(v?.provider ?? ""),
+    region: typeof v?.region === "string" && v.region ? v.region : undefined,
+    size: typeof v?.size === "string" && v.size ? v.size : undefined,
+    ttlMinutes: typeof v?.ttlMinutes === "number" ? v.ttlMinutes : undefined,
+    teardownOnAgentFinish: Boolean(v?.teardownOnAgentFinish) || undefined,
+    createdAt: String(v?.createdAt ?? ""),
+    updatedAt: String(v?.updatedAt ?? ""),
+  };
+}
+
+/** The account's saved ephemeral node configs (shared across the account's devices). */
+export async function fetchEphemeralConfigs(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`ephemeral-configs request failed: ${res.status}`);
+  const data: unknown = await res.json().catch(() => []);
+  return Array.isArray(data) ? data.map(coerceConfig).filter((c) => c.id) : [];
+}
+
+export async function createEphemeralConfig(store: LocalStore, input: EphemeralConfigInput, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs`, { method: "POST", headers: authHeaders(store), body: JSON.stringify(input) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `create ephemeral config failed: ${res.status}`);
+  return coerceConfig(data);
+}
+
+export async function updateEphemeralConfig(store: LocalStore, id: string, patch: Partial<EphemeralConfigInput>, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs/${encodeURIComponent(id)}`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(patch) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `update ephemeral config failed: ${res.status}`);
+  return coerceConfig(data);
+}
+
+export async function deleteEphemeralConfig(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders(store) });
+  if (!res.ok) {
+    const data: any = await res.json().catch(() => ({}));
+    throw new Error(data?.error || `delete ephemeral config failed: ${res.status}`);
+  }
+}
+
+function coerceRouting(v: any): QueueRouting {
+  const p = v?.primary;
+  let primary: QueueRunnerTarget = { kind: "shared" };
+  if (p?.kind === "node" && typeof p.node === "string" && p.node.trim()) primary = { kind: "node", node: p.node.trim() };
+  else if (p?.kind === "config" && typeof p.configId === "string" && p.configId) primary = { kind: "config", configId: p.configId };
+  const f = v?.fallback;
+  const fallback = f?.kind === "config" && typeof f.configId === "string" && f.configId ? { kind: "config" as const, configId: f.configId } : undefined;
+  return primary.kind === "node" && fallback ? { primary, fallback } : { primary };
+}
+
+/** The account's default queue routing (primary runner + optional fallback). */
+export async function fetchQueueRouting(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<QueueRouting> {
+  const res = await fetchImpl(`${cpBase(store)}/account/queue-routing`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`queue-routing request failed: ${res.status}`);
+  return coerceRouting(await res.json().catch(() => ({})));
+}
+
+export async function setQueueRouting(store: LocalStore, routing: QueueRouting, fetchImpl: typeof fetch = fetch): Promise<QueueRouting> {
+  const res = await fetchImpl(`${cpBase(store)}/account/queue-routing`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(routing) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `set queue routing failed: ${res.status}`);
+  return coerceRouting(data);
+}
+
+// --- Hosted (control-plane-orchestrated) provisioning -----------------------
+// Status is non-secret: which credentials are present, never their values.
+export interface HostedProvisioningStatus {
+  enabled: boolean;
+  credential: "app" | "pat" | "none";
+  githubAppId?: string;
+  providers: string[];
+  /** Whether the server has an encryption key configured; secrets can't be saved without it. */
+  encryptionReady: boolean;
+  /** Active encryption key id (for rotation display). */
+  keyId?: string;
+}
+
+export interface HostedProvisioningPatch {
+  enabled?: boolean;
+  githubToken?: string;
+  githubApp?: { appId: string; installationId: string; privateKeyPem: string } | null;
+  providerTokens?: Record<string, string>;
+}
+
+export interface HostedAuditEvent {
+  at: string;
+  action: string;
+  provider?: string;
+  configId?: string;
+  nodeId?: string;
+  workItemId?: string;
+  detail?: string;
+}
+
+export interface HostedProvisionPlan { willProvision: boolean; targetConfigId: string | null; reason: string; }
+
+function coerceHostedStatus(d: any): HostedProvisioningStatus {
+  return {
+    enabled: Boolean(d?.enabled),
+    credential: d?.credential === "app" || d?.credential === "pat" ? d.credential : "none",
+    githubAppId: typeof d?.githubAppId === "string" ? d.githubAppId : undefined,
+    providers: Array.isArray(d?.providers) ? d.providers : [],
+    encryptionReady: Boolean(d?.encryptionReady),
+    keyId: typeof d?.keyId === "string" ? d.keyId : undefined,
+  };
+}
+
+export async function fetchHostedProvisioning(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`hosted-provisioning request failed: ${res.status}`);
+  return coerceHostedStatus(await res.json().catch(() => ({})));
+}
+
+export async function setHostedProvisioning(store: LocalStore, patch: HostedProvisioningPatch, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(patch) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `set hosted provisioning failed: ${res.status}`);
+  return coerceHostedStatus(data);
+}
+
+export async function rotateHostedProvisioning(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedProvisioningStatus> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning/rotate`, { method: "POST", headers: authHeaders(store) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `rotate hosted credentials failed: ${res.status}`);
+  return coerceHostedStatus(data);
+}
+
+export async function fetchHostedAudit(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedAuditEvent[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-audit`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`hosted-audit request failed: ${res.status}`);
+  const d: unknown = await res.json().catch(() => []);
+  return Array.isArray(d) ? (d as HostedAuditEvent[]) : [];
+}
+
+export async function triggerHostedProvision(store: LocalStore, execute = false, fetchImpl: typeof fetch = fetch): Promise<{ plan: HostedProvisionPlan; provisioned?: { id: string; nodeId?: string } | null }> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provision-now`, { method: "POST", headers: authHeaders(store), body: JSON.stringify({ execute }) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `hosted provision failed: ${res.status}`);
+  return data;
+}
+
 export interface GithubQueueItem {
   id: string;
-  source: string; // "github:issue" | "github:comment" | "slack"
+  source: string; // "github:issue" | "github:comment" | "linear:issue" | "slack"
   status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
   label: string;
   title: string;
   repo?: string;
   issueNumber?: number;
+  externalId?: string;
   url?: string;
   runtimeId?: string; // agent override set via the queue "Run…" action
   model?: string; // model override set via the queue "Run…" action
@@ -641,6 +887,79 @@ export async function clearWorkQueue(store: LocalStore, fetchImpl: typeof fetch 
   return Number(data?.removed) || 0;
 }
 
+export interface SlackHook {
+  id: string;
+  endpoint: string;
+  enabled: boolean;
+  defaultNode?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export async function fetchSlackHook(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<SlackHook | null> {
+  const res = await fetchImpl(`${cpBase(store)}/account/slack-hook`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`Slack integration request failed: ${res.status}`);
+  const data: any = await res.json().catch(() => ({}));
+  return data?.hook ?? null;
+}
+
+export async function connectSlackHook(
+  store: LocalStore,
+  input: { signingSecret: string; defaultNode?: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<SlackHook> {
+  const res = await fetchImpl(`${cpBase(store)}/account/slack-hook`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify(input),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Connect Slack failed: ${res.status}`);
+  return data.hook;
+}
+
+export async function disconnectSlackHook(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/slack-hook`, { method: "DELETE", headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`Disconnect Slack failed: ${res.status}`);
+}
+
+export interface LinearHook {
+  id: string;
+  endpoint: string;
+  enabled: boolean;
+  defaultNode?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export async function fetchLinearHook(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<LinearHook | null> {
+  const res = await fetchImpl(`${cpBase(store)}/account/linear-hook`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`Linear integration request failed: ${res.status}`);
+  const data: any = await res.json().catch(() => ({}));
+  return data?.hook ?? null;
+}
+
+/** Create the endpoint (no secret), or finish/update it with Linear's signing secret. */
+export async function connectLinearHook(
+  store: LocalStore,
+  input: { signingSecret?: string; defaultNode?: string } = {},
+  fetchImpl: typeof fetch = fetch,
+): Promise<LinearHook> {
+  const res = await fetchImpl(`${cpBase(store)}/account/linear-hook`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify(input),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Connect Linear failed: ${res.status}`);
+  return data.hook;
+}
+
+export async function disconnectLinearHook(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/linear-hook`, { method: "DELETE", headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`Disconnect Linear failed: ${res.status}`);
+}
+
 export interface AutomationHook {
   id: string;
   endpoint: string;
@@ -758,12 +1077,6 @@ export async function logout(store: LocalStore, devicePublicKeyB64?: string, fet
     body: JSON.stringify(devicePublicKeyB64 ? { devicePublicKeyB64 } : {}),
   });
 }
-
-/** Display price for the Pro plan. The authoritative amount lives in Stripe
- *  (env STRIPE_PRICE_PRO on the control plane); this is the marketing label
- *  shown on in-app upgrade CTAs so users see the cost before the redirect.
- *  Keep it in sync with the pricing section on the marketing site. */
-export const PRO_PRICE_LABEL = "$15/mo";
 
 /** Start a Stripe checkout; returns the URL to redirect to. */
 export async function billingCheckout(store: LocalStore, plan = "pro", fetchImpl: typeof fetch = fetch): Promise<string> {

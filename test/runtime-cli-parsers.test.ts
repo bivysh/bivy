@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { bivyProtocolParser, claudeStreamJsonParser, codexJsonParser, gooseStreamJsonParser, geminiJsonParser, extractTokenUsage } from "../src/runtime/cli-parsers.js";
+import { bivyProtocolParser, claudeStreamJsonParser, codexJsonParser, gooseStreamJsonParser, geminiJsonParser, genericStreamJsonParser, genericJsonParser, extractTokenUsage } from "../src/runtime/cli-parsers.js";
 import { ProcessRuntime } from "../src/runtime/process.js";
 import type { RuntimeEvent } from "../src/runtime/types.js";
 
@@ -199,6 +199,71 @@ async function main() {
     assert.ok(!anyOutput.includes("SHOULD_NOT_RUN"), "subprocess was never spawned");
     assert.equal(session.isStreaming, false, "streaming reset after preflight block");
     session.dispose();
+  });
+
+  // ---- generic tolerant parsers (opt-in fidelity for unpinned JSON CLIs) ------
+
+  await check("genericStreamJson: extracts Claude/ACP-style assistant text", () => {
+    const p = genericStreamJsonParser();
+    const events = feed(p, [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Hel" }] } }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "lo" }] } }),
+      JSON.stringify({ type: "result", usage: { input_tokens: 3, output_tokens: 4 } }),
+    ]);
+    const last = events.filter((e) => e.type === "message_update").at(-1) as any;
+    assert.equal(last.message.content, "Hello");
+    assert.equal(types(events).filter((t) => t === "agent_end").length, 1);
+    assert.equal(p.usage?.()?.tokens?.input, 3);
+  });
+
+  await check("genericStreamJson: extracts OpenAI-style delta chunks", () => {
+    const p = genericStreamJsonParser();
+    const events = feed(p, [
+      JSON.stringify({ choices: [{ delta: { content: "foo " } }] }),
+      JSON.stringify({ delta: { text: "bar" } }),
+      JSON.stringify({ type: "done" }),
+    ]);
+    const last = events.filter((e) => e.type === "message_update").at(-1) as any;
+    assert.equal(last.message.content, "foo bar");
+  });
+
+  await check("genericStreamJson: never loses output — non-JSON falls back to raw at close", () => {
+    const p = genericStreamJsonParser();
+    const events = feed(p, ["not json at all", "just plain text"]);
+    const last = events.filter((e) => e.type === "message_update").at(-1) as any;
+    assert.match(last.message.content, /just plain text/);
+    assert.equal(types(events).filter((t) => t === "agent_end").length, 1, "still terminates");
+  });
+
+  await check("genericStreamJson: surfaces an error frame", () => {
+    const p = genericStreamJsonParser();
+    const events = feed(p, [JSON.stringify({ error: { message: "boom" } }), JSON.stringify({ type: "done" })]);
+    assert.ok(events.some((e) => e.type === "session.error" && (e as any).error === "boom"));
+  });
+
+  await check("genericJson: extracts the reply from a final JSON object + usage", () => {
+    const p = genericJsonParser();
+    const events = feed(p, [JSON.stringify({ response: "the answer", usage: { total_tokens: 9 } })]);
+    const last = events.filter((e) => e.type === "message_update").at(-1) as any;
+    assert.equal(last.message.content, "the answer");
+    assert.equal(p.messages()[0]?.content, "the answer");
+    assert.equal(p.usage?.()?.tokens?.total, 9);
+  });
+
+  await check("genericJson: tolerates the `result` field and content arrays", () => {
+    const a = genericJsonParser();
+    feed(a, [JSON.stringify({ result: "R" })]);
+    assert.equal(a.messages()[0]?.content, "R");
+    const b = genericJsonParser();
+    feed(b, [JSON.stringify({ content: [{ text: "x" }, { text: "y" }] })]);
+    assert.equal(b.messages()[0]?.content, "xy");
+  });
+
+  await check("genericJson: unfamiliar shape falls back to raw (never empty)", () => {
+    const p = genericJsonParser();
+    const events = feed(p, [JSON.stringify({ weird: 123 })]);
+    const last = events.filter((e) => e.type === "message_update").at(-1) as any;
+    assert.match(last.message.content, /weird/);
   });
 
   if (failures > 0) {

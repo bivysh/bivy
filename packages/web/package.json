@@ -1,6 +1,6 @@
 {
   "name": "@bivy/web",
-  "version": "0.1.0",
+  "version": "0.5.1",
   "description": "Bivy web PWA — React + Vite view layer over @bivy/core.",
   "type": "module",
   "license": "FSL-1.1-ALv2",
@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@bivy/core": "*",
+    "cronstrue": "^3.24.0",
     "@xterm/addon-canvas": "^0.7.0",
     "@xterm/addon-clipboard": "^0.2.0",
     "@xterm/addon-fit": "^0.11.0",

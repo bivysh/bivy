@@ -86,7 +86,7 @@ const PROVIDER_ENV_KEYS: Record<string, string> = {
 };
 
 /** Env var an api-key credential for `provider` should be exposed under. */
-function apiKeyEnvVar(provider: string): string {
+export function apiKeyEnvVar(provider: string): string {
   return PROVIDER_ENV_KEYS[provider] ?? `${provider.replace(/[^a-z0-9]+/gi, "_").toUpperCase()}_API_KEY`;
 }
 

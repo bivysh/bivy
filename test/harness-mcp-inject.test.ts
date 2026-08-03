@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { injectJsonMcpConfig, injectMcpProxyForSession, bivyProxyLauncher } from "../src/harness/mcp-inject.js";
+import { injectJsonMcpConfig, injectMcpProxyForSession, injectBivyToolsForSession, bivyProxyLauncher } from "../src/harness/mcp-inject.js";
 import { agentMcpConfigTargets, isProxied } from "../src/harness/mcp-config.js";
 
 let failures = 0;
@@ -90,6 +90,100 @@ check("injectMcpProxyForSession is a no-op when no config exists", () => {
   assert.deepEqual(res.injected, []);
   res.restore();
   fs.rmSync(ws, { recursive: true, force: true });
+});
+
+// --- Bivy tools server injection (attach_to_chat discoverability, #290) --------
+
+check("injectBivyTools CREATES a session-local .mcp.json when absent, restore deletes it", () => {
+  const ws = tmp();
+  const file = path.join(ws, ".mcp.json");
+  assert.equal(fs.existsSync(file), false);
+
+  const res = injectBivyToolsForSession("codex-cli", { workspace: ws, home: os.homedir(), sessionId: "sess-1", endpoint: "http://127.0.0.1:4317" });
+  assert.deepEqual(res.injected, [file]);
+  const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(cfg.mcpServers.bivy.command, "bivy");
+  assert.deepEqual(cfg.mcpServers.bivy.args, ["mcp-serve"]);
+  assert.equal(cfg.mcpServers.bivy.env.BIVY_SESSION_ID, "sess-1");
+  assert.equal(cfg.mcpServers.bivy.env.BIVY_MCP_ENDPOINT, "http://127.0.0.1:4317");
+
+  res.restore();
+  assert.equal(fs.existsSync(file), false, "restore must delete a file it created");
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+check("injectBivyTools ADDS to an existing config and restores exact original bytes", () => {
+  const ws = tmp();
+  const file = path.join(ws, ".mcp.json");
+  const original = JSON.stringify({ mcpServers: { fs: { command: "mcp-fs", args: [] } } }, null, 2) + "\n";
+  fs.writeFileSync(file, original);
+
+  const res = injectBivyToolsForSession("gemini-generic", { workspace: ws, home: os.homedir(), sessionId: "s" });
+  assert.deepEqual(res.injected, [file]);
+  const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(cfg.mcpServers.fs.command, "mcp-fs", "existing servers are preserved");
+  assert.equal(cfg.mcpServers.bivy.command, "bivy");
+  assert.equal(cfg.mcpServers.bivy.env.BIVY_MCP_ENDPOINT, undefined, "no endpoint stamped when not provided");
+
+  res.restore();
+  assert.equal(fs.readFileSync(file, "utf8"), original, "restore reproduces the original bytes exactly");
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+check("injectBivyTools is idempotent — a pre-existing bivy server is a no-op", () => {
+  const ws = tmp();
+  const file = path.join(ws, ".mcp.json");
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: { bivy: { command: "bivy", args: ["mcp-serve"] } } }));
+  const res = injectBivyToolsForSession("generic", { workspace: ws, home: os.homedir(), sessionId: "s" });
+  assert.deepEqual(res.injected, []);
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+check("injectBivyTools CREATES Codex's TOML config (mcp_servers.bivy) and restore deletes it", () => {
+  const home = tmp();
+  const file = path.join(home, ".codex", "config.toml");
+  const res = injectBivyToolsForSession("codex", { workspace: home, home, sessionId: "sess-c", endpoint: "http://127.0.0.1:4317" });
+  assert.deepEqual(res.injected, [file]);
+  const toml = fs.readFileSync(file, "utf8");
+  assert.match(toml, /\[mcp_servers\.bivy\]/);
+  assert.match(toml, /command = "bivy"/);
+  assert.match(toml, /args = \["mcp-serve"\]/);
+  assert.match(toml, /BIVY_SESSION_ID = "sess-c"/);
+  assert.match(toml, /BIVY_MCP_ENDPOINT = "http:\/\/127\.0\.0\.1:4317"/);
+
+  res.restore();
+  assert.equal(fs.existsSync(file), false, "restore must delete a created TOML");
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+check("injectBivyTools APPENDS to an existing Codex TOML and restores exact bytes", () => {
+  const home = tmp();
+  const dir = path.join(home, ".codex");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "config.toml");
+  const original = `model = "gpt-5"\n\n[mcp_servers.fs]\ncommand = "mcp-fs"\nargs = []\n`;
+  fs.writeFileSync(file, original);
+
+  const res = injectBivyToolsForSession("codex", { workspace: home, home, sessionId: "s" });
+  assert.deepEqual(res.injected, [file]);
+  const toml = fs.readFileSync(file, "utf8");
+  assert.match(toml, /\[mcp_servers\.fs\]/, "existing servers preserved");
+  assert.match(toml, /\[mcp_servers\.bivy\]/);
+
+  res.restore();
+  assert.equal(fs.readFileSync(file, "utf8"), original, "restore reproduces exact original bytes");
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+check("injectBivyTools is idempotent on a Codex TOML that already declares bivy", () => {
+  const home = tmp();
+  const dir = path.join(home, ".codex");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "config.toml");
+  fs.writeFileSync(file, `[mcp_servers.bivy]\ncommand = "bivy"\nargs = ["mcp-serve"]\n`);
+  const res = injectBivyToolsForSession("codex", { workspace: home, home, sessionId: "s" });
+  assert.deepEqual(res.injected, []);
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 if (failures > 0) {

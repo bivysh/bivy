@@ -80,6 +80,9 @@ export interface Command extends CommandBase {
     | "terminal.open.tui"
     | "terminal.close.tui"
     | "node.stats"
+    // Fetch a stored attachment's bytes by content hash (see AttachmentStore).
+    // Reply: `attachment.data` (base64) or `attachment.error`.
+    | "attachment.fetch"
     | (string & {});
 }
 
@@ -109,6 +112,44 @@ export interface PromptAttachment {
   text?: string;
   truncated?: boolean;
   omitted?: boolean;
+  /**
+   * SHA-256 content hash of a durably-stored attachment (see AttachmentStore on
+   * the node). Present on attachments rehydrated from history: the bytes are no
+   * longer inline (`data`/`text` are absent), so the client fetches them by hash
+   * via `controller.fetchAttachment(hash)` to render a thumbnail/chip. This is
+   * what makes attachments re-findable after a reload or on another device.
+   */
+  hash?: string;
+}
+
+/**
+ * A durable reference to an attachment stored on the node, carried in a
+ * `session.history` event as `[messageText, AttachmentRef[]]` pairs so a client
+ * that never sent the attachment (a reload, or a different device) can still
+ * render it by hash. Mirrors the node's AttachmentRef in src/session/attachment-store.ts.
+ */
+export interface AttachmentRef {
+  hash: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: "image" | "file";
+}
+
+/**
+ * The inner event of a `session.event` the node emits when an AGENT sends an
+ * attachment into the chat (image or file) — the reverse of the composer
+ * paperclip. Carried live so the client can render a chip/thumbnail immediately
+ * (via `controller.fetchAttachment(ref.hash)`); durable history reproduces the
+ * same entry from an outbound-attachment overlay folded into the transcript, so
+ * a reload or another device shows it too. `id` is a stable transcript-entry id
+ * so the live entry and its history twin don't double up.
+ */
+export interface AttachmentEvent {
+  type: "attachment";
+  id: string;
+  ref: AttachmentRef;
+  caption?: string;
 }
 
 /**

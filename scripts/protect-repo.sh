@@ -3,11 +3,10 @@ set -euo pipefail
 
 # Apply branch + tag protection rulesets to this repo.
 #
-# Rulesets require a public repo or a paid org plan. While bivysh is on the free
-# plan and bivy is private, the API returns 403 and there is no way to protect
-# main at all -- this script exists so that protection is one command at the
-# moment the repo goes public, instead of a set of settings-page clicks nobody
-# remembers the shape of.
+# Rulesets require a public repo or a paid org plan. bivy is public now, so this
+# applies for real; it stays a script rather than a set of settings-page clicks
+# so the protection is reviewable, diffable, and re-appliable after any change.
+# Re-running is safe: apply() matches on ruleset name and updates in place.
 #
 # Usage:
 #   scripts/protect-repo.sh              # apply
@@ -73,17 +72,15 @@ read -r -d '' BRANCH_RULESET <<'JSON' || true
       "strict_required_status_checks_policy": true,
       "required_status_checks": [{"context": "ci-ok"}]}}
   ],
-  "bypass_actors": [
-    {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}
-  ]
+  "bypass_actors": []
 }
 JSON
 
-# release.yml publishes to npm on a v* tag push. npm trusted publishing already
-# pins the publisher to this repo and this workflow file, so nothing else can
-# impersonate the release path -- but that says nothing about *which commit* got
-# tagged. Without this, anyone with write access can move or delete a release
-# tag and republish. Tags become append-only.
+# release.yml's production job publishes to npm and then pushes a v* tag for the
+# release. npm trusted publishing already pins the publisher to this repo and this
+# workflow file, so nothing else can impersonate the release path -- but that says
+# nothing about *which commit* a tag points at. Without this, anyone with write
+# access could move or delete a release tag. Tags become append-only.
 read -r -d '' TAG_RULESET <<'JSON' || true
 {
   "name": "release-tags",
@@ -95,9 +92,7 @@ read -r -d '' TAG_RULESET <<'JSON' || true
     {"type": "non_fast_forward"},
     {"type": "update"}
   ],
-  "bypass_actors": [
-    {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}
-  ]
+  "bypass_actors": []
 }
 JSON
 

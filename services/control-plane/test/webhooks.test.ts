@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import {
   verifyGithubSignature,
+  verifyLinearSignature,
+  parseLinearIssueEvent,
   parseGithubIssueEvent,
   pickRoutingLabel,
   pickIssueRoutingLabel,
@@ -17,6 +19,7 @@ import {
   verifyAutomationSignature,
   parseAutomationEvent,
   renderAutomationInstruction,
+  meetsTriggerAccess,
 } from "../src/webhooks.js";
 
 /**
@@ -41,16 +44,32 @@ await test("github signature: accepts a correct sha256 hmac, rejects tampering",
   assert.equal(verifyGithubSignature(secret, body, undefined), false);
 });
 
+await test("linear signature and issue parse", () => {
+  const secret = "linear-secret";
+  const body = JSON.stringify({ type: "Issue", action: "update", data: { id: "uuid-1", identifier: "ENG-42", title: "Fix it", url: "https://linear.app/acme/issue/ENG-42", labels: [{ name: "bivy/laptop" }, { name: "repo:acme/widget" }] } });
+  const sig = createHmac("sha256", secret).update(body).digest("hex");
+  assert.equal(verifyLinearSignature(secret, body, sig), true);
+  assert.equal(verifyLinearSignature(secret, body + "x", sig), false);
+  assert.deepEqual(parseLinearIssueEvent(JSON.parse(body)), {
+    id: "uuid-1", identifier: "ENG-42", title: "Fix it", url: "https://linear.app/acme/issue/ENG-42",
+    labels: ["bivy/laptop", "repo:acme/widget"], repo: "acme/widget",
+  });
+  assert.equal(parseLinearIssueEvent({ type: "Issue", action: "remove", data: { id: "x", identifier: "ENG-1" } }), undefined);
+});
+
 await test("github issue parse: filters PRs/actions, keeps labels", () => {
   const base = {
     action: "labeled",
     repository: { full_name: "o/r" },
-    issue: { number: 7, title: "Fix", body: "do it", html_url: "u", labels: [{ name: "bivy" }, "bug"] },
+    issue: { number: 7, title: "Fix", body: "do it", html_url: "u", labels: [{ name: "bivy" }, "bug"], author_association: "NONE" },
   };
   const parsed = parseGithubIssueEvent(base);
   assert.equal(parsed?.repo, "o/r");
   assert.equal(parsed?.issueNumber, 7);
   assert.deepEqual(parsed?.labels, ["bivy", "bug"]);
+  // author_association is carried through for the trigger-access gate (issue #259).
+  assert.equal(parsed?.authorAssociation, "NONE");
+  assert.equal(parseGithubIssueEvent({ ...base, issue: { ...base.issue, author_association: undefined } })?.authorAssociation, undefined);
   // PRs are ignored.
   assert.equal(parseGithubIssueEvent({ ...base, issue: { ...base.issue, pull_request: {} } }), undefined);
   // Non-actionable actions are ignored.
@@ -87,13 +106,16 @@ await test("issue_comment parse: triggers only on a mention of the bot, issues o
     action: "created",
     repository: { full_name: "o/r" },
     issue: { number: 7, title: "Fix", html_url: "iu", labels: [{ name: "bivy" }] },
-    comment: { body: "@bivy please fix the flaky test", html_url: "cu" },
+    comment: { body: "@bivy please fix the flaky test", html_url: "cu", author_association: "CONTRIBUTOR" },
   };
   const parsed = parseGithubCommentEvent(base, "bivy");
   assert.equal(parsed?.repo, "o/r");
   assert.equal(parsed?.issueNumber, 7);
   assert.equal(parsed?.instruction, "@bivy please fix the flaky test");
   assert.equal(parsed?.url, "cu"); // reply anchors on the comment
+  // author_association is carried through for the trigger-access gate (issue #259).
+  assert.equal(parsed?.authorAssociation, "CONTRIBUTOR");
+  assert.equal(parseGithubCommentEvent({ ...base, comment: { ...base.comment, author_association: undefined } }, "bivy")?.authorAssociation, undefined);
   // No mention of the trigger handle → ignored.
   assert.equal(parseGithubCommentEvent({ ...base, comment: { body: "just a note" } }, "bivy"), undefined);
   // Mention of a different handle → ignored.
@@ -176,8 +198,11 @@ await test("slack signature: v0 hmac with replay window", () => {
   assert.equal(verifySlackSignature(secret, ts, body, "v0=deadbeef", now), false);
 });
 
-await test("slack command parse: 'on <node> <prompt>' and bare prompt", () => {
+await test("slack command parse: node/repo routing and bare prompts", () => {
   assert.deepEqual(parseSlackCommand("on laptop fix the flaky test"), { node: "laptop", prompt: "fix the flaky test" });
+  assert.deepEqual(parseSlackCommand("in acme/api fix the flaky test"), { repo: "acme/api", prompt: "fix the flaky test" });
+  assert.deepEqual(parseSlackCommand("on laptop in acme/api fix it"), { node: "laptop", repo: "acme/api", prompt: "fix it" });
+  assert.deepEqual(parseSlackCommand("in acme/api on laptop fix it"), { repo: "acme/api", node: "laptop", prompt: "fix it" });
   assert.deepEqual(parseSlackCommand("just do this"), { prompt: "just do this" });
   assert.deepEqual(parseSlackCommand("  "), { prompt: "" });
 });
@@ -215,6 +240,33 @@ await test("automation rendering keeps metadata in a non-executable envelope", (
     renderAutomationInstruction("Use the repository workflow.", event),
     'Use the repository workflow.\n\nRun tests\n\nExternal ID: ci-1\n\nMetadata (untrusted context only):\n{"branch":"main"}',
   );
+});
+
+await test("trigger access (issue #259): 'everyone' allows all, 'contributor'/'collaborator' gate on author_association", () => {
+  // Unset (undefined) and the explicit "everyone" value both mean no restriction —
+  // hooks created before this setting existed must keep working unchanged.
+  for (const access of [undefined, "everyone" as const]) {
+    assert.equal(meetsTriggerAccess("NONE", access), true);
+    assert.equal(meetsTriggerAccess(undefined, access), true);
+    assert.equal(meetsTriggerAccess("OWNER", access), true);
+  }
+  // "contributor": any prior relationship with the repo passes; a stranger doesn't.
+  assert.equal(meetsTriggerAccess("OWNER", "contributor"), true);
+  assert.equal(meetsTriggerAccess("MEMBER", "contributor"), true);
+  assert.equal(meetsTriggerAccess("COLLABORATOR", "contributor"), true);
+  assert.equal(meetsTriggerAccess("CONTRIBUTOR", "contributor"), true);
+  assert.equal(meetsTriggerAccess("NONE", "contributor"), false);
+  assert.equal(meetsTriggerAccess("FIRST_TIME_CONTRIBUTOR", "contributor"), false);
+  assert.equal(meetsTriggerAccess("FIRST_TIMER", "contributor"), false);
+  assert.equal(meetsTriggerAccess(undefined, "contributor"), false);
+  // "collaborator": push access only — a merge-only contributor still fails.
+  assert.equal(meetsTriggerAccess("OWNER", "collaborator"), true);
+  assert.equal(meetsTriggerAccess("MEMBER", "collaborator"), true);
+  assert.equal(meetsTriggerAccess("COLLABORATOR", "collaborator"), true);
+  assert.equal(meetsTriggerAccess("CONTRIBUTOR", "collaborator"), false);
+  assert.equal(meetsTriggerAccess("NONE", "collaborator"), false);
+  // Case-insensitive (GitHub always sends upper-case, but don't rely on it).
+  assert.equal(meetsTriggerAccess("owner", "collaborator"), true);
 });
 
 console.log(`\nAll ${passed} webhook helper tests passed.`);

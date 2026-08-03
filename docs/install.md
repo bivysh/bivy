@@ -19,7 +19,7 @@ The installer:
 1. checks for Node.js 22.19+ (on Debian/Ubuntu it can install it for you; on
    macOS it warns if Xcode Command Line Tools are missing, which the native
    `node-pty` module needs to build),
-2. runs `npm install -g bivy`,
+2. runs `npm install -g @bivy/bivy`,
 3. migrates state from a previous tarball install, if it finds one (see below),
 4. launches the interactive `bivy setup` wizard, or restarts the background
    service on an existing install.
@@ -31,7 +31,7 @@ check with `npm audit signatures`. See [releasing.md](releasing.md).
 If you already have Node.js 22.19+, the installer is optional:
 
 ```bash
-npm install -g bivy
+npm install -g @bivy/bivy
 bivy setup
 ```
 
@@ -83,11 +83,15 @@ Override the location with `BIVY_DATA_DIR`.
 ## The setup wizard
 
 `bivy setup` (run by the installer, or `npm run setup` in an existing checkout)
-picks sensible defaults for everything and only asks two questions:
+picks sensible defaults for everything and asks two questions:
 
-- **Remote sync** — hosted (recommended; free, with unlimited nodes) or self-hosted,
+- **Remote access** — hosted (recommended; one node is free) or self-hosted,
   pointing this node at your own control plane + relay,
 - **Remote login** — GitHub sign-in (default) or an email magic link.
+
+Enrollment is required: without a relay/control plane, Bivy adds nothing over
+running the local agent CLI directly. If enrollment fails, setup can retry and
+will not install the background service until it succeeds.
 
 Everything else is automatic and changeable later in Settings: a dedicated
 `~/bivy-workspace` folder and local port, Pi as the default agent (other
@@ -104,7 +108,8 @@ You can start from the hosted app first:
 1. Open the Bivy PWA and sign in with GitHub or email.
 2. If no runner is connected, the app shows how to connect one:
    - **Connect your own computer** — run `curl -fsSL https://bivy.sh/install.sh | bash` on macOS/Linux. Setup signs the node into the same account and enrolls it on the hosted relay.
-3. Free accounts include unlimited hosted-relay nodes, so your computers can connect without upgrading.
+3. A free account includes one hosted-relay node; add another plan or self-host
+   when you need more.
 
 ## Secure remote web/PWA access (hosted relay)
 

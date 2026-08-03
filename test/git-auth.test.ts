@@ -140,8 +140,13 @@ await check("credConfigArgs resets the helper chain before adding bivy's helper"
 
 await check("nothing long-lived is stored on disk (fetch-on-demand)", () => {
   const credDir = path.join(dataDir, "git-cred");
-  assert.ok(fs.existsSync(path.join(credDir, "credential-helper.sh")), "shim should exist");
+  const shimFile = path.join(credDir, "credential-helper.sh");
+  assert.ok(fs.existsSync(shimFile), "shim should exist");
   assert.ok(fs.existsSync(path.join(credDir, "credential-helper.mjs")), "worker should exist");
+  // The helper may be launched by git after its inherited checkout was removed.
+  // It must leave that cwd before starting Node, whose bootstrap otherwise dies
+  // with uv_cwd before the worker gets to run.
+  assert.match(fs.readFileSync(shimFile, "utf8"), /\ncd \/ \|\| exit 0\n/, "shim moves to a stable cwd before starting Node");
   // No per-repo token files anywhere — the only on-disk secret is endpoint.json's
   // bootstrap secret (0600), which is not a GitHub token.
   assert.ok(!fs.existsSync(path.join(credDir, "tokens")), "no token files should exist");
@@ -171,10 +176,14 @@ await check("migration: rewriting a tokenized origin to clean drops the token", 
   await git(["-C", repo, "init", "-q"]);
   await git(["-C", repo, "remote", "add", "origin", "https://x-access-token:gho_leaked@github.com/bivysh/bivy.git"]);
   await git(["-C", repo, "remote", "set-url", "origin", cleanRemoteUrl("bivysh", "bivy")]);
-  const remotes = await git(["-C", repo, "remote", "-v"]);
-  assert.ok(!remotes.includes("gho_leaked"), "token must be gone from the remote");
-  assert.ok(!remotes.includes("@github.com"), "no userinfo should remain in the remote");
-  assert.match(remotes, /https:\/\/github\.com\/bivysh\/bivy\.git/);
+  // Read the STORED URL, not `git remote -v`: the latter applies the operator's
+  // global `url.*.insteadOf` rewrite and can legitimately render an authenticated
+  // transport URL even though this repo's config is clean. This migration guards
+  // what Bivy persists, not how a developer has configured Git globally.
+  const storedRemote = await git(["-C", repo, "config", "--local", "--get", "remote.origin.url"]);
+  assert.ok(!storedRemote.includes("gho_leaked"), "token must be gone from the stored remote");
+  assert.ok(!storedRemote.includes("@github.com"), "no userinfo should remain in the stored remote");
+  assert.match(storedRemote, /https:\/\/github\.com\/bivysh\/bivy\.git/);
 });
 
 server.close();

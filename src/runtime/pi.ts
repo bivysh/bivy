@@ -28,10 +28,12 @@ import { createPiModelRuntime } from "./pi-oauth.js";
 import { toModelInfo as sharedToModelInfo } from "./normalize.js";
 import { provisionPiAuthJson } from "./credential-provisioning.js";
 import { isNativeOAuthProvider } from "./oauth/model-oauth-providers.js";
+import { bivySessionEnv } from "./session-env.js";
 import type {
   AgentCommand,
   AgentRuntime,
   CatalogProvider,
+  ForkHistoryMessage,
   ForkNativePayload,
   ModelInfo,
   OpenSessionOptions,
@@ -218,6 +220,17 @@ class PiSession implements RuntimeSession {
    * daemon's own agent dir and session store (same files the SDK reads) and
    * resumes by session file, so the TUI shows the live conversation. Returns
    * null for an unsaved session (nothing to resume yet).
+   *
+   * This is also the one place PiSession spawns a subprocess Bivy itself
+   * configures, so it's where BIVY_SESSION_ID (see session-env.ts) is injected
+   * for this adapter. It does NOT cover the live-chat case (an agent turn
+   * running pi's own bash tool): pi's SDK runs its agent loop in-process and
+   * builds that tool's subprocess env internally, with no hook for a host to
+   * inject its own vars. That gap is closed differently — the SDK's bash tool
+   * already exposes PI_SESSION_ID to every command it runs, and that id IS the
+   * Bivy session id for a pi session (this.id reads the exact same
+   * SessionManager the SDK reads it from) — so `bivy attach` accepts
+   * PI_SESSION_ID as an equivalent fallback (see bin/attach-session-id.mjs).
    */
   async interactiveTuiCommand(): Promise<TuiLaunchSpec | null> {
     const file = this.sessionFile;
@@ -229,7 +242,7 @@ class PiSession implements RuntimeSession {
     return {
       command: process.execPath,
       args: [this.tui.piCli, "--session", file, "--session-dir", this.tui.sessionsDir],
-      env: { PI_CODING_AGENT_DIR: this.tui.piDir },
+      env: { PI_CODING_AGENT_DIR: this.tui.piDir, ...bivySessionEnv(this.id) },
     };
   }
 
@@ -424,6 +437,9 @@ export class PiRuntime implements AgentRuntime {
     // pi transcripts are structured messages that round-trip through the session
     // store, so a pi->pi fork is full fidelity (see exportForFork/importForFork).
     forkTransport: true,
+    // pi can also stand up a session from portable {role,text} history, so a fork
+    // FROM another agent INTO pi is a true replay, not a seeded summary.
+    forkHistoryImport: true,
     // The pi-coding-agent SDK implements both explicitly: prompting mid-turn
     // with no streamingBehavior hint throws, forcing every caller to choose.
     streamingBehaviors: ["steer", "followUp"],
@@ -576,6 +592,27 @@ export class PiRuntime implements AgentRuntime {
     }
     const sessionFile = sessionManager.getSessionFile();
     if (!sessionFile) throw new Error("pi.importForFork: session file was not persisted");
+    return { sessionFile, id: sessionManager.getSessionId() };
+  }
+
+  /**
+   * Stand up a pi session from a **cross-runtime** fork's portable history: open
+   * a fresh session in the destination workspace and append each `{role, text}`
+   * turn as a plain-text message, so the new session resumes on a copy of the
+   * whole conversation (fidelity "replayed"). The turns already have any tool
+   * activity inlined as text (see buildForkHistory), so nothing here needs to
+   * reconstruct provider-specific tool blocks. Never touches the source.
+   */
+  async importHistoryForFork(
+    history: ForkHistoryMessage[],
+    ctx: { workspace: string; cwd: string },
+  ): Promise<{ sessionFile: string; id: string }> {
+    const sessionManager = SessionManager.create(ctx.cwd || ctx.workspace, this.options.sessionsDir);
+    for (const message of history) {
+      sessionManager.appendMessage({ role: message.role, content: message.text } as unknown as Parameters<typeof sessionManager.appendMessage>[0]);
+    }
+    const sessionFile = sessionManager.getSessionFile();
+    if (!sessionFile) throw new Error("pi.importHistoryForFork: session file was not persisted");
     return { sessionFile, id: sessionManager.getSessionId() };
   }
 }

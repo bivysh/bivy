@@ -1,11 +1,34 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useRef, useState } from "react";
-import { githubIssueRefFromSource, primaryPr, repoFromSource, type PrRef, type RunTerminalSummary } from "@bivy/core";
+import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueItem, type PrRef, type RunTerminalSummary } from "@bivy/core";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
 import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
+import { SourceGlyph } from "./SourceMark.js";
+import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
+import { rowHint } from "../runEvidence.js";
+
+/** The leading indicator on a session row: a tinted source tile carrying the
+ *  trigger's glyph, with the live status as a small dot badge on its corner.
+ *  Source is the identity, status is the presence — one element, two axes, so
+ *  the row now reads "where it came from" and "what it's doing" at a glance.
+ *  The dot's colour/shape logic is the same statusClass the header pill uses. */
+export function RowMark({ kind, status, unseen, srLabel }: { kind: SourceKind; status: string; unseen?: boolean; srLabel: string }) {
+  return (
+    <>
+      <span className={`session-mark src-${kind}`} aria-hidden>
+        <SourceGlyph kind={kind} />
+        <span className={`mark-badge ${status}${unseen ? " unseen" : ""}`} />
+      </span>
+      {/* The mark + badge are colour/shape only and aria-hidden; mirror both the
+          source and the status as screen-reader-only text (parity with the old
+          bare status dot, which did the same for status alone). */}
+      <span className="sr-only">{srLabel}</span>
+    </>
+  );
+}
 
 // How long "Update GitHub status" stays in its busy state before giving up and
 // re-enabling the button — `controller.refreshPrStatus` is fire-and-forget
@@ -79,14 +102,19 @@ function sessionRepo(s: { source?: string }): string {
   return repoFromSource(s.source) || githubIssueRefFromSource(s.source)?.repo || "";
 }
 
-function sessionMeta(s: { source?: string; branch?: string; agentName?: string; nodeId?: string }, nodeLabel: string | null): string {
+function sessionMeta(
+  s: { source?: string; branch?: string; agentName?: string; nodeId?: string; forkedFrom?: string },
+  nodeLabel: string | null,
+): string {
   // Keep the title row for the human title + state badges. Agent/runtime names
   // and repo/branch context are supporting details, so they live on the quieter
   // second line where they don't steal the tiny sidebar's most valuable pixels.
   // GitHub-issue/queue sessions run in a disposable worktree with no branch and
   // no `repo:` source, so fall back to their originating issue/queue ref (the
   // only useful context) — mirrors GithubQueue's queueSessionMeta.
-  const parts = [s.agentName, nodeLabel, s.branch || repoFromSource(s.source) || queueSourceMeta(s.source)];
+  // A fork gets a one-word "Forked" flag up front — parity with the run pill's
+  // own "Forked from" row (RunPill.tsx), for the rows that never open the pill.
+  const parts = [s.forkedFrom ? "Forked" : null, s.agentName, nodeLabel, s.branch || repoFromSource(s.source) || queueSourceMeta(s.source)];
   return parts.filter(Boolean).join(" · ");
 }
 
@@ -249,7 +277,7 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
 // what's mounted and let the user page through the tail.
 const PAGE = 10;
 
-export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void }) {
+export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem> }) {
   const { sessions, runTerminals, activeSessionId, nodes, currentNodeId } = useAppState();
   const [query, setQuery] = useState("");
   const [repoFilter, setRepoFilter] = useState("");
@@ -466,8 +494,7 @@ export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: st
           return (
             <li key={t.termId} className="session-row">
               <button className="session-item" onClick={() => onPickTerminal(t.termId, t.nodeId)}>
-                <span className="session-dot working" title="Running in terminal" aria-hidden />
-                <span className="sr-only">Running in terminal</span>
+                <RowMark kind={CLI_SOURCE.kind} status="working" srLabel={`${CLI_SOURCE.label} · Running in terminal`} />
                 <span className="session-body">
                   <span className="session-title-row">
                     <span className="session-name">{title}</span>
@@ -487,24 +514,17 @@ export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: st
           const meta = sessionMeta(s, nodeName(s.nodeId));
           const unseen = isUnseen(s);
           const label = statusLabel(s);
+          const src = classifySource(s.source);
+          // A one-word exception hint on failed / waiting-on-you runs, so those
+          // rows pop in a long list; null (no extra text) for the calm majority.
+          const hint = rowHint(runEvidence?.get(s.sessionId));
           return (
             <li key={s.sessionId} className="session-row">
               <button
                 className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
                 onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
               >
-                <span
-                  className={`session-dot ${statusClass(s)}${unseen ? " unseen" : ""}`}
-                  title={label}
-                  aria-hidden
-                />
-                {/* The dot is the single most important glanceable signal in the
-                    row (needs-action / working / idle / unseen) but is color/shape
-                    only and `aria-hidden` — invisible to screen readers, and `title`
-                    tooltips aren't reliably exposed either. Mirror it as
-                    screen-reader-only text (already includes "· new" when unseen —
-                    see statusLabel) so the status is still announced. */}
-                <span className="sr-only">{label}</span>
+                <RowMark kind={src.kind} status={statusClass(s)} unseen={unseen} srLabel={`${src.label} · ${label}`} />
                 <span className="session-body">
                   <span className="session-title-row">
                     <span className="session-name">{s.name}</span>
@@ -515,7 +535,13 @@ export function SessionList({ onPick, onPickTerminal }: { onPick: (sessionId: st
                       </span>
                     )}
                   </span>
-                  {meta && <span className="session-meta">{meta}</span>}
+                  {(hint || meta) && (
+                    <span className="session-meta">
+                      {hint && <span className={`row-hint ${hint.tone}`}>{hint.text}</span>}
+                      {hint && meta ? " · " : ""}
+                      {meta}
+                    </span>
+                  )}
                 </span>
               </button>
               {(controller.direct || !s.nodeId || s.nodeId === currentNodeId) && (

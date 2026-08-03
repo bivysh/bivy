@@ -31,6 +31,7 @@ import fs from "node:fs";
 
 import { normalizedIntermediateText, thinkingTextFromContent, mergeTranscript, type SidecarMessage } from "./transcript-merge.js";
 import type { RuntimeMessage } from "../runtime/types.js";
+import type { AttachmentRef } from "./attachment-store.js";
 
 /** One appended overlay record: an intermediate-reasoning or tool-activity entry. */
 export interface EventLogEntry extends SidecarMessage {
@@ -49,8 +50,53 @@ export interface BaseLogEntry {
   messages: RuntimeMessage[];
 }
 
+/**
+ * One appended attachment record: the durable references for the attachments a
+ * user sent with a prompt, keyed by the persisted prompt text (the same composed
+ * caption+placeholder text the base transcript stores for that user message).
+ * A third, independent projection alongside overlay/base — folded by
+ * `replayAttachments`, ignored by the other two replays. Persisting the refs (not
+ * the bytes) is what makes attachments re-findable after a reload or on another
+ * device: the bytes live in the content-addressed AttachmentStore, and the client
+ * rehydrates thumbnails by hash from these refs instead of from volatile memory.
+ */
+export interface AttachmentLogEntry {
+  bivyKind: "attachment";
+  createdAt: number;
+  /** The persisted user-message text these attachments belong to. */
+  text: string;
+  refs: AttachmentRef[];
+}
+
+/**
+ * One appended OUTBOUND attachment record: an attachment an AGENT sent into the
+ * chat (the reverse of a user's composer upload). Unlike `AttachmentLogEntry`
+ * — keyed by user-message text — an agent attachment has no message text to key
+ * on, so it is position/time-anchored like an overlay: `afterMessageCount` +
+ * `createdAt` let `mergeTranscript` interleave it into the transcript at the
+ * point it was emitted, and `replayOutboundAttachments` folds it into a synthetic
+ * assistant message carrying the `bivy_attachment` block the client renders. `id`
+ * is the shared transcript-entry id (also on the live `attachment` event) so the
+ * live entry and its replayed twin don't double up. Bytes live in the
+ * content-addressed AttachmentStore; only the ref travels — same re-findability
+ * guarantee as inbound attachments.
+ */
+export interface OutboundAttachmentLogEntry {
+  bivyKind: "outbound-attachment";
+  createdAt: number;
+  afterMessageCount: number;
+  id: string;
+  ref: AttachmentRef;
+  caption?: string;
+}
+
 /** Any record the log can hold. */
-export type LogRecord = EventLogEntry | BaseLogEntry;
+export type LogRecord = EventLogEntry | BaseLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry;
+
+/** Content-block type carried by a folded outbound attachment. MUST match
+ *  `AGENT_ATTACHMENT_BLOCK` in packages/core/src/store-render.ts — the client's
+ *  renderHistory keys on this exact string to render the chip. */
+const AGENT_ATTACHMENT_BLOCK = "bivy_attachment";
 
 function isOverlay(value: unknown): value is EventLogEntry {
   if (!value || typeof value !== "object") return false;
@@ -64,8 +110,47 @@ function isBase(value: unknown): value is BaseLogEntry {
   return record.bivyKind === "base" && Array.isArray(record.messages) && typeof record.reset === "boolean";
 }
 
+function isAttachment(value: unknown): value is AttachmentLogEntry {
+  if (!value || typeof value !== "object") return false;
+  const record = value as { bivyKind?: unknown; text?: unknown; refs?: unknown };
+  return record.bivyKind === "attachment" && typeof record.text === "string" && Array.isArray(record.refs);
+}
+
+function isOutboundAttachment(value: unknown): value is OutboundAttachmentLogEntry {
+  if (!value || typeof value !== "object") return false;
+  const record = value as { bivyKind?: unknown; ref?: unknown; afterMessageCount?: unknown; id?: unknown };
+  return (
+    record.bivyKind === "outbound-attachment" &&
+    typeof record.afterMessageCount === "number" &&
+    typeof record.id === "string" &&
+    !!record.ref &&
+    typeof record.ref === "object" &&
+    typeof (record.ref as { hash?: unknown }).hash === "string"
+  );
+}
+
 function isRecord(value: unknown): value is LogRecord {
-  return isOverlay(value) || isBase(value);
+  return isOverlay(value) || isBase(value) || isAttachment(value) || isOutboundAttachment(value);
+}
+
+/**
+ * Fold attachment records into a text→refs list: last write wins per text (a
+ * resent identical prompt re-keys onto the newest refs), preserving first-seen
+ * order. `mergeTranscript` never sees these — the client matches them onto the
+ * user messages by their persisted text, exactly as its in-memory attachment
+ * cache did, but now sourced durably from the log.
+ */
+export function replayAttachments(entries: readonly LogRecord[]): Array<[string, AttachmentRef[]]> {
+  const byText = new Map<string, AttachmentRef[]>();
+  for (const entry of entries) {
+    if (entry.bivyKind !== "attachment") continue;
+    if (!entry.text || !entry.refs.length) continue;
+    // delete+set so a re-keyed text moves to the end (newest), matching the
+    // client's rememberAttachments last-wins semantics.
+    byText.delete(entry.text);
+    byText.set(entry.text, entry.refs);
+  }
+  return [...byText.entries()];
 }
 
 /**
@@ -125,7 +210,32 @@ export function replayExtras(entries: readonly LogRecord[]): SidecarMessage[] {
     if (entry.bivyKind === "intermediate") intermediate.push(entry);
     else if (entry.bivyKind === "tool") tool.push(entry);
   }
-  return [...foldIntermediate(intermediate), ...foldTool(tool)];
+  return [...foldIntermediate(intermediate), ...foldTool(tool), ...replayOutboundAttachments(entries)];
+}
+
+/**
+ * Fold the outbound (agent-sent) attachment records into time-anchored synthetic
+ * assistant messages `mergeTranscript` interleaves into the transcript. Last write
+ * wins per id (a re-emitted id updates in place, matching the log's coalescing),
+ * preserving first-seen order. Each becomes one `bivy_attachment` block the client
+ * renders as a chip/thumbnail.
+ */
+export function replayOutboundAttachments(entries: readonly LogRecord[]): SidecarMessage[] {
+  const byId = new Map<string, OutboundAttachmentLogEntry>();
+  for (const entry of entries) {
+    if (entry.bivyKind !== "outbound-attachment") continue;
+    // set() on an existing key updates the value in place (Map keeps first-seen
+    // insertion order), so last write wins while position is stable. Final
+    // placement is by time in mergeTranscript regardless.
+    byId.set(entry.id, entry);
+  }
+  return [...byId.values()].map((entry) => ({
+    role: "assistant",
+    content: [{ type: AGENT_ATTACHMENT_BLOCK, ref: entry.ref, caption: entry.caption }],
+    afterMessageCount: entry.afterMessageCount,
+    createdAt: entry.createdAt,
+    id: entry.id,
+  }));
 }
 
 /**
@@ -252,6 +362,41 @@ export class EventLog {
       : { bivyKind: "base", reset: true, createdAt: Date.now(), messages: nextKeys.map((s) => JSON.parse(s) as RuntimeMessage) };
     this.baseKeys.set(id, nextKeys);
     this.enqueue(id, this.syntheticKey(id), record);
+  }
+
+  /**
+   * Record the attachment references a user sent with a prompt, keyed by the
+   * prompt's persisted text. Id-less (synthetic key) so successive prompts never
+   * coalesce. A no-op when there are no refs.
+   */
+  appendAttachments(id: string, text: string, refs: readonly AttachmentRef[]): void {
+    if (!text || !refs.length) return;
+    this.load(id);
+    const record: AttachmentLogEntry = { bivyKind: "attachment", createdAt: Date.now(), text, refs: refs.map((r) => ({ ...r })) };
+    this.enqueue(id, this.syntheticKey(id), record);
+  }
+
+  /** Replay the attachment records (disk + pending) into a text→refs list. */
+  readAttachments(id: string): Array<[string, AttachmentRef[]]> {
+    return replayAttachments(this.entries(id));
+  }
+
+  /**
+   * Record an agent-sent (outbound) attachment, anchored at the current base
+   * length so history replay interleaves it where it was emitted. Coalesces on
+   * the transcript-entry id so a re-emit of the same attachment updates in place.
+   */
+  appendOutboundAttachment(id: string, entry: { afterMessageCount: number; id: string; ref: AttachmentRef; caption?: string }): void {
+    this.load(id);
+    const record: OutboundAttachmentLogEntry = {
+      bivyKind: "outbound-attachment",
+      createdAt: Date.now(),
+      afterMessageCount: entry.afterMessageCount,
+      id: entry.id,
+      ref: { ...entry.ref },
+      ...(entry.caption ? { caption: entry.caption } : {}),
+    };
+    this.enqueue(id, `oa:${entry.id}`, record);
   }
 
   /** Replay the overlay entries (disk + pending) into the flat `extras` list. */

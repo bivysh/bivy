@@ -25,6 +25,10 @@ interface RunTerminal {
   /** Pinned agent session id (set for shim/`bivy run` launches) — enables
    *  "continue as chat" (resume this session as a governed chat). */
   sessionId?: string;
+  /** Reported by the node: whether a takeover would actually find a session
+   *  right now (pinned id, or a session already discovered on disk). Absent on
+   *  older nodes — treated as ready to preserve prior behavior. */
+  takeoverReady?: boolean;
   pid?: number;
 }
 interface MuxSession {
@@ -49,6 +53,21 @@ function canContinueAsChat(t: RunTerminal, runtimes: RuntimeInfo[]): boolean {
   const caps = runtime?.capabilities as { sessionDiscovery?: boolean } | undefined;
   return Boolean(caps?.sessionDiscovery);
 }
+
+// Whether a takeover would succeed *right now*. `canContinueAsChat` says the
+// agent supports takeover at all; this says its session has actually started.
+// Agents that assign their id lazily (Pi, Codex) advertise the capability
+// immediately but have nothing to adopt until the first message — tapping then
+// used to surface a raw 409. The node reports `takeoverReady`; older nodes omit
+// it, so `!== false` keeps them at prior behavior (button enabled).
+function isTakeoverReady(t: RunTerminal): boolean {
+  return t.takeoverReady !== false;
+}
+
+// Human-first (no "409"/"session id" jargon) — non-technical users read this on
+// the mobile "Continue in chat" affordance when the agent hasn't started yet.
+const TAKEOVER_NOT_READY_HINT =
+  "Send a message in the terminal first — the chat starts once the conversation begins.";
 
 const FONT_FAMILY = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace';
 const MIN_FONT = 9;
@@ -1234,13 +1253,24 @@ export function TerminalOverlay({
                         {t.label || t.name || t.agent || t.termId}
                       </button>
                       {canContinueAsChat(t, runtimes) && (
-                        <button
-                          className="term-attach-chat"
-                          onClick={() => continueAsChat(t.termId)}
-                          title="Stop the terminal and continue this session as a governed chat"
-                        >
-                          Continue in chat
-                        </button>
+                        isTakeoverReady(t) ? (
+                          <button
+                            className="term-attach-chat"
+                            onClick={() => continueAsChat(t.termId)}
+                            title="Stop the terminal and continue this session as a governed chat"
+                          >
+                            Continue in chat
+                          </button>
+                        ) : (
+                          <button
+                            className="term-attach-chat is-disabled"
+                            disabled
+                            aria-disabled="true"
+                            title={TAKEOVER_NOT_READY_HINT}
+                          >
+                            Send a message first
+                          </button>
+                        )
                       )}
                     </div>
                   ))}
@@ -1255,13 +1285,22 @@ export function TerminalOverlay({
             </div>
           )}
           {currentRun && canContinueAsChat(currentRun, runtimes) && (
-            <button
-              className="btn primary term-continue-chat"
-              onClick={() => continueAsChat(currentRun.termId)}
-              title="Stop the terminal and continue this session as a governed chat"
-            >
-              Continue in chat
-            </button>
+            isTakeoverReady(currentRun) ? (
+              <button
+                className="btn primary term-continue-chat"
+                onClick={() => continueAsChat(currentRun.termId)}
+                title="Stop the terminal and continue this session as a governed chat"
+              >
+                Continue in chat
+              </button>
+            ) : (
+              <span className="term-continue-notready" title={TAKEOVER_NOT_READY_HINT}>
+                <button className="btn primary term-continue-chat" disabled aria-disabled="true">
+                  Continue in chat
+                </button>
+                <span className="term-continue-hint-text">Send a message first</span>
+              </span>
+            )
           )}
           <button className="ghost-btn" onClick={endShell}>
             End

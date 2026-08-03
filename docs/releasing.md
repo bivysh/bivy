@@ -1,12 +1,36 @@
 # Releasing and distribution
 
-Bivy is distributed on npm as the [`bivy`](https://www.npmjs.com/package/bivy)
+Bivy is distributed on npm as the [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy)
 package. `install.sh` is a thin bootstrapper: it ensures a supported Node.js is
-present, runs `npm install -g bivy`, and then runs `bivy setup`.
+present, runs `npm install -g @bivy/bivy`, and then runs `bivy setup`.
 
 npm is the distribution channel. `install.sh` retains a checksum-verified
 tarball fallback (`TARBALL_URL`/`MANIFEST_URL`/`install_from_tarball`) used only
 during the cutover — when the `bivy` package isn't yet on the registry.
+
+## Release channels
+
+Bivy ships on two npm [dist-tags](https://docs.npmjs.com/cli/v11/commands/npm-dist-tag),
+both published from CI via the single `release.yml` workflow:
+
+| Channel | dist-tag | Version shape | When it publishes | Install |
+|---|---|---|---|---|
+| **Production** | `latest` | `X.Y.Z` | on a deliberate "Promote" dispatch | `npm i -g @bivy/bivy` (default) |
+| **Staging** | `staging` | `X.Y.Z-staging.<run#>` | automatically on every merge to `main` | `BIVY_CHANNEL=staging` / `npm i -g @bivy/bivy@staging` |
+
+The flow is trunk-based: every change lands on `main` through a PR, and each merge
+immediately publishes a unique, provenance-signed **staging** build that the dev
+fleet can install with `BIVY_CHANNEL=staging`. `latest` never moves on a merge —
+it only advances when a maintainer promotes the current `package.json` version to
+production (see "Cutting a production release"). Staging versions are semver
+prereleases, so they sort *below* `X.Y.Z` and never satisfy a plain `@bivy/bivy`
+install; they also never consume the eventual stable `X.Y.Z` version.
+
+`package.json` on `main` always holds the **next** clean release version
+(`X.Y.Z`, no prerelease suffix). Staging builds derive from it (`X.Y.Z-staging.N`);
+promoting publishes exactly that `X.Y.Z`. After a production release, bump
+`package.json` to the next target in a PR so subsequent staging builds carry the
+new number.
 
 ## Why npm rather than a signed tarball
 
@@ -37,8 +61,8 @@ publish authentication.
 npm audit signatures
 
 # What the registry says about a specific version.
-npm view bivy@0.1.0 dist.integrity
-npm view bivy@0.1.0 dist.attestations
+npm view @bivy/bivy@0.1.0 dist.integrity
+npm view @bivy/bivy@0.1.0 dist.attestations
 ```
 
 The provenance attestation is also shown on the package page under
@@ -55,7 +79,7 @@ authenticate as this release path, and there is no standing token to leak,
 rotate, or revoke. Provenance is generated automatically as part of the same
 exchange.
 
-Configure it once, on the `bivy` package's **Settings → Trusted Publishers**
+Configure it once, on the `@bivy/bivy` package's **Settings → Trusted Publishers**
 page on npmjs.com (requires the package to already exist — see
 "Bootstrapping" below):
 
@@ -65,7 +89,20 @@ page on npmjs.com (requires the package to already exist — see
 | Organization or user | `bivysh` |
 | Repository | `bivy` |
 | Workflow filename | `release.yml` |
-| Environment name | *(leave blank — this workflow doesn't use a GitHub environment)* |
+| Environment name | **(leave blank)** |
+| Allowed actions | `npm publish` |
+
+**Leave the Environment field blank.** One workflow file (`release.yml`) is the
+single trusted publisher npm permits per package, and it publishes *both*
+channels. The automatic **staging** job runs in no GitHub environment, so pinning
+an environment in npm's trust policy would reject every staging publish. The
+**production** job still self-gates on the `release` GitHub environment for
+approval — that is a GitHub-side control and does not need to be (and must not be)
+part of npm's trust policy.
+
+Create the GitHub `release` environment and require a maintainer review under
+**Settings → Environments → release**. This gates only the production/promote
+path; staging is unaffected.
 
 npm's CLI needs to be `>= 11.5.1` to speak the trusted-publishing protocol;
 `release.yml` upgrades it explicitly (`npm install -g npm@^11`) rather than
@@ -73,46 +110,70 @@ bumping the repo's pinned Node version just for that.
 
 ### Bootstrapping
 
-npm can only configure a trusted publisher for a package that **already
-exists** — there's no equivalent of "reserve this name for CI" for a brand
-new package. So the very first publish of `bivy` has to happen once by hand,
-with a maintainer's own npm login (or a short-lived classic Automation
-token), *before* the table above can be filled in:
+The `@bivy/bivy` package already exists as a placeholder, so no manual bootstrap
+publish is needed. Configure the trusted publisher above; the first merge to
+`main` then publishes a `staging` build with provenance, which is the fastest way
+to confirm the whole OIDC path works end to end. Do not publish from a laptop;
+npm versions are immutable and a hand publish carries no provenance.
+
+## Staging (automatic)
+
+Nothing to do. Every merge to `main` runs the `staging` job in `release.yml`,
+which stamps `X.Y.Z-staging.<run_number>` onto the package, publishes it to the
+`staging` dist-tag with provenance, and moves on. There is no tag, no changelog
+requirement, and no approval — it is meant to be invisible. Install/verify a
+staging build with:
 
 ```bash
-npm run publish:npm:dry   # inspect what would ship
-npm login                 # if not already
-npm run publish:npm       # first publish only — no provenance yet, that's expected
+BIVY_CHANNEL=staging curl -fsSL https://bivy.sh/install.sh | sh
+# or, directly:
+npm install -g @bivy/bivy@staging
+npm view @bivy/bivy dist-tags        # see what `staging` and `latest` point at
 ```
 
-Once `bivy@<version>` exists on the registry, configure the trusted publisher
-above. Every tagged release after that goes through the workflow, with no
-token involved.
+## Cutting a production release
 
-## Cutting a release
+Production is a deliberate promotion of whatever version `package.json` currently
+holds on `main`, to the `latest` dist-tag.
 
-1. Land everything on `main` and make sure CI is green.
-2. Bump the version manually in the root `package.json` and in every workspace
-   `package.json` (`packages/*`, `services/*`) so they all agree — there is no
-   sync script.
-3. Update `CHANGELOG.md` — move `[Unreleased]` into a dated section.
-4. Tag: `git tag -a v0.1.0 -m "Bivy 0.1.0" && git push origin v0.1.0`.
-5. The tag-triggered release workflow (`.github/workflows/release.yml`) checks
-   out the tag, runs the full CI gate (`.github/workflows/ci.yml`, reused via
-   `workflow_call`), publishes to npm via Trusted Publishing (with automatic
-   provenance), and creates the GitHub release from the matching
-   `## [x.y.z]` section of `CHANGELOG.md` (`scripts/extract-changelog.mjs`).
+1. Open a PR that, on `main`:
+   - sets the release version in the root `package.json` **and every workspace**
+     `package.json` (`packages/*`, `services/*`) so they all agree — there is no
+     sync script — to a clean `X.Y.Z` (no prerelease suffix);
+   - moves `CHANGELOG.md`'s `[Unreleased]` into a `## [X.Y.Z]` section.
+   Merge it. (This merge also publishes one more `X.Y.Z-staging.<run#>` build —
+   harmless; it's a release candidate for exactly this version.)
+2. Run the **Promote** button: Actions → **Release** → *Run workflow* (from
+   `main`), and type the exact `X.Y.Z` into the confirmation field. Or from the
+   CLI:
 
-To publish by hand:
+   ```bash
+   gh workflow run release.yml --ref main -f confirm_version=X.Y.Z
+   ```
+3. Approve the run when it pauses on the `release` environment.
+
+The `production` job re-runs the full CI gate (`ci.yml` via `workflow_call`),
+validates that `package.json` is a clean version matching your confirmation and
+that `vX.Y.Z` was not already released, checks all workspaces agree, publishes to
+`latest` via Trusted Publishing (automatic provenance), then tags the commit
+`vX.Y.Z` and creates the GitHub release from the matching `## [X.Y.Z]` CHANGELOG
+section (`scripts/extract-changelog.mjs`).
+
+After the release, bump `package.json` (all workspaces) to the next development
+version in a follow-up PR so subsequent staging builds carry the new number.
+
+### Publishing by hand (discouraged)
 
 ```bash
-npm run publish:npm:dry   # inspect what would ship
-npm run publish:npm
+npm run publish:npm:dry            # inspect what would ship (dry-run, latest)
+npm run publish:npm                # publish to `latest`
+npm run publish:npm -- --tag staging   # publish to `staging`
 ```
 
-Publishing by hand produces **no** provenance attestation — npm can only attest
-to builds it can trace to a CI workflow. The build prints a warning when this
-happens. Prefer the workflow.
+A hand publish produces **no** provenance attestation — npm can only attest to
+builds it can trace to a CI workflow — and needs a token or interactive 2FA that
+the trusted-publishing workflow exists precisely to avoid. The build prints a
+warning when this happens. Prefer the workflow.
 
 ## What ships in the package
 
@@ -141,12 +202,12 @@ script, which fails in a packaged install.
 
 | Install kind | Update action |
 |---|---|
-| `npm-global` | `npm install -g bivy@latest`, then restart the service |
+| `npm-global` | `npm install -g @bivy/bivy@latest`, then restart the service |
 | `git` | `git pull` + `npm ci`, then restart |
 | `packaged` | re-runs `install.sh`, which migrates the install to npm |
 | `npx` | nothing to update; each run fetches afresh |
 
-The daemon checks `https://registry.npmjs.org/bivy/latest` every six hours and
+The daemon checks `https://registry.npmjs.org/%40bivy%2Fbivy/latest` every six hours and
 posts an in-session notice when a newer version exists. Override the endpoint
 with `BIVY_UPDATE_REGISTRY_URL` to point at a mirror or private registry.
 

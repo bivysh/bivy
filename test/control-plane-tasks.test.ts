@@ -27,18 +27,13 @@ async function waitFor(cond: () => boolean, { tries = 200, intervalMs = 5 } = {}
   if (!cond()) throw new Error("waitFor: condition never became true");
 }
 
-test("config: off unless enrolled AND issue pickup opted in", () => {
+test("config: every enrolled node serves the hosted work queue", () => {
   // Not enrolled → off.
   assert.equal(resolveControlPlaneTaskConfig(undefined, {}), null);
-  // Enrolled but not opted in → off.
-  assert.equal(
-    resolveControlPlaneTaskConfig({ controlPlaneUrl: "https://cp", enrollmentToken: "t" }, {}),
-    null,
-  );
-  // Enrolled + opted in → on, with default label.
+  // Slack/webhook/schedule work must run without a GitHub-specific opt-in.
   const cfg = resolveControlPlaneTaskConfig(
     { controlPlaneUrl: "https://cp/", enrollmentToken: "t" },
-    { BIVY_GITHUB_TASKS: "1" },
+    {},
   );
   assert.ok(cfg);
   assert.equal(cfg!.controlPlaneUrl, "https://cp"); // trailing slash trimmed
@@ -75,6 +70,34 @@ test("config: the node auto-serves bivy/<its-name> without any manual label", ()
     "hetzner",
   );
   assert.deepEqual(both!.labels, ["bivy", "bivy/hetzner", "bivy/extra"]);
+});
+
+test("poller: adopts renamed-node labels without a restart", async () => {
+  const cfg: ControlPlaneTaskConfig = {
+    controlPlaneUrl: "https://cp",
+    enrollmentToken: "tok",
+    labels: ["bivy", "bivy/old-name"],
+    pollMs: 60_000,
+  };
+  const urls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    urls.push(url);
+    return { ok: true, json: async () => ({ items: [] }) } as Response;
+  }) as typeof fetch;
+
+  const poller = new ControlPlaneTaskPoller(cfg, async () => {});
+  try {
+    poller.setLabels(["bivy", "bivy/new-name"]);
+    await waitFor(() => urls.length > 0);
+  } finally {
+    poller.stop();
+    globalThis.fetch = original;
+  }
+
+  assert.equal(cfg.labels.includes("bivy/new-name"), true);
+  assert.equal(cfg.labels.includes("bivy/old-name"), false);
+  assert.ok(urls.some((url) => decodeURIComponent(url).includes("labels=bivy,bivy/new-name")));
 });
 
 test("poller: claims then runs then completes; skips items lost to another node", async () => {

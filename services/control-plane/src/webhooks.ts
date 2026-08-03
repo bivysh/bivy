@@ -25,6 +25,13 @@ export function verifyGithubSignature(secret: string, rawBody: string | Buffer, 
   return safeEqual(expected, header);
 }
 
+/** Verify Linear's `Linear-Signature` HMAC-SHA256 header over the raw body. */
+export function verifyLinearSignature(secret: string, rawBody: string | Buffer, header: string | undefined): boolean {
+  if (!header || !/^[0-9a-f]{64}$/i.test(header)) return false;
+  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
+  return safeEqual(expected, header.toLowerCase());
+}
+
 /** Verify a generic automation `x-bivy-signature-256` header over raw bytes. */
 export function verifyAutomationSignature(
   secret: string,
@@ -122,6 +129,49 @@ export function renderAutomationInstruction(templateInstruction: string, event: 
   return parts.filter(Boolean).join("\n\n");
 }
 
+export interface ParsedLinearIssueWork {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  labels: string[];
+  repo?: string;
+}
+
+/** Parse actionable Linear Issue create/update webhook events. Issue content is
+ * deliberately omitted: the claiming node fetches it directly from Linear. A
+ * `bivy`/`bivy/<node>` label routes the issue; an optional `repo:owner/name`
+ * label selects a repository when the node has no BIVY_LINEAR_REPO default. */
+export function parseLinearIssueEvent(payload: unknown): ParsedLinearIssueWork | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const o = payload as Record<string, any>;
+  if (String(o.type ?? "").toLowerCase() !== "issue" || !["create", "update"].includes(String(o.action ?? "").toLowerCase())) return undefined;
+  const data = o.data;
+  if (!data || typeof data !== "object") return undefined;
+  const id = String(data.id ?? "").trim();
+  const identifier = String(data.identifier ?? "").trim();
+  if (!id || !identifier) return undefined;
+  const rawLabels = Array.isArray(data.labels)
+    ? data.labels
+    : Array.isArray(data.labelNames)
+      ? data.labelNames
+      : Array.isArray(data.labels?.nodes)
+        ? data.labels.nodes
+        : [];
+  const labels: string[] = rawLabels
+    .map((label: any) => typeof label === "string" ? label : label?.name)
+    .filter((name: any): name is string => Boolean(name));
+  const repoLabel = labels.find((label) => /^repo:[^/\s]+\/[^/\s]+$/i.test(label));
+  return {
+    id,
+    identifier,
+    title: String(data.title ?? ""),
+    url: String(data.url ?? ""),
+    labels,
+    repo: repoLabel?.slice("repo:".length),
+  };
+}
+
 export interface ParsedIssueWork {
   title: string;
   body: string;
@@ -129,6 +179,10 @@ export interface ParsedIssueWork {
   issueNumber: number;
   url: string;
   labels: string[];
+  // GitHub's `author_association` for the issue's author on this repo (e.g.
+  // "OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "NONE"). Used by
+  // `meetsTriggerAccess` to gate the body-mention trigger — see issue #259.
+  authorAssociation?: string;
 }
 
 /**
@@ -158,7 +212,41 @@ export function parseGithubIssueEvent(payload: unknown): ParsedIssueWork | undef
     issueNumber,
     url: String(issue.html_url ?? ""),
     labels,
+    authorAssociation: issue.author_association ? String(issue.author_association) : undefined,
   };
+}
+
+/**
+ * Access tiers for who may `@`-mention-trigger a run (issue #259 — on a public
+ * repo, anyone can otherwise comment/open an issue and burn the account's
+ * automation quota with arbitrary instructions). Checked against GitHub's own
+ * `author_association` on the triggering issue/comment — no extra API call:
+ *   - "everyone" — no restriction (default; preserves prior behavior for hooks
+ *     that never opted in).
+ *   - "contributor" — the author has SOME prior relationship with the repo:
+ *     they've had a PR merged, are a collaborator/member, or own it. Excludes
+ *     a rando who has never interacted with the project (`NONE`,
+ *     `FIRST_TIMER`, `FIRST_TIME_CONTRIBUTOR`, `MANNEQUIN`).
+ *   - "collaborator" — push access only: a collaborator, org member, or the
+ *     owner. The same bar GitHub itself uses for who can apply a label, so it
+ *     matches the (already-safe) label-routing trigger.
+ */
+export type TriggerAccess = "everyone" | "contributor" | "collaborator";
+
+const TRIGGER_ACCESS_ASSOCIATIONS: Record<Exclude<TriggerAccess, "everyone">, Set<string>> = {
+  contributor: new Set(["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]),
+  collaborator: new Set(["OWNER", "MEMBER", "COLLABORATOR"]),
+};
+
+/**
+ * Whether `association` (a GitHub `author_association` value, case-
+ * insensitive) clears the bar set by `access`. `undefined`/unrecognized
+ * `access` behaves like `"everyone"` so hooks created before this setting
+ * existed keep working exactly as before.
+ */
+export function meetsTriggerAccess(association: string | undefined, access: TriggerAccess | undefined): boolean {
+  if (access !== "contributor" && access !== "collaborator") return true;
+  return TRIGGER_ACCESS_ASSOCIATIONS[access].has(String(association ?? "").trim().toUpperCase());
 }
 
 /**
@@ -215,6 +303,9 @@ export interface ParsedCommentWork {
   url: string;
   mentions: string[];
   issueLabels: string[];
+  // GitHub's `author_association` for the commenter on this repo. Used by
+  // `meetsTriggerAccess` to gate the mention trigger — see issue #259.
+  authorAssociation?: string;
 }
 
 /**
@@ -250,6 +341,7 @@ export function parseGithubCommentEvent(payload: unknown, triggerLogin: string):
     url: String(comment.html_url ?? issue.html_url ?? ""),
     mentions,
     issueLabels,
+    authorAssociation: comment.author_association ? String(comment.author_association) : undefined,
   };
 }
 
@@ -323,17 +415,32 @@ export function verifySlackSignature(
 
 export interface ParsedSlackCommand {
   node?: string; // target node label suffix, e.g. "laptop" from "on laptop"
+  repo?: string; // optional GitHub repository, e.g. "acme/api" from "in acme/api"
   prompt: string;
 }
 
 /**
- * Parse a Slack command body like `on laptop fix the flaky test` into a target
- * node and a prompt. With no leading `on <node>`, the whole text is the prompt
- * (routed to the account's default label).
+ * Parse `/bivy [on <node>] [in <owner/repo>] <request>`. The routing and repo
+ * clauses may appear in either order; without them the whole text is the prompt.
  */
 export function parseSlackCommand(text: string): ParsedSlackCommand {
-  const trimmed = (text ?? "").trim();
-  const m = trimmed.match(/^on\s+(\S+)\s+([\s\S]+)$/i);
-  if (m) return { node: m[1], prompt: m[2].trim() };
-  return { prompt: trimmed };
+  let rest = (text ?? "").trim();
+  const out: ParsedSlackCommand = { prompt: "" };
+  for (let i = 0; i < 2; i++) {
+    const node = rest.match(/^on\s+([A-Za-z0-9._-]+)\s+([\s\S]+)$/i);
+    if (node && !out.node) {
+      out.node = node[1];
+      rest = node[2].trim();
+      continue;
+    }
+    const repo = rest.match(/^in\s+([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\s+([\s\S]+)$/i);
+    if (repo && !out.repo) {
+      out.repo = repo[1];
+      rest = repo[2].trim();
+      continue;
+    }
+    break;
+  }
+  out.prompt = rest;
+  return out;
 }

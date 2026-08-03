@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Copyright (c) 2026 Petter André Sjulstad
+//
+// Classify a session's `source` tag into the trigger that started it, so every
+// surface that shows a run — the sidebar list, the in-session pill, the GitHub
+// queue screen — agrees on one mark and one label instead of re-parsing the
+// string each place. The node stores `source` as a compact tag; the shapes we
+// see are:
+//   repo:owner/name        a workspace session opened by hand (app or CLI)
+//   issue:owner/repo#123   a labelled GitHub issue the queue picked up
+//   queue:github:issue     a labelled issue with no repo worktree
+//   queue:github:comment   an @-mention of the GitHub app
+//   queue:slack            a Slack request
+//   queue:linear:issue     a labelled Linear issue
+//   queue:schedule         a scheduled (cron/one-off) automation
+//   queue:webhook          a signed inbound webhook
+//   queue:manual           a "Run now" dispatch of an automation definition
+//   takeover/import/replica:… housekeeping tags — treated as ordinary sessions
+//   (empty)                a plain workspace session
+// See src/server.ts (`queue:${item.source}`, `repo:${slug}`, `issue:…`) and
+// packages/core/src/store-normalize.ts for where these are produced/parsed.
+
+/** Every trigger a run can carry, plus the two non-automation origins (a live
+ *  `bivy run` terminal → `cli`, anything else opened by hand → `app`). */
+export type SourceKind =
+  | "github-issue"
+  | "github-mention"
+  | "slack"
+  | "linear"
+  | "schedule"
+  | "webhook"
+  | "manual"
+  | "cli"
+  | "app";
+
+export interface SourceInfo {
+  kind: SourceKind;
+  /** Full, human-facing label — used as the mark's tooltip and the pill text. */
+  label: string;
+  /** True for the queue-driven triggers, i.e. runs that carry a live lifecycle
+   *  status worth surfacing. `cli`/`app` sessions are just sessions. */
+  automation: boolean;
+}
+
+/** A live `bivy run <agent>` terminal — surfaced from the run-terminal list, not
+ *  from a `source` tag, so it's a named constant rather than a parse result. */
+export const CLI_SOURCE: SourceInfo = { kind: "cli", label: "Terminal · bivy run", automation: false };
+
+/** Map a session's `source` tag to the trigger that started it. Unknown or
+ *  housekeeping tags fall through to a plain `app` session — never throws, so
+ *  a new server-side tag degrades to "a session" rather than breaking a row. */
+export function classifySource(source: string | undefined): SourceInfo {
+  const s = (source ?? "").trim();
+  if (s.startsWith("issue:") || s === "queue:github:issue" || s.startsWith("github:issue")) {
+    return { kind: "github-issue", label: "GitHub · labelled issue", automation: true };
+  }
+  if (s === "queue:github:comment" || s === "github:comment") {
+    return { kind: "github-mention", label: "GitHub · @-mention", automation: true };
+  }
+  if (s === "queue:slack" || s === "slack") {
+    return { kind: "slack", label: "Slack request", automation: true };
+  }
+  if (s === "queue:linear:issue" || s === "linear:issue") {
+    return { kind: "linear", label: "Linear issue", automation: true };
+  }
+  if (s === "queue:schedule" || s === "schedule") {
+    return { kind: "schedule", label: "Scheduled run", automation: true };
+  }
+  if (s === "queue:webhook" || s === "webhook") {
+    return { kind: "webhook", label: "Webhook", automation: true };
+  }
+  if (s === "queue:manual" || s === "manual") {
+    return { kind: "manual", label: "Manual run", automation: true };
+  }
+  return { kind: "app", label: "App session", automation: false };
+}
+
+/** Short one/two-word label for tight spots (the in-session pill). */
+export function shortSourceLabel(kind: SourceKind): string {
+  switch (kind) {
+    case "github-issue":
+    case "github-mention":
+      return "GitHub";
+    case "slack":
+      return "Slack";
+    case "linear":
+      return "Linear";
+    case "schedule":
+      return "Schedule";
+    case "webhook":
+      return "Webhook";
+    case "manual":
+      return "Manual";
+    case "cli":
+      return "CLI";
+    case "app":
+      return "App";
+  }
+}

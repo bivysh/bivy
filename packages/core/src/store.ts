@@ -14,14 +14,14 @@
 // reproduced here yet — see packages/web/STATUS.md. They are refinements over
 // this correct baseline, not prerequisites for it.
 
-import type { ConnectionStatus, PromptAttachment, ServerEvent } from "./protocol.js";
+import type { AttachmentRef, ConnectionStatus, PromptAttachment, ServerEvent } from "./protocol.js";
 import type { AccountNode } from "./account.js";
 import type { InboxAdvert } from "./inbox.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml } from "./markdown.js";
 import { eventKind, normalizeEventType, toolCallId, toolInput, toolName } from "./tool-activity.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
-import { contentThinking, contentToText, mergeToolInto, nextId, renderHistory, toolEntriesFromContent } from "./store-render.js";
+import { attachmentFromRef, contentThinking, contentToText, mergeToolInto, nextId, renderHistory, toolEntriesFromContent } from "./store-render.js";
 import {
   agentLabel,
   githubContext,
@@ -85,6 +85,11 @@ export interface SessionSummary {
   worktree?: string;
   name: string;
   source?: string;
+  /** Parent session's id, when this session was materialized from a fork
+   *  bundle (see src/session/fork.ts on the node). Undefined for an ordinary
+   *  session. The parent may live on a different node, so this is only ever
+   *  an id to display/link, not something guaranteed resolvable locally. */
+  forkedFrom?: string;
   /** Relay/account mode: node that owns this session. Used by all-node lists. */
   nodeId?: string;
   runtimeId?: string;
@@ -96,6 +101,11 @@ export interface SessionSummary {
    *  carries this from the node — see src/server.ts — it was previously dropped
    *  here, which is why the sidebar had no branch/PR context per row). */
   branch?: string;
+  /** This session's ephemeral node was torn down (unenrolled, gone from the
+   *  registry) but is REBUILDABLE from a durable correlation + the room key this
+   *  device still holds — so the row stays in the sidebar as offline-but-rebuildable
+   *  and a send rebuilds it (Gap 1). Client-local; the node has no concept of it. */
+  rebuildable?: boolean;
   /** Per-session sandbox tier this session was created with (the override); absent
    *  = the node default. Baked in at creation and read-only for the session's life
    *  — surfaced so a running session can show its sandbox mode read-only. */
@@ -516,6 +526,10 @@ export interface NodeSettings {
    *  re-drives the interrupted turn on boot, "manual" waits for a one-tap Resume.
    *  Governs interactive sessions only — issue automation always auto-resumes. */
   sessionResumeMode: "auto" | "manual";
+  /** Passively surface images a tool produces (e.g. a screenshot MCP tool's
+   *  output) into the chat as attachments, with no explicit "attach" call
+   *  (issue #292). Off by default; bounded per-turn regardless once enabled. */
+  autoAttachToolImages: boolean;
 }
 
 export interface AppState {
@@ -826,6 +840,19 @@ export class SessionStore {
   private state: AppState = initialState();
   private listeners = new Set<() => void>();
   private draft: Draft = freshDraft();
+  /** Agent-sent attachments buffered during the current turn. Flushed at the
+   *  turn boundary onto the turn's final assistant bubble (see
+   *  flushPendingAgentAttachments) so a chip reads as part of the reply, not as a
+   *  standalone entry stranded mid-turn where `bivy attach` happened to run. */
+  private pendingAgentAttachments: Array<{ attachment: PromptAttachment; caption: string }> = [];
+  /** Every agent-sent attachment ever shown for a session, keyed by content hash
+   *  (append-only — an agent can't "unsend" one). A later history snapshot that
+   *  omits one — a resume-race reconcile, or any transcript built from raw runtime
+   *  messages without the durable outbound-attachment overlay — is therefore
+   *  lossy, and must not be allowed to erase the chip. withStickyAgentAttachments
+   *  re-applies any missing ones; keying by hash also de-dupes a re-broadcast of a
+   *  live `attachment` event the transcript already carries. */
+  private knownAgentAttachmentsBySession = new Map<string, Map<string, { attachment: PromptAttachment; caption: string }>>();
   /** The user's last-used model, remembered across sessions and reloads. Honored
    *  by the models.list reducer *only* while no session is active (a fresh
    *  draft), so a new session opens on the same model the user last picked. The
@@ -1061,6 +1088,21 @@ export class SessionStore {
   restoreAttachments(entries: Array<[string, PromptAttachment[]]> | undefined): void {
     if (!entries || !entries.length) return;
     for (const [text, attachments] of entries) this.rememberAttachments(text, attachments);
+  }
+
+  /** Fold the durable attachment references a `session.history` event carries
+   *  (text→refs, persisted by the node's event log) into the in-memory cache, so
+   *  attachments rehydrate after a reload or on a device that never sent them.
+   *  The refs carry no bytes — only a content `hash` the chip resolves lazily via
+   *  `controller.fetchAttachment`. A text already cached with real bytes (our own
+   *  send this session) is left untouched; refs only ever FILL gaps. */
+  foldAttachmentRefs(entries: Array<[string, AttachmentRef[]]> | undefined): void {
+    if (!entries || !entries.length) return;
+    for (const [text, refs] of entries) {
+      if (!text || !refs.length || this.attachmentsByText.has(text)) continue;
+      const attachments: PromptAttachment[] = refs.map((r) => ({ kind: r.kind, name: r.name, size: r.size, mimeType: r.mimeType, hash: r.hash }));
+      this.rememberAttachments(text, attachments);
+    }
   }
 
   /** Re-attach cached attachments onto matching user entries rebuilt from
@@ -1869,6 +1911,7 @@ export class SessionStore {
         });
         if (sid) this.dropSessionCommands(sid);
         if (sid) this.dropFollowups(sid);
+        if (sid) this.knownAgentAttachmentsBySession.delete(sid);
         if (sid && sid === this.state.activeSessionId) this.resetActiveSession();
         return;
       }
@@ -2457,6 +2500,10 @@ export class SessionStore {
    * full replace. Re-renders, refreshes both caches, and persists the cursor.
    */
   private applyHistory(e: any, sessionId: string | null): void {
+    // Durable attachment refs (text→refs) fill the in-memory cache before render,
+    // so a reload / another device rehydrates thumbnails by hash instead of a bare
+    // "[Image attachment: …]" placeholder. Must precede withCachedAttachments.
+    if (Array.isArray(e.attachmentRefs)) this.foldAttachmentRefs(e.attachmentRefs as Array<[string, AttachmentRef[]]>);
     const incoming: any[] = Array.isArray(e.messages) ? e.messages : [];
     const prev = sessionId ? this.historyRaw.get(sessionId) : undefined;
     const isAppend = e.mode === "append" && prev && (e.baseCount === undefined || e.baseCount === prev.count);
@@ -2484,7 +2531,14 @@ export class SessionStore {
       if (historyHash) this.onHistoryPersist?.(sessionId, full, count, historyHash);
     }
     const rendered = this.withCachedAttachments(renderHistory(full));
-    if (sessionId) this.cacheTranscript(sessionId, rendered);
+    // Record the agent attachments this snapshot carries, then re-apply any it
+    // dropped: agent attachments are append-only, so a snapshot missing one the
+    // session already showed (a resume-race reconcile, or a transcript built from
+    // raw runtime messages without the outbound-attachment overlay) is lossy and
+    // must not erase the chip.
+    this.rememberAgentAttachments(sessionId, rendered);
+    const withAttachments = this.withStickyAgentAttachments(sessionId, rendered);
+    if (sessionId) this.cacheTranscript(sessionId, withAttachments);
     // A history snapshot can arrive for a session the user has already switched
     // away from (slow radio + fast taps): its request was in flight when they
     // opened another. Refresh that session's caches above, but never let it
@@ -2519,7 +2573,7 @@ export class SessionStore {
       activeTitle: e.name || this.state.activeTitle,
       currentAgentName: e.agentName || this.state.currentAgentName,
       github: githubContext(e),
-      transcript: this.withPendingUserEntries(rendered),
+      transcript: this.withPendingUserEntries(withAttachments),
       working: Boolean(e.isStreaming),
       opening: false,
       usage: normalizeUsage(e.usage),
@@ -2537,6 +2591,8 @@ export class SessionStore {
     // A connection drop mid-open will never deliver the history it was waiting
     // on, so stop the spinner rather than leaving the pane blank indefinitely.
     if (this.state.opening) this.set({ opening: false });
+    // A turn cut short still shows any attachments it managed to emit.
+    this.flushPendingAgentAttachments();
     if (this.draft.finalized) return;
     this.finishDrafts();
     this.draft.finalized = true;
@@ -2556,6 +2612,101 @@ export class SessionStore {
 
   private pushEntry(entry: TranscriptEntry): void {
     this.set({ transcript: [...this.state.transcript, entry] });
+  }
+
+  /**
+   * Flush this turn's buffered agent attachments (see pendingAgentAttachments)
+   * onto the turn's FINAL assistant prose bubble — the last assistant text entry
+   * since the most recent user message — so the chips read as part of the reply.
+   * Falls back to a standalone entry (carrying the caption) when the turn has no
+   * prose bubble to hang them on. Idempotent: a no-op once the buffer is drained,
+   * so it's safe to call at both turn_end and agent_end. Mirrors the durable
+   * grouping renderHistory applies on reload (groupAgentAttachments).
+   */
+  private flushPendingAgentAttachments(): void {
+    const buffered = this.pendingAgentAttachments;
+    if (!buffered.length) return;
+    this.pendingAgentAttachments = [];
+    const transcript = this.state.transcript;
+    // Skip any whose bytes the transcript already carries (a reconnect/resume that
+    // re-broadcasts a live `attachment` event history already grouped in) so a
+    // replay never doubles the chip.
+    const present = this.attachmentHashesIn(transcript);
+    const fresh = buffered.filter((b) => !b.attachment.hash || !present.has(b.attachment.hash));
+    const next = this.placeAgentAttachments(transcript, fresh);
+    if (next !== transcript) this.set({ transcript: next });
+    this.rememberAgentAttachments(this.state.activeSessionId, this.state.transcript);
+  }
+
+  /** The set of attachment content hashes present anywhere in a transcript. */
+  private attachmentHashesIn(transcript: TranscriptEntry[]): Set<string> {
+    const hashes = new Set<string>();
+    for (const e of transcript) for (const a of e.attachments ?? []) if (a.hash) hashes.add(a.hash);
+    return hashes;
+  }
+
+  /** Index of the assistant prose bubble agent attachments hang on: the last
+   *  attachment-free assistant text entry since the most recent user message (the
+   *  turn's final reply). -1 when the turn has no such bubble. */
+  private agentAttachmentTarget(transcript: TranscriptEntry[]): number {
+    let turnStart = -1;
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      if (transcript[i]!.role === "user") { turnStart = i; break; }
+    }
+    for (let i = transcript.length - 1; i > turnStart; i--) {
+      const e = transcript[i]!;
+      if (e.role === "assistant" && !e.tool && e.text && !(e.attachments && e.attachments.length)) return i;
+    }
+    return -1;
+  }
+
+  /** Group `items` onto the turn's final assistant bubble, or append them as their
+   *  own caption-carrying entries when the turn has no prose bubble. Returns the
+   *  same array reference unchanged when there is nothing to place. */
+  private placeAgentAttachments(
+    transcript: TranscriptEntry[],
+    items: Array<{ attachment: PromptAttachment; caption: string }>,
+  ): TranscriptEntry[] {
+    if (!items.length) return transcript;
+    const chips = items.map((b) => b.attachment);
+    const target = this.agentAttachmentTarget(transcript);
+    if (target >= 0) {
+      return transcript.map((e, i) => (i === target ? { ...e, attachments: [...(e.attachments ?? []), ...chips] } : e));
+    }
+    // No prose this turn — keep each attachment as its own entry (with caption),
+    // preserving the pre-grouping behaviour for the caption-only case.
+    return [...transcript, ...items.map((b) => ({ id: nextId(), role: "assistant" as const, text: b.caption, attachments: [b.attachment] }))];
+  }
+
+  /** Record every agent-sent attachment in a rendered transcript into the durable
+   *  per-session map, keyed by hash (append-only). Only assistant entries carry
+   *  agent attachments; user uploads live on user entries and are ignored. */
+  private rememberAgentAttachments(sessionId: string | null, transcript: TranscriptEntry[]): void {
+    if (!sessionId) return;
+    let map = this.knownAgentAttachmentsBySession.get(sessionId);
+    for (const e of transcript) {
+      if (e.role !== "assistant" || !e.attachments) continue;
+      for (const a of e.attachments) {
+        if (!a.hash) continue;
+        if (!map) { map = new Map(); this.knownAgentAttachmentsBySession.set(sessionId, map); }
+        // Caption only matters for the standalone (no-prose-in-turn) fallback; a
+        // grouped chip's entry text is the reply prose, not a caption, so default
+        // to empty rather than risk re-adding prose as a caption.
+        if (!map.has(a.hash)) map.set(a.hash, { attachment: a, caption: "" });
+      }
+    }
+  }
+
+  /** Re-apply any known agent attachment a (possibly lossy) snapshot dropped, so a
+   *  reconcile that lacks the outbound-attachment overlay can't erase a chip the
+   *  session already showed. No-op once every known hash is present. */
+  private withStickyAgentAttachments(sessionId: string | null, transcript: TranscriptEntry[]): TranscriptEntry[] {
+    if (!sessionId) return transcript;
+    const known = this.knownAgentAttachmentsBySession.get(sessionId);
+    if (!known || known.size === 0) return transcript;
+    const present = this.attachmentHashesIn(transcript);
+    const missing = [...known.values()].filter((k) => k.attachment.hash && !present.has(k.attachment.hash));
+    return this.placeAgentAttachments(transcript, missing);
   }
 
   /** Fold a live field update (status, branch, PR link, …) onto a session-list
@@ -2682,6 +2833,19 @@ export class SessionStore {
           this.setWorking("Drafting response…");
         }
         return;
+      case "attachment": {
+        // An agent-sent attachment (image or file). Buffer it and render it at the
+        // turn boundary under the turn's final assistant bubble, rather than as a
+        // standalone entry at the moment `bivy attach` ran — which lands mid-turn,
+        // between tool cards and the reply, reading as detached. Grouping matches
+        // how user uploads render under their own message. Durable history
+        // reproduces the same grouping (see groupAgentAttachments in renderHistory).
+        const ref = (event as any).ref;
+        if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return;
+        const caption = typeof (event as any).caption === "string" ? (event as any).caption : "";
+        this.pendingAgentAttachments.push({ attachment: attachmentFromRef(ref), caption });
+        return;
+      }
       case "message_update":
       case "message_end": {
         const msg = (event as any).message;
@@ -2717,11 +2881,19 @@ export class SessionStore {
           this.commitPendingProse();
           this.draft.finalized = true;
         } else {
-          // No per-token transcript churn any more — just keep the working label
-          // honest, and only when it actually changes so we don't notify on every
-          // update.
+          // Keep the working label honest, and only when it actually changes so
+          // we don't notify on every update.
           const label = text ? "Drafting response…" : "Thinking…";
           if (this.state.workingLabel !== label || !this.state.working) this.setWorking(label);
+          // Show the in-flight prose as a live streaming bubble so a session the
+          // user just switched back to (or is watching continuously) reflects the
+          // agent's current answer immediately — instead of nothing until
+          // message_end, which mid-turn is several seconds away and reads as a
+          // stale, frozen transcript. Rendered as plain text (no per-update
+          // markdown/highlight pass — that O(n²) churn is the reason streaming
+          // prose was originally deferred to boundaries); commitPendingProse
+          // swaps in the rendered markdown when the run seals.
+          this.previewPendingProse();
         }
         for (const tool of toolEntriesFromContent(msg.content)) this.applyTool(tool);
         return;
@@ -2762,10 +2934,15 @@ export class SessionStore {
         });
         return;
       case "turn_end":
+        // Land any attachments emitted this turn under its final assistant bubble.
+        this.flushPendingAgentAttachments();
         this.setWorking("Planning next step…");
         return;
       case "agent_end":
         this.finishDrafts();
+        // finishDrafts sealed the final prose bubble; now group this turn's
+        // attachments onto it (no-op if turn_end already flushed them).
+        this.flushPendingAgentAttachments();
         this.closeRunningTools();
         // Clear the prose accumulator so a next turn that opens straight into a
         // tool (no message_start first) can't re-commit this turn's prose above
@@ -2817,11 +2994,43 @@ export class SessionStore {
     const tail = (full.startsWith(committed) ? full.slice(committed.length) : full).trim();
     if (!tail) return;
     this.draft.committedText = full;
-    // Each committed run is its own bubble; drop any reuse handle so upsertDraft
-    // pushes a fresh entry rather than replacing the previous run.
-    this.draft.assistantId = null;
-    if (looksLikeAgentError(tail)) this.pushEntry({ id: nextId(), role: "error", text: humanizeError(tail) });
-    else this.upsertDraft("assistant", tail, true);
+    if (looksLikeAgentError(tail)) {
+      // A run that turns out to be an agent error becomes a red bubble. Drop any
+      // in-flight streaming preview for this run first so it isn't left dangling
+      // as a plain-text bubble above the error.
+      if (this.draft.assistantId) {
+        this.removeEntry(this.draft.assistantId);
+        this.draft.assistantId = null;
+      }
+      this.pushEntry({ id: nextId(), role: "error", text: humanizeError(tail) });
+      return;
+    }
+    // Seal this run's bubble as rendered markdown. When previewPendingProse
+    // already pushed a live (plain-text, streaming) preview for it, upsertDraft
+    // reuses that entry via draft.assistantId and swaps in the HTML in place;
+    // otherwise it pushes a fresh finished bubble. Either way upsertDraft clears
+    // assistantId on finalize, so the next run (after a tool boundary) starts its
+    // own bubble.
+    this.upsertDraft("assistant", tail, true);
+  }
+
+  /**
+   * Paint the not-yet-committed prose of the current draft as a live streaming
+   * bubble (plain text, no markdown pass) so an actively-streaming turn shows its
+   * progress the instant the user is looking — most visibly when they switch back
+   * to a session mid-turn. The finished, markdown-rendered bubble replaces it at
+   * the next tool boundary / message_end via commitPendingProse (which reuses the
+   * same draft.assistantId entry). Mirrors commitPendingProse's tail arithmetic so
+   * cumulative (Codex) and per-segment (Claude) runtimes both preview correctly; a
+   * run that only classifies as an error once complete is handled at commit, so a
+   * partial that merely looks error-shaped mid-stream isn't special-cased here.
+   */
+  private previewPendingProse(): void {
+    const full = this.draft.pendingText;
+    const committed = this.draft.committedText;
+    const tail = (full.startsWith(committed) ? full.slice(committed.length) : full).trim();
+    if (!tail) return;
+    this.upsertDraft("assistant", tail, false);
   }
 
   /**
@@ -2849,15 +3058,25 @@ export class SessionStore {
   private upsertDraft(which: "assistant" | "thinking", text: string, finalize: boolean): void {
     const role: TranscriptRole = which === "assistant" ? "assistant" : "thinking";
     const idField = which === "assistant" ? "assistantId" : "thinkingId";
+    // Only render markdown once the run is finalized. A streaming assistant
+    // preview updates on every coalesced message_update, so running toHtml (plus
+    // syntax highlighting) each time is the O(n²) churn we deliberately avoid —
+    // the view renders the streaming entry's plain `text` and computes markdown
+    // only when it seals (see EntryView in ChatView).
+    const html = role === "assistant" && finalize ? toHtml(text) : undefined;
     let id = this.draft[idField];
     if (!id) {
       id = nextId();
       this.draft[idField] = id;
-      this.pushEntry({ id, role, text, html: role === "assistant" ? toHtml(text) : undefined, streaming: !finalize });
+      this.pushEntry({ id, role, text, html, streaming: !finalize });
     } else {
-      this.replaceEntry(id, { text, html: role === "assistant" ? toHtml(text) : undefined, streaming: !finalize });
+      this.replaceEntry(id, { text, html, streaming: !finalize });
     }
     if (finalize) this.draft[idField] = null;
+  }
+
+  private removeEntry(id: string): void {
+    this.set({ transcript: this.state.transcript.filter((e) => e.id !== id) });
   }
 
   private finishDrafts(): void {

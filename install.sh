@@ -6,7 +6,7 @@
 #
 # This script does three things:
 #   1. makes sure a supported Node.js is present (installing it on Debian/Ubuntu),
-#   2. installs the `bivy` package from npm,
+#   2. installs the `@bivy/bivy` package from npm,
 #   3. runs `bivy setup`, or restarts an existing background service.
 #
 # Distribution integrity is npm's: the registry serves content-addressed
@@ -15,7 +15,7 @@
 # given version was built:
 #
 #   npm audit signatures
-#   npm view bivy dist.integrity
+#   npm view @bivy/bivy dist.integrity
 #
 # If the package is not on the registry yet, the script falls back to the
 # self-hosted release tarball (see "Tarball fallback" below) so that a fresh
@@ -24,6 +24,8 @@
 #
 # Overrides:
 #   BIVY_VERSION=0.1.0            install a specific version instead of latest
+#   BIVY_CHANNEL=staging          install the latest dev build off the `staging`
+#                                 dist-tag (every merge to main); default `latest`
 #   BIVY_NPM_PREFIX=~/.local      install into a user-owned npm prefix (no sudo)
 #   BIVY_INSTALL_ALL_AGENTS=1     preinstall every bundled agent runtime
 #   BIVY_NO_TARBALL_FALLBACK=1    fail instead of falling back to the tarball
@@ -32,7 +34,10 @@
 #
 set -euo pipefail
 
-PKG_VERSION="${BIVY_VERSION:-latest}"
+# BIVY_VERSION pins an exact version; BIVY_CHANNEL selects a dist-tag
+# (latest | staging). BIVY_VERSION wins if both are set.
+PKG_VERSION="${BIVY_VERSION:-${BIVY_CHANNEL:-latest}}"
+NPM_PACKAGE="@bivy/bivy"
 DATA_DIR="${BIVY_DATA_DIR:-$HOME/.bivy}"
 # Also the destination for a tarball-fallback install, whose state lives inside
 # the app directory rather than at $DATA_DIR.
@@ -291,13 +296,13 @@ install_from_tarball() {
 }
 
 install_globally() {
-  local args=(install -g "bivy@${PKG_VERSION}" --no-audit --no-fund)
+  local args=(install -g "${NPM_PACKAGE}@${PKG_VERSION}" --no-audit --no-fund)
   if [ -n "${BIVY_NPM_PREFIX:-}" ]; then
-    info "Installing bivy@${PKG_VERSION} into ${BIVY_NPM_PREFIX}"
+    info "Installing ${NPM_PACKAGE}@${PKG_VERSION} into ${BIVY_NPM_PREFIX}"
     npm "${args[@]}" --prefix "$BIVY_NPM_PREFIX"
     return
   fi
-  info "Installing bivy@${PKG_VERSION} from npm"
+  info "Installing ${NPM_PACKAGE}@${PKG_VERSION} from npm"
   if npm "${args[@]}" 2>"$ERR_LOG"; then
     return 0
   fi
@@ -315,17 +320,17 @@ install_globally() {
   # than trusting the error text alone — a 404 in the install log could just as
   # easily come from a missing transitive dependency, which the tarball (built
   # from the same package.json) would not fix either.
-  if grep -qiE 'E404|404 Not Found' "$ERR_LOG" && ! npm view "bivy@${PKG_VERSION}" version >/dev/null 2>&1; then
+  if grep -qiE 'E404|404 Not Found' "$ERR_LOG" && ! npm view "${NPM_PACKAGE}@${PKG_VERSION}" version >/dev/null 2>&1; then
     if [ "${BIVY_NO_TARBALL_FALLBACK:-}" = "1" ]; then
       cat "$ERR_LOG" >&2
-      die "bivy@${PKG_VERSION} is not published on npm, and BIVY_NO_TARBALL_FALLBACK=1."
+      die "${NPM_PACKAGE}@${PKG_VERSION} is not published on npm, and BIVY_NO_TARBALL_FALLBACK=1."
     fi
-    warn "bivy@${PKG_VERSION} is not on the npm registry yet — using the release archive instead."
+    warn "${NPM_PACKAGE}@${PKG_VERSION} is not on the npm registry yet — using the release archive instead."
     install_from_tarball
     return
   fi
   cat "$ERR_LOG" >&2
-  die "npm could not install bivy. See the error above."
+  die "npm could not install ${NPM_PACKAGE}. See the error above."
 }
 
 ERR_LOG="$(mktemp)"
@@ -342,7 +347,39 @@ if [ "$INSTALL_MODE" = "npm" ]; then
   fi
   BIVY_BIN="$BIN_DIR/bivy"
 fi
-[ -x "$BIVY_BIN" ] || die "bivy was installed but no executable was found at $BIVY_BIN."
+# The install can "succeed" yet leave no runnable `bivy`. By far the most common
+# cause before launch is that the requested channel points at a PLACEHOLDER
+# release with no executable — e.g. `latest` is a 0.0.0 stub until a production
+# release is promoted. npm installs that happily, then has nothing to link, and a
+# bare "no executable at <path>" sends people hunting for a PATH bug that isn't
+# there. Diagnose the two real cases (binless release vs. prefix/PATH mismatch)
+# and say what to do.
+if [ ! -x "$BIVY_BIN" ]; then
+  pkg_json=""
+  if [ "$INSTALL_MODE" = "npm" ]; then
+    if [ -n "${BIVY_NPM_PREFIX:-}" ]; then
+      pkg_json="$BIVY_NPM_PREFIX/lib/node_modules/${NPM_PACKAGE}/package.json"
+    else
+      pkg_json="$(npm root -g 2>/dev/null)/${NPM_PACKAGE}/package.json"
+    fi
+  fi
+  # Binless-release case: the package installed but declares no `bin`.
+  if [ -n "$pkg_json" ] && [ -f "$pkg_json" ] \
+     && ! node -e 'const b=require(process.argv[1]).bin;process.exit(b&&(typeof b==="string"||Object.keys(b).length)?0:1)' "$pkg_json" 2>/dev/null; then
+    ver="$(node -e 'try{process.stdout.write(String(require(process.argv[1]).version||"?"))}catch(e){process.stdout.write("?")}' "$pkg_json" 2>/dev/null || echo "?")"
+    warn "${NPM_PACKAGE}@${PKG_VERSION} resolved to version ${ver}, which ships no 'bivy' executable —"
+    warn "that channel only has a placeholder release so far, so there is nothing to run yet."
+    if [ "${BIVY_CHANNEL:-latest}" != "staging" ] && [ -z "${BIVY_VERSION:-}" ]; then
+      die "No published build on the '${BIVY_CHANNEL:-latest}' channel yet. Install the current dev build:
+    npm i -g ${NPM_PACKAGE}@staging
+  (or re-run this installer with BIVY_CHANNEL=staging, once a channel-aware install.sh is served)."
+    fi
+    die "The '${PKG_VERSION}' release ships no executable. Pick a channel/version with a published build — see: npm view ${NPM_PACKAGE} dist-tags"
+  fi
+  # Otherwise the package has a bin but it isn't where we looked: a prefix/PATH mismatch.
+  die "bivy installed but no executable was found at $BIVY_BIN.
+Your npm global bin dir may differ from '$BIN_DIR' — check: npm prefix -g   (its bin/ must be on PATH)."
+fi
 
 # ------------------------------------------------------- migrate legacy state
 #
@@ -460,18 +497,36 @@ else
   STATE_DIR="$DATA_DIR"
 fi
 
+# Record the release channel (npm dist-tag) next to the node's state so
+# `bivy update` keeps tracking it instead of snapping back to `latest`. A staging
+# tester who installed with BIVY_CHANNEL=staging should stay on staging across
+# updates. BIVY_VERSION pins an exact version rather than a channel, so skip the
+# record then and leave any existing marker untouched. Best-effort — an
+# unwritable state dir just means update falls back to the default channel.
+if [ -z "${BIVY_VERSION:-}" ]; then
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  printf '%s\n' "${BIVY_CHANNEL:-latest}" > "$STATE_DIR/channel" 2>/dev/null || true
+fi
+
 if [ "${BIVY_INSTALL_ALL_AGENTS:-}" = "1" ]; then
   info "Installing all bundled agent runtimes"
   "$BIVY_BIN" agents:install || warn "Could not install every bundled agent runtime. Bivy still works; run 'bivy agents:install' later to retry."
 fi
 
 if [ -f "$STATE_DIR/cli.json" ]; then
-  info "Existing Bivy configuration found; skipping first-run setup."
-  if node -e 'const fs=require("fs");process.exit(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).service===true?0:1)' "$STATE_DIR/cli.json" 2>/dev/null; then
-    info "Restarting the background service…"
-    "$BIVY_BIN" restart || warn "Could not restart the service automatically. Run: bivy restart"
+  info "Existing Bivy configuration found; applying the update."
+  # A Bivy node is remote-only — it has to keep running to stay reachable through
+  # the relay — so an update RESTARTS the background service to pick up the new
+  # build and reconnect. It never drops you at a local 'bivy start'. `bivy
+  # restart` exits non-zero when there is no service to restart; in that case
+  # install one so the node keeps running. (Don't gate on cli.json's `service`
+  # flag: a box can have an active service while that flag is unset, which is
+  # exactly how an update used to silently do nothing.)
+  if "$BIVY_BIN" restart; then
+    :
   else
-    info "Update complete. Start Bivy with: bivy start"
+    info "No background service yet — installing one so the node keeps running…"
+    "$BIVY_BIN" service install || warn "Could not install the background service automatically. Finish with: bivy setup"
   fi
 else
   info "Launching setup…"

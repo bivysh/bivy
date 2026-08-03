@@ -94,7 +94,13 @@ function writeIfChanged(file: string, content: string, mode: number): void {
 export function ensureCredentialHelper(): string {
   fs.mkdirSync(credDir(), { recursive: true, mode: 0o700 });
   writeIfChanged(workerPath(), WORKER_SOURCE, 0o700);
-  const shim = `#!/usr/bin/env sh\nexec ${shDq(process.execPath)} ${shDq(workerPath())} "$@"\n`;
+  // Git can invoke a credential helper after its caller's checkout has been
+  // removed (for example while an old daemon drains across an npm update, or
+  // while a broken clone is being rebuilt). Node resolves its cwd before it
+  // evaluates the worker and aborts with uv_cwd when that inherited directory
+  // has been unlinked. Move to a stable directory in the shell first; the worker
+  // resolves endpoint.json from import.meta.url and never relies on cwd.
+  const shim = `#!/usr/bin/env sh\ncd / || exit 0\nexec ${shDq(process.execPath)} ${shDq(workerPath())} "$@"\n`;
   writeIfChanged(shimPath(), shim, 0o700);
   return shimPath();
 }

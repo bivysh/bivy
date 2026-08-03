@@ -4,8 +4,11 @@ import { useEffect, useState } from "react";
 import {
   EPHEMERAL_PROVIDERS,
   ephemeralAdapter,
+  ephemeralCostHint,
   type EphemeralMachine,
+  type EphemeralModelKeyInfo,
   type EphemeralSetup,
+  type EphemeralNodeConfig,
   type ProviderKeyInfo,
   type ProviderSize,
 } from "@bivy/core";
@@ -20,7 +23,7 @@ const TTL_OPTIONS = [
   { v: 480, label: "8 hours" },
 ];
 
-export function EphemeralSheet({ onClose, setupId }: { onClose: () => void; setupId?: string }) {
+export function EphemeralSheet({ onClose, setupId, config, firstRun = false }: { onClose: () => void; setupId?: string; config?: EphemeralNodeConfig; firstRun?: boolean }) {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
   const [setups, setSetups] = useState<EphemeralSetup[]>([]);
   const [selectedSetup, setSelectedSetup] = useState<EphemeralSetup | null>(null);
@@ -28,6 +31,24 @@ export function EphemeralSheet({ onClose, setupId }: { onClose: () => void; setu
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys);
   useEffect(() => {
     refreshKeys();
+    // An account-level ephemeral config selected in the node picker: launch a
+    // fresh machine from it, stamped with the config id so a device can tie the
+    // running machine back to its config (see NodeSwitcher configInUse). The
+    // config is presented as a one-item "saved setup" via a synthetic record so
+    // the launch form and machine-record correlation work unchanged.
+    if (config) {
+      const synthetic: EphemeralSetup = {
+        id: config.id, provider: config.provider, name: config.name,
+        region: config.region ?? null, size: config.size ?? null,
+        ttlMinutes: config.ttlMinutes ?? null, repo: null,
+        teardownOnAgentFinish: Boolean(config.teardownOnAgentFinish),
+        createdAt: config.createdAt, updatedAt: config.updatedAt,
+      };
+      setSetups([synthetic]);
+      setSelectedSetup(synthetic);
+      setProvider(config.provider);
+      return;
+    }
     controller.listEphemeralSetups().then((rows) => {
       setSetups(rows);
       const selected = setupId ? rows.find((s) => s.id === setupId) : undefined;
@@ -36,7 +57,7 @@ export function EphemeralSheet({ onClose, setupId }: { onClose: () => void; setu
         setProvider(selected.provider);
       }
     });
-  }, [setupId]);
+  }, [setupId, config]);
 
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === provider);
 
@@ -85,13 +106,13 @@ export function EphemeralSheet({ onClose, setupId }: { onClose: () => void; setu
           })}
         </div>
       ) : (
-        <ProviderPanel providerId={provider} setup={selectedSetup} onKeysChanged={refreshKeys} />
+        <ProviderPanel providerId={provider} setup={selectedSetup} onKeysChanged={refreshKeys} firstRun={firstRun} />
       )}
     </Sheet>
   );
 }
 
-function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: string; setup: EphemeralSetup | null; onKeysChanged: () => void }) {
+function ProviderPanel({ providerId, setup, onKeysChanged, firstRun }: { providerId: string; setup: EphemeralSetup | null; onKeysChanged: () => void; firstRun: boolean }) {
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === providerId)!;
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   const adapter = ephemeralAdapter(providerId)!;
@@ -105,6 +126,13 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [modelKeys, setModelKeys] = useState<EphemeralModelKeyInfo[]>([]);
+  const [modelProvider, setModelProvider] = useState("anthropic");
+  const [modelKey, setModelKey] = useState("");
+  const [savingModel, setSavingModel] = useState(false);
+  const [hasGithubToken, setHasGithubToken] = useState(false);
+  const [githubToken, setGithubToken] = useState("");
+  const [savingGithub, setSavingGithub] = useState(false);
   // Split from the old single `msg`, which rendered a launch failure and a
   // launch success in the same muted <p> — a failure read like a neutral
   // status line (#140). `err` gets the queue panel's `chip err` treatment.
@@ -124,6 +152,8 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
   }, [machines]);
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t)));
+    controller.listEphemeralModelKeys().then(setModelKeys).catch(() => {});
+    controller.getGithubTaskToken().then((t) => setHasGithubToken(Boolean(t))).catch(() => {});
     // Pre-fill from the preferences the user saved in Settings → Ephemeral
     // machines. Additive: everything stays editable per launch; a missing
     // preference just leaves the adapter default in place.
@@ -183,13 +213,68 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
     }
   };
 
+  const saveModelKey = async () => {
+    if (!modelProvider.trim() || !modelKey.trim() || savingModel) return;
+    setSavingModel(true);
+    setErr(null);
+    try {
+      await controller.setEphemeralModelKey(modelProvider.trim(), modelKey.trim());
+      setModelKey("");
+      setModelKeys(await controller.listEphemeralModelKeys());
+      setMsg("Model key saved on this device.");
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setSavingModel(false);
+    }
+  };
+
+  const saveGithubToken = async () => {
+    if (!githubToken.trim() || savingGithub) return;
+    setSavingGithub(true);
+    setErr(null);
+    try {
+      await controller.setGithubTaskToken(githubToken.trim());
+      setGithubToken("");
+      setHasGithubToken(true);
+      setMsg("GitHub token saved on this device.");
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setSavingGithub(false);
+    }
+  };
+
+  // Suspend-to-zero providers (Fly Sprites) keep the machine and self-suspend
+  // when idle — so the TTL self-destruct and "destroy when the agent finishes"
+  // controls don't apply; a suspend explainer replaces them.
+  const suspendsWhenIdle = adapter.suspendsWhenIdle === true;
+
   const launch = async () => {
+    if (firstRun && modelKeys.length === 0) {
+      setErr("Add a model API key before launching your first runner.");
+      return;
+    }
+    if (firstRun && !hasGithubToken) {
+      setErr("Connect GitHub before launching your first runner.");
+      return;
+    }
     setBusy(true);
     setMsg(null);
     setErr(null);
     try {
-      await controller.launchEphemeral({ provider: providerId, region, size, ttlMinutes: ttl, teardownOnAgentFinish, name: setup?.name, setupId: setup?.id });
-      setMsg("Launching — it will appear in the node list once it boots.");
+      await controller.launchEphemeral({
+        provider: providerId,
+        region,
+        size,
+        ttlMinutes: suspendsWhenIdle ? undefined : ttl,
+        teardownOnAgentFinish: suspendsWhenIdle ? false : teardownOnAgentFinish,
+        name: setup?.name,
+        setupId: setup?.id,
+      });
+      setMsg(suspendsWhenIdle
+        ? "Launching — it'll appear in the node list once it boots, then suspend to ~$0 when idle."
+        : "Launching — it will appear in the node list once it boots.");
       refreshMachines();
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -202,6 +287,7 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
     <div className="settings-form">
       {!hasToken ? (
         <>
+          {firstRun && <h4 className="settings-subhead">1. Connect your cloud provider</h4>}
           <p className="muted">{catalog.blurb}</p>
           <ol className="eph-steps">
             {catalog.steps.map((s, i) => (
@@ -223,6 +309,47 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
         </>
       ) : (
         <>
+          {firstRun && (
+            <div className="first-run-credentials">
+              <h4 className="settings-subhead">2. Give the runner model access</h4>
+              <p className="muted small">Required for your first task. The key stays on this device and is sent to the runner only after its encrypted connection is online.</p>
+              {modelKeys.length > 0 ? (
+                <p className="chip ok">✓ Model key ready ({modelKeys.map((k) => k.provider).join(", ")})</p>
+              ) : (
+                <>
+                  <label className="field-label">Model provider</label>
+                  <select className="picker-search" value={modelProvider} onChange={(e) => setModelProvider(e.target.value)}>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="google">Google</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="xai">xAI</option>
+                  </select>
+                  <label className="field-label">Model API key</label>
+                  <input className="picker-search" type="password" autoComplete="off" value={modelKey} onChange={(e) => setModelKey(e.target.value)} placeholder="Paste API key" />
+                  <button className="btn" disabled={!modelKey.trim() || savingModel} onClick={saveModelKey}>
+                    {savingModel ? "Saving…" : "Save model key"}
+                  </button>
+                </>
+              )}
+
+              <h4 className="settings-subhead">3. Connect GitHub</h4>
+              <p className="muted small">Required for the first-run path. GitHub sign-in identifies your Bivy account but deliberately does not grant repository access; create a fine-grained token with Contents and Pull requests read/write access.</p>
+              {hasGithubToken ? (
+                <p className="chip ok">✓ GitHub access ready</p>
+              ) : (
+                <>
+                  <a className="btn ghost" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained GitHub token</a>
+                  <label className="field-label">GitHub token</label>
+                  <input className="picker-search" type="password" autoComplete="off" value={githubToken} onChange={(e) => setGithubToken(e.target.value)} placeholder="Paste GitHub token" />
+                  <button className="btn" disabled={!githubToken.trim() || savingGithub} onClick={saveGithubToken}>
+                    {savingGithub ? "Saving…" : "Save GitHub token"}
+                  </button>
+                </>
+              )}
+              <h4 className="settings-subhead">4. Choose and launch the runner</h4>
+            </div>
+          )}
           <div className="eph-row">
             <label className="field-label">Region</label>
             <select className="picker-search" value={region} onChange={(e) => setRegion(e.target.value)}>
@@ -243,25 +370,43 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
               ))}
             </select>
           </div>
-          <div className="eph-row">
-            <label className="field-label">Auto-destroy after</label>
-            <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
-              {TTL_OPTIONS.map((o) => (
-                <option key={o.v} value={o.v}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <label className="field-label">Teardown</label>
-          <label className="checkbox-row">
-            <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
-            <span>Destroy when the agent finishes <span className="muted small">(TTL remains a safety fallback; requires this device to stay online)</span></span>
-          </label>
+          {!suspendsWhenIdle && (
+            <div className="eph-row">
+              <label className="field-label">Auto-destroy after</label>
+              <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
+                {TTL_OPTIONS.map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {(() => {
+            const selected = sizes.find((s) => s.id === size);
+            // Suspend-to-zero: only the hourly rate is meaningful (no TTL ceiling),
+            // and it's ~$0 while idle. Pass no TTL to get just the "≈ $x/hr" part.
+            const hint = ephemeralCostHint(selected, suspendsWhenIdle ? undefined : ttl, adapter.currency);
+            if (!hint) return null;
+            return suspendsWhenIdle
+              ? <p className="muted small">{hint} while active · ~$0 while suspended · billed by {catalog.name}, not Bivy</p>
+              : <p className="muted small">{hint} · billed by {catalog.name}, not Bivy</p>;
+          })()}
+          {suspendsWhenIdle ? (
+            <p className="muted small">Keeps its memory: suspends to ~$0 when idle and resumes with everything intact. Reopen its session from the node list to wake it. Destroy it manually when you're done.</p>
+          ) : (
+            <>
+              <label className="field-label">Teardown</label>
+              <label className="checkbox-row">
+                <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
+                <span>Destroy when the agent finishes <span className="muted small">(TTL remains a safety fallback; requires this device to stay online)</span></span>
+              </label>
+            </>
+          )}
           <p className="muted small">The machine pre-clones the repo you pick in the new-session composer.</p>
           <div className="row-actions">
-            <button className="btn primary" disabled={busy} onClick={launch}>
-              {busy ? "Launching…" : "Launch machine"}
+            <button className="btn primary" disabled={busy || (firstRun && (modelKeys.length === 0 || !hasGithubToken))} onClick={launch}>
+              {busy ? "Launching…" : firstRun ? "Launch my first runner" : "Launch machine"}
             </button>
             <button
               className="btn danger-ghost"
@@ -313,7 +458,7 @@ function ProviderPanel({ providerId, setup, onKeysChanged }: { providerId: strin
                         title: "Destroy machine?",
                         message: `Destroy ${m.name || m.id} now? This can't be undone.`,
                         label: "Destroy",
-                        action: () => controller.destroyEphemeral(m).then(refreshMachines),
+                        action: () => controller.destroyEphemeral(m).then(refreshMachines).catch((e) => setErr(String((e as Error)?.message || e))),
                       });
                     }}
                   >

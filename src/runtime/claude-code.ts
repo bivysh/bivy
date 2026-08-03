@@ -22,8 +22,10 @@ import type {
   AgentCommand,
   AgentRuntime,
   AgentCredentialStore,
+  AttachToChatFn,
   CatalogProvider,
   DiscoveredNativeSession,
+  ForkHistoryMessage,
   ForkNativePayload,
   ModelInfo,
   OpenSessionOptions,
@@ -44,10 +46,13 @@ import fs from "node:fs";
 import { depCacheEnv } from "../harness/dep-cache.js";
 import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
 import { sandboxTier, claudePermissionModeFor, type SandboxTier } from "../harness/sandbox.js";
+import { autoAttachToolImagesEnabled, PassiveImageBudget } from "../harness/tool-image-attachments.js";
 import { anthropicCredentialPreflight, describeAnthropicError, isAnthropicAuthError } from "./anthropic-preflight.js";
 import { toModelInfo as sharedToModelInfo } from "./normalize.js";
 import { hasLiveProcessForCwd } from "./native-process-scan.js";
+import { bivySessionEnv } from "./session-env.js";
 
 /** Binary names a live Claude Code process could be running under (see
  *  native-process-scan.ts's best-effort cwd match). */
@@ -101,9 +106,79 @@ export interface ClaudeCodeRuntimeOptions {
   credentialProvider?: string;
   /** Per-session sandbox tier override (maps to the SDK permission mode). */
   sandbox?: SandboxTier;
+  /**
+   * Backs the native `attach_to_chat` tool (issue #291) — registered as an
+   * in-process MCP server (via the SDK's createSdkMcpServer/tool) so the agent
+   * sees it in its tool list instead of having to shell out to `bivy attach`.
+   * Absent = the tool isn't registered and the session falls back to the
+   * discoverability prompt hint alone (BIVY_ATTACH_SYSTEM_PROMPT).
+   */
+  attachToChat?: AttachToChatFn;
   /** Override for the SDK loader (tests inject a fake `query()`); defaults to
    *  importing the real optional SDK package. */
   sdkLoader?: () => Promise<any>;
+}
+
+/**
+ * Appended to the Claude Code system prompt so the agent DISCOVERS the outbound
+ * attachment capability. `bivy attach` is just a shell command — without this the
+ * agent has no way to know it exists and, when asked to "send a file", concludes
+ * it can't (it looks for a tool, finds none). BIVY_SESSION_ID is injected into the
+ * subprocess env (see spawnQuery), so the bare command resolves the session. Keep
+ * this short: it rides on every turn's system prompt.
+ */
+export const BIVY_ATTACH_SYSTEM_PROMPT =
+  "Sending files and images to the user: the person you're talking to is in a chat UI. They cannot see files you only " +
+  "write to disk, and the chat cannot load remote image URLs or workspace file paths. " +
+  "To show them a file or image — a report, screenshot, chart, or a file they asked for — run " +
+  '`bivy attach <path> [--caption "short note"]` in your shell. ' +
+  "An image renders inline in the chat; any other file shows as a downloadable chip. The path must be inside the session " +
+  "workspace. Do NOT use markdown image syntax like ![](path) to show a local file or a URL — it will not render; always " +
+  "use `bivy attach`. Prefer this over pasting large file contents or describing where a file lives on disk.";
+
+/** Name of the in-process MCP server the native attach tool is registered
+ *  under (see buildAttachMcpServer) — the SDK namespaces the tool the agent
+ *  sees as `mcp__<server>__<tool>`. */
+export const BIVY_ATTACH_MCP_SERVER_NAME = "bivy";
+/** The tool's own name, unnamespaced (see BIVY_ATTACH_MCP_SERVER_NAME). */
+export const BIVY_ATTACH_TOOL_NAME = "attach_to_chat";
+
+/**
+ * Build the in-process MCP server that exposes `attach_to_chat` as a native
+ * tool call (issue #291) — the stronger sibling of BIVY_ATTACH_SYSTEM_PROMPT's
+ * shell-out hint: the agent sees this in its actual tool list instead of having
+ * to discover a shell command from prose. Bound to one session's id so the
+ * handler always attaches into the conversation that called it, regardless of
+ * how many Claude sessions this node is running concurrently.
+ *
+ * `sdk` is the already-loaded SDK module (see loadSdk) — `tool`/
+ * createSdkMcpServer are read off it dynamically for the same reason the rest
+ * of this adapter never imports SDK values statically: the package is
+ * optional, and a static import would force every Bivy install to have it.
+ * Returns undefined if this SDK build doesn't export the MCP builder helpers
+ * (older/trimmed installs) — the caller degrades to prompt-only discoverability.
+ */
+function buildAttachMcpServer(sdk: any, sessionId: string, attachToChat: AttachToChatFn): unknown {
+  if (typeof sdk?.tool !== "function" || typeof sdk?.createSdkMcpServer !== "function") return undefined;
+  const attachTool = sdk.tool(
+    BIVY_ATTACH_TOOL_NAME,
+    "Push a file or image from the session workspace into the chat as an attachment, exactly like the CLI `bivy attach` " +
+      "or the composer's paperclip upload but as a direct tool call. Use this — not markdown image syntax, not describing " +
+      "where a file lives — whenever the user should see a report, screenshot, chart, or a file they asked for; they " +
+      "cannot see files you only write to disk. The path must be inside the session workspace.",
+    {
+      filePath: z.string().describe("Path to the file, absolute or relative to the session workspace."),
+      caption: z.string().optional().describe("Short caption shown next to the attachment in the chat."),
+    },
+    async (args: { filePath: string; caption?: string }) => {
+      const result = attachToChat(sessionId, { filePath: args.filePath, caption: args.caption });
+      if ("error" in result) return { content: [{ type: "text", text: result.error }], isError: true };
+      return {
+        content: [{ type: "text", text: `Attached ${result.ref.name} (${result.ref.kind}, ${result.ref.mimeType}) to the chat.` }],
+      };
+    },
+  );
+  return sdk.createSdkMcpServer({ name: BIVY_ATTACH_MCP_SERVER_NAME, tools: [attachTool] });
 }
 
 export function claudeRuntimeFromEnv(): ClaudeCodeRuntimeOptions {
@@ -270,6 +345,32 @@ function toolResultText(block: any): string {
     .filter((part: any) => part?.type === "text" && typeof part.text === "string")
     .map((part: any) => part.text)
     .join("");
+}
+
+/** One base64-encoded image pulled out of a tool_result block. */
+interface ToolResultImage {
+  mimeType: string;
+  data: string;
+}
+
+/** Sibling of toolResultText that keeps what that one discards: the `image`
+ *  content parts of a tool_result (e.g. a Playwright/screenshot MCP tool's
+ *  output), so they can be passively surfaced as chat attachments (issue #292)
+ *  instead of silently vanishing. Only base64-sourced images are collected — a
+ *  `url`-sourced image block (rare for a local tool) is skipped rather than
+ *  fetched, since this passive path must never make its own network call. */
+function toolResultImages(block: any): ToolResultImage[] {
+  const content = block?.content;
+  if (!Array.isArray(content)) return [];
+  const out: ToolResultImage[] = [];
+  for (const part of content) {
+    if (part?.type !== "image") continue;
+    const source = part.source;
+    if (!source || source.type !== "base64" || typeof source.data !== "string" || !source.data) continue;
+    const mimeType = typeof source.media_type === "string" && source.media_type ? source.media_type : "image/png";
+    out.push({ mimeType, data: source.data });
+  }
+  return out;
 }
 
 /** Sums per-model token usage (SDK's ModelUsage) into a single totals object. */
@@ -600,6 +701,14 @@ class ClaudeSession implements RuntimeSession {
    *  and on a real abort() (a user Stop must never be silenced by a stale flag). */
   private suppressNextInterrupt = false;
 
+  /** tool_use id → tool name, learned as "assistant" turns emit tool_use blocks.
+   *  Used only to label a passively-surfaced tool_image (see #292); never
+   *  cleared mid-session since a tool_use_id is unique for the session's life. */
+  private readonly toolNamesByUseId = new Map<string, string>();
+  /** This turn's passive-image noise guard (see PassiveImageBudget); replaced
+   *  with a fresh budget at the start of every prompt(). */
+  private passiveImageBudget = new PassiveImageBudget();
+
   /** The agent's own slash commands for this session, learned from the SDK's
    *  system/init message (slash_commands + skills). Empty until the first turn's
    *  init arrives; getCommands() exposes them and a `runtime.commands` event lets
@@ -724,6 +833,11 @@ class ClaudeSession implements RuntimeSession {
     const env: Record<string, string> = { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env } as Record<string, string>;
     const credEnv = await this.resolveCredentialEnv();
     Object.assign(env, credEnv);
+    // Let the agent's own shell surface a file into the chat via `bivy attach`
+    // (POST /api/session/:id/attach). The session id is otherwise invisible to
+    // the subprocess. Shared with process.ts and protocol.ts via bivySessionEnv
+    // (see session-env.ts) so every CLI-spawning adapter injects it the same way.
+    Object.assign(env, bivySessionEnv(this.id));
     this.spawnedToken = authTokenFromEnv(credEnv);
 
     const options: Record<string, unknown> = {
@@ -737,10 +851,26 @@ class ClaudeSession implements RuntimeSession {
       permissionMode,
       canUseTool,
       env,
+      // Keep the default Claude Code prompt, appending the note that teaches the
+      // agent how to send a file to the user (`bivy attach`) — otherwise the
+      // capability is undiscoverable and "send me X as an attachment" fails.
+      // Kept even when the native tool below is also registered: it's a cheap,
+      // harmless fallback for a shell/subprocess the agent spawns that can't
+      // reach the in-process MCP tool directly.
+      systemPrompt: { type: "preset", preset: "claude_code", append: BIVY_ATTACH_SYSTEM_PROMPT },
     };
     if (resumeId) options.resume = resumeId;
     else options.sessionId = this.id;
     if (this.desiredModel) options.model = this.desiredModel;
+    // Native attach_to_chat tool (issue #291) — the stronger, tool-based sibling
+    // of the system-prompt hint above. Wired only when the daemon handed us a
+    // callback (see ClaudeCodeRuntimeOptions.attachToChat); absent in a few
+    // deliberately minimal test harnesses, and gracefully degrades to the prompt
+    // hint alone if this SDK build lacks the MCP builder helpers.
+    if (this.runtimeOptions.attachToChat) {
+      const attachServer = buildAttachMcpServer(sdk, this.id, this.runtimeOptions.attachToChat);
+      if (attachServer) options.mcpServers = { [BIVY_ATTACH_MCP_SERVER_NAME]: attachServer };
+    }
 
     const q = sdk.query({ prompt: this.input, options });
     this.query = q;
@@ -868,6 +998,33 @@ class ClaudeSession implements RuntimeSession {
     this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
   }
 
+  /**
+   * Passively surface any images riding home on a tool_result (issue #292) —
+   * e.g. a Playwright/screenshot MCP tool's output, which toolResultText above
+   * deliberately drops. Gated by autoAttachToolImagesEnabled() at the call site
+   * and bounded here by this turn's PassiveImageBudget so a chatty tool can't
+   * flood the transcript; a drop is logged (with the responsible tool's name)
+   * rather than silently discarded. Emits one `tool_image` RuntimeEvent per
+   * admitted image; src/server.ts's session listener does the actual
+   * store+persist+broadcast, the same way an explicit `bivy attach` does.
+   */
+  private emitPassiveToolImages(block: any): void {
+    const images = toolResultImages(block);
+    if (!images.length) return;
+    const toolUseId = String(block.tool_use_id ?? "");
+    const toolName = this.toolNamesByUseId.get(toolUseId) ?? "tool";
+    for (const image of images) {
+      const byteLength = Buffer.byteLength(image.data, "base64");
+      if (!this.passiveImageBudget.admit(byteLength)) {
+        console.warn(
+          `[claude-code] dropped a passively-surfaced tool image from "${toolName}" (tool_use_id=${toolUseId}, ~${byteLength} bytes): ${this.passiveImageBudget.droppedSummary()}`,
+        );
+        continue;
+      }
+      this.emit({ type: "tool_image", toolUseId, toolName, mimeType: image.mimeType, data: image.data });
+    }
+  }
+
   private handle(message: any): void {
     switch (message?.type) {
       case "stream_event": {
@@ -904,6 +1061,7 @@ class ClaudeSession implements RuntimeSession {
         for (const block of content) {
           if (block?.type === "tool_use") {
             this.emit({ type: "tool_call", toolName: block.name, input: block.input, toolUseId: block.id });
+            if (typeof block.id === "string" && typeof block.name === "string") this.toolNamesByUseId.set(block.id, block.name);
           }
         }
         const text = extractText(message.message);
@@ -946,6 +1104,7 @@ class ClaudeSession implements RuntimeSession {
           for (const block of toolResults) {
             this.runningTools.delete(String(block.tool_use_id));
             this.emit({ type: "tool_result", toolUseId: block.tool_use_id, result: toolResultText(block), isError: Boolean(block.is_error) });
+            if (autoAttachToolImagesEnabled()) this.emitPassiveToolImages(block);
           }
           this.emit({ type: "user", raw: message });
           break;
@@ -1047,6 +1206,9 @@ class ClaudeSession implements RuntimeSession {
     const content = claudeUserContent(prompt, options);
     const hasImages = Boolean(options?.images?.length);
     if (!prompt && !hasImages) return;
+    // Fresh per-turn noise-guard budget (see PassiveImageBudget) — a prior
+    // turn's usage must never carry over and eat into this one's allowance.
+    this.passiveImageBudget = new PassiveImageBudget();
     // Credential preflight (first turn only): if no Anthropic credential will
     // reach the SDK, surface an actionable message instead of letting it spawn
     // and fail its first request with an opaque `401 Unauthorized`.
@@ -1216,6 +1378,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     // The on-disk jsonl transcript can be exported and re-materialised on another
     // node under a fresh session id, so a claude->claude fork is full fidelity.
     forkTransport: true,
+    // Claude can also synthesise a resumable jsonl from portable {role,text}
+    // history, so a fork FROM another agent INTO claude is a true replay of the
+    // whole transcript rather than a seeded summary (see importHistoryForFork).
+    forkHistoryImport: true,
     // Claude Code ignores the streamingBehavior hint entirely — a mid-turn
     // prompt always re-enters the live input queue and behaves like an
     // immediate steer, regardless of what's asked for. There is no real
@@ -1335,6 +1501,50 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       })
       .join("\n");
     fs.writeFileSync(path.join(projectDir, `${newId}.jsonl`), rewritten ? `${rewritten}\n` : "");
+    return { sessionFile: newId, id: newId };
+  }
+
+  /**
+   * Stand up a claude session from a **cross-runtime** fork's portable history:
+   * synthesise a resumable jsonl transcript from the `{role, text}` turns and
+   * write it under the destination cwd's project dir with a fresh session id, so
+   * `--resume <id>` opens on a copy of the whole conversation (fidelity
+   * "replayed"). Each turn becomes one claude jsonl entry whose `message` is a
+   * plain-text user/assistant message — the same shape loadClaudeTranscript reads
+   * back — chained by `uuid`/`parentUuid` exactly as claude's own transcripts are.
+   * Tool activity is already inlined as text upstream, so no `tool_use`/
+   * `tool_result` blocks (whose ids would dangle) are ever emitted. The source is
+   * never touched.
+   */
+  async importHistoryForFork(
+    history: ForkHistoryMessage[],
+    ctx: { workspace: string; cwd: string },
+  ): Promise<{ sessionFile: string; id: string }> {
+    const newId = randomUUID();
+    const cwd = ctx.cwd || ctx.workspace;
+    // Claude encodes the cwd into the project-dir name by replacing every
+    // non-alphanumeric char with "-" (matches importForFork above).
+    const projectSlug = cwd.replace(/[^a-zA-Z0-9]/g, "-");
+    const root = claudeProjectDirs()[0] ?? path.join(os.homedir(), ".claude");
+    const projectDir = path.join(root, "projects", projectSlug);
+    fs.mkdirSync(projectDir, { recursive: true });
+    let parentUuid: string | null = null;
+    const lines = history.map((message) => {
+      const uuid = randomUUID();
+      const entry = {
+        parentUuid,
+        isSidechain: false,
+        userType: "external",
+        cwd,
+        sessionId: newId,
+        type: message.role,
+        message: { role: message.role, content: message.text },
+        uuid,
+      };
+      parentUuid = uuid;
+      return JSON.stringify(entry);
+    });
+    fs.writeFileSync(path.join(projectDir, `${newId}.jsonl`), lines.length ? `${lines.join("\n")}\n` : "");
     return { sessionFile: newId, id: newId };
   }
 

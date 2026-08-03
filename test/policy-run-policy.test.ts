@@ -82,6 +82,51 @@ check("a provider-supplied wait overrides computed backoff", () => {
   if (d.action === "retry") assert.equal(d.delayMs, 45_000);
 });
 
+check("a retry rule waits until a session limit resets", () => {
+  const ruleset: Ruleset = {
+    version: 1,
+    name: "resume-session-limit",
+    appliesTo: ["queue"],
+    rules: [{ when: ["credits_exhausted"], action: "retry", maxAttempts: 2 }],
+  };
+  const now = Date.parse("2026-07-27T18:00:00Z");
+  const policy = createRunPolicy({ ruleset, context: "queue", random: noJitter, now: () => now });
+  const d = policy.decide({
+    routing: {},
+    error: "You've hit your limit; resets_at 2026-07-27T20:30:00Z",
+    attempt: 1,
+    rerouteCount: 0,
+  });
+  assert.equal(d.action, "retry");
+  if (d.action === "retry") {
+    assert.equal(d.delayMs, 9_000_000);
+    assert.match(d.summary, /when the limit resets at 2026-07-27T20:30:00Z/);
+  }
+});
+
+check("a reset time in the past retries immediately instead of using backoff", () => {
+  const ruleset: Ruleset = {
+    version: 1,
+    name: "past-reset",
+    appliesTo: ["queue"],
+    rules: [{ when: ["credits_exhausted"], action: "retry", maxAttempts: 2 }],
+  };
+  const policy = createRunPolicy({
+    ruleset,
+    context: "queue",
+    random: noJitter,
+    now: () => Date.parse("2026-07-27T21:00:00Z"),
+  });
+  const d = policy.decide({
+    routing: {},
+    error: "session limit reached; resets_at 2026-07-27T20:30:00Z",
+    attempt: 1,
+    rerouteCount: 0,
+  });
+  assert.equal(d.action, "retry");
+  if (d.action === "retry") assert.equal(d.delayMs, 0);
+});
+
 check("quota/auth/context park immediately", () => {
   for (const err of ["credit balance is too low", "401 Unauthorized", "maximum context length exceeded, tokens"]) {
     const d = def.decide({ routing: {}, error: err, attempt: 1, rerouteCount: 0 });

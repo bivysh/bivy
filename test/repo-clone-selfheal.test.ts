@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isReusableCheckout, fetchOrigin } from "../src/repo-workspace.js";
+import { cloneOrUpdateRepo, isReusableCheckout, fetchOrigin } from "../src/repo-workspace.js";
 
 const exec = promisify(execFile);
 
@@ -45,7 +45,45 @@ async function main() {
     // off whatever refs already exist.
     await fetchOrigin(good); // real repo, no reachable origin configured
     await fetchOrigin(bare); // not a git repo at all
-    console.log("repo-clone-selfheal: ok (valid reused, broken/absent rebuilt, fetchOrigin best-effort)");
+
+    // An npm-global update can unlink the daemon's install directory while the
+    // old process drains. child_process then fails before git starts unless the
+    // call supplies an existing cwd. Reproduce that state with a tiny fake git;
+    // cloneOrUpdateRepo must anchor both clone and follow-up config calls in the
+    // durable repos tree rather than inheriting the deleted process cwd.
+    const fakeBin = path.join(root, "bin");
+    const repos = path.join(root, "repos");
+    const staleCwd = path.join(root, "old-install");
+    const dataDir = path.join(root, "data");
+    fs.mkdirSync(fakeBin);
+    fs.mkdirSync(staleCwd);
+    fs.writeFileSync(path.join(fakeBin, "git"), `#!/bin/sh
+state=0
+for arg in "$@"; do
+  if [ "$state" = 2 ]; then mkdir -p "$arg/.git"; printf '[core]\\n' > "$arg/.git/config"; exit 0; fi
+  if [ "$state" = 1 ]; then state=2; elif [ "$arg" = clone ]; then state=1; fi
+done
+exit 0
+`, { mode: 0o755 });
+    const originalCwd = process.cwd();
+    const originalPath = process.env.PATH;
+    const originalDataDir = process.env.BIVY_DATA_DIR;
+    try {
+      process.env.PATH = `${fakeBin}${path.delimiter}${originalPath ?? ""}`;
+      process.env.BIVY_DATA_DIR = dataDir;
+      process.chdir(staleCwd);
+      fs.rmSync(staleCwd, { recursive: true, force: true });
+      const cloned = await cloneOrUpdateRepo({ owner: "owner", repo: "repo", root: repos });
+      assert.equal(cloned, path.join(repos, "owner__repo"));
+      assert.ok(fs.existsSync(path.join(cloned, ".git", "config")), "clone completes with an unlinked process cwd");
+    } finally {
+      process.chdir(originalCwd);
+      process.env.PATH = originalPath;
+      if (originalDataDir === undefined) delete process.env.BIVY_DATA_DIR;
+      else process.env.BIVY_DATA_DIR = originalDataDir;
+    }
+
+    console.log("repo-clone-selfheal: ok (valid reused, broken/absent rebuilt, stale cwd tolerated, fetchOrigin best-effort)");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

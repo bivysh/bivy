@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralQueueDefault, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, PRO_PRICE_LABEL, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralNodeConfig, QueueRouting, HostedProvisioningStatus, HostedAuditEvent, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, LinearHook, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, connectSlackHook, disconnectSlackHook, fetchSlackHook, connectLinearHook, disconnectLinearHook, fetchLinearHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -16,6 +16,7 @@ import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { SourceGlyph } from "./SourceMark.js";
 
 // The view enumeration lives in router.ts (as `SettingsView`) so the router can
 // validate a `/settings/:view` path without importing this component module;
@@ -50,6 +51,10 @@ const IconMic = () => (
 const IconGithub = () => (
   <Glyph><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" /></Glyph>
 );
+// Reuse the official brand geometry used by run-source marks instead of
+// maintaining approximate line-art versions in Settings.
+const IconSlack = () => <SourceGlyph kind="slack" />;
+const IconLinear = () => <SourceGlyph kind="linear" />;
 const IconUser = () => (
   <Glyph><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Glyph>
 );
@@ -67,6 +72,10 @@ const IconServer = () => (
 );
 const IconBolt = () => (
   <Glyph><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" /></Glyph>
+);
+// Webhook glyph — three linked nodes, the conventional inbound-hook mark.
+const IconWebhook = () => (
+  <Glyph><circle cx="6" cy="16" r="2.5" /><circle cx="18" cy="16" r="2.5" /><circle cx="12" cy="5" r="2.5" /><path d="m10.7 7.1-3 5.2M13.3 7.1l3 5.2M8.5 16h7" /></Glyph>
 );
 // Branch/policy glyph for Rulesets — a decision splitting into fallback routes.
 const IconRules = () => (
@@ -104,6 +113,15 @@ const PLAN_LABELS: Record<string, string> = {
 function planLabel(plan: string | null | undefined): string {
   if (!plan) return "—";
   return PLAN_LABELS[plan] ?? plan;
+}
+
+/** Render the baked-in PWA build timestamp (see __APP_BUILD_TIME__) as a short
+ *  local date+time, or "" when it isn't a parseable ISO string. */
+function formatBuildTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 /**
@@ -151,8 +169,11 @@ const TITLES: Record<View, string> = {
   models: "Local models",
   voice: "Voice input",
   github: "GitHub App",
-  queue: "GitHub Queue",
+  linear: "Linear",
+  slack: "Slack",
+  queue: "Work Queue",
   automations: "Automations",
+  webhooks: "Webhooks",
   rulesets: "Rulesets",
   nodes: "Nodes",
   ephemeral: "Ephemeral machines",
@@ -230,17 +251,21 @@ export function Settings({
       ],
     },
     {
-      label: "GitHub",
+      label: "Integrations",
       items: [
         { id: "github", label: "GitHub App", icon: <IconGithub /> },
-        { id: "queue", label: "GitHub Queue", icon: <IconQueue /> },
-        { id: "automations", label: "Automations", icon: <IconBolt /> },
+        ...(hosted ? [
+          { id: "linear" as View, label: "Linear", icon: <IconLinear /> },
+          { id: "slack" as View, label: "Slack", icon: <IconSlack /> },
+        ] : []),
+        { id: "queue", label: "Work Queue", icon: <IconQueue /> },
       ],
     },
     {
       label: "Automation",
       items: [
-        { id: "automations", label: "Webhooks", icon: <IconBolt /> },
+        { id: "automations", label: "Automations", icon: <IconBolt /> },
+        { id: "webhooks", label: "Webhooks", icon: <IconWebhook /> },
         { id: "rulesets", label: "Rulesets", icon: <IconRules /> },
       ],
     },
@@ -316,6 +341,12 @@ export function Settings({
               );
             })}
           </nav>
+          <div className="settings-nav-version" title="The version of the Bivy app running on this device">
+            <span>Bivy v{__APP_VERSION__}</span>
+            {formatBuildTime(__APP_BUILD_TIME__) && (
+              <span className="settings-nav-version-updated">Updated {formatBuildTime(__APP_BUILD_TIME__)}</span>
+            )}
+          </div>
         </aside>
 
         <section className="settings-content">
@@ -336,6 +367,8 @@ export function Settings({
             {activeView === "models" && <LocalModelsPanel state={state} />}
             {activeView === "voice" && <VoicePanel state={state} />}
             {activeView === "github" && <GithubPanel state={state} onOpenGithubQueue={() => onViewChange("queue")} />}
+            {activeView === "linear" && <LinearPanel />}
+            {activeView === "slack" && <SlackPanel />}
             {activeView === "queue" && (
               <GithubQueuePanel
                 queue={githubQueue ?? null}
@@ -344,12 +377,8 @@ export function Settings({
                 onOpenGithubSettings={() => onViewChange("github")}
               />
             )}
-            {activeView === "automations" && (
-              <>
-                <AutomationsPanel state={state} />
-                <WebhookTriggersPanel />
-              </>
-            )}
+            {activeView === "automations" && <AutomationsPanel state={state} />}
+            {activeView === "webhooks" && <WebhookTriggersPanel />}
             {activeView === "rulesets" && <RulesetsPanel state={state} />}
             {activeView === "nodes" && <NodesPanel state={state} />}
             {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
@@ -1182,73 +1211,561 @@ function NodeRouteSelect({
 // separate copy of the fetch/save plumbing — it's one account setting either
 // way, and (per the trigger-neutral automation-run queue) already covers
 // webhook-triggered runs alongside GitHub ones once enabled.
-function EphemeralQueueDefaultSection({ hint }: { hint?: string }) {
-  const [ephemeralKeys, setEphemeralKeys] = useState<ProviderKeyInfo[]>([]);
-  const [ephemeralDefault, setEphemeralDefault] = useState<EphemeralQueueDefault | null>(null);
+type EphemeralConfigDraft = {
+  editing?: string;
+  name: string;
+  provider: string;
+  region: string;
+  size: string;
+  ttlMinutes: number | null;
+  teardownOnAgentFinish: boolean;
+};
+
+const QUEUE_TTL_OPTIONS = [
+  { v: 30, label: "30 min" },
+  { v: 60, label: "1 hour" },
+  { v: 180, label: "3 hours" },
+];
+
+// Account-level queue routing (issue #532 / ephemeral configs). Picks the
+// default runner for queued work — the shared queue, a persistent node, or an
+// ephemeral config (a reusable, named runner template shown "as a node"). A
+// persistent-node primary may carry an ephemeral-config fallback for when the
+// node is offline; an ephemeral-config primary needs none (it's provisioned on
+// demand). Also manages the account's ephemeral configs (create/edit/remove).
+function QueueRoutingSection() {
+  const [nodes, setNodes] = useState<AccountNode[]>([]);
+  const [configs, setConfigs] = useState<EphemeralNodeConfig[]>([]);
+  const [routing, setRouting] = useState<QueueRouting | null>(null);
+  const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [draft, setDraft] = useState<EphemeralConfigDraft | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<EphemeralNodeConfig | null>(null);
+
+  const refreshConfigs = () => controller.listEphemeralConfigs().then(setConfigs).catch(() => {});
   useEffect(() => {
-    controller.listEphemeralKeys().then(setEphemeralKeys).catch(() => {});
-    controller.getEphemeralQueueDefault().then(setEphemeralDefault).catch(() => setEphemeralDefault(null));
+    controller.listNodes().then(setNodes).catch(() => {});
+    controller.listEphemeralKeys().then(setKeys).catch(() => {});
+    controller.getQueueRouting().then(setRouting).catch(() => setRouting(null));
+    refreshConfigs();
   }, []);
-  const configuredProviders = ephemeralKeys.filter((k) => k.configured);
-  const defaultProviderConfigured = Boolean(
-    ephemeralDefault?.provider && ephemeralKeys.find((k) => k.id === ephemeralDefault.provider)?.configured,
-  );
-  const save = async (patch: Partial<EphemeralQueueDefault>) => {
+
+  const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
+  const primaryValue = routing?.primary.kind === "node" ? `node:${routing.primary.node}`
+    : routing?.primary.kind === "config" ? `config:${routing.primary.configId}` : "shared";
+  const fallbackValue = routing?.fallback?.kind === "config" ? `config:${routing.fallback.configId}` : "";
+  const primaryIsNode = routing?.primary.kind === "node";
+  const providerName = (id: string) => keys.find((k) => k.id === id)?.name || id;
+  const providerReady = (id: string) => Boolean(keys.find((k) => k.id === id)?.configured);
+
+  const saveRouting = async (primaryStr: string, fallbackStr: string) => {
     setErr(null);
     setBusy(true);
     try {
-      setEphemeralDefault(await controller.setEphemeralQueueDefault(patch));
+      const primary: QueueRouting["primary"] = primaryStr.startsWith("node:")
+        ? { kind: "node", node: primaryStr.slice("node:".length) }
+        : primaryStr.startsWith("config:")
+          ? { kind: "config", configId: primaryStr.slice("config:".length) }
+          : { kind: "shared" };
+      const next: QueueRouting = primary.kind === "node" && fallbackStr.startsWith("config:")
+        ? { primary, fallback: { kind: "config", configId: fallbackStr.slice("config:".length) } }
+        : { primary };
+      setRouting(await controller.setQueueRouting(next));
     } catch (e) {
       setErr(String((e as Error)?.message || e));
     } finally {
       setBusy(false);
     }
   };
+
+  const saveConfig = async () => {
+    if (!draft) return;
+    const name = draft.name.trim();
+    if (!name) { setErr("Config name is required"); return; }
+    if (!draft.provider) { setErr("Choose a provider"); return; }
+    setErr(null);
+    setBusy(true);
+    try {
+      const input = {
+        name, provider: draft.provider,
+        region: draft.region.trim() || null,
+        size: draft.size.trim() || null,
+        ttlMinutes: draft.ttlMinutes ?? null,
+        teardownOnAgentFinish: draft.teardownOnAgentFinish,
+      };
+      if (draft.editing) await controller.updateEphemeralConfig(draft.editing, input);
+      else await controller.createEphemeralConfig(input);
+      setDraft(null);
+      refreshConfigs();
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeConfig = async (cfg: EphemeralNodeConfig) => {
+    setConfirmRemove(null);
+    setBusy(true);
+    try {
+      await controller.removeEphemeralConfig(cfg.id);
+      refreshConfigs();
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
-      <div className="settings-toggle-row">
-        <div className="settings-toggle-text">
-          <span className="settings-toggle-title">Auto-provision when nothing's online</span>
-          <span className="muted small">
-            {hint ||
-              "Spin up a short-lived server from your saved provider token to pick up queued work when nothing persistent is online, then tear it down."}
-          </span>
-        </div>
-        <Toggle
-          checked={Boolean(ephemeralDefault?.enabled)}
-          disabled={busy || configuredProviders.length === 0}
-          onChange={(v) => save({ enabled: v, provider: ephemeralDefault?.provider || configuredProviders[0]?.id })}
-          label="Auto-provision an ephemeral server when nothing's online"
-        />
-      </div>
-      {configuredProviders.length === 0 ? (
-        <p className="muted">Add a Fly.io or Hetzner token in Ephemeral settings to enable this.</p>
-      ) : (
-        ephemeralDefault?.enabled && (
-          <>
-            <select className="picker-search" value={ephemeralDefault.provider ?? ""} onChange={(e) => save({ provider: e.target.value })}>
-              {configuredProviders.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
+      <label className="field-label"><span>Primary runner</span>
+        <select className="picker-search" value={primaryValue} disabled={busy} onChange={(e) => saveRouting(e.target.value, fallbackValue)}>
+          <option value="shared">Shared queue (any online node)</option>
+          {persistentNodes.length > 0 && (
+            <optgroup label="Persistent nodes">
+              {persistentNodes.map((n) => (
+                <option key={n.id} value={`node:${n.name || n.id}`}>{n.name || n.id}</option>
+              ))}
+            </optgroup>
+          )}
+          {configs.length > 0 && (
+            <optgroup label="Ephemeral configs">
+              {configs.map((c) => (
+                <option key={c.id} value={`config:${c.id}`}>{c.name} · {c.provider}</option>
+              ))}
+            </optgroup>
+          )}
+        </select>
+      </label>
+      {primaryIsNode && (
+        <label className="field-label"><span>Fallback if node is offline</span>
+          <select className="picker-search" value={fallbackValue} disabled={busy} onChange={(e) => saveRouting(primaryValue, e.target.value)}>
+            <option value="">None — wait for the node</option>
+            {configs.map((c) => (
+              <option key={c.id} value={`config:${c.id}`}>{c.name} · {c.provider}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      <p className="muted small">
+        {primaryIsNode
+          ? "Queued work waits for this node; if it's offline and a fallback is set, that ephemeral config is provisioned instead."
+          : routing?.primary.kind === "config"
+            ? "Queued work provisions a fresh machine from this config when nothing persistent is online."
+            : "Queued work is picked up by any online node."}
+      </p>
+
+      <h4 className="settings-subhead">Ephemeral configs</h4>
+      {draft ? (
+        <div className="settings-form">
+          <label className="field-label"><span>Name</span>
+            <input className="picker-search" value={draft.name} placeholder="e.g. fly-small-iad" onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+          </label>
+          <label className="field-label"><span>Provider</span>
+            <select className="picker-search" value={draft.provider} onChange={(e) => setDraft({ ...draft, provider: e.target.value })}>
+              <option value="" disabled>Choose a provider</option>
+              {keys.map((k) => (
+                <option key={k.id} value={k.id}>{k.name}{k.configured ? "" : " (no token on this device)"}</option>
               ))}
             </select>
-            {!defaultProviderConfigured && (
-              <p className="muted">This device has no saved token for {ephemeralDefault.provider} — add one in Ephemeral settings to actually help out.</p>
-            )}
-            {err && <span className="chip err">{err}</span>}
-          </>
-        )
+          </label>
+          <label className="field-label"><span>Region (optional)</span>
+            <input className="picker-search" value={draft.region} placeholder="provider default" onChange={(e) => setDraft({ ...draft, region: e.target.value })} />
+          </label>
+          <label className="field-label"><span>Server type (optional)</span>
+            <input className="picker-search" value={draft.size} placeholder="provider default" onChange={(e) => setDraft({ ...draft, size: e.target.value })} />
+          </label>
+          <label className="field-label"><span>Auto-destroy after</span>
+            <select className="picker-search" value={draft.ttlMinutes ?? ""} onChange={(e) => setDraft({ ...draft, ttlMinutes: e.target.value ? Number(e.target.value) : null })}>
+              <option value="">Provider default</option>
+              {QUEUE_TTL_OPTIONS.map((o) => (<option key={o.v} value={o.v}>{o.label}</option>))}
+            </select>
+          </label>
+          <div className="settings-toggle-row">
+            <div className="settings-toggle-text">
+              <span className="settings-toggle-title">Destroy after the agent finishes</span>
+              <span className="muted small">Tear the machine down on agent_end; the TTL stays a safety fallback.</span>
+            </div>
+            <Toggle checked={draft.teardownOnAgentFinish} onChange={(v) => setDraft({ ...draft, teardownOnAgentFinish: v })} label="Destroy after the agent finishes" />
+          </div>
+          <div className="row-actions">
+            <button className="btn primary" disabled={busy || !draft.name.trim() || !draft.provider} onClick={saveConfig}>
+              {busy ? "Saving…" : draft.editing ? "Save changes" : "Add config"}
+            </button>
+            <button className="btn" onClick={() => { setErr(null); setDraft(null); }}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="picker-list">
+            {configs.length === 0 && <div className="picker-empty">No ephemeral configs yet.</div>}
+            {configs.map((c) => (
+              <PickerItem
+                key={c.id}
+                title={c.name}
+                meta={`${providerName(c.provider)}${c.region ? " · " + c.region : ""}${c.size ? " · " + c.size : ""}${c.ttlMinutes ? " · " + c.ttlMinutes + "m" : ""}${providerReady(c.provider) ? "" : " · no token here"}`}
+                right={<button className="btn danger-ghost sm" onClick={(e) => { e.stopPropagation(); setConfirmRemove(c); }}>Remove</button>}
+                onClick={() => { setErr(null); setDraft({ editing: c.id, name: c.name, provider: c.provider, region: c.region ?? "", size: c.size ?? "", ttlMinutes: c.ttlMinutes ?? null, teardownOnAgentFinish: Boolean(c.teardownOnAgentFinish) }); }}
+              />
+            ))}
+          </div>
+          <button className="btn primary block" onClick={() => { setErr(null); setDraft({ name: "", provider: keys[0]?.id ?? "", region: "", size: "", ttlMinutes: null, teardownOnAgentFinish: false }); }}>+ Add config</button>
+        </>
+      )}
+      {err && <span className="chip err">{err}</span>}
+      {confirmRemove && (
+        <ConfirmDialog
+          title="Remove config?"
+          message={`Remove ${confirmRemove.name}? Queued work routed to it will fall back to the shared queue.`}
+          confirmLabel="Remove"
+          danger
+          onCancel={() => setConfirmRemove(null)}
+          onConfirm={() => removeConfig(confirmRemove)}
+        />
       )}
     </>
   );
 }
 
+const HOSTED_PROVIDERS = [
+  { id: "fly", name: "Fly.io" },
+  { id: "hetzner", name: "Hetzner" },
+  { id: "aws", name: "AWS" },
+];
+
+// Unattended (control-plane-orchestrated) provisioning. Lets the control plane
+// launch an ephemeral config when work arrives with no device online. This
+// stores cloud + GitHub credentials on the control plane — see
+// docs/hosted-provisioning-trust-model.md — so it's opt-in and surfaces the
+// trust trade-off, the encryption-key status, and an audit trail here.
+function HostedProvisioningSection() {
+  const [status, setStatus] = useState<HostedProvisioningStatus | null>(null);
+  const [audit, setAudit] = useState<HostedAuditEvent[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+  const [mode, setMode] = useState<"app" | "pat">("app");
+  const [appId, setAppId] = useState("");
+  const [installationId, setInstallationId] = useState("");
+  const [privateKeyPem, setPrivateKeyPem] = useState("");
+  const [pat, setPat] = useState("");
+  const [provider, setProvider] = useState("fly");
+  const [providerToken, setProviderToken] = useState("");
+
+  const refreshAudit = () => controller.listHostedAudit().then(setAudit).catch(() => {});
+  useEffect(() => {
+    controller.getHostedProvisioning().then(setStatus).catch(() => setStatus(null));
+    refreshAudit();
+  }, []);
+
+  const save = async (patch: Parameters<typeof controller.setHostedProvisioning>[0], done?: () => void) => {
+    setErr(null);
+    setBusy(true);
+    try {
+      setStatus(await controller.setHostedProvisioning(patch));
+      done?.();
+      refreshAudit();
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runTest = async () => {
+    setErr(null);
+    setTestMsg(null);
+    try {
+      const { plan } = await controller.triggerHostedProvision(false);
+      setTestMsg(plan.willProvision ? `Ready — would provision ${plan.targetConfigId}` : `Would not provision: ${plan.reason}`);
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    }
+  };
+
+  const rotate = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      setStatus(await controller.rotateHostedProvisioning());
+      refreshAudit();
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const enabled = Boolean(status?.enabled);
+  const canSaveSecrets = Boolean(status?.encryptionReady);
+
+  return (
+    <>
+      <p className="muted small">
+        Let the control plane launch an ephemeral config for queued work when nothing is online — no device needed.
+        This stores cloud and GitHub credentials on the control plane (encrypted at rest); it is opt-in per account.
+      </p>
+
+      {status && !status.encryptionReady && (
+        <div className="banner error inline">
+          Credential encryption is not configured on the server (<code>HOSTED_CREDENTIAL_KEY</code>). You can enable the
+          flag, but saving credentials is refused until a key is set.
+        </div>
+      )}
+
+      <div className="settings-toggle-row">
+        <div className="settings-toggle-text">
+          <span className="settings-toggle-title">Enable unattended provisioning</span>
+          <span className="muted small">Off by default. When on, the control plane provisions per your queue routing.</span>
+        </div>
+        <Toggle checked={enabled} disabled={busy} onChange={(v) => save({ enabled: v })} label="Enable unattended provisioning" />
+      </div>
+
+      {enabled && (
+        <>
+          <h4 className="settings-subhead">GitHub credential</h4>
+          <p className="muted small">
+            Current: <span className="chip">{status?.credential === "app" ? `GitHub App ${status.githubAppId ?? ""}` : status?.credential === "pat" ? "Personal token" : "none"}</span>
+            {" "}A GitHub App is recommended — the control plane mints a fresh, short-lived installation token per run instead of holding a long-lived token.
+          </p>
+          <label className="field-label"><span>Credential type</span>
+            <select className="picker-search" value={mode} onChange={(e) => setMode(e.target.value as "app" | "pat")}>
+              <option value="app">GitHub App (recommended)</option>
+              <option value="pat">Personal access token</option>
+            </select>
+          </label>
+          {mode === "app" ? (
+            <>
+              <label className="field-label"><span>App ID</span>
+                <input className="picker-search" value={appId} placeholder="123456" onChange={(e) => setAppId(e.target.value)} />
+              </label>
+              <label className="field-label"><span>Installation ID</span>
+                <input className="picker-search" value={installationId} placeholder="789012" onChange={(e) => setInstallationId(e.target.value)} />
+              </label>
+              <label className="field-label"><span>Private key (PEM)</span>
+                <textarea className="picker-search" rows={4} value={privateKeyPem} placeholder="-----BEGIN RSA PRIVATE KEY-----" onChange={(e) => setPrivateKeyPem(e.target.value)} />
+              </label>
+              <button
+                className="btn primary"
+                disabled={busy || !canSaveSecrets || !appId.trim() || !installationId.trim() || !privateKeyPem.trim()}
+                onClick={() => save({ githubApp: { appId: appId.trim(), installationId: installationId.trim(), privateKeyPem } }, () => { setAppId(""); setInstallationId(""); setPrivateKeyPem(""); })}
+              >
+                {busy ? "Saving…" : "Save GitHub App"}
+              </button>
+            </>
+          ) : (
+            <>
+              <label className="field-label"><span>Fine-grained token (Contents + Pull requests)</span>
+                <input className="picker-search" type="password" value={pat} placeholder="github_pat_…" onChange={(e) => setPat(e.target.value)} />
+              </label>
+              <button className="btn primary" disabled={busy || !canSaveSecrets || !pat.trim()} onClick={() => save({ githubToken: pat.trim() }, () => setPat(""))}>
+                {busy ? "Saving…" : "Save token"}
+              </button>
+            </>
+          )}
+
+          <h4 className="settings-subhead">Cloud provider token</h4>
+          <p className="muted small">Configured: {status?.providers.length ? status.providers.map((p) => <span key={p} className="chip">{p}</span>) : <span className="muted">none</span>}</p>
+          <label className="field-label"><span>Provider</span>
+            <select className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value)}>
+              {HOSTED_PROVIDERS.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+            </select>
+          </label>
+          <label className="field-label"><span>Token</span>
+            <input className="picker-search" type="password" value={providerToken} placeholder="provider API token" onChange={(e) => setProviderToken(e.target.value)} />
+          </label>
+          <button className="btn primary" disabled={busy || !canSaveSecrets || !providerToken.trim()} onClick={() => save({ providerTokens: { [provider]: providerToken.trim() } }, () => setProviderToken(""))}>
+            {busy ? "Saving…" : `Save ${provider} token`}
+          </button>
+
+          <h4 className="settings-subhead">Encryption</h4>
+          <p className="muted small">
+            Credentials are encrypted at rest{status?.keyId ? <> under key <span className="chip">{status.keyId}</span></> : ""}. Rotating re-seals them under the current primary key.
+          </p>
+          <div className="row-actions">
+            <button className="btn" disabled={busy || !canSaveSecrets} onClick={rotate}>Rotate encryption key</button>
+          </div>
+
+          <h4 className="settings-subhead">Check</h4>
+          <div className="row-actions">
+            <button className="btn" disabled={busy} onClick={runTest}>Dry-run the provisioning decision</button>
+            {testMsg && <span className="chip ok">{testMsg}</span>}
+          </div>
+
+          <h4 className="settings-subhead">Audit</h4>
+          <div className="picker-list">
+            {audit.length === 0 && <div className="picker-empty">No credential activity yet.</div>}
+            {audit.map((e, i) => (
+              <PickerItem
+                key={`${e.at}-${i}`}
+                title={e.action}
+                meta={[new Date(e.at).toLocaleString(), e.provider, e.nodeId, e.detail].filter(Boolean).join(" · ")}
+              />
+            ))}
+          </div>
+        </>
+      )}
+      {err && <span className="chip err">{err}</span>}
+    </>
+  );
+}
+
+// ---- Linear issue integration ----
+function LinearPanel() {
+  const [hook, setHook] = useState<LinearHook | null>(null);
+  const [secret, setSecret] = useState("");
+  const [route, setRoute] = useState("");
+  const [nodes, setNodes] = useState<AccountNode[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    fetchLinearHook(controller.local).then((next) => {
+      setHook(next);
+      if (next?.defaultNode) setRoute(next.defaultNode);
+    }).catch((e) => setError(e instanceof Error ? e.message : "Could not load Linear integration."));
+    controller.listNodes().then(setNodes).catch(() => {});
+  }, []);
+  const createEndpoint = async () => {
+    setBusy(true); setError("");
+    try { setHook(await connectLinearHook(controller.local, { defaultNode: route || undefined })); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not create Linear endpoint."); }
+    finally { setBusy(false); }
+  };
+  const connect = async () => {
+    setBusy(true); setError("");
+    try {
+      setHook(await connectLinearHook(controller.local, { signingSecret: secret, defaultNode: route || undefined }));
+      setSecret("");
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not connect Linear."); }
+    finally { setBusy(false); }
+  };
+  const disconnect = async () => {
+    if (!confirm("Disconnect Linear? Its webhook URL will stop accepting issues.")) return;
+    setBusy(true); setError("");
+    try { await disconnectLinearHook(controller.local); setHook(null); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not disconnect Linear."); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="settings-form">
+      <p className="settings-lead">Turn labelled Linear issues into unattended coding sessions and GitHub pull requests.</p>
+      {error && <div className="banner error inline">{error}</div>}
+      {!hook ? (
+        <section className="settings-section">
+          <h3>Connect Linear</h3>
+          <p className="settings-hint">First create a Bivy webhook URL. You will paste it into Linear, then bring Linear's generated signing secret back here.</p>
+          <label className="field-label">Default node (optional)</label>
+          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
+          <button className="btn primary" disabled={busy} onClick={() => void createEndpoint()}>Create webhook URL</button>
+        </section>
+      ) : (
+        <section className="settings-section">
+          <h3>{hook.enabled ? "Connected" : "Finish connecting"}</h3>
+          <ol className="settings-hint">
+            <li>In <strong>Linear → Settings → API → Webhooks</strong>, create an <strong>Issue</strong> webhook using this URL:</li>
+          </ol>
+          <code className="settings-code">{hook.endpoint}</code>
+          <button className="btn" onClick={() => void navigator.clipboard.writeText(hook.endpoint)}>Copy webhook URL</button>
+          <ol className="settings-hint" start={2}>
+            <li>Copy the signing secret generated by Linear and paste it below.</li>
+            <li>Create Linear labels <code>bivy</code> and optionally <code>bivy/node-name</code>. Applying one dispatches the issue.</li>
+          </ol>
+          <label className="field-label">Linear signing secret</label>
+          <input className="field-input" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={hook.enabled ? "Replace signing secret" : "Signing secret"} />
+          <label className="field-label">Default node (optional)</label>
+          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
+          <button className="btn primary" disabled={busy || secret.trim().length < 16} onClick={() => void connect()}>{hook.enabled ? "Update connection" : "Connect Linear"}</button>
+          <p className="settings-hint">Each runner also needs <code>BIVY_LINEAR_API_KEY</code> and a default <code>BIVY_LINEAR_REPO=owner/repo</code>. A <code>repo:owner/repo</code> issue label can override the repository.</p>
+          <button className="btn danger" disabled={busy} onClick={() => void disconnect()}>Disconnect Linear</button>
+        </section>
+      )}
+    </div>
+  );
+}
+
+// ---- Slack slash-command integration ----
+function SlackPanel() {
+  const [hook, setHook] = useState<SlackHook | null>(null);
+  const [secret, setSecret] = useState("");
+  const [route, setRoute] = useState("");
+  const [nodes, setNodes] = useState<AccountNode[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = async () => {
+    try {
+      const next = await fetchSlackHook(controller.local);
+      setHook(next);
+      if (next?.defaultNode) setRoute(next.defaultNode);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load Slack integration.");
+    }
+  };
+  useEffect(() => {
+    void refresh();
+    controller.listNodes().then(setNodes).catch(() => {});
+  }, []);
+  const connect = async () => {
+    setBusy(true); setError("");
+    try {
+      setHook(await connectSlackHook(controller.local, { signingSecret: secret, defaultNode: route || undefined }));
+      setSecret("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not connect Slack.");
+    } finally { setBusy(false); }
+  };
+  const disconnect = async () => {
+    if (!confirm("Disconnect Slack? The current slash-command URL will stop accepting requests.")) return;
+    setBusy(true); setError("");
+    try {
+      await disconnectSlackHook(controller.local);
+      setHook(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not disconnect Slack.");
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="settings-form">
+      <p className="settings-lead">Turn requests from a Slack slash command into unattended agent runs on your nodes.</p>
+      {error && <div className="banner error inline">{error}</div>}
+      {hook ? (
+        <section className="settings-section">
+          <h3>Connected</h3>
+          <p className="settings-hint">Use this as your Slack app's slash-command Request URL:</p>
+          <code className="settings-code">{hook.endpoint}</code>
+          <button className="btn" onClick={() => void navigator.clipboard.writeText(hook.endpoint)}>Copy Request URL</button>
+          <h4 className="settings-subhead">Commands</h4>
+          <code className="settings-code">/bivy fix the failing tests</code>
+          <code className="settings-code">/bivy on macbook fix the failing tests</code>
+          <code className="settings-code">/bivy in owner/repo fix the failing tests</code>
+          <p className="settings-hint">Add <code>in owner/repo</code> to run in an isolated checkout and bring back a pull request. Add <code>on node</code> to select a machine; the clauses can be combined.</p>
+          <button className="btn danger" disabled={busy} onClick={() => void disconnect()}>Disconnect Slack</button>
+        </section>
+      ) : (
+        <section className="settings-section">
+          <h3>Connect a Slack app</h3>
+          <ol className="settings-hint">
+            <li>Create a Slack app, then open <strong>Basic Information</strong>.</li>
+            <li>Copy its <strong>Signing Secret</strong> below.</li>
+            <li>After connecting, create a slash command named <code>/bivy</code> and paste the Request URL shown here.</li>
+          </ol>
+          <label className="field-label">Slack signing secret</label>
+          <input className="field-input" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Signing Secret" />
+          <label className="field-label">Default node (optional)</label>
+          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
+          <button className="btn primary" disabled={busy || secret.trim().length < 16} onClick={() => void connect()}>Connect Slack</button>
+        </section>
+      )}
+    </div>
+  );
+}
+
 // ---- Generic signed automation webhooks ----
-// Signed inbound webhook triggers (from the automation-webhooks feature). Lives
-// alongside the scheduled-automations panel (imported from ./Automations) under
-// the same "Automations" view — the two features arrived independently and both
-// belong here.
+// Signed inbound webhook triggers (from the automation-webhooks feature). Its
+// own "Webhooks" settings view, a sibling of the scheduled-automations panel
+// (imported from ./Automations) — the two used to share one "Automations" view
+// but were split into separate screens since they're independent features.
 function WebhookTriggersPanel() {
   const [hooks, setHooks] = useState<AutomationHook[]>([]);
   const [outcomes, setOutcomes] = useState<AutomationOutcome[]>([]);
@@ -1328,8 +1845,8 @@ curl -X POST '${revealed.hook.endpoint}' \\
       </section>
       {EPHEMERAL_MACHINES_ENABLED && (
         <section className="settings-section">
-          <h4 className="settings-subhead">Ephemeral fallback</h4>
-          <EphemeralQueueDefaultSection hint="Spin up a short-lived server from your saved provider token to pick up any queued run — including these webhooks — when nothing persistent is online, then tear it down. One account-wide setting; also shown in GitHub App settings." />
+          <h4 className="settings-subhead">Queue routing</h4>
+          <QueueRoutingSection />
         </section>
       )}
       {hooks.map((hook) => (
@@ -1378,6 +1895,9 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   const [defaultNode, setDefaultNode] = useState("");
   const [savingDefaultNode, setSavingDefaultNode] = useState(false);
   const [defaultNodeMsg, setDefaultNodeMsg] = useState<string | null>(null);
+  const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">("everyone");
+  const [savingTriggerAccess, setSavingTriggerAccess] = useState(false);
+  const [triggerAccessMsg, setTriggerAccessMsg] = useState<string | null>(null);
   // "Connect an existing GitHub App" (App ID + .pem) — for reconnecting an app
   // this account already set up onto the active node, without creating a new one.
   // `ceApp` is the connected app the form was opened for (null = a fresh app the
@@ -1490,6 +2010,10 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   // Seed the editable field from the account's stored default whenever it
   // changes (initial load, or after a save round-trip elsewhere).
   useEffect(() => { setDefaultNode(storedDefaultNode); }, [storedDefaultNode]);
+  // Same account-wide-preference pattern as the default node: any app that has
+  // it set answers for all of them; "everyone" (no restriction) if none do.
+  const storedTriggerAccess = apps.find((a) => a.triggerAccess)?.triggerAccess ?? "everyone";
+  useEffect(() => { setTriggerAccess(storedTriggerAccess); }, [storedTriggerAccess]);
 
   // The apps share the same routing copy; show the first one's handle as the example.
   const primaryMention = apps.find((a) => a.mention)?.mention;
@@ -1505,6 +2029,23 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
       setDefaultNodeMsg(String((e as Error)?.message || e));
     } finally {
       setSavingDefaultNode(false);
+    }
+  };
+  const saveTriggerAccess = async (next: "everyone" | "contributor" | "collaborator") => {
+    setTriggerAccessMsg(null);
+    setSavingTriggerAccess(true);
+    const prev = triggerAccess;
+    setTriggerAccess(next); // optimistic — it's a plain select, not a form submit
+    try {
+      const saved = await controller.setGithubAppTriggerAccess(next);
+      setInfo((cur) => (cur ? { ...cur, triggerAccess: saved, apps: cur.apps.map((a) => ({ ...a, triggerAccess: saved })) } : cur));
+      setTriggerAccessMsg("Saved");
+      setTimeout(() => setTriggerAccessMsg(null), 1500);
+    } catch (e) {
+      setTriggerAccess(prev);
+      setTriggerAccessMsg(String((e as Error)?.message || e));
+    } finally {
+      setSavingTriggerAccess(false);
     }
   };
   const disconnect = async (entry: GithubAppEntry) => {
@@ -1721,6 +2262,27 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
           </section>
 
           <section className="settings-section">
+            <h4 className="settings-subhead">Who can trigger runs</h4>
+            <p className="muted">
+              On a public repository, anyone can open an issue or leave a comment — by default,{" "}
+              <code>@{primaryMention || "mention"}</code>-ing the bot there queues a run for whoever wrote it. Restrict
+              this to people GitHub already trusts with the repo. One setting for the whole account: it applies to
+              every app above.
+            </p>
+            <select
+              className="picker-search"
+              value={triggerAccess}
+              disabled={savingTriggerAccess}
+              onChange={(e) => void saveTriggerAccess(e.target.value as "everyone" | "contributor" | "collaborator")}
+            >
+              <option value="everyone">Everyone — any GitHub user (default)</option>
+              <option value="contributor">Contributors — anyone with a prior merged contribution, or higher</option>
+              <option value="collaborator">Collaborators only — push access (collaborator, member, or owner)</option>
+            </select>
+            {triggerAccessMsg && <span className="chip ok">{triggerAccessMsg}</span>}
+          </section>
+
+          <section className="settings-section">
             <h4 className="settings-subhead">Routing labels</h4>
             <p className="muted">Label a GitHub issue (or use the directive in a comment/description) to route it:</p>
             <ul className="settings-list">
@@ -1732,8 +2294,15 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
 
           {EPHEMERAL_MACHINES_ENABLED && (
             <section className="settings-section">
-              <h4 className="settings-subhead">Ephemeral runner</h4>
-              <EphemeralQueueDefaultSection />
+              <h4 className="settings-subhead">Queue routing</h4>
+              <QueueRoutingSection />
+            </section>
+          )}
+
+          {EPHEMERAL_MACHINES_ENABLED && (
+            <section className="settings-section">
+              <h4 className="settings-subhead">Unattended provisioning</h4>
+              <HostedProvisioningSection />
             </section>
           )}
         </>
@@ -1813,6 +2382,7 @@ function NodesPanel({ state }: { state: AppState }) {
         worktreeSync: form.worktreeSync,
         syncStandbyNodeId: form.syncStandbyNodeId ?? "",
         sessionResumeMode: form.sessionResumeMode,
+        autoAttachToolImages: form.autoAttachToolImages,
       });
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
@@ -1999,6 +2569,25 @@ function NodesPanel({ state }: { state: AppState }) {
           </section>
 
           <section className="settings-section">
+            <h4 className="settings-subhead">Attachments</h4>
+            <div className="settings-toggle-row">
+              <div className="settings-toggle-text">
+                <span className="settings-toggle-title">Auto-attach images from tool results</span>
+                <span className="muted small">
+                  When a tool the agent runs returns an image — a screenshot from a browser-automation tool, say —
+                  show it in the chat automatically, with no explicit attach step. Bounded per turn so a chatty tool
+                  can't flood the chat.
+                </span>
+              </div>
+              <Toggle
+                checked={form.autoAttachToolImages}
+                onChange={(v) => setForm({ ...form, autoAttachToolImages: v })}
+                label="Enable auto-attach for tool images"
+              />
+            </div>
+          </section>
+
+          <section className="settings-section">
             <h4 className="settings-subhead">Session sync</h4>
             <div className="settings-toggle-row">
               <div className="settings-toggle-text">
@@ -2152,7 +2741,30 @@ function EphemeralPanel() {
           );
         })}
       </div>
+      <EphemeralTokenSync />
       <EphemeralModelKeys />
+    </div>
+  );
+}
+
+// Opt-in: sync provider tokens to the account's OTHER devices via an E2E device
+// vault, so a second device can wake/reach a machine this one launched (P2 /
+// Gap A). Off by default; the control plane only ever stores ciphertext.
+function EphemeralTokenSync() {
+  const [on, setOn] = useState(false);
+  useEffect(() => { setOn(controller.getDeviceTokenSync()); }, []);
+  return (
+    <div className="settings-form" style={{ marginTop: "1rem" }}>
+      <Toggle
+        checked={on}
+        onChange={(v) => { controller.setDeviceTokenSync(v); setOn(v); }}
+        label="Sync provider tokens across my devices"
+      />
+      <p className="muted small">
+        End-to-end encrypted, opt-in. Lets your other signed-in devices wake and reach machines you launch here without
+        re-entering the token — the control plane only ever stores ciphertext. A brand-new device receives the token the
+        next time an existing device is opened.
+      </p>
     </div>
   );
 }
@@ -2174,12 +2786,15 @@ function EphemeralModelKeys() {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const refresh = () => controller.listEphemeralModelKeys().then(setKeys).catch(() => {});
   useEffect(() => { refresh(); }, []);
 
   const save = async () => {
     setBusy(true);
     setMsg(null);
+    setErr(null);
     try {
       await controller.setEphemeralModelKey(provider, key);
       setProvider("");
@@ -2187,7 +2802,7 @@ function EphemeralModelKeys() {
       setMsg("Saved on this device.");
       refresh();
     } catch (e) {
-      setMsg(String((e as Error)?.message || e));
+      setErr(String((e as Error)?.message || e));
     } finally {
       setBusy(false);
     }
@@ -2214,7 +2829,7 @@ function EphemeralModelKeys() {
                   className="picker-action danger"
                   onClick={(e) => {
                     e.stopPropagation();
-                    controller.removeEphemeralModelKey(k.provider).then(refresh);
+                    setConfirmRemove(k.provider);
                   }}
                 >
                   Remove
@@ -2223,6 +2838,20 @@ function EphemeralModelKeys() {
             />
           ))}
         </div>
+      )}
+      {confirmRemove && (
+        <ConfirmDialog
+          title="Remove model key?"
+          message={`Forget the ${confirmRemove} model key on this device? New machines won't be seeded with it.`}
+          confirmLabel="Remove"
+          danger
+          onCancel={() => setConfirmRemove(null)}
+          onConfirm={() => {
+            const p = confirmRemove;
+            setConfirmRemove(null);
+            controller.removeEphemeralModelKey(p).then(refresh).catch((e) => setErr(String((e as Error)?.message || e)));
+          }}
+        />
       )}
       <datalist id="eph-model-providers">
         {COMMON_MODEL_PROVIDERS.map((p) => (
@@ -2248,6 +2877,7 @@ function EphemeralModelKeys() {
       <button className="btn primary" disabled={busy || !provider.trim() || !key.trim()} onClick={save}>
         {busy ? "Saving…" : "Save key"}
       </button>
+      {err && <span className="chip err">{err}</span>}
       {msg && <p className="muted">{msg}</p>}
     </section>
   );
@@ -2256,6 +2886,9 @@ function EphemeralModelKeys() {
 function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, onSetupsChanged, onBack }: { providerId: string; initialSetupId: string | null; onKeysChanged: () => void; onSetupsChanged: () => void; onBack: () => void }) {
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === providerId)!;
   const adapter = ephemeralAdapter(providerId)!;
+  // Suspend-to-zero providers (Fly Sprites) keep the machine and self-suspend
+  // when idle — so TTL self-destruct and destroy-on-finish don't apply.
+  const suspendsWhenIdle = adapter.suspendsWhenIdle === true;
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   const [token, setToken] = useState("");
   const [hasToken, setHasToken] = useState(false);
@@ -2272,6 +2905,9 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   const [machines, setMachines] = useState<EphemeralMachine[]>([]);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // Failures render as a `chip err` — kept separate from the neutral `msg` so a
+  // token/save error doesn't read like a calm status line.
+  const [err, setErr] = useState<string | null>(null);
   // Both saveToken and savePrefs are already real awaited requests — the
   // missing piece was an in-flight guard against a double-submit (#140).
   const [busy, setBusy] = useState(false);
@@ -2315,6 +2951,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   const saveToken = async () => {
     if (busy) return;
     setBusy(true);
+    setErr(null);
     try {
       await controller.setEphemeralToken(providerId, token.trim());
       setToken("");
@@ -2322,7 +2959,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       onKeysChanged();
       setMsg("Token saved on this device.");
     } catch (e) {
-      setMsg(String((e as Error).message || e));
+      setErr(String((e as Error).message || e));
     } finally {
       setBusy(false);
     }
@@ -2331,6 +2968,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   const savePrefs = async () => {
     if (busy) return;
     setBusy(true);
+    setErr(null);
     try {
       // Repo isn't a machine setting — it comes from the new-session composer at
       // launch time — so clear any legacy value rather than carry it here.
@@ -2344,7 +2982,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(null), 1500);
     } catch (e) {
-      setMsg(String((e as Error).message || e));
+      setErr(String((e as Error).message || e));
     } finally {
       setBusy(false);
     }
@@ -2397,16 +3035,34 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
             {sizes.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
 
-          <label className="field-label">Auto-destroy after (TTL)</label>
-          <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
-            {EPHEMERAL_TTL_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-          </select>
+          {!suspendsWhenIdle && (
+            <>
+              <label className="field-label">Auto-destroy after (TTL)</label>
+              <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
+                {EPHEMERAL_TTL_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+              </select>
+            </>
+          )}
+          {(() => {
+            const selected = sizes.find((s) => s.id === size);
+            const hint = ephemeralCostHint(selected, suspendsWhenIdle ? undefined : ttl, adapter.currency);
+            if (!hint) return null;
+            return suspendsWhenIdle
+              ? <p className="muted small">{hint} while active · ~$0 while suspended · billed by {catalog.name}, not Bivy</p>
+              : <p className="muted small">{hint} · billed by {catalog.name}, not Bivy</p>;
+          })()}
 
-          <label className="field-label">Work until finished</label>
-          <label className="checkbox-row">
-            <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
-            <span>Destroy the machine once the agent finishes its work <span className="muted small">(the TTL above stays a safety fallback; the launching device must be online)</span></span>
-          </label>
+          {suspendsWhenIdle ? (
+            <p className="muted small">Keeps its memory: suspends to ~$0 when idle and resumes with everything intact. Reopen its session from the node list to wake it — no TTL, no teardown-on-finish.</p>
+          ) : (
+            <>
+              <label className="field-label">Work until finished</label>
+              <label className="checkbox-row">
+                <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
+                <span>Destroy the machine once the agent finishes its work <span className="muted small">(the TTL above stays a safety fallback; the launching device must be online)</span></span>
+              </label>
+            </>
+          )}
 
           <p className="muted small">The repo this machine works on is whatever you pick in the new-session composer — it isn't set here.</p>
 
@@ -2437,6 +3093,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           </div>
         </>
       )}
+      {err && <span className="chip err">{err}</span>}
       {msg && <p className="muted">{msg}</p>}
       {machines.length > 0 && (
         <>
@@ -2457,7 +3114,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
                         title: "Destroy machine?",
                         message: `Destroy ${m.name || m.id} now? This can't be undone.`,
                         label: "Destroy",
-                        action: () => controller.destroyEphemeral(m).then(refreshMachines),
+                        action: () => controller.destroyEphemeral(m).then(refreshMachines).catch((e) => setErr(String((e as Error)?.message || e))),
                       });
                     }}
                   >
@@ -2491,8 +3148,9 @@ function AccountPanel() {
   const ent = me?.entitlements;
   const counts = me?.counts;
   const free = (ent?.plan || me?.account?.plan) === "free";
-  // Free's one cap: runs per rolling 7-day window across every source. Undefined = unlimited (paid).
+  // Free caps unattended automation only; interactive CLI/app sessions are unlimited.
   const runCap = ent ? (ent.weeklyRunLimit ?? "∞") : "—";
+  const proPrice = me?.pricing?.pro?.label;
   return (
     <div className="settings-form">
       {confirm && (
@@ -2508,12 +3166,12 @@ function AccountPanel() {
       {err && <div className="banner error inline">{err}</div>}
       <div className="stat-grid">
         <Stat label="Plan" value={planLabel(ent?.plan || me?.account?.plan)} />
-        <Stat label="Runs / week" value={`${counts?.runsThisWeek ?? "—"} / ${runCap}`} />
+        <Stat label="Automations / week" value={`${counts?.runsThisWeek ?? "—"} / ${runCap}`} />
       </div>
       {free && (
         <p className="muted settings-intro">
-          You're on the free plan — everything's included, capped at {runCap} runs per rolling 7 days across
-          every source (manual, app, GitHub queue, ephemeral). Pro removes the cap for {PRO_PRICE_LABEL}.
+          You're on the free plan — interactive sessions are unlimited, with {runCap} unattended automations
+          per rolling 7 days across GitHub, Slack, webhooks, and schedules. Pro removes the automation cap{proPrice ? ` for ${proPrice}` : ""}.
         </p>
       )}
       <div className="row-actions">
@@ -2531,7 +3189,7 @@ function AccountPanel() {
               controller.startCheckout().catch((e) => setErr(String(e.message || e))).finally(() => setOpening(false));
             }}
           >
-            {opening ? "Opening…" : `Upgrade to Pro — ${PRO_PRICE_LABEL}`}
+            {opening ? "Opening…" : `Upgrade to Pro${proPrice ? ` — ${proPrice}` : ""}`}
           </button>
         ) : (
           <button

@@ -124,7 +124,7 @@ await test("free vs pro entitlements match the published pricing table", () => {
   assert.equal(free.pushEnabled, true, "free: push notifications included");
   assert.equal(free.relayEnabled, true, "free: hosted relay");
   assert.equal(free.workQueueEnabled, true, "free: hosted work queue included");
-  assert.equal(free.weeklyRunLimit, 10, "free: metered at 10 runs / rolling 7 days across every source");
+  assert.equal(free.weeklyRunLimit, 10, "free: 10 weekly automations; interactive sessions are unlimited");
   assert.equal(free.ephemeralEnabled, true, "free: quick ephemeral servers included");
 
   const pro = entitlementsForPlan("pro");
@@ -266,13 +266,15 @@ await test("pruneExpiredAuthTokens drops expired rows across every short-lived a
   const store = await makeStore();
   const account = await store.findOrCreateAccount("prune-auth@example.com");
 
-  // Mint one row in each of the five short-lived tables pruneExpiredAuthTokens
-  // covers. All default to a future expires_at (none is expired yet).
+  // Mint one row in each short-lived table pruneExpiredAuthTokens covers. All
+  // default to a future expiry/reset (none is expired yet).
   await store.createLoginToken(account.email);
   await store.createSession(account.id);
   await store.createLinkGrant(account.id, "node-1");
   await store.createRelayTicket({ role: "node", accountId: account.id, nodeId: "node-1" });
   await store.createDeviceLogin();
+  await store.createOAuthState({ returnPath: "/" });
+  await store.rateLimitExceeded("test", "key", 1, 60_000);
 
   // A "now" cutoff removes nothing — every row above is still within its TTL.
   assert.equal(await store.pruneExpiredAuthTokens(new Date().toISOString()), 0, "nothing expired yet");
@@ -280,7 +282,7 @@ await test("pruneExpiredAuthTokens drops expired rows across every short-lived a
   // A cutoff past every table's TTL (sessions' 30-day TTL is the longest) removes
   // all five rows in one call.
   const wayInTheFuture = new Date(Date.now() + 31 * 24 * 60 * 60_000).toISOString();
-  assert.equal(await store.pruneExpiredAuthTokens(wayInTheFuture), 5, "one expired row from each of the five tables");
+  assert.equal(await store.pruneExpiredAuthTokens(wayInTheFuture), 7, "one expired row from each short-lived table");
 
   // Idempotent: nothing left to prune the second time.
   assert.equal(await store.pruneExpiredAuthTokens(wayInTheFuture), 0, "already-pruned rows aren't double-counted");
@@ -499,6 +501,29 @@ await test("setInboundHookDefaultNode sets/clears the default node, scoped to th
   assert.equal(await store.setInboundHookDefaultNode(other.id, hook.id, "elsewhere"), undefined);
 });
 
+await test("setInboundHookTriggerAccess sets/clears who can trigger a run, scoped to the account (issue #259)", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("trigger-access@example.com");
+  const hook = await store.createInboundHook(acct.id, "github_app");
+  // Unset by default — "everyone" (no restriction), the behavior before this
+  // setting existed.
+  assert.equal((await store.getInboundHook(hook.id))?.triggerAccess, undefined);
+  let updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "contributor");
+  assert.equal(updated?.triggerAccess, "contributor");
+  assert.equal((await store.getInboundHook(hook.id))?.triggerAccess, "contributor");
+  updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "collaborator");
+  assert.equal(updated?.triggerAccess, "collaborator");
+  // Setting back to "everyone" clears it (stored the same as unset).
+  updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "everyone");
+  assert.equal(updated?.triggerAccess, undefined);
+  updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "collaborator");
+  updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, undefined);
+  assert.equal(updated?.triggerAccess, undefined);
+  // Scoped to the owning account.
+  const other = await store.findOrCreateAccount("trigger-access2@example.com");
+  assert.equal(await store.setInboundHookTriggerAccess(other.id, hook.id, "collaborator"), undefined);
+});
+
 await test("renaming a node carries its GitHub App default-node reference along (issue #464)", async () => {
   const store = await makeStore();
   const acct = await store.findOrCreateAccount("rename-default-node@example.com");
@@ -646,6 +671,26 @@ await test("listWorkItems returns all the account's items regardless of status",
   // Account-scoped.
   const other = await store.findOrCreateAccount("q2@example.com");
   assert.equal((await store.listWorkItems(other.id)).length, 0);
+});
+
+await test("setNodeOnline(true) stamps last_seen_at; setNodeOnline(false) does not", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("presence@example.com");
+  const { node } = await store.enrollNode(acct.id, "node-presence", "Laptop");
+
+  // Mark online → flag true, last_seen_at populated.
+  await store.setNodeOnline(node.id, true);
+  const afterOnline = (await store.listNodes(acct.id)).find((n) => n.id === node.id);
+  assert.equal(afterOnline?.online, true);
+  assert.ok(afterOnline?.lastSeenAt, "online write must stamp last_seen_at");
+  const seenWhenOnline = afterOnline!.lastSeenAt;
+
+  // A racing/stale offline write flips the flag but must NOT refresh last_seen_at,
+  // so the read-path TTL fallback can still tell the node was recently seen online.
+  await store.setNodeOnline(node.id, false);
+  const afterOffline = (await store.listNodes(acct.id)).find((n) => n.id === node.id);
+  assert.equal(afterOffline?.online, false);
+  assert.equal(afterOffline?.lastSeenAt, seenWhenOnline, "offline write must not bump last_seen_at");
 });
 
 console.log(`\nAll ${passed} control-plane store tests passed.`);

@@ -8,7 +8,7 @@ import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypt
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
-import { listRuntimes, catalogRuntimes, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { listRuntimes, catalogRuntimes, cliInstallSpec, isCliAgentId, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController } from "./policy/session-reroute.js";
@@ -27,6 +27,7 @@ import { provisionAgentRun } from "./runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
 import { suggestNameFromSelectedModel } from "./runtime/model-namer.js";
 import { isNativeOAuthProvider, loginModelOAuth, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
+import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
 import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } from "./runtime/codex-sessions.js";
 import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
@@ -51,19 +52,23 @@ import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from "./auth.js";
 import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-client.js";
+import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
+import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
+import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
-import { createWorktree, removeWorktree, branchSlug, type Worktree } from "./worktree.js";
+import { createWorktree, removeWorktree, branchSlug, gitRepoRoot, type Worktree } from "./worktree.js";
 import { HarnessManager } from "./harness/manager.js";
 import { startEgressProxyIfEnabled } from "./harness/egress.js";
 import { initSharedDepCache, sharedDepCacheRoot } from "./harness/dep-cache.js";
 import { evictToCap, dirSizeBytes } from "./harness/cache-evict.js";
 import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
-import { injectMcpProxyForSession } from "./harness/mcp-inject.js";
-import { parseRepo, inferGitHubRepoFromWorkspace, resolveGitHubToken, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
+import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
+import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
+import { parseRepo, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
   GitHubTaskPoller,
@@ -95,8 +100,9 @@ import {
   type GitHubTaskConfig,
   type GitHubIssue,
 } from "./github-tasks.js";
+import { buildLinearTaskPrompt, getLinearIssue, linearBranchName } from "./linear-tasks.js";
 import { PairingStore } from "./device-registry.js";
-import { IntegrationManager } from "./integrations/index.js";
+import { IntegrationManager, type SessionIdRef } from "./integrations/index.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession, type PrRef } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
@@ -106,6 +112,8 @@ import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { normalizeMessages } from "./session/transcript-normal.js";
 import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog } from "./session/event-log.js";
+import { AttachmentStore, isValidAttachmentHash, type AttachmentRef } from "./session/attachment-store.js";
+import { planAttachment, isAttachPlanError, MAX_AGENT_ATTACHMENT_BYTES } from "./session/attach-to-chat.js";
 import { ReplicationService } from "./session/replication-service.js";
 import type { ReplWireFrame } from "./session/replicator.js";
 import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
@@ -156,7 +164,7 @@ const repoRoot = path.resolve(__dirname, "..");
 // running from source. Packaged/release builds may override them (BIVY_ASSET_ROOT,
 // BIVY_DATA_DIR) so it can write outside the read-only app bundle.
 const assetRoot = process.env.BIVY_ASSET_ROOT ?? repoRoot;
-const appDir = process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy");
+const appDir = path.resolve(process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy"));
 // Load persisted env from cli.json into process.env so config written there —
 // e.g. connecting a GitHub App (BIVY_GITHUB_APP_ID / BIVY_GITHUB_HOSTED_TASKS /
 // BIVY_NODE_LABEL) — takes effect on the NEXT restart even if the service
@@ -183,6 +191,13 @@ initSharedDepCache(appDir);
 // Materialize the git credential helper under the data dir so repo clones can
 // authenticate without ever writing a token into their remote URL / .git/config.
 configureGitAuth(appDir);
+// Never leave the daemon parked in its installed package directory. A global
+// npm update atomically replaces that directory while the old process drains;
+// any later child process (notably git's remote/credential helpers) then aborts
+// before running with "Unable to read current working directory". appDir is the
+// durable state root and every workspace/asset path below is already absolute.
+// Anchoring the process itself fixes all subprocess paths, not just `git clone`.
+process.chdir(appDir);
 // Make `bivy update` and user-scoped npm globals available to agents/tools
 // launched by the daemon even when the node runs under systemd/launchd with a
 // minimal PATH. The installer also symlinks ~/.local/bin/bivy, but adding these
@@ -398,7 +413,7 @@ const queueRunPolicy: RunPolicy = {
 };
 // Bivy is distributed on npm, so "is there a newer version?" is a registry
 // question. Overridable for self-hosted or mirrored registries.
-const updateRegistryUrl = process.env.BIVY_UPDATE_REGISTRY_URL ?? "https://registry.npmjs.org/bivy/latest";
+const updateRegistryUrl = process.env.BIVY_UPDATE_REGISTRY_URL ?? "https://registry.npmjs.org/%40bivy%2Fbivy/latest";
 fs.mkdirSync(sessionsDir, { recursive: true });
 fs.mkdirSync(credsDir, { recursive: true, mode: 0o700 });
 // One-time migration for installs created before the shared vault was split out
@@ -577,7 +592,7 @@ function resolveApproval(id: string, approved: boolean) {
   }
   return ok;
 }
-const integrations = new IntegrationManager(appDir);
+const integrations = new IntegrationManager(appDir, undefined, attachToChatForSession);
 const terminals = new TerminalManager();
 // Per-session agents: a node holds one AgentRuntime instance *per agent id*,
 // built lazily and cached, instead of a single global runtime. `defaultRuntimeId`
@@ -585,7 +600,7 @@ const terminals = new TerminalManager();
 // be swapped under a live conversation, so the agent is chosen at session creation
 // and fixed for that session's life; switching agents in the UI starts a new one.
 let defaultRuntimeId = (process.env.BIVY_RUNTIME ?? "pi").toLowerCase();
-const runtimeHost = new RuntimeHost({ credsDir, piDir, sessionsDir });
+const runtimeHost = new RuntimeHost({ credsDir, piDir, sessionsDir, attachToChat: attachToChatForSession });
 
 // In-session model reroute (docs/rulesets.md). Opt-in: set
 // BIVY_SESSION_MODEL_FALLBACK to a comma-separated model list and a session that
@@ -747,67 +762,34 @@ async function maybeNotifyBivyUpdate(record: SessionRecord) {
 type RuntimeInstallSpec = { id: string; command: string; args: string[]; cwd: string; displayCommand?: string };
 
 function runtimeInstallSpec(requested?: string): RuntimeInstallSpec | undefined {
-  const id = String(requested ?? "").trim().toLowerCase();
-  const npmGlobalArgs = (pkg: string) => ["install", "--global", "--prefix", userLocalPrefix, pkg];
-  const npmGlobalDisplay = (pkg: string) => `npm install --global --prefix ${userLocalPrefix} ${pkg}`;
-  if (id === "claude" || id === "claude-code" || id === "claude-code-sdk") {
+  let id = String(requested ?? "").trim().toLowerCase();
+  // Normalize a few historical aliases to their canonical runtime id.
+  const alias: Record<string, string> = {
+    "open-code": "opencode",
+    "gemini-cli": "gemini",
+    "qwen-code": "qwen",
+    "open-claw": "openclaw",
+    claude: "claude-code-sdk",
+    "claude-code": "claude-code-sdk",
+  };
+  id = alias[id] ?? id;
+
+  // Claude Code SDK is a node dependency installed into the repo (not a global
+  // CLI), and OpenClaw is a phase-1 adapter that isn't a CLI_AGENT_SPECS entry —
+  // both stay bespoke. Everything else derives from the agent's structured
+  // `install` descriptor via cliInstallSpec (the SAME source the catalog "Install"
+  // button reads), so there's a single install definition per agent, not two.
+  if (id === "claude-code-sdk") {
     return { id: "claude-code-sdk", command: "npm", args: ["install", "@anthropic-ai/claude-agent-sdk"], cwd: repoRoot };
   }
-  if (id === "codex") {
-    return { id: "codex", command: "npm", args: npmGlobalArgs("@openai/codex"), cwd: repoRoot, displayCommand: npmGlobalDisplay("@openai/codex") };
+  if (id === "openclaw") {
+    return { id: "openclaw", command: "npm", args: ["install", "--global", "--prefix", userLocalPrefix, "openclaw"], cwd: repoRoot, displayCommand: `npm install --global --prefix ${userLocalPrefix} openclaw` };
   }
-  if (id === "opencode" || id === "open-code") {
-    return { id: "opencode", command: "npm", args: npmGlobalArgs("opencode-ai"), cwd: repoRoot, displayCommand: npmGlobalDisplay("opencode-ai") };
-  }
-  if (id === "hermes") {
-    // The bare `hermes` npm package is segmentio/hermes ("Messenger of the gods"),
-    // an unrelated abandoned 2015 lib — not the agent. `hermes-agent` is the AI
-    // agent CLI and ships the `hermes` bin this runtime launches.
-    return { id: "hermes", command: "npm", args: npmGlobalArgs("hermes-agent"), cwd: repoRoot, displayCommand: npmGlobalDisplay("hermes-agent") };
-  }
-  if (id === "openclaw" || id === "open-claw") {
-    return { id: "openclaw", command: "npm", args: npmGlobalArgs("openclaw"), cwd: repoRoot, displayCommand: npmGlobalDisplay("openclaw") };
-  }
-  if (id === "aider") {
-    // Some node images ship a python3 without pip ("No module named pip"), so
-    // bootstrap it via the stdlib ensurepip module first (best-effort) before the
-    // install. Routed through sh so the two steps can chain; the displayed command
-    // stays the plain pip line users recognize.
-    return {
-      id: "aider",
-      command: "sh",
-      args: ["-c", "python3 -m ensurepip --user >/dev/null 2>&1 || true; python3 -m pip install --user aider-chat"],
-      cwd: repoRoot,
-      displayCommand: "python3 -m pip install --user aider-chat",
-    };
-  }
-  if (id === "gemini" || id === "gemini-cli") {
-    return { id: "gemini", command: "npm", args: npmGlobalArgs("@google/gemini-cli"), cwd: repoRoot, displayCommand: npmGlobalDisplay("@google/gemini-cli") };
-  }
-  if (id === "qwen" || id === "qwen-code") {
-    return { id: "qwen", command: "npm", args: npmGlobalArgs("@qwen-code/qwen-code"), cwd: repoRoot, displayCommand: npmGlobalDisplay("@qwen-code/qwen-code") };
-  }
-  if (id === "cline") {
-    return { id: "cline", command: "npm", args: npmGlobalArgs("cline"), cwd: repoRoot, displayCommand: npmGlobalDisplay("cline") };
-  }
-  if (id === "crush") {
-    return { id: "crush", command: "npm", args: npmGlobalArgs("@charmland/crush"), cwd: repoRoot, displayCommand: npmGlobalDisplay("@charmland/crush") };
-  }
-  if (id === "goose") {
-    // `brew install block/tap/goose` ENOENTs on any node without Homebrew (i.e.
-    // every stock Linux node). Use Goose's official download_cli.sh instead — it
-    // works on Linux and macOS alike and honors GOOSE_BIN_DIR, so we drop the
-    // binary into the same ~/.local/bin that's already on PATH (userLocalPrefix)
-    // where commandAvailable("goose") looks. CONFIGURE=false skips the script's
-    // interactive provider setup.
-    const gooseBin = path.join(userLocalPrefix, "bin");
-    return {
-      id: "goose",
-      command: "sh",
-      args: ["-c", `mkdir -p "${gooseBin}" && curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false GOOSE_BIN_DIR="${gooseBin}" bash`],
-      cwd: repoRoot,
-      displayCommand: "curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash",
-    };
+  if (isCliAgentId(id)) {
+    const spec = cliInstallSpec(id, userLocalPrefix);
+    // No `install` descriptor (e.g. Rovo Dev's `acli`, installed out of band) →
+    // no allowlisted auto-install; the catalog shows the agent as external.
+    return spec ? { id, command: spec.command, args: spec.args, cwd: repoRoot, displayCommand: spec.display } : undefined;
   }
   return undefined;
 }
@@ -873,8 +855,11 @@ function getRuntime(requested?: string, sandbox?: SandboxTier): AgentRuntime {
 }
 // Holds the node's X25519 identity key, the rotating room key, and the linked
 // device registry. The room key is generated fresh on first load and delivered
-// to devices via the X25519 pairing handshake — there is no static seed.
-const pairingStore = PairingStore.load(appDir);
+// to devices via the X25519 pairing handshake — there is no static seed, EXCEPT
+// on an ephemeral rebuild: relay.json carries the reused session's room key
+// (`e2eKey`) so a brand-new pairing state adopts it and can decrypt the restored
+// snapshot. Only seeds a first-run node; an existing pairing.json always wins.
+const pairingStore = PairingStore.load(appDir, loadRelayConfig(appDir)?.e2eKey);
 function syncPairingMetadata() {
   for (const device of pairingStore.listDevices()) {
     metadata.upsertDevice({ id: device.id, label: device.label, publicKeyB64: device.publicKeyB64, firstSeenAt: device.createdAt, lastSeenAt: device.lastSeenAt ?? undefined });
@@ -885,7 +870,36 @@ let relay: RelayConnector | undefined;
 const clients = new Set<WebSocket>();
 const commandProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const oauthLogins = new Map<string, OAuthLoginState>();
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController };
+// A browser-initiated subscription login parks the node on `manualCodePromise`
+// until the remote device pastes the code (`provider.oauth.code`). If the user
+// abandons it, the entry — AND its local callback http.Server — would otherwise
+// linger until the process exits. That matters especially on a short-lived
+// ephemeral node. Sweep periodically: abort (which closes the callback server,
+// see startCallbackServer) + drop any in-flight login past its TTL, and drop a
+// finished one after a short grace so clients can still read the final status.
+const OAUTH_LOGIN_TTL_MS = 10 * 60_000;
+const OAUTH_LOGIN_DONE_GRACE_MS = 2 * 60_000;
+function sweepOauthLogins(now = Date.now()): void {
+  for (const [id, login] of oauthLogins.entries()) {
+    const { drop, abort } = decideOAuthLoginSweep(login.status, now - login.createdAt, {
+      ttlMs: OAUTH_LOGIN_TTL_MS,
+      graceMs: OAUTH_LOGIN_DONE_GRACE_MS,
+    });
+    if (!drop) continue;
+    if (abort) {
+      login.cancelled = true;
+      try { login.abort.abort(); } catch { /* already settled */ }
+    }
+    oauthLogins.delete(id);
+  }
+}
+let oauthLoginSweepTimer: ReturnType<typeof setInterval> | undefined;
+function startOAuthLoginSweeper(): void {
+  if (oauthLoginSweepTimer) return;
+  oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
+  oauthLoginSweepTimer.unref?.();
+}
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -1047,18 +1061,22 @@ interface DecodedAttachment {
 }
 
 /**
- * Split composer attachments into three channels:
+ * Split composer attachments into channels:
  *   - `images`     — base64 blobs passed to the model as vision.
  *   - `imageNotes` — one prose line per image for the persisted transcript.
+ *   - `imageRefs`  — durable AttachmentStore references for the images, persisted
+ *                    in the event log so they rehydrate after a reload / on
+ *                    another device (images used to be vision-only, then lost).
  *   - `files`      — decoded file attachments (bytes or text) to be written to
  *                    disk by materializeAttachments so the agent can open them
  *                    with its normal file tools. Any file type is supported;
  *                    binary files arrive as base64 `data`.
  */
-function attachmentsFrom(value: unknown): { images: PromptImage[]; imageNotes: string[]; files: DecodedAttachment[] } {
-  if (!Array.isArray(value)) return { images: [], imageNotes: [], files: [] };
+function attachmentsFrom(value: unknown): { images: PromptImage[]; imageNotes: string[]; imageRefs: AttachmentRef[]; files: DecodedAttachment[] } {
+  if (!Array.isArray(value)) return { images: [], imageNotes: [], imageRefs: [], files: [] };
   const images: PromptImage[] = [];
   const imageNotes: string[] = [];
+  const imageRefs: AttachmentRef[] = [];
   const files: DecodedAttachment[] = [];
   for (const raw of value.slice(0, 12) as unknown[]) {
     if (!raw || typeof raw !== "object") continue;
@@ -1067,8 +1085,16 @@ function attachmentsFrom(value: unknown): { images: PromptImage[]; imageNotes: s
     const size = Number(attachment.size || 0);
     const mimeType = typeof attachment.mimeType === "string" && attachment.mimeType ? attachment.mimeType : undefined;
     if (attachment.kind === "image" && typeof attachment.data === "string") {
-      images.push({ type: "image", data: attachment.data, mimeType: mimeType ?? "image/png" });
+      const imgMime = mimeType ?? "image/png";
+      images.push({ type: "image", data: attachment.data, mimeType: imgMime });
       imageNotes.push(`[Image attachment: ${name}${size ? ` (${size} bytes)` : ""}]`);
+      // Persist the image bytes durably (dedup by hash). Best-effort: a store
+      // failure must not break vision for the turn, so it only costs the ref.
+      try {
+        imageRefs.push(attachmentStore.put(Buffer.from(attachment.data, "base64"), { name, mimeType: imgMime, kind: "image" }));
+      } catch (error) {
+        console.warn("[attachments] failed to store image:", error instanceof Error ? error.message : String(error));
+      }
     } else if (attachment.kind === "file") {
       if (typeof attachment.data === "string" && attachment.data) {
         files.push({ name, mimeType: mimeType ?? "application/octet-stream", size, bytes: Buffer.from(attachment.data, "base64"), truncated: !!attachment.truncated });
@@ -1079,7 +1105,7 @@ function attachmentsFrom(value: unknown): { images: PromptImage[]; imageNotes: s
       // nothing to write, so there is nothing to hand the agent — skip it.
     }
   }
-  return { images, imageNotes, files };
+  return { images, imageNotes, imageRefs, files };
 }
 
 /** Strip a user-supplied filename to a safe basename — no path traversal, no
@@ -1102,15 +1128,28 @@ function sanitizeAttachmentFilename(name: string): string {
  * `report.pdf`s don't clobber. Best-effort: a failure degrades to a note rather
  * than throwing, so a bad attachment never sinks the whole turn.
  */
-function materializeAttachments(record: SessionRecord, files: DecodedAttachment[]): string {
-  if (!files.length) return "";
+function materializeAttachments(record: SessionRecord, files: DecodedAttachment[]): { note: string; refs: AttachmentRef[] } {
+  if (!files.length) return { note: "", refs: [] };
+  const refs: AttachmentRef[] = [];
+  // Store every file durably in the global content-addressed store first (for
+  // re-findability), independent of the per-workdir copy below. Best-effort per
+  // file so one bad blob doesn't lose the others.
+  for (const file of files) {
+    const bytes = file.bytes ?? (typeof file.text === "string" ? Buffer.from(file.text, "utf8") : undefined);
+    if (!bytes) continue;
+    try {
+      refs.push(attachmentStore.put(bytes, { name: sanitizeAttachmentFilename(file.name), mimeType: file.mimeType, kind: "file" }));
+    } catch (error) {
+      console.warn("[attachments] failed to store file:", error instanceof Error ? error.message : String(error));
+    }
+  }
   const workdir = harnessDirFor(record);
   const dir = path.join(workdir, ".bivy-attachments");
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error);
-    return files.map((f) => `[File attachment: ${sanitizeAttachmentFilename(f.name)} could not be saved: ${why}]`).join("\n");
+    return { note: files.map((f) => `[File attachment: ${sanitizeAttachmentFilename(f.name)} could not be saved: ${why}]`).join("\n"), refs };
   }
   const notes: string[] = [];
   const used = new Set<string>();
@@ -1137,7 +1176,122 @@ function materializeAttachments(record: SessionRecord, files: DecodedAttachment[
       notes.push(`[File attachment: ${label} could not be saved: ${error instanceof Error ? error.message : String(error)}]`);
     }
   }
-  return notes.join("\n");
+  return { note: notes.join("\n"), refs };
+}
+
+/**
+ * Store attachment bytes, persist a durable outbound reference anchored at the
+ * current transcript position (so a reload or another device shows it), and
+ * emit the live `attachment` event so attached devices render the chip/
+ * thumbnail immediately. The common tail of both `attachToChat` (an explicit
+ * `bivy attach`) and `handlePassiveToolImage` (an image a tool produced,
+ * surfaced with no explicit attach call — see issue #292); the only difference
+ * between the two callers is how the bytes were obtained. Records the stored
+ * hash onto `record.seenAttachmentHashes` so a later passive image with
+ * identical bytes de-dupes against this one for free.
+ */
+function recordAttachment(
+  record: SessionRecord,
+  bytes: Buffer,
+  opts: { name: string; mimeType: string; kind: "image" | "file"; caption?: string },
+): { ref: AttachmentRef } | { error: string } {
+  let ref: AttachmentRef;
+  try {
+    ref = attachmentStore.put(bytes, { name: opts.name, mimeType: opts.mimeType, kind: opts.kind });
+  } catch (error) {
+    return { error: `Could not store the attachment: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  (record.seenAttachmentHashes ??= new Set()).add(ref.hash);
+  const entryId = `att-${randomBytes(8).toString("hex")}`;
+  const caption = opts.caption ? String(opts.caption).slice(0, 2000) : undefined;
+  // Anchor at the current base length so history replay interleaves the
+  // attachment where it was emitted (see event-log outbound projection).
+  const afterMessageCount = record.session.getMessages().length;
+  eventLog.appendOutboundAttachment(record.id, { afterMessageCount, id: entryId, ref, caption });
+  broadcast({ type: "session.event", sessionId: record.id, event: { type: "attachment", id: entryId, ref, caption } });
+  return { ref };
+}
+
+/**
+ * Surface an AGENT-produced file into the chat as an attachment (image or file)
+ * — the reverse of the composer paperclip. Confines to the session workspace,
+ * then hands off to recordAttachment for the store+persist+broadcast. Shared by
+ * the HTTP endpoint and the `bivy attach` CLI. Returns the stored ref, or a
+ * human-readable error.
+ */
+function attachToChat(
+  record: SessionRecord,
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+): { ref: AttachmentRef } | { error: string } {
+  const plan = planAttachment({
+    workspaceDir: harnessDirFor(record),
+    filePath: opts.filePath,
+    mimeType: opts.mimeType,
+    name: opts.name,
+  });
+  if (isAttachPlanError(plan)) return { error: plan.error };
+  return recordAttachment(record, plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind, caption: opts.caption });
+}
+
+/** Extension guess for a passively-surfaced tool image, from its mime type. */
+function extFromImageMime(mimeType: string): string {
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/gif") return "gif";
+  if (mimeType === "image/webp") return "webp";
+  if (mimeType === "image/svg+xml") return "svg";
+  return "png";
+}
+
+/**
+ * Handle a `tool_image` RuntimeEvent — a runtime adapter (see
+ * src/runtime/claude-code.ts's emitPassiveToolImages) noticed an image inside a
+ * tool_result and, gated on autoAttachToolImagesEnabled() and bounded by its own
+ * per-turn budget, forwarded the raw bytes here. Stores it exactly like an
+ * explicit `bivy attach` (see recordAttachment), except de-duplicated against
+ * anything already surfaced in this session — explicit or passive — by content
+ * hash, so identical bytes (a tool that returns the same screenshot twice, or a
+ * tool result that duplicates bytes the agent already attached) never produce a
+ * second chip. Best-effort: a malformed or oversized payload is dropped with a
+ * warning rather than erroring the turn.
+ */
+function handlePassiveToolImage(record: SessionRecord, event: Record<string, unknown>): void {
+  const dataB64 = typeof event.data === "string" ? event.data : "";
+  if (!dataB64) return;
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(dataB64, "base64");
+  } catch {
+    return;
+  }
+  if (!bytes.length || bytes.length > MAX_AGENT_ATTACHMENT_BYTES) return;
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  if (record.seenAttachmentHashes?.has(hash)) return;
+  const mimeType = typeof event.mimeType === "string" && event.mimeType ? event.mimeType : "image/png";
+  const toolName = typeof event.toolName === "string" && event.toolName.trim() ? event.toolName.trim() : "tool";
+  const name = sanitizeAttachmentFilename(`${toolName}-${hash.slice(0, 8)}.${extFromImageMime(mimeType)}`);
+  const result = recordAttachment(record, bytes, { name, mimeType, kind: "image", caption: `From ${toolName}` });
+  if ("error" in result) {
+    console.warn("[attachments] failed to store a passively-surfaced tool image:", result.error);
+  }
+}
+
+/**
+ * Session-id-keyed wrapper around attachToChat, handed to runtime adapters as
+ * the `attachToChat` callback that backs each agent's native "attach to chat"
+ * tool surface (Claude's SDK tool, Pi's ToolProvider tool — issue #291). Those
+ * tools are wired at runtime/tool-provider construction time, before the
+ * specific session that will run them exists — a per-session circular
+ * dependency (build the tools -> need the session -> need the tools) — so the
+ * callback takes a session id and resolves the live record from openSessions
+ * when it actually fires, exactly like the HTTP endpoint below does by path.
+ */
+function attachToChatForSession(
+  sessionId: string,
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+): { ref: AttachmentRef } | { error: string } {
+  const record = openSessions.get(sessionId);
+  if (!record) return { error: "Session not found" };
+  return attachToChat(record, opts);
 }
 
 function approvalModeFrom(value: unknown): ApprovalMode | undefined {
@@ -1278,6 +1432,12 @@ type NodeSettings = {
    *  "auto" re-drives the interrupted turn on boot; "manual" leaves it for the
    *  user to resume with one tap. Issue automation always auto-resumes regardless. */
   sessionResumeMode: "auto" | "manual";
+  /** Passively surface images a tool produces (e.g. a screenshot MCP tool's
+   *  output) into the chat as attachments, with no explicit `bivy attach` call
+   *  (issue #292). Off by default — bounded per-turn regardless (see
+   *  src/harness/tool-image-attachments.ts) so a chatty tool can't flood the
+   *  transcript even once enabled. */
+  autoAttachToolImages: boolean;
 };
 
 /** The node's default model for new sessions, or null (= use the runtime default). */
@@ -1337,6 +1497,7 @@ function nodeSettingsSnapshot(): NodeSettings {
       return typeof v === "string" && v.trim() ? v.trim() : undefined;
     })(),
     sessionResumeMode: nodeSessionResumeMode(),
+    autoAttachToolImages: readSettings().autoAttachToolImages === true,
   };
 }
 
@@ -1390,6 +1551,10 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   if ("sessionResumeMode" in patch) {
     settings.sessionResumeMode = patch.sessionResumeMode === "manual" ? "manual" : "auto";
   }
+  if ("autoAttachToolImages" in patch) {
+    settings.autoAttachToolImages = patch.autoAttachToolImages === true;
+    setConfiguredAutoAttachToolImages(settings.autoAttachToolImages);
+  }
   writeSettings(settings);
   const snapshot = nodeSettingsSnapshot();
   broadcast({ type: "node.settings", settings: snapshot });
@@ -1397,8 +1562,11 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
 }
 
 // Apply persisted node settings at boot: seed the effective sandbox tier and the
-// default runtime from settings.json (env still wins for the sandbox).
+// default runtime from settings.json (env still wins for the sandbox), plus the
+// passive tool-image-attachment gate (issue #292; BIVY_AUTO_ATTACH_TOOL_IMAGES
+// still wins — see src/harness/tool-image-attachments.ts).
 setConfiguredSandboxTier(readSettings().defaultSandbox);
+setConfiguredAutoAttachToolImages(readSettings().autoAttachToolImages);
 {
   const savedAgent = readSettings().defaultAgent;
   if (typeof savedAgent === "string" && savedAgent.trim()) {
@@ -1517,7 +1685,11 @@ async function runTerminalList() {
   const out = [];
   for (const t of runs) {
     let sessionRef = t.meta.sessionId;
-    if (!sessionRef && t.meta.autoName) {
+    // Discover the on-disk session for agents that assign their id lazily (Pi,
+    // Codex). Runs whenever there's no pinned id — not just for auto-named
+    // terminals — so the takeover-readiness flag below is accurate even for a
+    // run launched with an explicit --name.
+    if (!sessionRef) {
       try { sessionRef = await SESSION_DISCOVERY_BY_AGENT[t.meta.agent ?? ""]?.(t.workspace, t.createdAt); }
       catch { /* agent may still be starting */ }
     }
@@ -1525,7 +1697,11 @@ async function runTerminalList() {
     const nativeName = native?.name?.trim();
     if (t.meta.autoName && nativeName && !isEmptyUntitledTitle(nativeName)) t.meta.name = nativeName;
     const { autoName: _autoName, ...publicMeta } = t.meta;
-    out.push({ termId: t.id, workspace: t.workspace, createdAt: t.createdAt, lastActivityAt: t.lastActivityAt, pid: terminals.pid(t.id), ...publicMeta });
+    // "Continue as chat" can only adopt a session that exists: a pinned id, or a
+    // session discovered on disk. Surface that so the client can disable the
+    // affordance (with guidance) until the agent has actually started its
+    // session, instead of letting the user tap it and hit a 409.
+    out.push({ termId: t.id, workspace: t.workspace, createdAt: t.createdAt, lastActivityAt: t.lastActivityAt, pid: terminals.pid(t.id), ...publicMeta, takeoverReady: Boolean(sessionRef) });
   }
   return out;
 }
@@ -2194,6 +2370,13 @@ function eventLogPath(sessionId: string): string {
 // choke point before anything lands on the synced-to-PWA disk.
 const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets);
 
+// Global content-addressed store for message attachments (images + files). Unlike
+// the per-session `.bivy-attachments/` worktree copy (kept so the agent can open
+// files with its tools), this is durable, session-independent, and re-findable:
+// the transcript references blobs by hash, and clients rehydrate thumbnails by
+// hash after a reload or on another device. See src/session/attachment-store.ts.
+const attachmentStore = new AttachmentStore(path.join(appDir, "attachments"));
+
 // --- Warm session replication (docs/session-replication.md) -----------------
 // A standby's replica repo lives under appDir/replicas/<id>: a self-contained git
 // repo that receives checkpoint bundles and is checked out on promotion. Created
@@ -2454,6 +2637,9 @@ function buildHistoryEvent(opts: {
     prUrl: record?.prUrl ?? opts.prUrl,
     prs: record?.prs ?? opts.prs,
     bivySession: bSess,
+    // Durable attachment references (text→refs), so a client that never sent the
+    // attachment (a reload, or a different device) rehydrates thumbnails by hash.
+    attachmentRefs: opts.sessionId ? eventLog.readAttachments(opts.sessionId) : [],
   };
 }
 
@@ -2492,6 +2678,27 @@ const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<vo
 const RELAY_COMMANDS: Record<string, Command> = {
   ping(msg, ctx) {
     ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
+  },
+  // Fetch a stored attachment's bytes by content hash. The relay client (a phone
+  // not on the LAN) can't reach the GET /api/attachment endpoint, so it fetches
+  // over the encrypted tunnel instead; the relay framing chunks the base64 payload
+  // (the same mechanism that carries large image uploads). Direct/LAN clients use
+  // the HTTP endpoint. Both are authenticated — the relay tunnel by enrollment,
+  // the HTTP route by /api's authMiddleware.
+  "attachment.fetch"(msg, ctx) {
+    const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+    const hash = typeof (msg as { hash?: unknown }).hash === "string" ? String((msg as { hash?: unknown }).hash) : "";
+    if (!isValidAttachmentHash(hash)) {
+      ctx.reply({ type: "attachment.error", requestId, hash, error: "Invalid attachment id" });
+      return;
+    }
+    const bytes = attachmentStore.read(hash);
+    if (!bytes) {
+      ctx.reply({ type: "attachment.error", requestId, hash, error: "Attachment not found" });
+      return;
+    }
+    const meta = attachmentStore.readMeta(hash);
+    ctx.reply({ type: "attachment.data", requestId, hash, mimeType: meta?.mimeType ?? "application/octet-stream", name: meta?.name, data: bytes.toString("base64") });
   },
   "session.pause"(msg) {
     const record = resolveSession(msg.sessionId);
@@ -2556,6 +2763,9 @@ const RELAY_COMMANDS: Record<string, Command> = {
   "node.rename"(msg, ctx) {
     const prev = identity.name;
     const name = identity.setName(String(msg.name ?? ""));
+    // Queue routing follows the node name (`bivy/<name>`). Update the live
+    // poller now instead of leaving it on its startup-time label until restart.
+    refreshControlPlaneTaskLabels();
     void advertiseNodeName(name, prev);
     ctx.broadcast({ type: "node.updated", name });
     ctx.reply({ type: "node.updated", name });
@@ -2740,6 +2950,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
         agent: meta?.runtimeId ?? s.agent,
         agentName: meta?.agentName ?? s.agentName,
         source: rec?.source ?? meta?.source,
+        forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
         branch: rec?.worktree?.branch ?? meta?.branch,
         sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
         prUrl: rec?.prUrl ?? meta?.prUrl,
@@ -3227,7 +3438,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
   },
   async prompt(msg) {
     const text = String(msg.text ?? "").trim();
-    const { images, imageNotes, files } = attachmentsFrom(msg.attachments);
+    const { images, imageNotes, imageRefs, files } = attachmentsFrom(msg.attachments);
     if (!text && !images.length && !files.length) return;
     // Title/naming can only see what we have before the session exists; the file
     // notes (with on-disk paths) are added once the workdir is known, below.
@@ -3262,10 +3473,13 @@ const RELAY_COMMANDS: Record<string, Command> = {
     touchSession(record);
     // Now that the session (and its workdir) exists, write file attachments to
     // disk and fold their path notes into the prompt the agent actually sees.
-    const fileNote = materializeAttachments(record, files);
+    const { note: fileNote, refs: fileRefs } = materializeAttachments(record, files);
     const promptText =
       [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
       (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
+    // Persist durable attachment refs keyed by the exact text the transcript
+    // stores for this user message, so history rehydrates thumbnails by hash.
+    eventLog.appendAttachments(record.id, promptText, [...imageRefs, ...fileRefs]);
     const agentPrompt = promptForAgent(record, promptText);
     const cmid = typeof msg.clientMessageId === "string" && msg.clientMessageId ? msg.clientMessageId : undefined;
     void dedupePrompt(cmid, async () => {
@@ -3324,7 +3538,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       // When the client has already picked a target agent, pass it so the
       // bundle omits the native payload for a cross-runtime fork (it could
       // never be replayed there — see buildForkBundle). Unset => keep it.
-      const bundle = buildForkBundle({ runtime: getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: agentFrom(msg) });
+      const bundle = buildForkBundle({ runtime: getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: agentFrom(msg), liveMessages: rec.session.getMessages() });
       relay?.sendEvent({ type: "session.fork.bundle", requestId, bundle });
     } catch (error) {
       relay?.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
@@ -3403,7 +3617,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
         try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort */ }
       }
       // Same runtime → the bundle carries the native payload → full fidelity.
-      const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId });
+      const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages() });
       // Cut a fresh fork branch (the source still holds its own); skip prereq
       // detection (same node + same runtime ⇒ agent and repo are present).
       const outcome = await standUpFork({
@@ -3513,7 +3727,14 @@ function startRelayIfConfigured() {
   terminals.dropClient(RELAY_CLIENT_ID);
   relay = new RelayConnector(config, (msg) => void handleRelayMessage(msg), {
     pairing: pairingStore,
-    onWorkAvailable: () => controlPlanePoller?.poke(),
+    onWorkAvailable: () => {
+      controlPlanePoller?.poke();
+      // A relay wake also means "something changed for this account" — kick a
+      // (debounced) model-auth sync so a peer node answers any pending vault-key
+      // request from a freshly-launched ephemeral runner without waiting for its
+      // 30s poll. Cheap and idempotent; coalesced to at most one sync per burst.
+      triggerModelAuthSyncSoon();
+    },
   });
   relay.start();
   if (config.controlPlaneUrl && config.enrollmentToken) {
@@ -3543,6 +3764,17 @@ function startRelayIfConfigured() {
     if (advertiseResyncTimer) clearInterval(advertiseResyncTimer);
     advertiseResyncTimer = setInterval(() => scheduleAdvertise(), 60_000);
     advertiseResyncTimer.unref?.();
+    // Periodic online heartbeat. The relay flips the node's `online` flag
+    // fire-and-forget on socket connect/close with no ordering guard, so a
+    // late/racing `false` can pin a genuinely-connected node offline in the
+    // registry until some later reconnect wins. Re-affirming online on a steady
+    // interval keeps `last_seen_at` fresh and self-heals a lost race (the control
+    // plane treats a recent heartbeat as online — see NODE_ONLINE_TTL_MS). Fire one
+    // immediately so a reconnect corrects a stale `false` without waiting a full tick.
+    if (nodeHeartbeatTimer) clearInterval(nodeHeartbeatTimer);
+    void sendNodeHeartbeat();
+    nodeHeartbeatTimer = setInterval(() => void sendNodeHeartbeat(), NODE_HEARTBEAT_MS);
+    nodeHeartbeatTimer.unref?.();
   }
   console.log("[relay] connector enabled");
   return true;
@@ -3551,6 +3783,9 @@ function startRelayIfConfigured() {
 type ModelAuthVaultResponse = {
   vault?: { ciphertext: string; updatedAt: string; updatedByNodeId: string } | null;
   wrappedKey?: { nodeId: string; wrappedKey: string; wrappedByNodeId: string; wrappedByPublicKey: string } | null;
+  // Hosted escrow: the raw vault key, served only for hosted-provisioning accounts
+  // so a lone hosted ephemeral can decrypt the vault without a peer (node-less).
+  hostedKey?: string | null;
   requests?: Array<{ nodeId: string; publicKey: string }>;
 };
 const modelAuthVaultKeyPath = path.join(appDir, "model-auth-vault.json");
@@ -3631,6 +3866,61 @@ async function modelAuthFetch(pathname: string, init: RequestInit = {}) {
   return fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}${pathname}`, { ...init, headers });
 }
 
+// Debounced model-auth sync trigger. A relay wake (`work.available`) fires this
+// so peers answer a new node's vault-key request promptly (event-driven) instead
+// of on the steady 30s poll. Coalesces a burst of wakes into one sync.
+let modelAuthSyncSoonTimer: ReturnType<typeof setTimeout> | undefined;
+function triggerModelAuthSyncSoon() {
+  if (modelAuthSyncSoonTimer) return;
+  modelAuthSyncSoonTimer = setTimeout(() => {
+    modelAuthSyncSoonTimer = undefined;
+    void syncModelAuthFromControlPlane();
+  }, 250);
+  modelAuthSyncSoonTimer.unref?.();
+}
+
+// Cold-start fast-retry. A freshly-launched node (typically a short-lived
+// ephemeral runner) that holds vault ciphertext but no wrapped key yet must wait
+// for a peer node to answer its key request. The 30s steady poll is too slow for
+// a machine that may only live a minute, so once we've requested the key we
+// re-sync on a brief bounded cadence until the wrapped key arrives (a peer
+// answered) or we give up and let the steady poll continue. Peer-only by design:
+// the key is always answered by another node over the E2E wrap — nothing ever
+// transits the device or control plane in the clear.
+const MODEL_AUTH_COLDSTART_INTERVAL_MS = 2_000;
+const MODEL_AUTH_COLDSTART_MAX_ATTEMPTS = 30; // ~60s bounded
+let modelAuthColdStartActive = false;
+let modelAuthColdStartAttempts = 0;
+let modelAuthColdStartTimer: ReturnType<typeof setTimeout> | undefined;
+function stopModelAuthColdStart() {
+  modelAuthColdStartActive = false;
+  modelAuthColdStartAttempts = 0;
+  if (modelAuthColdStartTimer) {
+    clearTimeout(modelAuthColdStartTimer);
+    modelAuthColdStartTimer = undefined;
+  }
+}
+function ensureModelAuthColdStart() {
+  if (modelAuthColdStartActive) return; // already retrying
+  modelAuthColdStartActive = true;
+  modelAuthColdStartAttempts = 0;
+  const tick = () => {
+    modelAuthColdStartTimer = undefined;
+    if (!modelAuthColdStartActive) return;
+    // A concurrent sync may have already landed the key — stop as soon as we have it.
+    if (readLocalModelAuthVaultKey() || modelAuthColdStartAttempts >= MODEL_AUTH_COLDSTART_MAX_ATTEMPTS) {
+      stopModelAuthColdStart();
+      return;
+    }
+    modelAuthColdStartAttempts++;
+    void syncModelAuthFromControlPlane();
+    modelAuthColdStartTimer = setTimeout(tick, MODEL_AUTH_COLDSTART_INTERVAL_MS);
+    modelAuthColdStartTimer.unref?.();
+  };
+  modelAuthColdStartTimer = setTimeout(tick, MODEL_AUTH_COLDSTART_INTERVAL_MS);
+  modelAuthColdStartTimer.unref?.();
+}
+
 async function syncModelAuthFromControlPlane() {
   if (!sessionAdvertiseTarget) return;
   try {
@@ -3645,6 +3935,15 @@ async function syncModelAuthFromControlPlane() {
       writeLocalModelAuthVaultKey(vaultKeyB64);
     }
 
+    // Node-less inheritance: a lone HOSTED ephemeral (no peer to wrap the key)
+    // adopts the vault key the control plane escrowed for this hosted account, so
+    // it can decrypt the synced vault (incl. subscription OAuth) on cold start. The
+    // control plane serves `hostedKey` only for hosted-provisioning accounts.
+    if (!vaultKeyB64 && data.hostedKey && Buffer.from(data.hostedKey, "base64").length === 32) {
+      vaultKeyB64 = data.hostedKey;
+      writeLocalModelAuthVaultKey(vaultKeyB64);
+    }
+
     if (data.vault?.ciphertext && vaultKeyB64) {
       const { providers, localModels } = decryptModelAuthEnvelope(data.vault.ciphertext, vaultKeyB64);
       await importProviderAuth(credsDir, providers);
@@ -3654,9 +3953,16 @@ async function syncModelAuthFromControlPlane() {
       await writePiModelsProjection();
       await broadcastLocalModels();
       lastPushedModelAuthCiphertext = data.vault.ciphertext;
+      // Got the key and imported the vault (incl. any subscription-OAuth logins) —
+      // the cold-start race is over.
+      stopModelAuthColdStart();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
     } else if (data.vault?.ciphertext && !vaultKeyB64) {
       await modelAuthFetch("/node/model-auth-key/request", { method: "POST", body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64() }) });
+      // No peer has wrapped our key yet. Fast-retry (bounded) so a short-lived
+      // ephemeral runner picks up the key within seconds of a peer answering,
+      // rather than waiting for its next 30s poll.
+      ensureModelAuthColdStart();
     } else if (
       Object.keys(await exportProviderAuth(credsDir)).length > 0 ||
       Object.keys(exportLocalModels(localModelsDir)).length > 0
@@ -3702,6 +4008,13 @@ async function pushModelAuthToControlPlane() {
       method: "PUT",
       body: JSON.stringify({ targetNodeId: identity.nodeId, wrappedByPublicKey: pairingStore.nodePublicKeyB64(), wrappedKey: pairingStore.wrapForNodePublicKey(pairingStore.nodePublicKeyB64(), vaultKeyB64) }),
     });
+    // Node-less inheritance: a HOSTED node also escrows the vault key to the control
+    // plane (sealed at rest, hosted-only) so the account's NEXT hosted ephemeral —
+    // possibly the only node — can decrypt this vault without a peer to wrap the key.
+    // Gated to hosted nodes; the CP double-checks the account is hosted. Best effort.
+    if (process.env.BIVY_GITHUB_HOSTED_TASKS) {
+      await modelAuthFetch("/node/model-auth-key/hosted-escrow", { method: "PUT", body: JSON.stringify({ vaultKeyB64 }) }).catch(() => {});
+    }
     lastPushedModelAuthCiphertext = ciphertext;
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
@@ -3966,6 +4279,28 @@ let sessionAdvertiseTarget: { controlPlaneUrl: string; enrollmentToken: string }
 let advertiseTimer: ReturnType<typeof setTimeout> | undefined;
 let advertiseResyncTimer: ReturnType<typeof setInterval> | undefined;
 
+// How often the node re-affirms it's online to the control plane. Kept well
+// under the control plane's NODE_ONLINE_TTL_MS (90s) so a missed beat or two
+// doesn't flap a healthy node's status.
+const NODE_HEARTBEAT_MS = 30_000;
+let nodeHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Re-affirm this node's online status so the registry self-heals a lost
+ *  relay connect/close race (see the heartbeat wiring in the relay connector
+ *  and NODE_ONLINE_TTL_MS in the control plane). Best-effort: a missed beat is
+ *  covered by the next tick and the TTL window. */
+async function sendNodeHeartbeat() {
+  if (!sessionAdvertiseTarget) return;
+  try {
+    await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/heartbeat`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}` },
+    });
+  } catch {
+    // best effort; the next tick retries
+  }
+}
+
 
 async function advertiseNodeName(name: string, prevName?: string) {
   if (!sessionAdvertiseTarget) return;
@@ -3982,6 +4317,7 @@ async function advertiseNodeName(name: string, prevName?: string) {
       const accepted = typeof data?.node?.name === "string" ? data.node.name : undefined;
       if (accepted && accepted !== identity.name) {
         identity.setName(accepted);
+        refreshControlPlaneTaskLabels();
         broadcast({ type: "node.updated", name: accepted });
         relay?.sendEvent({ type: "node.updated", name: accepted });
       }
@@ -3991,6 +4327,7 @@ async function advertiseNodeName(name: string, prevName?: string) {
     // optimistic local change so the node name stays consistent with the account.
     if (prevName && prevName !== identity.name) {
       identity.setName(prevName);
+      refreshControlPlaneTaskLabels();
       broadcast({ type: "node.updated", name: prevName });
       relay?.sendEvent({ type: "node.updated", name: prevName });
     }
@@ -4699,6 +5036,13 @@ async function startGitHubTasksIfConfigured() {
 
 let controlPlanePoller: ControlPlaneTaskPoller | undefined;
 
+/** Refresh a running queue poller's labels after the node is renamed. */
+function refreshControlPlaneTaskLabels(): void {
+  if (!controlPlanePoller) return;
+  const cfg = resolveControlPlaneTaskConfig(loadRelayConfig(appDir), process.env, identity.name);
+  if (cfg) controlPlanePoller.setLabels(cfg.labels);
+}
+
 /**
  * Run one hosted work-queue item (E2 GitHub webhook / E4 Slack). GitHub-issue
  * items reuse the full issue→worktree→PR flow (`runIssueTask`) against a fresh
@@ -4742,6 +5086,32 @@ function invalidateGitHubApps(): void {
  * replies post as `<app>[bot]`; anything else uses the device-flow PAT. This is
  * where future sources (Slack bot token, Linear/Notion OAuth) branch in.
  */
+// Hosted (control-plane-orchestrated) machines carry neither a static GitHub
+// token nor an app key. When BIVY_HOSTED_MINT is set they mint a fresh,
+// short-lived token from the control plane per git op — cached until ~5 min
+// before expiry so a burst of git ops is a single round trip. This is the final
+// fallback rung after local apps and BIVY_GITHUB_TOKEN.
+let hostedMintCache: { token: string; expiresAt: number } | undefined;
+async function hostedMintToken(): Promise<string | undefined> {
+  if (!process.env.BIVY_HOSTED_MINT || !sessionAdvertiseTarget) return undefined;
+  const now = Date.now();
+  if (hostedMintCache && hostedMintCache.expiresAt - now > 5 * 60 * 1000) return hostedMintCache.token;
+  try {
+    const res = await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/hosted-git-credential`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}` },
+    });
+    if (!res.ok) return undefined;
+    const data = (await res.json().catch(() => ({}))) as { token?: string; expiresAt?: string };
+    if (!data.token) return undefined;
+    const parsed = data.expiresAt ? Date.parse(data.expiresAt) : NaN;
+    hostedMintCache = { token: data.token, expiresAt: Number.isFinite(parsed) ? parsed : now + 55 * 60 * 1000 };
+    return data.token;
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveTokenForWorkItem(item: ControlPlaneWorkItem): Promise<string | undefined> {
   if (item.installationId) {
     const apps = await ensureGitHubApps();
@@ -4758,7 +5128,7 @@ async function resolveTokenForWorkItem(item: ControlPlaneWorkItem): Promise<stri
       }
     }
   }
-  return resolveGitHubToken();
+  return (await resolveGitHubToken()) ?? (await hostedMintToken());
 }
 
 /**
@@ -4806,7 +5176,7 @@ async function resolveTokenForRepo(owner: string, repo: string): Promise<string 
       }
     }
   }
-  return resolveGitHubToken();
+  return (await resolveGitHubToken()) ?? (await hostedMintToken());
 }
 
 async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>) {
@@ -4852,22 +5222,104 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       issue.body = instruction;
       if (item.url) issue.url = item.url;
     }
+    // Case B: the control plane asked us to CONTINUE an existing session for this
+    // issue (an inbound comment/issue on a thread that already has one). If that
+    // session isn't live on this node — e.g. its ephemeral machine was torn down —
+    // best-effort restore its snapshot first so its transcript + branch state are
+    // rebuilt and the work continues the thread instead of starting cold. On
+    // failure we fall through to the normal idempotent, remote-branch-adopting
+    // pickup, so this can only help, never break.
+    const issueSource = `issue:${parsed.owner}/${parsed.repo}#${item.issueNumber}`;
+    if (item.targetKind === "existing_session" && item.targetSessionId && !findIssueSession(issueSource)) {
+      await restoreSessionFromSnapshot(item.targetSessionId).catch((e) => {
+        console.warn(`[case-b] snapshot restore for ${item.targetSessionId} failed:`, (e as Error).message);
+      });
+    }
     await runIssueTask(cfg, issue, { runtimeId: item.runtimeId, model: item.model, onEvidence: report });
     return;
   }
-  // Generic prompt (Slack, or an issue with no repo): a background session in the
-  // default workspace so it doesn't steal the user's focused session.
-  const record = await createSession(defaultWorkspace, undefined, {
+  if (item.source === "linear:issue" && item.externalId) {
+    const apiKey = process.env.BIVY_LINEAR_API_KEY?.trim();
+    const repoSlug = item.repo || process.env.BIVY_LINEAR_REPO?.trim();
+    if (!apiKey) throw new Error("no Linear API key available (set BIVY_LINEAR_API_KEY)");
+    if (!repoSlug) throw new Error("no repository mapped for Linear work (set BIVY_LINEAR_REPO or add a repo:owner/name label)");
+    const issue = await getLinearIssue(apiKey, item.externalId);
+    if (!issue) throw new Error(`Linear issue ${item.externalId} is unavailable`);
+    const parsed = parseRepo(repoSlug);
+    if (!parsed) throw new Error(`Linear work item has an invalid repo "${repoSlug}"`);
+    const githubToken = await resolveGitHubToken();
+    if (!githubToken) throw new Error("no GitHub token available to clone the Linear issue repository");
+    const repoDir = await cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token: githubToken, root: reposRoot });
+    await fetchOrigin(repoDir);
+    const base = await resolveDefaultBaseRef(repoDir);
+    const branch = linearBranchName(issue.identifier);
+    const record = await createSession(repoDir, undefined, {
+      worktree: { branch, base },
+      makeActive: false,
+      source: "queue:linear:issue",
+      runtimeId: item.runtimeId || nodeConfiguredDefaultAgent(),
+      sandbox: normalizeSandboxTier(item.sandbox),
+      approvalMode: approvalModeFrom(item.approvalMode),
+    });
+    setSessionName(record, `${issue.identifier}: ${issue.title}`);
+    if (item.model) { try { await record.session.setModel("", item.model); } catch {} }
+    await report({ output: { sessionId: record.id, branch }, events: [{ at: new Date().toISOString(), kind: "branch", summary: "Linear issue working branch and session created.", ref: branch, url: issue.url }] });
+    await runSessionTurn(record, buildLinearTaskPrompt(issue));
+    await maybePushWorktreeBranch(record);
+    await maybeDetectPullRequest(record);
+    await report({ output: { sessionId: record.id, branch, prUrl: record.prUrl }, events: record.prUrl ? [{ at: new Date().toISOString(), kind: "pull_request", summary: "Pull request opened.", ref: branch, url: record.prUrl }] : undefined });
+    return;
+  }
+  // Slack can target a GitHub repository (`/bivy in owner/repo ...`). Give that
+  // request the same isolated worktree and repo credentials as an interactive
+  // repo session; without a repo it still runs safely in the configured default
+  // workspace (and gains worktree isolation when that workspace is a checkout).
+  const parsedRepo = item.repo ? parseRepo(item.repo) : undefined;
+  if (item.repo && !parsedRepo) throw new Error(`work item ${item.id} has an invalid repo "${item.repo}"`);
+  const sessionOpts = {
     makeActive: false,
-    source: `queue:${item.source}`,
+    title: item.title,
     runtimeId: item.runtimeId,
     sandbox: normalizeSandboxTier(item.sandbox),
-    approvalMode: approvalModeFrom(item.approvalMode),
-  });
+  };
+  const record = parsedRepo
+    ? await createRepoSession(parsedRepo, sessionOpts)
+    : await createWorkspaceSession(defaultWorkspace, sessionOpts);
+  // Preserve queue provenance for non-repo work. Repo-backed sessions retain
+  // `repo:owner/repo`, which is required by branch push/PR detection.
+  if (!parsedRepo && !record.worktree) record.source = `queue:${item.source}`;
+  record.approvalMode = approvalModeFrom(item.approvalMode);
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
   }
-  await record.session.prompt(item.body ? `${item.title}\n\n${item.body}` : item.title);
+  const request = item.body ? `${item.title}\n\n${item.body}` : item.title;
+  const prompt = parsedRepo || record.worktree
+    ? [
+        request,
+        "",
+        "Work carefully in this repository and implement the request completely. Run the relevant tests, linter, and type-checker.",
+        "When finished, commit and push your changes, then open a pull request with a clear title and description. If you cannot open it, leave the changes committed on this branch.",
+      ].join("\n")
+    : request;
+  await runSessionTurn(record, prompt);
+  if (record.worktree) {
+    await maybePushWorktreeBranch(record);
+    await maybeDetectPullRequest(record);
+  }
+  await report({
+    output: {
+      sessionId: record.id,
+      branch: record.worktree?.branch,
+      prUrl: record.prUrl,
+    },
+    events: record.prUrl ? [{
+      at: new Date().toISOString(),
+      kind: "pull_request",
+      summary: "Pull request opened.",
+      ref: record.worktree?.branch,
+      url: record.prUrl,
+    }] : undefined,
+  });
 }
 
 function startControlPlaneTasksIfConfigured() {
@@ -5088,6 +5540,9 @@ async function startOAuthLogin(provider: string) {
   // wildcard so browsers resolving localhost to ::1 can reach the callback.
   process.env.PI_OAUTH_CALLBACK_HOST ||= "::";
 
+  // Opportunistically drop stale/abandoned logins whenever a new one starts, so a
+  // long-lived node doesn't accumulate them between sweeps (and tests can drive it).
+  sweepOauthLogins();
   const id = randomUUID();
   const abort = new AbortController();
   const state: OAuthLoginState = { id, provider, status: "starting", abort, createdAt: Date.now(), progress: [] };
@@ -5487,6 +5942,21 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
     workspace = repoDir;
     cwd = wt.path;
     worktree = wt;
+  } else {
+    // Non-repo-backed source. The fork would otherwise reuse the PARENT's cwd,
+    // putting two sessions in one working tree — so when that cwd is itself a git
+    // checkout (a local repo without a GitHub origin), cut the fork its own
+    // worktree on a fresh branch. Best-effort: a non-git workspace has no tree to
+    // isolate, so the fork keeps the fallback cwd (no git collisions possible).
+    const forkRepoRoot = await gitRepoRoot(cwd);
+    if (forkRepoRoot) {
+      const forkBranch = `bivy/fork-${randomBytes(6).toString("hex")}`;
+      const wt = await createWorktree({ repoDir: forkRepoRoot, id: forkBranch, branch: forkBranch });
+      applyDirtyPatch(wt.path, bundle.dirtyPatch);
+      workspace = forkRepoRoot;
+      cwd = wt.path;
+      worktree = wt;
+    }
   }
 
   // Materialise the transcript, then stand the session up — resume the imported
@@ -5495,6 +5965,11 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
   const record = plan.kind === "resume"
     ? await createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, makeActive: false })
     : await createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, makeActive: false });
+  // Mark the new session as a fork of its source, so the run card can show
+  // "Forked from …" and the lineage survives a reload (persisted below). Just
+  // the parent's session id — an identifier, not content, so it's safe to
+  // carry into metadata the same way branch/prUrl already are.
+  record.forkedFrom = bundle.record.sourceSessionId;
   // Attach the reconstructed worktree to the record. createSession only
   // populates record.worktree when it provisions one itself (fresh repo session)
   // or restores it from stored metadata (resume) — neither happens for a fork,
@@ -5878,6 +6353,7 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
     name: record.session.getName(),
     workspace: record.workspace,
     source: record.source ?? "manual",
+    forkedFrom: record.forkedFrom,
     runtimeId: record.runtimeId,
     sandbox: record.sandbox,
     agentName: getRuntime(record.runtimeId).displayName,
@@ -6263,10 +6739,145 @@ async function deleteSessionFile(opts: { id?: string; path?: string; fallbackAct
   return { sessionId: deletedSessionId, sessionFile: inRoot ? resolved : undefined };
 }
 
-const idleCloseTimer = setInterval(() => { closeIdleSessions(); pruneGhostSessions(); pruneEmptySessions(); }, idleCloseSweepMs);
+const idleCloseTimer = setInterval(() => { closeIdleSessions(); pruneGhostSessions(); pruneEmptySessions(); evaluateEphemeralTeardown(); }, idleCloseSweepMs);
 idleCloseTimer.unref?.();
 const worktreeCleanupTimer = setInterval(() => void sweepDiskGuardrails(), worktreeCleanupSweepMs);
 worktreeCleanupTimer.unref?.();
+
+// --- server-side ephemeral teardown ----------------------------------------
+// On a disposable machine (bootstrap set BIVY_EPHEMERAL=1) the daemon ends the
+// machine ITSELF once it goes idle, so teardown no longer needs the launching
+// device online. See src/ephemeral-teardown.ts + docs/ephemeral-sessions.md.
+const ephemeralTeardownCfg = readEphemeralTeardownConfig();
+let ephemeralEverBusy = false;
+let ephemeralLastBusyAt = Date.now();
+
+/** Best-effort "I've settled — reap me" signal to the control plane. Non-secret
+ *  (node id via the enrollment bearer); lets a hosted machine whose provider
+ *  can't self-reap on exit (Hetzner) be destroyed server-side. */
+async function signalSettledToControlPlane(): Promise<void> {
+  if (!sessionAdvertiseTarget) return;
+  await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/settled`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
+    body: "{}",
+  }).catch(() => {});
+}
+
+/** Rebuild-resume (Gap B): on a freshly re-provisioned machine booted with
+ *  `BIVY_RESTORE=<sessionId>`, fetch the session's control-plane snapshot,
+ *  decrypt it with this machine's room key (reused from the torn-down session so
+ *  the seal matches), and apply it — restoring the transcript (EventLog) and the
+ *  git checkpoint into a repo the session can open. The runtime process starts
+ *  fresh/seeded from the restored transcript ("reconstructed", not byte-identical
+ *  — see docs/ephemeral-sessions.md). Best-effort: a missing/undecryptable
+ *  snapshot leaves a clean fresh machine. Reuses the standby-replica machinery. */
+async function restoreSessionFromSnapshot(sessionId: string): Promise<void> {
+  if (!sessionAdvertiseTarget) return;
+  const cpBaseUrl = sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "");
+  try {
+    const res = await fetch(`${cpBaseUrl}/node/session-snapshot/${encodeURIComponent(sessionId)}`, {
+      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}` },
+    });
+    if (!res.ok) {
+      console.error(`[restore] no snapshot for ${sessionId} (${res.status})`);
+      return;
+    }
+    const data = (await res.json()) as { ciphertext?: string };
+    if (!data.ciphertext) return;
+    const applied = await applySessionSnapshot(data.ciphertext, pairingStore.roomKey(), {
+      persistRecords: (id, records) => eventLog.rewrite(id, records),
+      applyBundle: async (id, buf) => applyCheckpointBundle(await ensureReplicaRepo(id), id, buf),
+      materialize: async (id) => materializeCheckpoint(await ensureReplicaRepo(id), id),
+    });
+    // Register the rebuilt session so it lists and opens (mirrors the standby's
+    // upsertReplicaMeta); the transcript replays from the restored EventLog.
+    try {
+      metadata.upsertSession({ id: sessionId, source: "restored", status: "saved" });
+    } catch {
+      /* best-effort listing */
+    }
+    console.log(`[restore] session ${sessionId}: ${applied.recordCount} records, checkpoint ${applied.checkpointCommit ?? "none"}`);
+  } catch (e) {
+    console.error(`[restore] session ${sessionId} failed: ${(e as Error)?.message || e}`);
+  }
+}
+
+/** Flush a durable, E2E-encrypted snapshot of each open session to the control
+ *  plane before this disposable machine is torn down, so a destroy-lane session
+ *  can be rebuilt on a fresh machine later (Gap B). Sealed under the node room
+ *  key — the same key that seals the session title — so a restore machine that
+ *  reuses this session's room key can decrypt it; the control plane sees only
+ *  ciphertext. Best-effort per session; never blocks teardown for long. */
+async function flushSessionSnapshots(): Promise<void> {
+  if (!sessionAdvertiseTarget) return;
+  const roomKey = pairingStore.roomKey();
+  const cpBaseUrl = sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "");
+  for (const record of new Set(openSessions.values())) {
+    try {
+      const sealed = await buildSessionSnapshot(record.id, roomKey, {
+        readRecords: (id) => eventLog.entries(id),
+        epochOf: () => 0,
+        checkpointHead: async (id) => {
+          try {
+            return (await harness.checkpoints(id))[0]?.id;
+          } catch {
+            return undefined;
+          }
+        },
+        bundleCheckpoint: async (id, since) => createCheckpointBundle(harnessDirFor(record), id, since),
+        runtimeSessionRef: (id) => openSessions.get(id)?.sessionFile,
+        worktreeSync: () => true,
+      });
+      if (!sealed) continue;
+      await fetch(`${cpBaseUrl}/node/session-snapshot/${encodeURIComponent(record.id)}`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ ciphertext: sealed }),
+      }).catch(() => {});
+    } catch {
+      /* best effort per session — TTL/branch push remain the backstops */
+    }
+  }
+}
+
+let ephemeralTearingDown = false;
+/** Evaluate the quiet condition and self-terminate if the machine is done. Reads
+ *  live session/queue state each call, so it's safe to invoke from the idle
+ *  sweep and from agent_end. No-op on a persistent node (env absent). */
+function evaluateEphemeralTeardown(): void {
+  if (!ephemeralTeardownCfg.enabled || ephemeralTearingDown) return;
+  const records = new Set(openSessions.values());
+  const anyWorking = [...records].some((r) => r.isWorking);
+  const anyRemoteActive = [...records].some((r) => r.remoteActive);
+  const inFlightWork = controlPlanePoller?.inFlightCount() ?? 0;
+  if (anyWorking || anyRemoteActive || inFlightWork > 0) {
+    ephemeralEverBusy = true;
+    ephemeralLastBusyAt = Date.now();
+    return;
+  }
+  const idleForMs = Date.now() - ephemeralLastBusyAt;
+  if (!shouldSelfTeardown(ephemeralTeardownCfg, { everBusy: ephemeralEverBusy, anyWorking, anyRemoteActive, inFlightWork, idleForMs })) return;
+  ephemeralTearingDown = true;
+  void (async () => {
+    // Persist a rebuild snapshot BEFORE the machine goes away (Gap B), then reap.
+    await flushSessionSnapshots();
+    await performSelfTeardown({
+      provider: ephemeralTeardownCfg.provider,
+      signalSettled: signalSettledToControlPlane,
+      shutdown: () => { try { spawnSync("shutdown", ["-h", "now"], { stdio: "ignore" }); } catch { /* TTL backstops */ } },
+    });
+  })();
+}
+
+if (ephemeralTeardownCfg.enabled) {
+  // Sample often enough to honour the finish grace (~10s) without waiting for the
+  // 1–5min idle sweep. Ephemeral-only, so no cost on a persistent node.
+  const ephemeralEvalMs = Math.max(2_000, Math.min(ephemeralTeardownCfg.finishGraceMs, 15_000));
+  const ephemeralTeardownTimer = setInterval(() => evaluateEphemeralTeardown(), ephemeralEvalMs);
+  ephemeralTeardownTimer.unref?.();
+  console.log(`[ephemeral-teardown] armed: provider=${ephemeralTeardownCfg.provider} onFinish=${ephemeralTeardownCfg.onFinish} ttl=${ephemeralTeardownCfg.ttlMin}m`);
+}
 setTimeout(() => void sweepDiskGuardrails(), 30_000).unref?.();
 // One sweep shortly after boot clears ghosts left by a previous run before any
 // client paints its sidebar; the idle timer keeps it clean thereafter.
@@ -6384,6 +6995,15 @@ function attachSessionListeners(record: SessionRecord) {
     // coalesced update first, so a tool_call / message_end never overtakes the
     // text the user is watching stream in.
     if (event.type !== "message_update") sessionEvents.flush(record.id);
+    if (event.type === "tool_image") {
+      // A runtime adapter (e.g. Claude Code) noticed an image inside a
+      // tool_result and forwarded the raw bytes — store/persist/broadcast it as
+      // a chat attachment (see handlePassiveToolImage) instead of the generic
+      // session.event wrap below, which would otherwise ship the raw base64
+      // payload to every client.
+      handlePassiveToolImage(record, event as Record<string, unknown>);
+      return;
+    }
     const currentSessionFile = record.session.sessionFile;
     if (currentSessionFile && currentSessionFile !== record.sessionFile) {
       record.sessionFile = currentSessionFile;
@@ -6503,6 +7123,9 @@ function attachSessionListeners(record: SessionRecord) {
       // itself (gh/API/web) so the badge lights up.
       void maybePushWorktreeBranch(record)
         .then(() => maybeDetectPullRequest(record));
+      // On a disposable machine, a finished turn with nobody watching is the cue
+      // to consider self-teardown promptly (the idle sweep is the backstop).
+      evaluateEphemeralTeardown();
     }
     const sessionEventPayload = { type: "session.event", sessionId: record.id, event };
     if (event.type === "message_update") {
@@ -6525,7 +7148,9 @@ async function refreshRecordAfterTui(record: SessionRecord) {
     record.unsubscribe = undefined;
     const rt = await ensureRuntimeAvailable(record.runtimeId);
     const workspace = record.worktree?.path || oldSession.cwd || record.workspace;
-    const runtimeSessionOptions = { workspace, toolProvider: integrations.toolProvider(), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+    // Refreshing an EXISTING record: its id is already known, so attach_to_chat
+    // (see toolProvider's SessionIdRef doc) can be wired live, not deferred.
+    const runtimeSessionOptions = { workspace, toolProvider: integrations.toolProvider({ current: record.id }), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
     const { session, warning } = await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: record.sessionFile });
     record.session = session;
     record.sessionFile = session.sessionFile ?? record.sessionFile;
@@ -6583,7 +7208,10 @@ function maybeRenameWorktreeBranch(record: SessionRecord, name: string) {
   const result = spawnSync("git", ["-C", wt.path, "branch", "-m", wt.branch, next], { encoding: "utf8", timeout: 10_000 });
   if (result.error || result.status !== 0) {
     const detail = String(result.stderr || result.error || "git branch rename failed").trim();
-    console.warn(`[branch-rename] could not rename ${wt.branch} to ${next}:`, detail);
+    // Pass the branch names as args, not spliced into the format string: a branch
+    // name containing a %-specifier would otherwise be interpreted by console.warn
+    // (CodeQL js/tainted-format-string).
+    console.warn("[branch-rename] could not rename %s to %s:", wt.branch, next, detail);
     return;
   }
 
@@ -6993,11 +7621,62 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
     const admission = checkDiskAdmission(workspace);
     if (!admission.allowed) throw new Error(`Not enough disk to start a new worktree session: ${admission.reason}`);
     const wtOpts = typeof opts.worktree === "object" ? opts.worktree : {};
-    worktree = await createWorktree({ repoDir: workspace, id: wtOpts.branch ?? `session-${Date.now()}`, branch: wtOpts.branch, base: wtOpts.base });
+    // A random suffix, never a timestamp: two sessions started in the same
+    // millisecond would otherwise resolve to the same slug → same worktree path
+    // and branch, and `createWorktree` would ADOPT the first's worktree, dropping
+    // the second session into a directory another session already owns.
+    worktree = await createWorktree({ repoDir: workspace, id: wtOpts.branch ?? `session-${randomBytes(6).toString("hex")}`, branch: wtOpts.branch, base: wtOpts.base });
     runtimeWorkspace = worktree.path;
   }
 
-  const runtimeSessionOptions = { workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+  // Resume with a reaped worktree. When a repo-backed session is resumed but its
+  // worktree directory was removed while it was closed (disk cleanup, a manual
+  // rm, `git worktree remove`), restoredWorktree is undefined and we'd otherwise
+  // fall back to the shared clone root — which the invariant below then rejects.
+  // Re-provision a fresh worktree on the SAME branch instead (branches survive
+  // `git worktree remove`, so the agent's committed history is intact), restoring
+  // isolation so the resumed session is usable again. Best-effort: if the clone
+  // or branch is gone, we leave it to the invariant to fail safe rather than
+  // corrupt a neighbour. The clone root is reconstructed from `source`
+  // (`repo:owner/repo`) because stored `workspace` is the old worktree path.
+  if (requestedSessionFile && !worktree && storedMeta?.worktree && storedMeta?.branch) {
+    const parsedSource = parseRepoSource(storedMeta.source);
+    if (parsedSource) {
+      const repoDir = path.join(reposRoot, `${parsedSource.owner}__${parsedSource.repo}`);
+      try {
+        // Clear any stale registration left by a dir that was rm'd out from under
+        // git, so re-adding the branch's worktree doesn't hit "already checked out".
+        runGit(["worktree", "prune"], repoDir);
+        const reprovisioned = await createWorktree({ repoDir, id: storedMeta.branch, branch: storedMeta.branch });
+        worktree = reprovisioned;
+        runtimeWorkspace = reprovisioned.path;
+      } catch (error) {
+        console.warn(`Could not re-provision worktree for resumed session on ${storedMeta.branch}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  // Isolation invariant. A session must NEVER run directly in a Bivy-managed
+  // shared clone root (`<reposRoot>/owner__repo`): every session for that repo
+  // shares that one checkout, so an agent running there collides with concurrent
+  // sessions on `git checkout`/`git stash` — exactly the "sessions mixing" bug.
+  // A GitHub-backed session is supposed to get its own worktree; reaching here
+  // without one means an earlier step degraded (e.g. a transient repo-inference
+  // failure, or a resume whose worktree was reaped). Fail loudly instead of
+  // silently sharing the tree and corrupting a neighbouring session's work.
+  if (!worktree && isSharedCloneRoot(runtimeWorkspace, reposRoot)) {
+    throw new Error(
+      `Refusing to start a session in the shared clone root ${runtimeWorkspace} without an isolated worktree — ` +
+        `this would collide with concurrent sessions on the same repo. Retry; if it persists the checkout may be busy.`,
+    );
+  }
+
+  // A brand-new session's id isn't known until runtimeHost.{create,open}Session
+  // resolves below, but the ToolProvider (and its attach_to_chat tool) must be
+  // built now, up front — so hand it this box instead of a session id and fill
+  // `.current` in the moment `sessionId` is (see toolProvider's SessionIdRef doc).
+  const attachSessionIdRef: SessionIdRef = {};
+  const runtimeSessionOptions = { workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(attachSessionIdRef), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
   // Stage 2/3: prefer re-attaching to a still-live remote session — routed to its
   // OWN agent service — over re-opening a fresh copy from disk. Falls back to
   // open/create when nothing live is there.
@@ -7015,6 +7694,10 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
       ? await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: requestedSessionFile })
       : await runtimeHost.createSession(rt, runtimeSessionOptions));
   const sessionId = session.id;
+  // Now that it's known, unblock any attach_to_chat call this session's agent
+  // makes (see attachSessionIdRef above) — set synchronously, well before any
+  // prompt (and so any tool call) can reach this session.
+  attachSessionIdRef.current = sessionId;
   // Resuming an existing session: restore Bivy's canonical name onto the runtime
   // session when the runtime didn't itself (the Claude Code adapter resumes by id
   // and starts nameless). Without this getName() is undefined, so opening a
@@ -7023,8 +7706,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // session" in the sidebar.
   if (requestedSessionFile && storedMeta?.name && !session.getName()) session.setName(storedMeta.name);
   const sessionWorkspace = session.cwd || runtimeWorkspace;
-  const inferredRepo = opts.source || storedMeta?.source ? undefined : await inferGitHubRepoFromWorkspace(sessionWorkspace);
-  if (!worktree && requestedSessionFile && inferredRepo) {
+  // Best-effort here (unlike createWorkspaceSession, which must fail loudly):
+  // this only decides whether to ADOPT an already-checked-out branch as the
+  // session's worktree label, so a transient inference failure should quietly
+  // skip adoption rather than break resuming the session.
+  const inferredRepo = opts.source || storedMeta?.source ? undefined : await inferGitHubRepoFromWorkspace(sessionWorkspace).catch(() => undefined);
+  if (!worktree && requestedSessionFile && inferredRepo && !isSharedCloneRoot(sessionWorkspace, reposRoot)) {
     const branch = runGit(["branch", "--show-current"], sessionWorkspace) || runGit(["rev-parse", "--short", "HEAD"], sessionWorkspace) || undefined;
     if (branch) {
       const mainWorktree = runGit(["worktree", "list", "--porcelain"], sessionWorkspace)?.split("\n").find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
@@ -7059,6 +7746,30 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
       }
     } catch {
       // Injection is best-effort; never block session creation.
+    }
+  }
+  // Bivy-owned tools (attach_to_chat, …): make them discoverable to non-SDK
+  // agents by adding a `bivy` server (run via `bivy mcp-serve`) to the agent's
+  // config. Default-on (not gated on BIVY_MCP_PROXY) — it only ADDS a safe,
+  // session-scoped, restored capability the agent already has via env, so the
+  // chat can receive files. Claude/Pi expose these natively (in-process SDK MCP
+  // server / integration ToolProvider), so the tool-interception runtimes are
+  // skipped to avoid a duplicate registration.
+  if (!rt.capabilities.toolInterception) {
+    try {
+      const res = injectBivyToolsForSession(rt.id, {
+        workspace: sessionWorkspace,
+        home: os.homedir(),
+        sessionId,
+        endpoint: process.env.BIVY_MCP_ENDPOINT,
+      });
+      if (res.injected.length) {
+        const prev = record.mcpRestore;
+        record.mcpRestore = () => { try { res.restore(); } finally { prev?.(); } };
+        console.log(`MCP tools: added bivy server to ${res.injected.length} config(s) for session ${sessionId}`);
+      }
+    } catch {
+      // Best-effort; never block session creation.
     }
   }
   rememberSession(record);
@@ -7825,6 +8536,9 @@ app.get("/api/status", (_req, res) => {
     ok: true,
     nodeId: identity.nodeId,
     name: identity.name,
+    // The running daemon's package version, so `bivy status` (and any client)
+    // can report which build the node is on.
+    version: currentVersion() ?? null,
     port,
     workspace: defaultWorkspace,
     appDir,
@@ -7835,7 +8549,14 @@ app.get("/api/status", (_req, res) => {
       workspaceBoundary: true,
       strictApprovalOptIn: true,
     },
-    relay: { configured: Boolean(relayConfig), connected: Boolean(relay) },
+    relay: {
+      configured: Boolean(relayConfig),
+      // Real link state (relay sent `ready`), not merely "a connector exists".
+      connected: Boolean(relay?.connected),
+      controlPlaneUrl: relayConfig?.controlPlaneUrl,
+      relayUrl: relayConfig?.url,
+      ...(relay?.lastError ? { lastError: relay.lastError } : {}),
+    },
     sessions: {
       open: new Set(openSessions.values()).size,
       indexed: metadata.listSessions().length,
@@ -8594,6 +9315,7 @@ app.get("/api/sessions", async (_req, res, next) => {
         agent: meta?.runtimeId ?? s.agent,
         agentName: meta?.agentName ?? s.agentName,
         source: rec?.source ?? meta?.source,
+        forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
         branch: rec?.worktree?.branch ?? meta?.branch,
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,
@@ -9278,13 +10000,51 @@ app.get("/api/repos/branches", async (req, res) => {
   res.json(await listRepoBranches(String(req.query.repo || "").trim()));
 });
 
+// Serve a stored attachment's bytes by content hash (direct/LAN clients). Behind
+// /api's authMiddleware. Content-addressed, so responses are immutably cacheable.
+// The hash is validated to a 64-char hex before it ever touches a path.
+app.get("/api/attachment/:hash", (req, res) => {
+  const hash = String(req.params.hash || "");
+  if (!isValidAttachmentHash(hash)) return res.status(400).json({ error: "Invalid attachment id" });
+  const bytes = attachmentStore.read(hash);
+  if (!bytes) return res.status(404).json({ error: "Attachment not found" });
+  const meta = attachmentStore.readMeta(hash);
+  res.setHeader("Content-Type", meta?.mimeType || "application/octet-stream");
+  res.setHeader("Content-Length", String(bytes.length));
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  // Content-addressed: the bytes for a hash never change, so cache aggressively.
+  res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+  res.end(bytes);
+});
+
+// Let an AGENT push a file into the chat as an attachment (image/file) — the
+// reverse of the composer upload. Called by the agent's own shell (`bivy attach`)
+// or any local tool; on a single-user host the loopback bypass means no token is
+// needed. Behind /api's authMiddleware. `path` is resolved inside — and confined
+// to — the session's workspace (see planAttachment's security note).
+app.post("/api/session/:id/attach", (req, res) => {
+  const record = openSessions.get(String(req.params.id));
+  if (!record) return res.status(404).json({ error: "Session not found" });
+  const filePath = String(req.body?.path ?? req.body?.filePath ?? "").trim();
+  if (!filePath) return res.status(400).json({ error: "Missing file path" });
+  const result = attachToChat(record, {
+    filePath,
+    caption: typeof req.body?.caption === "string" ? req.body.caption : undefined,
+    mimeType: typeof req.body?.mimeType === "string" ? req.body.mimeType : undefined,
+    name: typeof req.body?.name === "string" ? req.body.name : undefined,
+  });
+  if ("error" in result) return res.status(400).json({ error: result.error });
+  const { hash, name, mimeType, size, kind } = result.ref;
+  res.json({ ok: true, hash, name, mimeType, size, kind });
+});
+
 app.post("/api/session/prompt", async (req, res, next) => {
   try {
     const text = String(req.body?.text ?? "").trim();
     if (text === "/login" || text.startsWith("/login ")) {
       return res.status(400).json({ error: "Use the Login / API tokens dialog from the phone UI. If it is not visible, refresh this page after updating Bivy." });
     }
-    const { images, imageNotes, files } = attachmentsFrom(req.body?.attachments);
+    const { images, imageNotes, imageRefs, files } = attachmentsFrom(req.body?.attachments);
     if (!text && !images.length && !files.length) return res.status(400).json({ error: "Missing text" });
     // File notes (with on-disk paths) are folded in once the workdir exists; the
     // session title can only reflect what's known before then.
@@ -9306,10 +10066,11 @@ app.post("/api/session/prompt", async (req, res, next) => {
       return res.status(409).json({ error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
     }
     const session = record.session;
-    const fileNote = materializeAttachments(record, files);
+    const { note: fileNote, refs: fileRefs } = materializeAttachments(record, files);
     const promptText =
       [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
       (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
+    eventLog.appendAttachments(record.id, promptText, [...imageRefs, ...fileRefs]);
     const agentPrompt = promptForAgent(record, promptText);
     const cmid = typeof req.body?.clientMessageId === "string" && req.body.clientMessageId ? req.body.clientMessageId : undefined;
     markSessionWorking(record, { type: "agent_start" });
@@ -9533,7 +10294,11 @@ const server = app.listen(port, host, async () => {
   console.log(`Agent data dir: ${piDir}`);
   console.log(`Workspace: ${defaultWorkspace}`);
   startRelayIfConfigured();
+  // Rebuild-resume (Gap B): if this machine was re-provisioned to restore a
+  // torn-down session, pull + apply its snapshot before serving. Non-blocking.
+  if (process.env.BIVY_RESTORE) void restoreSessionFromSnapshot(String(process.env.BIVY_RESTORE));
   startModelAuthWatcher();
+  startOAuthLoginSweeper();
   startGithubAppSyncWatcher();
   await startGitHubTasksIfConfigured();
   startControlPlaneTasksIfConfigured();
@@ -9552,6 +10317,25 @@ const server = app.listen(port, host, async () => {
   // Point `bivy mcp-proxy` subprocesses at this node's actual port (they inherit
   // this env). Defaults to 4317 in the CLI, so only needed on a custom port.
   if (!process.env.BIVY_MCP_ENDPOINT) process.env.BIVY_MCP_ENDPOINT = `http://127.0.0.1:${port}`;
+});
+
+// A failed bind is fatal and must be reported, not swallowed. `app.listen` emits
+// the error on the server; with no handler it reaches the global
+// `uncaughtException` net below, which keeps the process alive — leaving a node
+// that is "running" but listening on nothing. The common cause is another node
+// already on this port (two OS users, or a staging + production node, both
+// defaulting to 4317). Print an actionable message and exit so the supervisor
+// and `bivy logs` surface a real failure instead of a silent hang.
+server.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EADDRINUSE") {
+    console.error(
+      `[bivy] Port ${port} is already in use — another Bivy node or process holds ${host}:${port}. ` +
+        `Give this node its own port (set PORT, or re-run 'bivy setup', which now picks a free one automatically) and start it again.`,
+    );
+  } else {
+    console.error(`[bivy] Could not bind ${host}:${port}:`, error);
+  }
+  process.exit(1);
 });
 
 const wss = new WebSocketServer({ server, path: "/ws" });
