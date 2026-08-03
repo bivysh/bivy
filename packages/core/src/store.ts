@@ -1165,6 +1165,21 @@ export class SessionStore {
     this.set({
       activeSessionId: sessionId,
       activeRuntimeId: known?.runtimeId ?? null,
+      // The composer is shared by drafts and live sessions. Replace the draft's
+      // agent/model paint as soon as an existing row is opened; otherwise the
+      // pills keep claiming that this session uses whatever was last selected
+      // on the New session screen until the history/models round-trips arrive.
+      // The row already has authoritative agent metadata. Model metadata is not
+      // part of sessions.list, so show the neutral loading/default state until
+      // the session-scoped models.list response supplies the real selection.
+      currentAgentName:
+        known?.agentName ||
+        agentLabel(this.state.runtimes.find((r) => r.id === known?.runtimeId)) ||
+        "",
+      currentModel: null,
+      currentModelId: null,
+      models: [],
+      modelsRuntimeId: known?.runtimeId ?? null,
       // Opening a row is how the user "sees" it — stamp lastSeenAt right away
       // so a finished-but-unseen row's indicator clears the instant they look,
       // rather than waiting on a node round-trip to confirm anything.
