@@ -995,6 +995,48 @@ describe("SessionStore", () => {
     expect(store.getState().activeTitle).toBe("Ship the PR");
   });
 
+  it("beginOpen replaces the New-session agent/model pills with session-scoped metadata", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "runtimes.list",
+      current: { id: "claude", displayName: "Claude Code" },
+      runtimes: [
+        { id: "claude", displayName: "Claude Code" },
+        { id: "codex", displayName: "Codex" },
+      ],
+    });
+    store.apply({
+      type: "models.list",
+      runtimeId: "claude",
+      current: { id: "sonnet", provider: "anthropic" },
+      models: [{ id: "sonnet", provider: "anthropic" }],
+    });
+    store.apply({
+      type: "sessions.list",
+      sessions: [{ id: "s2", name: "Codex session", runtimeId: "codex", agentName: "Codex" }],
+    });
+
+    // These are the selections visible on the New session screen.
+    expect(store.getState().currentAgentName).toBe("Claude Code");
+    expect(store.getState().currentModel?.id).toBe("sonnet");
+
+    store.beginOpen("s2");
+    expect(store.getState().currentAgentName).toBe("Codex");
+    expect(store.getState().activeRuntimeId).toBe("codex");
+    expect(store.getState().currentModel).toBeNull();
+    expect(store.getState().models).toEqual([]);
+
+    // The session-scoped refresh fills in that session's actual model.
+    store.apply({
+      type: "models.list",
+      sessionId: "s2",
+      runtimeId: "codex",
+      current: { id: "gpt-5.4", provider: "openai" },
+      models: [{ id: "gpt-5.4", provider: "openai" }],
+    });
+    expect(store.getState().currentModel?.id).toBe("gpt-5.4");
+  });
+
   it("tracks the active session runtime independently from the global agent selection", () => {
     const store = new SessionStore();
     store.setSelectedAgentLocal("pi");
