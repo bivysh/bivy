@@ -616,6 +616,12 @@ export interface AppState {
   /** Voice-input config (preferred provider + stored keys), or null until fetched. */
   sttConfig: SttConfig | null;
   oauth: OauthState | null;
+  /** A launched ephemeral runner came online with no usable model credentials
+   *  (nothing to seed from this device, no peer vault, no hosted escrow) — the
+   *  first-run subscription-OAuth prompt. `nodeId` scopes it to the runner that
+   *  needs it; cleared automatically once any provider becomes configured (that
+   *  same login is then escrowed so future runners inherit it). Null otherwise. */
+  needsModelAuth: { nodeId: string; provider: string } | null;
   githubApp: GithubAppState | null;
   /** Cost/token/plan-quota for the active session (display-only), or null. */
   usage: Usage | null;
@@ -746,6 +752,7 @@ export function initialState(): AppState {
     rulesets: [],
     sttConfig: null,
     oauth: null,
+    needsModelAuth: null,
     githubApp: null,
     usage: null,
     nodeStats: null,
@@ -1488,6 +1495,9 @@ export class SessionStore {
       followupsBySession: {},
       error: null,
       notice: null,
+      // First-run model-auth prompt is scoped to a specific runner; a node
+      // switch means it no longer applies to whatever we're now looking at.
+      needsModelAuth: null,
       // Per-node settings (name, default agent/model, GitHub prompt, sync
       // config, …) must never survive a switch — otherwise a still-editable
       // form can keep showing the *previous* node's settings under the
@@ -1504,6 +1514,12 @@ export class SessionStore {
   /** Show (or clear, with "") a transient success/confirmation banner. */
   setNotice(message: string): void {
     this.set({ notice: message });
+  }
+
+  /** Set (or clear, with null) the first-run "sign in to your model" prompt for a
+   *  freshly-launched ephemeral runner. See `AppState.needsModelAuth`. */
+  setNeedsModelAuth(v: { nodeId: string; provider: string } | null): void {
+    this.set({ needsModelAuth: v });
   }
 
   /** Append a local system message to the active transcript (client-only, not
@@ -2239,6 +2255,13 @@ export class SessionStore {
         const providers = Array.isArray(e.providers) ? (e.providers as ProviderInfo[]) : [];
         // A configured provider we were managing → refresh its auth detail too.
         this.set({ providers });
+        // The runner now has a usable model provider — the first-run OAuth prompt
+        // (if it was showing) is satisfied, whether the login just completed here
+        // or a peer/hosted-escrow sync landed the vault. Auto-dismiss it so a
+        // transient "no creds yet" prompt disappears once creds arrive.
+        if (this.state.needsModelAuth && providers.some((p) => p.configured)) {
+          this.set({ needsModelAuth: null });
+        }
         return;
       }
       case "provider.auth": {
