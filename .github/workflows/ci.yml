@@ -108,7 +108,7 @@ jobs:
       - name: Verify patched pi dependency
         run: |
           actual="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion/package.json').version")"
-          test "$actual" = "5.0.8"
+          test "$actual" = "5.0.9"
       # Production dependencies ship to users; do not release a known
       # high/critical advisory.
       - run: npm audit --omit=dev --audit-level=high

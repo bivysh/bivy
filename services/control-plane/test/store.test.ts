@@ -673,4 +673,24 @@ await test("listWorkItems returns all the account's items regardless of status",
   assert.equal((await store.listWorkItems(other.id)).length, 0);
 });
 
+await test("setNodeOnline(true) stamps last_seen_at; setNodeOnline(false) does not", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("presence@example.com");
+  const { node } = await store.enrollNode(acct.id, "node-presence", "Laptop");
+
+  // Mark online → flag true, last_seen_at populated.
+  await store.setNodeOnline(node.id, true);
+  const afterOnline = (await store.listNodes(acct.id)).find((n) => n.id === node.id);
+  assert.equal(afterOnline?.online, true);
+  assert.ok(afterOnline?.lastSeenAt, "online write must stamp last_seen_at");
+  const seenWhenOnline = afterOnline!.lastSeenAt;
+
+  // A racing/stale offline write flips the flag but must NOT refresh last_seen_at,
+  // so the read-path TTL fallback can still tell the node was recently seen online.
+  await store.setNodeOnline(node.id, false);
+  const afterOffline = (await store.listNodes(acct.id)).find((n) => n.id === node.id);
+  assert.equal(afterOffline?.online, false);
+  assert.equal(afterOffline?.lastSeenAt, seenWhenOnline, "offline write must not bump last_seen_at");
+});
+
 console.log(`\nAll ${passed} control-plane store tests passed.`);

@@ -120,6 +120,14 @@ export interface SessionIndexEntry {
   source?: string; // e.g. "issue:#12"
   titleEnc?: string; // opaque ciphertext; never plaintext
   branch?: string;
+  /** Content-free unresolved-condition descriptors. Never prompt/tool bodies. */
+  attention?: Array<{
+    id: string;
+    kind: "approval" | "question" | "session" | "automation";
+    severity: "info" | "warning" | "error" | "critical";
+    createdAt: string;
+    updatedAt?: string;
+  }>;
   /**
    * Address of the agent service currently hosting this session's live runtime
    * (Stage 2 of docs/agent-node-decoupling.md), e.g. "unix:/run/bivy.sock" or

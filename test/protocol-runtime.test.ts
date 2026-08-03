@@ -319,4 +319,43 @@ const imported = await historyImport.importHistoryForFork(
 assert.deepEqual(imported, { sessionFile: "roll-1", id: "roll-1" }, "delegates to writeHistory's result");
 assert.deepEqual((seen as { history: unknown }).history, [{ role: "user", text: "port to rust" }, { role: "assistant", text: "on it" }]);
 
+// --- Credential preflight ---------------------------------------------------
+// A runtime whose preflight reports no usable credential must surface an
+// actionable session.error and end the turn WITHOUT forwarding the prompt to the
+// agent (mirroring ProcessRuntime), so the daemon can raise the sign-in sheet
+// instead of letting the shim's first upstream call 401.
+const preflightRuntime = new ProtocolRuntime({
+  command: process.execPath,
+  args: [fixture],
+  displayName: "Fixture Protocol (preflight)",
+  preflight: () => "no usable credential",
+});
+const { session: pfSession } = await preflightRuntime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
+const pfEvents: RuntimeEvent[] = [];
+pfSession.subscribe((event) => pfEvents.push(event));
+await pfSession.prompt("do the thing");
+const pfError = await waitFor(pfEvents, (event) => event.type === "session.error");
+assert.equal((pfError as { error?: string }).error, "no usable credential", "preflight message surfaced as session.error");
+await waitFor(pfEvents, (event) => event.type === "agent_end");
+assert.equal(pfSession.isStreaming, false, "streaming cleared after a preflight block");
+// The prompt never reached the shim: no chat.send → no prompt.received echo.
+assert.ok(!pfEvents.some((event) => event.type === "prompt.received"), "prompt not forwarded when preflight blocks");
+pfSession.dispose();
+
+// A preflight that returns undefined lets the turn proceed normally.
+const okPreflightRuntime = new ProtocolRuntime({
+  command: process.execPath,
+  args: [fixture],
+  displayName: "Fixture Protocol (preflight ok)",
+  preflight: () => undefined,
+});
+const { session: okSession } = await okPreflightRuntime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
+const okEvents: RuntimeEvent[] = [];
+okSession.subscribe((event) => okEvents.push(event));
+await okSession.prompt("say hello");
+await waitFor(okEvents, (event) => event.type === "prompt.received");
+await waitFor(okEvents, (event) => event.type === "agent_end");
+assert.ok(!okEvents.some((event) => event.type === "session.error"), "no error when the credential preflight passes");
+okSession.dispose();
+
 console.log("protocol-runtime: all tests passed");

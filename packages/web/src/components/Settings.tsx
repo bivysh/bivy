@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralNodeConfig, QueueRouting, HostedProvisioningStatus, HostedAuditEvent, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, LinearHook, EphemeralMachine, EphemeralModelKeyInfo, EphemeralSetup, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralNodeConfig, QueueRouting, HostedProvisioningStatus, HostedAuditEvent, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, LinearHook, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, connectSlackHook, disconnectSlackHook, fetchSlackHook, connectLinearHook, disconnectLinearHook, fetchLinearHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
@@ -113,6 +113,15 @@ const PLAN_LABELS: Record<string, string> = {
 function planLabel(plan: string | null | undefined): string {
   if (!plan) return "—";
   return PLAN_LABELS[plan] ?? plan;
+}
+
+/** Render the baked-in PWA build timestamp (see __APP_BUILD_TIME__) as a short
+ *  local date+time, or "" when it isn't a parseable ISO string. */
+function formatBuildTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 /**
@@ -332,6 +341,12 @@ export function Settings({
               );
             })}
           </nav>
+          <div className="settings-nav-version" title="The version of the Bivy app running on this device">
+            <span>Bivy v{__APP_VERSION__}</span>
+            {formatBuildTime(__APP_BUILD_TIME__) && (
+              <span className="settings-nav-version-updated">Updated {formatBuildTime(__APP_BUILD_TIME__)}</span>
+            )}
+          </div>
         </aside>
 
         <section className="settings-content">
@@ -2659,14 +2674,49 @@ const EPHEMERAL_TTL_OPTIONS = [
 
 function EphemeralPanel() {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
-  const [setups, setSetups] = useState<EphemeralSetup[]>([]);
+  const [setups, setSetups] = useState<EphemeralNodeConfig[]>([]);
   // Which machine we've drilled into to edit. `setupId: null` = a fresh machine
   // for that provider; a string = editing an existing one. `null` nav = the
   // list view.
   const [nav, setNav] = useState<{ provider: string; setupId: string | null } | null>(null);
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys).catch(() => {});
-  const refreshSetups = () => controller.listEphemeralSetups().then(setSetups).catch(() => {});
-  useEffect(() => { refreshKeys(); refreshSetups(); }, []);
+  // Account-level ephemeral configs — the same records the new-session node
+  // picker lists, so a machine saved here shows up there (and syncs across the
+  // account's devices). The provider token stays device-local (below).
+  const refreshSetups = () => controller.listEphemeralConfigs().then(setSetups).catch(() => {});
+  // One-time migration: earlier builds saved machines as device-local "setups"
+  // (invisible to the node picker, which reads account-level configs). Copy any
+  // legacy setup that doesn't already have a matching config to the account,
+  // then drop the device-local copy so it can't resurrect. Idempotent and
+  // best-effort — the panel works regardless of whether this runs.
+  const migrateLegacySetups = async () => {
+    try {
+      const [legacy, configs] = await Promise.all([
+        controller.listEphemeralSetups(),
+        controller.listEphemeralConfigs(),
+      ]);
+      if (!legacy.length) return;
+      const have = new Set(configs.map((c) => `${c.provider} ${c.name}`));
+      for (const s of legacy) {
+        if (!have.has(`${s.provider} ${s.name}`)) {
+          await controller.createEphemeralConfig({
+            provider: s.provider, name: s.name,
+            region: s.region ?? null, size: s.size ?? null,
+            ttlMinutes: s.ttlMinutes ?? null,
+            teardownOnAgentFinish: s.teardownOnAgentFinish === true,
+          });
+        }
+        await controller.removeEphemeralSetup(s.id).catch(() => {});
+      }
+      refreshSetups();
+    } catch { /* best effort */ }
+  };
+  useEffect(() => {
+    refreshKeys();
+    refreshSetups();
+    void migrateLegacySetups();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const catalog = nav ? EPHEMERAL_PROVIDERS.find((p) => p.id === nav.provider) : undefined;
   if (nav && catalog) {
@@ -2899,7 +2949,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
 
   const refreshMachines = () =>
     controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId))).catch(() => {});
-  const editSetup = (setup: EphemeralSetup | null) => {
+  const editSetup = (setup: EphemeralNodeConfig | null) => {
     setSetupId(setup?.id ?? null);
     setSetupName(setup?.name ?? "");
     setRegion(setup?.region || adapter.defaultRegion);
@@ -2912,7 +2962,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
   // blank form when adding).
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
-    controller.listEphemeralSetups(providerId).then((rows) => {
+    controller.listEphemeralConfigs().then((rows) => {
       editSetup(initialSetupId ? rows.find((s) => s.id === initialSetupId) ?? null : null);
     }).catch(() => {});
     refreshMachines();
@@ -2956,11 +3006,11 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
     setErr(null);
     try {
       // Repo isn't a machine setting — it comes from the new-session composer at
-      // launch time — so clear any legacy value rather than carry it here.
-      const values = { name: setupName.trim(), region, size, ttlMinutes: ttl, teardownOnAgentFinish, repo: null };
-      if (setupId) await controller.updateEphemeralSetup(setupId, values);
+      // launch time — so it's never part of a saved config.
+      const values = { name: setupName.trim(), region, size, ttlMinutes: ttl, teardownOnAgentFinish };
+      if (setupId) await controller.updateEphemeralConfig(setupId, values);
       else {
-        const created = await controller.createEphemeralSetup(providerId, values);
+        const created = await controller.createEphemeralConfig({ provider: providerId, ...values });
         setSetupId(created.id);
       }
       onSetupsChanged();
@@ -3059,7 +3109,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
                 title: "Remove machine?",
                 message: `Remove ${setupName}? Running machines are not affected.`,
                 label: "Remove",
-                action: () => controller.removeEphemeralSetup(setupId).then(() => { onSetupsChanged(); onBack(); }),
+                action: () => controller.removeEphemeralConfig(setupId).then(() => { onSetupsChanged(); onBack(); }),
               })}>Remove machine</button>
             )}
             <button

@@ -63,11 +63,23 @@ export function OauthStep() {
  * Settings-only action) since here the only goal is getting the model
  * selectable, not managing the credential long-term.
  */
-export function ProviderConnectForm({ state, providerId }: { state: AppState; providerId: string }) {
+export function ProviderConnectForm({
+  state,
+  providerId,
+  apiKeyProvider,
+}: {
+  state: AppState;
+  providerId: string;
+  /** Where a pasted API key is saved, when it differs from the OAuth id — e.g.
+   *  Codex signs in as `openai-codex` but its key lives under `openai`
+   *  (OPENAI_API_KEY). Defaults to `providerId`. */
+  apiKeyProvider?: string;
+}) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const provider = state.providers.find((p) => p.id === providerId);
   const name = provider?.name || providerId;
+  const keyProvider = apiKeyProvider || providerId;
 
   if (provider?.configured) {
     // A "Connect" tap can race a connection that already landed (e.g. the
@@ -105,7 +117,7 @@ export function ProviderConnectForm({ state, providerId }: { state: AppState; pr
           disabled={!key.trim() || busy}
           onClick={() => {
             setBusy(true);
-            controller.saveApiKey(providerId, key.trim());
+            controller.saveApiKey(keyProvider, key.trim());
             setKey("");
             // provider.apiKey has no direct ack — re-list so `provider.configured`
             // above (and the model picker's own providers watch) reflect the

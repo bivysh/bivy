@@ -132,6 +132,73 @@ describe("agent attachment — history render (grouped onto the final bubble)", 
   });
 });
 
+describe("agent attachment — sticky across a lossy reconcile (append-only)", () => {
+  const HASH2 = "c".repeat(64);
+  const svg = { hash: HASH, name: "logo.svg", mimeType: "image/svg+xml", size: 4470, kind: "image" as const };
+  const withOverlay = [
+    { role: "user", content: "make a logo" },
+    { role: "assistant", content: [{ type: "bivy_attachment", ref: svg, caption: "cap" }] },
+    { role: "assistant", content: [{ type: "text", text: "Here it is." }] },
+  ];
+  // The same turn as the runtime rebuilds it after a resume: raw messages, WITHOUT
+  // the bivy-side outbound-attachment overlay.
+  const withoutOverlay = [
+    { role: "user", content: "make a logo" },
+    { role: "assistant", content: [{ type: "text", text: "Here it is." }] },
+  ];
+  const historyEvent = (messages: unknown[], count: number, hash: string, requestId?: string) => ({
+    type: "session.history", requestId, sessionId: "s1", runtimeId: "claude", mode: "full", count, historyHash: hash, messages,
+  });
+  const attCount = (s: SessionStore) => s.getState().transcript.reduce((n, e) => n + (e.attachments?.length ?? 0), 0);
+
+  it("a later snapshot that omits the overlay does not erase the chip", () => {
+    const s = new SessionStore();
+    s.beginOpen("s1");
+    s.apply(historyEvent(withOverlay, 3, "h3", "r1") as never); // open-paint: chip shows
+    expect(attCount(s)).toBe(1);
+    s.apply(historyEvent(withoutOverlay, 2, "hRaw") as never); // post-resume reconcile, lossy
+    expect(attCount(s)).toBe(1); // sticky — chip survives
+    const chip = s.getState().transcript.find((e) => e.attachments?.length)?.attachments?.[0];
+    expect(chip?.hash).toBe(HASH);
+  });
+
+  it("re-grouped correctly and never duplicated when the overlay comes back", () => {
+    const s = new SessionStore();
+    s.beginOpen("s1");
+    s.apply(historyEvent(withOverlay, 3, "h3", "r1") as never);
+    s.apply(historyEvent(withoutOverlay, 2, "hRaw") as never); // lossy
+    s.apply(historyEvent(withOverlay, 3, "h3b") as never); // overlay returns
+    expect(attCount(s)).toBe(1); // dedup by hash — not two copies
+  });
+
+  it("keeps distinct hashes; a lossy snapshot restores all of them", () => {
+    const csv = { hash: HASH2, name: "data.csv", mimeType: "text/csv", size: 9, kind: "file" as const };
+    const two = [
+      { role: "user", content: "give me both" },
+      { role: "assistant", content: [{ type: "bivy_attachment", ref: svg }] },
+      { role: "assistant", content: [{ type: "bivy_attachment", ref: csv }] },
+      { role: "assistant", content: [{ type: "text", text: "Both attached." }] },
+    ];
+    const s = new SessionStore();
+    s.beginOpen("s1");
+    s.apply(historyEvent(two, 4, "h4", "r1") as never);
+    expect(attCount(s)).toBe(2);
+    s.apply(historyEvent(withoutOverlay, 2, "hRaw") as never);
+    const hashes = s.getState().transcript.flatMap((e) => e.attachments?.map((a) => a.hash) ?? []);
+    expect(new Set(hashes)).toEqual(new Set([HASH, HASH2]));
+  });
+
+  it("a re-broadcast live attachment already in history is not duplicated", () => {
+    const s = new SessionStore();
+    s.beginOpen("s1");
+    s.apply(historyEvent(withOverlay, 3, "h3", "r1") as never); // history already carries the chip
+    // A resume/reconnect replays the live attachment event for the same bytes.
+    s.apply({ type: "session.event", sessionId: "s1", event: { type: "attachment", id: "att1", ref: svg, caption: "cap" } } as never);
+    s.apply({ type: "session.event", sessionId: "s1", event: { type: "agent_end" } } as never);
+    expect(attCount(s)).toBe(1);
+  });
+});
+
 describe("markdown inline images", () => {
   it("renders ![alt](https://…) as a constrained <img>", () => {
     const html = toHtml("![a cat](https://ex.com/cat.png)");

@@ -1,97 +1,42 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useState } from "react";
-import {
-  EPHEMERAL_PROVIDERS,
-  ephemeralAdapter,
-  ephemeralCostHint,
-  type EphemeralMachine,
-  type EphemeralModelKeyInfo,
-  type EphemeralSetup,
-  type EphemeralNodeConfig,
-  type ProviderKeyInfo,
-  type ProviderSize,
-} from "@bivy/core";
+import { EPHEMERAL_PROVIDERS, type ProviderKeyInfo } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { Sheet, PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 
-const TTL_OPTIONS = [
-  { v: 30, label: "30 min" },
-  { v: 60, label: "1 hour" },
-  { v: 180, label: "3 hours" },
-  { v: 480, label: "8 hours" },
-];
-
-export function EphemeralSheet({ onClose, setupId, config, firstRun = false }: { onClose: () => void; setupId?: string; config?: EphemeralNodeConfig; firstRun?: boolean }) {
+/**
+ * Connect-a-cloud-provider sheet — the onboarding entry point for ephemeral
+ * runners. Its ONLY job is getting a provider token saved; connecting a provider
+ * auto-creates a default runner and picks it for the draft, so the user returns
+ * to the composer and their first message launches the machine. There is no
+ * "launch" button and no machine management here — a runner is a node you pick
+ * (node switcher) and machines are launched by sending, not by a modal. Region /
+ * size / TTL live in Settings → Ephemeral machines.
+ */
+export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => void; firstRun?: boolean }) {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
-  const [setups, setSetups] = useState<EphemeralSetup[]>([]);
-  const [selectedSetup, setSelectedSetup] = useState<EphemeralSetup | null>(null);
   const [provider, setProvider] = useState<string | null>(null);
-  const refreshKeys = () => controller.listEphemeralKeys().then(setKeys);
-  useEffect(() => {
-    refreshKeys();
-    // An account-level ephemeral config selected in the node picker: launch a
-    // fresh machine from it, stamped with the config id so a device can tie the
-    // running machine back to its config (see NodeSwitcher configInUse). The
-    // config is presented as a one-item "saved setup" via a synthetic record so
-    // the launch form and machine-record correlation work unchanged.
-    if (config) {
-      const synthetic: EphemeralSetup = {
-        id: config.id, provider: config.provider, name: config.name,
-        region: config.region ?? null, size: config.size ?? null,
-        ttlMinutes: config.ttlMinutes ?? null, repo: null,
-        teardownOnAgentFinish: Boolean(config.teardownOnAgentFinish),
-        createdAt: config.createdAt, updatedAt: config.updatedAt,
-      };
-      setSetups([synthetic]);
-      setSelectedSetup(synthetic);
-      setProvider(config.provider);
-      return;
-    }
-    controller.listEphemeralSetups().then((rows) => {
-      setSetups(rows);
-      const selected = setupId ? rows.find((s) => s.id === setupId) : undefined;
-      if (selected) {
-        setSelectedSetup(selected);
-        setProvider(selected.provider);
-      }
-    });
-  }, [setupId, config]);
+  const refreshKeys = () => controller.listEphemeralKeys().then(setKeys).catch(() => {});
+  useEffect(() => { refreshKeys(); }, []);
 
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === provider);
-
-  // Ephemeral cloud runners are included on every plan (each launch draws from
-  // the shared weekly run cap), so there's no upgrade gate here.
   return (
     <Sheet
-      title={catalog ? catalog.name : "Ephemeral machine"}
+      title={catalog ? catalog.name : "Connect a cloud provider"}
       onClose={onClose}
-      headExtra={
-        provider ? (
-          <button className="sheet-back" onClick={() => { setProvider(null); setSelectedSetup(null); }} aria-label="Back">
-            ‹
-          </button>
-        ) : undefined
-      }
+      headExtra={provider ? (
+        <button className="sheet-back" onClick={() => setProvider(null)} aria-label="Back">‹</button>
+      ) : undefined}
     >
       {!provider ? (
         <div className="picker-list">
-          <p className="muted settings-intro">Launch a saved node setup, or configure an ad-hoc temporary node that self-destructs at its TTL.</p>
-          {setups.length > 0 && <div className="node-menu-head">Saved setups</div>}
-          {setups.map((setup) => {
-            const p = EPHEMERAL_PROVIDERS.find((item) => item.id === setup.provider);
-            return (
-              <PickerItem
-                key={setup.id}
-                title={setup.name}
-                meta={[p?.name, setup.region, setup.size, setup.teardownOnAgentFinish ? "until agent finishes" : setup.ttlMinutes ? `${setup.ttlMinutes} min` : null].filter(Boolean).join(" · ")}
-                right={<span className="chip">Offline</span>}
-                onClick={() => { setSelectedSetup(setup); setProvider(setup.provider); }}
-              />
-            );
-          })}
-          {setups.length > 0 && <div className="node-menu-head">Providers</div>}
+          <p className="muted settings-intro">
+            {firstRun
+              ? "Connect your own cloud account to run agents on temporary servers. Pick a provider, paste a token, and you're ready — your first message launches the machine."
+              : "Pick a provider and paste a token. Connecting one adds a runner you can pick in the node menu."}
+          </p>
           {EPHEMERAL_PROVIDERS.map((p) => {
             const k = keys.find((x) => x.id === p.id);
             return (
@@ -99,113 +44,47 @@ export function EphemeralSheet({ onClose, setupId, config, firstRun = false }: {
                 key={p.id}
                 title={p.name}
                 meta={p.blurb}
-                right={k?.configured ? <span className="chip ok">Token saved</span> : undefined}
-                onClick={() => { setSelectedSetup(null); setProvider(p.id); }}
+                right={k?.configured ? <span className="chip ok">Connected</span> : undefined}
+                onClick={() => setProvider(p.id)}
               />
             );
           })}
         </div>
       ) : (
-        <ProviderPanel providerId={provider} setup={selectedSetup} onKeysChanged={refreshKeys} firstRun={firstRun} />
+        <ProviderConnectPanel providerId={provider} onKeysChanged={refreshKeys} onDone={onClose} />
       )}
     </Sheet>
   );
 }
 
-function ProviderPanel({ providerId, setup, onKeysChanged, firstRun }: { providerId: string; setup: EphemeralSetup | null; onKeysChanged: () => void; firstRun: boolean }) {
+function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerId: string; onKeysChanged: () => void; onDone: () => void }) {
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === providerId)!;
-  const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
-  const adapter = ephemeralAdapter(providerId)!;
   const [token, setToken] = useState("");
   const [hasToken, setHasToken] = useState(false);
-  const [region, setRegion] = useState(adapter.defaultRegion);
-  const [sizes, setSizes] = useState<ProviderSize[]>(adapter.sizes);
-  const [size, setSize] = useState(adapter.defaultSize);
-  const [ttl, setTtl] = useState(60);
-  const [teardownOnAgentFinish, setTeardownOnAgentFinish] = useState(false);
-  const [machines, setMachines] = useState<EphemeralMachine[]>([]);
-  const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [modelKeys, setModelKeys] = useState<EphemeralModelKeyInfo[]>([]);
-  const [modelProvider, setModelProvider] = useState("anthropic");
-  const [modelKey, setModelKey] = useState("");
-  const [savingModel, setSavingModel] = useState(false);
-  const [hasGithubToken, setHasGithubToken] = useState(false);
-  const [githubToken, setGithubToken] = useState("");
-  const [savingGithub, setSavingGithub] = useState(false);
-  // Split from the old single `msg`, which rendered a launch failure and a
-  // launch success in the same muted <p> — a failure read like a neutral
-  // status line (#140). `err` gets the queue panel's `chip err` treatment.
-  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
 
-  const refreshMachines = () =>
-    controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId)));
-  // Poll while a machine is still booting so its status/IP update without the
-  // user having to close and reopen the sheet (#140) — stops once nothing is
-  // in a transitional state.
   useEffect(() => {
-    if (!machines.some((m) => m.status === "starting")) return;
-    const t = setInterval(refreshMachines, 5000);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [machines]);
-  useEffect(() => {
-    controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t)));
-    controller.listEphemeralModelKeys().then(setModelKeys).catch(() => {});
-    controller.getGithubTaskToken().then((t) => setHasGithubToken(Boolean(t))).catch(() => {});
-    // Pre-fill from the preferences the user saved in Settings → Ephemeral
-    // machines. Additive: everything stays editable per launch; a missing
-    // preference just leaves the adapter default in place.
-    const loadPrefs = setup ? Promise.resolve(setup) : controller.getEphemeralPrefs(providerId);
-    loadPrefs.then((p) => {
-      if (p.region) setRegion(p.region);
-      if (p.size) setSize(p.size);
-      if (typeof p.ttlMinutes === "number") setTtl(p.ttlMinutes);
-      setTeardownOnAgentFinish(p.teardownOnAgentFinish === true);
-    }).catch(() => {});
-    refreshMachines();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerId, setup]);
+    controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
+  }, [providerId]);
 
-  // Once a token is saved, replace the static catalog with the provider's live,
-  // non-deprecated sizes for the chosen region so neither a retired plan nor one
-  // unavailable in that region can be offered. Re-runs when the region changes.
-  useEffect(() => {
-    if (!hasToken) return;
-    let active = true;
-    controller
-      .listEphemeralSizes(providerId, region)
-      .then((list) => {
-        if (!active || !list.length) return;
-        setSizes(list);
-        setSize((cur) =>
-          list.some((s) => s.id === cur)
-            ? cur
-            : list.some((s) => s.id === adapter.defaultSize)
-              ? adapter.defaultSize
-              : (list[0]?.id ?? adapter.defaultSize),
-        );
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasToken, providerId, region]);
-
-  const saveToken = async () => {
-    // token isn't cleared until the await resolves, so without this guard a
-    // second click before then fires another save (#140).
+  // Connect the token, then pick the provider's (auto-created) default runner for
+  // the draft and close — so the user lands back on the composer ready to send.
+  const connect = async () => {
     if (saving) return;
     setSaving(true);
     setErr(null);
     try {
-      await controller.setEphemeralToken(providerId, token.trim());
+      const runner = await controller.connectEphemeralProvider(providerId, token.trim());
       setToken("");
       setHasToken(true);
       onKeysChanged();
-      setMsg("Token saved on this device.");
+      if (runner) {
+        controller.pickDraftEphemeralRunner(runner);
+        onDone();
+      }
     } catch (e) {
       setErr(String((e as Error).message || e));
     } finally {
@@ -213,69 +92,15 @@ function ProviderPanel({ providerId, setup, onKeysChanged, firstRun }: { provide
     }
   };
 
-  const saveModelKey = async () => {
-    if (!modelProvider.trim() || !modelKey.trim() || savingModel) return;
-    setSavingModel(true);
-    setErr(null);
-    try {
-      await controller.setEphemeralModelKey(modelProvider.trim(), modelKey.trim());
-      setModelKey("");
-      setModelKeys(await controller.listEphemeralModelKeys());
-      setMsg("Model key saved on this device.");
-    } catch (e) {
-      setErr(String((e as Error).message || e));
-    } finally {
-      setSavingModel(false);
-    }
-  };
-
-  const saveGithubToken = async () => {
-    if (!githubToken.trim() || savingGithub) return;
-    setSavingGithub(true);
-    setErr(null);
-    try {
-      await controller.setGithubTaskToken(githubToken.trim());
-      setGithubToken("");
-      setHasGithubToken(true);
-      setMsg("GitHub token saved on this device.");
-    } catch (e) {
-      setErr(String((e as Error).message || e));
-    } finally {
-      setSavingGithub(false);
-    }
-  };
-
-  // Suspend-to-zero providers (Fly Sprites) keep the machine and self-suspend
-  // when idle — so the TTL self-destruct and "destroy when the agent finishes"
-  // controls don't apply; a suspend explainer replaces them.
-  const suspendsWhenIdle = adapter.suspendsWhenIdle === true;
-
-  const launch = async () => {
-    if (firstRun && modelKeys.length === 0) {
-      setErr("Add a model API key before launching your first runner.");
-      return;
-    }
-    if (firstRun && !hasGithubToken) {
-      setErr("Connect GitHub before launching your first runner.");
-      return;
-    }
+  // Provider already connected: pick its default runner and return to composing.
+  const useRunner = async () => {
+    if (busy) return;
     setBusy(true);
-    setMsg(null);
     setErr(null);
     try {
-      await controller.launchEphemeral({
-        provider: providerId,
-        region,
-        size,
-        ttlMinutes: suspendsWhenIdle ? undefined : ttl,
-        teardownOnAgentFinish: suspendsWhenIdle ? false : teardownOnAgentFinish,
-        name: setup?.name,
-        setupId: setup?.id,
-      });
-      setMsg(suspendsWhenIdle
-        ? "Launching — it'll appear in the node list once it boots, then suspend to ~$0 when idle."
-        : "Launching — it will appear in the node list once it boots.");
-      refreshMachines();
+      const runner = await controller.defaultEphemeralRunner(providerId);
+      if (runner) controller.pickDraftEphemeralRunner(runner);
+      onDone();
     } catch (e) {
       setErr(String((e as Error).message || e));
     } finally {
@@ -287,136 +112,34 @@ function ProviderPanel({ providerId, setup, onKeysChanged, firstRun }: { provide
     <div className="settings-form">
       {!hasToken ? (
         <>
-          {firstRun && <h4 className="settings-subhead">1. Connect your cloud provider</h4>}
           <p className="muted">{catalog.blurb}</p>
           <ol className="eph-steps">
-            {catalog.steps.map((s, i) => (
-              <li key={i}>{s}</li>
-            ))}
+            {catalog.steps.map((s, i) => <li key={i}>{s}</li>)}
           </ol>
           <div className="row-actions">
             {catalog.links.map((l) => (
-              <a key={l.url} className="btn ghost" href={l.url} target="_blank" rel="noopener">
-                {l.label}
-              </a>
+              <a key={l.url} className="btn ghost" href={l.url} target="_blank" rel="noopener">{l.label}</a>
             ))}
           </div>
           <label className="field-label">{catalog.tokenLabel}</label>
           <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste token" />
-          <button className="btn primary" disabled={!token.trim() || saving} onClick={saveToken}>
-            {saving ? "Saving…" : "Save token"}
+          <button className="btn primary" disabled={!token.trim() || saving} onClick={connect}>
+            {saving ? "Connecting…" : "Connect"}
           </button>
+          <p className="muted small">The token stays on this device — Bivy never stores it. You can fine-tune region, size, and auto-destroy later in Settings → Ephemeral machines.</p>
         </>
       ) : (
         <>
-          {firstRun && (
-            <div className="first-run-credentials">
-              <h4 className="settings-subhead">2. Give the runner model access</h4>
-              <p className="muted small">Required for your first task. The key stays on this device and is sent to the runner only after its encrypted connection is online.</p>
-              {modelKeys.length > 0 ? (
-                <p className="chip ok">✓ Model key ready ({modelKeys.map((k) => k.provider).join(", ")})</p>
-              ) : (
-                <>
-                  <label className="field-label">Model provider</label>
-                  <select className="picker-search" value={modelProvider} onChange={(e) => setModelProvider(e.target.value)}>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="google">Google</option>
-                    <option value="openrouter">OpenRouter</option>
-                    <option value="xai">xAI</option>
-                  </select>
-                  <label className="field-label">Model API key</label>
-                  <input className="picker-search" type="password" autoComplete="off" value={modelKey} onChange={(e) => setModelKey(e.target.value)} placeholder="Paste API key" />
-                  <button className="btn" disabled={!modelKey.trim() || savingModel} onClick={saveModelKey}>
-                    {savingModel ? "Saving…" : "Save model key"}
-                  </button>
-                </>
-              )}
-
-              <h4 className="settings-subhead">3. Connect GitHub</h4>
-              <p className="muted small">Required for the first-run path. GitHub sign-in identifies your Bivy account but deliberately does not grant repository access; create a fine-grained token with Contents and Pull requests read/write access.</p>
-              {hasGithubToken ? (
-                <p className="chip ok">✓ GitHub access ready</p>
-              ) : (
-                <>
-                  <a className="btn ghost" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained GitHub token</a>
-                  <label className="field-label">GitHub token</label>
-                  <input className="picker-search" type="password" autoComplete="off" value={githubToken} onChange={(e) => setGithubToken(e.target.value)} placeholder="Paste GitHub token" />
-                  <button className="btn" disabled={!githubToken.trim() || savingGithub} onClick={saveGithubToken}>
-                    {savingGithub ? "Saving…" : "Save GitHub token"}
-                  </button>
-                </>
-              )}
-              <h4 className="settings-subhead">4. Choose and launch the runner</h4>
-            </div>
-          )}
-          <div className="eph-row">
-            <label className="field-label">Region</label>
-            <select className="picker-search" value={region} onChange={(e) => setRegion(e.target.value)}>
-              {adapter.regions.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="eph-row">
-            <label className="field-label">Server type</label>
-            <select className="picker-search" value={size} onChange={(e) => setSize(e.target.value)}>
-              {sizes.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          {!suspendsWhenIdle && (
-            <div className="eph-row">
-              <label className="field-label">Auto-destroy after</label>
-              <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
-                {TTL_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          {(() => {
-            const selected = sizes.find((s) => s.id === size);
-            // Suspend-to-zero: only the hourly rate is meaningful (no TTL ceiling),
-            // and it's ~$0 while idle. Pass no TTL to get just the "≈ $x/hr" part.
-            const hint = ephemeralCostHint(selected, suspendsWhenIdle ? undefined : ttl, adapter.currency);
-            if (!hint) return null;
-            return suspendsWhenIdle
-              ? <p className="muted small">{hint} while active · ~$0 while suspended · billed by {catalog.name}, not Bivy</p>
-              : <p className="muted small">{hint} · billed by {catalog.name}, not Bivy</p>;
-          })()}
-          {suspendsWhenIdle ? (
-            <p className="muted small">Keeps its memory: suspends to ~$0 when idle and resumes with everything intact. Reopen its session from the node list to wake it. Destroy it manually when you're done.</p>
-          ) : (
-            <>
-              <label className="field-label">Teardown</label>
-              <label className="checkbox-row">
-                <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
-                <span>Destroy when the agent finishes <span className="muted small">(TTL remains a safety fallback; requires this device to stay online)</span></span>
-              </label>
-            </>
-          )}
-          <p className="muted small">The machine pre-clones the repo you pick in the new-session composer.</p>
+          <p className="chip ok">✓ {catalog.name} connected</p>
+          <p className="muted small">A default runner is ready. Pick it and send your first message to launch a machine — no launch button. Adjust its region / size / TTL anytime in Settings → Ephemeral machines.</p>
           <div className="row-actions">
-            <button className="btn primary" disabled={busy || (firstRun && (modelKeys.length === 0 || !hasGithubToken))} onClick={launch}>
-              {busy ? "Launching…" : firstRun ? "Launch my first runner" : "Launch machine"}
-            </button>
+            <button className="btn primary" disabled={busy} onClick={useRunner}>{busy ? "…" : "Use this runner"}</button>
             <button
               className="btn danger-ghost"
               onClick={() => setConfirm({
                 title: "Remove provider token?",
                 message: `Forget the ${catalog.name} token on this device?`,
-                action: () => controller.removeEphemeralToken(providerId).then(() => {
-                  setHasToken(false);
-                  onKeysChanged();
-                }),
+                action: () => controller.removeEphemeralToken(providerId).then(() => { setHasToken(false); onKeysChanged(); }),
               })}
             >
               Remove token
@@ -428,48 +151,13 @@ function ProviderPanel({ providerId, setup, onKeysChanged, firstRun }: { provide
         <ConfirmDialog
           title={confirm.title}
           message={confirm.message}
-          confirmLabel={confirm.label || "Remove"}
+          confirmLabel="Remove"
           danger
           onCancel={() => setConfirm(null)}
           onConfirm={() => { confirm.action(); setConfirm(null); }}
         />
       )}
       {err && <span className="chip err">{err}</span>}
-      {msg && <p className="muted">{msg}</p>}
-      {machines.length > 0 && (
-        <>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <label className="field-label">Launched machines</label>
-            <button type="button" className="link-btn" onClick={refreshMachines}>Refresh</button>
-          </div>
-          <div className="picker-list">
-            {machines.map((m) => (
-              <PickerItem
-                key={m.id}
-                title={m.name || m.id}
-                meta={[m.region, m.ip, m.repo, m.status].filter(Boolean).join(" · ")}
-                right={
-                  <button
-                    type="button"
-                    className="picker-action danger"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConfirm({
-                        title: "Destroy machine?",
-                        message: `Destroy ${m.name || m.id} now? This can't be undone.`,
-                        label: "Destroy",
-                        action: () => controller.destroyEphemeral(m).then(refreshMachines).catch((e) => setErr(String((e as Error)?.message || e))),
-                      });
-                    }}
-                  >
-                    Destroy
-                  </button>
-                }
-              />
-            ))}
-          </div>
-        </>
-      )}
     </div>
   );
 }

@@ -81,6 +81,9 @@ function assertProductionConfig() {
     // and leak the single-use login token. Require it in production.
     problems.push("PUBLIC_CONTROL_PLANE_URL must be set in production (sign-in link URLs must not be derived from request headers)");
   }
+  if (Boolean(process.env.JANITOR_SERVICE_URL) !== Boolean(process.env.JANITOR_PROXY_SECRET)) {
+    problems.push("JANITOR_SERVICE_URL and JANITOR_PROXY_SECRET must be configured together");
+  }
   if (problems.length > 0) {
     console.error("Refusing to start: insecure production configuration:\n  - " + problems.join("\n  - "));
     process.exit(1);
@@ -431,6 +434,36 @@ app.get("/readyz", asyncHandler(async (_req, res) => {
 }));
 function noStorePwaShell(res: Response) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
+}
+
+// Janitor is deployed as a private Kamal accessory. The control plane is its
+// only public ingress: API/artifact requests require the user's existing Bivy
+// bearer token, and the accessory receives only the resolved account id plus a
+// server-to-server secret. Model keys never pass through the browser.
+const janitorServiceUrl = process.env.JANITOR_SERVICE_URL?.replace(/\/$/, "");
+const janitorProxySecret = process.env.JANITOR_PROXY_SECRET;
+if (janitorServiceUrl && janitorProxySecret) {
+  app.all(/^\/janitor(?:\/.*)?$/, asyncHandler(async (req, res) => {
+    const protectedPath = req.path === "/janitor/api" || req.path.startsWith("/janitor/api/") || req.path.startsWith("/janitor/artifacts/");
+    const account = protectedPath ? await store.accountFromSession(bearer(req)) : null;
+    if (protectedPath && !account) return res.status(401).json({ error: "Sign in to Bivy to use Janitor." });
+    const suffix = req.originalUrl.slice("/janitor".length) || "/";
+    const headers: Record<string, string> = {
+      accept: String(req.headers.accept ?? "*/*"),
+      "x-janitor-proxy-secret": janitorProxySecret,
+      "x-bivy-account-id": account?.id ?? "public-shell",
+    };
+    let body: string | undefined;
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      headers["content-type"] = "application/json";
+      body = JSON.stringify(req.body ?? {});
+    }
+    const upstream = await fetch(`${janitorServiceUrl}${suffix}`, { method: req.method, headers, body, signal: AbortSignal.timeout(210_000) });
+    for (const name of ["content-type", "cache-control", "etag", "last-modified"]) {
+      const value = upstream.headers.get(name); if (value) res.setHeader(name, value);
+    }
+    res.status(upstream.status).send(Buffer.from(await upstream.arrayBuffer()));
+  }));
 }
 
 // Serve the React/Vite PWA (@bivy/web) — Bivy's single web client — at the root
@@ -1097,6 +1130,25 @@ app.post("/nodes/enroll", requireUser, asyncHandler(async (req, res) => {
   res.json({ ok: true, ...result });
 }));
 
+// A node is reported online if its stored flag says so OR it was confirmed online
+// within this window. The stored `online` flag is flipped fire-and-forget by the
+// relay on socket connect/close with no ordering guard, so a late/duplicate/stale
+// `false` (out-of-order reconnect, or a stale relay replica's close) can pin a
+// genuinely-connected node offline until some later reconnect happens to win. The
+// daemon's periodic `/node/heartbeat` keeps `last_seen_at` fresh while it's really
+// connected, so this fallback treats such a node as online and the race self-heals.
+// Must comfortably exceed the daemon heartbeat interval (NODE_HEARTBEAT_MS in
+// src/server.ts, 30s) so a couple of missed beats don't flap a healthy node.
+const NODE_ONLINE_TTL_MS = 90_000;
+
+/** Effective online = stored flag OR a recent `last_seen_at` (see NODE_ONLINE_TTL_MS). */
+function withEffectiveOnline<T extends { online: boolean; lastSeenAt: string | null }>(node: T): T {
+  if (node.online) return node;
+  const seen = node.lastSeenAt ? Date.parse(node.lastSeenAt) : NaN;
+  const recentlySeen = Number.isFinite(seen) && Date.now() - seen < NODE_ONLINE_TTL_MS;
+  return recentlySeen ? { ...node, online: true } : node;
+}
+
 // Lists the caller's nodes. Accepts an account session (all nodes), a
 // node-scoped link grant from a linking QR (only that one node), or a node's own
 // enrollment token (its account's nodes — so `bivy nodes` on an installed node
@@ -1108,13 +1160,13 @@ async function listClientNodes(req: Request, res: Response) {
   if (client) {
     const nodes = await store.listNodes(client.accountId);
     const scoped = client.nodeId ? nodes.filter((node) => node.id === client.nodeId) : nodes;
-    return res.json(scoped.map(({ enrollmentTokenHash: _hash, ...node }) => node));
+    return res.json(scoped.map(({ enrollmentTokenHash: _hash, ...node }) => withEffectiveOnline(node)));
   }
   // Fall back to node-token auth: an enrolled node listing its account's nodes.
   const node = await store.nodeFromEnrollmentToken(token);
   if (node) {
     const nodes = await store.listNodes(node.accountId);
-    return res.json(nodes.map(({ enrollmentTokenHash: _hash, ...n }) => n));
+    return res.json(nodes.map(({ enrollmentTokenHash: _hash, ...n }) => withEffectiveOnline(n)));
   }
   return res.status(401).json({ error: "Unauthorized" });
 }
@@ -1261,6 +1313,28 @@ function sessionAdvertsFrom(raw: unknown) {
       source: s.source != null ? String(s.source) : undefined,
       titleEnc: s.titleEnc != null ? String(s.titleEnc) : undefined,
       branch: s.branch != null ? String(s.branch) : undefined,
+      attention: Array.isArray(s.attention)
+        ? s.attention.slice(0, 50).flatMap((rawItem: unknown) => {
+            if (!rawItem || typeof rawItem !== "object") return [];
+            const item = rawItem as Record<string, unknown>;
+            const kind = String(item.kind || "");
+            const severity = String(item.severity || "");
+            const id = String(item.id || "").slice(0, 256);
+            const createdAt = String(item.createdAt || "");
+            if (!id || !["approval", "question", "session", "automation"].includes(kind)
+              || !["info", "warning", "error", "critical"].includes(severity)
+              || !Number.isFinite(Date.parse(createdAt))) return [];
+            return [{
+              id,
+              kind: kind as "approval" | "question" | "session" | "automation",
+              severity: severity as "info" | "warning" | "error" | "critical",
+              createdAt,
+              ...(item.updatedAt && Number.isFinite(Date.parse(String(item.updatedAt)))
+                ? { updatedAt: String(item.updatedAt) }
+                : {}),
+            }];
+          })
+        : undefined,
       // Stage 2 routing metadata (see store.ts SessionIndexEntry). Node-only.
       agentServiceAddress: s.agentServiceAddress != null ? String(s.agentServiceAddress) : undefined,
     }))
@@ -1331,12 +1405,15 @@ app.post("/internal/notifications/hints", requireNode, asyncHandler(async (req, 
   const node = (req as Request & { node: NodeRecord }).node;
   const kind = String(req.body?.kind || req.body?.type || "session");
   const sessionId = String(req.body?.sessionId || "");
+  const attentionId = String(req.body?.attentionId || "");
   const title = String(req.body?.title || (kind === "approval_requested" ? "Approval needed" : kind === "session_done" ? "Session finished" : kind === "session_error" ? "Session hit an error" : kind === "question_asked" ? "Bivy needs your input" : kind === "terminal_bell" ? "Terminal bell" : "Bivy update"));
   const body = String(req.body?.body || (kind === "approval_requested" ? "A session wants to run something — tap to approve or deny." : kind === "session_done" ? "A session finished — tap to review the result." : kind === "session_error" ? "A session failed its last turn — tap to see what went wrong." : kind === "question_asked" ? "A session is asking a question — tap to answer." : kind === "terminal_bell" ? "A terminal rang the bell — it may be waiting for you." : "Open Bivy to continue."));
   // Deep link via the SPA session route (`/sessions/:id`) — the client router
   // matches that path — carrying the owning node as a query param so a click can
   // switch to it before opening. Without a session id we can only open the root.
-  const url = sessionId ? `/sessions/${encodeURIComponent(sessionId)}?node=${encodeURIComponent(node.id)}` : "/";
+  const url = sessionId
+    ? `/sessions/${encodeURIComponent(sessionId)}?node=${encodeURIComponent(node.id)}${attentionId ? `&attention=${encodeURIComponent(attentionId)}` : ""}`
+    : "/";
   const result = await sendPushToAccount(node.accountId, { title, body, kind, nodeId: node.id, sessionId, url });
   res.json({ ok: true, ...result });
 }));
@@ -1996,7 +2073,7 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
     const slug = hook.botMention || "";
     const servingNode = hook.servingNodeId ? nodes.find((n) => n.id === hook.servingNodeId) : undefined;
     const servedBy = servingNode
-      ? { id: servingNode.id, name: servingNode.name, online: Boolean(servingNode.online), lastSeenAt: servingNode.lastSeenAt }
+      ? { id: servingNode.id, name: servingNode.name, online: withEffectiveOnline(servingNode).online, lastSeenAt: servingNode.lastSeenAt }
       : null;
     return {
       connected: true,

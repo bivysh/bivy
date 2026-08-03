@@ -145,6 +145,7 @@ const attachEntry = path.join(repoRoot, packaged ? "dist/attach.js" : "src/attac
 const relayAttachEntry = path.join(repoRoot, packaged ? "dist/relay-attach.js" : "src/relay-attach.ts");
 const execEntry = path.join(repoRoot, packaged ? "dist/exec.js" : "src/exec.ts");
 const mcpProxyEntry = path.join(repoRoot, packaged ? "dist/harness/mcp-proxy-cli.js" : "src/harness/mcp-proxy-cli.ts");
+const mcpServeEntry = path.join(repoRoot, packaged ? "dist/harness/mcp-serve-cli.js" : "src/harness/mcp-serve-cli.ts");
 const qrEntry = path.join(repoRoot, "public", "qr.js");
 const tsxCli = packaged ? "" : path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
 const nodeBin = process.execPath;
@@ -3467,6 +3468,7 @@ async function cmdStatus(args = []) {
   }
   console.log(c.bold("\n  Bivy node\n"));
   console.log(`  url:       ${url(config)}  ${reachable ? c.green("● reachable") : c.dim("○ not reachable")}`);
+  if (status?.version) console.log(`  version:   ${status.version}`);
   console.log(`  workspace: ${status?.workspace || config.workspace}`);
   console.log(`  ${serviceStatusLine()}`);
   const relay = loadRelayConfig();
@@ -3505,6 +3507,10 @@ async function cmdStatus(args = []) {
     console.log(`  devices:   ${status.devices?.paired ?? 0} paired remote, ${status.devices?.localTokens ?? 0} local token(s)`);
     console.log(`  approvals: ${status.approvals?.pending ?? 0} pending`);
     console.log(`  guard:     ${status.approvalMode || "autonomous"} (${status.guardrails?.workspaceBoundary ? "workspace boundary on" : "boundary unknown"})`);
+    if (status.updatedAt) {
+      const when = new Date(status.updatedAt);
+      console.log(`  updated:   ${Number.isNaN(when.getTime()) ? status.updatedAt : when.toLocaleString()}`);
+    }
   }
   console.log("");
 }
@@ -4359,6 +4365,13 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       // else here (no deps banner) and inherit stdio verbatim. Run in the
       // agent's cwd so relative server commands resolve.
       await run(nodeBin, [...nodeScriptArgs(mcpProxyEntry), ...args], { cwd: process.cwd(), env: process.env });
+      break;
+    case "mcp-serve":
+      // Bivy-owned MCP server (exposes attach_to_chat and future chat tools).
+      // Injected into a non-SDK agent's MCP config so the agent discovers the
+      // tool; like mcp-proxy its stdin/stdout ARE the JSON-RPC stream, so emit
+      // nothing else here and inherit stdio verbatim.
+      await run(nodeBin, [...nodeScriptArgs(mcpServeEntry), ...args], { cwd: process.cwd(), env: process.env });
       break;
     case "help":
     case "-h":
