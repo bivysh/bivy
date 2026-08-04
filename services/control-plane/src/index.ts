@@ -2806,9 +2806,15 @@ app.post("/webhooks/linear/:id", asyncHandler(async (req, res) => {
   if (!rawLabel) return res.json({ ok: true, enqueued: false });
   const label = applyDefaultNode(rawLabel, hook.defaultNode);
   const deliveryId = String(req.headers["linear-delivery"] ?? "").trim();
+  // Case B (Linear): if this issue already has an indexed session, CONTINUE it
+  // rather than starting a fresh one, so a re-dispatch lands in the same thread and
+  // the user keeps interacting with it as a normal chat — the Linear analogue of
+  // the GitHub issue/comment path above.
+  const existingSession = await store.findSessionByExternalId(hook.accountId, issue.id).catch(() => undefined);
   const item = await store.enqueueWorkItem(hook.accountId, {
     label,
     source: "linear:issue",
+    target: existingSession ? { kind: "existing_session", sessionId: existingSession.sessionId } : undefined,
     title: `Linear issue ${issue.identifier}`,
     repo: issue.repo,
     externalId: issue.id,
