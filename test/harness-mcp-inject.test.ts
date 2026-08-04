@@ -186,6 +186,81 @@ check("injectBivyTools is idempotent on a Codex TOML that already declares bivy"
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+// --- OpenCode native `mcp` shape (rejects mcpServers) ------------------------
+
+check("injectBivyTools CREATES opencode.json with mcp (not mcpServers) and restore deletes it", () => {
+  const ws = tmp();
+  const file = path.join(ws, "opencode.json");
+  assert.equal(fs.existsSync(file), false);
+
+  const res = injectBivyToolsForSession("opencode", {
+    workspace: ws,
+    home: os.homedir(),
+    sessionId: "sess-oc",
+    endpoint: "http://127.0.0.1:4318",
+  });
+  assert.deepEqual(res.injected, [file]);
+  const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(cfg.mcpServers, undefined, "must not write the Cursor-style key OpenCode rejects");
+  assert.equal(cfg.mcp.bivy.type, "local");
+  assert.deepEqual(cfg.mcp.bivy.command, ["bivy", "mcp-serve"]);
+  assert.equal(cfg.mcp.bivy.environment.BIVY_SESSION_ID, "sess-oc");
+  assert.equal(cfg.mcp.bivy.environment.BIVY_MCP_ENDPOINT, "http://127.0.0.1:4318");
+
+  res.restore();
+  assert.equal(fs.existsSync(file), false, "restore must delete a file it created");
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+check("injectBivyTools ADDS to an existing OpenCode mcp map and restores exact bytes", () => {
+  const ws = tmp();
+  const file = path.join(ws, "opencode.json");
+  const original =
+    JSON.stringify({ mcp: { fs: { type: "local", command: ["mcp-fs", "--root", "/w"] } }, model: "openai/gpt-5" }, null, 2) + "\n";
+  fs.writeFileSync(file, original);
+
+  const res = injectBivyToolsForSession("opencode", { workspace: ws, home: os.homedir(), sessionId: "s" });
+  assert.deepEqual(res.injected, [file]);
+  const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.deepEqual(cfg.mcp.fs.command, ["mcp-fs", "--root", "/w"], "existing servers preserved");
+  assert.equal(cfg.model, "openai/gpt-5", "other top-level keys preserved");
+  assert.equal(cfg.mcp.bivy.type, "local");
+  assert.deepEqual(cfg.mcp.bivy.command, ["bivy", "mcp-serve"]);
+
+  res.restore();
+  assert.equal(fs.readFileSync(file, "utf8"), original, "restore reproduces the original bytes exactly");
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+check("injectBivyTools is idempotent on OpenCode when bivy already present", () => {
+  const ws = tmp();
+  const file = path.join(ws, "opencode.json");
+  fs.writeFileSync(file, JSON.stringify({ mcp: { bivy: { type: "local", command: ["bivy", "mcp-serve"] } } }));
+  const res = injectBivyToolsForSession("opencode", { workspace: ws, home: os.homedir(), sessionId: "s" });
+  assert.deepEqual(res.injected, []);
+  fs.rmSync(ws, { recursive: true, force: true });
+});
+
+check("injectJsonMcpConfig routes OpenCode local servers via command argv array", () => {
+  const dir = tmp();
+  const file = path.join(dir, "opencode.json");
+  const original =
+    JSON.stringify({ mcp: { fs: { type: "local", command: ["mcp-fs", "--root", "/w"], environment: { X: "1" } } } }, null, 2) + "\n";
+  fs.writeFileSync(file, original);
+
+  const r = injectJsonMcpConfig(file, launcher);
+  assert.equal(r.injected, true);
+  const rewritten = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(rewritten.mcp.fs.command[0], "bivy");
+  assert.ok(rewritten.mcp.fs.command.includes("--bivy-mcp"));
+  assert.deepEqual(rewritten.mcp.fs.environment, { X: "1" });
+  assert.equal(rewritten.mcpServers, undefined);
+
+  r.restore();
+  assert.equal(fs.readFileSync(file, "utf8"), original);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 if (failures > 0) {
   console.error(`\n${failures} mcp-inject test(s) failed`);
   process.exit(1);
