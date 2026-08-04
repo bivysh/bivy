@@ -65,7 +65,7 @@ import { commandLaunch } from "./command-launch.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
 import { createWorktree, removeWorktree, branchSlug, gitRepoRoot, type Worktree } from "./worktree.js";
 import { HarnessManager } from "./harness/manager.js";
-import { startEgressProxyIfEnabled } from "./harness/egress.js";
+import { startEgressProxyIfEnabled, applySessionSandboxEgress, stopSessionEgress } from "./harness/egress.js";
 import { initSharedDepCache, sharedDepCacheRoot } from "./harness/dep-cache.js";
 import { evictToCap, dirSizeBytes } from "./harness/cache-evict.js";
 import { checkDiskAdmission } from "./harness/disk-admission.js";
@@ -6970,6 +6970,9 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   sessionEvents.clear(record.id);
   record.session.dispose();
   harness.detach(record.id);
+  // Tear down this session's own egress proxy, if it started one (read-only /
+  // workflow network policy). No-op for the default path.
+  void stopSessionEgress(record.id);
   record.mcpRestore?.();
   openSessions.delete(record.id);
   if (record.sessionFile) openSessions.delete(path.resolve(record.sessionFile));
@@ -8132,6 +8135,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // session legitimately starts "active now".
   const resumedLastActive = requestedSessionFile ? metaLastActiveMs(storedMeta) : undefined;
   const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: opts.approvalMode, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral };
+  // Apply this session's sandbox network policy as a per-session egress proxy
+  // (its own proxy/decider, never the node-global one). Opt-in via BIVY_SANDBOX_NET:
+  // a read-only session then actually blocks outbound network even for a CLI agent
+  // whose own sandbox doesn't (opencode/aider/goose). No-op otherwise. Fire-and-
+  // forget — a slow proxy listen never delays session creation.
+  void applySessionSandboxEgress(record.id, sessionSandbox, (event) => broadcast({ type: "node.egress", event }));
   // Stage 2 slice 4: a re-attached session recovers its still-running TUI
   // terminal link (the PTY survives a detach) from the session→terminal registry.
   if (attached) {
