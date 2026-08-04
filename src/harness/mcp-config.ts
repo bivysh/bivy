@@ -3,12 +3,13 @@
 // Universal Agent Harness — MCP config rewriting.
 //
 // The one piece of MCP governance that is unavoidably per-agent is *where* the
-// config lives — but the shape is near-universal. Claude Code, Codex, Cursor,
-// Windsurf, and most MCP hosts use the same `{ mcpServers: { name: { command,
-// args, env } } }` object (stdio servers) plus optional remote (url) servers.
-// This module rewrites that object so every stdio server launches through the
-// Bivy MCP proxy instead of directly — turning each agent's own MCP config into
-// the injection point, with no agent-specific code beyond the file location.
+// config lives — and, for a couple of hosts, the shape. Claude Code, Cursor,
+// Windsurf, and most MCP hosts use `{ mcpServers: { name: { command, args, env
+// } } }` (stdio) plus optional remote (url) servers. OpenCode is the JSON
+// outlier: `{ mcp: { name: { type: "local", command: [bin, ...args],
+// environment } } }` (see opencode.ai/config.json). This module rewrites both
+// shapes so every stdio server launches through the Bivy MCP proxy instead of
+// directly — turning each agent's own MCP config into the injection point.
 //
 // Pure functions, no I/O — unit-tested in test/harness-mcp-config.test.ts. The
 // file-location table for each agent is data (see agentMcpConfigTargets) that
@@ -149,14 +150,128 @@ export function withBivyToolsServer(config: McpConfig, spec: McpServerSpec, name
 }
 
 // ---------------------------------------------------------------------------
+// OpenCode — same job as the mcpServers helpers above, different JSON shape.
+// OpenCode's schema rejects unknown top-level keys (additionalProperties: false),
+// so writing `mcpServers` makes `opencode run` fail immediately with
+// "Unrecognized key: mcpServers". Local servers use `command` as a full argv
+// array and `environment` (not `args`/`env`).
+
+/** One entry under OpenCode's top-level `mcp` map. */
+export interface OpenCodeMcpServerSpec {
+  type?: "local" | "remote" | string;
+  /** Local: full argv, e.g. `["bivy", "mcp-serve"]`. */
+  command?: string[];
+  environment?: Record<string, string>;
+  enabled?: boolean;
+  cwd?: string;
+  timeout?: number;
+  /** Remote: SSE/HTTP endpoint. */
+  url?: string;
+  headers?: Record<string, string>;
+  [k: string]: unknown;
+}
+
+export interface OpenCodeConfig {
+  mcp?: Record<string, OpenCodeMcpServerSpec>;
+  [k: string]: unknown;
+}
+
+/** Convert a universal stdio server spec into OpenCode's local-server shape. */
+export function toOpenCodeLocalServer(spec: McpServerSpec): OpenCodeMcpServerSpec {
+  const command = [spec.command ?? "", ...(spec.args ?? [])].filter((s, i) => i === 0 || s !== undefined);
+  // Drop a leading empty command if somehow absent — callers always pass one.
+  const argv = command[0] ? command : command.slice(1);
+  const out: OpenCodeMcpServerSpec = { type: "local", command: argv };
+  if (spec.env && Object.keys(spec.env).length) out.environment = { ...spec.env };
+  return out;
+}
+
+/** True when an OpenCode local server already launches through the Bivy proxy. */
+export function isOpenCodeProxied(spec: OpenCodeMcpServerSpec, launcher: ProxyLauncher): boolean {
+  if (!Array.isArray(spec.command) || spec.command.length === 0) return false;
+  if (spec.command[0] !== launcher.command) return false;
+  return spec.command.includes(PROXY_MARKER);
+}
+
+/**
+ * Rewrite every local stdio server in `config.mcp` to launch through the proxy:
+ *
+ *   original:  { type: "local", command: ["mcp-fs", "--root", "/w"], environment: {...} }
+ *   rewritten: { type: "local",
+ *                command: ["bivy", "mcp-proxy", "--bivy-mcp", "--server", "<name>", "--",
+ *                          "mcp-fs", "--root", "/w"],
+ *                environment: {...} }
+ *
+ * Remote servers and already-proxied locals are left untouched (reported in
+ * `skipped`). Idempotent. Does not mutate the input.
+ */
+export function routeOpenCodeThroughProxy(config: OpenCodeConfig, launcher: ProxyLauncher): RouteResult & { config: OpenCodeConfig } {
+  const rewritten: string[] = [];
+  const skipped: string[] = [];
+  const servers = config.mcp ?? {};
+  const nextServers: Record<string, OpenCodeMcpServerSpec> = {};
+
+  for (const [name, spec] of Object.entries(servers)) {
+    if (!spec || typeof spec !== "object") {
+      nextServers[name] = spec;
+      skipped.push(name);
+      continue;
+    }
+    if (!Array.isArray(spec.command) || spec.command.length === 0 || typeof spec.command[0] !== "string" || !spec.command[0]) {
+      // Remote/url server, enabled-only stub, or malformed — can't wrap via stdio proxy.
+      nextServers[name] = spec;
+      skipped.push(name);
+      continue;
+    }
+    if (isOpenCodeProxied(spec, launcher)) {
+      nextServers[name] = spec;
+      skipped.push(name);
+      continue;
+    }
+    const prefix = launcher.argsPrefix ?? [];
+    const orig = spec.command;
+    nextServers[name] = {
+      ...spec,
+      type: "local",
+      command: [launcher.command, ...prefix, PROXY_MARKER, "--server", name, "--", ...orig],
+    };
+    rewritten.push(name);
+  }
+
+  return {
+    config: { ...config, mcp: nextServers },
+    rewritten,
+    skipped,
+  };
+}
+
+/**
+ * Insert the Bivy tools server under OpenCode's `mcp.<name>` (default "bivy").
+ * Idempotent: an existing entry of that name is left untouched.
+ */
+export function withOpenCodeBivyToolsServer(
+  config: OpenCodeConfig,
+  spec: OpenCodeMcpServerSpec,
+  name = "bivy",
+): { config: OpenCodeConfig; added: boolean } {
+  const servers = config.mcp ?? {};
+  if (servers[name]) return { config, added: false };
+  return { config: { ...config, mcp: { ...servers, [name]: spec } }, added: true };
+}
+
+/** Basename check for OpenCode project config files we inject into. */
+export function isOpenCodeConfigFile(filePath: string): boolean {
+  const base = nodePath.basename(filePath).toLowerCase();
+  return base === "opencode.json" || base === ".opencode.json" || base === "opencode.jsonc" || base === ".opencode.jsonc";
+}
+
+// ---------------------------------------------------------------------------
 // Phase 2b — auto-injection into an agent's on-disk MCP config.
 //
-// The transform above is universal; the only per-agent bit is *where* the JSON
-// config lives. This table lists the JSON MCP-config files each agent reads
-// (workspace-local first, so injection is session-scoped and safe). Agents whose
-// config is TOML/YAML (Codex, Goose) are intentionally omitted for now — routing
-// them needs a format-specific writer; they still run + are governed by the FS
-// and network channels, just without proxied MCP.
+// The transform above is shared; the per-agent bit is *where* the config lives
+// (and for OpenCode/Codex/Goose, which writer to use). This table lists the
+// MCP-config files each agent reads (workspace-local first, so injection is
+// session-scoped and safe).
 
 export interface McpConfigContext {
   /** The session workspace (for workspace-local config files). */
