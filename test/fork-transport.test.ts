@@ -245,6 +245,12 @@ async function run() {
     assert.deepEqual(withLive.normalized.turns.map((t) => t.role), ["user", "assistant"]);
   });
 
+  await test("the source's sandbox tier round-trips in the bundle record (fork bug #6)", async () => {
+    const src = fakeRuntime("pi", true);
+    const bundle = buildForkBundle({ runtime: src, sessionFile: "x", record: record({ sandbox: "workspace-write" }) });
+    assert.equal(bundle.record.sandbox, "workspace-write", "so standUpFork can carry it into the forked session's tier");
+  });
+
   console.log(`fork-transport: all ${passed} tests passed`);
 }
 

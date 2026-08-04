@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -54,18 +54,65 @@ export function captureDirtyPatch(repoDir: string, opts: { maxBytes?: number } =
   return { patch, untracked };
 }
 
+/** Outcome of re-applying a fork's captured working-tree changes. */
+export interface ApplyDirtyResult {
+  /** True when at least part of the patch landed on the destination tree. */
+  applied: boolean;
+  /** True when it only landed via 3-way merge and may carry conflict markers. */
+  conflicted?: boolean;
+  /** A human-facing note when the patch didn't apply cleanly (or at all). */
+  warning?: string;
+}
+
 /**
  * Re-apply a captured patch onto a fresh checkout at `repoDir`. A no-op when the
  * source pushed the branch instead (`pushedInstead`) or the working tree was
  * clean (empty patch). Uses `git apply` so both tracked hunks and untracked
  * new-file hunks (produced via `--no-index`) land correctly.
+ *
+ * NEVER throws: a fork's uncommitted changes are best-effort, and the source's
+ * base commit frequently differs from what the destination cloned (a diverged
+ * default branch, an unpushed source branch), so a strict `git apply` fails on
+ * hunk-context mismatch and previously took the whole fork down with it. Instead
+ * we fall back to `git apply --3way` (which reconstructs the hunks from the blob
+ * SHAs the patch carries and merges what it can) and, when even that fails,
+ * surface a warning and leave the tree as the clone left it — the fork still
+ * succeeds, minus the un-appliable working-tree edits.
  */
-export function applyDirtyPatch(repoDir: string, dirty: ForkDirtyPatch | undefined): void {
-  if (!dirty || dirty.pushedInstead || !dirty.patch.trim()) return;
+export function applyDirtyPatch(repoDir: string, dirty: ForkDirtyPatch | undefined): ApplyDirtyResult {
+  if (!dirty || dirty.pushedInstead || !dirty.patch.trim()) return { applied: false };
   const tmp = path.join(os.tmpdir(), `bivy-fork-${Date.now()}-${Math.random().toString(36).slice(2)}.patch`);
   fs.writeFileSync(tmp, dirty.patch);
   try {
-    execFileSync("git", ["-C", repoDir, "apply", "--whitespace=nowarn", tmp], { stdio: "pipe" });
+    try {
+      execFileSync("git", ["-C", repoDir, "apply", "--whitespace=nowarn", tmp], { stdio: "pipe" });
+      return { applied: true };
+    } catch {
+      // Clean apply failed — the destination's base drifted from the source's.
+      // Retry with a 3-way merge, which reconstructs the pre-image from the blob
+      // SHAs the patch carries (present because the destination cloned the same
+      // repo) and merges what it can. `git apply --3way` exits non-zero BOTH for
+      // an un-appliable patch (nothing lands) AND for a conflicting one (it lands
+      // the non-conflicting hunks and writes conflict markers) — so read the exit
+      // status/stderr with spawnSync rather than treating every non-zero as a
+      // total failure that drops all the WIP.
+      const res = spawnSync("git", ["-C", repoDir, "apply", "--3way", "--whitespace=nowarn", tmp], { encoding: "utf8" });
+      if (res.status === 0) return { applied: true }; // merged cleanly onto the diverged base
+      const stderr = (res.stderr || "").toString();
+      if (/with conflicts/i.test(stderr)) {
+        return {
+          applied: true,
+          conflicted: true,
+          warning:
+            "Some uncommitted changes from the source didn't apply cleanly and were merged with conflict markers — review and resolve them in the fork.",
+        };
+      }
+      const detail = stderr.split("\n").find((l) => l.trim()) || "patch did not apply";
+      return {
+        applied: false,
+        warning: `Couldn't re-apply the source's uncommitted changes (${detail}); they were left behind. Re-make them in the fork if you still need them.`,
+      };
+    }
   } finally {
     try {
       fs.unlinkSync(tmp);

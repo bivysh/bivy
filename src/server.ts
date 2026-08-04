@@ -72,7 +72,7 @@ import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
 import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
-import { parseRepo, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
+import { parseRepo, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
   GitHubTaskPoller,
@@ -3707,11 +3707,19 @@ const RELAY_COMMANDS: Record<string, Command> = {
         source: rec.source,
         title: rec.session.getName(),
         model: rec.session.getCurrentModel()?.name,
+        sandbox: rec.sandbox,
       };
       let dirtyPatch;
       if (rec.worktree) {
         try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort — omit dirty state */ }
       }
+      // Publish the source branch so a cross-node fork's COMMITTED work travels
+      // via origin (the destination adopts `origin/<branch>`; see
+      // resolveAdoptBaseRef). Uncommitted work rides the dirtyPatch above. Only
+      // for a genuine cross-node fork — a same-node cross-agent fork adopts the
+      // LOCAL branch and needs no push. Best-effort: a no-token/offline node just
+      // falls back to the default base downstream.
+      if (msg.crossNode === true) await pushForkSourceBranch(rec);
       // Refresh the account model-auth vault so the destination node can pull
       // this session's model credentials during import (fork credential-move,
       // docs/session-fork-plan.md). Best-effort: local-only nodes just skip it.
@@ -3790,6 +3798,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
         source: rec.source,
         title: rec.session.getName(),
         model: rec.session.getCurrentModel()?.name,
+        sandbox: rec.sandbox,
       };
       // Carry uncommitted work: capture from the SOURCE worktree; standUpFork
       // re-applies it into the fork's fresh worktree. Local git ops only.
@@ -6055,6 +6064,47 @@ async function applyRequestedModel(record: SessionRecord, model: { provider: str
   }
 }
 
+// Serialize clone + worktree work per repo directory. Two forks (or a fork and
+// a GitHub pickup) hitting the same shared clone concurrently race on
+// `git worktree add`/`remove` and the `.bivy/worktrees` dir — the loser used to
+// see "already exists"/"already checked out" or, worse, `createWorktree`'s
+// adopt-path `rmSync` clearing a sibling's tree. A lightweight per-key async
+// mutex removes the race without a filesystem lock.
+const repoWorktreeLocks = new Map<string, Promise<unknown>>();
+async function withRepoLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = repoWorktreeLocks.get(key) ?? Promise.resolve();
+  // Chain the map's tail on the PREVIOUS holder settling (never rejecting), so a
+  // failing fork doesn't poison the next waiter's gate. Each caller still awaits
+  // its own `run` and gets its own result/exception. Bounded by repo count.
+  const gate = prev.then(() => {}, () => {});
+  const run = gate.then(fn);
+  repoWorktreeLocks.set(key, run.then(() => {}, () => {}));
+  return run;
+}
+
+/**
+ * Best-effort push of a fork SOURCE's branch to origin before the bundle leaves
+ * the node, so a cross-node fork's committed work travels via origin (the
+ * destination bases its adopted worktree on `origin/<branch>` — see
+ * `resolveAdoptBaseRef`). Guarded by a token + repo backing; a failure just
+ * means the destination falls back to the default base and the dirty patch.
+ */
+async function pushForkSourceBranch(rec: SessionRecord): Promise<void> {
+  const parts = repoSessionParts(rec);
+  if (!parts) return;
+  const { wt, parsed } = parts;
+  try {
+    const token = await resolveTokenForRepo(parsed.owner, parsed.repo);
+    if (!token) return;
+    const cfg: GitHubTaskConfig = { token, owner: parsed.owner, repo: parsed.repo, repoDir: wt.repoRoot, label: "bivy", claimLabel: "bivy:in-progress", pollMs: 60_000 };
+    await pushBranch(cfg, wt.path, wt.branch);
+    rec.branchPushed = true;
+  } catch {
+    // offline / no rights / protected branch — committed work may not reach a
+    // cross-node destination, but the fork still proceeds from the best base.
+  }
+}
+
 /** Options controlling how a fork bundle is stood up (docs/session-fork-plan.md). */
 interface StandUpForkOptions {
   bundle: ForkBundle;
@@ -6098,8 +6148,10 @@ type StandUpForkOutcome =
  */
 async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome> {
   const { bundle, targetRuntimeId } = opts;
-  const targetRuntime = getRuntime(targetRuntimeId);
   const fallback = opts.fallback ?? { workspace: defaultWorkspace, cwd: defaultWorkspace };
+  // Carry the source's sandbox tier so a sandboxed session forks into a
+  // sandboxed one, rather than defaulting to this node's tier (fork.ts).
+  const forkSandbox = normalizeSandboxTier(bundle.record.sandbox);
 
   // Credential-move: if the chosen model's provider isn't logged in on this node,
   // pull the account model-auth vault (a login done on another node carries over),
@@ -6114,41 +6166,65 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
   }
 
   // Prerequisite detection. A missing AGENT is a hard blocker — stop before any
-  // clone/worktree work. Skipped for a same-node local fork.
+  // clone/worktree work. Skipped for a same-node local fork. Read the agent's
+  // availability + display name from the runtime REGISTRY (which never throws)
+  // rather than resolving the runtime up front: `getRuntime` throws for a
+  // known-but-not-installed agent, which — called eagerly — surfaced a raw
+  // "not available" string with an empty `missing[]` instead of this friendly
+  // install checklist. An unknown id (no registry entry) is treated as
+  // unavailable so it, too, degrades to the checklist rather than a getRuntime throw.
   const agentInfo = listRuntimes().find((r) => r.id === targetRuntimeId);
-  const agentAvailable = agentInfo ? (agentInfo as { status?: string }).status === "available" : true;
+  const agentAvailable = agentInfo ? (agentInfo as { status?: string }).status === "available" : false;
+  const agentDisplayName = agentInfo?.displayName ?? targetRuntimeId;
   const prereqInput: ForkPrereqInput = {
-    agent: { id: targetRuntimeId, displayName: targetRuntime.displayName, available: agentAvailable },
+    agent: { id: targetRuntimeId, displayName: agentDisplayName, available: agentAvailable },
     ...(modelProvider ? { model: { provider: modelProvider, configured: Boolean(modelConfigured) } } : {}),
   };
   if (opts.detectPrereqs) {
     const early = evaluateForkPrereqs(prereqInput);
     if (blockingForkPrereqs(early).length > 0) {
-      return { ok: false, error: `${targetRuntime.displayName} is not installed on the destination node.`, missing: missingForkPrereqs(early) };
+      return { ok: false, error: `${agentDisplayName} is not installed on the destination node.`, missing: missingForkPrereqs(early) };
     }
   }
+
+  // Safe now: the agent is available (or this is a same-node local fork whose
+  // agent is self-evidently present). The per-session sandbox tier bakes into
+  // the runtime's launch flags.
+  const targetRuntime = getRuntime(targetRuntimeId, forkSandbox);
 
   // Reconstruct repo + worktree when the source was repo-backed.
   let workspace = fallback.workspace;
   let cwd = fallback.cwd;
   let repoReachable: boolean | undefined;
   let worktree: Worktree | undefined;
+  let dirtyWarning: string | undefined;
   const parsed = bundle.record.repoSlug ? parseRepo(bundle.record.repoSlug) : undefined;
   if (parsed) {
     const token = await resolveTokenForRepo(parsed.owner, parsed.repo);
     repoReachable = Boolean(token);
     const repoDir = await cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token, root: reposRoot });
     const srcBranch = bundle.record.branch;
-    let wt;
-    if (opts.worktree === "fresh") {
-      // Cut a new branch from the source branch (or the repo's default base).
-      const forkBranch = `${srcBranch ?? "fork"}-fork-${randomBytes(4).toString("hex")}`;
-      wt = await createWorktree({ repoDir, id: forkBranch, branch: forkBranch, base: srcBranch ?? await resolveDefaultBaseRef(repoDir) });
-    } else {
-      // Adopt the source branch, or a fresh random worktree when it had none.
-      wt = await createWorktree({ repoDir, id: srcBranch ?? `fork-${randomBytes(6).toString("hex")}`, branch: srcBranch, base: srcBranch ? undefined : await resolveDefaultBaseRef(repoDir) });
-    }
-    applyDirtyPatch(wt.path, bundle.dirtyPatch);
+    // Serialize clone-adjacent worktree ops on this repo so concurrent forks /
+    // pickups don't race on `git worktree add` or clobber each other's trees.
+    const wt = await withRepoLock(repoDir, async () => {
+      if (opts.worktree === "fresh") {
+        // Same-node fork: cut a NEW branch from the source's LOCAL branch (which
+        // holds its latest, possibly-unpushed commits) or the repo default.
+        const forkBranch = `${srcBranch ?? "fork"}-fork-${randomBytes(4).toString("hex")}`;
+        return createWorktree({ repoDir, id: forkBranch, branch: forkBranch, base: srcBranch ?? await resolveDefaultBaseRef(repoDir) });
+      }
+      // Cross-node adopt: the source branch has no LOCAL ref here. Base the
+      // adopted branch on the pushed `origin/<branch>` so committed work travels
+      // (was: undefined → the destination's DEFAULT branch, silently dropping
+      // every commit). Give the worktree DIR a unique suffix so a same-branch
+      // adopt never reuses — or, via createWorktree's stale-dir cleanup, deletes
+      // — another live session's tree.
+      const dirId = `${srcBranch ?? "fork"}-${randomBytes(4).toString("hex")}`;
+      const base = srcBranch ? await resolveAdoptBaseRef(repoDir, srcBranch) : await resolveDefaultBaseRef(repoDir);
+      return createWorktree({ repoDir, id: dirId, branch: srcBranch, base });
+    });
+    const applied = applyDirtyPatch(wt.path, bundle.dirtyPatch);
+    if (applied.warning) dirtyWarning = applied.warning;
     workspace = repoDir;
     cwd = wt.path;
     worktree = wt;
@@ -6161,8 +6237,9 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
     const forkRepoRoot = await gitRepoRoot(cwd);
     if (forkRepoRoot) {
       const forkBranch = `bivy/fork-${randomBytes(6).toString("hex")}`;
-      const wt = await createWorktree({ repoDir: forkRepoRoot, id: forkBranch, branch: forkBranch });
-      applyDirtyPatch(wt.path, bundle.dirtyPatch);
+      const wt = await withRepoLock(forkRepoRoot, () => createWorktree({ repoDir: forkRepoRoot, id: forkBranch, branch: forkBranch }));
+      const applied = applyDirtyPatch(wt.path, bundle.dirtyPatch);
+      if (applied.warning) dirtyWarning = applied.warning;
       workspace = forkRepoRoot;
       cwd = wt.path;
       worktree = wt;
@@ -6173,8 +6250,8 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
   // transcript (full) or a fresh session the caller seeds with plan.seedPrompt.
   const plan = await materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd }, seed: { transcriptUrl: opts.transcriptUrl } });
   const record = plan.kind === "resume"
-    ? await createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, makeActive: false })
-    : await createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, makeActive: false });
+    ? await createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false })
+    : await createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false });
   // Mark the new session as a fork of its source, so the run card can show
   // "Forked from …" and the lineage survives a reload (persisted below). Just
   // the parent's session id — an identifier, not content, so it's safe to
@@ -6192,6 +6269,9 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
     broadcast({ type: "session.updated", sessionId: record.id, sessionFile: record.sessionFile, bivySession: bivySessionEnvelope(record) });
   }
   if (bundle.record.title && !record.session.getName()) record.session.setName(bundle.record.title);
+  // Surface a non-fatal note when the source's uncommitted changes didn't apply
+  // cleanly, so the fork isn't silently missing work-in-progress.
+  if (dirtyWarning) broadcast({ type: "session.notice", sessionId: record.id, message: dirtyWarning });
   await applyRequestedModel(record, opts.model ?? nodeDefaultModel() ?? undefined);
   persistSessionMetadata(record);
   scheduleAdvertise();
