@@ -91,7 +91,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 - [x] Add critical Playwright flows at desktop/mobile widths to CI.
 - [ ] Add axe, keyboard/focus, light/dark visual, service-worker update, and reconnect tests.
 - [ ] Add long-transcript and initial-bundle budgets.
-- [ ] Eliminate React hook warnings and fail CI on new production warnings.
+- [x] Eliminate React hook warnings and fail CI on new production warnings.
 - [ ] Add a redacted diagnostics export and privacy-safe activation stage/failure instrumentation.
 
 ## Workstream C — Phase 2: trustworthy, reviewable outcomes

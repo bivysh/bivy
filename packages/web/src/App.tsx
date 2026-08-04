@@ -90,7 +90,7 @@ export function App() {
       if (document.visibilityState !== "hidden") { refreshGithubQueue(); refreshAutomationRuns(); }
     }, 30000);
     return () => clearInterval(id);
-  }, [refreshGithubQueue, refreshAutomationRuns]);
+  }, [refreshGithubQueue, refreshAutomationRuns, state.signedIn]);
   // sessionId → the run that produced it, joined from the queue's evidence.
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.

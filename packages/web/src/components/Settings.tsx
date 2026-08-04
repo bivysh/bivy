@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralNodeConfig, QueueRouting, HostedProvisioningStatus, HostedAuditEvent, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, LinearHook, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, connectSlackHook, disconnectSlackHook, fetchSlackHook, connectLinearHook, disconnectLinearHook, fetchLinearHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
@@ -2037,17 +2037,17 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   // routinely drop scripted navigations but honour a genuine submit gesture.
   const ready = phase === "submitting" && app?.action && app?.manifest;
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     if (!canQuery) return;
     controller.fetchGithubApp().then(setInfo).catch(() => setInfo(null));
     controller.listNodes().then(setNodes).catch(() => {});
-  };
-  useEffect(refresh, []);
+  }, [canQuery]);
+  useEffect(() => { refresh(); }, [refresh]);
   // Re-pull once the create flow reports success, so "connected" appears without
   // a manual reload.
   useEffect(() => {
     if (phase === "done") refresh();
-  }, [phase]);
+  }, [phase, refresh]);
   const apps = info?.apps ?? [];
   // The default node is one account-level setting written to every app, so any
   // app that has it answers for all of them.
@@ -2407,6 +2407,10 @@ function NodesPanel({ state }: { state: AppState }) {
   // Includes githubIssuePrompt so `resetIssuePrompt` (which doesn't touch the
   // rest of the form) re-seeds once the node echoes back the restored default.
   const sig = settings ? `${settings.name}|${settings.defaultAgent}|${settings.githubIssuePrompt}` : "";
+  // Intentionally keyed on `sig`, not `settings`: re-seed the form only when the
+  // signature changes (a real node/settings switch), so a new `settings` object
+  // identity from an unrelated re-render doesn't clobber an in-progress edit.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setForm(settings); }, [sig]);
 
   const runtimes = state.runtimes.filter((r) => String((r as { status?: string }).status ?? "available") === "available");

@@ -42,13 +42,15 @@ export default tseslint.config(
     },
   },
   {
-    // React view layer — keep hooks rules on (order is a real-bug class);
-    // exhaustive-deps stays a warning.
+    // React view layer — hook rules are ERRORS so CI fails on any new hook
+    // warning (B4c). rules-of-hooks catches order bugs; exhaustive-deps catches
+    // stale closures. A genuinely-intentional deviation carries a justified
+    // `// eslint-disable-next-line react-hooks/exhaustive-deps` at its call site.
     files: ["packages/web/**/*.{ts,tsx}"],
     plugins: { "react-hooks": reactHooks },
     rules: {
       "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
+      "react-hooks/exhaustive-deps": "error",
     },
   },
   {
