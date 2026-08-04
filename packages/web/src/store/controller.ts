@@ -3090,6 +3090,14 @@ export class AppController {
     if (id && checkpointId) this.send({ kind: "session.rewind", sessionId: id, checkpointId });
   }
 
+  /** Revert one changed file to its pre-turn content (C3d) — a per-file undo that
+   *  doesn't rewind the whole turn. `content` is the file's pre-turn text, or null
+   *  when the turn added the file (revert = remove it). */
+  revertFile(path: string, content: string | null, sessionId?: string): void {
+    const id = sessionId || this.store.getState().activeSessionId;
+    if (id && path) this.send({ kind: "session.revert_file", sessionId: id, path, content });
+  }
+
   /** Ask the node for this session's checkpoint list (rewind targets). */
   listCheckpoints(sessionId?: string): void {
     const id = sessionId || this.store.getState().activeSessionId;

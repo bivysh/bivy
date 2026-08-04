@@ -682,7 +682,7 @@ export async function triggerHostedProvision(store: LocalStore, execute = false,
 export interface GithubQueueItem {
   id: string;
   source: string; // "github:issue" | "github:comment" | "linear:issue" | "slack"
-  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
+  status: "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
   label: string;
   title: string;
   repo?: string;
@@ -699,6 +699,7 @@ export interface GithubQueueItem {
   createdAt: string;
   claimedAt?: string;
   claimedByNodeId?: string;
+  leaseExpiresAt?: string;
   completedAt?: string;
   triggerId?: string;
   triggerKind?: "github" | "slack" | "manual" | "webhook" | "schedule";
@@ -722,11 +723,11 @@ export interface GithubQueueItem {
    *  secret, token, or raw command/tool output; only bounded summaries,
    *  identifiers, and URLs. */
   routingReason?: string;
-  checks?: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; exitCode?: number }>;
+  checks?: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; exitCode?: number; durationMs?: number }>;
   events?: Array<{
     at: string;
     kind: "triggered" | "routed" | "claimed" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
-      | "retry" | "fallback" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
+      | "retry" | "fallback" | "rate_limited" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
     summary: string;
     attempt?: number;
     ref?: string;
@@ -760,11 +761,12 @@ export interface AccountAutomationRun {
   id: string;
   definitionId?: string;
   triggerKind: string;
-  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled";
+  status: "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled";
   title: string;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
+  leaseExpiresAt?: string;
   output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
 }
 
@@ -973,7 +975,7 @@ export interface AutomationHook {
 export interface AutomationOutcome {
   id: string;
   hookId: string;
-  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
+  status: "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
   title: string;
   createdAt: string;
   claimedAt?: string;

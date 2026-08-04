@@ -56,6 +56,8 @@ import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-cli
 import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
+import { configuredTurnTimeoutMs } from "./session/turn-watchdog.js";
+import { runRequiredAutomationChecks } from "./automation-checks.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
@@ -114,6 +116,8 @@ import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { normalizeMessages } from "./session/transcript-normal.js";
 import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog } from "./session/event-log.js";
+import { revertFile } from "./session/revert-file.js";
+import { buildDiagnosticsReport, activationRecord } from "./diagnostics.js";
 import { AttachmentStore, isValidAttachmentHash, type AttachmentRef } from "./session/attachment-store.js";
 import { planAttachment, isAttachPlanError, MAX_AGENT_ATTACHMENT_BYTES } from "./session/attach-to-chat.js";
 import {
@@ -908,7 +912,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -1081,18 +1085,29 @@ interface DecodedAttachment {
  *                    with its normal file tools. Any file type is supported;
  *                    binary files arrive as base64 `data`.
  */
+const MAX_PROMPT_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_PROMPT_ATTACHMENTS_BYTES = 40 * 1024 * 1024;
+
 function attachmentsFrom(value: unknown): { images: PromptImage[]; imageNotes: string[]; imageRefs: AttachmentRef[]; files: DecodedAttachment[] } {
   if (!Array.isArray(value)) return { images: [], imageNotes: [], imageRefs: [], files: [] };
   const images: PromptImage[] = [];
   const imageNotes: string[] = [];
   const imageRefs: AttachmentRef[] = [];
   const files: DecodedAttachment[] = [];
-  for (const raw of value.slice(0, 12) as unknown[]) {
+  let totalBytes = 0;
+  if (value.length > 12) throw new Error("A message can include at most 12 attachments");
+  for (const raw of value as unknown[]) {
     if (!raw || typeof raw !== "object") continue;
     const attachment = raw as PromptAttachment;
     const name = safeAttachmentName(attachment.name);
     const size = Number(attachment.size || 0);
     const mimeType = typeof attachment.mimeType === "string" && attachment.mimeType ? attachment.mimeType : undefined;
+    const encodedBytes = typeof attachment.data === "string" ? Math.floor(attachment.data.length * 3 / 4) : 0;
+    const textBytes = attachment.kind === "file" && typeof attachment.text === "string" ? Buffer.byteLength(attachment.text) : 0;
+    const actualBytes = encodedBytes || textBytes;
+    if (actualBytes > MAX_PROMPT_ATTACHMENT_BYTES) throw new Error(`${name} exceeds the 10 MiB attachment limit`);
+    totalBytes += actualBytes;
+    if (totalBytes > MAX_PROMPT_ATTACHMENTS_BYTES) throw new Error("Attachments exceed the 40 MiB per-message limit");
     if (attachment.kind === "image" && typeof attachment.data === "string") {
       const imgMime = mimeType ?? "image/png";
       images.push({ type: "image", data: attachment.data, mimeType: imgMime });
@@ -2376,15 +2391,53 @@ function eventLogPath(sessionId: string): string {
 // whole history: overlay detail (reasoning + tool activity) AND the base transcript,
 // the latter as bounded delta/reset records. Written on every event; read via
 // eventLog.deriveHistory. `redactSecrets` scrubs credentials at the single flush
-// choke point before anything lands on the synced-to-PWA disk.
-const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets);
+// choke point before anything lands on the synced-to-PWA disk. I/O/corruption
+// failures are never silently converted into empty history: keep a diagnostic,
+// log loudly, and notify the owning live session while pending appends remain
+// queued for retry.
+const eventLogIssues = new Map<string, { operation: string; message: string; at: number }>();
+const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets, 500, (issue) => {
+  eventLogIssues.set(issue.sessionId, { operation: issue.operation, message: issue.message, at: issue.at });
+  console.error(`[event-log] ${issue.operation} failed for ${issue.sessionId}: ${issue.message}`);
+  const record = openSessions.get(issue.sessionId);
+  if (!record) return;
+  const warning = `Session history storage problem (${issue.operation}): ${issue.message}`;
+  if (record.warning === warning) return;
+  record.warning = warning;
+  broadcast({ type: "session.notice", sessionId: record.id, level: "error", message: warning });
+});
 
 // Global content-addressed store for message attachments (images + files). Unlike
 // the per-session `.bivy-attachments/` worktree copy (kept so the agent can open
 // files with its tools), this is durable, session-independent, and re-findable:
 // the transcript references blobs by hash, and clients rehydrate thumbnails by
 // hash after a reload or on another device. See src/session/attachment-store.ts.
-const attachmentStore = new AttachmentStore(path.join(appDir, "attachments"));
+const positiveEnvNumber = (name: string, fallback: number): number => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+};
+const attachmentStore = new AttachmentStore(path.join(appDir, "attachments"), {
+  maxFileBytes: positiveEnvNumber("BIVY_ATTACHMENT_MAX_FILE_BYTES", 25 * 1024 * 1024),
+  maxStoreBytes: positiveEnvNumber("BIVY_ATTACHMENT_STORE_MAX_BYTES", 2 * 1024 * 1024 * 1024),
+  retentionMs: positiveEnvNumber("BIVY_ATTACHMENT_RETENTION_MS", 30 * 24 * 60 * 60 * 1000),
+});
+let attachmentGcStats = attachmentStore.stats();
+
+function referencedAttachmentHashes(): Set<string> | null {
+  // If transcript history is unreadable, collecting nothing would make its
+  // still-referenced blobs look orphaned. Fail closed and skip destructive GC.
+  if (!eventLog.health().ok) return null;
+  const hashes = new Set<string>();
+  const ids = new Set(metadata.listSessions().map((session) => session.id));
+  for (const record of new Set(openSessions.values())) ids.add(record.id);
+  for (const id of ids) {
+    for (const entry of eventLog.entries(id)) {
+      if (entry.bivyKind === "attachment") for (const ref of entry.refs) hashes.add(ref.hash);
+      else if (entry.bivyKind === "outbound-attachment" || entry.bivyKind === "inline-image") hashes.add(entry.ref.hash);
+    }
+  }
+  return eventLog.health().ok ? hashes : null;
+}
 
 // --- Warm session replication (docs/session-replication.md) -----------------
 // A standby's replica repo lives under appDir/replicas/<id>: a self-contained git
@@ -2810,6 +2863,29 @@ const RELAY_COMMANDS: Record<string, Command> = {
     } catch (error) {
       ctx.reply({ type: "session.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) });
     }
+  },
+  async "session.revert_file"(msg, ctx) {
+    // C3d — revert ONE changed file to its pre-turn content without rewinding the
+    // whole turn. `content` is the file's pre-turn text (or null when the turn
+    // added it). Path-confined to the session's worktree by revertFile.
+    const record = resolveSession(msg.sessionId);
+    const relPath = String(msg.path ?? "").trim();
+    if (!record || !relPath) return;
+    if (sessionBusy(record)) {
+      ctx.reply({ type: "session.error", sessionId: record.id, error: "Stop the current turn before reverting a file." });
+      return;
+    }
+    const content = typeof msg.content === "string" ? msg.content : null;
+    const result = revertFile(harnessDirFor(record), relPath, content);
+    if (!result.ok) {
+      ctx.reply({ type: "session.error", sessionId: record.id, error: `Could not revert ${relPath}: ${result.error ?? "unknown error"}` });
+      return;
+    }
+    // Recompute the turn's diff against the (unchanged) baseline so the review
+    // surface drops the reverted file immediately.
+    const event = { type: "session.file_reverted", sessionId: record.id, path: relPath, status: result.status };
+    ctx.reply(event);
+    ctx.broadcast(event);
   },
   async "session.pr.refresh"(msg, ctx) {
     // Force a refresh regardless of live/attached state — resume the session if
@@ -3564,7 +3640,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       record.lastPrompt = agentPrompt;
       record.lastPromptOptions = promptOptionsFor(record, msg.streamingBehavior, images);
       record.reroute?.beginTurn();
-      await record.session.prompt(agentPrompt, record.lastPromptOptions);
+      await promptWithWatchdog(record, agentPrompt, record.lastPromptOptions);
     }).catch((error) => {
       // Mirror the HTTP path (see the /prompt route): a rejected turn after
       // the runtime marked the session working emits no agent_end, so without
@@ -4657,16 +4733,26 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
     // evidence trail — the branch/PR references and a bounded summary only,
     // never file lists or error details (those stay in `message`/`extra`,
     // which are broadcast to the live session but never sent to onEvidence).
-    const kind = stage === "pr_opened" ? "pull_request" : stage === "started" ? "branch" : stage === "failed" ? "completed" : undefined;
+    const kind = stage === "pr_opened" ? "pull_request"
+      : stage === "started" || stage === "pushed" ? "branch"
+        : stage === "failed" || stage === "checks_failed" || stage === "no_changes" ? "completed"
+          : undefined;
     if (kind) {
+      const summary = stage === "pr_opened" ? "Pull request opened."
+        : stage === "started" ? "Working branch and session created."
+          : stage === "pushed" ? "Changes pushed; no pull request is open."
+            : stage === "no_changes" ? "Run completed with no file changes."
+              : stage === "checks_failed" ? "Deterministic validation checks failed."
+                : "Execution failed. Detailed diagnostics remain on the node.";
       void overrides.onEvidence?.({
         output: { sessionId: record.id, branch, prUrl: typeof extra.prUrl === "string" ? extra.prUrl : undefined },
         events: [{
           at: new Date().toISOString(),
           kind,
-          summary: stage === "pr_opened" ? "Pull request opened." : stage === "started" ? "Working branch and session created." : "Execution failed. Detailed diagnostics remain on the node.",
+          summary,
           ref: branch,
           url: typeof extra.prUrl === "string" ? extra.prUrl : undefined,
+          ...(stage === "checks_failed" || stage === "failed" ? { status: "failed" } : {}),
         }],
       });
     }
@@ -4680,7 +4766,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   // which now adopts the existing remote branch rather than colliding.
   const existing = findIssueSession(source);
   if (existing?.worktree && fs.existsSync(existing.worktree.path)) {
-    return runIssueFollowUp(cfg, issue, existing, emit);
+    return runIssueFollowUp(cfg, issue, existing, emit, overrides);
   }
 
   // Idempotency guard against the duplicate-PR regression: if this issue's
@@ -4762,8 +4848,8 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   try {
     emit(record, "started", `Started work on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
     await runSessionTurn(record, buildTaskPrompt(issue, nodeGithubIssuePrompt()));
-    emit(record, "agent_done", `Agent finished issue #${issue.number}; checking for changes.`);
-    await reportIssueOutcome(cfg, issue, record, emit, { followUp: false });
+    emit(record, "agent_done", `Agent finished issue #${issue.number}; running deterministic checks.`);
+    await reportIssueOutcome(cfg, issue, record, emit, { followUp: false, onEvidence: overrides.onEvidence });
   } catch (error) {
     emit(record, "failed", `GitHub issue #${issue.number} failed: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
@@ -4776,7 +4862,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
  * the new comment as another turn in the same worktree, then report the outcome
  * the same way a fresh pickup does.
  */
-async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, record: SessionRecord, emit: IssueEmit) {
+async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, record: SessionRecord, emit: IssueEmit, overrides: RunIssueOverrides = {}) {
   const wt = record.worktree;
   if (!wt) throw new Error("issue session has no worktree");
   try {
@@ -4805,8 +4891,8 @@ async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, recor
     }
 
     await runSessionTurn(record, buildFollowUpPrompt(issue));
-    emit(record, "agent_done", `Agent handled the follow-up on issue #${issue.number}; checking for changes.`);
-    await reportIssueOutcome(cfg, issue, record, emit, { followUp: true });
+    emit(record, "agent_done", `Agent handled the follow-up on issue #${issue.number}; running deterministic checks.`);
+    await reportIssueOutcome(cfg, issue, record, emit, { followUp: true, onEvidence: overrides.onEvidence });
   } catch (error) {
     emit(record, "failed", `GitHub issue #${issue.number} follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
@@ -4833,10 +4919,31 @@ async function reportIssueOutcome(
   issue: GitHubIssue,
   record: SessionRecord,
   emit: IssueEmit,
-  opts: { followUp: boolean },
+  opts: { followUp: boolean; onEvidence?: RunIssueOverrides["onEvidence"] },
 ) {
   const wt = record.worktree;
   if (!wt) throw new Error("issue session has no worktree");
+
+  // Customer success is not `agent_end`. Run the repository's declared standard
+  // checks under local time/output bounds and report only privacy-safe metadata
+  // (name/hash/status/exit), never command text or output, to the control plane.
+  const checks = runRequiredAutomationChecks(wt.path);
+  if (checks.length > 0) {
+    const failed = checks.filter((check) => check.status === "failed");
+    await opts.onEvidence?.({
+      checks,
+      events: [{
+        at: new Date().toISOString(),
+        kind: "completed",
+        summary: failed.length ? `${failed.length} deterministic check(s) failed.` : `${checks.length} deterministic check(s) passed.`,
+        status: failed.length ? "failed" : "passed",
+      }],
+    });
+    if (failed.length) {
+      emit(record, "checks_failed", `${failed.map((check) => check.name).join(", ")} failed; the run needs review.`);
+      throw new Error(`Required checks failed: ${failed.map((check) => check.name).join(", ")}`);
+    }
+  }
 
   const commitMessage = opts.followUp ? `Follow-up on #${issue.number}` : `${issue.title} (#${issue.number})`;
   await commitAll(wt.path, commitMessage);
@@ -4936,7 +5043,7 @@ async function runSessionTurn(record: SessionRecord, prompt: string): Promise<vo
       }
     });
   });
-  await record.session.prompt(prompt);
+  await promptWithWatchdog(record, prompt);
   await finished;
 }
 
@@ -6593,6 +6700,12 @@ async function sweepDiskGuardrails() {
   await cleanupOldWorktrees();
   evictSharedDepCacheIfNeeded();
   warnOversizedWorktrees();
+  const attachmentRefs = referencedAttachmentHashes();
+  if (attachmentRefs) attachmentGcStats = attachmentStore.gc(attachmentRefs);
+  else console.warn("[attachments] skipping garbage collection because event-log references are not healthy");
+  if ((attachmentGcStats.overCapBytes ?? 0) > 0) {
+    console.warn(`[attachments] store remains ${attachmentGcStats.overCapBytes} bytes over cap because referenced history is retained`);
+  }
 }
 
 /**
@@ -6954,6 +7067,63 @@ setTimeout(() => void sweepDiskGuardrails(), 30_000).unref?.();
 // client paints its sidebar; the idle timer keeps it clean thereafter.
 setTimeout(pruneGhostSessions, 10_000).unref?.();
 
+const turnTimeoutMs = configuredTurnTimeoutMs();
+if (turnTimeoutMs > 0) console.log(`[turn-watchdog] armed: timeout=${turnTimeoutMs}ms`);
+else console.warn("[turn-watchdog] disabled by BIVY_TURN_TIMEOUT_MS=0");
+
+function turnTimeoutMessage(): string {
+  return `Agent turn timed out after ${Math.round(turnTimeoutMs / 60_000)} minutes and was stopped.`;
+}
+
+function clearTurnWatchdog(record: SessionRecord): void {
+  if (record.turnWatchdog) clearTimeout(record.turnWatchdog);
+  record.turnWatchdog = undefined;
+  record.turnTimeoutSignal = undefined;
+  record.turnTimeoutResolve = undefined;
+}
+
+function armTurnWatchdog(record: SessionRecord): void {
+  clearTurnWatchdog(record);
+  record.turnTimedOut = false;
+  if (turnTimeoutMs <= 0) return;
+  record.turnTimeoutSignal = new Promise<void>((resolve) => { record.turnTimeoutResolve = resolve; });
+  record.turnWatchdog = setTimeout(() => {
+    record.turnWatchdog = undefined;
+    record.turnTimedOut = true;
+    record.lastFailureAt = Date.now();
+    const message = turnTimeoutMessage();
+    record.turnTimeoutResolve?.();
+    record.turnTimeoutResolve = undefined;
+    // Clear/persist first so the session and an ephemeral runner cannot remain
+    // pinned in a false working state if the runtime's abort path fails to emit
+    // agent_end. abort() is still invoked to kill the underlying process group.
+    clearSessionWorking(record);
+    metadata.touchSession(record.id, "failed");
+    broadcast({ type: "session.outcome", sessionId: record.id, status: "timed_out", completedAt: new Date().toISOString(), error: message });
+    broadcast({ type: "session.error", sessionId: record.id, error: message });
+    void record.session.abort().catch((error) => {
+      console.error(`[turn-watchdog] abort failed for ${record.id}:`, error);
+    }).finally(() => evaluateEphemeralTeardown());
+  }, turnTimeoutMs);
+  record.turnWatchdog.unref?.();
+}
+
+async function promptWithWatchdog(record: SessionRecord, prompt: string, options?: ReturnType<typeof promptOptionsFor>): Promise<void> {
+  armTurnWatchdog(record);
+  const timeoutSignal = record.turnTimeoutSignal;
+  try {
+    await Promise.race([
+      record.session.prompt(prompt, options),
+      ...(timeoutSignal ? [timeoutSignal.then(() => { throw new Error(turnTimeoutMessage()); })] : []),
+    ]);
+  } catch (error) {
+    // The timeout callback already cleared/persisted the session. For an ordinary
+    // prompt failure, disarm here and let the caller publish its actionable error.
+    if (!record.turnTimedOut) clearTurnWatchdog(record);
+    throw error;
+  }
+}
+
 function markSessionWorking(record: SessionRecord, activity: unknown) {
   touchSession(record);
   const wasWorking = record.isWorking;
@@ -6967,6 +7137,7 @@ function markSessionWorking(record: SessionRecord, activity: unknown) {
 }
 
 function clearSessionWorking(record: SessionRecord) {
+  clearTurnWatchdog(record);
   touchSession(record);
   record.isWorking = false;
   record.lastActivity = undefined;
@@ -7198,7 +7369,7 @@ function attachSessionListeners(record: SessionRecord) {
           getCurrentModelName: () => record.session.getCurrentModel()?.name,
           setModel: (p, i) => record.session.setModel(p, i),
           reprompt: async () => {
-            await record.session.prompt(record.lastPrompt!, record.lastPromptOptions);
+            await promptWithWatchdog(record, record.lastPrompt!, record.lastPromptOptions);
           },
         });
       } else if (turnError) {
@@ -8583,6 +8754,9 @@ app.delete("/api/devices/:id", (req, res) => {
 });
 
 app.get("/api/node/info", (_req, res) => {
+  const selectedRuntimeId = active?.runtimeId ?? defaultRuntimeId;
+  const runtimeInfo = runtimeList(selectedRuntimeId).find((runtime) => runtime.id === selectedRuntimeId);
+  const structuredControls = runtimeInfo?.protectionLevel === "native-sandbox" || runtimeInfo?.protectionLevel === "tool-controls";
   res.json({
     nodeId: identity.nodeId,
     name: identity.name,
@@ -8593,11 +8767,17 @@ app.get("/api/node/info", (_req, res) => {
     guardrails: {
       mode: approvalMode,
       defaultAllow: approvalMode === "autonomous" || approvalMode === "never",
-      workspaceBoundary: "Writes outside the active workspace/worktree are denied.",
-      denyList: "Catastrophic/destructive commands and privilege escalation are blocked or require approval.",
-      strictApprovalOptIn: "Set approval mode to risky or always for prompt-heavy review.",
+      enforcementLevel: runtimeInfo?.protectionLevel ?? "user-permissions",
+      protection: runtimeInfo?.protectionLabel ?? "Runs as your user",
+      workspaceBoundary: structuredControls
+        ? "Structured file tools are checked against the active workspace; shell commands are not an OS isolation boundary."
+        : "Not guaranteed by Bivy for this runtime. Run it in a container/VM when isolation is required.",
+      denyList: structuredControls
+        ? "Known catastrophic shell commands are heuristically blocked; this catches accidents, not adversarial bypasses."
+        : "No universal Bivy command interception is available for this runtime.",
+      strictApprovalOptIn: "Set approval mode to risky or always for prompt-heavy review where this runtime exposes tool controls.",
     },
-    runtime: runtimeSummary(getRuntime(active?.runtimeId ?? defaultRuntimeId)),
+    runtime: { ...runtimeSummary(getRuntime(selectedRuntimeId)), ...runtimeInfo },
     defaultRuntimeId,
     sandbox: sandboxInfo(),
   });
@@ -8638,8 +8818,39 @@ function sandboxInfo() {
   };
 }
 
+// Redacted diagnostics bundle (B4d) — a shareable support export with no secrets,
+// prompts, transcripts, diffs, or repo content: versions, health counters, a
+// whitelisted set of config flags, and the activation stage record.
+app.get("/api/diagnostics", (_req, res) => {
+  const relayConfig = loadRelayConfig(appDir);
+  const selectedRuntimeId = active?.runtimeId ?? defaultRuntimeId;
+  const runtimeInfo = runtimeList(selectedRuntimeId).find((runtime) => runtime.id === selectedRuntimeId);
+  const report = buildDiagnosticsReport({
+    version: currentVersion() ?? undefined,
+    platform: process.platform,
+    nodeVersion: process.version,
+    relayConfigured: Boolean(relayConfig),
+    health: {
+      sessionsOpen: new Set(openSessions.values()).size,
+      sessionsIndexed: metadata.listSessions().length,
+      enforcementLevel: runtimeInfo?.protectionLevel ?? "user-permissions",
+      approvalMode,
+      relayConnected: Boolean(relay?.connected),
+    },
+    env: process.env as Record<string, string | undefined>,
+    // The node knows it is online and which runtime is selectable; the client's
+    // setup readiness fills the rest. This baseline still records the golden path.
+    activation: activationRecord({ nodeOnline: true, runtimeReady: Boolean(runtimeInfo) }),
+    generatedAt: new Date().toISOString(),
+  });
+  res.json(report);
+});
+
 app.get("/api/status", (_req, res) => {
   const relayConfig = loadRelayConfig(appDir);
+  const selectedRuntimeId = active?.runtimeId ?? defaultRuntimeId;
+  const runtimeInfo = runtimeList(selectedRuntimeId).find((runtime) => runtime.id === selectedRuntimeId);
+  const workspaceBoundary = runtimeInfo?.protectionLevel === "native-sandbox" || runtimeInfo?.protectionLevel === "tool-controls";
   res.json({
     ok: true,
     nodeId: identity.nodeId,
@@ -8654,7 +8865,9 @@ app.get("/api/status", (_req, res) => {
     approvalMode,
     guardrails: {
       autonomousDefault: approvalMode === "autonomous",
-      workspaceBoundary: true,
+      workspaceBoundary,
+      enforcementLevel: runtimeInfo?.protectionLevel ?? "user-permissions",
+      protection: runtimeInfo?.protectionLabel ?? "Runs as your user",
       strictApprovalOptIn: true,
     },
     relay: {
@@ -8676,6 +8889,9 @@ app.get("/api/status", (_req, res) => {
     },
     devices: { paired: pairingStore.listDevices().length, localTokens: identity.listDevices().length },
     approvals: { pending: approvals.list().filter((a) => a.status === "pending").length, recent: metadata.listApprovals(20) },
+    eventLog: { ...eventLog.diskUsage(), ...eventLog.health(), affectedSessions: eventLogIssues.size },
+    attachments: attachmentGcStats,
+    turnWatchdog: { enabled: turnTimeoutMs > 0, timeoutMs: turnTimeoutMs },
     updatedAt: new Date().toISOString(),
   });
 });
@@ -10187,7 +10403,7 @@ app.post("/api/session/prompt", async (req, res, next) => {
       broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
       void maybeNameSession(record, promptText);
       harnessBeginTurn(record);
-      await session.prompt(agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images));
+      await promptWithWatchdog(record, agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images));
     }).catch((error) => {
       clearSessionWorking(record);
       broadcast({ type: "session.error", sessionId: record.id, error: String(error?.stack ?? error) });

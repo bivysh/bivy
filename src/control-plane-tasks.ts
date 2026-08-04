@@ -49,6 +49,7 @@ export interface WorkItem {
   // (mapWorkItem); typed here so it isn't silently dropped.
   targetKind?: "new_session" | "existing_session";
   targetSessionId?: string;
+  leaseExpiresAt?: string;
 }
 
 /** Sanitized-on-arrival at the control plane (services/control-plane/src/run-evidence.ts);
@@ -98,7 +99,18 @@ async function cp(cfg: ControlPlaneTaskConfig, method: string, path: string): Pr
 }
 
 async function transitionWork(cfg: ControlPlaneTaskConfig, id: string, action: string): Promise<void> {
-  await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/${action}`).catch(() => {});
+  // Best-effort — a dropped transition never loses the run itself — but NOT
+  // silent: a swallowed `complete`/`fail`/`needs-attention` leaves the control
+  // plane's view of the item stale (stuck "running", or re-dispatched), so the
+  // failure must be visible in node logs/diagnostics rather than discarded (A4).
+  try {
+    const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/${action}`);
+    if (!res.ok) {
+      console.warn(`[control-plane-tasks] work ${id} "${action}" rejected by control plane (${res.status}); its status may be stale`);
+    }
+  } catch (error) {
+    console.warn(`[control-plane-tasks] work ${id} "${action}" could not reach control plane:`, error instanceof Error ? error.message : error);
+  }
 }
 
 export async function fetchPendingWork(cfg: ControlPlaneTaskConfig): Promise<WorkItem[]> {
@@ -111,6 +123,11 @@ export async function fetchPendingWork(cfg: ControlPlaneTaskConfig): Promise<Wor
 /** Atomically claim an item. Returns true only if THIS node won the claim. */
 export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promise<boolean> {
   const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/claim`);
+  return res.ok;
+}
+
+export async function renewWorkLease(cfg: ControlPlaneTaskConfig, id: string): Promise<boolean> {
+  const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/heartbeat`);
   return res.ok;
 }
 
@@ -130,13 +147,21 @@ export async function needsAttentionWork(cfg: ControlPlaneTaskConfig, id: string
 /** Report privacy-safe run evidence (issue #153) — routing reason, output refs
  *  (branch/PR/checkpoint/commit/...), check results, and new timeline events.
  *  Best-effort: a dropped report loses one evidence update, never the run
- *  itself, so failures here are swallowed like the other transition calls. */
+ *  itself. It is not throwing, but the failure is logged (A4) so a persistently
+ *  failing evidence channel is visible in diagnostics instead of silent. */
 export async function reportEvidence(cfg: ControlPlaneTaskConfig, id: string, patch: EvidencePatch): Promise<void> {
-  await fetch(`${cfg.controlPlaneUrl}/node/work/${encodeURIComponent(id)}/evidence`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${cfg.enrollmentToken}`, "content-type": "application/json" },
-    body: JSON.stringify(patch),
-  }).catch(() => {});
+  try {
+    const res = await fetch(`${cfg.controlPlaneUrl}/node/work/${encodeURIComponent(id)}/evidence`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${cfg.enrollmentToken}`, "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      console.warn(`[control-plane-tasks] work ${id} evidence report rejected (${res.status})`);
+    }
+  } catch (error) {
+    console.warn(`[control-plane-tasks] work ${id} evidence report could not reach control plane:`, error instanceof Error ? error.message : error);
+  }
 }
 
 /** Optional policy hooks — when omitted the poller keeps its historical behavior
@@ -236,10 +261,14 @@ export class ControlPlaneTaskPoller {
   }
 
   private async runOne(item: WorkItem): Promise<void> {
+    let leaseHeartbeat: NodeJS.Timeout | undefined;
     try {
       // Claim first so only one node runs it; skip if another node won (no
-      // claim → not ours → don't run or complete it).
+      // claim → not ours → don't run or complete it). A heartbeat keeps the
+      // finite lease alive; process death stops it and makes the item reclaimable.
       if (!(await claimWork(this.cfg, item.id))) return;
+      leaseHeartbeat = setInterval(() => void renewWorkLease(this.cfg, item.id), 30_000);
+      leaseHeartbeat.unref?.();
       const report = (patch: EvidencePatch) => reportEvidence(this.cfg, item.id, patch);
       await transitionWork(this.cfg, item.id, "running");
       console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
@@ -250,6 +279,7 @@ export class ControlPlaneTaskPoller {
       await report({ routingReason: item.runtimeId || item.model ? "manual override" : "queue label" });
       await this.runWithPolicy(item, report);
     } finally {
+      if (leaseHeartbeat) clearInterval(leaseHeartbeat);
       this.inFlight.delete(item.id);
     }
   }

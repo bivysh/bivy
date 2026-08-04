@@ -16,7 +16,8 @@ import { SessionMenu } from "./components/SessionMenu.js";
 import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
 import { classifySource } from "./sessionSource.js";
-import { indexRunEvidence } from "./runEvidence.js";
+import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
+import { resolveInboxDeepLink } from "./inboxDeepLink.js";
 import { ChangesCard } from "./components/ChangesCard.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
@@ -90,11 +91,36 @@ export function App() {
       if (document.visibilityState !== "hidden") { refreshGithubQueue(); refreshAutomationRuns(); }
     }, 30000);
     return () => clearInterval(id);
-  }, [refreshGithubQueue, refreshAutomationRuns]);
+  }, [refreshGithubQueue, refreshAutomationRuns, state.signedIn]);
   // sessionId → the run that produced it, joined from the queue's evidence.
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
   const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
+  const inboxItems = useMemo(() => buildInboxItems({
+    sessions: state.sessions,
+    approvals: state.approvals,
+    questions: state.questions,
+    nodes: state.nodes,
+    queue: githubQueue ?? [],
+    runs: automationRuns ?? [],
+  }), [state.sessions, state.approvals, state.questions, state.nodes, githubQueue, automationRuns]);
+  // Attention must remain visible when Bivy is a background tab or installed
+  // PWA. The Inbox is authoritative; mirror only its content-free count into
+  // browser chrome and the OS app badge.
+  useEffect(() => {
+    const count = inboxItems.length;
+    document.title = count > 0 ? `(${count}) Bivy` : "Bivy";
+    const badge = navigator as Navigator & {
+      setAppBadge?: (contents?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    const update = count > 0 ? badge.setAppBadge?.(count) : badge.clearAppBadge?.();
+    void update?.catch(() => {}); // unsupported/blocked badge APIs are non-fatal
+    return () => {
+      document.title = "Bivy";
+      void badge.clearAppBadge?.().catch(() => {});
+    };
+  }, [inboxItems.length]);
   // Signed in on the hosted app but no node yet: poll for a newly-installed
   // machine so the empty state advances to the live app the moment the node
   // dials in — the user shouldn't have to hit "Refresh nodes" after running the
@@ -336,31 +362,23 @@ export function App() {
   // no sessionId are treated as global and shown everywhere.
   const activeApprovals = state.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSessionId);
   const activeQuestions = state.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSessionId);
-  const inboxItems = buildInboxItems({
-    sessions: state.sessions,
-    approvals: state.approvals,
-    questions: state.questions,
-    nodes: state.nodes,
-    queue: githubQueue ?? [],
-    runs: automationRuns ?? [],
-  });
   const openInboxItem = (item: InboxItem) => {
     setInboxOpen(false);
     closeDrawer();
-    if (item.sessionId) {
-      controller.openSessionOnNode(item.sessionId, undefined, item.nodeId);
-      if (item.kind === "approval" || item.kind === "question") {
-        const conditionId = item.targetId;
-        if (!conditionId) return;
+    // One shared resolver for Inbox taps and push deep-links (B3), so both focus
+    // the exact approval / question / outcome — not just the session top.
+    const link = resolveInboxDeepLink(item);
+    if (link.target === "session" && link.sessionId) {
+      controller.openSessionOnNode(link.sessionId, undefined, link.nodeId);
+      if (link.attentionId) {
         const params = new URLSearchParams(location.search);
-        params.set("attention", conditionId);
+        params.set("attention", link.attentionId);
         history.replaceState(null, "", `${location.pathname}?${params.toString()}${location.hash}`);
-        setTimeout(() => document.getElementById(`attention-${encodeURIComponent(conditionId)}`)?.scrollIntoView({ block: "center" }), 500);
+        setTimeout(() => document.getElementById(`attention-${encodeURIComponent(link.attentionId!)}`)?.scrollIntoView({ block: "center" }), 500);
       }
       return;
     }
-    if (item.source === "queue") openSettings("queue");
-    else if (item.source === "provider") openSettings("providers");
+    if (link.settingsTab) openSettings(link.settingsTab);
   };
 
   return (
@@ -561,7 +579,12 @@ export function App() {
           }
         />
 
-        <ChangesCard changes={state.changes} checkpoints={state.checkpoints} />
+        <ChangesCard
+          changes={state.changes}
+          checkpoints={state.checkpoints}
+          checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
+          output={activeSession ? runEvidence.get(activeSession.sessionId)?.output : undefined}
+        />
 
         <div className="composer-gh">
           {/* The run card now stands for every active session — an automation
@@ -571,6 +594,7 @@ export function App() {
               session yet) falls back to the bare GithubPill for repo context. */}
           {activeSession && activeRunSource ? (
             <RunPill
+              anchorId={`attention-${activeSession.sessionId}`}
               source={activeRunSource}
               statusClass={statusClass(activeSession)}
               statusLabel={statusLabel(activeSession)}
@@ -579,6 +603,24 @@ export function App() {
               finishedAt={activeSession.finishedAt}
               usage={state.usage}
               forkedFrom={activeForkedFrom}
+              onRecover={(kind) => {
+                // C2: recover a terminal run using existing capabilities. fix/retry
+                // send a targeted prompt to this session; fork branches it off.
+                const sid = activeSession.sessionId;
+                const ev = runEvidence.get(sid);
+                const failed = ev ? failingCheckNames(ev) : [];
+                if (kind === "fork") { void controller.forkSession(sid); return; }
+                if (kind === "fix") {
+                  controller.sendPrompt(failed.length
+                    ? `The deterministic checks failed (${failed.join(", ")}). Please investigate the failures and fix them, then confirm the checks pass.`
+                    : "This run did not finish cleanly. Please investigate what went wrong and fix it.");
+                  return;
+                }
+                // retry
+                controller.sendPrompt(failed.length
+                  ? `Please re-run the ${failed.join(", ")} check(s) and address anything that still fails.`
+                  : "Please re-run the project checks and address anything that fails.");
+              }}
             />
           ) : (
             <GithubPill gh={state.github} />

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useState } from "react";
-import { EPHEMERAL_PROVIDERS, type ProviderKeyInfo } from "@bivy/core";
+import { EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, type EphemeralNodeConfig, type ProviderKeyInfo } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { Sheet, PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -65,6 +65,7 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
+  const [pendingRunner, setPendingRunner] = useState<EphemeralNodeConfig | null>(null);
 
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
@@ -81,10 +82,7 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
       setToken("");
       setHasToken(true);
       onKeysChanged();
-      if (runner) {
-        controller.pickDraftEphemeralRunner(runner);
-        onDone();
-      }
+      if (runner) setPendingRunner(runner);
     } catch (e) {
       setErr(String((e as Error).message || e));
     } finally {
@@ -99,8 +97,7 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
     setErr(null);
     try {
       const runner = await controller.defaultEphemeralRunner(providerId);
-      if (runner) controller.pickDraftEphemeralRunner(runner);
-      onDone();
+      if (runner) setPendingRunner(runner);
     } catch (e) {
       setErr(String((e as Error).message || e));
     } finally {
@@ -147,6 +144,28 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
           </div>
         </>
       )}
+      {pendingRunner && (() => {
+        const adapter = ephemeralAdapter(pendingRunner.provider);
+        const size = adapter?.sizes.find((candidate) => candidate.id === pendingRunner.size);
+        const cost = ephemeralCostHint(size, pendingRunner.ttlMinutes, adapter?.currency);
+        const region = pendingRunner.region || adapter?.defaultRegion || "provider default";
+        const teardown = pendingRunner.teardownOnAgentFinish
+          ? "It will be destroyed when the agent finishes; the TTL remains a backstop."
+          : `It will remain billable until its ${pendingRunner.ttlMinutes ?? "provider-default"}-minute TTL or manual teardown.`;
+        return (
+          <ConfirmDialog
+            title="Use this billable runner?"
+            message={`${catalog.name} will launch a machine in ${region}${size ? ` (${size.label})` : ""} when you send your first message. ${cost || "The provider's live rate applies."} ${teardown}`}
+            confirmLabel="Use runner"
+            onCancel={() => setPendingRunner(null)}
+            onConfirm={() => {
+              controller.pickDraftEphemeralRunner(pendingRunner);
+              setPendingRunner(null);
+              onDone();
+            }}
+          />
+        );
+      })()}
       {confirm && (
         <ConfirmDialog
           title={confirm.title}

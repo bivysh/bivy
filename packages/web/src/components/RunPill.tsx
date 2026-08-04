@@ -14,12 +14,14 @@
 // usage) — the card is the same, the information applies.
 
 import { useState } from "react";
-import { type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
+import { deriveRunOutcome, type GithubContext, type GithubQueueItem, type PrRef, type Usage } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { SourceGlyph } from "./SourceMark.js";
 import { PrBadge, GhMark } from "./SessionList.js";
 import { shortSourceLabel, type SourceInfo } from "../sessionSource.js";
-import { checkCounts, retryReason, runDuration } from "../runEvidence.js";
+import { checkCounts, retryReason, runDuration, artifactRef, recoveryActions, type RecoveryKind } from "../runEvidence.js";
+
+const RECOVERY_LABEL: Record<RecoveryKind, string> = { fix: "Fix", retry: "Retry checks", fork: "Fork" };
 
 interface Action {
   label: string;
@@ -109,6 +111,8 @@ export function RunPill({
   finishedAt,
   usage,
   forkedFrom,
+  onRecover,
+  anchorId,
 }: {
   source: SourceInfo;
   /** The row's status class (`working` / `needs-action` / `saved` / `idle`)
@@ -131,6 +135,14 @@ export function RunPill({
    *  local session list — the parent may live on another node or be gone by
    *  now, so it's best-effort and falls back to a shortened id. */
   forkedFrom?: { sessionId: string; name?: string };
+  /** Invoked when the user taps a recovery action on a terminal run (C2). The
+   *  parent (App) maps each kind onto a real capability: fix → send a "fix the
+   *  failing checks" prompt, retry → re-run the checks, fork → fork the session.
+   *  Omitted where no session is in scope, hiding the buttons. */
+  onRecover?: (kind: RecoveryKind) => void;
+  /** DOM id (`attention-<sessionId>`) so an outcome deep-link from the Inbox or a
+   *  push tap scrolls to this pill — the exact outcome — not just the session (B3). */
+  anchorId?: string;
 }) {
   const [open, setOpen] = useState(false);
   useModalEscape(() => setOpen(false), open);
@@ -141,11 +153,14 @@ export function RunPill({
   // that out in the sheet, where there's room; the terse pill/sidebar keep "Open".
   const sheetStatus = statusLabel === "Open" ? "Open on node" : statusLabel;
 
+  const outcome = evidence ? deriveRunOutcome(evidence) : null;
   const counts = evidence ? checkCounts(evidence) : null;
   const duration = evidence ? runDuration(evidence) : null;
   const finished = typeof finishedAt === "number" ? formatWhen(finishedAt) : "";
   const attempt = evidence?.attempt ?? 0;
   const reason = evidence ? retryReason(evidence) : null;
+  const artifact = evidence ? artifactRef(evidence) : null;
+  const recovery = evidence && onRecover ? recoveryActions(evidence) : [];
   const agentLine = [evidence?.runtimeId, evidence?.model].filter(Boolean).join(" · ");
   const failure = evidence?.output?.failure;
   const forkedFromLabel = forkedFrom ? forkedFrom.name || `session ${forkedFrom.sessionId.slice(0, 8)}` : null;
@@ -162,6 +177,7 @@ export function RunPill({
   return (
     <>
       <button
+        id={anchorId}
         className={`run-pill src-${source.kind} ${statusClass}`}
         onClick={() => setOpen(true)}
         title={`${source.label} · ${statusLabel}`}
@@ -207,6 +223,12 @@ export function RunPill({
 
             {evidence && (
               <div className="run-sheet-rows">
+                {outcome && <Row k="Outcome"><span className={`chip outcome-${outcome.tone} outcome-kind-${outcome.kind}`}>{outcome.label}</span></Row>}
+                {artifact?.url && (
+                  <Row k="Artifact">
+                    <a href={artifact.url} target="_blank" rel="noopener">{artifact.label}</a>
+                  </Row>
+                )}
                 {counts && (
                   <Row k="Checks">
                     <Checks item={evidence} />
@@ -262,6 +284,20 @@ export function RunPill({
               <a className="action-sheet-item" href={evidence.output.artifactUrl} target="_blank" rel="noopener" onClick={() => setOpen(false)}>
                 View artifact
               </a>
+            )}
+            {recovery.length > 0 && onRecover && (
+              <div className="run-sheet-recovery" role="group" aria-label="Recover this run">
+                {recovery.map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    className={`btn small recover-${kind}`}
+                    onClick={() => { onRecover(kind); setOpen(false); }}
+                  >
+                    {RECOVERY_LABEL[kind]}
+                  </button>
+                ))}
+              </div>
             )}
             {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && (
               <div className="action-sheet-empty">This session has nothing to report yet.</div>

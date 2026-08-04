@@ -9,8 +9,9 @@
 
 /**
  * Ephemeral machines: bring-your-own-cloud, short-lived runners (Fly.io,
- * Hetzner, AWS EC2). Hidden for now while the feature is built out — the
- * underlying core adapters, node proxy, and controller bridge stay intact.
+ * Hetzner, AWS EC2). This is currently a visible Beta surface. Keep this comment
+ * and the flag aligned: changing exposure is a release decision, not dead-code
+ * documentation.
  *
  * Gates every user-facing entry point: the NodeSwitcher "Ephemeral machine…"
  * menu item, the onboarding "Quick ephemeral server" CTA, the Settings
@@ -26,7 +27,8 @@ export const EPHEMERAL_MACHINES_ENABLED = true;
  * and its logs, which is why "it never starts" is currently undebuggable.
  *
  * Trade-off while on: a machine that boots fine also won't self-reap on exit, so
- * it lingers until torn down manually — acceptable for staging diagnosis only.
- * Turn OFF before shipping to users.
+ * it lingers until torn down manually. It is OFF by default and requires an
+ * explicit staging/debug build setting; production must never retain billable
+ * machines merely to preserve logs.
  */
-export const EPHEMERAL_KEEP_FAILED_MACHINES = true;
+export const EPHEMERAL_KEEP_FAILED_MACHINES = import.meta.env.VITE_BIVY_KEEP_FAILED_EPHEMERAL === "1";

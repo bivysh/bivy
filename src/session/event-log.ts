@@ -28,6 +28,7 @@
 // interleaved in any order on disk; each replay reads only its own kind.
 
 import fs from "node:fs";
+import path from "node:path";
 
 import { normalizedIntermediateText, thinkingTextFromContent, mergeTranscript, type SidecarMessage } from "./transcript-merge.js";
 import type { RuntimeMessage } from "../runtime/types.js";
@@ -302,18 +303,34 @@ export function baseReplay(entries: readonly LogRecord[]): RuntimeMessage[] {
   return base;
 }
 
-/** Parse a JSONL log body into valid records, skipping malformed/blank lines. */
-export function parseLog(body: string): LogRecord[] {
-  const out: LogRecord[] = [];
+export interface EventLogIssue {
+  sessionId: string;
+  operation: "read" | "parse" | "append" | "rewrite";
+  message: string;
+  at: number;
+}
+
+function parseLogDetailed(body: string): { records: LogRecord[]; malformedLines: number } {
+  const records: LogRecord[] = [];
+  let malformedLines = 0;
   for (const line of body.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
       const value = JSON.parse(trimmed);
-      if (isRecord(value)) out.push(value);
-    } catch {}
+      if (isRecord(value)) records.push(value);
+      else malformedLines += 1;
+    } catch {
+      malformedLines += 1;
+    }
   }
-  return out;
+  return { records, malformedLines };
+}
+
+/** Parse a JSONL log body into valid records. Callers that need corruption
+ * diagnostics use EventLog.load, which reports malformed lines via onIssue. */
+export function parseLog(body: string): LogRecord[] {
+  return parseLogDetailed(body).records;
 }
 
 /**
@@ -334,21 +351,62 @@ export class EventLog {
   // snapshot can be diffed (prefix-compared) into a bounded delta. Seeded from disk
   // on first use of a session after a restart.
   private baseKeys = new Map<string, string[]>();
+  private lastIssue?: EventLogIssue;
 
   constructor(
     private dir: string,
     private pathFor: (id: string) => string,
     private redact: (text: string) => string = (t) => t,
     private throttleMs = 500,
+    private onIssue: (issue: EventLogIssue) => void = (issue) => console.error(`[event-log] ${issue.operation} failed for ${issue.sessionId}: ${issue.message}`),
   ) {}
+
+  private report(id: string, operation: EventLogIssue["operation"], error: unknown): void {
+    const issue: EventLogIssue = {
+      sessionId: id,
+      operation,
+      message: error instanceof Error ? error.message : String(error),
+      at: Date.now(),
+    };
+    this.lastIssue = issue;
+    this.onIssue(issue);
+  }
+
+  health(): { ok: boolean; lastIssue?: EventLogIssue; pendingSessions: number } {
+    return { ok: !this.lastIssue, ...(this.lastIssue ? { lastIssue: { ...this.lastIssue } } : {}), pendingSessions: this.pending.size };
+  }
+
+  diskUsage(): { files: number; bytes: number } {
+    if (!fs.existsSync(this.dir)) return { files: 0, bytes: 0 };
+    let files = 0;
+    let bytes = 0;
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile()) {
+          try {
+            files += 1;
+            bytes += fs.statSync(full).size;
+          } catch { /* raced cleanup */ }
+        }
+      }
+    };
+    try { walk(this.dir); } catch (error) { this.report("*", "read", error); }
+    return { files, bytes };
+  }
 
   private load(id: string): LogRecord[] {
     const cached = this.disk.get(id);
     if (cached) return cached;
     let data: LogRecord[] = [];
     try {
-      data = parseLog(fs.readFileSync(this.pathFor(id), "utf8"));
-    } catch {}
+      const parsed = parseLogDetailed(fs.readFileSync(this.pathFor(id), "utf8"));
+      data = parsed.records;
+      if (parsed.malformedLines > 0) this.report(id, "parse", new Error(`${parsed.malformedLines} malformed record(s); valid history was recovered`));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") this.report(id, "read", error);
+    }
     this.disk.set(id, data);
     return data;
   }
@@ -516,7 +574,10 @@ export class EventLog {
       disk.push(...lines);
       batch.clear();
       this.lastFlush.set(id, Date.now());
-    } catch {}
+    } catch (error) {
+      // Do not clear the batch: a later explicit/timer flush can retry it.
+      this.report(id, "append", error);
+    }
   }
 
   /**
@@ -538,7 +599,9 @@ export class EventLog {
       const body = copy.length ? copy.map((e) => JSON.stringify(e)).join("\n") + "\n" : "";
       fs.writeFileSync(this.pathFor(id), this.redact(body));
       this.lastFlush.set(id, Date.now());
-    } catch {}
+    } catch (error) {
+      this.report(id, "rewrite", error);
+    }
   }
 
   /** Cancel any pending write and forget the session (used when it's deleted). */

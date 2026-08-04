@@ -382,6 +382,30 @@ test("appendBaseSnapshot round-trips through disk and seeds prevKeys from disk a
   }
 });
 
+test("missing logs are empty, but malformed logs and append failures are reported", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
+  try {
+    const issues: Array<{ operation: string; message: string }> = [];
+    const missing = new EventLog(dir, (id) => path.join(dir, `${id}.jsonl`), (t) => t, 0, (issue) => issues.push(issue));
+    assert.deepEqual(missing.read("missing"), []);
+    assert.equal(issues.length, 0, "ENOENT is the only normal empty-log state");
+
+    fs.writeFileSync(path.join(dir, "corrupt.jsonl"), "{not-json}\n");
+    assert.deepEqual(missing.diskUsage(), { files: 1, bytes: Buffer.byteLength("{not-json}\n") });
+    assert.deepEqual(missing.read("corrupt"), []);
+    assert.equal(issues.at(-1)?.operation, "parse");
+    assert.equal(missing.health().ok, false);
+
+    const appendIssues: Array<{ operation: string }> = [];
+    const unwritable = new EventLog(dir, (id) => path.join(dir, "missing-parent", `${id}.jsonl`), (t) => t, 0, (issue) => appendIssues.push(issue));
+    unwritable.append("s1", STREAMS["streaming reasoning (same id refined per delta)"]![0]!);
+    assert.equal(appendIssues.at(-1)?.operation, "append");
+    assert.equal(unwritable.health().pendingSessions, 1, "failed appends stay queued for retry");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("deriveHistory prefers the runtime base and falls back to the log's base", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
   try {

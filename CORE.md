@@ -18,7 +18,7 @@ Core includes:
 
 Core promises:
 
-- local-only use must not require a Bivy Cloud account;
+- Bivy requires relay/control-plane enrollment to deliver its core value — remotely visible, steerable sessions — but that enrollment can always target self-hosted infrastructure, so a Bivy Cloud account is never mandatory;
 - users bring their own model/provider credentials for launch; Bivy Cloud is not required for AI inference;
 - sensitive workspace data stays on the node unless the user explicitly opts into a feature that moves it;
 - Bivy Cloud endpoints are defaults, not lock-in — equivalent self-host URLs can be configured.

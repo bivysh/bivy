@@ -104,6 +104,27 @@ describe("buildInboxItems", () => {
     expect(items[0]).toMatchObject({ kind: "queue", queueItemId: "q1" });
   });
 
+  it("keeps a recent reviewable outcome until its session is opened after completion", () => {
+    const completedAt = "2026-01-01T00:08:00.000Z";
+    const completed: GithubQueueItem = {
+      id: "q-done", source: "github:issue", status: "succeeded", label: "bivy/main", title: "Fix bug",
+      createdAt: "2026-01-01T00:00:00.000Z", completedAt,
+      output: { sessionId: "s-done", prUrl: "https://github.test/pr/1" },
+    };
+    const unseen = buildInboxItems({
+      sessions: [session({ sessionId: "s-done", lastSeenAt: Date.parse("2026-01-01T00:07:00.000Z") })],
+      approvals: [], questions: [], nodes: [], queue: [completed], now: NOW,
+    });
+    expect(unseen).toHaveLength(1);
+    expect(unseen[0]).toMatchObject({ kind: "outcome", sessionId: "s-done", title: "PR open — review outcome" });
+
+    const reviewed = buildInboxItems({
+      sessions: [session({ sessionId: "s-done", lastSeenAt: Date.parse(completedAt) })],
+      approvals: [], questions: [], nodes: [], queue: [completed], now: NOW,
+    });
+    expect(reviewed).toHaveLength(0);
+  });
+
   it("surfaces an automation run that needs attention or failed, keyed by run id, and ignores healthy runs", () => {
     const runs: AccountAutomationRun[] = [
       { id: "run-1", triggerKind: "github", status: "needs_attention", title: "Nightly deploy", createdAt: "2026-01-01T00:03:00.000Z", output: { sessionId: "s9" } },

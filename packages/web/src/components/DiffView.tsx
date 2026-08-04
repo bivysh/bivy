@@ -15,11 +15,14 @@ function DiffStat({ added, removed }: { added: number; removed: number }) {
 
 const MAX_LINES = 420;
 
-/** Line-by-line diff viewer for Edit/Write hunks, matching the legacy client. */
-export const DiffView = memo(function DiffView({ hunks, single }: { hunks: DiffHunk[]; single?: string }) {
+export type DiffMode = "unified" | "split";
+
+/** Line-by-line diff viewer for Edit/Write hunks, matching the legacy client.
+ *  `mode: "split"` renders old/new side-by-side (C3a); "unified" is the default. */
+export const DiffView = memo(function DiffView({ hunks, single, mode = "unified" }: { hunks: DiffHunk[]; single?: string; mode?: DiffMode }) {
   let budget = MAX_LINES;
   return (
-    <div className="diff-viewer">
+    <div className={`diff-viewer diff-${mode}`}>
       {hunks.map((h, hi) => {
         const ops = compactDiffOps(diffOps(h.oldText, h.newText));
         const rows: React.ReactNode[] = [];
@@ -36,14 +39,37 @@ export const DiffView = memo(function DiffView({ hunks, single }: { hunks: DiffH
           const op = ops[i]!;
           if (op.type === "skip") {
             rows.push(
-              <div className="diff-line skip" key={i}>
-                <span className="diff-gutter">⋯</span>
-                <span>{op.count} unchanged lines</span>
-              </div>,
+              mode === "split" ? (
+                <div className="diff-row skip" key={i}>
+                  <div className="diff-side"><span className="diff-gutter">⋯</span><span>{op.count} unchanged</span></div>
+                  <div className="diff-side"><span className="diff-gutter">⋯</span><span>{op.count} unchanged</span></div>
+                </div>
+              ) : (
+                <div className="diff-line skip" key={i}>
+                  <span className="diff-gutter">⋯</span>
+                  <span>{op.count} unchanged lines</span>
+                </div>
+              ),
             );
             continue;
           }
           budget--;
+          if (mode === "split") {
+            // Old side shows context+deletions; new side shows context+additions.
+            const oldCell = op.type === "add" ? null : op.text || " ";
+            const newCell = op.type === "del" ? null : op.text || " ";
+            rows.push(
+              <div className="diff-row" key={i}>
+                <div className={`diff-side ${op.type === "del" ? "del" : op.type === "ctx" ? "" : "empty"}`}>
+                  {oldCell !== null && <><span className="diff-gutter">{op.type === "del" ? "−" : " "}</span><span className="diff-code">{oldCell}</span></>}
+                </div>
+                <div className={`diff-side ${op.type === "add" ? "add" : op.type === "ctx" ? "" : "empty"}`}>
+                  {newCell !== null && <><span className="diff-gutter">{op.type === "add" ? "+" : " "}</span><span className="diff-code">{newCell}</span></>}
+                </div>
+              </div>,
+            );
+            continue;
+          }
           const gutter = op.type === "add" ? "+" : op.type === "del" ? "−" : " ";
           rows.push(
             <div className={`diff-line ${op.type}`} key={i}>

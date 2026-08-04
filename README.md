@@ -199,24 +199,33 @@ Every environment variable, config file, and precedence rule:
 ## Approvals and sandboxing
 
 The default approval mode is **`autonomous`**: agents act without per-action
-prompts. Safety comes from a floor that applies in *every* mode — catastrophic
-commands and writes outside the workspace are refused outright, and a backstop
-set (force-push, publish, deploy, sudo) always pauses for a human.
+prompts. The actual protection depends on the selected runtime. Native-sandbox
+agents enforce the chosen access tier; structured runtimes also pass tool calls
+through Bivy's policy and approval layer. Process agents that Bivy cannot
+intercept run with your OS user permissions. The picker shows this distinction
+and requires confirmation before selecting that limited path.
+
+Where Bivy receives structured shell/file calls, a heuristic floor blocks known
+catastrophic commands and structured writes outside the workspace, and a
+backstop set (force-push, publish, deploy, sudo) pauses for a human. This catches
+accidents; it is not an adversarial isolation boundary.
 
 If you want to be asked about more, set the mode explicitly:
 
 ```bash
 BIVY_APPROVAL_MODE=risky    # prompt on risky shell commands and file edits
 BIVY_APPROVAL_MODE=always   # prompt on all shell commands and file edits
-BIVY_APPROVAL_MODE=never    # no prompts beyond the hard floor
+BIVY_APPROVAL_MODE=never    # no prompts; structured-tool heuristic blocks still apply where available
 ```
 
 Approve from the terminal, browser, or phone.
 
 Sandbox tiers (`read-only`, `workspace-write`, `danger-full-access`) are enforced
 natively by agents that support them — Codex, Claude Code, Gemini CLI, Qwen Code.
-Agents without a native sandbox are governed at the filesystem, MCP, and network
-layer. **Bivy does not ship its own OS-level jail in 0.1.**
+Agents without a native sandbox may expose structured tool or MCP controls, but
+those controls do not cover activity the agent performs outside those channels;
+some process adapters run entirely with your user permissions. Check the
+picker's Protection label. **Bivy does not currently ship its own OS-level jail.**
 
 ## Credentials
 

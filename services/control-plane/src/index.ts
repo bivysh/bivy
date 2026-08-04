@@ -2211,6 +2211,7 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     createdAt: w.createdAt,
     claimedAt: w.claimedAt,
     claimedByNodeId: w.claimedByNodeId,
+    leaseExpiresAt: w.leaseExpiresAt,
     completedAt: w.completedAt,
     triggerId: w.triggerId,
     triggerKind: w.triggerKind,
@@ -2888,6 +2889,15 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
   res.json({ ok: true, item });
+}));
+
+// Renew finite ownership while a live node is working. If the node/process dies,
+// heartbeats stop and list/claim may atomically reclaim the item after expiry.
+app.post("/node/work/:id/heartbeat", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const item = await store.renewWorkItemLease(node.accountId, node.id, String(req.params.id));
+  if (!item) return res.status(409).json({ error: "Run lease is not owned by this node" });
+  res.json({ ok: true, leaseExpiresAt: item.leaseExpiresAt });
 }));
 
 app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) => {

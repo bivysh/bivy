@@ -46,7 +46,6 @@ function AttachmentChip({ attachment }: { attachment: PromptAttachment }) {
       }
     }
     return null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-derive only when the attachment identity changes
   }, [attachment]);
 
   useEffect(() => {

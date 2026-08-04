@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import {
   resolveControlPlaneTaskConfig,
   ControlPlaneTaskPoller,
+  failWork,
+  reportEvidence,
   type ControlPlaneTaskConfig,
   type WorkItem,
 } from "../src/control-plane-tasks.js";
@@ -209,6 +211,36 @@ test("poller: runs up to the concurrency cap in parallel, not one at a time", as
     await tickPromise;
   } finally {
     globalThis.fetch = original;
+  }
+});
+
+test("A4: a failed work transition is logged, not swallowed", async () => {
+  const cfg: ControlPlaneTaskConfig = { controlPlaneUrl: "https://cp", enrollmentToken: "t", labels: ["bivy"], pollMs: 60_000 };
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+  const originalFetch = globalThis.fetch;
+
+  try {
+    // Network-level failure (fetch rejects).
+    globalThis.fetch = (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch;
+    await failWork(cfg, "w1"); // must not throw
+    assert.ok(warnings.some((w) => w.includes("w1") && w.includes("fail")), `expected a warning naming the failed transition, got: ${warnings.join(" | ")}`);
+
+    // Control-plane rejects the transition (non-ok response).
+    warnings.length = 0;
+    globalThis.fetch = (async () => new Response("", { status: 503 })) as typeof fetch;
+    await failWork(cfg, "w2");
+    assert.ok(warnings.some((w) => w.includes("w2") && w.includes("503")), `expected a warning with the rejection status, got: ${warnings.join(" | ")}`);
+
+    // Evidence reports are logged the same way.
+    warnings.length = 0;
+    globalThis.fetch = (async () => { throw new Error("down"); }) as typeof fetch;
+    await reportEvidence(cfg, "w3", { routingReason: "test" });
+    assert.ok(warnings.some((w) => w.includes("w3") && w.includes("evidence")), `expected an evidence-report warning, got: ${warnings.join(" | ")}`);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
   }
 });
 

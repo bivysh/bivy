@@ -182,7 +182,7 @@ unless noted.
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
 | `BIVY_SANDBOX` | `read-only` \| `workspace-write` \| `danger-full-access` | `workspace-write` | Supported | Selects the tier each agent enforces in its own native sandbox (Codex `--sandbox`, Gemini `--approval-mode`, Claude `permissionMode`). Agents with no native sandbox (Goose, OpenCode, Aider) are governed by Bivy's filesystem/MCP/network channels instead. Case-insensitive; `_` is normalised to `-`; an unrecognised value is silently ignored |
-| `BIVY_APPROVAL_MODE` | `autonomous` \| `risky` \| `always` \| `never` | `autonomous` | Supported | `autonomous` runs without per-action approval; catastrophic commands and writes outside the workspace are blocked in every mode, and a backstop set (force-push, publish, deploy, sudo) still pauses. `risky`/`always` restore prompt-heavy behaviour |
+| `BIVY_APPROVAL_MODE` | `autonomous` \| `risky` \| `always` \| `never` | `autonomous` | Supported | Controls prompting where the selected runtime exposes structured tool calls. On those paths, heuristic catastrophic-command/workspace checks apply and backstop actions pause. Process runtimes without interception still run with the OS user's permissions; this setting is not an isolation boundary |
 | `BIVY_EGRESS_PROXY` | any non-empty | unset | Supported (opt-in) | Routes CLI-agent outbound traffic through a local governance broker, whose proxy env is merged into every agent subprocess |
 | `BIVY_MCP_PROXY` | any non-empty | unset | Supported (opt-in) | Rewrites the agent's on-disk MCP config so its servers launch through `bivy mcp-proxy`, restored on session close. Skipped for Pi and the Claude SDK, which govern MCP natively. Note: `BIVY_MCP_PROXY=0` **enables** it |
 
@@ -294,8 +294,8 @@ The hosted endpoints all derive from one domain, so you normally set nothing.
 | Variable | Type | Default | Status |
 | --- | --- | --- | --- |
 | `BIVY_HOSTED_DOMAIN` | domain | `bivy.sh` | Supported — re-points all three derived URLs at once (self-host/staging) |
-| `BIVY_CONTROL_PLANE_URL` | URL | `https://app.<domain>` | Supported |
-| `BIVY_RELAY_URL` | `ws(s)://` URL | `wss://relay.<domain>` | Supported. **Overrides the value in `relay.json`** |
+| `BIVY_CONTROL_PLANE_URL` | URL | `https://app.<domain>` | Supported. Setting this (or `BIVY_RELAY_URL`) makes `bivy setup` default the remote-access prompt to **self-hosted** and pre-fills this URL |
+| `BIVY_RELAY_URL` | `ws(s)://` URL | `wss://relay.<domain>` | Supported. **Overrides the value in `relay.json`**. Setting this (or `BIVY_CONTROL_PLANE_URL`) makes `bivy setup` default to **self-hosted** and pre-fills this URL |
 | `BIVY_CLIENT_BASE_URL` | URL | the resolved control-plane URL | Supported — where the web app is served |
 | `BIVY_RELAY_TOKEN` | token | `relay.json`'s `enrollmentToken` | Supported. If neither a URL nor a token resolves, the relay stays off |
 | `BIVY_EMAIL` | email | unset | Supported — non-interactive `bivy relay:setup` |
@@ -341,12 +341,18 @@ self-contained setups.
 | `BIVY_WORKTREE_COW_CLONE` | any non-empty | unset | Supported (opt-in, experimental) | Copy-on-write cloning of installed dirs (`node_modules` etc.) from a sibling worktree. Requires filesystem CoW support; silently disabled otherwise |
 | `BIVY_SHARED_DEP_CACHE` | `1`/`true`, **or a path** | unset | Supported (opt-in) | Points npm/yarn/pip/cargo/go *caches* at one directory for every agent and terminal. `1`/`true` uses `<data-dir>/dep-cache`; any other value is taken as an explicit path. Cache-only — never changes a project's lockfile or install location |
 | `BIVY_SHARED_DEP_CACHE_MAX_BYTES` | integer bytes | `21474836480` (20 GiB) | Supported | LRU eviction cap for the shared cache. `0` disables eviction |
+| `BIVY_ATTACHMENT_MAX_FILE_BYTES` | integer bytes | `26214400` (25 MiB) | Supported | Node-side hard limit for a durably stored attachment; composer uploads have a stricter 10 MiB limit |
+| `BIVY_ATTACHMENT_STORE_MAX_BYTES` | integer bytes | `2147483648` (2 GiB) | Supported | Global admission cap for new blobs. GC removes only unreferenced blobs; if a lowered cap is already exceeded by referenced history, it is retained and an over-cap warning is reported |
+| `BIVY_ATTACHMENT_RETENTION_MS` | integer ms | `2592000000` (30 days) | Supported | Minimum age before an unreferenced attachment is collected during the disk sweep |
 
 ## Terminals and notifications
 
 | Variable | Type | Default | Status |
 | --- | --- | --- | --- |
-| `BIVY_EXEC_TIMEOUT_MS` | integer ms | `600000` (10 min) | Supported — `bivy exec` turn timeout. `--timeout <seconds>` wins |
+| `BIVY_EXEC_TIMEOUT_MS` | integer ms | `600000` (10 min) | Supported — `bivy exec` client wait timeout. `--timeout <seconds>` wins |
+| `BIVY_TURN_TIMEOUT_MS` | integer ms | `3600000` (60 min) | Supported — daemon-side watchdog for every agent turn. Stops the runtime, marks the session timed out, and releases ephemeral/queue progress. `0` explicitly disables it; values above 24 h are capped |
+| `BIVY_AUTOMATION_CHECKS` | JSON array or comma list of package-script names | `test,lint,typecheck` | Supported | Deterministic checks run after unattended issue work when those scripts exist. Only name/hash/status/exit are reported; command text/output stay on the node |
+| `BIVY_AUTOMATION_CHECK_TIMEOUT_MS` | integer ms | `600000` (10 min) | Supported | Per-check timeout, clamped to 1 s–30 min |
 | `BIVY_RUN_IDLE_NOTIFY_MS` | integer ms | `30000` | Internal / test tuning |
 | `BIVY_TERM_BELL_QUIET_MS` | integer ms | `8000` | Internal / test tuning — how long since your last keystroke before a terminal bell counts as "you stepped away" |
 | `BIVY_TERM_BELL_COOLDOWN_MS` | integer ms | `45000` | Internal / test tuning — collapses a bell storm into one notification |

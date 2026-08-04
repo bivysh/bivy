@@ -5,6 +5,8 @@
       "label": "Codex",
       "command": "codex",
       "hidden": true,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "exec"
       ],
@@ -18,6 +20,8 @@
       "label": "OpenCode",
       "command": "opencode",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "run",
         "-s"
@@ -32,6 +36,8 @@
       "label": "Aider",
       "command": "aider",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "--yes-always",
         "--message"
@@ -46,6 +52,8 @@
       "label": "Hermes",
       "command": "hermes",
       "hidden": true,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [],
       "install": {
         "kind": "npm",
@@ -57,6 +65,8 @@
       "label": "Goose",
       "command": "goose",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "run",
         "-t",
@@ -76,6 +86,8 @@
       "label": "Gemini CLI",
       "command": "gemini",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "-p",
         "-o",
@@ -92,6 +104,8 @@
       "label": "Qwen Code",
       "command": "qwen",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "-p",
         "--output-format",
@@ -108,6 +122,8 @@
       "label": "Cline",
       "command": "cline",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "-y",
         "--id"
@@ -122,6 +138,8 @@
       "label": "Crush",
       "command": "crush",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "run",
         "-q"
@@ -136,6 +154,8 @@
       "label": "Cursor",
       "command": "cursor-agent",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "--force",
         "-p"
@@ -151,6 +171,8 @@
       "label": "GitHub Copilot",
       "command": "copilot",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "--allow-all-tools",
         "-p"
@@ -165,6 +187,8 @@
       "label": "Grok",
       "command": "grok",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "-p"
       ],
@@ -178,6 +202,8 @@
       "label": "Amp",
       "command": "amp",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "-x",
         "threads",
@@ -193,6 +219,8 @@
       "label": "Auggie",
       "command": "auggie",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "--quiet",
         "--print"
@@ -207,6 +235,8 @@
       "label": "Droid",
       "command": "droid",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "exec",
         "--auto",
@@ -223,6 +253,8 @@
       "label": "Continue",
       "command": "cn",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "--auto",
         "-p"
@@ -237,6 +269,8 @@
       "label": "Kilo Code",
       "command": "kilo",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "run",
         "--auto",
@@ -252,6 +286,8 @@
       "label": "Rovo Dev",
       "command": "acli",
       "hidden": false,
+      "supportTier": "beta",
+      "certification": "adapter-tested",
       "headlessFlags": [
         "rovodev",
         "run",
@@ -265,6 +301,8 @@
       "label": "Codebuff",
       "command": "codebuff",
       "hidden": true,
+      "supportTier": "experimental",
+      "certification": "unverified",
       "headlessFlags": [
         "--continue"
       ],

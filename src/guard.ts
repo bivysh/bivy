@@ -19,8 +19,13 @@ export type GuardDecision = "allow" | "ask" | "deny";
 
 export function bashCommand(input: unknown): string {
   if (!input || typeof input !== "object") return "";
-  const command = (input as { command?: unknown }).command;
-  return typeof command === "string" ? command : "";
+  const value = input as Record<string, unknown>;
+  // Structured agents use different names for their shell surface. Keep this
+  // intentionally small and factual; unknown tools are not magically governed.
+  for (const key of ["command", "cmd", "script"]) {
+    if (typeof value[key] === "string") return value[key] as string;
+  }
+  return "";
 }
 
 /** Heuristic for the legacy "risky" mode (prompt-heavy). */
@@ -33,15 +38,44 @@ export function looksRiskyBash(command: string): boolean {
   );
 }
 
+/** Parse dangerous recursive rm targets without a nested-quantifier regex. The
+ * input is user/agent controlled, so this intentionally stays linear-time. */
+function catastrophicRm(command: string): boolean {
+  const systemRoots = ["/etc", "/usr", "/home", "/var", "/opt", "/boot", "/root", "/bin", "/sbin", "/lib", "/lib64"];
+  for (const segment of command.split(/[;\n|&]+/)) {
+    const tokens = segment.trim().split(/\s+/).map((token) => token.replace(/^["']|["']$/g, ""));
+    const rmIndex = tokens.lastIndexOf("rm");
+    if (rmIndex < 0) continue;
+    let recursive = false;
+    let force = false;
+    const targets: string[] = [];
+    for (const token of tokens.slice(rmIndex + 1)) {
+      if (token === "--recursive") recursive = true;
+      else if (token === "--force") force = true;
+      else if (token.startsWith("-") && !token.startsWith("--")) {
+        recursive ||= token.includes("r") || token.includes("R");
+        force ||= token.includes("f");
+      } else if (!token.startsWith("--")) targets.push(token);
+    }
+    if (!recursive || !force) continue;
+    for (const rawTarget of targets) {
+      const target = rawTarget.length > 1 ? rawTarget.replace(/\/+$/, "") : rawTarget;
+      if (target === "/" || target === "~" || target === "$home" || target === "/*") return true;
+      if (systemRoots.some((root) => target === root || target.startsWith(`${root}/`))) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Catastrophic, irreversible, system-wide actions. Blocked OUTRIGHT in every mode
  * — the boundary that makes unattended autonomy safe rather than reckless.
  */
 export function looksCatastrophic(command: string): boolean {
-  const c = command.trim().toLowerCase();
+  const c = command.trim().toLowerCase().slice(0, 100_000);
   if (!c) return false;
   return (
-    /\brm\s+(-\S*[rf]\S*\s+)+(\/|~|\$home|\/\*)(\s|$|\/)/.test(c) || // rm -rf / | ~ | /*
+    catastrophicRm(c) || // rm -rf / | ~ | system roots
     /\bmkfs(\.\w+)?\b/.test(c) ||
     /\bdd\b[^\n]*\bof=\/dev\/(sd|nvme|hd|disk)/.test(c) ||
     />\s*\/dev\/(sd|nvme|hd|disk)/.test(c) ||
@@ -104,12 +138,13 @@ export function guardToolCall(
   // case-sensitive compare silently disabled it for claude-code. Integration
   // tool names (MCP, etc.) keep their original casing via `isRiskyIntegration`.
   const tool = toolName.toLowerCase();
+  const isShell = tool === "bash" || tool === "shell" || tool === "execute" || tool === "run_command";
   // Tools that write to the filesystem and so must respect the workspace
   // boundary. MultiEdit/NotebookEdit also take a `file_path` (see toolPath).
   const isWrite = tool === "write" || tool === "edit" || tool === "multiedit" || tool === "notebookedit";
 
   // --- Hard floor: blocked in every mode ---
-  if (tool === "bash" && looksCatastrophic(bashCommand(input))) {
+  if (isShell && looksCatastrophic(bashCommand(input))) {
     return { decision: "deny", reason: "Blocked: catastrophic command (outside the safety boundary)" };
   }
   if (isWrite) {
@@ -125,13 +160,13 @@ export function guardToolCall(
   if (isRiskyIntegration(toolName)) return { decision: "ask" };
 
   if (mode === "autonomous") {
-    if (tool === "bash" && looksBackstop(bashCommand(input))) return { decision: "ask" };
+    if (isShell && looksBackstop(bashCommand(input))) return { decision: "ask" };
     return { decision: "allow" };
   }
   if (mode === "always") {
-    return { decision: tool === "bash" || isWrite ? "ask" : "allow" };
+    return { decision: isShell || isWrite ? "ask" : "allow" };
   }
   // "risky"
-  if (tool === "bash") return { decision: looksRiskyBash(bashCommand(input)) ? "ask" : "allow" };
+  if (isShell) return { decision: looksRiskyBash(bashCommand(input)) ? "ask" : "allow" };
   return { decision: isWrite ? "ask" : "allow" };
 }

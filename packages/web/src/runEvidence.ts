@@ -8,7 +8,7 @@
 // docs/automation-runs.md. Everything here is read-only projection over that
 // already-sanitized record; it never reaches for a prompt/transcript/diff.
 
-import type { GithubQueueItem } from "@bivy/core";
+import { deriveRunOutcome, type GithubQueueItem } from "@bivy/core";
 
 /** sessionId → its run evidence. Only a claimed-or-later run carries
  *  `output.sessionId`, so pending items simply don't appear (nothing to join
@@ -65,6 +65,50 @@ export function runDuration(item: GithubQueueItem): string | null {
 export function retryReason(item: GithubQueueItem): string | null {
   const ev = [...(item.events ?? [])].reverse().find((e) => e.kind === "retry" || e.kind === "fallback");
   return ev?.summary || null;
+}
+
+export interface ArtifactRef {
+  label: string;
+  url?: string;
+}
+
+/** The primary tangible output of a run for the outcome detail (C1): the pull
+ *  request if one was opened, else an explicit artifact URL, else the branch or
+ *  commit ref. Lets the outcome surface show a single first-class "Artifact"
+ *  field instead of leaving the PR only as a nav link. */
+export function artifactRef(item: GithubQueueItem): ArtifactRef | null {
+  const out = item.output;
+  if (!out) return null;
+  if (out.prUrl) return { label: "Pull request", url: out.prUrl };
+  if (out.artifactUrl) return { label: "Artifact", url: out.artifactUrl };
+  if (out.branch) return { label: `branch ${out.branch}` };
+  if (out.commit) return { label: `commit ${out.commit.slice(0, 12)}` };
+  return null;
+}
+
+export type RecoveryKind = "fix" | "retry" | "fork";
+
+/** The names of the checks that failed, for a "fix" prompt that tells the agent
+ *  exactly what to repair rather than a vague "something failed". */
+export function failingCheckNames(item: GithubQueueItem): string[] {
+  return (item.checks ?? []).filter((c) => c.status === "failed").map((c) => c.name);
+}
+
+/**
+ * Which recovery actions to offer for a run (C2). Derived from the durable
+ * outcome, NOT the agent's own prose: a run whose deterministic checks failed
+ * offers fix + retry + fork even if the agent narrated success. A reviewable
+ * success offers fork (iterate on it); a non-terminal or nothing-to-review run
+ * offers none.
+ */
+export function recoveryActions(item: GithubQueueItem): RecoveryKind[] {
+  const outcome = deriveRunOutcome(item);
+  if (!outcome.terminal) return [];
+  if (outcome.kind === "checks_failed" || outcome.kind === "agent_failed" || outcome.kind === "timed_out") {
+    return ["fix", "retry", "fork"];
+  }
+  if (outcome.reviewable) return ["fork"];
+  return [];
 }
 
 export interface RowHint {

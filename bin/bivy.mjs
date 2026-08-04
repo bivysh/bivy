@@ -425,6 +425,25 @@ function run(cmd, args, opts = {}) {
   });
 }
 
+/** Fixed executable + fixed entry point for setup's inline model-auth stage.
+ * Keep this separate from the generic CLI forwarding helper: no user-provided
+ * command or argv value reaches this process boundary. */
+function runSetupModelLogin(config) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, nodeScriptArgs(bivyLoginEntry), {
+      stdio: "inherit",
+      cwd: repoRoot,
+      env: startEnv(config),
+      shell: false,
+    });
+    child.on("exit", (code) => resolve(code ?? 0));
+    child.on("error", (error) => {
+      console.error(c.red(`Failed to start model login: ${error.message}`));
+      resolve(1);
+    });
+  });
+}
+
 function runQuiet(cmd, args, opts = {}) {
   const res = spawnSync(cmd, args, { encoding: "utf8", ...opts });
   return { code: res.status ?? 1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
@@ -1530,7 +1549,7 @@ function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
     "run", "sessions", "ls", "resume", "promote", "rename", "nodes", "agents", "agents:install", "shim", "takeover", "token", "exec",
-    "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "logs", "login",
+    "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "logs", "login",
     "update", "update:log", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
@@ -3194,9 +3213,10 @@ async function cmdSetup(args = []) {
     config.env = { ...config.env, BIVY_RUNTIME: setupAgent.runtimeId };
     saveConfig(config);
   }
+  let agentReady = true;
   if (setupAgent && setupAgent.runtimeId !== "pi") {
-    const installed = await ensureSetupAgent(setupAgent);
-    if (!installed) console.log(c.yellow(`${setupAgent.label} was not fully installed. Install it later from the app or with 'bivy agents:install'.`));
+    agentReady = await ensureSetupAgent(setupAgent);
+    if (!agentReady) console.log(c.yellow(`${setupAgent.label} was not fully installed. Install it later from the app or with 'bivy agents:install'.`));
   }
   console.log(c.dim(`Default agent: ${setupAgent?.label || "Pi"}  (change in Settings; sign into your model from the agent's CLI/TUI or Settings → Keys & OAuth)`));
 
@@ -3211,13 +3231,17 @@ async function cmdSetup(args = []) {
     console.log(c.bold("\n  Remote access\n"));
 
     console.log("Bivy uses remote access to make agent sessions visible and steerable from your other devices.");
+    // If self-host endpoints are already provided via the environment, default to
+    // self-hosted so a scripted or self-hosted install doesn't have to re-pick it
+    // (BIVY_CONTROL_PLANE_URL / BIVY_RELAY_URL then pre-fill the URL prompts below).
+    const selfHostEnv = Boolean((process.env.BIVY_CONTROL_PLANE_URL || "").trim() || (process.env.BIVY_RELAY_URL || "").trim());
     const syncChoice = await askChoice(
       "Remote access",
       [
         { key: "h", label: "hosted (recommended — one node is free)" },
         { key: "s", label: "self-hosted (your own control plane + relay)" },
       ],
-      "h",
+      selfHostEnv ? "s" : "h",
     );
     const relayArgs = [];
     if (syncChoice === "s") {
@@ -3278,6 +3302,22 @@ async function cmdSetup(args = []) {
   // `bivy github:app-create` / `github:app-connect`. One app covers every repo,
   // and the node mints its own tokens, so there's no per-repo token to set up here.
 
+  // Model access is part of activation, not a post-success footnote. Pi/Aider use
+  // Bivy's provider login; offer it inline so setup cannot imply the first task
+  // is ready while the required credential is still absent. Agent-native auth is
+  // explained in the readiness checklist below because those CLIs own the flow.
+  if (setupAgent?.needsBivyModel && !hasModelConfig(config)) {
+    const signInNow = await askYesNo("Sign in to a model now so your first task can run?", true);
+    if (signInNow) {
+      rl.pause();
+      const loginCode = await runSetupModelLogin(config);
+      rl.resume();
+      if (loginCode !== 0 || !hasModelConfig(loadConfig())) {
+        console.log(c.yellow("Model sign-in did not complete. The node can start, but an agent reply still requires 'bivy login'."));
+      }
+    }
+  }
+
   // 4. Background service — always installed so the node keeps running (and stays
   // reachable remotely) after you close this terminal. No prompt.
   let started = false;
@@ -3296,9 +3336,17 @@ async function cmdSetup(args = []) {
     return;
   }
 
-  console.log(c.bold(c.green("\n  ✓ Your node is running.\n")));
-  printFirstRunSteps();
-  await finishSetupRemote(config, setupSession);
+  const finalConfig = loadConfig();
+  const modelReady = !setupAgent?.needsBivyModel || hasModelConfig(finalConfig);
+  console.log(c.bold(c.green("\n  ✓ Node running. Check first-task readiness below.\n")));
+  console.log(`  ${c.green("✓")} node reachable at ${url(finalConfig)}`);
+  console.log(`  ${agentReady ? c.green("✓") : c.yellow("!")} runtime ${agentReady ? `${setupAgent?.label || "Pi"} available` : "not installed — run 'bivy agents:install'"}`);
+  console.log(`  ${modelReady ? (setupAgent?.needsBivyModel ? c.green("✓") : c.dim("○")) : c.yellow("!")} model ${modelReady ? (setupAgent?.needsBivyModel ? "credential configured" : "agent-managed — verified by the first task") : "not configured — run 'bivy login'"}`);
+  console.log(`  ${c.dim("○")} repository chosen from the directory where you start Bivy`);
+  console.log(`  ${agentReady && modelReady ? c.green("✓") : c.yellow("!")} first task ${agentReady && modelReady ? "ready to try" : "blocked by the stage above"}`);
+  console.log(`  ${fs.existsSync(relayConfigPath) ? c.green("✓") : c.yellow("!")} remote ${fs.existsSync(relayConfigPath) ? "configured" : "not configured — run 'bivy relay:setup'"}\n`);
+  printFirstRunSteps(modelReady);
+  await finishSetupRemote(finalConfig, setupSession);
 }
 
 // Read and delete the one-time account-session handoff written by relay:setup
@@ -3385,11 +3433,11 @@ async function openRemoteApp(config, { setupSession = null, open = true } = {}) 
   return { relay, remoteBase, accountUrl, pairedUrl, openUrl };
 }
 
-function printFirstRunSteps() {
+function printFirstRunSteps(modelReady = false) {
   console.log("  Run your first task:");
-  console.log(`    1. Model access:  ${c.cyan("bivy login")}  ${c.dim("(for Pi; other agents use their own login)")}`);
-  console.log(`    2. Start chatting: ${c.cyan("bivy")}`);
-  console.log(`       One-shot task: ${c.cyan('bivy exec "explain this repository"')}\n`);
+  if (!modelReady) console.log(`    1. Model access:   ${c.cyan("bivy login")}  ${c.dim("(for Pi; other agents use their own login)")}`);
+  console.log(`    ${modelReady ? "1" : "2"}. Start chatting: ${c.cyan("bivy")}`);
+  console.log(`       Starter task:  ${c.cyan('bivy exec "explain this repository and identify one low-risk improvement"')}\n`);
 }
 
 async function finishSetupRemote(config, setupSession = null) {
@@ -3506,7 +3554,7 @@ async function cmdStatus(args = []) {
     console.log(`  sessions:  ${status.sessions?.open ?? 0} open, ${status.sessions?.indexed ?? 0} indexed${status.sessions?.active ? `, active ${status.sessions.active}` : ""}`);
     console.log(`  devices:   ${status.devices?.paired ?? 0} paired remote, ${status.devices?.localTokens ?? 0} local token(s)`);
     console.log(`  approvals: ${status.approvals?.pending ?? 0} pending`);
-    console.log(`  guard:     ${status.approvalMode || "autonomous"} (${status.guardrails?.workspaceBoundary ? "workspace boundary on" : "boundary unknown"})`);
+    console.log(`  guard:     ${status.approvalMode || "autonomous"} · ${status.guardrails?.protection || (status.guardrails?.workspaceBoundary ? "structured workspace controls" : "runs with user permissions")}`);
     if (status.updatedAt) {
       const when = new Date(status.updatedAt);
       console.log(`  updated:   ${Number.isNaN(when.getTime()) ? status.updatedAt : when.toLocaleString()}`);
@@ -3517,9 +3565,34 @@ async function cmdStatus(args = []) {
 
 // `bivy doctor` — one health screen: runtime deps, node reachability, model auth,
 // remote/relay, and agents on PATH.
+// `bivy diagnostics [--out <file>]` — fetch the node's redacted diagnostics
+// bundle (versions, health counters, whitelisted config, activation record — no
+// secrets/prompts/transcripts) and print it, or write it to a file to attach to a
+// support request. See src/diagnostics.ts for exactly what is (and isn't) included.
+async function cmdDiagnostics(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log('Usage: bivy diagnostics [--out <file>]\n\nPrint a redacted, shareable diagnostics bundle (no secrets, prompts, transcripts, or repo content). --out writes it to a file instead of stdout.');
+    return;
+  }
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  let report;
+  try { report = await localApi(config, "/api/diagnostics"); }
+  catch (error) { console.error(c.red(`Could not fetch diagnostics: ${error?.message || String(error)}`)); process.exit(1); return; }
+  const json = JSON.stringify(report, null, 2);
+  const outIdx = args.indexOf("--out");
+  const out = outIdx >= 0 && outIdx + 1 < args.length ? args[outIdx + 1] : undefined;
+  if (out) {
+    fs.writeFileSync(out, json + "\n");
+    console.log(c.green(`Wrote redacted diagnostics to ${out}`));
+  } else {
+    console.log(json);
+  }
+}
+
 async function cmdDoctor(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy doctor\n\nHealth check: runtime deps, node reachability, model auth, remote/relay, and agents on PATH. Exits non-zero if Node is unsupported or the node is unreachable, so it can gate CI/monitoring.");
+    console.log("Usage: bivy doctor\n\nHealth check: runtime deps, node reachability, model auth, remote/relay, and agents on PATH. Exits non-zero if Node is unsupported or the node is unreachable, so it can gate CI/monitoring. See also 'bivy diagnostics' for a shareable redacted bundle.");
     return;
   }
   if (!(await ensureDeps())) process.exit(1);
@@ -3565,6 +3638,16 @@ async function cmdDoctor(args = []) {
   const agentCommands = [...BUILTIN_TERMINAL_AGENTS.values()].filter((a) => a.type === "command").map((a) => a.command);
   const agents = agentCommands.filter((a) => commandExists(a));
   console.log(`  ${mark(agents.length > 0, true)} agents on PATH: ${agents.length ? c.cyan(agents.join(", ")) : c.dim("none (built-in Pi still works; 'bivy agents:install')")}`);
+  if (status?.eventLog) {
+    const healthy = status.eventLog.ok !== false;
+    const mib = Number(status.eventLog.bytes || 0) / (1024 * 1024);
+    console.log(`  ${mark(healthy, true)} event log ${healthy ? "writable" : `${status.eventLog.affectedSessions ?? 0} session(s) need attention`} · ${mib.toFixed(1)} MiB`);
+  }
+  if (status?.attachments) {
+    const mib = Number(status.attachments.bytes || 0) / (1024 * 1024);
+    const over = Number(status.attachments.overCapBytes || 0);
+    console.log(`  ${over > 0 ? warn : ok} attachments ${status.attachments.blobs ?? 0} blob(s), ${mib.toFixed(1)} MiB${over > 0 ? c.dim("  (over cap; referenced history retained)") : ""}`);
+  }
   console.log("");
 
   // Fail the command when a hard check is red (unsupported Node or an
@@ -4233,6 +4316,9 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "doctor":
       await cmdDoctor(args);
+      break;
+    case "diagnostics":
+      await cmdDiagnostics(args);
       break;
     case "logs":
       await cmdLogs(args);

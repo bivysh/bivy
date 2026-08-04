@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralNodeConfig, QueueRouting, HostedProvisioningStatus, HostedAuditEvent, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, LinearHook, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, connectSlackHook, disconnectSlackHook, fetchSlackHook, connectLinearHook, disconnectLinearHook, fetchLinearHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
@@ -181,6 +181,28 @@ const TITLES: Record<View, string> = {
   link: "Link a device",
 };
 
+// Search the concepts and controls inside each panel, not just its title. This
+// remains intentionally compact: selecting a result opens the owning panel.
+const SEARCH_TERMS: Record<View, string> = {
+  appearance: "theme system light dark",
+  notifications: "push alerts attention approval permission idle completed",
+  import: "session transcript file upload migrate",
+  providers: "api key oauth openai anthropic google login credentials",
+  models: "ollama local model endpoint",
+  voice: "microphone speech transcription",
+  github: "github app repository installation issue pull request",
+  linear: "linear workspace issue integration",
+  slack: "slack workspace channel integration",
+  queue: "work queue issue run evidence outcome retry lease checks",
+  automations: "schedule cron unattended recurring task",
+  webhooks: "webhook trigger secret event",
+  rulesets: "rules policy routing agent runtime model sandbox",
+  nodes: "node daemon online offline diagnostics version update storage disk",
+  ephemeral: "ephemeral hosted machine provisioning billing teardown retention",
+  account: "account billing subscription plan usage",
+  link: "device qr code phone mobile pair",
+};
+
 export function Settings({
   state,
   onClose,
@@ -240,14 +262,19 @@ export function Settings({
 
   const groups: NavGroup[] = [
     {
-      label: "General",
+      label: "Models & agents",
       items: [
-        { id: "appearance", label: "Appearance", icon: <IconAppearance /> },
-        { id: "notifications", label: "Notifications", icon: <IconBell /> },
-        { id: "import", label: "Import session", icon: <IconImport /> },
         { id: "providers", label: "Keys & OAuth", icon: <IconKey /> },
         { id: "models", label: "Local models", icon: <IconCpu /> },
-        { id: "voice", label: "Voice input", icon: <IconMic /> },
+      ],
+    },
+    {
+      label: "Machines",
+      items: [
+        { id: "nodes", label: "Nodes", icon: <IconServer /> },
+        ...(EPHEMERAL_MACHINES_ENABLED
+          ? [{ id: "ephemeral" as View, label: "Ephemeral machines", icon: <IconBolt /> }]
+          : []),
       ],
     },
     {
@@ -258,24 +285,24 @@ export function Settings({
           { id: "linear" as View, label: "Linear", icon: <IconLinear /> },
           { id: "slack" as View, label: "Slack", icon: <IconSlack /> },
         ] : []),
-        { id: "queue", label: "Work Queue", icon: <IconQueue /> },
       ],
     },
     {
-      label: "Automation",
+      label: "Automation & policy",
       items: [
+        { id: "queue", label: "Work Queue", icon: <IconQueue /> },
         { id: "automations", label: "Automations", icon: <IconBolt /> },
         { id: "webhooks", label: "Webhooks", icon: <IconWebhook /> },
         { id: "rulesets", label: "Rulesets", icon: <IconRules /> },
       ],
     },
     {
-      label: "Infrastructure",
+      label: "App",
       items: [
-        { id: "nodes", label: "Nodes", icon: <IconServer /> },
-        ...(EPHEMERAL_MACHINES_ENABLED
-          ? [{ id: "ephemeral" as View, label: "Ephemeral machines", icon: <IconBolt /> }]
-          : []),
+        { id: "appearance", label: "Appearance", icon: <IconAppearance /> },
+        { id: "notifications", label: "Notifications", icon: <IconBell /> },
+        { id: "voice", label: "Voice input", icon: <IconMic /> },
+        { id: "import", label: "Import session", icon: <IconImport /> },
       ],
     },
   ];
@@ -290,10 +317,10 @@ export function Settings({
   }
 
   const q = query.trim().toLowerCase();
-  const matches = (label: string) => !q || label.toLowerCase().includes(q);
+  const matches = (item: NavItem) => !q || `${item.label} ${SEARCH_TERMS[item.id]}`.toLowerCase().includes(q);
   // A query matching nothing used to hide every group and leave the sidebar
   // blank — looked broken rather than "no results" (#140).
-  const hasVisibleNavItem = groups.some((group) => group.items.some((it) => matches(it.label)));
+  const hasVisibleNavItem = groups.some((group) => group.items.some(matches));
 
   const title = activeView ? TITLES[activeView] : "Settings";
 
@@ -321,7 +348,7 @@ export function Settings({
           <nav className="settings-nav-groups">
             {!hasVisibleNavItem && <div className="picker-empty">No settings match "{query.trim()}"</div>}
             {groups.map((group) => {
-              const visible = group.items.filter((it) => matches(it.label));
+              const visible = group.items.filter(matches);
               if (visible.length === 0) return null;
               return (
                 <div className="settings-nav-group" key={group.label}>
@@ -1453,6 +1480,7 @@ function HostedProvisioningSection() {
   const [pat, setPat] = useState("");
   const [provider, setProvider] = useState("fly");
   const [providerToken, setProviderToken] = useState("");
+  const [confirmEnable, setConfirmEnable] = useState(false);
 
   const refreshAudit = () => controller.listHostedAudit().then(setAudit).catch(() => {});
   useEffect(() => {
@@ -1520,7 +1548,15 @@ function HostedProvisioningSection() {
           <span className="settings-toggle-title">Enable unattended provisioning</span>
           <span className="muted small">Off by default. When on, the control plane provisions per your queue routing.</span>
         </div>
-        <Toggle checked={enabled} disabled={busy} onChange={(v) => save({ enabled: v })} label="Enable unattended provisioning" />
+        <Toggle
+          checked={enabled}
+          disabled={busy}
+          onChange={(next) => {
+            if (next) setConfirmEnable(true);
+            else void save({ enabled: false });
+          }}
+          label="Enable unattended provisioning"
+        />
       </div>
 
       {enabled && (
@@ -1608,6 +1644,15 @@ function HostedProvisioningSection() {
         </>
       )}
       {err && <span className="chip err">{err}</span>}
+      {confirmEnable && (
+        <ConfirmDialog
+          title="Enable billable unattended runners?"
+          message="When queued work matches your routing policy, the control plane may launch the selected cloud config without another prompt. Your cloud provider bills its displayed hourly rate until teardown; each config's region, size, finish-teardown setting, and TTL backstop control that window. Review the config and use Dry run before relying on it."
+          confirmLabel="Enable provisioning"
+          onCancel={() => setConfirmEnable(false)}
+          onConfirm={() => { setConfirmEnable(false); void save({ enabled: true }); }}
+        />
+      )}
     </>
   );
 }
@@ -1992,17 +2037,17 @@ function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGith
   // routinely drop scripted navigations but honour a genuine submit gesture.
   const ready = phase === "submitting" && app?.action && app?.manifest;
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     if (!canQuery) return;
     controller.fetchGithubApp().then(setInfo).catch(() => setInfo(null));
     controller.listNodes().then(setNodes).catch(() => {});
-  };
-  useEffect(refresh, []);
+  }, [canQuery]);
+  useEffect(() => { refresh(); }, [refresh]);
   // Re-pull once the create flow reports success, so "connected" appears without
   // a manual reload.
   useEffect(() => {
     if (phase === "done") refresh();
-  }, [phase]);
+  }, [phase, refresh]);
   const apps = info?.apps ?? [];
   // The default node is one account-level setting written to every app, so any
   // app that has it answers for all of them.
@@ -2332,6 +2377,13 @@ function NodesPanel({ state }: { state: AppState }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const currentNodeId = controller.local.cur;
+  const selectedNode = nodes.find((node) => node.id === currentNodeId);
+  const selectedLastSeen = typeof selectedNode?.lastSeenAt === "string" ? Date.parse(selectedNode.lastSeenAt) : NaN;
+  const selectedHealth = selectedNode?.online
+    ? "Connected now."
+    : Number.isFinite(selectedLastSeen)
+      ? `Last contact ${new Date(selectedLastSeen).toLocaleString()}. The daemon may be stopped, updating, asleep, or unable to reach the control plane.`
+      : "This node has not completed a control-plane heartbeat yet. Check that the daemon is running and can reach the network.";
 
   const reload = () => {
     controller.getNodeSettings();
@@ -2355,6 +2407,10 @@ function NodesPanel({ state }: { state: AppState }) {
   // Includes githubIssuePrompt so `resetIssuePrompt` (which doesn't touch the
   // rest of the form) re-seeds once the node echoes back the restored default.
   const sig = settings ? `${settings.name}|${settings.defaultAgent}|${settings.githubIssuePrompt}` : "";
+  // Intentionally keyed on `sig`, not `settings`: re-seed the form only when the
+  // signature changes (a real node/settings switch), so a new `settings` object
+  // identity from an unrelated re-render doesn't clobber an in-progress edit.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setForm(settings); }, [sig]);
 
   const runtimes = state.runtimes.filter((r) => String((r as { status?: string }).status ?? "available") === "available");
@@ -2431,6 +2487,8 @@ function NodesPanel({ state }: { state: AppState }) {
               </option>
             ))}
           </select>
+          {selectedNode && <p className={`muted small${selectedNode.online ? "" : " warn-text"}`}>{selectedHealth}</p>}
+          <p className="muted small">Run <code>bivy update</code> on the node to update or repair its service, then refresh this list.</p>
         </section>
       )}
 

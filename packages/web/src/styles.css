@@ -1145,10 +1145,13 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .runtime-meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .runtime-meta-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .runtime-capabilities { display: flex; flex-wrap: wrap; gap: 4px; }
-.runtime-cap, .runtime-tier { border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; font-size: 10px; line-height: 1.5; color: var(--muted); }
+.runtime-cap, .runtime-tier, .runtime-protection { border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; font-size: 10px; line-height: 1.5; color: var(--muted); }
 .runtime-tier.supported { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 65%, var(--line)); font-weight: 700; }
 .runtime-tier.beta { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); font-weight: 700; }
 .runtime-tier.planned, .runtime-tier.experimental { opacity: 0.78; }
+.runtime-protection.native-sandbox, .runtime-protection.tool-controls { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.runtime-protection.mcp-controls { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 60%, var(--line)); }
+.runtime-protection.user-permissions { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); font-weight: 650; }
 .runtime-cap.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
 .runtime-cap.limited { opacity: 0.72; }
 .picker-action { flex: none; background: transparent; border: 1px solid var(--accent); color: var(--accent); border-radius: 8px; padding: 3px 10px; font-size: 12px; font-weight: 600; }
@@ -1160,6 +1163,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 /* Divides a picker list into groups (e.g. the model picker's connected vs.
    "Other models" — unconnected, offered with an inline Connect action). */
 .picker-section-label { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 12px 12px 4px; }
+.picker-section-toggle { width: 100%; display: flex; justify-content: space-between; border: 0; background: none; color: var(--muted); font: inherit; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 12px 12px 6px; cursor: pointer; }
 
 .reasoning-wrap { position: relative; }
 .reasoning-pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink); border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; }
@@ -1300,6 +1304,45 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .queue-run-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .queue-run-field select, .queue-run-field input { font-size: 13px; }
 .queue-run-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chip.outcome-success { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.chip.outcome-warning { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.chip.outcome-danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+/* Waiting/rate-limited (C4b): visually distinct from an actively-running run —
+   a dashed border + hourglass reads as "paused, not consuming compute". */
+.chip.outcome-kind-waiting { border-style: dashed; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.chip.outcome-kind-waiting::before { content: "⏳ "; }
+/* Recovery actions (C2): fix / retry / fork buttons on a terminal run's sheet. */
+.run-sheet-recovery { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.run-sheet-recovery .btn.small { padding: 4px 12px; font-size: 12px; }
+
+/* First-session decision summary (B2): the four decisions a new session makes. */
+.composer-first-session { font-size: 11px; color: var(--muted); padding: 2px 4px 4px; }
+.composer-first-session .fs-decisions { color: var(--fg); }
+
+/* Review surface (C3): state badges, checks strip, view-mode toggle, file tree,
+   per-file actions, and the split (side-by-side) diff layout. */
+.changes-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.changes-states, .changes-checks { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.changes-states .chip { font-size: 10px; padding: 1px 7px; }
+.changes-checks .chk { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.changes-checks .chk.passed { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.changes-checks .chk.failed { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+.changes-mode { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.changes-mode button { border: 0; background: transparent; color: var(--muted); font-size: 11px; padding: 2px 8px; cursor: pointer; }
+.changes-mode button.active { background: var(--accent); color: #fff; }
+.changes-file-head { display: flex; align-items: center; gap: 6px; }
+.changes-file-open { flex: 1; display: flex; align-items: center; gap: 6px; background: transparent; border: 0; text-align: left; cursor: pointer; color: inherit; min-width: 0; }
+.changes-file-actions { display: inline-flex; gap: 4px; }
+.changes-file-act { font-size: 10px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; }
+.changes-file-act.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+.changes-dir-head { display: flex; align-items: center; gap: 4px; width: 100%; background: transparent; border: 0; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 0; }
+.changes-dir-name { font-weight: 600; }
+.diff-viewer.diff-split .diff-row { display: grid; grid-template-columns: 1fr 1fr; }
+.diff-viewer.diff-split .diff-side { display: flex; gap: 4px; border-right: 1px solid var(--line); padding: 0 4px; white-space: pre; overflow-x: auto; }
+.diff-viewer.diff-split .diff-side.add { background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.diff-viewer.diff-split .diff-side.del { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.diff-viewer.diff-split .diff-side.empty { background: color-mix(in srgb, var(--line) 25%, transparent); }
+
 /* Run evidence / outcome reports (issue #153). */
 .evidence-list { display: flex; flex-direction: column; gap: 8px; }
 .evidence-report { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--surface-2); }

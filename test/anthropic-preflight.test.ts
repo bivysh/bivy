@@ -6,6 +6,7 @@ import {
   claudeCredentialFiles,
   describeAnthropicError,
   isAnthropicAuthError,
+  probeAnthropicAccess,
   ANTHROPIC_NO_CREDENTIAL_MESSAGE,
   ANTHROPIC_AUTH_HINT,
 } from "../src/runtime/anthropic-preflight.js";
@@ -80,6 +81,55 @@ check("describeAnthropicError appends guidance to auth failures only", () => {
   assert.ok(authed.includes(ANTHROPIC_AUTH_HINT), "appends the sign-in hint");
   const other = describeAnthropicError("connection reset");
   assert.equal(other, "connection reset", "non-auth errors pass through untouched");
+});
+
+async function acheck(name: string, fn: () => Promise<void>) {
+  try {
+    await fn();
+    console.log(`  ok  ${name}`);
+  } catch (error) {
+    failures += 1;
+    console.error(`FAIL  ${name}\n      ${(error as Error).stack ?? (error as Error).message}`);
+  }
+}
+
+const okFetch = (async () => new Response(JSON.stringify({ data: [] }), { status: 200 })) as typeof fetch;
+const unauthorizedFetch = (async () => new Response("bad key", { status: 401 })) as typeof fetch;
+const rateLimitedFetch = (async () => new Response("slow down", { status: 429 })) as typeof fetch;
+const downFetch = (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch;
+
+await acheck("probe: a valid API key reports authoritative access", async () => {
+  const r = await probeAnthropicAccess("sk-ant-valid", { fetch: okFetch });
+  assert.deepEqual({ probed: r.probed, ok: r.ok }, { probed: true, ok: true });
+});
+
+await acheck("probe: a 401 is an authoritative rejection", async () => {
+  const r = await probeAnthropicAccess("sk-ant-bad", { fetch: unauthorizedFetch });
+  assert.equal(r.probed, true);
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 401);
+});
+
+await acheck("probe: rate-limit/5xx is inconclusive, never a false rejection", async () => {
+  const r = await probeAnthropicAccess("sk-ant-valid", { fetch: rateLimitedFetch });
+  assert.equal(r.probed, false, "429 must not be reported as a definitive result");
+  assert.equal(r.ok, true, "an inconclusive probe must not fail readiness");
+});
+
+await acheck("probe: a network error is inconclusive, not a rejection", async () => {
+  const r = await probeAnthropicAccess("sk-ant-valid", { fetch: downFetch });
+  assert.equal(r.probed, false);
+  assert.equal(r.ok, true);
+});
+
+await acheck("probe: non-API-key credentials (OAuth/CLI) are not probed", async () => {
+  let called = false;
+  const spy = (async () => { called = true; return new Response("", { status: 200 }); }) as typeof fetch;
+  const r = await probeAnthropicAccess("oauth-subscription-token", { fetch: spy });
+  assert.equal(called, false, "must not send a request for a non-sk- credential");
+  assert.deepEqual({ probed: r.probed, ok: r.ok }, { probed: false, ok: true });
+  const empty = await probeAnthropicAccess(undefined, { fetch: spy });
+  assert.equal(empty.probed, false);
 });
 
 if (failures > 0) {

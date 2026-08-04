@@ -73,6 +73,7 @@ export function sanitizeEvidencePatch(value: unknown): RunEvidencePatch {
         commandHash: text(check.commandHash, 128),
         status: status as RunCheck["status"],
         exitCode: typeof check.exitCode === "number" ? Math.trunc(check.exitCode) : undefined,
+        durationMs: typeof check.durationMs === "number" ? Math.max(0, Math.min(30 * 60 * 1000, Math.trunc(check.durationMs))) : undefined,
       }];
     });
     if (checks.length) patch.checks = checks;
