@@ -215,12 +215,29 @@ workflow-level sandbox is added, the collision surfaces to design around are all
 → Isolate via the per-session override arg + a per-workflow proxy/decider; never
 touch the process-global knobs.
 
-## Phase 7 — Connect computer to remote app; key & provider OAuth sync
+## Phase 7 — Connect computer to remote app; key & provider OAuth sync — DESIGN DOC + first fix SHIPPED
 
 Grouped because both live in the enrollment/credential seam (`src/relay-setup.ts`,
 `pairing-crypto.ts`, `runtime/oauth`, `runtime/credential-*.ts`,
-`docs/credential-sync.md`). Scope a dedicated pass: audit the pairing/enroll happy
-path and failure modes for the "connect computer" flow, and make provider key +
-OAuth sync converge predictably across node ↔ device ↔ ephemeral runner. Land its
-own plan doc before implementation — this is the largest surface and least
-suited to fold into a polish PR.
+`docs/credential-sync.md`). Per the "land its own plan doc first" instruction, this
+phase ships **`docs/internal/connect-computer-credential-sync-plan.md`** — a full
+engineering map of node enrollment + device pairing + the credential/OAuth vault
+and cross-node sync, with a ranked list of seven failure modes / convergence gaps
+(each with `file:line`) and sequenced, self-contained remediations.
+
+**First fix shipped (convergence gap #4 — clock skew can pin the account onto a
+stale OAuth token).** The cross-node merge is now a pure, exported, unit-tested
+`preferIncomingCredential(local, incoming)` (`credential-store.ts`, used by
+`importAll`): a per-node `refreshedAt` mint stamp (`model-oauth.ts`) beats the
+skew-inflatable `expires`; ties keep local (no churn / no equal-`expires`
+clobber); and a refresh-less snapshot can't overwrite a usable single-use refresh
+token. Backward-compatible (`refreshedAt` optional, propagates for free in the
+existing envelope). +6 tests (`test/credential-merge.test.ts`).
+
+Sequenced follow-ups in the design doc (not shipped — each needs a live
+control-plane ↔ relay ↔ device/ephemeral setup this environment lacks for
+end-to-end verification, so each is scoped so its risky half is a pure decision
+that lands first): tombstone-aware merge so sign-out/revoke converges (#3);
+rotate the model-auth vault key on node removal (#1); re-arm refresh before an
+ephemeral consumes a pulled snapshot (#2/#6); surface a silently-detached node
+(#7).

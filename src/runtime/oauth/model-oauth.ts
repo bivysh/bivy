@@ -42,6 +42,9 @@ interface OAuthTokens {
   refresh: string;
   /** Absolute expiry, epoch ms (skew already applied). */
   expires: number;
+  /** Wall-clock epoch ms this set was minted — the monotonic tiebreak used by the
+   *  cross-node merge (see credential-store `preferIncomingCredential`). */
+  refreshedAt: number;
   accountId?: string;
 }
 
@@ -99,14 +102,15 @@ function tokensFrom(
   const rotated = typeof payload.refresh_token === "string" ? payload.refresh_token : "";
   const refresh = rotated || prev?.refresh || "";
   const expiresIn = Number(payload.expires_in) || 3600;
-  const expires = Date.now() + expiresIn * 1000 - provider.refreshSkewMs;
+  const now = Date.now();
+  const expires = now + expiresIn * 1000 - provider.refreshSkewMs;
 
   let accountId: string | undefined = prev?.accountId;
   if (provider.accountIdClaim) {
     accountId = jwtClaim(access, provider.accountIdClaim.path, provider.accountIdClaim.field) ?? accountId;
     if (!accountId) throw new Error(`Could not extract account id for "${provider.id}" from the OAuth token`);
   }
-  return { access, refresh, expires, ...(accountId ? { accountId } : {}) };
+  return { access, refresh, expires, refreshedAt: now, ...(accountId ? { accountId } : {}) };
 }
 
 // --- Authorization-code flow (browser + callback server + manual paste) ------
@@ -317,7 +321,7 @@ export async function loginModelOAuth(credsDir: string, providerId: string, inte
   const provider = getModelOAuthProvider(providerId);
   if (!provider) throw new Error(`Provider "${providerId}" does not support subscription login`);
   const tokens = provider.flow === "device_code" ? await loginDeviceCode(provider, interaction) : await loginAuthCode(provider, interaction);
-  const credential: OAuthCredential = { type: "oauth", access: tokens.access, refresh: tokens.refresh, expires: tokens.expires, ...(tokens.accountId ? { accountId: tokens.accountId } : {}) };
+  const credential: OAuthCredential = { type: "oauth", access: tokens.access, refresh: tokens.refresh, expires: tokens.expires, refreshedAt: tokens.refreshedAt, ...(tokens.accountId ? { accountId: tokens.accountId } : {}) };
   await createCredentialVault(credsDir).modify(providerId, async () => credential);
 }
 
@@ -351,7 +355,7 @@ export async function refreshModelOAuth(credsDir: string, providerId: string): P
     // Someone else already refreshed while we waited for the lock — use theirs.
     if (Number(current.expires) > Date.now()) return current;
     const fresh = await refreshTokens(provider, current);
-    return { type: "oauth", access: fresh.access, refresh: fresh.refresh, expires: fresh.expires, ...(fresh.accountId ? { accountId: fresh.accountId } : {}) };
+    return { type: "oauth", access: fresh.access, refresh: fresh.refresh, expires: fresh.expires, refreshedAt: fresh.refreshedAt, ...(fresh.accountId ? { accountId: fresh.accountId } : {}) };
   });
   return result?.type === "oauth" ? result.access : undefined;
 }
