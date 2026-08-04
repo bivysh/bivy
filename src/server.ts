@@ -116,6 +116,7 @@ import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { normalizeMessages } from "./session/transcript-normal.js";
 import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog } from "./session/event-log.js";
+import { revertFile } from "./session/revert-file.js";
 import { AttachmentStore, isValidAttachmentHash, type AttachmentRef } from "./session/attachment-store.js";
 import { planAttachment, isAttachPlanError, MAX_AGENT_ATTACHMENT_BYTES } from "./session/attach-to-chat.js";
 import {
@@ -2861,6 +2862,29 @@ const RELAY_COMMANDS: Record<string, Command> = {
     } catch (error) {
       ctx.reply({ type: "session.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) });
     }
+  },
+  async "session.revert_file"(msg, ctx) {
+    // C3d — revert ONE changed file to its pre-turn content without rewinding the
+    // whole turn. `content` is the file's pre-turn text (or null when the turn
+    // added it). Path-confined to the session's worktree by revertFile.
+    const record = resolveSession(msg.sessionId);
+    const relPath = String(msg.path ?? "").trim();
+    if (!record || !relPath) return;
+    if (sessionBusy(record)) {
+      ctx.reply({ type: "session.error", sessionId: record.id, error: "Stop the current turn before reverting a file." });
+      return;
+    }
+    const content = typeof msg.content === "string" ? msg.content : null;
+    const result = revertFile(harnessDirFor(record), relPath, content);
+    if (!result.ok) {
+      ctx.reply({ type: "session.error", sessionId: record.id, error: `Could not revert ${relPath}: ${result.error ?? "unknown error"}` });
+      return;
+    }
+    // Recompute the turn's diff against the (unchanged) baseline so the review
+    // surface drops the reverted file immediately.
+    const event = { type: "session.file_reverted", sessionId: record.id, path: relPath, status: result.status };
+    ctx.reply(event);
+    ctx.broadcast(event);
   },
   async "session.pr.refresh"(msg, ctx) {
     // Force a refresh regardless of live/attached state — resume the session if

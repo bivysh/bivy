@@ -578,7 +578,12 @@ export function App() {
           }
         />
 
-        <ChangesCard changes={state.changes} checkpoints={state.checkpoints} />
+        <ChangesCard
+          changes={state.changes}
+          checkpoints={state.checkpoints}
+          checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
+          output={activeSession ? runEvidence.get(activeSession.sessionId)?.output : undefined}
+        />
 
         <div className="composer-gh">
           {/* The run card now stands for every active session — an automation

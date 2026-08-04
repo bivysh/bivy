@@ -1315,6 +1315,30 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .run-sheet-recovery { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .run-sheet-recovery .btn.small { padding: 4px 12px; font-size: 12px; }
 
+/* Review surface (C3): state badges, checks strip, view-mode toggle, file tree,
+   per-file actions, and the split (side-by-side) diff layout. */
+.changes-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.changes-states, .changes-checks { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.changes-states .chip { font-size: 10px; padding: 1px 7px; }
+.changes-checks .chk { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.changes-checks .chk.passed { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.changes-checks .chk.failed { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+.changes-mode { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.changes-mode button { border: 0; background: transparent; color: var(--muted); font-size: 11px; padding: 2px 8px; cursor: pointer; }
+.changes-mode button.active { background: var(--accent); color: #fff; }
+.changes-file-head { display: flex; align-items: center; gap: 6px; }
+.changes-file-open { flex: 1; display: flex; align-items: center; gap: 6px; background: transparent; border: 0; text-align: left; cursor: pointer; color: inherit; min-width: 0; }
+.changes-file-actions { display: inline-flex; gap: 4px; }
+.changes-file-act { font-size: 10px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; }
+.changes-file-act.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+.changes-dir-head { display: flex; align-items: center; gap: 4px; width: 100%; background: transparent; border: 0; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 0; }
+.changes-dir-name { font-weight: 600; }
+.diff-viewer.diff-split .diff-row { display: grid; grid-template-columns: 1fr 1fr; }
+.diff-viewer.diff-split .diff-side { display: flex; gap: 4px; border-right: 1px solid var(--line); padding: 0 4px; white-space: pre; overflow-x: auto; }
+.diff-viewer.diff-split .diff-side.add { background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.diff-viewer.diff-split .diff-side.del { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.diff-viewer.diff-split .diff-side.empty { background: color-mix(in srgb, var(--line) 25%, transparent); }
+
 /* Run evidence / outcome reports (issue #153). */
 .evidence-list { display: flex; flex-direction: column; gap: 8px; }
 .evidence-report { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--surface-2); }

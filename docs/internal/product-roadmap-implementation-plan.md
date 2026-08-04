@@ -112,10 +112,10 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 ### C3. Review surface
 
-- [ ] Promote the existing checkpoint diff into a changed-file tree with unified/side-by-side modes.
-- [ ] Distinguish working-tree, checkpoint, branch, commit, and PR state.
-- [ ] Place check results beside changes.
-- [ ] Add safe per-file revert and “ask agent about this” where the underlying checkpoint supports it.
+- [x] Promote the existing checkpoint diff into a changed-file tree with unified/side-by-side modes.
+- [x] Distinguish working-tree, checkpoint, branch, commit, and PR state.
+- [x] Place check results beside changes.
+- [x] Add safe per-file revert and “ask agent about this” where the underlying checkpoint supports it.
 
 ### C4. Reliable automation ownership
 
