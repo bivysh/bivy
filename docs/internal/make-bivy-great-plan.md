@@ -171,12 +171,41 @@ reaches the same "instant switch" outcome without that correctness risk.
 *Caveat:* the per-runtime warm-up and prefetch were exercised via the client/
 transport tests and the reasoning above, not a live multi-agent node.
 
-## Phase 4 — Top-tier agents + slash completeness (Claude, Codex, Pi, opencode)
+## Phase 4 — Top-tier agents + slash completeness (Claude, Codex, Pi, opencode) — SHIPPED
 
-- Codex/opencode `getCommands()` adapters (see Phase-1 item 3 follow-up).
-- Audit each adapter's model list, streaming/steer behaviours, and TUI handoff on
-  mobile against the `runtime/types.ts` capability surface; close gaps so the four
-  headline agents are first-class in the mobile app.
+**Codex/opencode `getCommands()` adapters.** New `src/runtime/slash-commands.ts`
+sources each agent's custom prompt/command markdown from disk — Codex's
+`$CODEX_HOME/prompts/*.md`, opencode's global `~/.config/opencode/command` +
+project `.opencode/command` (project shadows global) — and exposes them two ways:
+`list()` populates the composer menu (`getCommands()`), and `expand()` makes an
+invoked `/name args` actually *run* by substituting the file body (`$ARGUMENTS`,
+`$1..$9`, unused args appended) and sending THAT as the turn. Codex/opencode only
+expand custom prompts in their interactive TUI, not on the non-interactive
+run/app-server path Bivy drives, so Bivy expands them itself — deterministic and
+verifiable, degrading to the raw slash line on any read failure. Wired into
+`ProcessSession` (opencode) and `ProtocolSession` (codex-approvals + ACP), both of
+which gained `getCommands()` + prompt-expansion, plus `cliSlashCommands()` /
+`codexSlashCommands()` in `index.ts`. +11 tests (`test/slash-commands.test.ts`).
+
+**Mobile capability audit (four headline agents vs `runtime/types.ts`).** No
+dangerous over-claims found (nothing advertised-true that throws). Closed the
+safe, verifiable under-claims for Codex:
+- **"Continue in terminal" now works for Codex.** `ProtocolSession` gained
+  `interactiveTuiCommand()` (via a new `ProtocolRuntimeOptions.interactiveTui`
+  hook); codex-approvals returns `codex resume <rolloutId>` — the same verified
+  command native discovery/takeover already use (`server.ts` RESUME maps) — with
+  the minted `CODEX_HOME` env so the TUI shares chat's auth. `interactiveTui` is
+  advertised gated on the `codex` binary (mirrors Claude).
+- **Codex `usageReporting` advertised** to match its already-real `getUsage()`.
+
+*Deferred with rationale (not shipped — would ship unverifiable external
+behaviour blind):* opencode TUI hand-off (no established `opencode` interactive
+resume-by-id command anywhere in the repo — a wrong command ships a broken
+affordance, worse than the honest hidden state); Codex/Claude reasoning-effort
+pickers on mobile (needs shim `thread/settings/update` reasoning-effort forwarding
+/ an SDK level knob that can't be verified without a live node). Catalog-constant
+vs live-object capability drift (`PI_CAPABILITIES`/`CLAUDE_CAPABILITIES`) is
+cosmetic and left untouched.
 
 ---
 
