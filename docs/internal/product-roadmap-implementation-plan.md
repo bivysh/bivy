@@ -53,7 +53,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 - [x] Show provider, region, rate hint, TTL, and teardown policy when enabling/launching billable runners.
 - [x] Require confirmation for the first interactive billable launch.
 - [x] Await and display provider/API-key save acknowledgements in every entry point.
-- [ ] Remove swallowed errors from high-value automation and terminal actions.
+- [x] Remove swallowed errors from high-value automation and terminal actions.
 
 ### A5. Minimum browser release gate
 

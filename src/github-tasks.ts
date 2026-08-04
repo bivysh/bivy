@@ -367,11 +367,16 @@ export function pickupMessage(nodeName?: string): string {
  * the control plane, not a GitHub label — touches the issue's labels at all.
  */
 export async function announcePickup(cfg: GitHubTaskConfig, issueNumber: number, nodeName?: string): Promise<void> {
-  await addLabel(cfg, issueNumber, cfg.claimLabel).catch(() => {});
+  // Best-effort and idempotent, but not silent (A4): a failed claim label can let
+  // another node pick up the same issue, and a failed comment hides the pickup
+  // from the reporter — both are worth a warning in the node log/diagnostics.
+  const warn = (what: string, error: unknown) =>
+    console.warn(`[github-tasks] issue #${issueNumber}: could not ${what}:`, error instanceof Error ? error.message : error);
+  await addLabel(cfg, issueNumber, cfg.claimLabel).catch((error) => warn(`apply claim label "${cfg.claimLabel}"`, error));
   if (cfg.label && cfg.label !== cfg.claimLabel) {
-    await removeLabel(cfg, issueNumber, cfg.label).catch(() => {});
+    await removeLabel(cfg, issueNumber, cfg.label).catch((error) => warn(`remove routing label "${cfg.label}"`, error));
   }
-  await commentIssue(cfg, issueNumber, pickupMessage(nodeName)).catch(() => {});
+  await commentIssue(cfg, issueNumber, pickupMessage(nodeName)).catch((error) => warn("post pickup comment", error));
 }
 
 export async function defaultBranch(cfg: GitHubTaskConfig): Promise<string> {
