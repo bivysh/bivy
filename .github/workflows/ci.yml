@@ -132,6 +132,11 @@ jobs:
       - run: npm run typecheck:web
       - run: npm run test:core
       - run: npm run test:unit
+      # Initial-bundle budget (B4b): build the PWA and fail if the entry chunk
+      # grows past its raw/gzip ceiling. The long-transcript budget rides in
+      # test:unit (transcript-budget.test.ts).
+      - run: npm run build:web
+      - run: node scripts/check-bundle-size.mjs
       # Exercise the node RELEASE build (what Render runs to publish the tarball
       # bivy update pulls). Unlike `npm run typecheck` (tsc --noEmit, lenient
       # rootDir inference), build:release compiles src/ with `tsc --rootDir src`
