@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { stripAnsi } from "./ansi.js";
 import { buildAgentCredentialEnv } from "./credentials.js";
-import { egressEnv } from "../harness/egress.js";
+import { egressEnv, sessionEgressEnv } from "../harness/egress.js";
 import { depCacheEnv } from "../harness/dep-cache.js";
 import { bivySessionEnv } from "./session-env.js";
 import type { CliParser, CliParserFactory } from "./cli-parsers.js";
@@ -458,12 +458,14 @@ class ProcessSession implements RuntimeSession {
     // src/harness/sandbox.ts). Bivy no longer wraps the process in an OS jail.
     const child = spawn(this.runtimeOptions.command, args, {
       cwd: this.cwd,
-      // egressEnv() routes this agent's outbound traffic through the harness
-      // network broker when BIVY_EGRESS_PROXY is enabled (else it's {}).
-      // bivySessionEnv() lets the agent's own shell resolve its session for
-      // `bivy attach <path>` (see session-env.ts); spread last so it can never
-      // be shadowed by an operator-configured env var of the same name.
-      env: { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env, ...credentialEnv, ...prepareEnv, ...egressEnv(), ...bivySessionEnv(this.id) },
+      // Route this agent's outbound traffic through an egress proxy: this
+      // session's OWN proxy if it has one (a per-session sandbox/workflow network
+      // policy — sessionEgressEnv), else the node-global broker when
+      // BIVY_EGRESS_PROXY is enabled (else {}). bivySessionEnv() lets the agent's
+      // own shell resolve its session for `bivy attach <path>` (see
+      // session-env.ts); spread last so it can never be shadowed by an operator-
+      // configured env var of the same name.
+      env: { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env, ...credentialEnv, ...prepareEnv, ...(sessionEgressEnv(this.id) ?? egressEnv()), ...bivySessionEnv(this.id) },
       stdio: "pipe",
       // Detached so the child becomes the leader of its own process group
       // (POSIX) — see killProcessGroup() / abort() below, which kill that whole

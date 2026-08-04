@@ -266,6 +266,36 @@ workflow-level sandbox is added, the collision surfaces to design around are all
 → Isolate via the per-session override arg + a per-workflow proxy/decider; never
 touch the process-global knobs.
 
+**SHIPPED — the per-session proxy/decider seam (globals untouched).** The sandbox
+*tier* was already per-session (`sandboxTier(override)`); the missing half was the
+network. `EgressProxy` was already per-instance (its own `decide`) — only the
+*holder* (`egress.ts`) was a node-global singleton with an allow-all decider, and
+its env was injected into every subprocess. Added:
+- **Composable deciders** (`net-proxy.ts`): `allowAllDecider`, `denyAllDecider`,
+  `allowlistDecider(hosts)` (apex + subdomain match) — the building blocks for any
+  per-workflow policy, pure and unit-tested.
+- **Per-session egress registry** (`egress.ts`): `startSessionEgress(id, decide)` /
+  `sessionEgressEnv(id)` / `stopSessionEgress(id)` — a session gets its OWN
+  `EgressProxy` with its OWN decider; the node-global `proxy`/decider and every
+  other session are untouched.
+- **Injection** (`process.ts`): the spawn env prefers `sessionEgressEnv(this.id)`
+  over the global `egressEnv()` — additive, identical to before when a session has
+  no proxy of its own.
+- **A real consumer, opt-in:** `applySessionSandboxEgress(id, tier)` gives a
+  `read-only` session a deny-all per-session proxy so its "no network" contract
+  holds even for a CLI agent whose *own* sandbox doesn't enforce it (opencode,
+  aider, goose) — closing a genuine gap. Gated behind `BIVY_SANDBOX_NET`, so the
+  default path is byte-for-byte unchanged; node-local traffic stays exempt (the
+  proxy env's `NO_PROXY`), so read-only sessions still reach the daemon's MCP/API.
+  Lifecycle tied to `createSession`/`closeSessionRecord`.
+
+Deliberately did **not** touch `BIVY_SANDBOX`/`configuredTier` or the global proxy.
++3 tests in `test/harness-net-proxy.test.ts` (deciders, a real deny-all session
+proxy, the opt-in gate). *Caveat:* verified via unit tests + typecheck, not a live
+multi-session node; the `allowlistDecider` is wired and tested but has no
+control-plane/workflow policy input feeding it yet (the next step for a full
+per-workflow allowlist).
+
 ## Phase 7 — Connect computer to remote app; key & provider OAuth sync
 
 Grouped because both live in the enrollment/credential seam (`src/relay-setup.ts`,

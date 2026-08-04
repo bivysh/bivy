@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
-import { EgressProxy, parseHostPort, type NetEvent } from "../src/harness/net-proxy.js";
+import { EgressProxy, parseHostPort, allowAllDecider, denyAllDecider, allowlistDecider, type NetEvent } from "../src/harness/net-proxy.js";
+import { startSessionEgress, sessionEgressEnv, stopSessionEgress, applySessionSandboxEgress } from "../src/harness/egress.js";
 
 let failures = 0;
 async function check(name: string, fn: () => Promise<void>) {
@@ -84,6 +85,57 @@ async function main() {
     assert.equal(env.HTTPS_PROXY, env.HTTP_PROXY);
     assert.match(env.NO_PROXY, /127\.0\.0\.1/);
     await proxy.stop();
+  });
+
+  await check("composable deciders: allowAll / denyAll / allowlist", async () => {
+    assert.deepEqual(await allowAllDecider("anything.com", 443), { allow: true });
+    const deny = denyAllDecider("nope");
+    assert.deepEqual(await deny("x.com", 80), { allow: false, reason: "nope" });
+    const allow = allowlistDecider(["github.com", "Api.Example.com"]);
+    assert.equal((await allow("github.com", 443)).allow, true);        // exact
+    assert.equal((await allow("codeload.github.com", 443)).allow, true); // subdomain of apex
+    assert.equal((await allow("api.example.com", 443)).allow, true);     // case-insensitive
+    assert.equal((await allow("evil.com", 443)).allow, false);           // not listed
+    assert.equal((await allow("notgithub.com", 443)).allow, false);      // suffix without dot boundary
+    assert.equal((await allowlistDecider([])("anything.com", 443)).allow, false); // empty = deny all
+  });
+
+  await check("per-session egress: a deny-all session proxy blocks, then clears on stop", async () => {
+    let hits = 0;
+    const origin = http.createServer((_req, res) => { hits++; res.end("NOPE"); });
+    const originPort = await listen(origin);
+    const sid = "sess-egress-test";
+    await startSessionEgress(sid, denyAllDecider("read-only"));
+    const env = sessionEgressEnv(sid);
+    assert.ok(env?.HTTP_PROXY, "session should advertise its own proxy env");
+    const port = Number(new URL(env!.HTTP_PROXY).port);
+    const out = await viaProxy(port, `http://127.0.0.1:${originPort}/x`);
+    assert.equal(out.status, 403);
+    assert.equal(hits, 0, "denied session traffic must not reach the origin");
+    await stopSessionEgress(sid);
+    assert.equal(sessionEgressEnv(sid), undefined, "stop clears the per-session proxy");
+    origin.close();
+  });
+
+  await check("applySessionSandboxEgress: opt-in gate + read-only only", async () => {
+    const prev = process.env.BIVY_SANDBOX_NET;
+    try {
+      delete process.env.BIVY_SANDBOX_NET;
+      await applySessionSandboxEgress("s-off", "read-only");
+      assert.equal(sessionEgressEnv("s-off"), undefined, "no enforcement unless opted in");
+
+      process.env.BIVY_SANDBOX_NET = "1";
+      await applySessionSandboxEgress("s-ww", "workspace-write");
+      assert.equal(sessionEgressEnv("s-ww"), undefined, "network-allowing tiers get no proxy");
+      await applySessionSandboxEgress("s-ro", "read-only");
+      assert.ok(sessionEgressEnv("s-ro")?.HTTP_PROXY, "read-only gets a per-session deny proxy when opted in");
+    } finally {
+      await stopSessionEgress("s-off");
+      await stopSessionEgress("s-ww");
+      await stopSessionEgress("s-ro");
+      if (prev === undefined) delete process.env.BIVY_SANDBOX_NET;
+      else process.env.BIVY_SANDBOX_NET = prev;
+    }
   });
 
   if (failures > 0) {
