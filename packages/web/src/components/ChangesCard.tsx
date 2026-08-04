@@ -203,33 +203,33 @@ export function ChangesCard({
           )}
         </div>
       </div>
-      {!collapsed && (states.length > 0 || (checks && checks.length > 0)) && (
-        <div className="changes-meta">
-          {states.length > 0 && (
-            <span className="changes-states">
-              {states.map((s) => <span key={s} className={`chip state-${s}`}>{reviewStateLabel(s)}</span>)}
-            </span>
-          )}
-          {checks && checks.length > 0 && (
-            <span className="changes-checks">
-              {checks.map((c, i) => (
-                <span key={`${c.name}-${i}`} className={`chk ${c.status}`}>
-                  {c.name} {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "–"}
-                </span>
-              ))}
-            </span>
-          )}
-        </div>
-      )}
       {!collapsed && (
-        <>
+        <div className="changes-body" role="region" aria-label="Code changes" tabIndex={0}>
+          {(states.length > 0 || (checks && checks.length > 0)) && (
+            <div className="changes-meta">
+              {states.length > 0 && (
+                <span className="changes-states">
+                  {states.map((s) => <span key={s} className={`chip state-${s}`}>{reviewStateLabel(s)}</span>)}
+                </span>
+              )}
+              {checks && checks.length > 0 && (
+                <span className="changes-checks">
+                  {checks.map((c, i) => (
+                    <span key={`${c.name}-${i}`} className={`chk ${c.status}`}>
+                      {c.name} {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "–"}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </div>
+          )}
           <div className="changes-files">
             {tree.map((node) => (
               <TreeNode key={node.path} node={node} byPath={byPath} mode={mode} depth={0} />
             ))}
           </div>
           {showHistory && <Timeline checkpoints={checkpoints} />}
-        </>
+        </div>
       )}
     </div>
   );
