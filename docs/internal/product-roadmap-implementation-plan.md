@@ -101,7 +101,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 - [x] Define one shared outcome vocabulary: changes ready, PR open, checks failed, needs review, no changes, agent failed, timed out, cancelled.
 - [x] Fold existing queue evidence and session checkpoint/PR state into that vocabulary.
 - [x] Never map `agent_end` alone to success.
-- [ ] Show duration, cost, policy/enforcement, checks, artifact, and retry path.
+- [x] Show duration, cost, policy/enforcement, checks, artifact, and retry path.
 
 ### C2. Deterministic checks
 

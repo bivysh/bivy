@@ -19,7 +19,7 @@ import { useModalEscape } from "../modalStack.js";
 import { SourceGlyph } from "./SourceMark.js";
 import { PrBadge, GhMark } from "./SessionList.js";
 import { shortSourceLabel, type SourceInfo } from "../sessionSource.js";
-import { checkCounts, retryReason, runDuration } from "../runEvidence.js";
+import { checkCounts, retryReason, runDuration, artifactRef } from "../runEvidence.js";
 
 interface Action {
   label: string;
@@ -147,6 +147,7 @@ export function RunPill({
   const finished = typeof finishedAt === "number" ? formatWhen(finishedAt) : "";
   const attempt = evidence?.attempt ?? 0;
   const reason = evidence ? retryReason(evidence) : null;
+  const artifact = evidence ? artifactRef(evidence) : null;
   const agentLine = [evidence?.runtimeId, evidence?.model].filter(Boolean).join(" · ");
   const failure = evidence?.output?.failure;
   const forkedFromLabel = forkedFrom ? forkedFrom.name || `session ${forkedFrom.sessionId.slice(0, 8)}` : null;
@@ -209,6 +210,11 @@ export function RunPill({
             {evidence && (
               <div className="run-sheet-rows">
                 {outcome && <Row k="Outcome"><span className={`chip outcome-${outcome.tone} outcome-kind-${outcome.kind}`}>{outcome.label}</span></Row>}
+                {artifact?.url && (
+                  <Row k="Artifact">
+                    <a href={artifact.url} target="_blank" rel="noopener">{artifact.label}</a>
+                  </Row>
+                )}
                 {counts && (
                   <Row k="Checks">
                     <Checks item={evidence} />

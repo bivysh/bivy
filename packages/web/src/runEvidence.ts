@@ -67,6 +67,25 @@ export function retryReason(item: GithubQueueItem): string | null {
   return ev?.summary || null;
 }
 
+export interface ArtifactRef {
+  label: string;
+  url?: string;
+}
+
+/** The primary tangible output of a run for the outcome detail (C1): the pull
+ *  request if one was opened, else an explicit artifact URL, else the branch or
+ *  commit ref. Lets the outcome surface show a single first-class "Artifact"
+ *  field instead of leaving the PR only as a nav link. */
+export function artifactRef(item: GithubQueueItem): ArtifactRef | null {
+  const out = item.output;
+  if (!out) return null;
+  if (out.prUrl) return { label: "Pull request", url: out.prUrl };
+  if (out.artifactUrl) return { label: "Artifact", url: out.artifactUrl };
+  if (out.branch) return { label: `branch ${out.branch}` };
+  if (out.commit) return { label: `commit ${out.commit.slice(0, 12)}` };
+  return null;
+}
+
 export interface RowHint {
   text: string;
   /** `danger` for a failed run, `warn` for one waiting on a person. */
