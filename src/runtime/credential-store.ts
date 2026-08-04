@@ -36,6 +36,15 @@ export interface OAuthCredential {
   access: string;
   refresh: string;
   expires: number;
+  /**
+   * Wall-clock epoch ms this token set was minted/refreshed on the node that
+   * obtained it (see model-oauth `tokensFrom`). Used as the monotonic tiebreak in
+   * `preferIncomingCredential` so cross-node merge follows mint order rather than
+   * the access-token `expires` alone — which a fast/slow clock can inflate,
+   * pinning the account onto a stale token. Optional: credentials minted before
+   * this field existed fall back to the `expires` comparison.
+   */
+  refreshedAt?: number;
   [key: string]: unknown;
 }
 
@@ -65,6 +74,34 @@ function isStoredCredential(value: unknown): value is StoredCredential {
 /** Normalize a provider id the way every path expects (trimmed, lowercased). */
 function providerId(id: string): string {
   return String(id ?? "").trim().toLowerCase();
+}
+
+/**
+ * Should an `incoming` credential replace the `local` one during a non-destructive
+ * `importAll` merge? Pure and exported so the convergence rule is unit-testable
+ * without a vault. Rules:
+ *  - No local entry → take the incoming one.
+ *  - Only OAuth-vs-OAuth needs freshness arbitration (an api-key set/replace, or a
+ *    type switch, keeps the existing "incoming wins on a real content change").
+ *  - A snapshot that omits the refresh token must never clobber a usable one —
+ *    rotated refresh tokens are single-use, so an incoming with a blank refresh is
+ *    strictly worse than a local one that still has it.
+ *  - Prefer the token minted LATER by `refreshedAt` (monotonic mint order) when
+ *    both carry it; otherwise fall back to the access-token `expires`. In both
+ *    cases a tie KEEPS the local credential (strictly-greater wins), so an equal
+ *    stamp can't needlessly churn/rotate the vault, and clock skew can't let an
+ *    equal-`expires` stale token win.
+ */
+export function preferIncomingCredential(local: StoredCredential | undefined, incoming: StoredCredential): boolean {
+  if (!local) return true;
+  if (local.type !== "oauth" || incoming.type !== "oauth") return true;
+  const localRefresh = String(local.refresh ?? "").trim();
+  const incomingRefresh = String(incoming.refresh ?? "").trim();
+  if (!incomingRefresh && localRefresh) return false;
+  const lt = Number(local.refreshedAt);
+  const it = Number(incoming.refreshedAt);
+  if (Number.isFinite(lt) && Number.isFinite(it)) return it > lt;
+  return (Number(incoming.expires) || 0) > (Number(local.expires) || 0);
 }
 
 /**
@@ -233,11 +270,9 @@ export class BivyCredentialStore {
         const id = providerId(rawId);
         if (!id || !isStoredCredential(incoming)) continue;
         const local = vault[id];
-        if (incoming.type === "oauth" && local?.type === "oauth") {
-          const localExpires = Number(local.expires) || 0;
-          const incomingExpires = Number(incoming.expires) || 0;
-          if (localExpires > incomingExpires) continue;
-        }
+        // Freshest-wins, rotation-safe (see preferIncomingCredential): a lagging
+        // or refresh-less snapshot must not overwrite a fresher local login.
+        if (!preferIncomingCredential(local, incoming)) continue;
         if (!(id in vault)) imported += 1;
         // Only mark dirty on a real content change, so a snapshot that merely
         // re-states what we already hold doesn't rewrite (and re-encrypt) the
