@@ -2020,13 +2020,25 @@ select.picker-search { appearance: auto; }
 }
 
 /* Universal Agent Harness — files-changed / undo-turn card */
-.changes-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 10px 12px; margin: 8px 0; }
-.changes-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.changes-card {
+  /* This is a direct child of the viewport-height .main flex column. An expanded
+     diff can be thousands of lines tall; without a bound its automatic
+     min-height takes over the column, pushes the composer out of view, and is
+     then clipped by .main's overflow:hidden. Keep the review surface bounded
+     and let its body own the scroll instead. */
+  display: flex; flex-direction: column; min-height: 0; max-height: min(60%, 720px); overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 10px 12px; margin: 8px 0;
+}
+.changes-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.changes-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+}
 .changes-title { font-size: 13px; font-weight: 600; }
 .changes-collapse { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1; background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
 .changes-collapse:hover .changes-title { color: var(--accent); }
 .changes-chevron { flex: none; font-size: 10px; opacity: 0.7; width: 12px; }
-.changes-card.collapsed { padding-bottom: 10px; }
+.changes-card.collapsed { max-height: none; padding-bottom: 10px; }
 .changes-card.collapsed .changes-head { margin-bottom: 0; }
 .changes-undo { font-size: 12px; padding: 4px 10px; }
 .changes-files { display: flex; flex-direction: column; gap: 2px; }
