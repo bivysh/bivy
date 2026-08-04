@@ -46,6 +46,30 @@ await test("findSessionByIssue is account-scoped", async () => {
   assert.equal(await store.findSessionByIssue(b.id, "o/r", 1), undefined);
 });
 
+await test("findSessionByExternalId matches the node's linear: source", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("lin@example.com");
+  await store.enrollNode(acct.id, "node-l", "Laptop");
+  await store.replaceNodeSessions(acct.id, "node-l", [
+    { sessionId: "sess-abc", status: "idle", source: "linear:abc-123" },
+    { sessionId: "sess-other", status: "idle", source: "linear:xyz-999" },
+  ]);
+  const hit = await store.findSessionByExternalId(acct.id, "abc-123");
+  assert.deepEqual(hit, { sessionId: "sess-abc", nodeId: "node-l" });
+  // A different external id does not match; a GitHub issue source does not leak in.
+  assert.equal(await store.findSessionByExternalId(acct.id, "nope"), undefined);
+});
+
+await test("findSessionByExternalId is account-scoped", async () => {
+  const store = await makeStore();
+  const a = await store.findOrCreateAccount("la@example.com");
+  const b = await store.findOrCreateAccount("lb@example.com");
+  await store.enrollNode(a.id, "na", "A");
+  await store.replaceNodeSessions(a.id, "na", [{ sessionId: "s1", status: "idle", source: "linear:iss-1" }]);
+  assert.ok(await store.findSessionByExternalId(a.id, "iss-1"));
+  assert.equal(await store.findSessionByExternalId(b.id, "iss-1"), undefined);
+});
+
 await test("enqueue carries an existing_session target end-to-end", async () => {
   const store = await makeStore();
   const acct = await store.findOrCreateAccount("c@example.com");

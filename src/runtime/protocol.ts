@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { buildAgentCredentialEnv } from "./credentials.js";
 import { bivySessionEnv } from "./session-env.js";
+import { mergeAgentCommands, type SlashCommandProvider } from "./slash-commands.js";
 import type {
   AgentCommand,
   AgentRuntime,
@@ -23,6 +24,7 @@ import type {
   SessionSummary,
   StreamingBehavior,
   ToolInterceptor,
+  TuiLaunchSpec,
   UsageSnapshot,
 } from "./types.js";
 import { extractTokenUsage } from "./cli-parsers.js";
@@ -123,6 +125,25 @@ export interface ProtocolRuntimeOptions {
    * (seeded via `capabilities` above); absent = no discovery for this agent.
    */
   discoverNativeSessions?: () => Promise<DiscoveredNativeSession[]> | DiscoveredNativeSession[];
+  /**
+   * Describe how to resume this session in the agent's own interactive TUI on
+   * this node (see RuntimeSession.interactiveTuiCommand — the "Continue in
+   * terminal" hand-off). Given the agent's own session ref and the resolved launch
+   * env (the same `prepare` + credential env a turn spawns with, so the TUI
+   * authenticates identically), returns a TuiLaunchSpec or null when there's
+   * nothing to resume yet. Pair with `capabilities.interactiveTui`. For Codex this
+   * is `codex resume <rolloutId>`. Absent = no TUI hand-off for this agent.
+   */
+  interactiveTui?: (info: { sessionRef?: string; cwd: string; env: Record<string, string> }) => TuiLaunchSpec | null;
+  /**
+   * Optional on-disk slash commands (see SlashCommandProvider), merged with any
+   * the shim advertises in its hello. When set, the session's getCommands()
+   * advertises them and prompt() expands a matching `/name args` line into the
+   * command's body before `chat.send` — Codex/opencode custom prompts don't expand
+   * on the app-server/ACP path Bivy drives, so Bivy expands them itself. Absent =
+   * only the shim's hello-advertised commands (if any).
+   */
+  slashCommands?: SlashCommandProvider;
 }
 
 type Pending = { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
@@ -343,6 +364,40 @@ class ProtocolSession implements RuntimeSession {
   async invokeCommand(name: string, args: string): Promise<void> {
     await this.open();
     await this.command("command.invoke", { sessionId: this.id, runtimeSessionRef: this.runtimeSessionRef, name, args: args ?? "" });
+  }
+  /** The session's slash commands: on-disk custom prompts (Codex/opencode) merged
+   *  with whatever the shim advertised in its hello, disk winning a collision.
+   *  Best-effort and display-only — a read failure just drops the on-disk set. */
+  getCommands(): AgentCommand[] {
+    let disk: AgentCommand[] | undefined;
+    try {
+      disk = this.runtimeOptions.slashCommands?.list(this.cwd);
+    } catch {
+      disk = undefined;
+    }
+    return mergeAgentCommands(disk, this.capabilitiesRef.commands);
+  }
+  /**
+   * Resume this session in the agent's own interactive TUI (see the runtimeOptions
+   * hook). Resolves the same launch env a turn would — `prepare` (e.g. Codex
+   * mints CODEX_HOME + auth.json) then credentials — so the TUI opens with the
+   * identical auth as chat. Returns null when the runtime has no TUI hook or there
+   * is no session ref to resume yet (the daemon then surfaces "no TUI available").
+   */
+  async interactiveTuiCommand(): Promise<TuiLaunchSpec | null> {
+    const hook = this.runtimeOptions.interactiveTui;
+    if (!hook) return null;
+    const credentialEnv = this.runtimeOptions.credentials
+      ? await buildAgentCredentialEnv(this.runtimeOptions.credentials, undefined, this.currentModelProvider).catch(() => ({}))
+      : {};
+    let prepareEnv = this.prepareEnv;
+    if (this.runtimeOptions.prepare) {
+      prepareEnv =
+        (await Promise.resolve(this.runtimeOptions.prepare({ ...process.env, ...this.runtimeOptions.env, ...credentialEnv })).catch(() => undefined)) ??
+        prepareEnv;
+    }
+    const env = { ...this.runtimeOptions.env, ...credentialEnv, ...prepareEnv };
+    return hook({ sessionRef: this.runtimeSessionRef ?? this.resumeRef, cwd: this.cwd, env });
   }
   getName(): string | undefined { return this.name; }
   setName(name: string): void { this.name = name; }
@@ -636,6 +691,16 @@ class ProtocolSession implements RuntimeSession {
     // (empty text) is still a real turn, so don't bail when only images arrive.
     const images = (options?.images ?? []).map((img) => ({ type: "image", data: img.data, mimeType: img.mimeType }));
     if (!prompt && !images.length) return;
+    // A `/name args` line matching an on-disk custom prompt runs the command by
+    // sending its expanded body; the transcript still shows what the user typed.
+    // Non-command lines pass through untouched. Best-effort — a read failure sends
+    // the raw line.
+    let textToSend: string;
+    try {
+      textToSend = this.runtimeOptions.slashCommands?.expand(this.cwd, prompt) ?? prompt;
+    } catch {
+      textToSend = prompt;
+    }
     this.messages.push({ role: "user", content: prompt, timestamp: Date.now() });
     this.streaming = true;
     this.assistantText = "";
@@ -646,7 +711,7 @@ class ProtocolSession implements RuntimeSession {
     await this.command("chat.send", {
       sessionId: this.id,
       runtimeSessionRef: this.runtimeSessionRef,
-      text: prompt,
+      text: textToSend,
       // Optional multimodal + streaming hints. Present only when the caller
       // supplied them, so a text-only turn keeps the exact payload it always had.
       ...(images.length ? { images } : {}),

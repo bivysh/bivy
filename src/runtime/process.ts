@@ -9,7 +9,9 @@ import { egressEnv, sessionEgressEnv } from "../harness/egress.js";
 import { depCacheEnv } from "../harness/dep-cache.js";
 import { bivySessionEnv } from "./session-env.js";
 import type { CliParser, CliParserFactory } from "./cli-parsers.js";
+import type { SlashCommandProvider } from "./slash-commands.js";
 import type {
+  AgentCommand,
   AgentRuntime,
   AgentCredentialStore,
   CatalogProvider,
@@ -146,6 +148,15 @@ export interface ProcessRuntimeOptions {
    * that best-effort snapshot (undefined when the turn carried no counts).
    */
   usageReporting?: boolean;
+  /**
+   * Optional on-disk slash commands (see SlashCommandProvider). When set, the
+   * session's getCommands() advertises them (so the composer offers this agent's
+   * custom prompts/commands) and prompt() expands a matching `/name args` line
+   * into the command's body before running — Codex/opencode custom commands don't
+   * expand on the non-interactive path Bivy drives, so Bivy expands them itself.
+   * Absent = no agent-native commands (the composer shows the empty state).
+   */
+  slashCommands?: SlashCommandProvider;
 }
 
 /**
@@ -336,6 +347,17 @@ class ProcessSession implements RuntimeSession {
     this.name = name;
   }
 
+  /** The agent's on-disk slash commands for this workspace (Codex prompts,
+   *  opencode commands). Best-effort and display-only: any read failure yields an
+   *  empty menu, never a throw. */
+  getCommands(): AgentCommand[] {
+    try {
+      return this.runtimeOptions.slashCommands?.list(this.cwd) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   async suggestName(): Promise<string | undefined> {
     // The generic CLI "dumb-pipe" runtime has no model of its own to name a
     // session with. Returning a raw 60-char truncation of the first message here
@@ -360,6 +382,17 @@ class ProcessSession implements RuntimeSession {
     if (this.streaming) throw new Error("Agent is already running.");
     const prompt = text.trim();
     if (!prompt) return;
+
+    // A `/name args` line that matches an on-disk command runs the command by
+    // sending its expanded body to the agent; the transcript still shows what the
+    // user typed. Any non-command line (incl. a leading slash that isn't one)
+    // passes through untouched. Best-effort — a read failure sends the raw line.
+    let promptToSend: string;
+    try {
+      promptToSend = this.runtimeOptions.slashCommands?.expand(this.cwd, prompt) ?? prompt;
+    } catch {
+      promptToSend = prompt;
+    }
 
     this.messages.push({ role: "user", content: prompt, timestamp: Date.now() });
     this.streaming = true;
@@ -388,7 +421,7 @@ class ProcessSession implements RuntimeSession {
       const idx = Math.min(Math.max(at, 0), argsWithFlags.length);
       argsWithFlags = [...argsWithFlags.slice(0, idx), ...inject, ...argsWithFlags.slice(idx)];
     }
-    const args = this.runtimeOptions.promptMode === "argv" ? [...argsWithFlags, prompt] : argsWithFlags;
+    const args = this.runtimeOptions.promptMode === "argv" ? [...argsWithFlags, promptToSend] : argsWithFlags;
     // Resolve credentials per prompt so freshly-refreshed OAuth tokens (and keys
     // added after this session started) reach the agent. The vault wins over any
     // ambient key so Bivy's shared sign-in is authoritative.
@@ -525,7 +558,7 @@ class ProcessSession implements RuntimeSession {
     });
 
     if (this.runtimeOptions.promptMode !== "argv") {
-      child.stdin.end(`${prompt}\n`);
+      child.stdin.end(`${promptToSend}\n`);
     } else {
       // Prompt is already in argv. Still close stdin so agents that also read it
       // (e.g. `codex exec` waits for stdin EOF even with a prompt arg) don't hang
