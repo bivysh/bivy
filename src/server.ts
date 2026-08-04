@@ -3265,6 +3265,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
   },
   async "models.list"(msg) {
     const requestedSessionId = typeof msg.sessionId === "string" && msg.sessionId ? msg.sessionId : undefined;
+    const wantedRuntimeId = typeof msg.runtimeId === "string" && msg.runtimeId ? msg.runtimeId : undefined;
     let record: SessionRecord | null | undefined;
     try {
       record = requestedSessionId ? await resolveOrResumeSession(requestedSessionId, msg.path) : active;
@@ -3276,7 +3277,11 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "session.error", sessionId: requestedSessionId, error: "Session not found" });
       return;
     }
-    record ??= await sessionForModelQuery();
+    // On a draft (no session id), a runtime hint from the composer takes
+    // precedence so an agent switch previews *that* agent's models even if a
+    // stale `active` on another runtime lingers on the node.
+    if (!requestedSessionId && wantedRuntimeId && record?.runtimeId !== wantedRuntimeId) record = null;
+    record ??= await sessionForModelQuery(wantedRuntimeId);
     const session = record.session;
     const current = session.getCurrentModel();
     const models = await publicModelsList(session, current);
@@ -3287,6 +3292,16 @@ const RELAY_COMMANDS: Record<string, Command> = {
     // linger on the composer/picker after the user switched to another agent
     // (e.g. Claude) — the "Claude shows Codex models" bug.
     relay?.sendEvent({ type: "models.list", sessionId: record.id, runtimeId: record.runtimeId, current: current ? publicModel(current, current) : null, models, thinking });
+  },
+  "models.prefetch"(msg) {
+    // The composer's agent picker opened: warm the scratch session for each
+    // offered agent in the background so the first switch to any of them answers
+    // instantly. Fire-and-forget — no reply; the follow-up models.list carries
+    // the result. Ignore anything but a bounded string[] of runtime ids.
+    const ids = Array.isArray(msg.runtimeIds)
+      ? msg.runtimeIds.filter((id: unknown): id is string => typeof id === "string" && !!id).slice(0, 16)
+      : [];
+    if (ids.length) prefetchModels(ids);
   },
   async "model.select"(msg) {
     const requestedSessionId = typeof msg.sessionId === "string" && msg.sessionId ? msg.sessionId : undefined;
@@ -8277,32 +8292,73 @@ async function resolveOrResumeSession(sessionId?: unknown, sessionPath?: unknown
 // races the runtime.select that switches the default agent, pin the pill to the
 // *previous* runtime (the reported agent-switching bug). Mirror how session.new/
 // session.open already refuse to touch `active` for remote clients: reuse a
-// single non-active scratch session on the current default runtime instead of
-// spawning a fresh runtime process on every picker read.
-let modelQueryScratch: SessionRecord | undefined;
-let modelQueryScratchPending: Promise<SessionRecord> | undefined;
-async function sessionForModelQuery(): Promise<SessionRecord> {
-  if (active) return active;
-  const wanted = resolveRuntimeId();
-  if (
-    modelQueryScratch &&
-    openSessions.has(modelQueryScratch.id) &&
-    modelQueryScratch.runtimeId === wanted &&
-    !sessionBusy(modelQueryScratch)
-  ) {
-    touchSession(modelQueryScratch);
-    return modelQueryScratch;
+// non-active scratch session per runtime instead of spawning a fresh runtime
+// process on every picker read.
+//
+// Keyed by runtime id, not a single slot: switching agents (Claude → Codex →
+// Claude) used to evict and re-spawn the one scratch on every switch — the
+// "switching agent takes a long time before models appear" bug. A map keeps one
+// warm scratch per runtime so a switch back to an agent already viewed this
+// session answers from the live session with no re-spawn, and `prefetchModels`
+// can warm several ahead of the first pick.
+const modelQueryScratch = new Map<string, SessionRecord>();
+const modelQueryScratchPending = new Map<string, Promise<SessionRecord>>();
+async function sessionForModelQuery(runtimeId?: string): Promise<SessionRecord> {
+  const wanted = resolveRuntimeId(runtimeId);
+  // A live active session answers for itself — but only when it IS the runtime
+  // being queried, so a prefetch/draft read for a *different* agent doesn't get
+  // the active session's (wrong-runtime) model list.
+  if (active && active.runtimeId === wanted) return active;
+  const cached = modelQueryScratch.get(wanted);
+  if (cached && openSessions.has(cached.id) && cached.runtimeId === wanted && !sessionBusy(cached)) {
+    touchSession(cached);
+    return cached;
   }
-  // De-dupe concurrent picker reads. Without this, a WS models.list and an HTTP
-  // GET /api/models fired together on page load both miss the reuse guard above
-  // (the scratch assignment only lands after createSession resolves ~0.3s later)
-  // and each stand up a session, leaving two empty rows a fraction of a second
-  // apart. Collapse concurrent builds onto one promise, mirroring resumingSessions.
-  if (modelQueryScratchPending) return modelQueryScratchPending;
-  modelQueryScratchPending = createSession(defaultWorkspace, undefined, { makeActive: false, ephemeral: true })
-    .then((rec) => { modelQueryScratch = rec; return rec; })
-    .finally(() => { modelQueryScratchPending = undefined; });
-  return modelQueryScratchPending;
+  // De-dupe concurrent picker reads per runtime. Without this, a WS models.list
+  // and an HTTP GET /api/models fired together on page load both miss the reuse
+  // guard above (the scratch assignment only lands after createSession resolves
+  // ~0.3s later) and each stand up a session, leaving two empty rows a fraction
+  // of a second apart. Collapse concurrent builds onto one promise per runtime,
+  // mirroring resumingSessions.
+  const inflight = modelQueryScratchPending.get(wanted);
+  if (inflight) return inflight;
+  const build = createSession(defaultWorkspace, undefined, { makeActive: false, ephemeral: true, runtimeId: wanted })
+    .then((rec) => { modelQueryScratch.set(wanted, rec); return rec; })
+    .finally(() => { modelQueryScratchPending.delete(wanted); });
+  modelQueryScratchPending.set(wanted, build);
+  return build;
+}
+
+/**
+ * Warm the model-query scratch for one or more runtimes in the background so the
+ * first agent switch to any of them answers instantly instead of paying the
+ * runtime spin-up on the critical path. Fired when the agent picker opens (see
+ * the `models.prefetch` command). Best-effort and de-duped: a runtime already
+ * warm (or being warmed) is a no-op, and a spin-up failure is swallowed — the
+ * normal models.list path will surface any real error when the user picks it.
+ */
+function prefetchModels(runtimeIds: string[]): void {
+  const wanted: string[] = [];
+  for (const id of runtimeIds) {
+    let resolved: string;
+    try {
+      resolved = resolveRuntimeId(id);
+    } catch {
+      continue; // unknown/uninstalled agent — nothing to warm
+    }
+    if (wanted.includes(resolved)) continue;
+    const cached = modelQueryScratch.get(resolved);
+    if (cached && openSessions.has(cached.id) && !sessionBusy(cached)) continue;
+    if (modelQueryScratchPending.has(resolved)) continue;
+    wanted.push(resolved);
+  }
+  // Warm serially, not in a burst: spinning up every agent subprocess at once
+  // would spike a small node's memory/CPU right as the user is interacting. Each
+  // build is cached (and de-duped) so this cost is paid at most once per runtime.
+  void wanted.reduce(
+    (chain, id) => chain.then(() => sessionForModelQuery(id).then(() => undefined, () => undefined)),
+    Promise.resolve(),
+  );
 }
 
 /**
@@ -9213,9 +9269,11 @@ app.get("/api/models", async (req, res, next) => {
   try {
     const requestedSessionId = typeof req.query.sessionId === "string" && req.query.sessionId ? req.query.sessionId : undefined;
     const requestedPath = typeof req.query.path === "string" ? req.query.path : undefined;
+    const wantedRuntimeId = typeof req.query.runtimeId === "string" && req.query.runtimeId ? req.query.runtimeId : undefined;
     let record = requestedSessionId ? await resolveOrResumeSession(requestedSessionId, requestedPath) : active;
     if (requestedSessionId && !record) return res.status(404).json({ error: "Session not found" });
-    record ??= await sessionForModelQuery();
+    if (!requestedSessionId && wantedRuntimeId && record?.runtimeId !== wantedRuntimeId) record = undefined;
+    record ??= await sessionForModelQuery(wantedRuntimeId);
     const session = record.session;
     const current = session.getCurrentModel();
     const models = await publicModelsList(session, current);
@@ -9224,6 +9282,17 @@ app.get("/api/models", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// Warm the per-runtime model-query scratch ahead of the first agent switch (see
+// prefetchModels). Fire-and-forget: returns immediately while the runtimes spin
+// up in the background, so the picker never blocks on it.
+app.post("/api/models/prefetch", (req, res) => {
+  const ids = Array.isArray(req.body?.runtimeIds)
+    ? req.body.runtimeIds.filter((id: unknown): id is string => typeof id === "string" && !!id).slice(0, 16)
+    : [];
+  if (ids.length) prefetchModels(ids);
+  res.json({ ok: true });
 });
 
 app.post("/api/models/select", async (req, res, next) => {
