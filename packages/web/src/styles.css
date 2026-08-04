@@ -1307,6 +1307,10 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .chip.outcome-success { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
 .chip.outcome-warning { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
 .chip.outcome-danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+/* Waiting/rate-limited (C4b): visually distinct from an actively-running run —
+   a dashed border + hourglass reads as "paused, not consuming compute". */
+.chip.outcome-kind-waiting { border-style: dashed; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.chip.outcome-kind-waiting::before { content: "⏳ "; }
 
 /* Run evidence / outcome reports (issue #153). */
 .evidence-list { display: flex; flex-direction: column; gap: 8px; }

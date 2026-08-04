@@ -682,7 +682,7 @@ export async function triggerHostedProvision(store: LocalStore, execute = false,
 export interface GithubQueueItem {
   id: string;
   source: string; // "github:issue" | "github:comment" | "linear:issue" | "slack"
-  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
+  status: "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
   label: string;
   title: string;
   repo?: string;
@@ -727,7 +727,7 @@ export interface GithubQueueItem {
   events?: Array<{
     at: string;
     kind: "triggered" | "routed" | "claimed" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
-      | "retry" | "fallback" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
+      | "retry" | "fallback" | "rate_limited" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
     summary: string;
     attempt?: number;
     ref?: string;
@@ -761,7 +761,7 @@ export interface AccountAutomationRun {
   id: string;
   definitionId?: string;
   triggerKind: string;
-  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled";
+  status: "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled";
   title: string;
   createdAt: string;
   startedAt?: string;
@@ -975,7 +975,7 @@ export interface AutomationHook {
 export interface AutomationOutcome {
   id: string;
   hookId: string;
-  status: "pending" | "claimed" | "running" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
+  status: "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled" | "done";
   title: string;
   createdAt: string;
   claimedAt?: string;

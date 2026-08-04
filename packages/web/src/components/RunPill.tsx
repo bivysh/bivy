@@ -208,7 +208,7 @@ export function RunPill({
 
             {evidence && (
               <div className="run-sheet-rows">
-                {outcome && <Row k="Outcome"><span className={`chip outcome-${outcome.tone}`}>{outcome.label}</span></Row>}
+                {outcome && <Row k="Outcome"><span className={`chip outcome-${outcome.tone} outcome-kind-${outcome.kind}`}>{outcome.label}</span></Row>}
                 {counts && (
                   <Row k="Checks">
                     <Checks item={evidence} />

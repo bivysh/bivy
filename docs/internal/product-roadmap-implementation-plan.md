@@ -121,7 +121,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 - [x] Add queue claim leases/heartbeats, expiry, and safe reclaim.
 - [x] Make external effects idempotent across retry/reclaim.
-- [ ] Represent waiting/rate-limited work separately from running work.
+- [x] Represent waiting/rate-limited work separately from running work.
 - [x] Certify GitHub issue/comment → worktree → checks → PR as the first unattended golden path.
 
 ### C5. Bounded durable storage

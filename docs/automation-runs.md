@@ -12,8 +12,11 @@ The domain separates four records:
 - A **trigger event** records how a run was requested and its idempotency/source
   key. GitHub delivery IDs and equivalent source keys remain unique per account.
 - An **automation run** is the durable lifecycle and routing record. Its states
-  are `pending`, `claimed`, `running`, `needs_attention`, `succeeded`, `failed`,
-  and `cancelled`. A conditional claim provides one winner when nodes race. The
+  are `pending`, `claimed`, `running`, `waiting`, `needs_attention`, `succeeded`,
+  `failed`, and `cancelled`. `waiting` marks a run that is blocked on an external
+  limit (provider rate-limit, queue backpressure) rather than actively consuming
+  compute, so it reads separately from `running`. A conditional claim provides
+  one winner when nodes race. The
   winner renews a finite lease every 30 seconds; if it crashes, the control plane
   makes the item reclaimable after the two-minute lease expires.
 - An **attempt** is represented explicitly on the run and starts at one. A run's

@@ -16,6 +16,30 @@ describe("deriveRunOutcome", () => {
     expect(deriveRunOutcome({ status: "succeeded", events: [{ at: new Date().toISOString(), kind: "completed", summary: "Run completed with no file changes." }] }).kind).toBe("no_changes");
   });
 
+  it("represents waiting/rate-limited work separately from running", () => {
+    // Explicit waiting status.
+    expect(deriveRunOutcome({ status: "waiting" }).kind).toBe("waiting");
+    // Nominally running, but the latest signal is a rate-limit → waiting, not running.
+    expect(deriveRunOutcome({
+      status: "running",
+      events: [
+        { at: "1", kind: "attempt_started", summary: "started" },
+        { at: "2", kind: "rate_limited", summary: "Provider rate limit; backing off." },
+      ],
+    } as never).kind).toBe("waiting");
+    // A plain running item is still running, and waiting is non-terminal.
+    expect(deriveRunOutcome({ status: "running" }).kind).toBe("running");
+    expect(deriveRunOutcome({ status: "waiting" }).terminal).toBe(false);
+    // Once it resumes work, it is running again, not stuck at waiting.
+    expect(deriveRunOutcome({
+      status: "running",
+      events: [
+        { at: "1", kind: "rate_limited", summary: "backing off" },
+        { at: "2", kind: "attempt_started", summary: "resumed" },
+      ],
+    } as never).kind).toBe("running");
+  });
+
   it("distinguishes timeout and ordinary agent failure", () => {
     expect(deriveRunOutcome({ status: "failed", output: { failure: "Agent turn timed out after 60 minutes" } }).kind).toBe("timed_out");
     expect(deriveRunOutcome({ status: "failed", output: { failure: "runtime exited" } }).kind).toBe("agent_failed");
