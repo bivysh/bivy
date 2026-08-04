@@ -82,7 +82,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 - [x] Preserve the existing global Inbox as the single attention aggregator.
 - [x] Add document-title and installed-app badge counts.
-- [ ] Verify push and Inbox deep-links focus the exact approval/question/outcome.
+- [x] Verify push and Inbox deep-links focus the exact approval/question/outcome.
 - [x] Add clear Needs approval, Needs answer, Failed, and Completed—unreviewed categories.
 - [x] Keep attention metadata content-free across the hosted boundary.
 

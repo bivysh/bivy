@@ -17,6 +17,7 @@ import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
 import { classifySource } from "./sessionSource.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
+import { resolveInboxDeepLink } from "./inboxDeepLink.js";
 import { ChangesCard } from "./components/ChangesCard.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
@@ -364,20 +365,20 @@ export function App() {
   const openInboxItem = (item: InboxItem) => {
     setInboxOpen(false);
     closeDrawer();
-    if (item.sessionId) {
-      controller.openSessionOnNode(item.sessionId, undefined, item.nodeId);
-      if (item.kind === "approval" || item.kind === "question") {
-        const conditionId = item.targetId;
-        if (!conditionId) return;
+    // One shared resolver for Inbox taps and push deep-links (B3), so both focus
+    // the exact approval / question / outcome — not just the session top.
+    const link = resolveInboxDeepLink(item);
+    if (link.target === "session" && link.sessionId) {
+      controller.openSessionOnNode(link.sessionId, undefined, link.nodeId);
+      if (link.attentionId) {
         const params = new URLSearchParams(location.search);
-        params.set("attention", conditionId);
+        params.set("attention", link.attentionId);
         history.replaceState(null, "", `${location.pathname}?${params.toString()}${location.hash}`);
-        setTimeout(() => document.getElementById(`attention-${encodeURIComponent(conditionId)}`)?.scrollIntoView({ block: "center" }), 500);
+        setTimeout(() => document.getElementById(`attention-${encodeURIComponent(link.attentionId!)}`)?.scrollIntoView({ block: "center" }), 500);
       }
       return;
     }
-    if (item.source === "queue") openSettings("queue");
-    else if (item.source === "provider") openSettings("providers");
+    if (link.settingsTab) openSettings(link.settingsTab);
   };
 
   return (
@@ -593,6 +594,7 @@ export function App() {
               session yet) falls back to the bare GithubPill for repo context. */}
           {activeSession && activeRunSource ? (
             <RunPill
+              anchorId={`attention-${activeSession.sessionId}`}
               source={activeRunSource}
               statusClass={statusClass(activeSession)}
               statusLabel={statusLabel(activeSession)}

@@ -112,6 +112,7 @@ export function RunPill({
   usage,
   forkedFrom,
   onRecover,
+  anchorId,
 }: {
   source: SourceInfo;
   /** The row's status class (`working` / `needs-action` / `saved` / `idle`)
@@ -139,6 +140,9 @@ export function RunPill({
    *  failing checks" prompt, retry → re-run the checks, fork → fork the session.
    *  Omitted where no session is in scope, hiding the buttons. */
   onRecover?: (kind: RecoveryKind) => void;
+  /** DOM id (`attention-<sessionId>`) so an outcome deep-link from the Inbox or a
+   *  push tap scrolls to this pill — the exact outcome — not just the session (B3). */
+  anchorId?: string;
 }) {
   const [open, setOpen] = useState(false);
   useModalEscape(() => setOpen(false), open);
@@ -173,6 +177,7 @@ export function RunPill({
   return (
     <>
       <button
+        id={anchorId}
         className={`run-pill src-${source.kind} ${statusClass}`}
         onClick={() => setOpen(true)}
         title={`${source.label} · ${statusLabel}`}
