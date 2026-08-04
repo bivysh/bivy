@@ -16,15 +16,8 @@ import { execFileSync } from "node:child_process";
 
 // GHSA id -> why it is accepted. Revisit on or before `review`.
 const ALLOW = {
-  // undici is a *direct dependency of @earendil-works/pi-coding-agent*, pinned to
-  // 8.5.0 inside that package's published npm-shrinkwrap.json. npm `overrides`
-  // cannot move a shrinkwrapped direct dependency, and pi-coding-agent's latest
-  // release (0.83.0) still pins 8.5.0, so there is no upstream fix yet. Both
-  // advisories concern undici acting as an HTTP proxy/cache; here it is only the
-  // coding agent's outbound LLM client. Remove these the moment pi-coding-agent
-  // ships undici >= 8.9.0 (or an override becomes effective).
-  "GHSA-8xcm-r25x-g524": { pkg: "undici", reason: "shrinkwrapped in pi-coding-agent; no upstream fix", review: "2026-09-03" },
-  "GHSA-4cwx-7wf7-3272": { pkg: "undici", reason: "shrinkwrapped in pi-coding-agent; no upstream fix", review: "2026-09-03" },
+  // (empty — previous undici advisories in pi-coding-agent are no longer reported
+  // after the postinstall patch to undici@8.9.0)
 };
 
 const BLOCKING = new Set(["high", "critical"]);

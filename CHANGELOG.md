@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-04
+
+### Added
+
+- Phase 7: connect-computer/credential-sync design doc + rotation-safe merge tiebreak (#344)
+- Phase 6: per-session egress proxy/decider for workflow/sandbox network isolation (#343)
+- Integrations as chat: Linear follow-up routing + provider-agnostic Case B (Phase 5) (#342)
+- Phase 4: Codex/opencode slash commands + Codex TUI hand-off & usage (agents) (#341)
+- Faster model switch: per-runtime scratch cache + client cache + prefetch (Phase 3) (#340)
+- Fork reliability: fix 6 stand-up bugs + add integration coverage (Phase 2) (#339)
+- Core-flow UX polish: attention list, queue auto-send, slash UI, update banner, terminal menu (#338)
+- Remove local-CLI setup direction; complete Phases 0–2 (supersedes #333) (#334)
+
+### Fixed
+
+- Fix scrolling in expanded code changes card (#346)
+- Fix Codex fork rollout metadata (#345)
+
 ## [0.6.0] - 2026-08-03
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "@bivy/core",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Framework-agnostic Bivy client core: protocol, transport, crypto, state. Shared by the web PWA and (later) the Expo app.",
   "type": "module",
   "license": "FSL-1.1-ALv2",
