@@ -66,6 +66,9 @@ export interface Command extends CommandBase {
     | "workspaces.list"
     | "node.settings.get"
     | "node.settings.set"
+    // Kick off `bivy update` on the node from the version-mismatch banner.
+    // Reply: `node.update.result` ({ ok, error? }).
+    | "node.update"
     | "github.app.manifest.start"
     | "github.app.manifest.code"
     | "github.app.connect-existing"

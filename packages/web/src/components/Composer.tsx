@@ -325,6 +325,16 @@ export function Composer({
   // The slash-command autocomplete list, shown while the user is still typing
   // the command word (no space yet) and hasn't dismissed it with Escape.
   const slashMenu = !disabled && !menuDismissed ? matchSlashCommands(text, agentCommands) : [];
+  // Whether the user is in the command word (typed "/" with no space yet), so we
+  // can show an empty-state instead of silence when nothing matches — otherwise
+  // an agent that advertises no commands (e.g. Codex) looks like it has no slash
+  // support at all, and a typo just vanishes with no feedback.
+  const inSlashWord = (() => {
+    if (disabled || menuDismissed) return false;
+    const p = text.trimStart();
+    return p.startsWith("/") && !/\s/.test(p);
+  })();
+  const slashEmpty = inSlashWord && slashMenu.length === 0;
 
   function autosize() {
     const ta = taRef.current;
@@ -585,6 +595,13 @@ export function Composer({
                 </button>
                 );
               })}
+            </div>
+          )}
+          {slashEmpty && (
+            <div className="slash-menu slash-empty" role="status">
+              {agentCommands.length === 0
+                ? "This agent has no slash commands."
+                : "No matching command — press Esc to send as a message."}
             </div>
           )}
           {(attachments.length > 0 || readingCount > 0) && (

@@ -25,7 +25,6 @@ export function SessionMenu({
   worktree,
   branch,
   sessionFile,
-  onOpenTerminal,
   onContinueInTerminal,
 }: {
   sessionId: string;
@@ -37,9 +36,6 @@ export function SessionMenu({
   worktree?: string;
   branch?: string;
   sessionFile?: string;
-  /** Open a terminal attached to this session. Undefined (item hidden) when the
-   *  node is offline. */
-  onOpenTerminal?: () => void;
   /** "Continue in terminal": hand this session to the runtime's interactive TUI.
    *  Undefined (item hidden) when the runtime lacks `interactiveTui` or the node
    *  is offline — the reverse of the terminal's "continue in chat". */
@@ -146,20 +142,6 @@ export function SessionMenu({
       )}
       {open && (
         <div className="session-actions-menu" role="menu">
-          {onOpenTerminal && (
-            <button
-              className="session-actions-item"
-              role="menuitem"
-              onClick={() => { close(); onOpenTerminal(); }}
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <path d="m7 9 3 3-3 3" />
-                <path d="M13 15h4" />
-              </svg>
-              Terminal
-            </button>
-          )}
           <button className="session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
             Copy session reference
           </button>

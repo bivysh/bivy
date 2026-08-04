@@ -649,7 +649,9 @@ if (sessionRunPolicy) {
 }
 
 let lastUpdateCheckAt = 0;
-let updateNoticeSentFor = "";
+// The most recent "this node is behind" finding, so a client that connects after
+// the check already ran still gets the banner (replayed on connect below).
+let pendingBivyUpdate: { current: string; latest: string } | null = null;
 
 function runtimeSummary(rt: AgentRuntime) {
   return runtimeHost.summary(rt);
@@ -740,35 +742,57 @@ function readJsonFile<T>(file: string): T | undefined {
   }
 }
 
-async function maybeNotifyBivyUpdate(record: SessionRecord) {
-  // The daemon creates an initial session during startup before any UI is
-  // connected. Don't consume the once-per-version notice until someone can see it.
-  if (clients.size === 0 && !relay) return;
-
+// Poll npm for a newer release (throttled to every 6h). On finding one, remember
+// it and push a dedicated `node.update` event so every connected app can show a
+// banner with a one-tap "Update this node" button (see runBivyUpdate). Safe to
+// call from anywhere — never throws, never interrupts a session.
+async function checkBivyUpdate(): Promise<void> {
   const now = Date.now();
   if (now - lastUpdateCheckAt < 6 * 60 * 60 * 1000) return;
   lastUpdateCheckAt = now;
-
   const current = currentVersion();
   if (!current) return;
-
   try {
     const res = await fetch(updateRegistryUrl, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return;
-    const latestVersion = ((await res.json()) as ReleaseInfo).version;
-    if (!latestVersion || !isNewerVersion(latestVersion, current)) return;
-    if (updateNoticeSentFor === latestVersion) return;
-    updateNoticeSentFor = latestVersion;
-    const label = ` ${latestVersion}`;
-    broadcast({
-      type: "session.notice",
-      sessionId: record.id,
-      level: "info",
-      message: `A newer Bivy version${label} is available. Run \`bivy update\` in your terminal to update.`,
-      action: "bivy update",
-    });
+    const latest = ((await res.json()) as ReleaseInfo).version;
+    if (!latest || !isNewerVersion(latest, current)) return;
+    pendingBivyUpdate = { current, latest };
+    broadcast({ type: "node.update", current, latest });
   } catch {
     // Best-effort update checks should never interrupt a session.
+  }
+}
+
+async function maybeNotifyBivyUpdate() {
+  // The daemon creates an initial session during startup before any UI is
+  // connected. Don't spend a check until someone can see the banner.
+  if (clients.size === 0 && !relay) return;
+  await checkBivyUpdate();
+}
+
+// Run `bivy update` on this node, the same command a user would type. The CLI
+// re-spawns itself detached, waits for any in-flight turn, updates, and restarts
+// the service (logging to update.log), so we just fire-and-forget it here. The
+// bin ships next to this server bundle in both the git checkout (src/server.ts)
+// and the published package (dist/server.js), so repoRoot/bin/bivy.mjs resolves
+// in both. Returns a friendly error instead of throwing when it can't be found
+// (e.g. an unusual layout), so the banner can fall back to the manual command.
+function runBivyUpdate(): { ok: boolean; error?: string } {
+  const script = path.join(repoRoot, "bin", "bivy.mjs");
+  if (!fs.existsSync(script)) {
+    return { ok: false, error: "Could not locate the bivy CLI on this node — run `bivy update` in a terminal." };
+  }
+  try {
+    const child = spawn(process.execPath, [script, "update"], {
+      detached: true,
+      stdio: "ignore",
+      env: process.env,
+    });
+    child.unref();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -2804,6 +2828,14 @@ const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<vo
 const RELAY_COMMANDS: Record<string, Command> = {
   ping(msg, ctx) {
     ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
+  },
+  // Kick off `bivy update` on this node from the app's version-mismatch banner
+  // (see runBivyUpdate). The node restarts itself when the update lands, so the
+  // client just sees the socket reconnect on the new build; a failure to even
+  // start reports back so the banner can show the manual command.
+  "node.update"(_msg, ctx) {
+    const result = runBivyUpdate();
+    ctx.reply({ type: "node.update.result", ok: result.ok, error: result.error });
   },
   // Fetch a stored attachment's bytes by content hash. The relay client (a phone
   // not on the LAN) can't reach the GET /api/attachment endpoint, so it fetches
@@ -7873,7 +7905,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
     // that only tracks real user/agent activity, not focus. (Was touchSession.)
     if (makeActive) active = existing;
     broadcast({ type: "session.created", sessionId: existing.id, name: existing.session.getName(), workspace: existing.workspace, sessionFile: existing.sessionFile, source: existing.source, branch: existing.worktree?.branch, prUrl: existing.prUrl, runtimeId: existing.runtimeId, agentName: getRuntime(existing.runtimeId).displayName, bivySession: bivySessionEnvelope(existing), capabilities: capabilitiesWithCommands(existing.runtimeId, existing.session) });
-    void maybeNotifyBivyUpdate(existing);
+    void maybeNotifyBivyUpdate();
     return existing;
   }
 
@@ -8059,7 +8091,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
 
   if (makeActive) active = record;
   broadcast({ type: "session.created", sessionId, name: record.session.getName(), workspace: sessionWorkspace, sessionFile: record.sessionFile, source: record.source, branch: worktree?.branch, prUrl: record.prUrl, runtimeId: rt.id, agentName: rt.displayName, modelFallbackMessage, bivySession: bivySessionEnvelope(record), capabilities: capabilitiesWithCommands(rt.id, record.session) });
-  void maybeNotifyBivyUpdate(record);
+  void maybeNotifyBivyUpdate();
   scheduleAdvertise();
   return record;
 }
@@ -8781,6 +8813,15 @@ app.get("/api/node/info", (_req, res) => {
     defaultRuntimeId,
     sandbox: sandboxInfo(),
   });
+});
+
+// One-tap "Update this node" from the app's version-mismatch banner, for
+// direct/LAN clients (the relay path uses the RELAY_COMMANDS "node.update"
+// handler). Both call the same runBivyUpdate.
+app.post("/api/node/update", (_req, res) => {
+  const result = runBivyUpdate();
+  if (result.ok) res.json({ ok: true });
+  else res.status(500).json({ ok: false, error: result.error });
 });
 
 // Build collectNodeStats() options, resolving the optional session so the panel
@@ -10683,6 +10724,14 @@ wss.on("connection", (socket, req) => {
   // sharing a PTY size it to their min (see TerminalManager.setClientSize).
   const clientTerminalId = `sock-${randomUUID()}`;
   socket.send(JSON.stringify({ type: "hello", activeSessionId: active?.id, activeSession: active ? { id: active.id, isStreaming: sessionBusy(active), lastActivity: active.lastActivity, workingStartedAt: active.workingStartedAt } : null }));
+  // Authoritative version status on every connect: `latest` set means this node
+  // is behind (banner shows); absent means up to date (banner + any "Updating…"
+  // state clear — this is how the banner disappears after an update lands and
+  // the socket reconnects on the new build). Then (re)run the throttled check so
+  // a freshly-opened app surfaces a newly-available update without waiting for a
+  // session turn.
+  socket.send(JSON.stringify({ type: "node.update", current: currentVersion() ?? "", latest: pendingBivyUpdate?.latest }));
+  void checkBivyUpdate();
   socket.on("message", (raw) => {
     let msg: { kind?: string };
     try {

@@ -35,6 +35,21 @@ export function isUnseen(s: SessionStatusInput): boolean {
   return s.lastSeenAt == null || s.finishedAt > s.lastSeenAt;
 }
 
+/** How urgently a session wants the user's eyes, for sorting the sidebar so the
+ *  ones that need a human float to the top (highest first):
+ *    2 — needs action (an approval or question is blocking the agent);
+ *    1 — a run finished the user hasn't looked at yet;
+ *    0 — the calm majority (working / idle / saved).
+ *  A session's own recency (updatedAt) is the tiebreak within a rank, so within
+ *  "needs action" the freshest still leads. Keeping this one function the single
+ *  source of ranking means the sidebar and any future surface can't disagree
+ *  about what counts as "needs you". */
+export function attentionRank(s: SessionStatusInput): number {
+  if (s.needsAction || s.status === "needs_action") return 2;
+  if (isUnseen(s)) return 1;
+  return 0;
+}
+
 /** Human-facing status text — the accessible (non-color) half of the signal,
  *  read by the dot's title/tooltip and screen readers. */
 export function statusLabel(s: SessionStatusInput): string {

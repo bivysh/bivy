@@ -642,6 +642,15 @@ export class DirectTransport implements Transport {
             { requestId: String(obj.requestId ?? "") },
           );
           break;
+        case "node.update": {
+          try {
+            await this.directApi("/api/node/update", { method: "POST", body: "{}" });
+            this.emit({ type: "node.update.result", ok: true });
+          } catch (e) {
+            this.emit({ type: "node.update.result", ok: false, error: (e as Error)?.message || String(e) });
+          }
+          break;
+        }
         default:
           // Terminal I/O rides the raw WS in direct mode.
           if (String(obj.kind || "").startsWith("terminal.") && this.connected && this.ws?.readyState === 1) {
