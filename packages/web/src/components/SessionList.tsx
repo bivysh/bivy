@@ -6,7 +6,7 @@ import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueIt
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
-import { isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
+import { attentionRank, isUnseen, statusClass, statusLabel } from "../sessionStatus.js";
 import { SourceGlyph } from "./SourceMark.js";
 import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
 import { rowHint } from "../runEvidence.js";
@@ -357,9 +357,15 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
       if (repoFilter && repo !== repoFilter) return false;
       return !q || `${s.name} ${s.source ?? ""} ${s.agentName ?? ""} ${repo}`.toLowerCase().includes(q);
     });
-    // Newest activity first (parity with the legacy drawer), stable within ties.
-    // Sort a copy so the store's array identity is untouched.
-    return [...matched].sort((a, b) => toMs(b.updatedAt) - toMs(a.updatedAt));
+    // Sessions that need a human float to the top (an agent blocked on an
+    // approval/question, then a finished run you haven't seen) — the old
+    // separate "inbox" is gone, so the list itself has to surface what needs
+    // you. Within the same attention rank it's newest-activity-first, so the
+    // calm majority still reads like the legacy drawer. Sort a copy so the
+    // store's array identity is untouched.
+    return [...matched].sort(
+      (a, b) => attentionRank(b) - attentionRank(a) || toMs(b.updatedAt) - toMs(a.updatedAt),
+    );
   }, [sessions, query, repoFilter, nodeFilter]);
 
   // Search spans every session; pagination only bounds the unfiltered list, so a
@@ -522,7 +528,13 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
           const src = classifySource(s.source);
           // A one-word exception hint on failed / waiting-on-you runs, so those
           // rows pop in a long list; null (no extra text) for the calm majority.
-          const hint = rowHint(runEvidence?.get(s.sessionId));
+          // A run-evidence hint (the specific "what": e.g. an approval prompt or
+          // a failed check) wins; otherwise, since a needs-action or unseen row
+          // has floated to the top, spell out why with its status label so the
+          // list itself says what needs you — no separate inbox required.
+          const hint =
+            rowHint(runEvidence?.get(s.sessionId)) ??
+            (attentionRank(s) > 0 ? { text: statusLabel(s), tone: "warn" as const } : null);
           return (
             <li key={s.sessionId} className="session-row">
               <button

@@ -311,6 +311,7 @@ export class AppController {
     // authoritative sessions.list arrives. Also start persisting live updates.
     this.seedSessionsFromCache();
     this.installSessionCachePersist();
+    this.installFollowupAutoDrain();
     if (!this.direct && this.local.s) void this.refreshAccountSessions();
     // Seed the reactive auth flag from the token we may have just consumed above,
     // so the very first render lands on the right surface (sign-in vs. shell).
@@ -917,6 +918,17 @@ export class AppController {
     void this.transport.send(command);
   }
 
+  /** Trigger `bivy update` on the connected node from the version-mismatch
+   *  banner. Optimistically marks the node updating so the button can't be
+   *  double-tapped; on success the node restarts and the socket reconnects on
+   *  the new build (the banner clears itself — see the store's node.update
+   *  handler), and a start failure comes back as node.update.result. */
+  updateNode(): void {
+    if (this.store.getState().nodeUpdating) return;
+    this.store.setNodeUpdating(true);
+    this.send({ kind: "node.update" });
+  }
+
   /**
    * Send a command and await its correlated reply instead of assuming success
    * the moment it was handed to the transport. A handful of node-settings-style
@@ -1383,6 +1395,30 @@ export class AppController {
     });
   }
 
+  /** Auto-send the next queued follow-up the instant the active session's turn
+   *  ends — regardless of *how* it ended. `onSessionSettled` already drains on a
+   *  live `agent_end`, but that event never arrives when a turn finishes while
+   *  the socket is down: the reconnect reconciles `working` back to false from
+   *  history, not from a fresh agent_end, so the queue would otherwise wedge
+   *  until the user sends manually. Watching the `working` true→false edge on the
+   *  active session covers every such path with one rule (and is a harmless
+   *  no-op double when agent_end already drained). Deliberately only the *same*
+   *  active session's edge — never a session-switch, since `beginOpen` paints
+   *  `working:false` optimistically before history reconciles, which would risk
+   *  firing a queued message into a background session that's actually mid-turn. */
+  private installFollowupAutoDrain(): void {
+    let wasWorking = this.store.getState().working;
+    let lastActive = this.store.getState().activeSessionId;
+    this.store.subscribe(() => {
+      const active = this.store.getState().activeSessionId;
+      const working = this.store.getState().working;
+      const settledNow = active != null && active === lastActive && wasWorking && !working;
+      wasWorking = working;
+      lastActive = active;
+      if (settledNow) this.drainFollowups(active);
+    });
+  }
+
   openSessionOnNode(sessionId: string, path?: string, nodeId?: string): void {
     if (!this.direct && nodeId && nodeId !== this.local.cur) {
       this.pendingCrossNodeOpen = { sessionId, path };
@@ -1654,6 +1690,9 @@ export class AppController {
     if (active) {
       if (this.mustQueue(active)) {
         this.store.enqueueFollowup(active, { id: cmid, text: trimmed, attachments: files }, Date.now());
+        // If the turn happened to settle between the mustQueue check and here,
+        // send it straight away rather than waiting for the next settle edge.
+        this.drainFollowups(active);
         return;
       }
       // The node is offline but this is an ephemeral machine we can bring back

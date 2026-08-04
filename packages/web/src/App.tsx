@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { type AccountAutomationRun, type GithubQueueItem, type InboxItem } from "@bivy/core";
+import { type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -17,7 +17,6 @@ import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
 import { classifySource } from "./sessionSource.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
-import { resolveInboxDeepLink } from "./inboxDeepLink.js";
 import { ChangesCard } from "./components/ChangesCard.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
@@ -26,7 +25,7 @@ import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
-import { buildInboxItems, Inbox } from "./components/Inbox.js";
+import { buildInboxItems } from "./components/Inbox.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
 // bundle). It's an on-demand overlay, so load it lazily to keep the initial app
@@ -74,7 +73,12 @@ export function App() {
   // need attention or failed). Same account-level, hosted-only, polled-at-shell
   // shape as the GitHub queue above.
   const [automationRuns, setAutomationRuns] = useState<AccountAutomationRun[] | null>(null);
-  const [inboxOpen, setInboxOpen] = useState(false);
+  // Ids of attention items the user has already looked at (opened the mobile
+  // session drawer since they arrived). Drives the red dot on the ☰ burger:
+  // it lights only for attention that appeared while the list was out of view.
+  // In-memory by design — a reload re-surfaces current attention, which is the
+  // safe default (better to re-show than to silently swallow a blocked agent).
+  const [seenAttn, setSeenAttn] = useState<Set<string>>(() => new Set());
   const refreshGithubQueue = useCallback(() => {
     if (controller.direct || !state.signedIn) return;
     controller.fetchGithubQueue().then(setGithubQueue).catch(() => {});
@@ -104,6 +108,13 @@ export function App() {
     queue: githubQueue ?? [],
     runs: automationRuns ?? [],
   }), [state.sessions, state.approvals, state.questions, state.nodes, githubQueue, automationRuns]);
+  // Something needs the user that they haven't seen yet → the ☰ burger wears a
+  // red dot. Opening the session drawer (openDrawer) marks the current set seen.
+  const attnUnseen = inboxItems.some((it) => !seenAttn.has(it.id));
+  const openDrawer = useCallback(() => {
+    setDrawerOpen(true);
+    setSeenAttn(new Set(inboxItems.map((it) => it.id)));
+  }, [inboxItems]);
   // Attention must remain visible when Bivy is a background tab or installed
   // PWA. The Inbox is authoritative; mirror only its content-free count into
   // browser chrome and the OS app badge.
@@ -190,7 +201,7 @@ export function App() {
   const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable() || Boolean(state.draftEphemeralConfig)) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
-  useEdgeSwipe({ isOpen: drawerOpen, onOpen: () => setDrawerOpen(true), onClose: () => setDrawerOpen(false) });
+  useEdgeSwipe({ isOpen: drawerOpen, onOpen: openDrawer, onClose: () => setDrawerOpen(false) });
 
   // Run an inline notice action button (e.g. a node-emitted "/new"). Declared
   // before any early return so hook order stays stable across renders (stable
@@ -362,25 +373,6 @@ export function App() {
   // no sessionId are treated as global and shown everywhere.
   const activeApprovals = state.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSessionId);
   const activeQuestions = state.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSessionId);
-  const openInboxItem = (item: InboxItem) => {
-    setInboxOpen(false);
-    closeDrawer();
-    // One shared resolver for Inbox taps and push deep-links (B3), so both focus
-    // the exact approval / question / outcome — not just the session top.
-    const link = resolveInboxDeepLink(item);
-    if (link.target === "session" && link.sessionId) {
-      controller.openSessionOnNode(link.sessionId, undefined, link.nodeId);
-      if (link.attentionId) {
-        const params = new URLSearchParams(location.search);
-        params.set("attention", link.attentionId);
-        history.replaceState(null, "", `${location.pathname}?${params.toString()}${location.hash}`);
-        setTimeout(() => document.getElementById(`attention-${encodeURIComponent(link.attentionId!)}`)?.scrollIntoView({ block: "center" }), 500);
-      }
-      return;
-    }
-    if (link.settingsTab) openSettings(link.settingsTab);
-  };
-
   return (
     <div className="app">
       <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
@@ -431,18 +423,6 @@ export function App() {
             everything else moved inside the Settings modal. */}
         <div className="sidebar-foot">
           <button
-            className="inbox-button"
-            onClick={() => { setInboxOpen(true); closeDrawer(); }}
-            title="Inbox"
-            aria-label={`Inbox, ${inboxItems.length} unresolved items`}
-          >
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
-              <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
-            </svg>
-            {inboxItems.length > 0 && <span className="inbox-count" aria-hidden>{inboxItems.length}</span>}
-          </button>
-          <button
             className="settings-gear"
             onClick={() => {
               openSettings();
@@ -463,8 +443,13 @@ export function App() {
 
       <main className={`main${needsNode ? " needs-node" : ""}`}>
         <header className="topbar">
-          <button className="icon-btn only-mobile" onClick={() => setDrawerOpen(true)} aria-label="Open sessions">
+          <button
+            className="icon-btn only-mobile burger-btn"
+            onClick={openDrawer}
+            aria-label={attnUnseen ? "Open sessions — something needs your attention" : "Open sessions"}
+          >
             ☰
+            {attnUnseen && <span className="attn-dot" aria-hidden />}
           </button>
           <div className="topbar-title">
             <div className="topbar-title-row">
@@ -523,7 +508,6 @@ export function App() {
                 worktree={activeSession?.worktree}
                 branch={activeSession?.branch}
                 sessionFile={activeSession?.path}
-                onOpenTerminal={online ? () => { setTerminalTarget(null); setTerminalStandalone(false); setTerminalTui(false); setTerminalOpen(true); } : undefined}
                 onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
               />
             )}
@@ -540,6 +524,24 @@ export function App() {
           <div className="banner info" role="status">
             <span className="reconnect-spinner" aria-hidden />
             Linking this device…
+          </div>
+        )}
+
+        {/* The connected node is running an older Bivy than the latest release.
+            One tap runs `bivy update` on the node (it restarts on the new build;
+            this banner clears itself once the socket reconnects up to date). */}
+        {state.nodeUpdate && (
+          <div className="banner update" role="status">
+            <span className="banner-text">
+              This node runs Bivy {state.nodeUpdate.current} — {state.nodeUpdate.latest} is available.
+            </span>
+            <button
+              className="banner-action"
+              onClick={() => controller.updateNode()}
+              disabled={state.nodeUpdating}
+            >
+              {state.nodeUpdating ? "Updating…" : "Update this node"}
+            </button>
           </div>
         )}
 
@@ -697,12 +699,6 @@ export function App() {
             )
           }
         />
-      )}
-      {inboxOpen && (
-        <>
-          <div className="scrim inbox-scrim" onClick={() => setInboxOpen(false)} />
-          <Inbox items={inboxItems} onOpen={openInboxItem} onClose={() => setInboxOpen(false)} />
-        </>
       )}
       {ephemeralOpen && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
       {state.needsModelAuth && <FirstRunModelAuthSheet state={state} />}

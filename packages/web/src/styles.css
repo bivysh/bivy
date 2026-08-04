@@ -146,11 +146,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .sidebar-head-actions { display: flex; align-items: center; gap: 8px; }
 .brand { font-weight: 700; letter-spacing: 0.02em; }
 .sidebar-foot { margin-top: auto; padding: 12px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
-.inbox-button { position: relative; flex: 1; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); color: var(--ink); font: inherit; }
-.inbox-button:hover { border-color: var(--line-strong); background: var(--surface-3); }
-.inbox-button svg { flex: none; color: var(--muted); }
-.inbox-button:hover svg { color: var(--ink); }
-.inbox-count { position: absolute; top: -6px; right: -6px; min-width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; border-radius: 999px; background: var(--danger); color: white; font-size: 11px; font-weight: 750; }
+/* Red dot on the mobile ☰ burger when something needs the user that they
+   haven't seen (an agent blocked on approval/question, an unseen finished run,
+   a provider needing auth). Replaces the old separate inbox surface — the
+   attention itself now floats to the top of the session list. */
+.burger-btn { position: relative; }
+.attn-dot { position: absolute; top: 3px; right: 3px; width: 9px; height: 9px; border-radius: 999px; background: var(--danger); box-shadow: 0 0 0 2px var(--surface); }
 .inbox { position: fixed; z-index: 101; inset: 5vh max(16px, calc((100vw - 760px) / 2)); max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 20px 70px rgba(0,0,0,.28); }
 .inbox-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px; border-bottom: 1px solid var(--line); }
 .inbox-head h2, .inbox-head p { margin: 0; }
@@ -869,6 +870,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
   color: var(--ink); cursor: pointer; font: inherit;
 }
 .slash-item:hover, .slash-item.active { background: var(--surface-2); }
+.slash-empty { padding: 10px 12px; color: var(--muted); font-size: 13px; }
 .slash-name { font-weight: 600; font-size: 14px; flex: none; min-width: 74px; }
 .slash-desc { color: var(--muted); font-size: 13px; }
 .composer-card:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -1806,6 +1808,10 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .banner.error { background: var(--danger-soft); color: var(--danger); }
 .banner.info { background: var(--surface-2); color: var(--muted); }
 .banner.warn { background: color-mix(in srgb, var(--warn, #d9a441) 16%, transparent); color: var(--warn, #d9a441); }
+.banner.update { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); }
+.banner-action { margin-left: auto; flex: none; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 8px; padding: 6px 12px; font: inherit; font-weight: 650; white-space: nowrap; }
+.banner-action:hover:not(:disabled) { filter: brightness(1.05); }
+.banner-action:disabled { opacity: .65; }
 .banner-text { flex: 1; }
 .banner-dismiss { margin-left: auto; border: 0; background: transparent; color: inherit; font-size: 18px; line-height: 1; }
 .reconnect-spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; flex: none; }

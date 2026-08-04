@@ -710,6 +710,14 @@ export interface AppState {
    *  a success toast and auto-dismissed by the UI. Distinct from `error` so the
    *  two can coexist and are styled differently. */
   notice: string | null;
+  /** Set when the connected node reports it's running an older Bivy than the
+   *  latest release — drives the version-mismatch banner and its one-tap
+   *  "Update this node" button (controller.updateNode). Null when up to date. */
+  nodeUpdate: { current: string; latest: string } | null;
+  /** True from the moment the user taps "Update this node" until the node
+   *  restarts on the new build (the socket reconnects) or reports it couldn't
+   *  start the update. Keeps the button from being tapped twice. */
+  nodeUpdating: boolean;
 }
 
 /** A harness checkpoint (rewind target) for the active session. */
@@ -804,6 +812,8 @@ export function initialState(): AppState {
     followupsBySession: {},
     error: null,
     notice: null,
+    nodeUpdate: null,
+    nodeUpdating: false,
   };
 }
 
@@ -1660,6 +1670,12 @@ export class SessionStore {
     this.set({ notice: message });
   }
 
+  /** Optimistically mark the node as updating the moment the user taps the
+   *  banner button, so it can't be tapped twice while the request is in flight. */
+  setNodeUpdating(value: boolean): void {
+    this.set({ nodeUpdating: value });
+  }
+
   /** Set (or clear, with null) the first-run "sign in to your model" prompt for a
    *  freshly-launched ephemeral runner. See `AppState.needsModelAuth`. */
   setNeedsModelAuth(v: { nodeId: string; provider: string; reason?: string } | null): void {
@@ -2091,6 +2107,26 @@ export class SessionStore {
             ),
           });
         }
+        return;
+      }
+      case "node.update": {
+        // Authoritative: `latest` present → node is behind (show banner);
+        // absent → up to date, so clear the banner and any "Updating…" state
+        // (this is how it clears after an update lands and the socket reconnects).
+        const e = event as any;
+        const current = typeof e.current === "string" ? e.current : "";
+        const latest = typeof e.latest === "string" ? e.latest : "";
+        if (current && latest) this.set({ nodeUpdate: { current, latest } });
+        else this.set({ nodeUpdate: null, nodeUpdating: false });
+        return;
+      }
+      case "node.update.result": {
+        // The update kicked off (node is restarting) → keep the "Updating…"
+        // state; the banner clears when the new build reconnects and no longer
+        // reports an update. A failure to even start → surface it and re-enable
+        // the button so the user can retry or update manually.
+        const e = event as any;
+        if (e.ok === false) this.set({ nodeUpdating: false, error: typeof e.error === "string" ? e.error : "Couldn't start the update on this node." });
         return;
       }
       case "session.notice": {
