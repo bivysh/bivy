@@ -20,14 +20,14 @@ Customer-facing protection will distinguish native isolation, Bivy structured to
 
 **Reason:** The mechanisms have different security properties that cannot honestly be collapsed into one badge.
 
-## D-003 — Preserve account-free Local CLI mode
+## D-003 — Remote enrollment stays required in setup
 
 **Date:** 2026-08-03
 **Status:** Accepted
 
-`bivy setup` will offer Local CLI, Bivy Cloud remote, and self-hosted remote. Local mode installs and starts the node without relay enrollment. Remote access remains the primary differentiated upgrade, but not an activation gate.
+`bivy setup` offers only Bivy Cloud remote and self-hosted remote paths, and requires relay/control-plane enrollment. An account-free "Local CLI only" setup mode is explicitly out of scope.
 
-**Reason:** This satisfies `CORE.md`, lowers first-value friction, and gives users a safe way to evaluate Bivy before account creation.
+**Reason:** Remotely visible, steerable sessions are Bivy's core value; without a relay/control plane the product adds little over running the agent directly. A local-only setup path was tried and rejected as the wrong product direction.
 
 ## D-004 — A turn watchdog is enabled by default and configurable
 

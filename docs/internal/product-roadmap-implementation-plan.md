@@ -65,8 +65,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 ### B1. One golden onboarding path
 
-- [x] Offer explicit Local CLI, Bivy Cloud remote, and self-hosted remote modes.
-- [x] Never require an account for Local CLI mode.
+- [x] Offer explicit Bivy Cloud remote and self-hosted remote modes; remote enrollment stays required.
 - [x] Make setup resumable and report a checklist of node, runtime, credential, repo, and first-task readiness.
 - [ ] Validate model access rather than credential presence alone where a safe provider probe exists.
 - [x] Do not print setup success as equivalent to agent readiness.

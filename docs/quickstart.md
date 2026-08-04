@@ -46,26 +46,29 @@ npm run setup     # same wizard, via the bundled bivy CLI
 
 ## 2. What `bivy setup` asks
 
-The wizard is short and account-free when you choose Local CLI. It picks defaults
-for everything it can and asks how you want to use Bivy. Chosen for you, no prompt:
+The wizard is short. It picks defaults for everything it can and only asks about
+remote access. Bivy requires relay/control-plane enrollment because making agent
+sessions remotely visible and steerable is what it adds to a local CLI. Chosen
+for you, no prompt:
 
 - **Workspace**: `~/bivy-workspace`. Changeable later in Settings.
 - **Local port**: `4317`.
 - **Default agent**: Pi. Changeable per session (`bivy run <agent>`) or in Settings.
 
-Asked once, only if remote access is not configured yet:
+Asked, once, only if remote access is not configured yet:
 
-1. **Usage mode** — `Bivy Cloud` (default; phone/browser access and one node is
-   free), `self-hosted remote`, or `Local CLI only` (no account).
-2. **Remote login** — only for a remote mode: GitHub (default) or an email
-   sign-in link. Self-hosted mode also asks for the control-plane and relay URLs.
+1. **Remote access** — `hosted` (default; one node is free) or `self-hosted`.
+   Choosing self-hosted then asks for your **control plane URL** and your **relay
+   `ws(s)://` URL**.
+2. **Remote login** — `GitHub` (default) or an `email sign-in link`. Choosing
+   email then asks for your **account email**.
 
-Local CLI mode skips account and relay enrollment entirely; enable remote access
-later with `bivy relay:setup`. For remote modes, setup opens your browser (or
-prints the URL on a headless box), enrolls this node, and writes
-`.bivy/relay.json`. Finally, setup installs the background service so the node
-keeps running after you close the terminal. It prints model-login and first-task
-commands; remote mode also opens the app and prints a pairing QR.
+For remote access, setup opens your browser (or prints the URL on a headless box)
+so you can authorize, waits for you to finish, enrolls this node, and writes
+`.bivy/relay.json`. If it fails it offers to retry; you can decline and run
+`bivy setup` to retry. Finally, with no prompt, setup installs the background
+service so the node keeps running after you close the terminal. It prints the
+model-login and first-task commands, a pairing QR, and opens the app.
 
 ## 3. Sign in to a model provider
 

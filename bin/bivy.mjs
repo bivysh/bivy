@@ -3162,7 +3162,7 @@ function terminalQr(text) {
 
 async function cmdSetup(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy setup\n\nFirst-run wizard: workspace, optional remote access, and background service. Local CLI mode requires no Bivy account. Safe to re-run later.");
+    console.log("Usage: bivy setup\n\nFirst-run wizard: workspace, remote access + sign-in, and background service. Safe to re-run later to change the workspace, default agent, or remote access.");
     return;
   }
   console.log(c.bold("\n  Bivy — node setup\n"));
@@ -3220,33 +3220,29 @@ async function cmdSetup(args = []) {
   }
   console.log(c.dim(`Default agent: ${setupAgent?.label || "Pi"}  (change in Settings; sign into your model from the agent's CLI/TUI or Settings → Keys & OAuth)`));
 
-  // 3. Remote web/PWA access is Bivy's primary upgrade over a local agent, but
-  // it is not an account gate. Local CLI mode still provides durable managed
-  // sessions, governance, checkpoints, and the Bivy terminal workflow while
-  // honoring CORE.md's account-free promise. Remote can be enabled later with
-  // `bivy relay:setup`.
+  // 3. Secure remote web/PWA access is what makes a Bivy-managed CLI useful:
+  // without a relay/control plane it adds nothing over running the agent
+  // directly. Setup therefore requires hosted or self-hosted enrollment.
   //
   // Carries the account session from relay:setup to the setup-completion step so
   // we can open the remote app signed into the whole account (see finishSetupRemote).
   let setupSession = null;
-  let localOnly = false;
   if (!fs.existsSync(relayConfigPath)) {
     console.log(c.bold("\n  Remote access\n"));
 
     console.log("Bivy uses remote access to make agent sessions visible and steerable from your other devices.");
+    // If self-host endpoints are already provided via the environment, default to
+    // self-hosted so a scripted or self-hosted install doesn't have to re-pick it
+    // (BIVY_CONTROL_PLANE_URL / BIVY_RELAY_URL then pre-fill the URL prompts below).
+    const selfHostEnv = Boolean((process.env.BIVY_CONTROL_PLANE_URL || "").trim() || (process.env.BIVY_RELAY_URL || "").trim());
     const syncChoice = await askChoice(
       "Remote access",
       [
-        { key: "h", label: "Bivy Cloud (recommended — phone/browser access; one node is free)" },
-        { key: "s", label: "self-hosted remote (your own control plane + relay)" },
-        { key: "l", label: "Local CLI only (no account; enable remote later)" },
+        { key: "h", label: "hosted (recommended — one node is free)" },
+        { key: "s", label: "self-hosted (your own control plane + relay)" },
       ],
-      "h",
+      selfHostEnv ? "s" : "h",
     );
-    if (syncChoice === "l") {
-      localOnly = true;
-      console.log(c.dim("  Local CLI mode selected. No account or relay will be configured."));
-    } else {
     const relayArgs = [];
     if (syncChoice === "s") {
       const endpoints = await getHostedEndpoints();
@@ -3298,7 +3294,6 @@ async function cmdSetup(args = []) {
       return;
     }
     setupSession = consumeSetupSession();
-    }
   } else {
     console.log(c.dim("\nRemote access already configured. Re-run 'bivy relay:setup' to change sync or sign-in."));
   }
@@ -3349,9 +3344,9 @@ async function cmdSetup(args = []) {
   console.log(`  ${modelReady ? (setupAgent?.needsBivyModel ? c.green("✓") : c.dim("○")) : c.yellow("!")} model ${modelReady ? (setupAgent?.needsBivyModel ? "credential configured" : "agent-managed — verified by the first task") : "not configured — run 'bivy login'"}`);
   console.log(`  ${c.dim("○")} repository chosen from the directory where you start Bivy`);
   console.log(`  ${agentReady && modelReady ? c.green("✓") : c.yellow("!")} first task ${agentReady && modelReady ? "ready to try" : "blocked by the stage above"}`);
-  console.log(`  ${fs.existsSync(relayConfigPath) ? c.green("✓") : c.dim("○")} remote ${fs.existsSync(relayConfigPath) ? "configured" : "optional — local CLI mode"}\n`);
+  console.log(`  ${fs.existsSync(relayConfigPath) ? c.green("✓") : c.yellow("!")} remote ${fs.existsSync(relayConfigPath) ? "configured" : "not configured — run 'bivy relay:setup'"}\n`);
   printFirstRunSteps(modelReady);
-  await finishSetupRemote(finalConfig, setupSession, { localOnly });
+  await finishSetupRemote(finalConfig, setupSession);
 }
 
 // Read and delete the one-time account-session handoff written by relay:setup
@@ -3445,15 +3440,13 @@ function printFirstRunSteps(modelReady = false) {
   console.log(`       Starter task:  ${c.cyan('bivy exec "explain this repository and identify one low-risk improvement"')}\n`);
 }
 
-async function finishSetupRemote(config, setupSession = null, { localOnly = false } = {}) {
+async function finishSetupRemote(config, setupSession = null) {
   const openable = canOpenBrowser();
   const remote = await openRemoteApp(config, { setupSession });
 
   if (!remote) {
-    console.log(localOnly
-      ? "\n  Local CLI mode is ready. Remote access is optional:"
-      : "\n  Almost there — enable remote access to open the Bivy app:");
-    console.log(`    • Enable remote:  ${c.cyan("bivy relay:setup")}  (opens the phone/browser app)`);
+    console.log("\n  Almost there — enable remote access to open the Bivy app:");
+    console.log(`    • Enable remote:  ${c.cyan("bivy relay:setup")}  (then the app opens automatically)`);
     console.log(`    • Check status:   ${c.cyan("bivy status")}\n`);
     return;
   }

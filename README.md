@@ -29,7 +29,7 @@ macOS and Linux. Requires Node.js 22.19 or newer; the installer installs it for
 you on Debian/Ubuntu and otherwise points you at nodejs.org. It installs the
 [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package from npm, puts
 the `bivy` command on your `PATH`, then runs the guided `bivy setup` wizard —
-workspace, Local CLI or optional remote sign-in, and an auto-start background service
+workspace, relay/control-plane sign-in, and an auto-start background service
 (launchd on macOS, systemd on Linux). Re-running it on a machine that already
 has Bivy just applies the latest build and restarts the service.
 

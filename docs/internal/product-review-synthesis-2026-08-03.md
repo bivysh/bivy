@@ -43,7 +43,7 @@ Together they imply that Bivy should first become a trustworthy product around i
 
 4. **Breadth is now a support and simplicity tax.** Nineteen agents, several execution modes, multiple auth owners, persistent and ephemeral machines, integrations, automation, replication, and self-hosting make Bivy look like several products. The catalog is an advantage only if the default path is narrow and every visible option is honestly tiered and certified.
 
-5. **Activation should end with value, not installation.** Setup currently mixes local execution with remote-account enrollment and leaves model authentication for later. A green setup result is not meaningful until a selected runtime can answer on a selected repo. Local CLI use should require no account; hosted or self-hosted remote access should be a clear opt-in upgrade.
+5. **Activation should end with value, not installation.** Setup leaves model authentication for later, and a green setup result is not meaningful until a selected runtime can answer on a selected repo. Remote (hosted or self-hosted) enrollment stays required: remotely visible, steerable sessions are what Bivy adds over a bare local CLI, so an account-free local-only path is explicitly out of scope.
 
 6. **Attention and outcomes—not chat alone—are the product center.** A customer wants to leave work running, know when it needs help, and understand what happened. The Inbox is the right foundation. The next missing layer is deterministic outcome status, checks, changes, cost, policy decisions, and recovery without reading an entire transcript.
 
@@ -92,6 +92,8 @@ A first session should expose at most four decisions:
 4. **Protection** — show a customer-language preset and the actual runtime enforcement below it.
 
 Setup is complete only after doctor checks pass and the user receives a useful first response. PWA installation, notifications, integrations, automation, more agents, ephemeral runners, rulesets, replication, and self-hosting come after first value.
+
+**Decision (2026-08-03, supersedes the earlier account-free-local direction; see decision record D-003):** remote enrollment stays **required**. Remotely visible, steerable sessions are what Bivy adds over a bare local CLI, so an account-free "Local CLI only" setup mode is explicitly out of scope. The `bivy setup` remote-access prompt therefore offers only **Bivy Cloud remote** and **self-hosted remote**. Self-hosting is the account-free path: pointing at your own control plane and relay (via the wizard's self-hosted choice, or by setting `BIVY_CONTROL_PLANE_URL` / `BIVY_RELAY_URL`, which default setup to self-hosted) means a Bivy Cloud account is never mandatory — consistent with `CORE.md`.
 
 ### Progressive power
 
@@ -153,7 +155,7 @@ Horizons are indicative. Advance on exit criteria, not dates.
 
 **Goal:** a new individual developer gets a useful response in under ten minutes and can safely walk away.
 
-1. Implement explicit **Local CLI**, **Bivy Cloud remote**, and **self-hosted remote** setup paths; require no account for Local CLI.
+1. Implement explicit **Bivy Cloud remote** and **self-hosted remote** setup paths; remote enrollment stays required because remote visibility and steerability are what Bivy adds over a bare CLI.
 2. Build one resumable setup checklist shared by CLI and app: install → node online → repo → runtime/provider auth → doctor → starter task.
 3. Validate credentials rather than checking only presence; route failures directly to the correct auth owner.
 4. Simplify the first composer to one context line and one recommended agent/model pairing.

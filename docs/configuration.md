@@ -294,8 +294,8 @@ The hosted endpoints all derive from one domain, so you normally set nothing.
 | Variable | Type | Default | Status |
 | --- | --- | --- | --- |
 | `BIVY_HOSTED_DOMAIN` | domain | `bivy.sh` | Supported — re-points all three derived URLs at once (self-host/staging) |
-| `BIVY_CONTROL_PLANE_URL` | URL | `https://app.<domain>` | Supported |
-| `BIVY_RELAY_URL` | `ws(s)://` URL | `wss://relay.<domain>` | Supported. **Overrides the value in `relay.json`** |
+| `BIVY_CONTROL_PLANE_URL` | URL | `https://app.<domain>` | Supported. Setting this (or `BIVY_RELAY_URL`) makes `bivy setup` default the remote-access prompt to **self-hosted** and pre-fills this URL |
+| `BIVY_RELAY_URL` | `ws(s)://` URL | `wss://relay.<domain>` | Supported. **Overrides the value in `relay.json`**. Setting this (or `BIVY_CONTROL_PLANE_URL`) makes `bivy setup` default to **self-hosted** and pre-fills this URL |
 | `BIVY_CLIENT_BASE_URL` | URL | the resolved control-plane URL | Supported — where the web app is served |
 | `BIVY_RELAY_TOKEN` | token | `relay.json`'s `enrollmentToken` | Supported. If neither a URL nor a token resolves, the relay stays off |
 | `BIVY_EMAIL` | email | unset | Supported — non-interactive `bivy relay:setup` |

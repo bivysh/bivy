@@ -20,7 +20,7 @@ Cloud may provide:
 
 Cloud must not require uploading workspace files, transcripts, prompts, tool output, plaintext model credentials, GitHub repo tokens, or local secrets to the control plane. The node remains the data plane; Cloud coordinates metadata and routing.
 
-Paid entitlement checks belong in hosted/account features. They must not prevent local-only Core usage or self-hosted deployments from operating.
+Paid entitlement checks belong in hosted/account features. They must not prevent self-hosted Core deployments from operating.
 
 Repository boundary: Bivy Core, plus the baseline self-hostable relay and control plane, are source-available under FSL-1.1-ALv2 in this repository. Bivy-operated production infrastructure, secrets, support tooling, private commercial overlays, and any managed compute/inference service live in a separate private Cloud repository.
 
