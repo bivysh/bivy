@@ -46,6 +46,14 @@ export interface ForkRecord {
   source?: string;
   title?: string;
   model?: string;
+  /**
+   * The source session's sandbox tier (a `SandboxTier` string). Carried so a
+   * fork of a sandboxed session lands sandboxed too, rather than silently
+   * defaulting to the destination node's tier. Typed loosely to keep this
+   * runtime-agnostic module free of the harness dependency; the server
+   * normalizes it back to a `SandboxTier` before use.
+   */
+  sandbox?: string;
 }
 
 /** Uncommitted working-tree changes carried alongside the transcript. */

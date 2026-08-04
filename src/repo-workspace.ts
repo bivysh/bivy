@@ -181,6 +181,25 @@ export async function resolveBranchBaseRef(repoDir: string, branch: string): Pro
 }
 
 /**
+ * Base ref for ADOPTING a source branch onto a fresh clone on another node (a
+ * cross-node fork). Prefers the pushed `origin/<branch>` so the source's
+ * committed work travels; falls back to the repo's default branch when the
+ * source branch was never pushed (best-effort — any uncommitted work still
+ * arrives via the fork's dirty patch). Fetches first so `origin/<branch>` is
+ * current. Contrast with `resolveBranchBaseRef`, which is user-facing and throws
+ * on a missing branch; a fork must degrade rather than fail.
+ */
+export async function resolveAdoptBaseRef(repoDir: string, branch: string): Promise<string> {
+  await fetchOrigin(repoDir);
+  try {
+    await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `origin/${branch}`], { cwd: repoDir });
+    return `origin/${branch}`;
+  } catch {
+    return resolveDefaultBaseRef(repoDir);
+  }
+}
+
+/**
  * Whether an existing Bivy-owned checkout at `dest` can be reused as-is, i.e. it
  * has a `.git` entry AND `git rev-parse` accepts it as a real repository. A
  * `.git` can survive an interrupted/corrupt clone, so presence alone is not

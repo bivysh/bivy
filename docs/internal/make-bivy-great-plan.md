@@ -91,35 +91,47 @@ separate entry point and is untouched.
 
 ---
 
-## Phase 2 — Forking reliability (self-contained; highest bug-value)
+## Phase 2 — Forking reliability (self-contained; highest bug-value) — SHIPPED
 
-Forking throws "strange errors all the time." Root causes found in
-`src/session/fork.ts`, `fork-dirty.ts`, `src/worktree.ts`, and `standUpFork`
-(`server.ts`), none of which have integration coverage:
+Forking threw "strange errors all the time." Root causes were in
+`src/session/fork.ts`, `fork-dirty.ts`, `src/repo-workspace.ts`, `src/worktree.ts`,
+and `standUpFork` (`server.ts`). All six are fixed, with integration coverage
+added (`test/fork-standup.test.ts`, plus new cases in `test/fork-dirty.test.ts`
+and `test/fork-transport.test.ts`):
 
-1. **Unavailable target agent throws before the friendly path.** `standUpFork`
-   calls `getRuntime()` (`host.ts:74`) *before* the blocking-prereq check, so a
-   fork to an agent not installed on the destination surfaces a raw string with
-   an empty `missing[]` instead of the install checklist. → Move/guard `getRuntime`
-   after prereq detection.
-2. **Cross-node "adopt" branches off the wrong base and loses committed work.**
-   `createWorktree({ base: undefined })` resolves to the destination's default
-   branch and never consults `origin/<srcBranch>`; the fork also never pushes the
-   source branch. → Push source before export (or `git worktree add … origin/<b>`),
-   and prefer `origin/<branch>` when the local branch is absent.
-3. **`applyDirtyPatch` is unguarded** (`server.ts`) and throws on any hunk
-   mismatch (frequent, given #2). → wrap + `git apply --3way`, degrade to a warning.
-4. **Client import timeout (180s) < server clone timeout (600s)** → the client
-   errors while the server keeps working, orphaning a session. → raise the client
-   timeout above the clone, or stream progress / provision async.
-5. **Worktree path/branch collisions** `rmSync` a path that may belong to a live
-   session; no per-repo lock around clone+worktree. → serialize per repo; unique
-   suffix even in adopt mode; never delete a live session's tree.
-6. **Sandbox tier isn't carried in `ForkRecord`** → a sandboxed source can fork
-   into an unsandboxed session. → carry the tier.
-
-Ship with integration tests for all three fork paths (local, cross-agent,
-cross-node), including unpushed-branch, non-applying patch, and unavailable-agent.
+1. **Unavailable target agent threw before the friendly path.** `standUpFork`
+   resolved the runtime with `getRuntime()` (→ `RuntimeHost.get` → `resolveRuntimeId`,
+   which *throws* for a known-but-not-installed agent) *before* the blocking-prereq
+   check, surfacing a raw string with an empty `missing[]` instead of the install
+   checklist. → **Fixed:** prereq detection now reads availability + display name
+   from the runtime *registry* (`listRuntimes()`, which never throws); `getRuntime`
+   is resolved only after the blocking check passes. An unknown id is treated as
+   unavailable so it, too, degrades to the checklist.
+2. **Cross-node "adopt" branched off the wrong base and lost committed work.**
+   Adopt mode passed `base: undefined` → the destination's default branch, never
+   consulting `origin/<srcBranch>`, and nothing pushed the source branch.
+   → **Fixed:** new `resolveAdoptBaseRef()` fetches and prefers the pushed
+   `origin/<branch>` (falling back to the default when absent), and the export
+   handler best-effort pushes the source branch on a *cross-node* fork
+   (`pushForkSourceBranch`, gated on the new `crossNode` export flag) so committed
+   work travels via origin.
+3. **`applyDirtyPatch` was unguarded** and threw on any hunk mismatch (frequent,
+   given #2), taking the whole fork down. → **Fixed:** it now returns a result
+   (never throws), retries with `git apply --3way` (reading the exit status via
+   `spawnSync` to tell "landed with conflict markers" from "nothing applied"),
+   and the destination surfaces a `session.notice` when WIP didn't apply cleanly.
+4. **Client import timeout (180s) < server clone timeout (600s)** orphaned a
+   session while the server kept cloning. → **Fixed:** client fork import/local
+   timeouts raised to `FORK_IMPORT_TIMEOUT_MS` (660s > the 600s clone cap).
+5. **Worktree path/branch collisions.** `createWorktree`'s adopt-path `rmSync`
+   could clear a live session's tree, and nothing serialized clone+worktree work
+   per repo. → **Fixed:** a per-repo async mutex (`withRepoLock`) serializes the
+   worktree ops, and adopt now uses a unique worktree *directory* id (keeping the
+   branch name), so a fork never reuses/deletes another session's tree.
+6. **Sandbox tier wasn't carried in `ForkRecord`** → a sandboxed source could
+   fork into an unsandboxed session. → **Fixed:** `ForkRecord.sandbox` is captured
+   on export and threaded into both `getRuntime()` launch flags and
+   `createSession({ sandbox })` on the destination.
 
 ## Phase 3 — Faster model list on agent switch (self-contained)
 

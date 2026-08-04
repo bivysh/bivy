@@ -180,6 +180,11 @@ const FIRST_RUN_MODEL_AUTH_GRACE_MS = 8000;
  *  from scratch (1–3 min), but bounded so a self-destructed machine doesn't leave
  *  the session spinning "Reconnecting…" forever. */
 const RUNNER_BOOT_TIMEOUT_MS = 4 * 60 * 1000;
+// A fork IMPORT can clone a fresh repo on the destination node, and the node's
+// clone step allows up to 600s (repo-workspace.ts). The client timeout must sit
+// ABOVE that, or it rejects "Fork request timed out" while the node is still
+// cloning — orphaning a session that then materializes with no client waiting.
+const FORK_IMPORT_TIMEOUT_MS = 11 * 60 * 1000; // 660s > server's 600s clone cap
 
 /**
  * Same rule as the legacy client: a same-origin/loopback node (or explicit
@@ -1144,7 +1149,7 @@ export class AppController {
     if (!crossNode && !crossAgent) {
       const doneEvent = await this.forkRequest(
         { kind: "session.fork.local", sessionId: sourceSessionId, ...(opts.model ? { model: opts.model } : {}) },
-        180000,
+        FORK_IMPORT_TIMEOUT_MS,
       );
       const newSessionId = String((doneEvent as { sessionId?: unknown }).sessionId || "");
       if (!newSessionId) throw new Error("Local fork returned no session id");
@@ -1159,9 +1164,11 @@ export class AppController {
 
     // 1. Export the bundle from the source node (current transport). Pass the
     //    chosen agent so the source can drop the native transcript payload when
-    //    the fork targets a different runtime that could never replay it.
+    //    the fork targets a different runtime that could never replay it, and
+    //    flag a cross-node fork so the source publishes its branch (a same-node
+    //    cross-agent fork adopts the local branch and needs no push).
     const exportEvent = await this.forkRequest(
-      { kind: "session.fork.export", sessionId: sourceSessionId, ...(targetAgentId ? { agent: targetAgentId } : {}) },
+      { kind: "session.fork.export", sessionId: sourceSessionId, ...(targetAgentId ? { agent: targetAgentId } : {}), ...(crossNode ? { crossNode: true } : {}) },
       60000,
     );
     const bundle = (exportEvent as { bundle?: unknown }).bundle;
@@ -1185,7 +1192,7 @@ export class AppController {
       sameNode: !crossNode,
       ...(targetAgentId ? { agent: targetAgentId } : {}),
       ...(opts.model ? { model: opts.model } : {}),
-    }, 180000);
+    }, FORK_IMPORT_TIMEOUT_MS);
     const newSessionId = String((doneEvent as { sessionId?: unknown }).sessionId || "");
     const actualAgentId = String((doneEvent as { runtimeId?: unknown }).runtimeId || "");
     if (targetAgentId && actualAgentId && actualAgentId !== targetAgentId) {
