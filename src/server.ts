@@ -117,6 +117,7 @@ import { normalizeMessages } from "./session/transcript-normal.js";
 import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog } from "./session/event-log.js";
 import { revertFile } from "./session/revert-file.js";
+import { buildDiagnosticsReport, activationRecord } from "./diagnostics.js";
 import { AttachmentStore, isValidAttachmentHash, type AttachmentRef } from "./session/attachment-store.js";
 import { planAttachment, isAttachPlanError, MAX_AGENT_ATTACHMENT_BYTES } from "./session/attach-to-chat.js";
 import {
@@ -8816,6 +8817,34 @@ function sandboxInfo() {
     tier: sandboxTier(),
   };
 }
+
+// Redacted diagnostics bundle (B4d) — a shareable support export with no secrets,
+// prompts, transcripts, diffs, or repo content: versions, health counters, a
+// whitelisted set of config flags, and the activation stage record.
+app.get("/api/diagnostics", (_req, res) => {
+  const relayConfig = loadRelayConfig(appDir);
+  const selectedRuntimeId = active?.runtimeId ?? defaultRuntimeId;
+  const runtimeInfo = runtimeList(selectedRuntimeId).find((runtime) => runtime.id === selectedRuntimeId);
+  const report = buildDiagnosticsReport({
+    version: currentVersion() ?? undefined,
+    platform: process.platform,
+    nodeVersion: process.version,
+    relayConfigured: Boolean(relayConfig),
+    health: {
+      sessionsOpen: new Set(openSessions.values()).size,
+      sessionsIndexed: metadata.listSessions().length,
+      enforcementLevel: runtimeInfo?.protectionLevel ?? "user-permissions",
+      approvalMode,
+      relayConnected: Boolean(relay?.connected),
+    },
+    env: process.env as Record<string, string | undefined>,
+    // The node knows it is online and which runtime is selectable; the client's
+    // setup readiness fills the rest. This baseline still records the golden path.
+    activation: activationRecord({ nodeOnline: true, runtimeReady: Boolean(runtimeInfo) }),
+    generatedAt: new Date().toISOString(),
+  });
+  res.json(report);
+});
 
 app.get("/api/status", (_req, res) => {
   const relayConfig = loadRelayConfig(appDir);

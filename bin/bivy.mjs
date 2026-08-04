@@ -1549,7 +1549,7 @@ function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
     "run", "sessions", "ls", "resume", "promote", "rename", "nodes", "agents", "agents:install", "shim", "takeover", "token", "exec",
-    "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "logs", "login",
+    "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "logs", "login",
     "update", "update:log", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
@@ -3565,9 +3565,34 @@ async function cmdStatus(args = []) {
 
 // `bivy doctor` — one health screen: runtime deps, node reachability, model auth,
 // remote/relay, and agents on PATH.
+// `bivy diagnostics [--out <file>]` — fetch the node's redacted diagnostics
+// bundle (versions, health counters, whitelisted config, activation record — no
+// secrets/prompts/transcripts) and print it, or write it to a file to attach to a
+// support request. See src/diagnostics.ts for exactly what is (and isn't) included.
+async function cmdDiagnostics(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log('Usage: bivy diagnostics [--out <file>]\n\nPrint a redacted, shareable diagnostics bundle (no secrets, prompts, transcripts, or repo content). --out writes it to a file instead of stdout.');
+    return;
+  }
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  let report;
+  try { report = await localApi(config, "/api/diagnostics"); }
+  catch (error) { console.error(c.red(`Could not fetch diagnostics: ${error?.message || String(error)}`)); process.exit(1); return; }
+  const json = JSON.stringify(report, null, 2);
+  const outIdx = args.indexOf("--out");
+  const out = outIdx >= 0 && outIdx + 1 < args.length ? args[outIdx + 1] : undefined;
+  if (out) {
+    fs.writeFileSync(out, json + "\n");
+    console.log(c.green(`Wrote redacted diagnostics to ${out}`));
+  } else {
+    console.log(json);
+  }
+}
+
 async function cmdDoctor(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy doctor\n\nHealth check: runtime deps, node reachability, model auth, remote/relay, and agents on PATH. Exits non-zero if Node is unsupported or the node is unreachable, so it can gate CI/monitoring.");
+    console.log("Usage: bivy doctor\n\nHealth check: runtime deps, node reachability, model auth, remote/relay, and agents on PATH. Exits non-zero if Node is unsupported or the node is unreachable, so it can gate CI/monitoring. See also 'bivy diagnostics' for a shareable redacted bundle.");
     return;
   }
   if (!(await ensureDeps())) process.exit(1);
@@ -4291,6 +4316,9 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "doctor":
       await cmdDoctor(args);
+      break;
+    case "diagnostics":
+      await cmdDiagnostics(args);
       break;
     case "logs":
       await cmdLogs(args);

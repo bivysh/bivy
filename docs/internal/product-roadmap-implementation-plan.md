@@ -92,7 +92,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 - [ ] Add axe, keyboard/focus, light/dark visual, service-worker update, and reconnect tests.
 - [x] Add long-transcript and initial-bundle budgets.
 - [x] Eliminate React hook warnings and fail CI on new production warnings.
-- [ ] Add a redacted diagnostics export and privacy-safe activation stage/failure instrumentation.
+- [x] Add a redacted diagnostics export and privacy-safe activation stage/failure instrumentation.
 
 ## Workstream C — Phase 2: trustworthy, reviewable outcomes
 
