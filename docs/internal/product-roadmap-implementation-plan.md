@@ -89,7 +89,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 ### B4. UI quality and diagnostics
 
 - [x] Add critical Playwright flows at desktop/mobile widths to CI.
-- [ ] Add axe, keyboard/focus, light/dark visual, service-worker update, and reconnect tests.
+- [x] Add axe, keyboard/focus, light/dark visual, service-worker update, and reconnect tests.
 - [x] Add long-transcript and initial-bundle budgets.
 - [x] Eliminate React hook warnings and fail CI on new production warnings.
 - [x] Add a redacted diagnostics export and privacy-safe activation stage/failure instrumentation.
