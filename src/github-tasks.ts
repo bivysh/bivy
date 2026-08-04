@@ -390,10 +390,26 @@ export async function openPullRequest(
   cfg: GitHubTaskConfig,
   input: { head: string; base: string; title: string; body: string },
 ): Promise<{ url: string; number: number } | undefined> {
+  // Idempotent across retry/reclaim (C4a). Creating a PR is an external effect
+  // that must not duplicate when the same item is retried on this node or
+  // reclaimed by another. A PR for this head may already exist — from a prior
+  // attempt or the agent's own `gh pr create` — so reuse it instead of POSTing
+  // blindly (GitHub 422s "a pull request already exists", which the old code
+  // reported as failure, silently losing the PR reference).
+  const branch = input.head.includes(":") ? input.head.slice(input.head.indexOf(":") + 1) : input.head;
+  const existing = await findOpenPullRequestForBranch(cfg, branch);
+  if (existing) return existing;
+
   const res = await gh(cfg, "POST", "/pulls", input);
-  if (!res.ok) return undefined;
-  const data = (await res.json().catch(() => ({}))) as { html_url?: string; number?: number };
-  return data.html_url ? { url: data.html_url, number: Number(data.number) } : undefined;
+  if (res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { html_url?: string; number?: number };
+    return data.html_url ? { url: data.html_url, number: Number(data.number) } : undefined;
+  }
+  // 422 = a PR for this head/base already exists (opened concurrently, e.g. by a
+  // node that reclaimed the item mid-flight). Recover its reference rather than
+  // reporting failure and re-attempting.
+  if (res.status === 422) return findOpenPullRequestForBranch(cfg, branch);
+  return undefined;
 }
 
 /**

@@ -25,6 +25,7 @@ import {
   issueBranchName,
   pickMergedPr,
   updatePullRequest,
+  openPullRequest,
   parsePrContent,
   branchDiff,
   mergeBaseIntoBranch,
@@ -571,6 +572,60 @@ checkAsync("branchDiff: shows the branch's own additions over base", async () =>
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/** Route fetch by method+path so openPullRequest's lookup and create can return
+ *  different things. Records every call for assertions. */
+function stubGithubRoutes(routes: (url: string, method: string) => { status: number; body?: unknown }) {
+  const calls: Array<{ url: string; method: string; body: unknown }> = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: { method?: string; body?: string }) => {
+    const method = init?.method ?? "GET";
+    calls.push({ url, method, body: init?.body ? JSON.parse(init.body) : undefined });
+    const { status, body } = routes(url, method);
+    return { ok: status >= 200 && status < 300, status, json: async () => body ?? {}, text: async () => "" } as Response;
+  }) as typeof fetch;
+  return { calls, restore: () => { globalThis.fetch = original; } };
+}
+
+checkAsync("C4a: openPullRequest reuses an existing open PR instead of creating a duplicate", async () => {
+  const existing = [{ html_url: "https://github.com/petter/bivy/pull/9", number: 9 }];
+  const s = stubGithubRoutes((url, method) => {
+    if (method === "GET" && url.includes("/pulls?state=open")) return { status: 200, body: existing };
+    if (method === "POST" && url.endsWith("/pulls")) return { status: 201, body: { html_url: "SHOULD-NOT-CREATE", number: 99 } };
+    return { status: 404 };
+  });
+  const pr = await openPullRequest(labelCfg, { head: "bivy/issue-1", base: "main", title: "t", body: "b" });
+  assert.deepEqual(pr, { url: "https://github.com/petter/bivy/pull/9", number: 9 });
+  assert.equal(s.calls.filter((c) => c.method === "POST").length, 0, "must not POST /pulls when one already exists");
+  s.restore();
+});
+
+checkAsync("C4a: openPullRequest recovers the PR ref when create 422s (already exists)", async () => {
+  let created = false;
+  const s = stubGithubRoutes((url, method) => {
+    if (method === "GET" && url.includes("/pulls?state=open")) {
+      // First lookup: none. After the 422, the PR is discoverable.
+      return created ? { status: 200, body: [{ html_url: "https://github.com/petter/bivy/pull/12", number: 12 }] } : { status: 200, body: [] };
+    }
+    if (method === "POST" && url.endsWith("/pulls")) { created = true; return { status: 422, body: { message: "A pull request already exists" } }; }
+    return { status: 404 };
+  });
+  const pr = await openPullRequest(labelCfg, { head: "bivy/issue-2", base: "main", title: "t", body: "b" });
+  assert.deepEqual(pr, { url: "https://github.com/petter/bivy/pull/12", number: 12 }, "422 must resolve to the existing PR, not undefined");
+  s.restore();
+});
+
+checkAsync("C4a: openPullRequest still creates when none exists", async () => {
+  const s = stubGithubRoutes((url, method) => {
+    if (method === "GET" && url.includes("/pulls?state=open")) return { status: 200, body: [] };
+    if (method === "POST" && url.endsWith("/pulls")) return { status: 201, body: { html_url: "https://github.com/petter/bivy/pull/3", number: 3 } };
+    return { status: 404 };
+  });
+  const pr = await openPullRequest(labelCfg, { head: "bivy/issue-3", base: "main", title: "t", body: "b" });
+  assert.deepEqual(pr, { url: "https://github.com/petter/bivy/pull/3", number: 3 });
+  assert.equal(s.calls.filter((c) => c.method === "POST").length, 1);
+  s.restore();
 });
 
 await runAsyncChecks();
