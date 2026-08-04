@@ -73,7 +73,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 ### B2. Progressive disclosure
 
-- [ ] Reduce first-session context to machine, repo, agent/model, and protection.
+- [x] Reduce first-session context to machine, repo, agent/model, and protection.
 - [x] Hide filters and advanced catalog entries until they are useful.
 - [x] Reorganize Settings around Models & agents, Machines, Integrations, Automation & policy, App, and Account.
 - [x] Make Settings search include field names and common synonyms.

@@ -6,6 +6,7 @@ import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
 import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
+import { firstSessionSummary } from "../firstSession.js";
 import { FollowupQueue } from "./FollowupQueue.js";
 import { SANDBOX_TIERS } from "./Settings.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
@@ -483,8 +484,28 @@ export function Composer({
   const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (node default)";
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
 
+  // B2 — a first session exposes exactly four decisions: machine, repo,
+  // agent/model, protection. On a draft we render a single explicit summary of
+  // them (the machine otherwise lives only in the topbar switcher), so a new user
+  // sees the whole decision set at a glance rather than inferring it from pills.
+  const machineLabel = state.nodes.find((n) => n.id === state.currentNodeId)?.name
+    || (controller.direct ? "This node" : "Default node");
+  const firstSessionLine = firstSessionSummary({
+    machine: machineLabel,
+    repo: state.draftRepo || "No repo",
+    agent: state.currentAgentName || "Agent",
+    model: modelLabel,
+    modelManagedByAgent: !modelSelectable,
+    protection: sandboxLabel || state.draftSandbox || undefined,
+  });
+
   return (
     <>
+      {isDraft && (
+        <div className="composer-first-session" title="A first session decides just four things: machine, repository, agent/model, and protection.">
+          Starting on <span className="fs-decisions">{firstSessionLine}</span>
+        </div>
+      )}
       {isDraft && (
         <div className="composer-lead">
           <button type="button" className="pill repo-pill" onClick={() => setPicker("repo")} title={repoTitle}>

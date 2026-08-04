@@ -1315,6 +1315,10 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .run-sheet-recovery { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .run-sheet-recovery .btn.small { padding: 4px 12px; font-size: 12px; }
 
+/* First-session decision summary (B2): the four decisions a new session makes. */
+.composer-first-session { font-size: 11px; color: var(--muted); padding: 2px 4px 4px; }
+.composer-first-session .fs-decisions { color: var(--fg); }
+
 /* Review surface (C3): state badges, checks strip, view-mode toggle, file tree,
    per-file actions, and the split (side-by-side) diff layout. */
 .changes-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
