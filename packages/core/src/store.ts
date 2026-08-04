@@ -920,6 +920,12 @@ export class SessionStore {
    *  last-used *agent* is restored imperatively by the controller, since that
    *  requires a runtime.select round-trip — see maybeRestoreDraftAgent.) */
   private draftModel: { provider?: string; id: string } | null = null;
+  /** Last model list seen per runtime, so switching an agent back to one already
+   *  viewed this session repaints its models instantly instead of blanking to a
+   *  loading state while the node's fresh models.list round-trips. Populated by
+   *  the models.list reducer; read by setSelectedAgentLocal. A pure client-side
+   *  cache — the node's fresh list still overwrites it (stale-while-revalidate). */
+  private modelsByRuntime = new Map<string, { models: ModelInfo[]; currentModel: ModelInfo | null }>();
   /**
    * The single source of truth for optimistic user sends, keyed by
    * clientMessageId (cmid). One entry per prompt the user sent from this client,
@@ -1808,17 +1814,28 @@ export class SessionStore {
   setSelectedAgentLocal(id: string): void {
     const rt = this.state.runtimes.find((a) => a.id === id);
     const next: Partial<AppState> = { selectedAgentId: id, currentAgentName: agentLabel(rt) || this.state.currentAgentName };
-    // Drop the outgoing agent's models the instant the pick is made — otherwise
-    // the model pill/picker keep showing that agent's models (e.g. Codex's GPT)
-    // in the window before this agent's models.list refresh (driven by the
-    // node's runtime.updated → listModels) lands. Only when we *know* the held
-    // list is for a different runtime; a null (unknown) id is left for the
-    // refresh to overwrite so we don't needlessly blank a still-valid pill.
+    // Only touch the model list when the held one belongs to a *different*
+    // runtime; a null (unknown) id is left for the refresh to overwrite so we
+    // don't needlessly blank a still-valid pill.
     if (this.state.modelsRuntimeId != null && this.state.modelsRuntimeId !== id) {
-      next.models = [];
-      next.modelsRuntimeId = null;
-      next.currentModel = null;
-      next.currentModelId = null;
+      const cached = this.modelsByRuntime.get(id);
+      if (cached) {
+        // Switching back to an agent already viewed this session: repaint its
+        // last-known models instantly so the pill/picker never flash empty. The
+        // node's fresh models.list still refines this (stale-while-revalidate).
+        next.models = cached.models;
+        next.modelsRuntimeId = id;
+        next.currentModel = cached.currentModel;
+        next.currentModelId = cached.currentModel?.id ?? null;
+      } else {
+        // First switch to this agent — drop the outgoing agent's models so the
+        // pill/picker don't keep showing them (e.g. Codex's GPT under Claude) in
+        // the window before this agent's models.list refresh lands.
+        next.models = [];
+        next.modelsRuntimeId = null;
+        next.currentModel = null;
+        next.currentModelId = null;
+      }
     }
     this.set(next);
   }
@@ -2361,11 +2378,16 @@ export class SessionStore {
           const stillValid = configuredModels.find((m) => sameModel(m, this.state.currentModel));
           current = flagged ?? stillValid ?? configuredModels[0]!;
         }
+        const listRuntimeId = e.runtimeId != null ? String(e.runtimeId) : null;
+        // Remember this runtime's list so a later switch back to it repaints
+        // instantly (see setSelectedAgentLocal). Keyed by the runtime the node
+        // resolved the list for, never the app's currently-selected agent.
+        if (listRuntimeId) this.modelsByRuntime.set(listRuntimeId, { models, currentModel: current });
         this.set({
           models,
           // The runtime this list was resolved for (undefined from an older node
           // → null "unknown", which seedDraftAgentModel treats as "trust it").
-          modelsRuntimeId: e.runtimeId != null ? String(e.runtimeId) : null,
+          modelsRuntimeId: listRuntimeId,
           currentModel: current,
           currentModelId: current?.id ?? null,
           ...(e.thinking ? { thinking: normalizeThinking(e.thinking) } : {}),

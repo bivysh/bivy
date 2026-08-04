@@ -42,6 +42,10 @@ export interface Command extends CommandBase {
     | "session.checkpoints"
     | "session.question.answer"
     | "models.list"
+    // Warm the per-runtime model-query scratch for the given `runtimeIds` so the
+    // first agent switch to any of them lists models instantly. Fire-and-forget
+    // (no reply); sent when the agent picker opens.
+    | "models.prefetch"
     | "model.select"
     | "thinking.set_level"
     | "runtimes.list"

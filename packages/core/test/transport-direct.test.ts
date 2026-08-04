@@ -89,4 +89,42 @@ describe("DirectTransport", () => {
     expect(events).toEqual([]);
     expect(statuses).toContain("online");
   });
+
+  it("forwards the models.list runtime hint as a query param", async () => {
+    FakeWS.instances.length = 0;
+    const fetchCalls: string[] = [];
+    const transport = new DirectTransport({
+      origin: "http://node.local",
+      tokenStore: mem({ bivy_local_token: "token" }),
+      fetchImpl: okFetch(fetchCalls),
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      handlers: { onEvent: () => {}, onStatus: () => {} },
+    });
+    await transport.connect();
+    FakeWS.instances[0].open();
+    await tick();
+    fetchCalls.length = 0;
+
+    await transport.send({ kind: "models.list", runtimeId: "codex" });
+    expect(fetchCalls.some((u) => u.includes("/api/models?") && u.includes("runtimeId=codex"))).toBe(true);
+  });
+
+  it("routes models.prefetch to the prefetch endpoint (no session/runtime query)", async () => {
+    FakeWS.instances.length = 0;
+    const fetchCalls: string[] = [];
+    const transport = new DirectTransport({
+      origin: "http://node.local",
+      tokenStore: mem({ bivy_local_token: "token" }),
+      fetchImpl: okFetch(fetchCalls),
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      handlers: { onEvent: () => {}, onStatus: () => {} },
+    });
+    await transport.connect();
+    FakeWS.instances[0].open();
+    await tick();
+    fetchCalls.length = 0;
+
+    await transport.send({ kind: "models.prefetch", runtimeIds: ["claude", "codex"] });
+    expect(fetchCalls.some((u) => u.endsWith("/api/models/prefetch"))).toBe(true);
+  });
 });

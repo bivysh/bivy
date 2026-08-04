@@ -133,22 +133,43 @@ and `test/fork-transport.test.ts`):
    on export and threaded into both `getRuntime()` launch flags and
    `createSession({ sandbox })` on the destination.
 
-## Phase 3 — Faster model list on agent switch (self-contained)
+## Phase 3 — Faster model list on agent switch (self-contained) — SHIPPED
 
-Switching agent spins up a **fresh networked Pi `ModelRuntime` + full agent
-session just to answer `models.list`**, and only one scratch session is cached
-(`sessionForModelQuery`, `server.ts`), so every switch re-spawns
-(`pi.ts` `build()` with `allowModelNetwork:true`). Fixes, cheapest first:
+Switching agent spun up a **fresh networked Pi `ModelRuntime` + full agent
+session just to answer `models.list`**, and only one scratch session was cached
+(`sessionForModelQuery`, `server.ts`), so every switch re-spawned
+(`pi.ts` `build()` with `allowModelNetwork:true`). Fixed via a stale-while-
+revalidate design that keeps the **real** `getModels()` path authoritative (so
+no offline model-resolution reimplementation to drift out of sync):
 
-1. Answer `models.list` immediately from the offline `listCatalog()` fast-path
-   (`allowModelNetwork:false`, reads `models.json`), then refine with the live
-   session's `getModels()` — stale-while-revalidate, the pattern `RepoPicker`
-   already uses.
-2. Client per-runtime model cache: stop clearing `state.models` on switch; paint
-   the last-known list while refreshing.
-3. Cache scratch sessions per runtime (`Map<runtimeId, SessionRecord>`), and
-   prefetch installed runtimes on picker open.
-4. Collapse the triple `getAvailable()` in `publicModelsList`.
+1. **Per-runtime scratch cache (server).** `modelQueryScratch` /
+   `…Pending` became `Map<runtimeId, …>` and `sessionForModelQuery(runtimeId?)`
+   reuses/creates one warm scratch **per runtime**, passing the id through to
+   `createSession`. Switching Claude → Codex → Claude no longer evicts+re-spawns
+   the single slot; the switch-back answers from the still-live session.
+2. **Per-runtime model cache (client).** `SessionStore.modelsByRuntime` remembers
+   each runtime's last list; `setSelectedAgentLocal` repaints the target runtime's
+   cached models **instantly** on switch-back instead of blanking to a loading
+   state (first-ever switch to an agent still blanks, as before). The node's fresh
+   `models.list` still overwrites — stale-while-revalidate.
+3. **Prefetch on picker open.** A new fire-and-forget `models.prefetch`
+   command / `POST /api/models/prefetch` warms every installed runtime's scratch
+   **serially** (not a concurrent burst — gentle on small nodes) when the agent
+   picker opens (`AgentPicker`), so the first user-visible switch is usually warm.
+4. **Runtime-hinted draft queries.** `models.list` (WS + `/api/models`) accepts an
+   optional `runtimeId`; the composer sends the agent it's previewing on a draft,
+   so the node answers for that runtime even if its default hasn't flipped yet.
+
+Verified: node + web + core typecheck, lint (0 errors), 411 core tests
+(+3: per-runtime repaint, runtime-hint forwarding, prefetch routing), 172 unit
+suites, web build. *Deviation from the original sketch:* the offline
+`listCatalog()` fast-path (item 1 of the old plan) was **not** used to synthesize
+the draft list — deriving "connected" providers offline from the vault diverges
+from the live `getModels()` path for env-/OAuth-/subscription-based creds (would
+mislabel a connected provider as "connect me"). The warm-scratch cache + prefetch
+reaches the same "instant switch" outcome without that correctness risk.
+*Caveat:* the per-runtime warm-up and prefetch were exercised via the client/
+transport tests and the reasoning above, not a live multi-agent node.
 
 ## Phase 4 — Top-tier agents + slash completeness (Claude, Codex, Pi, opencode)
 

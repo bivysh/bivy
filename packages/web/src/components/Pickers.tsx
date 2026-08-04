@@ -341,6 +341,10 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   useEffect(() => {
     controller.listRuntimes();
+    // Warm each agent's model list in the background so the first switch lists
+    // models instantly instead of waiting on a runtime spin-up (no-op on a live
+    // session, whose agent is fixed).
+    controller.prefetchModels();
   }, []);
   const runtimes = useMemo(() => {
     const query = q.trim().toLowerCase();

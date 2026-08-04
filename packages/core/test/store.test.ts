@@ -1880,6 +1880,46 @@ describe("SessionStore", () => {
     expect(store.getState().currentModel).toBeNull();
     expect(store.getState().models).toEqual([]);
   });
+
+  it("repaints a previously-viewed agent's models instantly on switch back (per-runtime cache)", () => {
+    // Faster model switch (Phase 3): switching back to an agent already listed
+    // this session must NOT blank to a loading state — the store repaints that
+    // runtime's last-known models immediately while the node's fresh list
+    // refreshes in the background.
+    const store = new SessionStore();
+    store.apply({
+      type: "runtimes.list",
+      current: { id: "codex", displayName: "Codex", current: true },
+      runtimes: [
+        { id: "codex", displayName: "Codex", current: true },
+        { id: "claude", displayName: "Claude Code" },
+      ],
+    });
+    // View Claude first so its list is cached.
+    store.setSelectedAgentLocal("claude");
+    store.apply({
+      type: "models.list",
+      runtimeId: "claude",
+      current: { id: "sonnet", provider: "anthropic" },
+      models: [{ id: "opus", provider: "anthropic" }, { id: "sonnet", provider: "anthropic" }],
+    });
+    // Switch to Codex (never viewed) → blanks, as before.
+    store.setSelectedAgentLocal("codex");
+    expect(store.getState().models).toEqual([]);
+    expect(store.getState().currentModel).toBeNull();
+    store.apply({
+      type: "models.list",
+      runtimeId: "codex",
+      current: { id: "gpt-5", provider: "openai" },
+      models: [{ id: "gpt-5", provider: "openai", current: true }],
+    });
+    // Switch back to Claude → its cached list repaints at once (no blank), with
+    // the runtime tag flipped and the remembered current model restored.
+    store.setSelectedAgentLocal("claude");
+    expect(store.getState().modelsRuntimeId).toBe("claude");
+    expect(store.getState().models.map((m) => m.id)).toEqual(["opus", "sonnet"]);
+    expect(store.getState().currentModel?.id).toBe("sonnet");
+  });
 });
 
 describe("session.auth_required → sign-in prompt", () => {

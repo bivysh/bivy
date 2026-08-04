@@ -391,8 +391,16 @@ export class DirectTransport implements Transport {
         case "models.list":
           this.emitMerged(
             "models.list",
-            await this.directApi(`/api/models?${new URLSearchParams(obj.sessionId ? { sessionId: String(obj.sessionId) } : {})}`),
+            await this.directApi(`/api/models?${new URLSearchParams({
+              ...(obj.sessionId ? { sessionId: String(obj.sessionId) } : {}),
+              ...(obj.runtimeId ? { runtimeId: String(obj.runtimeId) } : {}),
+            })}`),
           );
+          break;
+        case "models.prefetch":
+          // Fire-and-forget: warm the node's per-runtime scratch so the first
+          // agent switch lists models instantly. No event to emit.
+          await this.directApi("/api/models/prefetch", { method: "POST", body: JSON.stringify({ runtimeIds: obj.runtimeIds }) });
           break;
         case "model.select":
           await this.directApi("/api/models/select", { method: "POST", body: JSON.stringify(obj) });

@@ -1879,8 +1879,26 @@ export class AppController {
   }
 
   listModels(): void {
-    const sessionId = this.store.getState().activeSessionId ?? undefined;
-    this.send({ kind: "models.list", sessionId });
+    const s = this.store.getState();
+    const sessionId = s.activeSessionId ?? undefined;
+    // On a draft, hint the agent we're previewing so the node answers for THAT
+    // runtime (and tags the reply for the per-runtime cache) even if its default
+    // runtime hasn't flipped yet. A live session answers for itself — no hint.
+    const runtimeId = sessionId ? undefined : (s.selectedAgentId ?? undefined);
+    this.send({ kind: "models.list", sessionId, runtimeId });
+  }
+
+  /** Warm the node's per-runtime model scratch for every installed agent when the
+   *  agent picker opens, so the first switch to any of them lists models instantly
+   *  instead of paying the runtime spin-up on the critical path. No-op once a
+   *  session is live (its agent is fixed) or when no runtimes are known yet. */
+  prefetchModels(): void {
+    if (this.store.getState().activeSessionId) return;
+    const runtimeIds = this.store
+      .getState()
+      .runtimes.filter((r) => String((r as any).status || "available") === "available")
+      .map((r) => r.id);
+    if (runtimeIds.length) this.send({ kind: "models.prefetch", runtimeIds });
   }
 
   /** Pick a model. Live session → select now; draft → keep local for session.new. */
