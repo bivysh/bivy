@@ -183,7 +183,16 @@ export function writeCodexRollout(
   const stamp = iso.replace(/[:.]/g, "-").replace(/Z$/, "");
   const file = path.join(dir, `rollout-${stamp}-${id}.jsonl`);
   const records: unknown[] = [
-    { type: "session_meta", timestamp: iso, payload: { id, timestamp: iso, cwd, cli_version: "bivy-fork" } },
+    // Codex's SessionMeta parser requires `originator`. Without it the first
+    // record is discarded as malformed; `thread/resume` then reaches the first
+    // response_item and fails with "does not start with session metadata".
+    // Keep both ids: current Codex accepts legacy `id`-only records, but writing
+    // the canonical `session_id` makes the synthetic rollout valid directly.
+    {
+      type: "session_meta",
+      timestamp: iso,
+      payload: { session_id: id, id, timestamp: iso, cwd, originator: "bivy", cli_version: "bivy-fork" },
+    },
     ...history.map((message) => ({
       type: "response_item",
       timestamp: iso,
