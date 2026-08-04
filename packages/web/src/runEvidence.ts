@@ -8,7 +8,7 @@
 // docs/automation-runs.md. Everything here is read-only projection over that
 // already-sanitized record; it never reaches for a prompt/transcript/diff.
 
-import type { GithubQueueItem } from "@bivy/core";
+import { deriveRunOutcome, type GithubQueueItem } from "@bivy/core";
 
 /** sessionId → its run evidence. Only a claimed-or-later run carries
  *  `output.sessionId`, so pending items simply don't appear (nothing to join
@@ -84,6 +84,31 @@ export function artifactRef(item: GithubQueueItem): ArtifactRef | null {
   if (out.branch) return { label: `branch ${out.branch}` };
   if (out.commit) return { label: `commit ${out.commit.slice(0, 12)}` };
   return null;
+}
+
+export type RecoveryKind = "fix" | "retry" | "fork";
+
+/** The names of the checks that failed, for a "fix" prompt that tells the agent
+ *  exactly what to repair rather than a vague "something failed". */
+export function failingCheckNames(item: GithubQueueItem): string[] {
+  return (item.checks ?? []).filter((c) => c.status === "failed").map((c) => c.name);
+}
+
+/**
+ * Which recovery actions to offer for a run (C2). Derived from the durable
+ * outcome, NOT the agent's own prose: a run whose deterministic checks failed
+ * offers fix + retry + fork even if the agent narrated success. A reviewable
+ * success offers fork (iterate on it); a non-terminal or nothing-to-review run
+ * offers none.
+ */
+export function recoveryActions(item: GithubQueueItem): RecoveryKind[] {
+  const outcome = deriveRunOutcome(item);
+  if (!outcome.terminal) return [];
+  if (outcome.kind === "checks_failed" || outcome.kind === "agent_failed" || outcome.kind === "timed_out") {
+    return ["fix", "retry", "fork"];
+  }
+  if (outcome.reviewable) return ["fork"];
+  return [];
 }
 
 export interface RowHint {

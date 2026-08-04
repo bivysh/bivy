@@ -1311,6 +1311,9 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
    a dashed border + hourglass reads as "paused, not consuming compute". */
 .chip.outcome-kind-waiting { border-style: dashed; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
 .chip.outcome-kind-waiting::before { content: "⏳ "; }
+/* Recovery actions (C2): fix / retry / fork buttons on a terminal run's sheet. */
+.run-sheet-recovery { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.run-sheet-recovery .btn.small { padding: 4px 12px; font-size: 12px; }
 
 /* Run evidence / outcome reports (issue #153). */
 .evidence-list { display: flex; flex-direction: column; gap: 8px; }

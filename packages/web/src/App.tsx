@@ -16,7 +16,7 @@ import { SessionMenu } from "./components/SessionMenu.js";
 import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
 import { classifySource } from "./sessionSource.js";
-import { indexRunEvidence } from "./runEvidence.js";
+import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { ChangesCard } from "./components/ChangesCard.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
@@ -596,6 +596,24 @@ export function App() {
               finishedAt={activeSession.finishedAt}
               usage={state.usage}
               forkedFrom={activeForkedFrom}
+              onRecover={(kind) => {
+                // C2: recover a terminal run using existing capabilities. fix/retry
+                // send a targeted prompt to this session; fork branches it off.
+                const sid = activeSession.sessionId;
+                const ev = runEvidence.get(sid);
+                const failed = ev ? failingCheckNames(ev) : [];
+                if (kind === "fork") { void controller.forkSession(sid); return; }
+                if (kind === "fix") {
+                  controller.sendPrompt(failed.length
+                    ? `The deterministic checks failed (${failed.join(", ")}). Please investigate the failures and fix them, then confirm the checks pass.`
+                    : "This run did not finish cleanly. Please investigate what went wrong and fix it.");
+                  return;
+                }
+                // retry
+                controller.sendPrompt(failed.length
+                  ? `Please re-run the ${failed.join(", ")} check(s) and address anything that still fails.`
+                  : "Please re-run the project checks and address anything that fails.");
+              }}
             />
           ) : (
             <GithubPill gh={state.github} />

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { GithubQueueItem } from "../packages/core/src/account.js";
-import { checkCounts, runDuration, retryReason, artifactRef } from "../packages/web/src/runEvidence.js";
+import { checkCounts, runDuration, retryReason, artifactRef, recoveryActions, failingCheckNames } from "../packages/web/src/runEvidence.js";
 
 // The outcome-detail surface (C1) derives duration, checks, retry path, and the
 // artifact from the already-sanitized run evidence. These are the pure projections
@@ -48,6 +48,30 @@ check("artifactRef prefers PR, then artifactUrl, then branch, then commit", () =
   assert.deepEqual(artifactRef(base({ output: { artifactUrl: "https://x/a.zip" } })), { label: "Artifact", url: "https://x/a.zip" });
   assert.deepEqual(artifactRef(base({ output: { branch: "bivy/work" } })), { label: "branch bivy/work" });
   assert.deepEqual(artifactRef(base({ output: { commit: "abcdef1234567890" } })), { label: "commit abcdef123456" });
+});
+
+check("failingCheckNames lists only the failed checks", () => {
+  assert.deepEqual(failingCheckNames(base({ checks: [
+    { name: "test", status: "failed" }, { name: "lint", status: "passed" }, { name: "typecheck", status: "failed" },
+  ] })), ["test", "typecheck"]);
+  assert.deepEqual(failingCheckNames(base({})), []);
+});
+
+check("recoveryActions offers fix/retry/fork on failure — independent of agent prose", () => {
+  // A failed check yields fix+retry+fork EVEN when the run 'succeeded' and the
+  // agent narrated success — the durable check status drives it, not the prose.
+  assert.deepEqual(
+    recoveryActions(base({ status: "succeeded", output: { prUrl: "https://x/pr/1" }, checks: [{ name: "test", status: "failed" }], events: [{ at: "1", kind: "completed", summary: "All done, everything passing!" }] })),
+    ["fix", "retry", "fork"],
+  );
+  // A genuine agent failure and a timeout also offer full recovery.
+  assert.deepEqual(recoveryActions(base({ status: "failed", output: { failure: "runtime exited" } })), ["fix", "retry", "fork"]);
+  assert.deepEqual(recoveryActions(base({ status: "failed", output: { failure: "Agent turn timed out after 60 minutes" } })), ["fix", "retry", "fork"]);
+  // A reviewable success offers fork only (iterate on it).
+  assert.deepEqual(recoveryActions(base({ status: "succeeded", output: { prUrl: "https://x/pr/1" } })), ["fork"]);
+  // Non-terminal and nothing-to-review runs offer nothing.
+  assert.deepEqual(recoveryActions(base({ status: "running" })), []);
+  assert.deepEqual(recoveryActions(base({ status: "cancelled" })), []);
 });
 
 if (failures > 0) { console.error(`\n${failures} run-evidence test(s) failed`); process.exit(1); }

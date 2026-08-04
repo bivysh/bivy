@@ -108,7 +108,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 - [x] Allow automations to declare bounded required checks.
 - [x] Run checks after the turn under explicit timeout/output limits.
 - [x] Store only privacy-safe check metadata in hosted evidence.
-- [ ] Mark checks failed independently of agent prose and offer retry/fix/fork actions.
+- [x] Mark checks failed independently of agent prose and offer retry/fix/fork actions.
 
 ### C3. Review surface
 
