@@ -67,7 +67,7 @@ The source reviews are snapshots, not an authoritative defect list. Every work i
 
 - [x] Offer explicit Bivy Cloud remote and self-hosted remote modes; remote enrollment stays required.
 - [x] Make setup resumable and report a checklist of node, runtime, credential, repo, and first-task readiness.
-- [ ] Validate model access rather than credential presence alone where a safe provider probe exists.
+- [x] Validate model access rather than credential presence alone where a safe provider probe exists.
 - [x] Do not print setup success as equivalent to agent readiness.
 - [x] Provide a low-risk starter task and direct remediation for each failed stage.
 
