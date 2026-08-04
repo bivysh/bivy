@@ -41,7 +41,21 @@ import { ensureCodexAuth } from "./codex-auth.js";
 import { parserFactoryFor } from "./cli-parsers.js";
 import { sandboxTier, sandboxArgsFor, codexSandboxPolicy, type SandboxTier } from "../harness/sandbox.js";
 import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv, type ProtocolRuntimeOptions } from "./protocol.js";
+import { codexSlashCommands, opencodeSlashCommands, type SlashCommandProvider } from "./slash-commands.js";
 import type { AgentRuntime, AttachToChatFn, RuntimeCapabilities } from "./types.js";
+
+/**
+ * On-disk slash commands (custom prompts/commands) for the CLI agents that keep
+ * them as markdown on the node — Codex's `$CODEX_HOME/prompts`, opencode's
+ * global + project `command` dirs. Populates their composer menu and makes an
+ * invoked `/name` actually run (see SlashCommandProvider). Any other agent has no
+ * such directory convention, so it returns undefined (no agent-native commands).
+ */
+function cliSlashCommands(id: string): SlashCommandProvider | undefined {
+  if (id === "codex") return codexSlashCommands();
+  if (id === "opencode") return opencodeSlashCommands();
+  return undefined;
+}
 
 export * from "./types.js";
 export { NodeCredentialResolver, createCredentialStore } from "./credentials.js";
@@ -1184,6 +1198,11 @@ function codexApprovalsInfo(): RuntimeInfo {
       packages: false,
       fork: false,
       sessionDiscovery: true,
+      // getUsage() returns the shim's real token/cost snapshot, and `codex resume
+      // <id>` reopens the thread in Codex's TUI — advertise both so the catalog
+      // (and the pre-session picker) match what the session actually backs.
+      usageReporting: true,
+      interactiveTui: installed,
       // The governed/resumable Codex variant is the one that owns native
       // discovery+adoption (issue #156) — not the plain exec runtime below —
       // so an adopted session gets per-tool approvals from the moment it's
@@ -1295,7 +1314,12 @@ function codexAppServerRuntime(credsDir: string, tier?: SandboxTier): AgentRunti
         ],
       },
     ],
-    capabilities: { toolInterception: true, modelSelection: true, resume: true, nativeSessionDiscovery: true, nativeSessionAdoption: true },
+    // usageReporting: ProtocolSession.getUsage() already returns the shim's real
+    // token/cost snapshot — advertise it so the catalog matches what's backed.
+    // interactiveTui: `codex resume <rolloutId>` reopens the exact thread in
+    // Codex's own TUI (the same verified command as native discovery/takeover),
+    // gated on the codex binary being present — mirrors Claude's interactiveTui.
+    capabilities: { toolInterception: true, modelSelection: true, resume: true, usageReporting: true, interactiveTui: commandAvailable("codex"), nativeSessionDiscovery: true, nativeSessionAdoption: true },
     // Resume: the shim reconnects a prior thread via thread/resume by its rollout
     // id, and history preloads from the same on-disk rollout the exec path reads —
     // so takeover/reopen continues a governed session. (Validated on codex-cli
@@ -1312,6 +1336,15 @@ function codexAppServerRuntime(credsDir: string, tier?: SandboxTier): AgentRunti
     // Bivy didn't start, so a pre-existing `codex` session can be adopted here
     // (the governed variant), never the plain exec runtime below.
     discoverNativeSessions: () => discoverNativeCodexSessions(),
+    // Codex custom prompts ($CODEX_HOME/prompts/*.md) → composer slash menu; an
+    // invoked one is expanded and sent as the turn (the app-server doesn't expand
+    // /prompt names itself). resolveCodexHome() matches the prepare'd CODEX_HOME.
+    slashCommands: codexSlashCommands(),
+    // "Continue in terminal": resume this exact thread in Codex's TUI by its
+    // rollout id. `codex resume <id>` is the same command native discovery and
+    // takeover already use (server.ts RESUME/NATIVE_RESUME maps); `env` carries
+    // the minted CODEX_HOME so the TUI reads the same auth.json chat did.
+    interactiveTui: ({ sessionRef, env }) => (sessionRef ? { command: "codex", args: ["resume", sessionRef], env } : null),
   });
 }
 
@@ -1334,6 +1367,7 @@ function acpShimPath(): string {
  * ACP promotion path so both wrap agents identically.
  */
 function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string }): ProtocolRuntimeOptions {
+  const slashCommands = cliSlashCommands(opts.id);
   return {
     id: opts.id,
     displayName: opts.displayName,
@@ -1343,6 +1377,9 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
     // the FIRST session (before the shim's hello lands); the hello confirms them.
     capabilities: { toolInterception: true, resume: true },
     resumable: true,
+    // An ACP-promoted opencode still surfaces/expands its on-disk commands (the
+    // ACP handshake doesn't carry them); a bare ACP agent has none.
+    ...(slashCommands ? { slashCommands } : {}),
     ...(opts.credsDir ? { credentials: createCredentialStore(opts.credsDir) } : {}),
   };
 }
@@ -1848,5 +1885,5 @@ function makeCliRuntime(id: CliAgentId, options: RuntimeFactoryOptions): AgentRu
                 ),
             }
           : {};
-      return new ProcessRuntime({ id, displayName: spec.displayName, command: spec.command, args: runArgs, promptMode: spec.promptMode, credentials: createCredentialStore(options.credsDir), parserFactory: parserFactoryFor(parserId), preflight, prepare, model: cliModelConfig(id), thinking: cliThinkingConfig(id), usageReporting: cliUsageReporting(id), ...resumeOpts });
+      return new ProcessRuntime({ id, displayName: spec.displayName, command: spec.command, args: runArgs, promptMode: spec.promptMode, credentials: createCredentialStore(options.credsDir), parserFactory: parserFactoryFor(parserId), preflight, prepare, model: cliModelConfig(id), thinking: cliThinkingConfig(id), usageReporting: cliUsageReporting(id), slashCommands: cliSlashCommands(id), ...resumeOpts });
 }

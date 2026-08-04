@@ -65,7 +65,7 @@ import { commandLaunch } from "./command-launch.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
 import { createWorktree, removeWorktree, branchSlug, gitRepoRoot, type Worktree } from "./worktree.js";
 import { HarnessManager } from "./harness/manager.js";
-import { startEgressProxyIfEnabled } from "./harness/egress.js";
+import { startEgressProxyIfEnabled, applySessionSandboxEgress, stopSessionEgress } from "./harness/egress.js";
 import { initSharedDepCache, sharedDepCacheRoot } from "./harness/dep-cache.js";
 import { evictToCap, dirSizeBytes } from "./harness/cache-evict.js";
 import { checkDiskAdmission } from "./harness/disk-admission.js";
@@ -5415,6 +5415,54 @@ async function resolveTokenForRepo(owner: string, repo: string): Promise<string 
   return (await resolveGitHubToken()) ?? (await hostedMintToken());
 }
 
+/** The session source a Linear-issue pickup advertises, keyed by the issue's
+ *  provider-native id so the control plane can correlate a re-dispatch to it
+ *  (findSessionByExternalId → "linear:<externalId>"). The Linear analogue of the
+ *  GitHub `issue:owner/repo#N` source. */
+function linearSessionSource(externalId: string): string {
+  return `linear:${externalId}`;
+}
+
+/**
+ * Case B for a queued follow-up the control plane correlated to an existing
+ * session (`targetKind === "existing_session"`): if that session is still live on
+ * this node, continue it as a normal chat — run `prompt` as a follow-up turn and
+ * re-publish its branch/PR — so a channel reply lands in the same thread. The
+ * provider-agnostic analogue of the GitHub issue follow-up (`runIssueFollowUp`);
+ * used by both the Linear and the generic (Slack) pickup paths. When the session
+ * isn't live here (its machine was torn down), best-effort restore its snapshot so
+ * the caller's fresh pickup continues its branch/transcript instead of cold-
+ * starting, and return false so the caller falls through. Returns true only when
+ * it fully handled the item.
+ */
+async function continueCorrelatedSession(
+  item: ControlPlaneWorkItem,
+  prompt: string,
+  report: (patch: EvidencePatch) => Promise<void>,
+): Promise<boolean> {
+  if (item.targetKind !== "existing_session" || !item.targetSessionId) return false;
+  const record = openSessions.get(item.targetSessionId);
+  if (!record) {
+    await restoreSessionFromSnapshot(item.targetSessionId).catch((e) =>
+      console.warn(`[case-b] snapshot restore for ${item.targetSessionId} failed:`, (e as Error).message),
+    );
+    return false;
+  }
+  const branch = record.worktree?.branch;
+  await runSessionTurn(record, prompt);
+  if (record.worktree) {
+    await maybePushWorktreeBranch(record);
+    await maybeDetectPullRequest(record);
+  }
+  await report({
+    output: { sessionId: record.id, branch, prUrl: record.prUrl },
+    events: record.prUrl
+      ? [{ at: new Date().toISOString(), kind: "pull_request", summary: "Pull request updated.", ref: branch, url: record.prUrl }]
+      : undefined,
+  });
+  return true;
+}
+
 async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>) {
   if ((item.source === "schedule" || item.source === "manual") && item.body?.startsWith("bivy-room-v1:")) {
     const [, nodeId, ...payload] = item.body.split(":");
@@ -5483,6 +5531,9 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     if (!issue) throw new Error(`Linear issue ${item.externalId} is unavailable`);
     const parsed = parseRepo(repoSlug);
     if (!parsed) throw new Error(`Linear work item has an invalid repo "${repoSlug}"`);
+    // Case B: a re-dispatch the control plane correlated to an existing session
+    // continues it as a normal chat instead of starting cold (mirrors GitHub).
+    if (await continueCorrelatedSession(item, buildLinearTaskPrompt(issue), report)) return;
     const githubToken = await resolveGitHubToken();
     if (!githubToken) throw new Error("no GitHub token available to clone the Linear issue repository");
     const repoDir = await cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token: githubToken, root: reposRoot });
@@ -5492,7 +5543,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     const record = await createSession(repoDir, undefined, {
       worktree: { branch, base },
       makeActive: false,
-      source: "queue:linear:issue",
+      source: linearSessionSource(item.externalId),
       runtimeId: item.runtimeId || nodeConfiguredDefaultAgent(),
       sandbox: normalizeSandboxTier(item.sandbox),
       approvalMode: approvalModeFrom(item.approvalMode),
@@ -5512,6 +5563,12 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // workspace (and gains worktree isolation when that workspace is a checkout).
   const parsedRepo = item.repo ? parseRepo(item.repo) : undefined;
   if (item.repo && !parsedRepo) throw new Error(`work item ${item.id} has an invalid repo "${item.repo}"`);
+  const request = item.body ? `${item.title}\n\n${item.body}` : item.title;
+  // Case B (provider-agnostic): a follow-up the control plane correlated to an
+  // existing session continues it as a normal chat. Reached by Slack the moment a
+  // reply carries a thread identity the control plane can correlate; a one-shot
+  // slash command has none, so it simply falls through to a fresh session.
+  if (await continueCorrelatedSession(item, request, report)) return;
   const sessionOpts = {
     makeActive: false,
     title: item.title,
@@ -5528,7 +5585,6 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
   }
-  const request = item.body ? `${item.title}\n\n${item.body}` : item.title;
   const prompt = parsedRepo || record.worktree
     ? [
         request,
@@ -6970,6 +7026,9 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   sessionEvents.clear(record.id);
   record.session.dispose();
   harness.detach(record.id);
+  // Tear down this session's own egress proxy, if it started one (read-only /
+  // workflow network policy). No-op for the default path.
+  void stopSessionEgress(record.id);
   record.mcpRestore?.();
   openSessions.delete(record.id);
   if (record.sessionFile) openSessions.delete(path.resolve(record.sessionFile));
@@ -8132,6 +8191,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // session legitimately starts "active now".
   const resumedLastActive = requestedSessionFile ? metaLastActiveMs(storedMeta) : undefined;
   const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: opts.approvalMode, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral };
+  // Apply this session's sandbox network policy as a per-session egress proxy
+  // (its own proxy/decider, never the node-global one). Opt-in via BIVY_SANDBOX_NET:
+  // a read-only session then actually blocks outbound network even for a CLI agent
+  // whose own sandbox doesn't (opencode/aider/goose). No-op otherwise. Fire-and-
+  // forget — a slow proxy listen never delays session creation.
+  void applySessionSandboxEgress(record.id, sessionSandbox, (event) => broadcast({ type: "node.egress", event }));
   // Stage 2 slice 4: a re-attached session recovers its still-running TUI
   // terminal link (the PTY survives a detach) from the session→terminal registry.
   if (attached) {

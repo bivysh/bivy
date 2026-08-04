@@ -171,27 +171,78 @@ reaches the same "instant switch" outcome without that correctness risk.
 *Caveat:* the per-runtime warm-up and prefetch were exercised via the client/
 transport tests and the reasoning above, not a live multi-agent node.
 
-## Phase 4 — Top-tier agents + slash completeness (Claude, Codex, Pi, opencode)
+## Phase 4 — Top-tier agents + slash completeness (Claude, Codex, Pi, opencode) — SHIPPED
 
-- Codex/opencode `getCommands()` adapters (see Phase-1 item 3 follow-up).
-- Audit each adapter's model list, streaming/steer behaviours, and TUI handoff on
-  mobile against the `runtime/types.ts` capability surface; close gaps so the four
-  headline agents are first-class in the mobile app.
+**Codex/opencode `getCommands()` adapters.** New `src/runtime/slash-commands.ts`
+sources each agent's custom prompt/command markdown from disk — Codex's
+`$CODEX_HOME/prompts/*.md`, opencode's global `~/.config/opencode/command` +
+project `.opencode/command` (project shadows global) — and exposes them two ways:
+`list()` populates the composer menu (`getCommands()`), and `expand()` makes an
+invoked `/name args` actually *run* by substituting the file body (`$ARGUMENTS`,
+`$1..$9`, unused args appended) and sending THAT as the turn. Codex/opencode only
+expand custom prompts in their interactive TUI, not on the non-interactive
+run/app-server path Bivy drives, so Bivy expands them itself — deterministic and
+verifiable, degrading to the raw slash line on any read failure. Wired into
+`ProcessSession` (opencode) and `ProtocolSession` (codex-approvals + ACP), both of
+which gained `getCommands()` + prompt-expansion, plus `cliSlashCommands()` /
+`codexSlashCommands()` in `index.ts`. +11 tests (`test/slash-commands.test.ts`).
+
+**Mobile capability audit (four headline agents vs `runtime/types.ts`).** No
+dangerous over-claims found (nothing advertised-true that throws). Closed the
+safe, verifiable under-claims for Codex:
+- **"Continue in terminal" now works for Codex.** `ProtocolSession` gained
+  `interactiveTuiCommand()` (via a new `ProtocolRuntimeOptions.interactiveTui`
+  hook); codex-approvals returns `codex resume <rolloutId>` — the same verified
+  command native discovery/takeover already use (`server.ts` RESUME maps) — with
+  the minted `CODEX_HOME` env so the TUI shares chat's auth. `interactiveTui` is
+  advertised gated on the `codex` binary (mirrors Claude).
+- **Codex `usageReporting` advertised** to match its already-real `getUsage()`.
+
+*Deferred with rationale (not shipped — would ship unverifiable external
+behaviour blind):* opencode TUI hand-off (no established `opencode` interactive
+resume-by-id command anywhere in the repo — a wrong command ships a broken
+affordance, worse than the honest hidden state); Codex/Claude reasoning-effort
+pickers on mobile (needs shim `thread/settings/update` reasoning-effort forwarding
+/ an SDK level knob that can't be verified without a live node). Catalog-constant
+vs live-object capability drift (`PI_CAPABILITIES`/`CLAUDE_CAPABILITIES`) is
+cosmetic and left untouched.
 
 ---
 
-## Phase 5 — Integrations as normal chat (GitHub, Linear, Slack)
+## Phase 5 — Integrations as normal chat (GitHub, Linear, Slack) — SHIPPED (Linear; Slack node-ready)
 
 A queued work item already becomes a **fully interactive `SessionRecord`**
 (`server.ts` `runWorkItem`/`createSession`), so the user can keep chatting to it
-in-app. The gap: **only GitHub** routes a later channel reply back into the same
-session (`findIssueSession` → `runIssueFollowUp`). Linear and Slack run one turn
-and stop (`server.ts`), so a follow-up in the originating channel starts fresh.
+in-app. The gap: **only GitHub** routed a later channel reply back into the same
+session (`findSessionByIssue` → `existing_session` target → `runIssueFollowUp`).
+Linear/Slack ran one turn and stopped.
 
-→ Add a `findSession(source)` analog for `queue:linear:issue` and `queue:slack`
-(the control plane already supports `targetKind:"existing_session"` — it's just
-GitHub-gated), so "keep interacting as a normal chat" works from the channel too,
-not only from the app.
+**Linear — end-to-end, mirroring GitHub's Case B:**
+- Control plane: new `findSessionByExternalId(accountId, externalId)` (matches
+  `session_index.source` = `linear:<externalId>`, the Linear analogue of
+  `findSessionByIssue`'s `issue:owner/repo#N`); the Linear webhook now sets
+  `target: existing_session` when a prior session exists (`index.ts`). +2 store
+  tests, and `case-b-targeting.test.ts` is now actually wired into the CI
+  `test:unit` chain (it had been orphaned).
+- Node: a Linear-issue session advertises `linear:<externalId>` as its source
+  (`linearSessionSource()`), so the control plane can correlate a re-dispatch; and
+  `runWorkItem` routes a correlated follow-up through the new
+  `continueCorrelatedSession()` — continue the live session as a normal chat (run
+  the instruction as a follow-up turn, re-publish branch/PR) instead of a cold
+  start; best-effort snapshot-restore + fall through when the session isn't live
+  on this node.
+
+**Slack — node-ready, provider-agnostic:** `continueCorrelatedSession()` is called
+on the generic (Slack) pickup path too, so a Slack reply continues its session the
+moment the reply carries a thread identity the control plane can correlate. *Not
+wired end-to-end here:* a Slack **slash command** (`/bivy …`) is one-shot and has
+no reply-thread, so there's no thread id to correlate — closing that needs a Slack
+**Events API** (message-reply) integration, which wants a live Slack workspace to
+build/verify safely. Documented rather than shipped blind.
+
+*Caveat:* the node-side follow-up routing is verified via typecheck + reasoning and
+the control-plane store/targeting via `case-b-targeting.test.ts` (pg-mem), not a
+live control-plane ↔ relay ↔ Linear round-trip.
 
 ## Phase 6 — Workflow sandbox without colliding with the agent's own sandbox
 
@@ -214,6 +265,36 @@ workflow-level sandbox is added, the collision surfaces to design around are all
 
 → Isolate via the per-session override arg + a per-workflow proxy/decider; never
 touch the process-global knobs.
+
+**SHIPPED — the per-session proxy/decider seam (globals untouched).** The sandbox
+*tier* was already per-session (`sandboxTier(override)`); the missing half was the
+network. `EgressProxy` was already per-instance (its own `decide`) — only the
+*holder* (`egress.ts`) was a node-global singleton with an allow-all decider, and
+its env was injected into every subprocess. Added:
+- **Composable deciders** (`net-proxy.ts`): `allowAllDecider`, `denyAllDecider`,
+  `allowlistDecider(hosts)` (apex + subdomain match) — the building blocks for any
+  per-workflow policy, pure and unit-tested.
+- **Per-session egress registry** (`egress.ts`): `startSessionEgress(id, decide)` /
+  `sessionEgressEnv(id)` / `stopSessionEgress(id)` — a session gets its OWN
+  `EgressProxy` with its OWN decider; the node-global `proxy`/decider and every
+  other session are untouched.
+- **Injection** (`process.ts`): the spawn env prefers `sessionEgressEnv(this.id)`
+  over the global `egressEnv()` — additive, identical to before when a session has
+  no proxy of its own.
+- **A real consumer, opt-in:** `applySessionSandboxEgress(id, tier)` gives a
+  `read-only` session a deny-all per-session proxy so its "no network" contract
+  holds even for a CLI agent whose *own* sandbox doesn't enforce it (opencode,
+  aider, goose) — closing a genuine gap. Gated behind `BIVY_SANDBOX_NET`, so the
+  default path is byte-for-byte unchanged; node-local traffic stays exempt (the
+  proxy env's `NO_PROXY`), so read-only sessions still reach the daemon's MCP/API.
+  Lifecycle tied to `createSession`/`closeSessionRecord`.
+
+Deliberately did **not** touch `BIVY_SANDBOX`/`configuredTier` or the global proxy.
++3 tests in `test/harness-net-proxy.test.ts` (deciders, a real deny-all session
+proxy, the opt-in gate). *Caveat:* verified via unit tests + typecheck, not a live
+multi-session node; the `allowlistDecider` is wired and tested but has no
+control-plane/workflow policy input feeding it yet (the next step for a full
+per-workflow allowlist).
 
 ## Phase 7 — Connect computer to remote app; key & provider OAuth sync — DESIGN DOC + first fix SHIPPED
 
