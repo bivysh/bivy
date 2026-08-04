@@ -1875,6 +1875,16 @@ export class PostgresStore implements MeshStore {
     return rows[0] ? { sessionId: String(rows[0].session_id), nodeId: String(rows[0].node_id) } : undefined;
   }
 
+  async findSessionByExternalId(accountId: string, externalId: string): Promise<{ sessionId: string; nodeId: string } | undefined> {
+    // The node advertises a Linear-issue session with source "linear:<externalId>".
+    const source = `linear:${externalId}`;
+    const { rows } = await this.query(
+      `SELECT session_id, node_id FROM session_index WHERE account_id = $1 AND source = $2 ORDER BY updated_at DESC LIMIT 1`,
+      [accountId, source],
+    );
+    return rows[0] ? { sessionId: String(rows[0].session_id), nodeId: String(rows[0].node_id) } : undefined;
+  }
+
   // --- Inbound hooks + work queue (E2/E4) ------------------------------
 
   async createInboundHook(accountId: string, kind: string): Promise<InboundHook> {

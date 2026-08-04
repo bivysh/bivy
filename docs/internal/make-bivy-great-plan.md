@@ -209,18 +209,40 @@ cosmetic and left untouched.
 
 ---
 
-## Phase 5 — Integrations as normal chat (GitHub, Linear, Slack)
+## Phase 5 — Integrations as normal chat (GitHub, Linear, Slack) — SHIPPED (Linear; Slack node-ready)
 
 A queued work item already becomes a **fully interactive `SessionRecord`**
 (`server.ts` `runWorkItem`/`createSession`), so the user can keep chatting to it
-in-app. The gap: **only GitHub** routes a later channel reply back into the same
-session (`findIssueSession` → `runIssueFollowUp`). Linear and Slack run one turn
-and stop (`server.ts`), so a follow-up in the originating channel starts fresh.
+in-app. The gap: **only GitHub** routed a later channel reply back into the same
+session (`findSessionByIssue` → `existing_session` target → `runIssueFollowUp`).
+Linear/Slack ran one turn and stopped.
 
-→ Add a `findSession(source)` analog for `queue:linear:issue` and `queue:slack`
-(the control plane already supports `targetKind:"existing_session"` — it's just
-GitHub-gated), so "keep interacting as a normal chat" works from the channel too,
-not only from the app.
+**Linear — end-to-end, mirroring GitHub's Case B:**
+- Control plane: new `findSessionByExternalId(accountId, externalId)` (matches
+  `session_index.source` = `linear:<externalId>`, the Linear analogue of
+  `findSessionByIssue`'s `issue:owner/repo#N`); the Linear webhook now sets
+  `target: existing_session` when a prior session exists (`index.ts`). +2 store
+  tests, and `case-b-targeting.test.ts` is now actually wired into the CI
+  `test:unit` chain (it had been orphaned).
+- Node: a Linear-issue session advertises `linear:<externalId>` as its source
+  (`linearSessionSource()`), so the control plane can correlate a re-dispatch; and
+  `runWorkItem` routes a correlated follow-up through the new
+  `continueCorrelatedSession()` — continue the live session as a normal chat (run
+  the instruction as a follow-up turn, re-publish branch/PR) instead of a cold
+  start; best-effort snapshot-restore + fall through when the session isn't live
+  on this node.
+
+**Slack — node-ready, provider-agnostic:** `continueCorrelatedSession()` is called
+on the generic (Slack) pickup path too, so a Slack reply continues its session the
+moment the reply carries a thread identity the control plane can correlate. *Not
+wired end-to-end here:* a Slack **slash command** (`/bivy …`) is one-shot and has
+no reply-thread, so there's no thread id to correlate — closing that needs a Slack
+**Events API** (message-reply) integration, which wants a live Slack workspace to
+build/verify safely. Documented rather than shipped blind.
+
+*Caveat:* the node-side follow-up routing is verified via typecheck + reasoning and
+the control-plane store/targeting via `case-b-targeting.test.ts` (pg-mem), not a
+live control-plane ↔ relay ↔ Linear round-trip.
 
 ## Phase 6 — Workflow sandbox without colliding with the agent's own sandbox
 

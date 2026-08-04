@@ -1100,6 +1100,13 @@ export interface MeshStore {
   // whose node was already torn down is rebuilt via the device send path (Gap 1).
   findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined>;
 
+  // Case B for Linear: find an indexed session for a Linear issue (by its provider-
+  // native id, the same `externalId` the webhook enqueues) so a re-dispatch CONTINUES
+  // it instead of starting fresh — the Linear analogue of findSessionByIssue. Matches
+  // session_index.source ("linear:<externalId>"), the source the node advertises for
+  // a Linear-issue session.
+  findSessionByExternalId(accountId: string, externalId: string): Promise<{ sessionId: string; nodeId: string } | undefined>;
+
   // Gap 3: escrowed session ROOM KEY for HOSTED (device-offline) rebuild. Sealed
   // at rest with the per-account hosted-provisioning key (hosted-crypto), keyed by
   // the reusable eph-* node id, NOT FK-cascaded off nodes so it survives teardown.
