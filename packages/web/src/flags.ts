@@ -9,16 +9,23 @@
 
 /**
  * Ephemeral machines: bring-your-own-cloud, short-lived runners (Fly.io,
- * Hetzner, AWS EC2). This is currently a visible Beta surface. Keep this comment
- * and the flag aligned: changing exposure is a release decision, not dead-code
- * documentation.
+ * Hetzner, AWS EC2). A Beta surface, OFF by default (fail-closed): a built
+ * bundle only exposes it when `VITE_EPHEMERAL_MACHINES_ENABLED=1` is baked in at
+ * build time. Local `vite dev` (import.meta.env.DEV) keeps it on so day-to-day
+ * development isn't gated. Every real deploy is a production build, so it's off
+ * unless that deploy opts in — staging bakes the flag, production omits it.
  *
  * Gates every user-facing entry point: the NodeSwitcher "Ephemeral machine…"
  * menu item, the onboarding "Quick ephemeral server" CTA, the Settings
  * "Ephemeral machines" panel, and the GitHub Queue's ephemeral dispatch/
  * auto-provision options.
+ *
+ * Mirrors the server-side `EPHEMERAL_MACHINES_ENABLED` gate in the control plane
+ * (ephemeral-provisioner planAutoProvision and the /api/ephemeral/exec relay) —
+ * enable both to fully bring the feature online in a given deploy.
  */
-export const EPHEMERAL_MACHINES_ENABLED = true;
+export const EPHEMERAL_MACHINES_ENABLED =
+  import.meta.env.DEV || import.meta.env.VITE_EPHEMERAL_MACHINES_ENABLED === "1";
 
 /**
  * DEBUG: keep a boot-failed ephemeral machine alive instead of letting it
