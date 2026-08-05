@@ -22,31 +22,53 @@ function transcript(n: number) {
   return msgs;
 }
 
-function timeNormalize(n: number): number {
+// Measure CPU time (user + system), NOT wall-clock. This test asserts an
+// algorithmic property (normalization stays ~linear), and on a shared CI runner
+// wall-clock is unreliable for that: when the runner is oversubscribed, other
+// processes steal the core and inflate wall-clock without the code doing more
+// work. process.cpuUsage() counts only time THIS process was on-CPU, so a loaded
+// runner can't skew it — the number reflects actual computation, which is what a
+// scaling check should be about.
+function cpuNormalizeMs(n: number): number {
   const msgs = transcript(n);
-  const start = process.hrtime.bigint();
+  const start = process.cpuUsage();
   const out = normalizeMessages(msgs as never, header);
-  const ms = Number(process.hrtime.bigint() - start) / 1e6;
+  const d = process.cpuUsage(start);
+  const ms = (d.user + d.system) / 1000; // microseconds → milliseconds
   assert.equal(out.turns.length, n, "every message produces a turn");
   return ms;
 }
 
+// The smallest of several runs. Even CPU time carries occasional upward noise (a
+// GC sweep landing inside the measured window), never downward, so the MINIMUM
+// sample is the cleanest estimate of the true cost and keeps the scaling assertion
+// below from flaking.
+function bestNormalizeMs(n: number, reps = 6): number {
+  let best = Infinity;
+  for (let r = 0; r < reps; r++) best = Math.min(best, cpuNormalizeMs(n));
+  return best;
+}
+
 check("normalizes a 20k-message transcript within budget", () => {
   // Warm up the JIT so the measured run reflects steady state, not first-call cost.
-  // Run the warm-up twice; some CI runners are noisy on first JIT.
-  timeNormalize(2000);
-  timeNormalize(2000);
-  const ms = timeNormalize(20_000);
-  // Generous budget for CI runners under load (normal hardware does this in ~10-15ms).
-  assert.ok(ms < 2000, `20k messages normalized in ${ms.toFixed(0)}ms, over the 2000ms budget`);
+  cpuNormalizeMs(2000);
+  cpuNormalizeMs(2000);
+  const ms = bestNormalizeMs(20_000);
+  // Generous budget (CPU time; normal hardware does this in ~10-15ms).
+  assert.ok(ms < 2000, `20k messages normalized in ${ms.toFixed(0)}ms CPU, over the 2000ms budget`);
 });
 
 check("cost stays roughly linear (no superlinear blow-up) as size 4x", () => {
-  timeNormalize(2000); // warm up
-  const small = Math.max(timeNormalize(5_000), 1);
-  const big = timeNormalize(20_000); // 4x the messages
-  // Linear would be ~4x; allow generous slack for noise but catch quadratic (~16x).
-  assert.ok(big / small < 8, `4x the messages took ${(big / small).toFixed(1)}x the time — suspect superlinear scaling`);
+  cpuNormalizeMs(2000); // warm up
+  // Compare PER-MESSAGE cost at two sizes, each measured as the best of several
+  // runs (see bestNormalizeMs). Linear scaling keeps per-message cost ~flat (ratio
+  // ~1); an accidental O(n^2) join/scan makes the 4x-larger input's per-message
+  // cost grow ~4x. The threshold sits well between the two so the check catches a
+  // real quadratic regression without tripping on ordinary CI timing noise.
+  const perSmall = bestNormalizeMs(5_000) / 5_000;
+  const perBig = bestNormalizeMs(20_000) / 20_000; // 4x the messages
+  const growth = perBig / perSmall;
+  assert.ok(growth < 3, `per-message cost grew ${growth.toFixed(1)}x from 5k→20k messages — suspect superlinear scaling`);
 });
 
 if (failures > 0) { console.error(`\n${failures} transcript-budget test(s) failed`); process.exit(1); }
