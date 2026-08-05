@@ -129,6 +129,12 @@ export interface SessionSummary {
   finishedAt?: number;
   /** Content-free unresolved conditions from the account session index. */
   attention?: InboxAdvert[];
+  /** Hosted-trial gate: this session is beyond the account's free lifetime session
+   *  allowance, so the control plane returned it as a content-stripped stub (no
+   *  title/branch/source). The sidebar renders it as a locked "subscribe to view"
+   *  row; it cannot be opened until the account upgrades (or self-hosts). Only ever
+   *  set in relay/hosted mode on a free account past its trial. */
+  locked?: boolean;
 }
 
 export type ToolStatus = "running" | "done";
