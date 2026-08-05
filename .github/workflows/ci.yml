@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: ['pr/**']
   pull_request:
     branches: [main]
   # Lets other workflows call this one to run the exact same gate rather than
@@ -17,10 +15,9 @@ on:
         type: boolean
         default: false
 
-# Cancel superseded runs: a new push to the same branch/PR aborts the previous,
-# still-running CI so we don't pay for jobs' worth of runner time on a commit
-# that's already been replaced. `github.head_ref` groups by PR branch for
-# pull_request events; `github.ref` covers the pr/** push events.
+# Cancel superseded runs: a new push to the same PR aborts the previous,
+# still-running CI so runners are not occupied by a commit that has already been
+# replaced. Reusable release calls are grouped by their ref.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
@@ -29,12 +26,11 @@ permissions:
   contents: read
 
 jobs:
-  # Detect which areas a change actually touches so we only spend runner minutes
-  # on the jobs it can affect. This job is cheap (~15s) and every heavy job below
-  # gates on its outputs — a docs- or workflow-only PR runs nothing but this and
-  # the final `ci-ok` gate. Changing ci.yml itself re-runs everything (the
-  # `common` anchor is folded into every filter) so CI can't disable its own
-  # coverage unnoticed.
+  # Detect which areas a change actually touches so we only run relevant jobs.
+  # Even though standard runners are free for this public repository, filtering
+  # keeps feedback focused and leaves the account's concurrency available for
+  # other PRs. Changing ci.yml itself re-runs everything (the `common` anchor is
+  # folded into every filter) so CI cannot disable its own coverage unnoticed.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -68,8 +64,6 @@ jobs:
               - 'packages/**'
               - 'bin/**'
               - 'test/**'
-              # The release build (scripts/build-release.mjs) is exercised in the
-              # `core` job below, so a change to it must re-run that job.
               - 'scripts/**'
             relay:
               - *common
@@ -92,9 +86,13 @@ jobs:
               - '*.md'
               - 'scripts/check-links.mjs'
 
-  core:
+  # Root checks are split by responsibility. Standard GitHub-hosted runners are
+  # free for this public repository, so running these in parallel gives much
+  # faster feedback without consuming the private-repository minutes allowance.
+  root-security:
     needs: changes
     if: inputs.force_all || needs.changes.outputs.root == 'true'
+    name: Root security + policy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,50 +109,75 @@ jobs:
           undici="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/node_modules/undici/package.json').version")"
           test "$brace" = "5.0.9"
           test "$undici" = "8.9.0"
-      # Production dependencies ship to users; do not release a known
-      # high/critical advisory. `audit:prod` is `npm audit --omit=dev
-      # --audit-level=high` plus a narrow, documented allowlist
-      # (scripts/audit-prod.mjs) for advisories we have reviewed and accepted —
-      # currently the undici pair shrinkwrapped inside pi-coding-agent, which no
-      # override or upstream release can yet move. Any other high/critical still
-      # fails here.
+      # Production dependencies ship to users; do not release an unreviewed
+      # high/critical advisory. audit:prod applies the documented narrow
+      # allowlist in scripts/audit-prod.mjs.
       - run: npm run audit:prod
       - run: npm run check:licenses
-      # Scan the working tree for committed credentials. History is deliberately
-      # excluded here: the public repo starts from a fresh commit, and scanning
-      # every historical patch on each CI run is slow and noisy.
       - run: npm run check:secrets -- --current-only
+
+  root-quality:
+    needs: changes
+    if: inputs.force_all || needs.changes.outputs.root == 'true'
+    name: Root lint + typechecks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      # Typecheck + test the web client packages (@bivy/core / @bivy/web). These
-      # ran only locally before, so the SessionStore suite silently rotted; keep
-      # them in CI so a store/behaviour change can't land red again.
       - run: npm run typecheck:web
+
+  root-tests:
+    needs: changes
+    if: inputs.force_all || needs.changes.outputs.root == 'true'
+    name: Root unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
       - run: npm run test:core
+      # scripts/run-tests.mjs parallelizes independent suites across the runner's
+      # CPUs while serializing suites that use the same fixed port.
       - run: npm run test:unit
-      # Initial-bundle budget (B4b): build the PWA and fail if the entry chunk
-      # grows past its raw/gzip ceiling. The long-transcript budget rides in
-      # test:unit (transcript-budget.test.ts).
+
+  root-builds:
+    needs: changes
+    if: inputs.force_all || needs.changes.outputs.root == 'true'
+    name: Web + release builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
+      # Initial-bundle budget (B4b): fail if the PWA entry chunk grows past its
+      # raw/gzip ceiling. The long-transcript budget runs in test:unit.
       - run: npm run build:web
       - run: node scripts/check-bundle-size.mjs
-      # Exercise the node RELEASE build (what Render runs to publish the tarball
-      # bivy update pulls). Unlike `npm run typecheck` (tsc --noEmit, lenient
-      # rootDir inference), build:release compiles src/ with `tsc --rootDir src`
-      # (emit) and packages the standalone bundle — so a cross-boundary import can
-      # pass typecheck yet break the emit and silently FREEZE the published tarball
-      # (which is exactly what happened for a day). Catch that class here, at PR
-      # time, instead of only in the deploy pipeline.
+      # Exercise the emitted node RELEASE build and curated standalone package,
+      # which catches cross-boundary imports that tsc --noEmit can miss.
       - run: npm run build:release
 
-  # The PWA is a principal product client. Run its browser contract at desktop
-  # and mobile widths in CI instead of relying only on reducer/unit coverage.
+  # The PWA is a principal product client. Playwright parallelizes its test files
+  # and desktop/mobile projects within this runner.
   browser:
     needs: changes
     if: inputs.force_all || needs.changes.outputs.root == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
           cache: npm
@@ -162,9 +185,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
 
-  # Cheap, dependency-free check: no `npm ci` needed since scripts/check-links.mjs
-  # only uses node:fs/node:path. Gated on its own `docs` filter (not `root`) so a
-  # docs-only PR doesn't also pull in the full lint/typecheck/test `core` job.
+  # Cheap, dependency-free check: no npm ci is needed because check-links only
+  # uses node:fs/node:path. Its own filter keeps docs-only feedback fast.
   docs-links:
     needs: changes
     if: inputs.force_all || needs.changes.outputs.docs == 'true'
@@ -176,16 +198,34 @@ jobs:
           node-version: '22.19.0'
       - run: node scripts/check-links.mjs
 
-  # Relay + control-plane share a job: the relay suite already spawns the control
-  # plane as a child process (so it installs control-plane deps anyway), and the
-  # `relay` path filter already fires on control-plane changes. Splitting them
-  # meant a control-plane PR paid two per-job billed minutes for what is one
-  # install's worth of work; folded together it's one. Gated on either area
-  # changing so neither loses coverage.
-  services:
+  # Service checks use separate runners so control-plane verification does not
+  # block relay feedback. The relay suite still installs control-plane because it
+  # spawns that service as a child process for integration coverage.
+  control-plane:
     needs: changes
-    if: inputs.force_all || needs.changes.outputs.relay == 'true' || needs.changes.outputs.control_plane == 'true'
-    name: relay + control-plane
+    if: inputs.force_all || needs.changes.outputs.control_plane == 'true'
+    name: Control plane
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          cache-dependency-path: services/control-plane/package-lock.json
+      - run: npm ci
+        working-directory: services/control-plane
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: services/control-plane
+      - run: npm run typecheck
+        working-directory: services/control-plane
+      - run: npm run test:unit
+        working-directory: services/control-plane
+
+  relay:
+    needs: changes
+    if: inputs.force_all || needs.changes.outputs.relay == 'true'
+    name: Relay
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -198,32 +238,31 @@ jobs:
             services/control-plane/package-lock.json
       - run: npm ci
         working-directory: services/control-plane
-      - run: npm audit --omit=dev --audit-level=high
-        working-directory: services/control-plane
-      - run: npm run typecheck
-        working-directory: services/control-plane
-      - run: npm run test:unit
-        working-directory: services/control-plane
       - run: npm ci
         working-directory: services/relay
       - run: npm audit --omit=dev --audit-level=high
         working-directory: services/relay
       - run: npm run typecheck
         working-directory: services/relay
-      # relay's test:unit (test/e2e.ts, test/entitlements.test.ts) spawns the
-      # control plane installed just above as a child process to test against.
       - run: npm run --if-present test:unit
         working-directory: services/relay
 
-  # Full remote-path and X25519 pairing e2e over the real control plane + relay.
-  # These spawn services/control-plane and services/relay as child processes, so
-  # all three dependency sets must be installed. The heaviest job — gated so it
-  # only runs when the transport/pairing/service code it exercises changes.
+  # Run the independent remote-path and X25519 pairing suites on separate
+  # runners. This duplicates setup but minimizes wall-clock time on public-repo
+  # runners and keeps each suite's service ports isolated.
   remote-e2e:
     needs: changes
     if: inputs.force_all || needs.changes.outputs.e2e == 'true'
-    name: Remote path + pairing e2e
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Remote path e2e
+            script: test/remote-e2e.ts
+          - name: X25519 pairing e2e
+            script: test/remote-pairing-e2e.ts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -235,18 +274,24 @@ jobs:
         working-directory: services/control-plane
       - run: npm ci
         working-directory: services/relay
-      - name: Remote path e2e
-        run: npx tsx test/remote-e2e.ts
-      - name: X25519 pairing e2e
-        run: npx tsx test/remote-pairing-e2e.ts
+      - run: npx tsx ${{ matrix.script }}
 
   # Single gate for branch protection. Always runs, and passes only if no needed
-  # job FAILED or was CANCELLED — a skipped job (its area was untouched) is fine.
-  # Make THIS the required status check so gating individual jobs above never
-  # leaves a required check unreported and blocking the PR.
+  # job failed or was cancelled. A skipped job means its area was untouched and
+  # is expected. Keep this as the sole required status check.
   ci-ok:
     if: ${{ always() }}
-    needs: [changes, core, browser, docs-links, services, remote-e2e]
+    needs:
+      - changes
+      - root-security
+      - root-quality
+      - root-tests
+      - root-builds
+      - browser
+      - docs-links
+      - control-plane
+      - relay
+      - remote-e2e
     runs-on: ubuntu-latest
     steps:
       - name: Verify no required job failed
