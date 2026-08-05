@@ -3343,9 +3343,11 @@ async function cmdSetup(args = []) {
   console.log(`  ${agentReady ? c.green("✓") : c.yellow("!")} runtime ${agentReady ? `${setupAgent?.label || "Pi"} available` : "not installed — run 'bivy agents:install'"}`);
   console.log(`  ${modelReady ? (setupAgent?.needsBivyModel ? c.green("✓") : c.dim("○")) : c.yellow("!")} model ${modelReady ? (setupAgent?.needsBivyModel ? "credential configured" : "agent-managed — verified by the first task") : "not configured — run 'bivy login'"}`);
   console.log(`  ${c.dim("○")} repository chosen from the directory where you start Bivy`);
+  const ghReady = githubConnected(finalConfig);
+  console.log(`  ${ghReady ? c.green("✓") : c.dim("○")} GitHub ${ghReady ? "connected — your repos will list in the app" : c.dim("not connected — 'bivy github:connect' to list repos (optional)")}`);
   console.log(`  ${agentReady && modelReady ? c.green("✓") : c.yellow("!")} first task ${agentReady && modelReady ? "ready to try" : "blocked by the stage above"}`);
   console.log(`  ${fs.existsSync(relayConfigPath) ? c.green("✓") : c.yellow("!")} remote ${fs.existsSync(relayConfigPath) ? "configured" : "not configured — run 'bivy relay:setup'"}\n`);
-  printFirstRunSteps(modelReady);
+  printFirstRunSteps(modelReady, finalConfig);
   await finishSetupRemote(finalConfig, setupSession);
 }
 
@@ -3433,10 +3435,29 @@ async function openRemoteApp(config, { setupSession = null, open = true } = {}) 
   return { relay, remoteBase, accountUrl, pairedUrl, openUrl };
 }
 
-function printFirstRunSteps(modelReady = false) {
+// Whether GitHub is connected for repo listing/cloning. Bivy's own connect flow
+// (`bivy github:connect`, or the app's Connect button) writes BIVY_GITHUB_TOKEN
+// — usually a `secret://` vault reference — into cli.json's env; an explicit env
+// token counts too. A `gh auth login` session also works at runtime (the node
+// falls back to `gh auth token`), but that can't be known without shelling out,
+// so it's treated as "not connected here" — the hint is optional either way.
+function githubConnected(config = null) {
+  const token = String(
+    config?.env?.BIVY_GITHUB_TOKEN || process.env.BIVY_GITHUB_TOKEN || process.env.GITHUB_TOKEN || "",
+  ).trim();
+  return Boolean(token);
+}
+
+function printFirstRunSteps(modelReady = false, config = null) {
   console.log("  Run your first task:");
-  if (!modelReady) console.log(`    1. Model access:   ${c.cyan("bivy login")}  ${c.dim("(for Pi; other agents use their own login)")}`);
-  console.log(`    ${modelReady ? "1" : "2"}. Start chatting: ${c.cyan("bivy")}`);
+  let n = 0;
+  if (!modelReady) console.log(`    ${++n}. Model access:   ${c.cyan("bivy login")}  ${c.dim("(for Pi; other agents use their own login)")}`);
+  // GitHub is optional — "No repo" sessions work without it — so this only shows
+  // when nothing is connected yet, and never blocks the flow.
+  if (!githubConnected(config)) {
+    console.log(`    ${++n}. GitHub ${c.dim("(optional)")}: ${c.cyan("bivy github:connect")}  ${c.dim("— lets the app list your repos; required for private ones")}`);
+  }
+  console.log(`    ${++n}. Start chatting: ${c.cyan("bivy")}`);
   console.log(`       Starter task:  ${c.cyan('bivy exec "explain this repository and identify one low-risk improvement"')}\n`);
 }
 
@@ -3614,6 +3635,17 @@ async function cmdDoctor(args = []) {
   console.log(c.bold("\n  Bivy doctor\n"));
   console.log(`  ${mark(hasSupportedNode())} Node ${process.version}${hasSupportedNode() ? "" : c.dim("  (needs >= 22.19.0)")}`);
   console.log(`  ${mark(commandExists("git"), true)} git${commandExists("git") ? "" : c.dim("  (recommended for repo-backed sessions)")}`);
+  // GitHub is optional (a "No repo" session needs none), so this only ever warns.
+  // `gh` is NOT required — it's a token fallback; the primary path is Bivy's own
+  // 'bivy github:connect' (or the app's Connect button). We surface gh only as an
+  // available shortcut when it's installed but nothing is connected yet.
+  const ghConnected = githubConnected(config);
+  const ghHint = ghConnected
+    ? c.green("connected")
+    : commandExists("gh")
+      ? c.dim("not connected — 'bivy github:connect' (or 'gh auth login')")
+      : c.dim("not connected — 'bivy github:connect' to list/clone private repos");
+  console.log(`  ${mark(ghConnected, true)} GitHub ${ghHint}`);
   console.log(`  ${mark(reachable)} node ${reachable ? c.green("reachable") : c.dim("not reachable — 'bivy start'")} at ${url(config)}`);
   console.log(`  ${mark(/running/.test(serviceStatusLine()), true)} ${serviceStatusLine()}`);
   const defaultAgent = String(config.env?.BIVY_RUNTIME || runtimes?.current?.id || "pi");

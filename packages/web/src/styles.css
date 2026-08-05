@@ -1173,6 +1173,44 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 }
 .picker-list { display: flex; flex-direction: column; gap: 2px; }
 .picker-empty { color: var(--muted); font-size: 13px; padding: 12px 10px; }
+
+/* Actionable "connect GitHub" empty state in the repo picker (see Pickers.tsx
+   RepoConnectPrompt). Reuses the connect-command look at a tighter scale. */
+.repo-connect { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.repo-connect-lead { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; }
+.repo-connect-sub { margin: 0; color: var(--muted); font-size: 12.5px; }
+.repo-connect-command {
+  display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+.repo-connect-command code {
+  flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--ink);
+  scrollbar-width: none;
+}
+.repo-connect-command code::-webkit-scrollbar { display: none; }
+.repo-connect-copy {
+  flex: none; cursor: pointer; padding: 7px 11px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink);
+  font: inherit; font-size: 12px; font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.repo-connect-copy:hover { background: var(--surface-3); }
+.repo-connect-copy.is-copied { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line-strong)); }
+.repo-connect-alt { margin: 0; color: var(--muted); font-size: 12.5px; }
+.repo-connect-alt code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  padding: 1px 5px; border-radius: 5px; background: var(--surface-2); color: var(--ink);
+}
+.repo-connect-note { margin: 2px 0 0; font-size: 12px; }
+/* The device code the user types at github.com/login/device (status "waiting"). */
+.repo-connect-code {
+  align-self: flex-start; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 20px; font-weight: 700; letter-spacing: 3px; color: var(--ink);
+  padding: 8px 14px; border-radius: 10px; border: 1px solid var(--line-strong);
+  background: var(--surface-2); user-select: all;
+}
+.repo-connect-waiting { margin: 0; font-size: 12.5px; }
 .picker-item-row { display: flex; align-items: center; border-radius: 10px; }
 .picker-item-row.active { background: var(--surface-3); }
 .picker-item {

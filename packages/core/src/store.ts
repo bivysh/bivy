@@ -273,6 +273,26 @@ export interface ThinkingState {
   availableThinkingLevels: string[];
 }
 
+/** Why the repo listing came back empty & unauthed. `null` = connected/ok.
+ *  "no-token": nothing connected — steer to `bivy github:connect`.
+ *  "gh-unauthed": the `gh` CLI is installed but logged out — also offer `gh auth login`. */
+export type RepoAuthReason = "no-token" | "gh-unauthed" | null;
+
+/** The repo-picker "Connect GitHub" device flow (Tier 2). `starting` is a local
+ *  optimistic state; the rest come from the node's github.connect.status event.
+ *  `unconfigured` means the node has no device-flow client id — the UI falls
+ *  back to the `bivy github:connect` instructions. */
+export interface GithubConnectState {
+  status: "idle" | "starting" | "waiting" | "connected" | "expired" | "denied" | "error" | "unconfigured";
+  /** Device code the user enters at github.com/login/device (status "waiting"). */
+  userCode?: string;
+  /** Where to enter it. */
+  verificationUri?: string;
+  /** GitHub's poll interval, so the client doesn't hammer the endpoint. */
+  intervalMs?: number;
+  error?: string;
+}
+
 export interface RepoInfo {
   slug: string;
   description?: string;
@@ -621,6 +641,12 @@ export interface AppState {
   reposAuthed: boolean;
   reposError: string | null;
   reposLoading: boolean;
+  /** When the repo list is empty because GitHub isn't connected, WHY — so the
+   *  picker can show an actionable prompt (connect flow, plus a `gh auth login`
+   *  hint when gh is installed-but-logged-out). Null once authed. */
+  reposReason: RepoAuthReason;
+  /** State of the repo-picker "Connect GitHub" device flow (Tier 2). */
+  githubConnect: GithubConnectState;
   /** Repo chosen for the next new session (draft only). */
   draftRepo: string | null;
   /** Remote branches of `draftRepo` (for the adjacent branch pill), and which
@@ -788,6 +814,8 @@ export function initialState(): AppState {
     reposAuthed: true,
     reposError: null,
     reposLoading: false,
+    reposReason: null,
+    githubConnect: { status: "idle" },
     draftRepo: null,
     branches: [],
     branchesRepo: null,
@@ -1034,6 +1062,11 @@ export class SessionStore {
   /** Locally advance the GitHub App flow (used by the client between events). */
   setGithubAppPhase(phase: GithubAppState["phase"], patch: Partial<GithubAppState> = {}): void {
     this.set({ githubApp: { ...(this.state.githubApp || { phase: "idle" }), phase, ...patch } });
+  }
+
+  /** Set the repo-picker Connect-GitHub flow state (optimistic "starting", reset). */
+  setGithubConnect(state: GithubConnectState): void {
+    this.set({ githubConnect: state });
   }
 
   /** The append cursor to echo for a session (empty if we have nothing cached). */
@@ -2514,7 +2547,23 @@ export class SessionStore {
           repos: Array.isArray(e.repos) ? (e.repos as RepoInfo[]) : [],
           reposAuthed: e.authed !== false,
           reposError: e.error || null,
+          reposReason: e.reason === "gh-unauthed" || e.reason === "no-token" ? e.reason : null,
           reposLoading: false,
+        });
+        return;
+      }
+      case "github.connect.status": {
+        const e = event as any;
+        const known = ["waiting", "connected", "expired", "denied", "error", "unconfigured", "idle"] as const;
+        const status = (known as readonly string[]).includes(e.status) ? (e.status as GithubConnectState["status"]) : "idle";
+        this.set({
+          githubConnect: {
+            status,
+            userCode: typeof e.userCode === "string" ? e.userCode : undefined,
+            verificationUri: typeof e.verificationUri === "string" ? e.verificationUri : undefined,
+            intervalMs: typeof e.intervalMs === "number" ? e.intervalMs : undefined,
+            error: typeof e.error === "string" ? e.error : undefined,
+          },
         });
         return;
       }

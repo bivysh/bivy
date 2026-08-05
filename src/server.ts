@@ -72,7 +72,7 @@ import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
 import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
-import { parseRepo, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
+import { parseRepo, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
   GitHubTaskPoller,
@@ -132,6 +132,7 @@ import type { ReplWireFrame } from "./session/replicator.js";
 import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereqInput, type ForkPrereq } from "./session/fork-prereqs.js";
 import { SecretVault, resolveSecret } from "./secrets.js";
+import { deviceFlowClientId, requestDeviceCode, pollAccessTokenOnce, REPO_CONNECT_SCOPE, type DeviceCode } from "./github-device-auth.js";
 import { InstallationTokenCache, createAppJwt, resolveInstallationId, type GitHubAppConfig } from "./github-app-auth.js";
 import {
   loadGitHubAppConfigs,
@@ -3019,6 +3020,15 @@ const RELAY_COMMANDS: Record<string, Command> = {
   },
   async "repos.list"() {
     relay?.sendEvent({ type: "repos.list", ...(await listAccessibleRepos()) });
+  },
+  // Web-driven "Connect GitHub" for the repo picker: start the node's device
+  // flow, then poll it on GitHub's interval. Both answer with the same
+  // `github.connect.status` event so the client has one shape to handle.
+  async "github.connect.start"() {
+    relay?.sendEvent({ type: "github.connect.status", ...(await startGithubConnect()) });
+  },
+  async "github.connect.poll"() {
+    relay?.sendEvent({ type: "github.connect.status", ...(await pollGithubConnect()) });
   },
   // Branches for the repo the composer's repo pill just picked, so the branch
   // pill next to it can offer a specific remote branch to clone/base a new
@@ -10307,6 +10317,11 @@ type RepoListing = {
   authed: boolean;
   repos: { slug: string; description: string; private: boolean; pushedAt?: string; defaultBranch?: string }[];
   error?: string;
+  // Why the list is empty, so the picker can show an ACTIONABLE prompt instead of
+  // a dead-end string. Only set when authed:false (no usable token):
+  //   "no-token"    — nothing connected; steer to `bivy github:connect`.
+  //   "gh-unauthed" — the `gh` CLI is installed but logged out; also offer `gh auth login`.
+  reason?: "no-token" | "gh-unauthed";
 };
 
 type BranchListing = {
@@ -10376,7 +10391,7 @@ async function listAccessibleRepos(): Promise<RepoListing> {
   if (reposCache && Date.now() - reposCache.at < REPO_LIST_TTL_MS) return reposCache.val;
   try {
     const token = await resolveGitHubToken();
-    if (!token) return { authed: false, repos: [] };
+    if (!token) return { authed: false, repos: [], reason: (await ghCliInstalled()) ? "gh-unauthed" : "no-token" };
     const ghRes = await fetch("https://api.github.com/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member", {
       headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "bivy" },
     });
@@ -10398,6 +10413,99 @@ async function listAccessibleRepos(): Promise<RepoListing> {
   } catch (error) {
     return { authed: false, repos: [], error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+// --- Web-driven "Connect GitHub" (repo-scope device flow) ------------------
+// The repo picker's Connect button runs GitHub's device flow ON THIS NODE — the
+// same flow as `bivy github:connect`, so a repo-scoped token lands in the node
+// vault and the picker fills in, with no `gh` and no terminal. The browser
+// drives the cadence: one `github.connect.start`, then `github.connect.poll` on
+// GitHub's interval. A single in-flight flow (a personal, foreground action); a
+// fresh start replaces any stale one.
+type GithubConnectStatus =
+  | { status: "unconfigured" } // BIVY_GITHUB_OAUTH_CLIENT_ID unset — client falls back to the CLI instructions
+  | { status: "waiting"; userCode: string; verificationUri: string; intervalMs: number; expiresInMs: number }
+  | { status: "connected" }
+  | { status: "idle" } // no flow in progress (poll with nothing pending)
+  | { status: "expired" }
+  | { status: "denied" }
+  | { status: "error"; error: string };
+
+let pendingGithubConnect: { clientId: string; device: DeviceCode; expiresAt: number } | null = null;
+
+async function startGithubConnect(): Promise<GithubConnectStatus> {
+  const clientId = deviceFlowClientId();
+  if (!clientId) return { status: "unconfigured" };
+  try {
+    const device = await requestDeviceCode(clientId, REPO_CONNECT_SCOPE);
+    pendingGithubConnect = { clientId, device, expiresAt: Date.now() + device.expiresInSec * 1000 };
+    return {
+      status: "waiting",
+      userCode: device.userCode,
+      verificationUri: device.verificationUri,
+      intervalMs: device.intervalSec * 1000,
+      expiresInMs: device.expiresInSec * 1000,
+    };
+  } catch (error) {
+    return { status: "error", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function pollGithubConnect(): Promise<GithubConnectStatus> {
+  const pending = pendingGithubConnect;
+  if (!pending) return { status: "idle" };
+  if (Date.now() > pending.expiresAt) {
+    pendingGithubConnect = null;
+    return { status: "expired" };
+  }
+  let poll;
+  try {
+    poll = await pollAccessTokenOnce(pending.clientId, pending.device.deviceCode);
+  } catch (error) {
+    // A transient network blip mid-flow — keep the code alive and let the client
+    // poll again rather than discarding a device code the user may have authorized.
+    return { status: "error", error: error instanceof Error ? error.message : String(error) };
+  }
+  switch (poll.status) {
+    case "ok":
+      pendingGithubConnect = null;
+      persistConnectedGithubToken(poll.token);
+      return { status: "connected" };
+    case "slow_down":
+      // GitHub says we're polling too fast — widen the interval it hands the
+      // browser so the next poll backs off (and doesn't burn the device code).
+      pending.device.intervalSec = poll.intervalSec ?? pending.device.intervalSec + 5;
+    // falls through — same "keep waiting" answer, just a larger interval.
+    case "pending":
+      return {
+        status: "waiting",
+        userCode: pending.device.userCode,
+        verificationUri: pending.device.verificationUri,
+        intervalMs: pending.device.intervalSec * 1000,
+        expiresInMs: Math.max(0, pending.expiresAt - Date.now()),
+      };
+    case "denied":
+      pendingGithubConnect = null;
+      return { status: "denied" };
+    case "expired":
+      pendingGithubConnect = null;
+      return { status: "expired" };
+    default:
+      pendingGithubConnect = null;
+      return { status: "error", error: poll.error };
+  }
+}
+
+// Store the repo-scoped token exactly like `bivy github:connect`: the raw token
+// in the node's secret vault, and only a `secret://` reference in cli.json. But
+// ALSO update the LIVE process env so resolveGitHubToken() picks it up without a
+// restart (the Tier-1 caveat), and drop the repo-list cache so the very next
+// list is authed.
+function persistConnectedGithubToken(token: string): void {
+  new SecretVault(appDir).setLocal("github.repo-token", token, "GitHub repo/work-queue token");
+  saveCliEnv({ BIVY_GITHUB_TOKEN: "secret://github.repo-token" });
+  process.env.BIVY_GITHUB_TOKEN = "secret://github.repo-token";
+  invalidateGithubListingCaches();
 }
 
 // Fetch a repo's remote branch names with a given token (or none, for a public
@@ -10817,6 +10925,14 @@ app.get("/github/app/manifest/callback", async (req, res, next) => {
 
 app.get("/api/repos", async (_req, res) => {
   res.json(await listAccessibleRepos());
+});
+
+// Direct-transport (local PWA) equivalents of the github.connect.* commands.
+app.post("/api/github/connect/start", async (_req, res) => {
+  res.json(await startGithubConnect());
+});
+app.get("/api/github/connect/poll", async (_req, res) => {
+  res.json(await pollGithubConnect());
 });
 
 app.get("/api/repos/branches", async (req, res) => {

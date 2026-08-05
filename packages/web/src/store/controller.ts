@@ -1871,6 +1871,27 @@ export class AppController {
     this.send({ kind: "repos.list" });
   }
 
+  /** Begin the repo-picker "Connect GitHub" device flow on the node. The node
+   *  replies with a github.connect.status ("waiting" + a user code, or
+   *  "unconfigured" if it has no device-flow client id). Optimistically flips to
+   *  "starting" so the button shows progress before the round trip. */
+  githubConnectStart(): void {
+    this.store.setGithubConnect({ status: "starting" });
+    this.send({ kind: "github.connect.start" });
+  }
+
+  /** Ask the node whether the user has authorized yet (drives the flow forward).
+   *  The picker calls this on the node-provided interval while status is "waiting". */
+  githubConnectPoll(): void {
+    this.send({ kind: "github.connect.poll" });
+  }
+
+  /** Drop any Connect-GitHub flow state (e.g. on cancel, or after success once
+   *  the repo list has refreshed) so reopening the picker starts clean. */
+  githubConnectReset(): void {
+    this.store.setGithubConnect({ status: "idle" });
+  }
+
   /** Choose a repo for the next new session (persisted for next time). A plain
    *  repo tap PRESERVES an already-chosen branch when it's the same repo — the
    *  branch belongs to it — and only resets the branch/list when the repo

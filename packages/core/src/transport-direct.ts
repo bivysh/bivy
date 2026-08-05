@@ -612,6 +612,12 @@ export class DirectTransport implements Transport {
           await this.directApi("/api/github/app/disconnect", { method: "POST", body: JSON.stringify({ appId: obj.appId }) });
           this.emit({ type: "github.app.disconnected", requestId: String(obj.requestId ?? ""), ok: true });
           break;
+        case "github.connect.start":
+          this.emitMerged("github.connect.status", await this.directApi("/api/github/connect/start", { method: "POST" }));
+          break;
+        case "github.connect.poll":
+          this.emitMerged("github.connect.status", await this.directApi("/api/github/connect/poll"));
+          break;
         case "approval":
           await this.directApi(
             `/api/approvals/${encodeURIComponent(String(obj.id))}/${obj.approved ? "approve" : "reject"}`,

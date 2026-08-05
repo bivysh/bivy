@@ -120,6 +120,25 @@ export async function resolveGitHubToken(env: NodeJS.ProcessEnv = process.env): 
 }
 
 /**
+ * Whether the GitHub CLI (`gh`) is installed on this machine — used only to
+ * shade the "no GitHub token" message: when `gh` is present but `gh auth token`
+ * gave us nothing, the user is one `gh auth login` away, so the picker can say
+ * so. It never means `gh` is REQUIRED — `bivy github:connect` is the primary
+ * path and needs no CLI (see resolveGitHubToken). Mirrors the `command -v`
+ * probe in secrets.ts.
+ */
+export async function ghCliInstalled(): Promise<boolean> {
+  const which = process.platform === "win32" ? "where" : "command";
+  const args = process.platform === "win32" ? ["gh"] : ["-v", "gh"];
+  try {
+    await exec(which, args, process.platform === "win32" ? {} : ({ shell: true } as never));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Refresh the remote-tracking refs so a session branches off the CURRENT state
  * of `origin`, not whatever the local checkout last saw. Best-effort: an offline
  * node (or a checkout with no reachable origin) keeps its existing refs and the
