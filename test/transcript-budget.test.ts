@@ -31,6 +31,16 @@ function timeNormalize(n: number): number {
   return ms;
 }
 
+/** Min of several runs ≈ the least-contended run, i.e. true compute cost with
+ *  scheduler/GC noise stripped out. Noise on a shared CI runner can only *add*
+ *  time, never remove it, so the min is the only robust basis for comparing two
+ *  small timings. */
+function minTime(n: number, runs = 5): number {
+  let m = Infinity;
+  for (let i = 0; i < runs; i++) m = Math.min(m, timeNormalize(n));
+  return m;
+}
+
 check("normalizes a 20k-message transcript within budget", () => {
   // Warm up the JIT so the measured run reflects steady state, not first-call cost.
   // Run the warm-up twice; some CI runners are noisy on first JIT.
@@ -42,10 +52,15 @@ check("normalizes a 20k-message transcript within budget", () => {
 });
 
 check("cost stays roughly linear (no superlinear blow-up) as size 4x", () => {
-  timeNormalize(2000); // warm up
-  const small = Math.max(timeNormalize(5_000), 1);
-  const big = timeNormalize(20_000); // 4x the messages
-  // Linear would be ~4x; allow generous slack for noise but catch quadratic (~16x).
+  timeNormalize(2000); // warm up the JIT
+  // Compare the MIN of several runs at each size, not a single sample. A lone
+  // timing of a few-ms operation on a shared CI runner is dominated by GC /
+  // scheduler jitter (which only ever adds time), so single-sample ratios
+  // flaked as high as ~16x on a genuinely linear algorithm. The min tracks true
+  // compute cost; a real O(n^2) regression still shows ~16x here and trips.
+  const small = Math.max(minTime(5_000), 0.5);
+  const big = minTime(20_000); // 4x the messages
+  // Linear would be ~4x; generous slack for noise but still catches quadratic (~16x).
   assert.ok(big / small < 8, `4x the messages took ${(big / small).toFixed(1)}x the time — suspect superlinear scaling`);
 });
 
