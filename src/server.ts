@@ -8,7 +8,7 @@ import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypt
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
-import { listRuntimes, catalogRuntimes, cliInstallSpec, isCliAgentId, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { listRuntimes, catalogRuntimes, cliInstallSpec, invalidateCliProbeCache, isCliAgentId, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
@@ -3390,6 +3390,9 @@ const RELAY_COMMANDS: Record<string, Command> = {
     try {
       const before = runtimeList().find((runtime) => runtime.id === spec.id);
       if (before?.status !== "available") await runInstallCommand(spec);
+      // The just-installed binary changes what the CLI probes would report, so drop
+      // their (process-lifetime) cache and let the catalog below re-probe it.
+      invalidateCliProbeCache();
       const activeAgent = active?.runtimeId ?? defaultRuntimeId;
       const runtimes = runtimeList(activeAgent);
       relay?.sendEvent({ type: "runtime.install.done", id: spec.id, runtimes });
