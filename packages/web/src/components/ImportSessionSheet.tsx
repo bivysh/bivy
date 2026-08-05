@@ -123,7 +123,7 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
 
   const nodeList = useMemo(() => {
     const rows = [...nodes];
-    if (currentNodeId && !rows.some((n) => n.id === currentNodeId)) rows.unshift({ id: currentNodeId, name: "This node", online: true });
+    if (currentNodeId && !rows.some((n) => n.id === currentNodeId)) rows.unshift({ id: currentNodeId, name: "This machine", online: true });
     return rows;
   }, [nodes, currentNodeId]);
 
@@ -159,7 +159,7 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
     <>
       {nodeList.length > 1 && (
         <div className="picker-section">
-          <div className="picker-section-label">Node</div>
+          <div className="picker-section-label">Machine</div>
           <div className="picker-list">
             {nodeList.map((n) => (
               <PickerItem
@@ -200,12 +200,12 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
 
       <div className="picker-section">
         <div className="picker-section-label">Sessions (newest first)</div>
-        {status === "loading" && <div className="import-session-hint">Looking for sessions this node can see…</div>}
+        {status === "loading" && <div className="import-session-hint">Looking for sessions this machine can see…</div>}
         {status === "error" && <div className="fork-error" role="alert">{loadError}</div>}
         {status === "ready" && filtered.length === 0 && (
           <div className="import-session-hint">
             {sessions.length === 0
-              ? "No importable sessions found — Bivy already manages everything this node can see, or no supported provider (Claude Code, Codex) has a session here."
+              ? "No importable sessions found — Bivy already manages everything this machine can see, or no supported provider (Claude Code, Codex) has a session here."
               : "No sessions match these filters."}
           </div>
         )}

@@ -151,7 +151,7 @@ export function RunPill({
   // The plain "Open" state means the session is still live on its node and can
   // be resumed instantly (the counterpart to "Saved" — no live record). Spell
   // that out in the sheet, where there's room; the terse pill/sidebar keep "Open".
-  const sheetStatus = statusLabel === "Open" ? "Open on node" : statusLabel;
+  const sheetStatus = statusLabel === "Open" ? "Open on machine" : statusLabel;
 
   const outcome = evidence ? deriveRunOutcome(evidence) : null;
   const counts = evidence ? checkCounts(evidence) : null;

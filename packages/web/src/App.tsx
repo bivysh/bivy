@@ -533,14 +533,14 @@ export function App() {
         {state.nodeUpdate && (
           <div className="banner update" role="status">
             <span className="banner-text">
-              This node runs Bivy {state.nodeUpdate.current} — {state.nodeUpdate.latest} is available.
+              This machine runs Bivy {state.nodeUpdate.current} — {state.nodeUpdate.latest} is available.
             </span>
             <button
               className="banner-action"
               onClick={() => controller.updateNode()}
               disabled={state.nodeUpdating}
             >
-              {state.nodeUpdating ? "Updating…" : "Update this node"}
+              {state.nodeUpdating ? "Updating…" : "Update this machine"}
             </button>
           </div>
         )}

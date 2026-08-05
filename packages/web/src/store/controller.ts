@@ -948,7 +948,7 @@ export class AppController {
     return new Promise<ServerEvent>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingAcks.delete(rid);
-        reject(new Error("Timed out waiting for the node to respond."));
+        reject(new Error("Timed out waiting for the machine to respond."));
       }, timeoutMs);
       this.pendingAcks.set(rid, { resolve, reject, timer });
       void this.transport.send({ ...command, requestId: rid });
@@ -1114,7 +1114,7 @@ export class AppController {
   private waitForOnline(timeoutMs = 20000): Promise<void> {
     if (this.store.getState().status === "online") return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => { unsub(); reject(new Error("Destination node did not come online")); }, timeoutMs);
+      const timer = setTimeout(() => { unsub(); reject(new Error("Destination machine did not come online")); }, timeoutMs);
       const unsub = this.store.subscribe(() => {
         if (this.store.getState().status === "online") { clearTimeout(timer); unsub(); resolve(); }
       });
