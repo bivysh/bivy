@@ -198,8 +198,12 @@ export class SecretVault {
     if (fs.existsSync(this.file)) checks.push({ name: "secrets file permissions", ok: modeIsPrivate(this.file), detail: this.file });
     if (fs.existsSync(this.keyFile)) checks.push({ name: "local key file permissions", ok: modeIsPrivate(this.keyFile), detail: this.keyFile });
     checks.push({ name: "1Password CLI", ok: await commandExists("op"), detail: "required for op:// references" });
-    checks.push({ name: "GitHub CLI", ok: await commandExists("gh"), detail: "fallback for GitHub tokens when no Bivy secret is configured" });
-    return { ok: checks.every((c) => c.ok || c.name === "1Password CLI" || c.name === "GitHub CLI"), checks };
+    checks.push({ name: "GitHub CLI (optional)", ok: await commandExists("gh"), detail: "optional token shortcut; Bivy connects GitHub itself via `bivy github:connect`" });
+    // 1Password and the GitHub CLI are optional shortcuts — a missing one must
+    // not fail the vault's health (Bivy connects GitHub itself; op is only for
+    // op:// refs). Match on a stable prefix so renaming the label can't silently
+    // turn either back into a hard failure.
+    return { ok: checks.every((c) => c.ok || c.name.startsWith("1Password CLI") || c.name.startsWith("GitHub CLI")), checks };
   }
 
   private key(): Buffer {
