@@ -20,8 +20,9 @@
       "label": "OpenCode",
       "command": "opencode",
       "hidden": false,
-      "supportTier": "beta",
-      "certification": "adapter-tested",
+      "supportTier": "supported",
+      "certification": "release-tested",
+      "testedVersion": "1.18.13",
       "headlessFlags": [
         "run",
         "-s"

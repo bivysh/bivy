@@ -14,8 +14,8 @@ per-agent pages under [docs/agents/](agents/README.md).
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | [Pi](agents/pi.md) | `pi` | Supported | Yes | Yes | Yes | Yes | Yes | Yes | No | Bivy/Pi provider auth | Best native Bivy integration. |
 | [Claude Code SDK](agents/claude-code.md) | `claude-code-sdk` | Supported | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** | Claude/Pi/Bivy depending on mode | Structured SDK path; native Claude CLI login may be needed for TUI handoff. |
-| [Codex (approvals)](agents/codex.md) | `codex-approvals` | Beta | Yes | Yes | Partial | Yes | No | Yes | **Yes** | Codex CLI/OpenAI | App-server shim: per-tool Approve/Deny + thread resume. The single "Codex" surfaced in the picker. |
-| [OpenCode](agents/opencode.md) | `opencode` | Beta | Yes | Yes | Yes | Yes | Yes (`--model`) | Effect-level sandbox | No | OpenCode CLI | `opencode run` on the ProcessRuntime path; structured streaming, effect-level governance; resumes via `-s <id>`. |
+| [Codex (approvals)](agents/codex.md) | `codex-approvals` | Supported | Yes | Yes | Partial | Yes | Yes | Yes | **Yes** | Codex CLI/OpenAI | App-server shim: per-tool Approve/Deny, model + reasoning-effort selection, thread resume, usage reporting, native discovery. The single "Codex" surfaced in the picker. Release-tested against Codex CLI 0.145.0. |
+| [OpenCode](agents/opencode.md) | `opencode` | Supported | Yes | Yes | Yes | Yes | Yes (ACP) | **Per-tool (Approve/Deny)** | No | OpenCode CLI | Driven through its native `opencode acp` server by default → the governed `ProtocolRuntime`: per-tool approvals, `session/load` resume, and a model list read from the live session. Falls back to the `opencode run` pipe (effect-level governance, `--model`, `-s <id>` resume) when the installed binary has no `acp` subcommand. Release-tested against OpenCode 1.18.13. |
 | [Gemini CLI](agents/gemini-cli.md) | `gemini` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Native sandbox (`--approval-mode`) | No | Gemini CLI | `gemini-json` final-object parser; native auth; resumes via `-r <id>` (tier-aware `--approval-mode`). |
 | [Qwen Code](agents/qwen-code.md) | `qwen` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Native sandbox (`--approval-mode`) | No | Qwen Code CLI | Gemini-CLI fork: reuses the `gemini-json` parser, approval-mode containment, and `--resume <id>` form. |
 | [Goose](agents/goose.md) | `goose` | Beta | Yes | Yes | Yes | Yes | No | Effect-level (FS/MCP/net) | No | Goose CLI | `goose-stream-json` streaming parser; resumes via `--resume --session-id <id>`. |
@@ -63,15 +63,27 @@ column. The `Approvals` values above describe each agent's **default** (pipe)
 path, where governance is effect-level (sandbox tier / FS-MCP-network). But any
 agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com)
 can instead be driven through `bin/acp-shim.mjs` → the governed `ProtocolRuntime`
-— gaining **per-tool Approve/Deny** and **`session/load` resume** with zero
-per-agent code. The picker agents that ship a native ACP server declare it as
-data (an `acp` field in `CLI_AGENT_SPECS`) and are promoted with
-`BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all at once): **Gemini**
-(`--experimental-acp`), **Qwen Code** (`--experimental-acp` / newer `--acp`),
-**OpenCode** (`acp`), **Goose** (`acp`), **Kilo Code** (`acp`), **Cursor**
-(`acp`), **Cline** (`--acp`), and **GitHub Copilot** (`--acp`). Promotion is off
-by default until validated for your installed version; when on, the runtime
-honestly advertises Approvals + Resume in the picker. Agents with no first-party
+— gaining **per-tool Approve/Deny**, **`session/load` resume**, and **model
+selection** (`session/set_model`, with the list read from the live session so it
+matches the providers that node has actually authenticated) with zero per-agent
+code. The picker agents that ship a native ACP server declare it as data (an
+`acp` field in `CLI_AGENT_SPECS`): **Gemini** (`--experimental-acp`), **Qwen
+Code** (`--experimental-acp` / newer `--acp`), **OpenCode** (`acp`), **Goose**
+(`acp`), **Kilo Code** (`acp`), **Cursor** (`acp`), **Cline** (`--acp`), and
+**GitHub Copilot** (`--acp`).
+
+**OpenCode is promoted by default** (`acp.preferred`), having been validated
+end-to-end against 1.18.13 — that governed path is what earns it the Supported
+tier. The rest stay opt-in with `BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all
+at once) until they're validated the same way.
+
+Because ACP is a hard switch — once a session opens over the protocol there is no
+falling back to the pipe mid-flight — a *default-on* promotion is always gated on
+the installed binary evidencing the mode (a cached `--help` probe for the
+subcommand). A node whose CLI is too old keeps the pipe path and the picker
+honestly reports the lower capabilities, rather than opening a session that hangs
+and dies. An explicit `BIVY_<ID>_ACP=1` skips the probe (the operator knows their
+binary); `BIVY_<ID>_ACP=0` forces the pipe path back. Agents with no first-party
 ACP mode (Aider, Amp, Crush, Continue, Grok) stay on the pipe until one ships.
 See [agents/acp.md](agents/acp.md).
 
@@ -143,12 +155,14 @@ Four general, opt-in levers move an agent up that ladder without per-agent code:
   agent that speaks it** — a one-shot pipe can't gate a tool *before* it runs, so
   ACP is a strict upgrade. Any [Agent Client Protocol](https://agentclientprotocol.com)
   agent is driven through `bin/acp-shim.mjs` → the governed `ProtocolRuntime`
-  (per-tool approvals + streaming + resume) as data. Use the generic runtime
-  (`BIVY_ACP_COMMAND` / `BIVY_ACP_ARGS`), or promote a specific agent that declares
-  an `acp` field: Gemini CLI already does (`BIVY_GEMINI_ACP=1`; `BIVY_PREFER_ACP=1`
-  promotes every ACP-capable agent). A promoted agent honestly gains Approvals +
-  Resume in the picker. The pipe path is the fallback for agents that only offer a
-  headless print mode. See [agents/acp.md](agents/acp.md).
+  (per-tool approvals + streaming + resume + model selection) as data. Use the
+  generic runtime (`BIVY_ACP_COMMAND` / `BIVY_ACP_ARGS`), or promote a specific
+  agent that declares an `acp` field. OpenCode runs this way by default;
+  `BIVY_<ID>_ACP=1` opts in another one and `BIVY_PREFER_ACP=1` promotes every
+  ACP-capable agent. A promoted agent honestly gains Approvals + Resume in the
+  picker. The pipe path is the fallback for agents that only offer a headless
+  print mode, and for a binary too old to speak ACP. See
+  [agents/acp.md](agents/acp.md).
 
 Definitions:
 
