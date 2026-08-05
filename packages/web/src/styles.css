@@ -38,11 +38,11 @@
   --danger: #b0473d;
   --danger-soft: #f3e3df;
   --ok: #4f7a5c;
-  --merged: #8250df; /* GitHub's merged-PR purple */
+  --merged: #7a6a9e; /* GitHub's merged-PR purple, desaturated to sit calmly in-palette */
   /* A run that finished while you weren't looking — deliberately not accent
      (working), danger (needs input) or ok/merged (already used by PR state),
      so "something's ready" reads as its own signal at a glance. */
-  --unseen: #2563eb;
+  --unseen: #a8823f;
   /* Per-source hues for the session/run marks (see sessionSource.ts). Kept
      clear of the status palette (ok / danger / unseen) so a source is never
      mistaken for an outcome; `app`/`cli` stay quiet so hand-opened sessions
@@ -64,8 +64,8 @@
   --bg: #14171a; --surface: #191d21; --surface-2: #1f242a; --surface-3: #252b31;
   --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
   --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
-  --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a371f7;
-  --unseen: #5b9dff;
+  --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
+  --unseen: #cba96a;
   --s-github: #d7dde3; --s-slack: #d68ce6; --s-linear: #a5adf5; --s-schedule: #4bc4de;
   --s-webhook: #b79bf7; --s-manual: #f0a45a; --s-cli: #a3c987; --s-app: #9aa4b2;
   --term-selection: rgba(143, 182, 205, 0.36); --term-selection-inactive: rgba(143, 182, 205, 0.24);
@@ -76,8 +76,8 @@
     --bg: #14171a; --surface: #191d21; --surface-2: #1f242a; --surface-3: #252b31;
     --ink: #e6ebee; --muted: #838b91; --line: #262c31; --line-strong: #384049;
     --accent: #8fb6cd; --accent-contrast: #14171a; --accent-hover: #a7cadd;
-    --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a371f7;
-    --unseen: #5b9dff;
+    --danger: #c08a83; --danger-soft: #3a2420; --ok: #86a99f; --merged: #a99bc4;
+    --unseen: #cba96a;
     --term-selection: rgba(143, 182, 205, 0.36); --term-selection-inactive: rgba(143, 182, 205, 0.24);
   }
 }
@@ -178,8 +178,9 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .inbox-filters label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 650; text-transform: uppercase; }
 .inbox-filters select { min-height: 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; text-transform: none; }
 .inbox-list { overflow-y: auto; padding: 10px; }
-.inbox-item { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; margin-bottom: 8px; padding: 13px 14px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; background: var(--surface); color: var(--ink); text-align: left; }
+.inbox-item { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; margin-bottom: 8px; padding: 13px 14px; border: 1px solid var(--line); border-left: 3px solid var(--line-strong); border-radius: 10px; background: var(--surface); color: var(--ink); text-align: left; }
 .inbox-item:hover { background: var(--surface-2); }
+.inbox-item.severity-warning { border-left-color: var(--unseen); }
 .inbox-item.severity-error, .inbox-item.severity-critical { border-left-color: var(--danger); }
 .inbox-item-main { min-width: 0; display: grid; gap: 3px; }
 .inbox-item-main span { overflow: hidden; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
@@ -289,18 +290,18 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    .working/.needs-action already use. Shape stays a filled dot (still live),
    only the color+glow differ from plain .idle, so this reads as a variant of
    "open on node", not a new shape language. */
-.session-dot.idle.unseen { background: var(--unseen); box-shadow: 0 0 0 3px color-mix(in srgb, var(--unseen) 25%, transparent); }
+.session-dot.idle.unseen { background: var(--unseen); }
 /* Session has no live record on the node (closed) — a hollow ring in the
    dimmer --muted tone (not --line-strong, so live vs. not-live is a genuine
    color change, not just a fill/hollow swap) plus reduced opacity, so "not
    live" reads as clearly de-emphasized even for someone who can't see color. */
 .session-dot.saved { background: transparent; border: 1.5px solid var(--muted); opacity: 0.7; }
-.session-dot.working { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); animation: dot-pulse 1.4s ease-in-out infinite; }
+.session-dot.working { background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
 /* Needs a response from someone — always the same urgent color+halo
    regardless of seen/unseen, since the action stays outstanding either way
    (unlike a finished-and-nothing-to-do run, this can't quietly become "seen"). */
-.session-dot.needs-action { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent); }
-@keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.session-dot.needs-action { background: var(--danger); }
+@keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 .session-row { position: relative; display: flex; align-items: center; }
 .session-row .session-item { flex: 1; }
 .row-menu { position: relative; flex: none; }
@@ -689,9 +690,11 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-pr-text { white-space: nowrap; position: relative; top: 0.5px; }
 
 /* ---- Source marks & run pill (see sessionSource.ts / SourceMark.tsx) ----
-   `--sc` is the per-source hue; every mark tints its glyph and a faint fill
-   from it. Set once per source class so the tile, the sidebar mark and the
-   in-session pill all read from the same variable. */
+   Source identity is carried by the glyph alone: every mark renders a quiet
+   muted icon on a neutral tile, so eight triggers no longer read as eight
+   colours in one list. Presence/status (the corner .mark-badge) stays the one
+   coloured signal. `--sc` per source is kept (dormant) so a hue can be dialled
+   back in per-source later without re-plumbing. */
 .src-github-issue, .src-github-mention { --sc: var(--s-github); }
 .src-slack { --sc: var(--s-slack); }
 .src-linear { --sc: var(--s-linear); }
@@ -706,8 +709,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .source-mark {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; border-radius: 8px;
-  color: var(--sc, var(--muted));
-  background: color-mix(in srgb, var(--sc, var(--muted)) 15%, var(--surface));
+  color: var(--muted);
+  background: var(--surface-3);
 }
 .source-mark svg { width: 17px; height: 17px; display: block; }
 .source-mark.sm { width: 22px; height: 22px; border-radius: 6px; }
@@ -719,8 +722,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   position: relative; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 8px;
-  color: var(--sc, var(--muted));
-  background: color-mix(in srgb, var(--sc, var(--muted)) 14%, var(--surface));
+  color: var(--muted);
+  background: var(--surface-3);
 }
 .session-mark svg { width: 16px; height: 16px; display: block; }
 /* The presence dot. A 2px ring in the sidebar's own surface colour lifts it off
@@ -749,8 +752,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .run-pill-glyph {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: 20px; border-radius: 6px;
-  color: var(--sc, var(--muted));
-  background: color-mix(in srgb, var(--sc, var(--muted)) 18%, transparent);
+  color: var(--muted);
+  background: var(--surface-3);
 }
 .run-pill-glyph svg { width: 13px; height: 13px; display: block; }
 .run-pill-label { flex: none; }
@@ -1827,8 +1830,8 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .banner.info { background: var(--surface-2); color: var(--muted); }
 .banner.warn { background: color-mix(in srgb, var(--warn, #d9a441) 16%, transparent); color: var(--warn, #d9a441); }
 .banner.update { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); }
-.banner-action { margin-left: auto; flex: none; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 8px; padding: 6px 12px; font: inherit; font-weight: 650; white-space: nowrap; }
-.banner-action:hover:not(:disabled) { filter: brightness(1.05); }
+.banner-action { margin-left: auto; flex: none; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); border-radius: 8px; padding: 6px 12px; font: inherit; font-weight: 650; white-space: nowrap; }
+.banner-action:hover:not(:disabled) { opacity: 0.9; }
 .banner-action:disabled { opacity: .65; }
 .banner-text { flex: 1; }
 .banner-dismiss { margin-left: auto; border: 0; background: transparent; color: inherit; font-size: 18px; line-height: 1; }
