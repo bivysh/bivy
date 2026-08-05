@@ -3241,8 +3241,11 @@ function AccountPanel() {
   const ent = me?.entitlements;
   const counts = me?.counts;
   const free = (ent?.plan || me?.account?.plan) === "free";
-  // Free caps unattended automation only; interactive CLI/app sessions are unlimited.
+  // Free caps unattended automation per rolling window, plus a lifetime hosted-session
+  // trial (present only on Bivy Cloud free accounts — absent when self-hosting or paid).
   const runCap = ent ? (ent.weeklyRunLimit ?? "∞") : "—";
+  const trial = me?.trial;
+  const sessionCap = trial ? `${trial.used} / ${trial.limit ?? "∞"}` : "∞";
   const proPrice = me?.pricing?.pro?.label;
   return (
     <div className="settings-form">
@@ -3259,9 +3262,17 @@ function AccountPanel() {
       {err && <div className="banner error inline">{err}</div>}
       <div className="stat-grid">
         <Stat label="Plan" value={planLabel(ent?.plan || me?.account?.plan)} />
+        {trial && <Stat label="Sessions (trial)" value={sessionCap} />}
         <Stat label="Automations / week" value={`${counts?.runsThisWeek ?? "—"} / ${runCap}`} />
       </div>
-      {free && (
+      {free && trial && (
+        <p className="muted settings-intro">
+          You're on the free Bivy Cloud trial — the first {trial.limit} sessions are free to view and control
+          through the app{typeof trial.remaining === "number" && trial.remaining !== Infinity ? ` (${trial.remaining} left)` : ""}.
+          Pro removes the limit{proPrice ? ` for ${proPrice}` : ""} — or run your own self-hosted Bivy server to keep everything free.
+        </p>
+      )}
+      {free && !trial && (
         <p className="muted settings-intro">
           You're on the free plan — interactive sessions are unlimited, with {runCap} unattended automations
           per rolling 7 days across GitHub, Slack, webhooks, and schedules. Pro removes the automation cap{proPrice ? ` for ${proPrice}` : ""}.
