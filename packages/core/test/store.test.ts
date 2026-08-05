@@ -232,6 +232,53 @@ describe("SessionStore", () => {
     expect(store.getState().commandsBySession).toEqual({});
   });
 
+  it("carries the repo-list unauthed reason so the picker can prompt to connect GitHub", () => {
+    const store = new SessionStore();
+    // Nothing connected and no gh CLI: steer to `bivy github:connect`.
+    store.apply({ type: "repos.list", authed: false, repos: [], reason: "no-token" } as never);
+    expect(store.getState().reposAuthed).toBe(false);
+    expect(store.getState().reposReason).toBe("no-token");
+    // gh installed but logged out: the picker additionally offers `gh auth login`.
+    store.apply({ type: "repos.list", authed: false, repos: [], reason: "gh-unauthed" } as never);
+    expect(store.getState().reposReason).toBe("gh-unauthed");
+    // A successful listing clears the reason and marks authed.
+    store.apply({ type: "repos.list", authed: true, repos: [{ slug: "acme/app" }] } as never);
+    expect(store.getState().reposAuthed).toBe(true);
+    expect(store.getState().reposReason).toBeNull();
+    // An unknown/absent reason never leaks through as a truthy value.
+    store.apply({ type: "repos.list", authed: false, repos: [] } as never);
+    expect(store.getState().reposReason).toBeNull();
+  });
+
+  it("tracks the Connect-GitHub device flow so the repo picker can drive it", () => {
+    const store = new SessionStore();
+    expect(store.getState().githubConnect).toEqual({ status: "idle" });
+    // Optimistic local state before the node answers.
+    store.setGithubConnect({ status: "starting" });
+    expect(store.getState().githubConnect.status).toBe("starting");
+    // Node hands back a device code to show the user.
+    store.apply({
+      type: "github.connect.status",
+      status: "waiting",
+      userCode: "ABCD-1234",
+      verificationUri: "https://github.com/login/device",
+      intervalMs: 5000,
+    } as never);
+    expect(store.getState().githubConnect).toMatchObject({ status: "waiting", userCode: "ABCD-1234", intervalMs: 5000 });
+    // Success clears back to a terminal state the picker reacts to.
+    store.apply({ type: "github.connect.status", status: "connected" } as never);
+    expect(store.getState().githubConnect.status).toBe("connected");
+    // A node with no device-flow client id tells the UI to fall back to the CLI.
+    store.apply({ type: "github.connect.status", status: "unconfigured" } as never);
+    expect(store.getState().githubConnect.status).toBe("unconfigured");
+    // An unknown status never leaks through — it collapses to idle.
+    store.apply({ type: "github.connect.status", status: "bogus" } as never);
+    expect(store.getState().githubConnect.status).toBe("idle");
+    // Error carries its message.
+    store.apply({ type: "github.connect.status", status: "error", error: "nope" } as never);
+    expect(store.getState().githubConnect).toMatchObject({ status: "error", error: "nope" });
+  });
+
   it("clears nodeSettings on node switch so a new node's panel never shows the previous node's settings (issue #75)", () => {
     const store = new SessionStore();
     store.apply({

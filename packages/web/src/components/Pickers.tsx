@@ -7,6 +7,7 @@ import { Sheet, PickerItem } from "./Sheet.js";
 import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { SANDBOX_TIERS } from "./Settings.js";
+import { writeClipboard } from "../clipboard.js";
 
 function agentLabel(a: RuntimeInfo): string {
   return String(a.displayName || a.name || a.id || "Agent");
@@ -78,6 +79,129 @@ function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string })
   );
 }
 
+// A small copy-command row (mirrors ConnectRunner's install-command block) for
+// the connect prompt below.
+function ConnectCommand({ cmd, label }: { cmd: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const copy = async () => {
+    if (!(await writeClipboard(cmd))) return;
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1800);
+  };
+  return (
+    <div className="repo-connect-command">
+      <code>{cmd}</code>
+      <button
+        type="button"
+        className={`repo-connect-copy${copied ? " is-copied" : ""}`}
+        onClick={copy}
+        aria-label={copied ? "Command copied" : label}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+// Actionable empty state for the repo picker when GitHub isn't connected on the
+// node. `gh` is NOT required — the primary path is Bivy's own device flow, run
+// ON THE NODE straight from this button (no terminal): tap Connect → authorize
+// on GitHub → the token lands in the node vault and the list fills in. We only
+// mention `gh auth login` as an extra when the CLI is installed-but-logged-out
+// (reason === "gh-unauthed"). If the node has no device-flow client id
+// (status "unconfigured"), we fall back to the `bivy github:connect` command.
+function RepoConnectPrompt({ state }: { state: AppState }) {
+  const gc = state.githubConnect;
+
+  // While the user authorizes on GitHub, poll the node on the interval it gave
+  // us (never faster) until it flips to connected/expired/denied/error.
+  useEffect(() => {
+    if (gc.status !== "waiting") return;
+    const ms = gc.intervalMs && gc.intervalMs > 0 ? gc.intervalMs : 5000;
+    const id = setInterval(() => controller.githubConnectPoll(), ms);
+    return () => clearInterval(id);
+  }, [gc.status, gc.intervalMs]);
+
+  // On success, refresh the repo list — the picker re-renders with the repos and
+  // this prompt unmounts.
+  useEffect(() => {
+    if (gc.status === "connected") controller.listRepos();
+  }, [gc.status]);
+
+  // Drop flow state when the prompt goes away (sheet closed, or list arrived) so
+  // a later reopen starts clean.
+  useEffect(() => () => controller.githubConnectReset(), []);
+
+  const errorText =
+    gc.status === "denied"
+      ? "Authorization was denied. Try again."
+      : gc.status === "expired"
+        ? "That code expired before you authorized. Try again."
+        : gc.status === "error"
+          ? gc.error || "Couldn't connect. Try again."
+          : null;
+
+  return (
+    <div className="repo-connect">
+      <p className="repo-connect-lead">Connect GitHub to list your repos.</p>
+
+      {gc.status === "waiting" ? (
+        <>
+          <p className="repo-connect-sub">
+            Open{" "}
+            <a href={gc.verificationUri || "https://github.com/login/device"} target="_blank" rel="noopener">
+              {(gc.verificationUri || "github.com/login/device").replace(/^https?:\/\//, "")}
+            </a>{" "}
+            and enter this code:
+          </p>
+          <div className="repo-connect-code" aria-label="Device code">{gc.userCode || "…"}</div>
+          <p className="repo-connect-waiting muted">Waiting for you to authorize on GitHub…</p>
+          <button type="button" className="link-btn" onClick={() => controller.githubConnectReset()}>
+            Cancel
+          </button>
+        </>
+      ) : gc.status === "connected" ? (
+        <p className="repo-connect-sub">Connected — loading your repos…</p>
+      ) : gc.status === "unconfigured" ? (
+        <>
+          <p className="repo-connect-sub">Run this on the machine your agent runs on:</p>
+          <ConnectCommand cmd="bivy github:connect" label="Copy connect command" />
+          {state.reposReason === "gh-unauthed" && (
+            <p className="repo-connect-alt">
+              The GitHub CLI is installed but signed out — you can also run <code>gh auth login</code>.
+            </p>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="repo-connect-sub">One tap authorizes Bivy on this machine — no CLI needed.</p>
+          <button
+            type="button"
+            className="btn primary block"
+            disabled={gc.status === "starting"}
+            onClick={() => controller.githubConnectStart()}
+          >
+            {gc.status === "starting" ? "Starting…" : "Connect GitHub"}
+          </button>
+          {errorText && <p className="repo-connect-alt">{errorText}</p>}
+          {state.reposReason === "gh-unauthed" && (
+            <p className="repo-connect-alt">
+              The GitHub CLI is installed but signed out — you can also run <code>gh auth login</code>.
+            </p>
+          )}
+        </>
+      )}
+
+      <p className="repo-connect-note muted">
+        You don't need a repo to start — pick <strong>No repo</strong> above to work in the machine's default workspace.
+      </p>
+    </div>
+  );
+}
+
 // ---- Repo picker (new session) ----
 export function RepoPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
   const [q, setQ] = useState("");
@@ -119,8 +243,8 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
           }}
         />
         {state.reposLoading && <div className="picker-empty">Loading repos…</div>}
-        {!state.reposLoading && !state.reposAuthed && (
-          <div className="picker-empty">Connect GitHub on this machine to list repos.</div>
+        {!state.reposLoading && !state.reposAuthed && !state.reposError && (
+          <RepoConnectPrompt state={state} />
         )}
         {!state.reposLoading && state.reposError && <div className="picker-empty">{state.reposError}</div>}
         {repos.map((r) => {

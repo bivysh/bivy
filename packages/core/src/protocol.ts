@@ -77,6 +77,10 @@ export interface Command extends CommandBase {
     | "github.app.manifest.code"
     | "github.app.connect-existing"
     | "github.app.disconnect"
+    // Repo-picker "Connect GitHub" device flow. start begins it; poll advances
+    // it. Both reply with `github.connect.status`.
+    | "github.connect.start"
+    | "github.connect.poll"
     | "approval"
     | "stt.config.get"
     | "stt.config.set"
