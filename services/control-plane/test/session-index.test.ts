@@ -41,6 +41,18 @@ await test("replace + list round-trips metadata, never plaintext titles", async 
   assert.ok(list[0].updatedAt, "stamped with updatedAt");
 });
 
+await test("replace preserves node activity timestamps instead of restamping every row now", async () => {
+  const { store, accountId, nodeId } = await setup();
+  const old = "2025-06-01T12:00:00.000Z";
+  const recent = "2026-01-01T12:00:00.000Z";
+  await store.replaceNodeSessions(accountId, nodeId, [
+    { sessionId: "old", status: "saved", updatedAt: old },
+    { sessionId: "recent", status: "idle", updatedAt: recent },
+  ]);
+  const list = await store.listAccountSessions(accountId);
+  assert.deepEqual(list.map((s) => [s.sessionId, s.updatedAt]), [["recent", recent], ["old", old]]);
+});
+
 await test("replace is full-replace (handles removals)", async () => {
   const { store, accountId, nodeId } = await setup();
   await store.replaceNodeSessions(accountId, nodeId, [
@@ -84,12 +96,16 @@ await test("upsert updates one session in place without touching the rest", asyn
   ]);
   // Flip s1's status incrementally — s2 must survive untouched (the old code
   // read + rewrote the whole index; the upsert path must preserve it).
-  await store.upsertNodeSession(accountId, nodeId, { sessionId: "s1", status: "working", titleEnc: "T1" });
+  const activityAt = "2026-02-03T04:05:06.000Z";
+  const attention = [{ id: "q1", kind: "question" as const, severity: "warning" as const, createdAt: activityAt }];
+  await store.upsertNodeSession(accountId, nodeId, { sessionId: "s1", status: "working", titleEnc: "T1", updatedAt: activityAt, attention });
   const list = await store.listAccountSessions(accountId);
   assert.deepEqual([...list.map((s) => s.sessionId)].sort(), ["s1", "s2"]);
   const s1 = list.find((s) => s.sessionId === "s1")!;
   const s2 = list.find((s) => s.sessionId === "s2")!;
   assert.equal(s1.status, "working");
+  assert.equal(s1.updatedAt, activityAt);
+  assert.deepEqual(s1.attention, attention);
   assert.equal(s2.status, "idle", "sibling session is left untouched");
   assert.equal(s2.titleEnc, "T2");
 });

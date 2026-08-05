@@ -70,6 +70,19 @@ describe("buildInboxItems", () => {
     expect(questionItems[0]).toMatchObject({ sessionId: "s2", targetId: "q1" });
   });
 
+  it("retires a failure advert after its session is opened, but keeps blocking questions", () => {
+    const failedAt = "2026-01-01T00:05:00.000Z";
+    const viewed = session({
+      lastSeenAt: Date.parse("2026-01-01T00:06:00.000Z"),
+      attention: [
+        { id: "last-failure", kind: "session", severity: "error", createdAt: failedAt },
+        { id: "q1", kind: "question", severity: "warning", createdAt: failedAt },
+      ],
+    });
+    const items = buildInboxItems({ sessions: [viewed], approvals: [], questions: [], nodes: [], queue: [], now: NOW });
+    expect(items.map((i) => i.kind)).toEqual(["question"]);
+  });
+
   it("never double-counts one unresolved condition advertised by both the account index and a live push", () => {
     const sessions = [
       session({
@@ -138,6 +151,16 @@ describe("buildInboxItems", () => {
     expect(automation.find((i) => i.runId === "run-1")).toMatchObject({ source: "automation", severity: "warning", sessionId: "s9", nodeId: "node-a" });
     expect(automation.find((i) => i.runId === "run-2")).toMatchObject({ source: "automation", severity: "error", id: inboxItemId("automation", "run-2", "failed") });
     expect(automation.some((i) => i.runId === "run-3")).toBe(false);
+  });
+
+  it("retires a failed automation run after its linked session is opened", () => {
+    const completedAt = "2026-01-01T00:06:00.000Z";
+    const runs: AccountAutomationRun[] = [
+      { id: "run-f", triggerKind: "github", status: "failed", title: "Fix", createdAt: "2026-01-01T00:05:00.000Z", completedAt, output: { sessionId: "s9" } },
+    ];
+    const sessions = [session({ sessionId: "s9", lastSeenAt: Date.parse(completedAt) })];
+    const items = buildInboxItems({ sessions, approvals: [], questions: [], nodes: [], queue: [], runs, now: NOW });
+    expect(items).toEqual([]);
   });
 
   it("lets a real automation run supersede a session's source-derived failure advert — counted once", () => {

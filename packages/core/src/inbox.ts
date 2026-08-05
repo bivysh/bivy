@@ -139,6 +139,11 @@ export function buildInboxItems(input: {
       // source-derived automation stand-in so we don't double-count it.
       if (advert.kind === "automation" && runSessionIds.has(session.sessionId)) continue;
       const updatedAt = advert.updatedAt || advert.createdAt;
+      // A failure advert is a reviewable outcome, not a still-blocked prompt.
+      // Once the user opens the owning session after the failure, retire it from
+      // the attention count. Real approvals/questions remain until resolved.
+      if ((advert.kind === "session" || advert.kind === "automation")
+        && (session.lastSeenAt ?? 0) >= timestampMs(updatedAt)) continue;
       const node = session.nodeId ? nodes.get(session.nodeId) : undefined;
       const stale = node?.online === false || (session.updatedAt ? now - timestampMs(session.updatedAt) > STALE_AFTER_MS : false);
       items.push({
@@ -224,6 +229,9 @@ export function buildInboxItems(input: {
     const session = sessionId ? sessions.get(sessionId) : undefined;
     const node = session?.nodeId ? nodes.get(session.nodeId) : undefined;
     const updatedAt = run.completedAt || run.startedAt || run.createdAt;
+    // A final failure is acknowledged by opening its session. A genuinely
+    // parked needs_attention run stays until its condition is resolved.
+    if (run.status === "failed" && session && (session.lastSeenAt ?? 0) >= timestampMs(updatedAt)) continue;
     items.push({
       // Keyed by run + status so a run advancing (needs_attention → failed)
       // replaces rather than duplicates the earlier row via dedupeInboxItems.

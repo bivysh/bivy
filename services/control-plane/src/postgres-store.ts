@@ -1178,7 +1178,7 @@ export class PostgresStore implements MeshStore {
         // not unnest($1::text[], ...) — pg-mem, which the whole store is
         // deliberately tested against, doesn't support multi-array unnest.)
         if (sessions.length > 0) {
-          const sessionIndexCols = 9;
+          const sessionIndexCols = 10;
           const sessionIndexValues: unknown[] = [];
           const sessionIndexRows = sessions
             .map((s, i) => {
@@ -1193,8 +1193,9 @@ export class PostgresStore implements MeshStore {
                 s.branch ?? null,
                 s.agentServiceAddress ?? null,
                 JSON.stringify(s.attention ?? []),
+                s.updatedAt ?? new Date(),
               );
-              return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, now())`;
+              return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`;
             })
             .join(", ");
           await client.query(
@@ -1250,16 +1251,28 @@ export class PostgresStore implements MeshStore {
         // fixed-cost write per status flip, independent of how many sessions the
         // node has — unlike the wholesale DELETE+reinsert in replaceNodeSessions.
         await client.query(
-          `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+          `INSERT INTO session_index (node_id, session_id, account_id, status, source, title_enc, branch, agent_service_address, attention, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT (node_id, session_id) DO UPDATE
              SET status = EXCLUDED.status,
                  source = EXCLUDED.source,
                  title_enc = EXCLUDED.title_enc,
                  branch = EXCLUDED.branch,
                  agent_service_address = EXCLUDED.agent_service_address,
-                 updated_at = now()`,
-          [nodeId, session.sessionId, accountId, session.status, session.source ?? null, session.titleEnc ?? null, session.branch ?? null, session.agentServiceAddress ?? null],
+                 attention = EXCLUDED.attention,
+                 updated_at = EXCLUDED.updated_at`,
+          [
+            nodeId,
+            session.sessionId,
+            accountId,
+            session.status,
+            session.source ?? null,
+            session.titleEnc ?? null,
+            session.branch ?? null,
+            session.agentServiceAddress ?? null,
+            JSON.stringify(session.attention ?? []),
+            session.updatedAt ?? new Date(),
+          ],
         );
         // Count each run the first time its session is advertised — same funnel
         // as replaceNodeSessions (keyed by (account, session), DO NOTHING, so a
