@@ -141,8 +141,22 @@ export class SessionRerouteController {
     // Only defer for a concrete recovery window — a provider reset, or a delay
     // long enough that it's clearly a limit rather than routine backoff.
     if (decision.resetsAt === undefined && decision.delayMs < MIN_RESUME_DELAY_MS) return null;
-    const resumeAt = decision.resetsAt ?? new Date(now + decision.delayMs).toISOString();
-    return { condition: decision.condition, summary: decision.summary, delayMs: Math.max(0, decision.delayMs), resumeAt };
+    // Resolve the due time (provider reset when known, else backoff) and floor it
+    // to at least MIN_RESUME_DELAY_MS in the FUTURE. A reset time can be in the
+    // past or ~now — a stale/elapsed reset, clock skew, or (most often) a window
+    // that already lapsed while the daemon was down — and using it verbatim yields
+    // a 0ms delay. The caller arms a timer at that delay, so a 0ms resume re-sends
+    // instantly, re-hits the still-standing limit, and re-schedules 0ms again: a
+    // tight loop that pins a CPU core and never settles. Flooring turns a
+    // not-yet-cleared limit into a slow retry the attempt budget can still park.
+    const rawDueMs = decision.resetsAt ? Date.parse(decision.resetsAt) : now + decision.delayMs;
+    const dueMs = Math.max(Number.isFinite(rawDueMs) ? rawDueMs : now, now + MIN_RESUME_DELAY_MS);
+    return {
+      condition: decision.condition,
+      summary: decision.summary,
+      delayMs: dueMs - now,
+      resumeAt: new Date(dueMs).toISOString(),
+    };
   }
 
   /** Advance the attempt budget once the caller has committed to a resume, so a

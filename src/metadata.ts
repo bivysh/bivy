@@ -56,6 +56,13 @@ export type MetadataSession = {
    *  so the resume survives a daemon restart (re-armed by the resume sweep);
    *  cleared once the session resumes or otherwise moves on. */
   resumeAt?: string;
+  /** How many consecutive auto-resumes have been scheduled for this session since
+   *  its last genuine turn (a user prompt, or a resume that actually cleared the
+   *  limit). Durable so the cap survives a restart / session re-resolution — both
+   *  of which drop the in-memory reroute attempt budget — and a limit that never
+   *  clears can't re-send forever. Reset to 0 (absent) whenever a turn ends without
+   *  scheduling another resume. */
+  resumeAttempts?: number;
   createdAt: string;
   updatedAt: string;
   lastActivityAt?: string;
@@ -276,6 +283,19 @@ export class MetadataStore {
     const next = resumeAt ?? undefined;
     if ((prev.resumeAt ?? undefined) === next) return;
     this.data.sessions[id] = { ...prev, resumeAt: next, updatedAt: nowIso() };
+    this.save();
+  }
+
+  /** Set the durable consecutive auto-resume counter (the restart-safe backstop
+   *  for the in-memory reroute budget). Pass 0 to clear. No-op when the row is
+   *  missing or already in the requested state, so a normal turn (counter already
+   *  0) never churns the file. */
+  setResumeAttempts(id: string, attempts: number) {
+    const prev = this.data.sessions[id];
+    if (!prev) return;
+    const next = attempts > 0 ? attempts : undefined;
+    if ((prev.resumeAttempts ?? undefined) === next) return;
+    this.data.sessions[id] = { ...prev, resumeAttempts: next, updatedAt: nowIso() };
     this.save();
   }
 
