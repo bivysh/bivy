@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRuntime } from "../src/runtime/index.js";
+import { makeRuntime, invalidateCliProbeCache } from "../src/runtime/index.js";
 import { processRuntimeFromEnv } from "../src/runtime/process.js";
 import type { RuntimeEvent } from "../src/runtime/types.js";
 
@@ -45,6 +45,11 @@ function writeStub(name: string, argsFile: string, stdoutLines: string[]) {
     ].join("\n"),
     { mode: 0o755 },
   );
+  // CLI presence is probed once and memoized for the process lifetime (cleared on
+  // install). Writing a stub is that install, so drop the cache — otherwise a
+  // catalog build that probed this name before the stub existed keeps reporting it
+  // "not found".
+  invalidateCliProbeCache();
 }
 
 function runToEnd(session: { subscribe: (l: (e: RuntimeEvent) => void) => () => void; prompt: (t: string) => Promise<void> }): Promise<RuntimeEvent[]> {
