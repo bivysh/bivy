@@ -21,6 +21,13 @@
 // whether to suppress the turn's error toast before kicking off the async swap +
 // retry (`applyReroute`). Reroute happens only at the turn boundary, so there is
 // no partial-work hazard.
+//
+// It also plans the OTHER in-place recovery a live session can do: waiting out a
+// provider usage/rate limit and re-sending the same prompt when the window
+// resets (`planResume`). Unlike a reroute (which the controller applies itself),
+// a resume can be hours away and must survive a daemon restart, so scheduling +
+// persistence live in the caller (src/server.ts) — the controller only decides
+// whether a resume is warranted and by when.
 
 import type { RunPolicy } from "./run-policy.js";
 
@@ -40,6 +47,24 @@ export interface ReroutePlan {
   delayMs: number;
   rerouteCount: number;
 }
+
+/** A resolved "wait out the limit, then re-send the same prompt" recovery. The
+ *  caller schedules it (durably) and re-drives the turn when it comes due. */
+export interface ResumePlan {
+  condition: string;
+  summary: string;
+  /** How long from now until the retry should fire. */
+  delayMs: number;
+  /** ISO instant the retry is due — the reset time when the provider gave one,
+   *  else `now + delayMs`. What the caller persists so the resume survives a
+   *  restart. */
+  resumeAt: string;
+}
+
+/** Below this, a "retry" is ordinary backoff (seconds) — not worth deferring an
+ *  interactive turn for; let it surface. A real usage/rate window reset is
+ *  minutes-to-days out and always clears this bar. */
+const MIN_RESUME_DELAY_MS = 60_000;
 
 export interface SessionRerouteDeps {
   policy: RunPolicy;
@@ -84,6 +109,50 @@ export class SessionRerouteController {
       attempt: this.attempt,
       rerouteCount: this.rerouteCount,
     });
+    if (decision.action !== "reroute") return null;
+    return this.rerouteFrom(decision, currentModel);
+  }
+
+  /**
+   * Decide whether this turn error should be recovered by WAITING for a provider
+   * usage/rate limit to reset and re-sending the same prompt. Returns a plan the
+   * caller should persist + schedule, or null (surface the error as usual).
+   *
+   * `resetsAtHint` is the authoritative reset time when the caller has one (the
+   * provider's structured usage snapshot) — essential for a multi-day "weekly"
+   * window, whose error text only states a time-of-day. `now` is injectable for
+   * deterministic tests. Pure w.r.t. the controller's counters.
+   */
+  planResume(
+    rawError: unknown,
+    currentModel: string | undefined,
+    opts: { resetsAtHint?: string; now?: number } = {},
+  ): ResumePlan | null {
+    if (this.applying) return null;
+    const now = opts.now ?? Date.now();
+    const decision = this.deps.policy.decide({
+      routing: { model: currentModel },
+      error: rawError,
+      attempt: this.attempt,
+      rerouteCount: this.rerouteCount,
+      resetsAtHint: opts.resetsAtHint,
+    });
+    if (decision.action !== "retry") return null;
+    // Only defer for a concrete recovery window — a provider reset, or a delay
+    // long enough that it's clearly a limit rather than routine backoff.
+    if (decision.resetsAt === undefined && decision.delayMs < MIN_RESUME_DELAY_MS) return null;
+    const resumeAt = decision.resetsAt ?? new Date(now + decision.delayMs).toISOString();
+    return { condition: decision.condition, summary: decision.summary, delayMs: Math.max(0, decision.delayMs), resumeAt };
+  }
+
+  /** Advance the attempt budget once the caller has committed to a resume, so a
+   *  limit that re-fires after the reset counts toward `maxAttempts` and can
+   *  eventually exhaust (→ park) instead of looping forever. */
+  noteResumeApplied(): void {
+    this.attempt += 1;
+  }
+
+  private rerouteFrom(decision: ReturnType<RunPolicy["decide"]>, currentModel: string | undefined): ReroutePlan | null {
     if (decision.action !== "reroute") return null;
     const model = decision.routing.model;
     // Only a MODEL change is applicable in-session; a chain candidate that swaps

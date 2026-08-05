@@ -47,7 +47,7 @@ const ACTIONS: Array<{ id: RulesetRule["action"]; label: string; hint: string }>
 
 const CONTEXTS: Array<{ id: RuleContext; label: string; hint: string }> = [
   { id: "queue", label: "Work queue", hint: "Unattended runs (GitHub / webhooks)." },
-  { id: "session", label: "Session", hint: "Interactive sessions (model reroute only)." },
+  { id: "session", label: "Session", hint: "Interactive chats — resume when a usage/rate limit resets, or reroute to a fallback model." },
 ];
 
 const DEFAULT_BACKOFF: RulesetBackoff = { baseMs: 2000, factor: 2, capMs: 60_000, jitter: 0.3 };
@@ -171,8 +171,9 @@ export function RulesetsPanel({ state }: { state: AppState }) {
       <p className="muted settings-intro">
         A ruleset is policy for what happens when a run fails — a rate limit, an exhausted quota, an offline machine.
         Each rule matches one or more failure conditions and decides whether to retry, reroute through a fallback
-        chain, or park the run for a human. The <strong>active</strong> ruleset steers this machine's work queue; with
-        none active, a safe built-in default applies. Rulesets are stored on this machine.
+        chain, or park the run for a human. The <strong>active</strong> ruleset steers this machine's work queue and
+        interactive sessions (per the contexts it applies to); with none active, a safe built-in default applies.
+        Rulesets are stored on this machine.
       </p>
 
       <div className="picker-list">
@@ -246,6 +247,10 @@ function RulesetEditor({
   };
 
   const appliesToQueue = draft.appliesTo.includes("queue");
+  const appliesToSession = draft.appliesTo.includes("session");
+  // The active ruleset drives whichever contexts it applies to (the node reads it
+  // per-context), so it's activatable as soon as it covers queue and/or session.
+  const activatable = appliesToQueue || appliesToSession;
   // Client-side gate mirroring the schema's hard requirements, so Save is only
   // enabled when the node will actually accept it (name, ≥1 context, ≥1 rule,
   // and every rule matching ≥1 condition).
@@ -285,14 +290,14 @@ function RulesetEditor({
 
       <div className="settings-toggle-row" style={{ marginTop: 8 }}>
         <div className="settings-toggle-text">
-          <span className="settings-toggle-title">Active for the work queue</span>
+          <span className="settings-toggle-title">Active on this machine</span>
           <span className="muted small">
-            {appliesToQueue
-              ? "Use this ruleset for unattended queue runs on this machine. Only one ruleset is active at a time."
-              : "Add the “Work queue” context above to make this ruleset selectable as active."}
+            {activatable
+              ? `Use this ruleset for ${appliesToQueue && appliesToSession ? "queue runs and interactive sessions" : appliesToQueue ? "unattended queue runs" : "interactive sessions"} on this machine. Only one ruleset is active at a time.`
+              : "Add a context above (Work queue or Session) to make this ruleset selectable as active."}
           </span>
         </div>
-        <SmallToggle checked={active && appliesToQueue} disabled={!appliesToQueue} onChange={setActive} label="Active for the work queue" />
+        <SmallToggle checked={active && activatable} disabled={!activatable} onChange={setActive} label="Active on this machine" />
       </div>
 
       <label className="field-label" style={{ marginTop: 8 }}>Rules</label>

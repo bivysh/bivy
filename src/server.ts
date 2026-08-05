@@ -11,7 +11,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { listRuntimes, catalogRuntimes, cliInstallSpec, isCliAgentId, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
-import { SessionRerouteController } from "./policy/session-reroute.js";
+import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
 import { listRulesetInfos, upsertRuleset, removeRuleset, activeRulesetFor } from "./runtime/ruleset-store.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
@@ -615,11 +615,11 @@ const terminals = new TerminalManager();
 let defaultRuntimeId = (process.env.BIVY_RUNTIME ?? "pi").toLowerCase();
 const runtimeHost = new RuntimeHost({ credsDir, piDir, sessionsDir, attachToChat: attachToChatForSession });
 
-// In-session model reroute (docs/rulesets.md). Opt-in: set
-// BIVY_SESSION_MODEL_FALLBACK to a comma-separated model list and a session that
-// hits an exhausted-credits / rate-limit turn error swaps down the list (via the
-// runtime's live setModel) and retries, instead of surfacing the error. Absent =
-// inert, session behavior unchanged.
+// A built-in in-session model-fallback ruleset from BIVY_SESSION_MODEL_FALLBACK
+// (docs/rulesets.md). Opt-in: set it to a comma-separated model list and a
+// session that hits an exhausted-credits / rate-limit turn error swaps down the
+// list (via the runtime's live setModel) and retries. Used only when the user
+// hasn't authored their own session-scoped ruleset in the UI.
 function sessionModelFallbackRuleset(): Ruleset | undefined {
   const models = (process.env.BIVY_SESSION_MODEL_FALLBACK ?? "")
     .split(",")
@@ -642,9 +642,23 @@ function sessionModelFallbackRuleset(): Ruleset | undefined {
     ],
   };
 }
-const sessionRuleset = sessionModelFallbackRuleset();
-const sessionRunPolicy = sessionRuleset ? createRunPolicy({ ruleset: sessionRuleset, context: "session" }) : undefined;
-if (sessionRunPolicy) {
+
+/** The ruleset in-session recovery runs under right now: the user's active
+ *  ruleset if it applies to sessions, else the env model-fallback ruleset, else
+ *  undefined (→ built-in DEFAULT_RULESET). Read lazily on each turn error so UI
+ *  edits take effect without a restart, mirroring activeQueueRuleset. */
+function activeSessionRuleset(): Ruleset | undefined {
+  return activeRulesetFor(rulesetsDir, "session") ?? sessionModelFallbackRuleset();
+}
+
+// The in-session recovery effector's policy. Always available: an interactive
+// session can wait out a provider usage/rate limit and resume when it resets
+// (planResume), or swap models down a fallback chain (planReroute). Thin wrapper
+// so a freshly-saved active ruleset is picked up on the next turn error.
+const sessionRunPolicy: RunPolicy = {
+  decide: (ctx) => createRunPolicy({ context: "session", ruleset: activeSessionRuleset() }).decide(ctx),
+};
+if (process.env.BIVY_SESSION_MODEL_FALLBACK) {
   console.log(`[policy] in-session model reroute enabled: ${process.env.BIVY_SESSION_MODEL_FALLBACK}`);
 }
 
@@ -3687,6 +3701,9 @@ const RELAY_COMMANDS: Record<string, Command> = {
       record.lastPrompt = agentPrompt;
       record.lastPromptOptions = promptOptionsFor(record, msg.streamingBehavior, images);
       record.reroute?.beginTurn();
+      // The user is driving this turn manually — supersede any pending auto-resume
+      // that was scheduled after a prior limit so it can't re-fire on top of them.
+      clearSessionResume(record.id);
       await promptWithWatchdog(record, agentPrompt, record.lastPromptOptions);
     }).catch((error) => {
       // Mirror the HTTP path (see the /prompt route): a rejected turn after
@@ -7113,6 +7130,20 @@ const idleCloseTimer = setInterval(() => { closeIdleSessions(); pruneGhostSessio
 idleCloseTimer.unref?.();
 const worktreeCleanupTimer = setInterval(() => void sweepDiskGuardrails(), worktreeCleanupSweepMs);
 worktreeCleanupTimer.unref?.();
+// In-session auto-resume tunables (see the resume helpers below). setTimeout
+// can't be trusted past ~24.8 days and we don't want one timer owning a
+// multi-hour wait a restart would drop, so each timer is capped and the periodic
+// sweep re-arms the remainder from the persisted resumeAt.
+const SESSION_RESUME_MAX_TIMER_MS = 30 * 60_000;
+const SESSION_RESUME_SWEEP_MS = 60_000;
+/** Slack around "due": a capped timer may fire a touch early — drive only when
+ *  within this of the target, else re-arm. */
+const SESSION_RESUME_TICK_MS = 15_000;
+const sessionResumeTimers = new Map<string, NodeJS.Timeout>();
+// Fire due auto-resumes (a usage/rate limit that has since reset) and re-arm the
+// tail of long waits whose in-process timer was capped or lost to a restart.
+const sessionResumeTimer = setInterval(() => sessionResumeSweep(), SESSION_RESUME_SWEEP_MS);
+sessionResumeTimer.unref?.();
 
 // --- server-side ephemeral teardown ----------------------------------------
 // On a disposable machine (bootstrap set BIVY_EPHEMERAL=1) the daemon ends the
@@ -7353,6 +7384,122 @@ async function refreshSessionUsage(record: SessionRecord) {
   }
 }
 
+// ── In-session auto-resume after a usage/rate limit ─────────────────────────
+// When a turn ends because a provider window is exhausted ("you've hit your
+// weekly limit · resets 12am (UTC)") and the session's ruleset says retry, we
+// wait out the window and re-send the same prompt when it resets — instead of
+// leaving a dead error bubble. Durable: the due time is persisted (metadata
+// resumeAt) so a daemon restart re-arms it (sessionResumeSweep); an in-process
+// timer fires it promptly while the daemon is up. (Tunables + timer map are
+// declared up by the timer cluster so the sweep interval can reference them.)
+
+/** The authoritative reset time for the limit a session just hit: the soonest
+ *  future reset among its most-utilized usage windows (the binding one), from
+ *  the last snapshot the runtime reported. Essential for a multi-day "weekly"
+ *  window, whose error text states only a time-of-day. Undefined when unknown. */
+function limitResetHint(record: SessionRecord, nowMs: number): string | undefined {
+  const windows = record.usage?.plan?.windows ?? [];
+  let best: { at: number; util: number } | undefined;
+  for (const w of windows) {
+    if (!w.resetsAt) continue;
+    const at = Date.parse(w.resetsAt);
+    if (!Number.isFinite(at) || at <= nowMs) continue;
+    const util = w.utilizationPct ?? 0;
+    // Prefer the most-utilized window (the one being hit); tie-break on soonest reset.
+    if (!best || util > best.util || (util === best.util && at < best.at)) best = { at, util };
+  }
+  return best ? new Date(best.at).toISOString() : undefined;
+}
+
+/** Cancel a pending in-process resume timer (leaves the durable marker alone). */
+function cancelSessionResumeTimer(id: string): void {
+  const timer = sessionResumeTimers.get(id);
+  if (timer) {
+    clearTimeout(timer);
+    sessionResumeTimers.delete(id);
+  }
+}
+
+/** Clear both the durable resume marker and any armed timer — the session moved
+ *  on (a new user turn, or the resume itself started). */
+function clearSessionResume(id: string): void {
+  cancelSessionResumeTimer(id);
+  metadata.setResumeAt(id, null);
+}
+
+function armSessionResumeTimer(id: string, dueMs: number): void {
+  cancelSessionResumeTimer(id);
+  const delay = Math.min(Math.max(0, dueMs - Date.now()), SESSION_RESUME_MAX_TIMER_MS);
+  const timer = setTimeout(() => {
+    sessionResumeTimers.delete(id);
+    void driveSessionResume(id);
+  }, delay);
+  timer.unref?.();
+  sessionResumeTimers.set(id, timer);
+}
+
+/** Persist + arm an auto-resume decided by the session policy. Synchronous so
+ *  the caller can atomically suppress the turn's error toast. */
+function scheduleSessionResume(record: SessionRecord, plan: ResumePlan): void {
+  metadata.setResumeAt(record.id, plan.resumeAt);
+  const when = Date.parse(plan.resumeAt);
+  const cond = plan.condition.replace(/_/g, " ");
+  broadcast({
+    type: "session.notice",
+    sessionId: record.id,
+    level: "info",
+    message: `Hit a ${cond} limit — I'll resume this automatically when it resets (${plan.resumeAt}).`,
+  });
+  armSessionResumeTimer(record.id, Number.isFinite(when) ? when : Date.now());
+}
+
+/** Fire a due auto-resume: re-open the session if needed and re-send the turn's
+ *  last prompt. Clears the durable marker BEFORE driving so a crash mid-resume
+ *  can't loop. Best-effort — never throws into a timer/sweep. */
+async function driveSessionResume(id: string): Promise<void> {
+  const meta = metadata.getSession(id);
+  if (!meta?.resumeAt) return; // cancelled or already resumed
+  const due = Date.parse(meta.resumeAt);
+  if (Number.isFinite(due) && due - Date.now() > SESSION_RESUME_TICK_MS) {
+    // A capped timer fired before the real due time — re-arm for the remainder.
+    armSessionResumeTimer(id, due);
+    return;
+  }
+  clearSessionResume(id);
+  try {
+    const live = openSessions.get(id);
+    if (live?.isWorking) return; // a user turn is already running — don't pile on
+    const record = live ?? (await resolveOrResumeSession(id, meta.path));
+    if (!record) return; // transcript gone / unresolvable
+    if (record.isWorking) return;
+    // In-memory lastPrompt is the exact user turn to retry; after a restart it's
+    // gone, so fall back to the generic interrupted-turn continuation nudge.
+    const prompt = record.lastPrompt ?? buildInteractiveResumePrompt();
+    console.log(`[resume] auto-resuming session ${id} — provider limit has reset`);
+    broadcast({ type: "session.notice", sessionId: id, level: "info", message: "The limit has reset — resuming now." });
+    await promptWithWatchdog(record, prompt, record.lastPromptOptions);
+  } catch (error) {
+    console.warn(`[resume] auto-resume after a provider limit failed for ${id}`, error);
+  }
+}
+
+/** Re-arm (or immediately fire) durable auto-resume markers. Runs once at boot
+ *  and on an interval, so a wait survives a restart and a capped timer's tail
+ *  still fires. */
+function sessionResumeSweep(): void {
+  const now = Date.now();
+  for (const meta of metadata.sessionsWithResumeAt()) {
+    const due = Date.parse(meta.resumeAt!);
+    if (!Number.isFinite(due)) {
+      metadata.setResumeAt(meta.id, null);
+      continue;
+    }
+    if (sessionResumeTimers.has(meta.id)) continue; // already armed this run
+    if (due <= now + SESSION_RESUME_TICK_MS) void driveSessionResume(meta.id);
+    else armSessionResumeTimer(meta.id, due);
+  }
+}
+
 /**
  * Turn a raw provider/runtime error string into something a human can read.
  * Model APIs commonly return `<status> {json}` (e.g. `400 {"error":{"message":
@@ -7422,9 +7569,12 @@ function maybeSignalAuthRequired(record: SessionRecord, errorText: string): void
 
 function attachSessionListeners(record: SessionRecord) {
   record.unsubscribe?.();
-  // In-session model reroute controller (inert unless BIVY_SESSION_MODEL_FALLBACK
-  // is set). One per session; its per-turn budget resets on each user prompt.
-  if (sessionRunPolicy && !record.reroute) {
+  // In-session recovery controller — waits out a usage/rate limit and resumes
+  // (planResume), or swaps models down a fallback chain (planReroute). One per
+  // session; its per-turn budget resets on each user prompt. The policy reads
+  // the active session ruleset lazily, so it's inert until one authorizes a
+  // retry/reroute for the failing condition.
+  if (!record.reroute) {
     record.reroute = new SessionRerouteController({
       policy: sessionRunPolicy,
       onNotice: (n) => broadcast({ type: "session.notice", sessionId: record.id, level: n.level, message: n.message }),
@@ -7541,7 +7691,18 @@ function attachSessionListeners(record: SessionRecord) {
       // credential or a 4xx from the API) otherwise vanished: working cleared,
       // no reply, no signal. Surface it as a session-scoped error so the client
       // can show it *inline in that chat*, and notify instead of "done".
-      const turnError = terminalTurnError(event as Record<string, unknown>);
+      // A terminal turn error reaches us two ways. pi-ai puts it on the last
+      // assistant message (stopReason:"error" → terminalTurnError), and the
+      // server owns surfacing it. Claude Code instead throws inside the SDK
+      // query: it emits its OWN session.error to the client AND carries the raw
+      // text on agent_end.error (e.g. "you've hit your weekly limit · resets 12am
+      // (UTC)"). We read that too — but only to DRIVE recovery, since the runtime
+      // already surfaced it; re-broadcasting would double the error bubble.
+      const messageError = terminalTurnError(event as Record<string, unknown>);
+      const agentEndError = typeof (event as Record<string, unknown>).error === "string"
+        ? humanizeAgentError((event as Record<string, unknown>).error as string)
+        : undefined;
+      const turnError = messageError ?? (agentEndError?.trim() ? agentEndError : undefined);
       // Before surfacing a turn error, see if the session's run policy can recover
       // it in place by swapping to a fallback model and retrying the same prompt.
       // planReroute is synchronous, so we can atomically suppress the error toast
@@ -7549,6 +7710,15 @@ function attachSessionListeners(record: SessionRecord) {
       const reroutePlan =
         turnError && record.lastPrompt !== undefined
           ? record.reroute?.planReroute(turnError, record.session.getCurrentModel()?.name) ?? null
+          : null;
+      // If a reroute doesn't apply, a usage/rate limit that gave a reset time can
+      // instead be waited out and resumed when the window clears (planResume is
+      // synchronous too, so this stays atomic with suppressing the error toast).
+      const resumePlan =
+        !reroutePlan && turnError && record.lastPrompt !== undefined
+          ? record.reroute?.planResume(turnError, record.session.getCurrentModel()?.name, {
+              resetsAtHint: limitResetHint(record, Date.now()),
+            }) ?? null
           : null;
       if (reroutePlan) {
         void record.reroute!.applyReroute(reroutePlan, {
@@ -7558,14 +7728,22 @@ function attachSessionListeners(record: SessionRecord) {
             await promptWithWatchdog(record, record.lastPrompt!, record.lastPromptOptions);
           },
         });
-      } else if (turnError) {
+      } else if (resumePlan) {
+        // Charge the attempt budget so a limit that re-fires after the reset can
+        // eventually exhaust (→ surface) instead of looping, then park the turn
+        // as a scheduled resume rather than a dead error.
+        record.reroute!.noteResumeApplied();
+        scheduleSessionResume(record, resumePlan);
+      } else if (messageError) {
+        // Only the server-owned (pi-ai) path surfaces here; a Claude Code error
+        // the runtime already broadcast falls through to avoid a duplicate bubble.
         record.lastFailureAt = Date.now();
         metadata.touchSession(record.id, "failed");
         scheduleAdvertise();
-        broadcast({ type: "session.error", sessionId: record.id, error: turnError });
+        broadcast({ type: "session.error", sessionId: record.id, error: messageError });
         // If the terminal error is an auth failure (expired key/token → 4xx),
         // also raise the sign-in sheet for the failing provider.
-        maybeSignalAuthRequired(record, turnError);
+        maybeSignalAuthRequired(record, messageError);
         void sendNotificationHint({
           kind: "session_error",
           sessionId: record.id,
@@ -10888,6 +11066,9 @@ const server = app.listen(port, host, async () => {
   // Recover interactive sessions a restart interrupted mid-turn (auto-continue, or
   // flag for a one-tap manual Resume) per the node's sessionResumeMode setting.
   void reconcileInterruptedSessions().catch((error) => console.warn("[resume] interrupted-session reconciliation failed", error));
+  // Re-arm (or fire) durable auto-resume markers a limit-hit turn left behind,
+  // so a session waiting out a usage/rate window still resumes after a restart.
+  try { sessionResumeSweep(); } catch (error) { console.warn("[resume] auto-resume sweep failed at boot", error); }
   // Universal Agent Harness — network effect boundary (opt-in via
   // BIVY_EGRESS_PROXY). Governs/logs outbound traffic of CLI agents, which
   // inherit the proxy env from process.ts.

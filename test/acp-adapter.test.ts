@@ -134,13 +134,19 @@ await check("gemini: BIVY_GEMINI_ACP=1 promotes it to the governed ACP path end-
 // off — or onto — the ACP path. Capability advertisement is derived purely from
 // the spec + env, so it needs no installed binary.
 const ACP_CAPABLE = ["gemini", "qwen", "opencode", "goose", "kilocode", "cursor", "cline", "copilot"] as const;
+// Agents promoted to ACP BY DEFAULT (spec.acp.preferred) — their default state
+// depends on whether the installed binary evidences the ACP mode, so the opt-in
+// assertion below doesn't apply to them.
+const ACP_DEFAULT_ON = new Set(["opencode"]);
 await check("acp: the expected agents declare an ACP mode and promote to governed caps", () => {
   for (const id of ACP_CAPABLE) {
     const envKey = `BIVY_${id.toUpperCase()}_ACP`;
     delete process.env[envKey];
     const before = listRuntimes().find((r) => r.id === id);
     assert.ok(before, `${id} must be in the picker`);
-    assert.equal((before!.capabilities as Record<string, unknown>).toolInterception, false, `${id} is on the pipe by default (honest capabilities)`);
+    if (!ACP_DEFAULT_ON.has(id)) {
+      assert.equal((before!.capabilities as Record<string, unknown>).toolInterception, false, `${id} is on the pipe by default (honest capabilities)`);
+    }
     process.env[envKey] = "1";
     try {
       const caps = listRuntimes().find((r) => r.id === id)!.capabilities as Record<string, unknown>;
@@ -149,6 +155,50 @@ await check("acp: the expected agents declare an ACP mode and promote to governe
     } finally {
       delete process.env[envKey];
     }
+  }
+});
+
+// The default-on promotion must stay reversible and must never be taken on faith.
+// `BIVY_<ID>_ACP=0` is the operator escape hatch back to the pipe path, and the
+// capabilities the picker shows have to follow it — otherwise the catalog would
+// advertise approvals a downgraded session doesn't actually enforce.
+await check("acp: a default-on agent can be forced back to the pipe with =0", () => {
+  for (const id of ACP_DEFAULT_ON) {
+    const envKey = `BIVY_${id.toUpperCase()}_ACP`;
+    process.env[envKey] = "0";
+    try {
+      const info = listRuntimes().find((r) => r.id === id);
+      assert.ok(info, `${id} must be in the picker`);
+      const caps = info!.capabilities as Record<string, unknown>;
+      assert.equal(caps.toolInterception, false, `${id} must drop per-tool approvals when forced onto the pipe`);
+      assert.equal(info!.executionMode, "pipe", `${id} must actually run on the pipe when forced`);
+    } finally {
+      delete process.env[envKey];
+    }
+  }
+});
+
+// A default-on promotion is gated on the installed binary evidencing the ACP mode
+// (a cached `--help` probe). Point the agent at a command whose help says nothing
+// about ACP and it must degrade to the pipe rather than opening a dead session —
+// the whole point of the gate, since ACP has no mid-session fallback.
+await check("acp: default-on promotion degrades to the pipe when the binary has no ACP mode", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-noacp-"));
+  const originalPath = process.env.PATH;
+  try {
+    // A stand-in `opencode` whose --help mentions no `acp` subcommand.
+    const fake = path.join(tmp, "opencode");
+    fs.writeFileSync(fake, "#!/bin/sh\necho 'Usage: opencode run <message>'\n");
+    fs.chmodSync(fake, 0o755);
+    process.env.PATH = `${tmp}${path.delimiter}${originalPath}`;
+    delete process.env.BIVY_OPENCODE_ACP;
+    const info = listRuntimes().find((r) => r.id === "opencode")!;
+    assert.equal((info.capabilities as Record<string, unknown>).toolInterception, false,
+      "an opencode without an `acp` subcommand must not advertise per-tool approvals");
+    assert.equal(info.executionMode, "pipe", "it must fall back to the honest pipe path");
+  } finally {
+    process.env.PATH = originalPath;
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
 });
 

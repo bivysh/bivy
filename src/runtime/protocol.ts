@@ -513,6 +513,20 @@ class ProtocolSession implements RuntimeSession {
       if (typeof msg.runtimeSessionRef === "string") this.runtimeSessionRef = msg.runtimeSessionRef;
       return;
     }
+    // Late-arriving model registry. A shim that knows its models up front puts them
+    // in `hello`; one whose list is only knowable per session — an ACP agent's
+    // models depend on which providers the user has authenticated, and arrive with
+    // session/new — publishes them here instead. Same contract as the hello path: a
+    // picker backed by a real `model.set` the shim answers, never a claimed one.
+    if (type === "runtime.models") {
+      const models = parseModels(msg.models);
+      if (models.length) {
+        this.models = models;
+        this.capabilitiesRef.modelSelection = true;
+        if (typeof msg.currentModel === "string") this.currentModelId = msg.currentModel;
+      }
+      return;
+    }
     if (type === "message.delta") {
       const text = String(msg.text ?? "");
       if (!this.assistantText) this.emit({ type: "message_start", message: { role: "assistant", content: "" } });

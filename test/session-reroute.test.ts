@@ -132,6 +132,66 @@ await check("beginTurn resets the reroute budget for a new user turn", async () 
   assert.equal(plan!.model, "claude-sonnet");
 });
 
+// A retry ruleset like a user's "resume when the limit resets" rule.
+const retryRuleset: Ruleset = {
+  version: 1,
+  name: "session-resume",
+  appliesTo: ["session"],
+  rules: [{ when: ["credits_exhausted", "rate_limited"], action: "retry", maxAttempts: 3 }],
+};
+const NOW = Date.parse("2026-08-05T22:40:00Z");
+function retryController() {
+  return new SessionRerouteController({
+    policy: createRunPolicy({ ruleset: retryRuleset, context: "session", random: () => 0.5, now: () => NOW }),
+  });
+}
+
+await check("plans a resume at a weekly limit's reset time", async () => {
+  const controller = retryController();
+  controller.beginTurn();
+  const plan = controller.planResume("You've hit your weekly limit · resets 12am (UTC)", "claude-opus", { now: NOW });
+  assert.ok(plan, "should plan a resume");
+  assert.equal(plan!.resumeAt, "2026-08-06T00:00:00.000Z");
+  assert.equal(plan!.delayMs, 80 * 60 * 1000);
+  assert.equal(plan!.condition, "credits_exhausted");
+});
+
+await check("prefers a structured reset hint over the ambiguous text time", async () => {
+  const controller = retryController();
+  controller.beginTurn();
+  const plan = controller.planResume("You've hit your weekly limit · resets 12am (UTC)", "claude-opus", {
+    now: NOW,
+    resetsAtHint: "2026-08-11T00:00:00.000Z",
+  });
+  assert.equal(plan!.resumeAt, "2026-08-11T00:00:00.000Z");
+});
+
+await check("does not defer for ordinary short backoff", async () => {
+  // A transport blip under a retry rule → seconds of backoff, not a limit; surface it.
+  const controller = new SessionRerouteController({
+    policy: createRunPolicy({
+      ruleset: { version: 1, name: "t", appliesTo: ["session"], rules: [{ when: ["transport_error"], action: "retry", maxAttempts: 3 }] },
+      context: "session",
+      random: () => 0.5,
+      now: () => NOW,
+    }),
+  });
+  controller.beginTurn();
+  assert.equal(controller.planResume("socket hang up", "claude-opus", { now: NOW }), null);
+});
+
+await check("resume budget exhausts after maxAttempts and then parks (no plan)", async () => {
+  const controller = retryController();
+  controller.beginTurn();
+  for (let i = 0; i < 2; i += 1) {
+    const plan = controller.planResume("weekly limit reached · resets 12am (UTC)", "claude-opus", { now: NOW });
+    assert.ok(plan, `attempt ${i + 1} should still plan a resume`);
+    controller.noteResumeApplied();
+  }
+  // 3rd failure: maxAttempts reached → policy parks → retry no longer returned.
+  assert.equal(controller.planResume("weekly limit reached · resets 12am (UTC)", "claude-opus", { now: NOW }), null);
+});
+
 await check("a failed model swap reports via onFailed and doesn't throw", async () => {
   const { controller, failedMsgs } = makeController();
   const badTarget: SessionRerouteTarget = {
