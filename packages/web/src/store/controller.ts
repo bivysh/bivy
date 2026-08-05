@@ -311,6 +311,10 @@ export class AppController {
     if (!this.direct && !this.local.cp) this.local.cp = location.origin;
     this.transport = this.buildTransport();
     this.store.setCurrentNode(this.direct ? null : this.local.cur || null);
+    // Restore delete guards before painting the cached sidebar. A service-worker
+    // update reload can otherwise forget an in-flight deletion and immediately
+    // resurrect the stale cached/control-plane row.
+    this.restoreDeletedSessionTombstones();
     // Instant sidebar: paint the last known session list for this node from a
     // synchronous localStorage cache before the socket connects and the
     // authoritative sessions.list arrives. Also start persisting live updates.
@@ -477,6 +481,7 @@ export class AppController {
         }
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
+        if (appliedEvent.type === "session.deleted") this.persistDeletedSessionTombstones();
         this.maybeFlushPendingPrompt(appliedEvent);
         this.maybeConfirmFollowup(appliedEvent);
         this.maybeRestoreDraftAgent(appliedEvent);
@@ -1360,6 +1365,31 @@ export class AppController {
   // localStorage (small metadata; synchronous, so it seeds before first paint)
   // and reconcile against the live list the instant it lands.
 
+  private static readonly DELETED_SESSIONS_KEY = "bivy.deleted-sessions";
+
+  private restoreDeletedSessionTombstones(): void {
+    try {
+      const raw = localStorage.getItem(AppController.DELETED_SESSIONS_KEY);
+      if (raw) this.store.seedDeletedSessionTombstones(JSON.parse(raw));
+      this.persistDeletedSessionTombstones(); // also drops expired entries
+    } catch {
+      /* corrupt/unavailable localStorage — live reconciliation still works */
+    }
+  }
+
+  private persistDeletedSessionTombstones(): void {
+    try {
+      const tombstones = this.store.deletedSessionTombstones();
+      if (Object.keys(tombstones).length) {
+        localStorage.setItem(AppController.DELETED_SESSIONS_KEY, JSON.stringify(tombstones));
+      } else {
+        localStorage.removeItem(AppController.DELETED_SESSIONS_KEY);
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
   /** localStorage key for the current node's cached list (per-node so switching
    *  nodes never shows the wrong node's sessions). */
   private sessionCacheKey(): string {
@@ -1382,8 +1412,9 @@ export class AppController {
   /** Persist the session list whenever it changes. The store swaps in a new
    *  immutable state on every change, but the `sessions` array reference only
    *  changes when the list itself does, so this writes rarely. Empty lists are
-   *  never persisted, so a transient reset (e.g. switching nodes) can't wipe a
-   *  good cache before the new node's list arrives. */
+   *  significant: deleting the final session must overwrite the old cache or a
+   *  PWA reload paints that deleted row again. Node switches no longer clear the
+   *  unified list, so there is no transient-empty case to protect here. */
   private installSessionCachePersist(): void {
     if (typeof localStorage === "undefined") return;
     let last = this.store.getState().sessions;
@@ -1391,7 +1422,6 @@ export class AppController {
       const sessions = this.store.getState().sessions;
       if (sessions === last) return;
       last = sessions;
-      if (sessions.length === 0) return;
       try {
         // Cap the cached rows so a node with a very long history can't bloat
         // localStorage; the node's list is newest-first, so keep the head.
@@ -3117,6 +3147,7 @@ export class AppController {
       navigate({ kind: "new" });
     }
     this.store.removeSessionLocal(sessionId);
+    this.persistDeletedSessionTombstones();
     void this.transcriptCache.delete(sessionId);
     this.refreshSessions();
   }
