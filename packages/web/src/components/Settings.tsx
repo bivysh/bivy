@@ -3262,14 +3262,14 @@ function AccountPanel() {
       {err && <div className="banner error inline">{err}</div>}
       <div className="stat-grid">
         <Stat label="Plan" value={planLabel(ent?.plan || me?.account?.plan)} />
-        {trial && <Stat label="Sessions (trial)" value={sessionCap} />}
+        {trial && <Stat label="Pro trial" value={sessionCap} />}
         <Stat label="Automations / week" value={`${counts?.runsThisWeek ?? "—"} / ${runCap}`} />
       </div>
       {free && trial && (
         <p className="muted settings-intro">
-          You're on the free Bivy Cloud trial — the first {trial.limit} sessions are free to view and control
-          through the app{typeof trial.remaining === "number" && trial.remaining !== Infinity ? ` (${trial.remaining} left)` : ""}.
-          Pro removes the limit{proPrice ? ` for ${proPrice}` : ""} — or run your own self-hosted Bivy server to keep everything free.
+          You're on the Pro free trial — your first {trial.limit} sessions on Bivy Cloud are free
+          {typeof trial.remaining === "number" && trial.remaining !== Infinity ? ` (${trial.remaining} left)` : ""}.
+          Subscribe to Pro to keep unlimited sessions{proPrice ? ` for ${proPrice}` : ""} — or run your own self-hosted Bivy server to keep everything free.
         </p>
       )}
       {free && !trial && (
