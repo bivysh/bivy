@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-08-05
+
+### Changed
+
+- **Ephemeral machines are now opt-in and off by default.** The
+  bring-your-own-cloud short-lived runners (Fly.io, Hetzner, AWS EC2) are a
+  not-fully-developed Beta surface, so a deploy gets them only when it sets
+  `EPHEMERAL_MACHINES_ENABLED=1` (web build: `VITE_EPHEMERAL_MACHINES_ENABLED=1`).
+  This is fail-closed — production is off unless it explicitly opts in — while
+  local `vite dev` keeps the surface on so development isn't gated. The flag gates
+  all three layers: the web UI entry points, the control plane's server-initiated
+  auto-provision (`planAutoProvision`), and the device-launch `/api/ephemeral/exec`
+  relay. A machine's own idle self-teardown is intentionally unaffected, so any
+  already-running machine still reaps itself.
+
+### Fixed
+
+- The PWA's status bar / browser-chrome color now matches the app background
+  (`--bg`: `#f5f3ee` light, `#14171a` dark) instead of a pure white/black band —
+  the static `theme-color` tags and `theme.ts` were still `#ffffff`/`#111111`.
+
 ## [0.8.0] - 2026-08-05
 
 ### Changed
