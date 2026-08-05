@@ -51,6 +51,11 @@ export type MetadataSession = {
    *  durable flag lets the UI offer a one-tap "Resume" when the session is opened.
    *  Cleared the moment any turn completes on the session (see clearSessionWorking). */
   resumePending?: boolean;
+  /** ISO instant a session is scheduled to auto-resume at, set when a turn hit a
+   *  provider usage/rate limit and the ruleset says retry-when-it-resets. Durable
+   *  so the resume survives a daemon restart (re-armed by the resume sweep);
+   *  cleared once the session resumes or otherwise moves on. */
+  resumeAt?: string;
   createdAt: string;
   updatedAt: string;
   lastActivityAt?: string;
@@ -260,6 +265,24 @@ export class MetadataStore {
     if ((prev.resumePending ?? false) === pending) return;
     this.data.sessions[id] = { ...prev, resumePending: pending, updatedAt: nowIso() };
     this.save();
+  }
+
+  /** Set/clear the durable auto-resume time (rate/usage-limit recovery). Pass
+   *  null to clear. No-op when the row is missing or already in the requested
+   *  state, so it never churns the file on the hot turn path. */
+  setResumeAt(id: string, resumeAt: string | null) {
+    const prev = this.data.sessions[id];
+    if (!prev) return;
+    const next = resumeAt ?? undefined;
+    if ((prev.resumeAt ?? undefined) === next) return;
+    this.data.sessions[id] = { ...prev, resumeAt: next, updatedAt: nowIso() };
+    this.save();
+  }
+
+  /** Sessions with a durable auto-resume time set — the resume sweep re-arms
+   *  these after a restart. */
+  sessionsWithResumeAt(): MetadataSession[] {
+    return Object.values(this.data.sessions).filter((s) => typeof s.resumeAt === "string" && s.resumeAt);
   }
 
   /** Look up a session's durable metadata by id, or by session-file path. */

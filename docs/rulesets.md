@@ -101,12 +101,13 @@ for reroute — order the fallback chain. The node validates every save with
 `validateRuleset` before it is stored, so an invalid shape is rejected with a
 readable error rather than silently persisted.
 
-One ruleset may be marked **active**. That is the ruleset the work-queue effector
-runs under (`activeQueueRuleset` in `src/server.ts`), read lazily on each failed
-attempt so an edit in the UI takes effect on the next failure without a restart.
-An active ruleset only steers a context it `appliesTo` — an active session-only
-ruleset never touches the unattended queue. With no active ruleset, the queue
-falls back to `DEFAULT_RULESET` below.
+One ruleset may be marked **active**. That is the ruleset both effectors run
+under — the work queue (`activeQueueRuleset` in `src/server.ts`) and interactive
+sessions (`activeSessionRuleset`) — each read lazily on the next failure so a UI
+edit takes effect without a restart. An active ruleset only steers a context it
+`appliesTo`: an active session-only ruleset never touches the unattended queue,
+and an active queue-only ruleset never steers a session. With no active ruleset,
+each context falls back to `DEFAULT_RULESET` below.
 
 ### The built-in default
 
@@ -171,6 +172,37 @@ of surfacing the error.
 - **Bounded**: the per-turn reroute budget resets on each user prompt; when the
   chain drains the error surfaces as before.
 
+## Milestone 3 — in-session resume after a usage/rate limit (shipped)
+
+A live turn that ends because a provider usage window is exhausted — a Claude
+subscription "5-hour" or "weekly" cap, `you've hit your weekly limit · resets 12am
+(UTC)` — is **waited out and re-sent** when the window resets, instead of leaving a
+dead error bubble, whenever the active session ruleset says `retry` for that
+condition.
+
+- **Classification**: the qualifier in a windowed-limit message (`weekly`,
+  `5-hour`, `7-day`) no longer defeats the classifier — these map to
+  `credits_exhausted` (was silently `unknown`, so no rule ever matched). See
+  `src/policy/conditions.ts`.
+- **Reset time**: the resume fires at the provider's reset. `classifyFailure`
+  resolves it, most-authoritative first: a structured `resetsAtHint` (the Claude
+  usage snapshot's `resets_at`, essential for a multi-day window whose text only
+  states a time-of-day), then an ISO stamp in the text, then a bare wall-clock
+  (`resets 12am (UTC)`) via `parseResetClock`.
+- **Seam**: `SessionRerouteController.planResume` decides synchronously (like
+  `planReroute`); the daemon persists the due time (`metadata.resumeAt`) and arms
+  a timer. `driveSessionResume` re-opens the session if needed and re-sends the
+  turn's last prompt.
+- **Durable**: the due time is persisted, so a daemon restart re-arms it
+  (`sessionResumeSweep`, at boot and on a 60s interval). In-process timers are
+  capped and the sweep re-arms long tails.
+- **Bounded**: each resume charges the attempt budget (`noteResumeApplied`), so a
+  limit that re-fires after the reset eventually exhausts (→ surfaces) instead of
+  looping. A new user prompt supersedes a pending resume.
+- **Runtime coverage**: Claude Code throws the limit inside the SDK query and
+  emits its own `session.error` plus `agent_end.error`; the daemon now reads that
+  `error` string (not just pi-ai's stop-reason shape) to drive recovery.
+
 ## Not yet supported
 
 These are not available yet:
@@ -180,8 +212,10 @@ These are not available yet:
   budget.
 - **`continue` action** — for `context_overflow`, forking into a fresh session
   that preserves run lineage and workspace, rather than parking.
-- **Waiting state and claim leases** — releasing a node slot during a long
-  `retry-after` instead of sleeping, and reclaiming a dead node's claimed run.
+- **Queue waiting state and claim leases** — releasing a node slot during a long
+  `retry-after` instead of sleeping in-process, and reclaiming a dead node's
+  claimed run. (Interactive sessions already resume durably — see Milestone 3 —
+  because their due time is persisted rather than held in a lease.)
 - **Credential-aware queue reroute** — skipping un-credentialed fallback routes
   in the queue effector.
 - **Node fallback** — warm-standby promotion, cross-node fork, and ephemeral
