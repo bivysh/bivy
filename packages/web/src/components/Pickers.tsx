@@ -53,7 +53,7 @@ function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string })
   return (
     <span className="runtime-meta">
       {text && <span className="runtime-meta-text">{text}</span>}
-      <span className="runtime-capabilities" aria-label="Runtime support tier, protection, and capabilities">
+      <span className="runtime-capabilities" aria-label="Agent support tier, protection, and capabilities">
         <span
           className={`runtime-tier ${tier}`}
           title={runtime.certification === "release-tested"
@@ -64,7 +64,7 @@ function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string })
         </span>
         <span
           className={`runtime-protection ${protectionLevel}`}
-          title={runtime.protectionDetail || "This node did not report a protection description."}
+          title={runtime.protectionDetail || "This machine did not report a protection description."}
         >
           {protectionLabel}
         </span>
@@ -112,7 +112,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
         <PickerItem
           active={!state.draftRepo}
           title="No repo"
-          meta="Work in the node's default workspace"
+          meta="Work in the machine's default workspace"
           onClick={() => {
             controller.chooseRepo(null);
             onClose();
@@ -120,7 +120,7 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
         />
         {state.reposLoading && <div className="picker-empty">Loading repos…</div>}
         {!state.reposLoading && !state.reposAuthed && (
-          <div className="picker-empty">Connect GitHub on this node to list repos.</div>
+          <div className="picker-empty">Connect GitHub on this machine to list repos.</div>
         )}
         {!state.reposLoading && state.reposError && <div className="picker-empty">{state.reposError}</div>}
         {repos.map((r) => {
@@ -267,8 +267,8 @@ export function SandboxPicker({ state, onClose }: { state: AppState; onClose: ()
       <div className="picker-list">
         <PickerItem
           active={!state.draftSandbox}
-          title={`Node default${nodeDefault ? ` (${nodeDefault})` : ""}`}
-          meta="Use this node's configured sandbox mode"
+          title={`Machine default${nodeDefault ? ` (${nodeDefault})` : ""}`}
+          meta="Use this machine's configured sandbox mode"
           onClick={() => {
             controller.setSessionSandbox(null);
             onClose();
@@ -319,7 +319,7 @@ export function NodePicker({
   return (
     <Sheet title="Open terminal on" onClose={onClose} autoFocusSearch={false}>
       <div className="picker-list">
-        {state.nodes.length === 0 && <div className="picker-empty">No nodes available.</div>}
+        {state.nodes.length === 0 && <div className="picker-empty">No machines available.</div>}
         {state.nodes.map((n) => (
           <PickerItem
             key={n.id}

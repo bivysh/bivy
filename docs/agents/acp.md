@@ -61,19 +61,32 @@ a headless print mode.
 
 #### Agents that declare an ACP mode today
 
-Each of these ships a native ACP server, so it declares `acp` and can be promoted
-with `BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all of them at once):
+Each of these ships a native ACP server, so it declares `acp`. OpenCode is
+validated and promoted **by default**; the rest are opt-in with `BIVY_<ID>_ACP=1`
+(or `BIVY_PREFER_ACP=1` for all of them at once):
 
-| Agent | id | Launch flag | Promote with |
-| --- | --- | --- | --- |
-| Gemini CLI | `gemini` | `--experimental-acp` | `BIVY_GEMINI_ACP=1` |
-| Qwen Code | `qwen` | `--experimental-acp` (newer builds: `--acp`) | `BIVY_QWEN_ACP=1` |
-| OpenCode | `opencode` | `acp` | `BIVY_OPENCODE_ACP=1` |
-| Goose | `goose` | `acp` | `BIVY_GOOSE_ACP=1` |
-| Kilo Code | `kilocode` | `acp` | `BIVY_KILOCODE_ACP=1` |
-| Cursor | `cursor` | `acp` | `BIVY_CURSOR_ACP=1` |
-| Cline | `cline` | `--acp` | `BIVY_CLINE_ACP=1` |
-| GitHub Copilot | `copilot` | `--acp` | `BIVY_COPILOT_ACP=1` |
+| Agent | id | Launch flag | Default | Control |
+| --- | --- | --- | --- | --- |
+| OpenCode | `opencode` | `acp` | **On** (validated 1.18.13) | `BIVY_OPENCODE_ACP=0` to force the pipe |
+| Gemini CLI | `gemini` | `--experimental-acp` | Off | `BIVY_GEMINI_ACP=1` |
+| Qwen Code | `qwen` | `--experimental-acp` (newer builds: `--acp`) | Off | `BIVY_QWEN_ACP=1` |
+| Goose | `goose` | `acp` | Off | `BIVY_GOOSE_ACP=1` |
+| Kilo Code | `kilocode` | `acp` | Off | `BIVY_KILOCODE_ACP=1` |
+| Cursor | `cursor` | `acp` | Off | `BIVY_CURSOR_ACP=1` |
+| Cline | `cline` | `--acp` | Off | `BIVY_CLINE_ACP=1` |
+| GitHub Copilot | `copilot` | `--acp` | Off | `BIVY_COPILOT_ACP=1` |
+
+#### Why a default-on promotion is probe-gated
+
+ACP is a one-way switch: once a session opens over the protocol, there is no
+falling back to the pipe mid-flight. So an agent promoted **by default**
+(`acp.preferred` in its spec) is only taken down that path when the installed
+binary actually evidences the mode — a cached `--help` probe for the subcommand.
+A node running a CLI too old to speak ACP silently keeps the pipe path with its
+honest, lower capabilities instead of opening a session that hangs and dies.
+
+An explicit `BIVY_<ID>_ACP=1` skips the probe (the operator knows their binary);
+`BIVY_<ID>_ACP=0` forces the pipe path back on.
 
 Agents with no native ACP mode (Aider, Amp, Crush, Continue, Grok, …) stay on the
 one-shot pipe — only community bridge adapters exist upstream, which Bivy doesn't
@@ -84,7 +97,13 @@ bundle. When one of them ships a first-party ACP server, promoting it is a one-l
 
 - **Approvals:** Yes — per-tool, via `session/request_permission`.
 - **Resume:** Yes — `session/load` (Bivy passes the session ref back).
-- **Models:** Not part of core ACP, so no model picker is advertised.
+- **Models:** Yes, when the agent reports a selectable model config option on
+  `session/new`. The shim publishes that list to Bivy as a post-`hello`
+  `runtime.models` event and applies a choice with `session/set_model` (falling
+  back to `session/set_config_option`). The list is per node — it reflects the
+  providers that agent has actually been signed into — and a model the agent
+  rejects fails visibly rather than appearing to apply. An agent that reports no
+  model options advertises no picker.
 
 ## Known gaps / notes
 

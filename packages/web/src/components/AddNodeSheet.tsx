@@ -16,10 +16,10 @@ export function AddNodeSheet({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState(false);
 
   return (
-    <Sheet title="Add a node" onClose={onClose}>
+    <Sheet title="Add a machine" onClose={onClose}>
       <div className="settings-form">
         <p className="muted">
-          Run this on any Mac or Linux computer to install Bivy there and connect it as a new node on your account.
+          Run this on any Mac or Linux computer to install Bivy there and connect it as a new machine on your account.
         </p>
         <pre className="code-snippet">
           <code>{INSTALL_CMD}</code>
@@ -39,7 +39,7 @@ export function AddNodeSheet({ onClose }: { onClose: () => void }) {
           </button>
           <a className="btn ghost" href="/install.sh">Download script</a>
         </div>
-        <p className="muted">The new node shows up in this switcher as soon as it connects — no need to close this.</p>
+        <p className="muted">The new machine shows up in this switcher as soon as it connects — no need to close this.</p>
       </div>
     </Sheet>
   );

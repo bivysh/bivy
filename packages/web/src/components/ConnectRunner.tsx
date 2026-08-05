@@ -60,7 +60,7 @@ export function ConnectRunner({
         <div className="connect-kicker">Signed in — one step left</div>
         <h2 className="connect-title" id="connect-runner-title">Choose where your first agent runs</h2>
         <p className="connect-sub">
-          Use your own computer for an always-ready node, or launch a temporary
+          Use your own computer for an always-ready machine, or launch a temporary
           runner in your cloud account. Bivy never receives your code or keys.
         </p>
       </div>
@@ -133,7 +133,7 @@ export function ConnectRunner({
 
       {persistentNodes.length > 0 && (
         <div className="connect-nodes">
-          <div className="connect-nodes-head">Your nodes</div>
+          <div className="connect-nodes-head">Your machines</div>
           <div className="connect-nodes-list">
             {persistentNodes.map((n) => (
               <button
@@ -141,7 +141,7 @@ export function ConnectRunner({
                 type="button"
                 className="connect-node"
                 onClick={() => onPickNode(n.id)}
-                title={n.online ? "Start a new session on this node" : "This node is offline — selecting it will try to reconnect"}
+                title={n.online ? "Start a new session on this machine" : "This machine is offline — selecting it will try to reconnect"}
               >
                 <span className={`node-dot${n.online ? " online" : ""}`} aria-hidden />
                 <span className="connect-node-name">{n.name || n.id}</span>

@@ -49,7 +49,7 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
 
   const nodeList = useMemo(() => {
     const rows = [...nodes];
-    if (currentNodeId && !rows.some((n) => n.id === currentNodeId)) rows.unshift({ id: currentNodeId, name: "This node", online: true });
+    if (currentNodeId && !rows.some((n) => n.id === currentNodeId)) rows.unshift({ id: currentNodeId, name: "This machine", online: true });
     return rows;
   }, [nodes, currentNodeId]);
 
@@ -88,7 +88,7 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
     <Sheet title={willRetire ? "Move session" : "Fork session"} onClose={onClose} autoFocusSearch={false}>
       {nodeList.length > 1 && (
         <div className="picker-section fork-select-field">
-          <label htmlFor="fork-destination-node">Destination node</label>
+          <label htmlFor="fork-destination-node">Destination machine</label>
           <select
             id="fork-destination-node"
             value={destNodeId}

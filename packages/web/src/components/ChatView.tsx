@@ -502,7 +502,7 @@ export function ChatView({
             <div className="chat-empty">
               <p className="chat-empty-title">Start a new session</p>
               <p className="chat-empty-sub">
-                Choose the <b>node</b> to run on in the header, then the{" "}
+                Choose the <b>machine</b> to run on in the header, then the{" "}
                 <b>agent</b> and <b>model</b> below. Describe your task to
                 begin.
               </p>

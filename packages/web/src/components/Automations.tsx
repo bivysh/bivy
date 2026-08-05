@@ -132,7 +132,7 @@ export function AutomationsPanel({ state }: { state: AppState }) {
     try {
       const nodeId = state.currentNodeId || controller.local.cur;
       const roomKey = nodeId ? controller.local.keys()[nodeId] : undefined;
-      if (!nodeId || !roomKey) throw new Error("Connect to the assigned node before saving encrypted instructions.");
+      if (!nodeId || !roomKey) throw new Error("Connect to the assigned machine before saving encrypted instructions.");
       if (kind === "cron" && !cron.trim()) throw new Error("Describe when to run, e.g. “every day at 9am”.");
       if (kind === "once" && !onceAt) throw new Error("Pick a date and time to run.");
       const encrypted = await seal(await importRoomKey(unb64(roomKey)), ciphertext.trim());
@@ -182,7 +182,7 @@ export function AutomationsPanel({ state }: { state: AppState }) {
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
       const roomKey = controller.local.keys()[parts[1]];
       if (!roomKey) {
-        setError("This device does not hold the assigned node's encryption key.");
+        setError("This device does not hold the assigned machine's encryption key.");
         return;
       }
       setCiphertext(await open(await importRoomKey(unb64(roomKey)), parts.slice(2).join(":")));
@@ -214,7 +214,7 @@ export function AutomationsPanel({ state }: { state: AppState }) {
       <section className="settings-section">
         <h3>Scheduled automations</h3>
         <p className="settings-hint">
-          Instructions are encrypted for the assigned node before upload. The hosted control plane never receives
+          Instructions are encrypted for the assigned machine before upload. The hosted control plane never receives
           plaintext prompts, repository contents, transcripts, credentials, or tool output.
         </p>
         <form onSubmit={submit} className="settings-form">
@@ -296,13 +296,13 @@ export function AutomationsPanel({ state }: { state: AppState }) {
             </div>
           )}
           <div className="settings-field">
-            <label className="field-label" htmlFor="automation-node-label">Node label (optional)</label>
+            <label className="field-label" htmlFor="automation-node-label">Machine label (optional)</label>
             <input id="automation-node-label" className="picker-search" value={nodeLabel} onChange={(e) => setNodeLabel(e.target.value)} placeholder="bivy/laptop" />
           </div>
           <div className="settings-field">
-            <label className="field-label" htmlFor="automation-runtime">Runtime (optional)</label>
+            <label className="field-label" htmlFor="automation-runtime">Agent (optional)</label>
             <select id="automation-runtime" className="picker-search" value={runtimeId} onChange={(e) => setRuntimeId(e.target.value)}>
-              <option value="">Node default</option>
+              <option value="">Machine default</option>
               {state.runtimes.map((r) => (
                 <option key={r.id} value={r.id}>{String(r.displayName || r.name || r.id)}</option>
               ))}
