@@ -45,7 +45,7 @@ export function Inbox({
   return (
     <section className="inbox" role="dialog" aria-modal="true" aria-labelledby="inbox-title">
       <header className="inbox-head">
-        <div><h2 id="inbox-title">Inbox</h2><p>What needs you now, across every node.</p></div>
+        <div><h2 id="inbox-title">Inbox</h2><p>What needs you now, across every machine.</p></div>
         <button ref={closeRef} type="button" className="icon-btn" onClick={onClose} aria-label="Close inbox">×</button>
       </header>
       <div className="inbox-filters" aria-label="Inbox filters">

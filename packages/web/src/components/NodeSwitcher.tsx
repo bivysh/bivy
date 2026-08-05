@@ -51,7 +51,7 @@ export function NodeSwitcher() {
   // A runner picked for the (not-yet-created) draft session shows as the current
   // selection — offline/pending until the first message launches it.
   const draftRunner = !activeSessionId ? draftEphemeralConfig : null;
-  const label = draftRunner ? draftRunner.name : current?.name || sessionNodeId || "Node";
+  const label = draftRunner ? draftRunner.name : current?.name || sessionNodeId || "Machine";
   const showOnline = draftRunner ? false : current?.online;
   // Ephemeral machines enroll as real account nodes (id `eph-…`) once they boot,
   // so they'd otherwise show up twice: here under "Your nodes" AND under the
@@ -87,7 +87,7 @@ export function NodeSwitcher() {
         }}
         aria-haspopup={locked ? undefined : "menu"}
         aria-expanded={locked ? undefined : open}
-        aria-label={locked ? `Session node: ${label}` : undefined}
+        aria-label={locked ? `Session machine: ${label}` : undefined}
       >
         {/* Online/offline/reconnecting is otherwise color/shape-only (a 9px
             dot, sometimes a spinner) with no text — invisible to screen
@@ -108,8 +108,8 @@ export function NodeSwitcher() {
               Reconnecting…
             </div>
           )}
-          <div className="node-menu-head">Your nodes</div>
-          {persistentNodes.length === 0 && <div className="node-menu-empty">No other nodes</div>}
+          <div className="node-menu-head">Your machines</div>
+          {persistentNodes.length === 0 && <div className="node-menu-empty">No other machines</div>}
           {persistentNodes.map((n) => (
             <div className="node-menu-row" key={n.id}>
               <button
@@ -172,7 +172,7 @@ export function NodeSwitcher() {
             }}
           >
             <span className="node-menu-glyph">+</span>
-            <span className="node-menu-name">Add a node…</span>
+            <span className="node-menu-name">Add a machine…</span>
           </button>
           <div className="node-menu-sep" />
           {/* Confirm first — signing out here used to be a single tap with no

@@ -382,7 +382,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
   }, [query, repoFilter, nodeFilter]);
 
   const activeFilterCount = (repoFilter ? 1 : 0) + (nodeFilter ? 1 : 0);
-  const filterSummary = [nodeFilter ? nodeName(nodeFilter) : !controller.direct ? "All nodes" : null, repoFilter || null].filter(Boolean).join(" · ");
+  const filterSummary = [nodeFilter ? nodeName(nodeFilter) : !controller.direct ? "All machines" : null, repoFilter || null].filter(Boolean).join(" · ");
   const emptyText = query.trim() || repoFilter || nodeFilter
     ? "No matching sessions."
     : "No sessions yet. Use ＋ New to start one.";
@@ -424,7 +424,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
             <div className="session-filter-menu" role="menu">
               {!controller.direct && (
                 <div className="session-filter-section">
-                  <div className="session-filter-head">Node</div>
+                  <div className="session-filter-head">Machine</div>
                   <button
                     className="session-filter-item"
                     role="menuitemradio"
@@ -434,11 +434,11 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                       setFilterOpen(false);
                     }}
                   >
-                    <span>All nodes</span>
+                    <span>All machines</span>
                     {!nodeFilter && <span className="session-filter-check">✓</span>}
                   </button>
                   {nodes.length === 0 ? (
-                    <div className="session-filter-empty">No nodes</div>
+                    <div className="session-filter-empty">No machines</div>
                   ) : (
                     nodes.map((n) => (
                       <button

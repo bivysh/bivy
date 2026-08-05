@@ -86,7 +86,7 @@ export function GithubQueuePanel({
   // to the node's default.
   const agentOptions = useMemo(
     () => [
-      { id: "", label: "Node default" },
+      { id: "", label: "Machine default" },
       ...runtimes.map((r) => ({ id: r.id, label: String(r.displayName || r.name || r.id) })),
     ],
     [runtimes],
@@ -420,10 +420,10 @@ export function GithubQueuePanel({
         {canQuery && workQueueEnabled !== false && unservedApps.length > 0 && (
           <div className="banner warn inline">
             {unservedApps.length === apps.length
-              ? `${apps.length === 1 ? "Your GitHub App is" : "Your GitHub Apps are"} set up, but no online node is running ${apps.length === 1 ? "it" : "them"} — nothing will pick these up.`
-              : `${unservedApps.length} of your ${apps.length} GitHub Apps (${unservedApps.map((a) => a.name || a.mention || a.appId).join(", ")}) aren't running on any node — work for those won't be picked up.`}{" "}
+              ? `${apps.length === 1 ? "Your GitHub App is" : "Your GitHub Apps are"} set up, but no online machine is running ${apps.length === 1 ? "it" : "them"} — nothing will pick these up.`
+              : `${unservedApps.length} of your ${apps.length} GitHub Apps (${unservedApps.map((a) => a.name || a.mention || a.appId).join(", ")}) aren't running on any machine — work for those won't be picked up.`}{" "}
             <button className="link-btn" onClick={onOpenGithubSettings}>
-              {unservedApps.length === 1 ? "Connect it on a node →" : "Connect them on a node →"}
+              {unservedApps.length === 1 ? "Connect it on a machine →" : "Connect them on a machine →"}
             </button>
           </div>
         )}
@@ -554,7 +554,7 @@ export function GithubQueuePanel({
                           <button
                             className={`queue-action-btn${open ? " active" : ""}`}
                             onClick={() => (open ? setAssignOpenId(null) : openAssign(w))}
-                            title="Dispatch to a node + agent"
+                            title="Dispatch to a machine + agent"
                           >
                             {open ? "Cancel" : "Run…"}
                           </button>
@@ -574,9 +574,9 @@ export function GithubQueuePanel({
                           <label className="queue-run-field">
                             <span>Runner</span>
                             <select value={assignPrimary} onChange={(e) => setAssignPrimary(e.target.value)}>
-                              <option value="shared">Shared queue (any online node)</option>
+                              <option value="shared">Shared queue (any online machine)</option>
                               {persistentNodes.length > 0 && (
-                                <optgroup label="Persistent nodes">
+                                <optgroup label="Persistent machines">
                                   {persistentNodes.map((n) => (
                                     <option key={n.id} value={`node:${n.name || n.id}`}>
                                       {n.name || n.id}{n.online ? "" : " (offline)"}
@@ -600,9 +600,9 @@ export function GithubQueuePanel({
                               config is provisioned on demand, so it needs no fallback. */}
                           {EPHEMERAL_MACHINES_ENABLED && primarySel.kind === "node" && ephemeralConfigs.length > 0 && (
                             <label className="queue-run-field">
-                              <span>Fallback if node is offline</span>
+                              <span>Fallback if machine is offline</span>
                               <select value={assignFallback} onChange={(e) => setAssignFallback(e.target.value)}>
-                                <option value="">None — wait for the node</option>
+                                <option value="">None — wait for the machine</option>
                                 {ephemeralConfigs.map((s) => (
                                   <option key={s.id} value={`config:${s.id}`}>{s.name} · {s.provider}</option>
                                 ))}
@@ -724,7 +724,7 @@ export function GithubQueuePanel({
 
         {!canQuery && (
           <p className="muted">
-            Direct/local mode has no shared account queue — sessions a labelled issue starts on this node still show above.
+            Direct/local mode has no shared account queue — sessions a labelled issue starts on this machine still show above.
           </p>
         )}
       </div>
