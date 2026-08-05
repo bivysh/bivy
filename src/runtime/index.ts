@@ -176,13 +176,25 @@ function claudeCodeInfo(): RuntimeInfo {
   };
 }
 
+// Memoized CLI probes. `commandAvailable`/`resolveCommandPath`/`probeHelpText`
+// each shell out with a BLOCKING spawnSync, and the runtime catalog that calls
+// them (cliAgentInfo → prefersAcp/acpSupportedByBinary) is rebuilt often — on
+// every advertise and every runtimes.list send. Re-probing per build stalled the
+// event loop for seconds at a time (a synchronous spawn storm). A CLI's presence
+// is effectively constant for the daemon's run, so cache per command for the
+// process lifetime and clear on install (invalidateCliProbeCache).
+const COMMAND_AVAILABLE_CACHE = new Map<string, boolean>();
 function commandAvailable(command: string): boolean {
   if (!command.trim()) return false;
+  const cached = COMMAND_AVAILABLE_CACHE.get(command);
+  if (cached !== undefined) return cached;
   const result = spawnSync(process.platform === "win32" ? "where" : "command", process.platform === "win32" ? [command] : ["-v", command], {
     shell: process.platform !== "win32",
     stdio: "ignore",
   });
-  return result.status === 0;
+  const available = result.status === 0;
+  COMMAND_AVAILABLE_CACHE.set(command, available);
+  return available;
 }
 
 function genericCliInfo(): RuntimeInfo {
@@ -1074,15 +1086,21 @@ function cliThinkingConfig(id: CliAgentId): ProcessThinkingConfig | undefined {
  * Used to key the help-probe cache: caching by the bare NAME would keep serving a
  * stale answer after the binary behind that name changed (a CLI upgraded or
  * installed while the daemon is running, or a different PATH entry winning).
+ * Memoized per command (see COMMAND_AVAILABLE_CACHE) — it spawnSyncs, and is hit
+ * on every catalog build.
  */
+const COMMAND_PATH_CACHE = new Map<string, string | null>();
 function resolveCommandPath(command: string): string | null {
   if (!command.trim()) return null;
+  const cached = COMMAND_PATH_CACHE.get(command);
+  if (cached !== undefined) return cached;
   const res = spawnSync(process.platform === "win32" ? "where" : "command", process.platform === "win32" ? [command] : ["-v", command], {
     shell: process.platform !== "win32",
     encoding: "utf8",
   });
-  if (res.status !== 0) return null;
-  return (res.stdout ?? "").split(/\r?\n/)[0]?.trim() || null;
+  const resolved = res.status !== 0 ? null : ((res.stdout ?? "").split(/\r?\n/)[0]?.trim() || null);
+  COMMAND_PATH_CACHE.set(command, resolved);
+  return resolved;
 }
 
 const HELP_PROBE_CACHE = new Map<string, string | null>();
@@ -1099,6 +1117,20 @@ function probeHelpText(command: string): string | null {
   }
   HELP_PROBE_CACHE.set(key, text);
   return text;
+}
+
+/**
+ * Drop every memoized CLI probe (availability, resolved path, --help text). These
+ * probes shell out with a blocking spawnSync and are cached for the process
+ * lifetime to keep the frequently-rebuilt runtime catalog off the event loop, so a
+ * CLI installed/updated mid-run wouldn't otherwise be noticed until a restart.
+ * Call this right after Bivy installs a runtime so the next catalog build re-probes
+ * and reflects the new binary immediately.
+ */
+export function invalidateCliProbeCache(): void {
+  COMMAND_AVAILABLE_CACHE.clear();
+  COMMAND_PATH_CACHE.clear();
+  HELP_PROBE_CACHE.clear();
 }
 
 // A resume template mixes launch flags (`-p`, `--force`) with the resume-specific
