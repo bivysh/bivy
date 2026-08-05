@@ -995,7 +995,9 @@ export class SessionStore {
    *  session reappears and looks like the delete silently failed. Bounded by TTL
    *  so a delete that genuinely failed on the node can't hide a row forever. */
   private recentlyDeleted = new Map<string, number>();
-  private static readonly DELETE_TOMBSTONE_MS = 30_000;
+  // Long enough to survive a PWA reload and the node's 60s control-plane
+  // reconciliation. A failed delete still self-heals instead of hiding forever.
+  private static readonly DELETE_TOMBSTONE_MS = 5 * 60_000;
   /** Per-session raw node messages + history cursor (count + hash), so we can
    *  apply append deltas and echo the cursor for incremental backfill. */
   private historyRaw = new Map<string, { messages: any[]; count: number; historyHash: string }>();
@@ -1910,6 +1912,22 @@ export class SessionStore {
     this.set({ sessions: this.state.sessions.map((s) => (s.sessionId === sessionId ? { ...s, name } : s)) });
   }
 
+  /** Restore deletion guards persisted by a view layer across a PWA reload. */
+  seedDeletedSessionTombstones(value: unknown): void {
+    if (!value || typeof value !== "object") return;
+    for (const [id, rawAt] of Object.entries(value as Record<string, unknown>)) {
+      const at = Number(rawAt);
+      if (id && Number.isFinite(at)) this.recentlyDeleted.set(id, at);
+    }
+    this.pruneDeletedSessionTombstones();
+  }
+
+  /** Serializable deletion guards for the view layer's local durable cache. */
+  deletedSessionTombstones(): Record<string, number> {
+    this.pruneDeletedSessionTombstones();
+    return Object.fromEntries(this.recentlyDeleted);
+  }
+
   /** Optimistically drop a session-list row before the node's fresh list arrives. */
   removeSessionLocal(sessionId: string): void {
     // Tombstone the id so a full-list refresh that still predates the deletion
@@ -1919,14 +1937,18 @@ export class SessionStore {
     this.set({ sessions: this.state.sessions.filter((s) => s.sessionId !== sessionId) });
   }
 
-  /** Drop rows the user just deleted, pruning expired tombstones as we go, so a
-   *  stale authoritative list can't resurrect a just-deleted session. */
-  private withoutRecentlyDeleted(sessions: SessionSummary[]): SessionSummary[] {
-    if (this.recentlyDeleted.size === 0) return sessions;
+  private pruneDeletedSessionTombstones(): void {
     const now = Date.now();
     for (const [id, at] of this.recentlyDeleted) {
       if (now - at > SessionStore.DELETE_TOMBSTONE_MS) this.recentlyDeleted.delete(id);
     }
+  }
+
+  /** Drop rows the user just deleted, pruning expired tombstones as we go, so a
+   *  stale authoritative list can't resurrect a just-deleted session. */
+  private withoutRecentlyDeleted(sessions: SessionSummary[]): SessionSummary[] {
+    if (this.recentlyDeleted.size === 0) return sessions;
+    this.pruneDeletedSessionTombstones();
     if (this.recentlyDeleted.size === 0) return sessions;
     return sessions.filter((s) => !this.recentlyDeleted.has(s.sessionId));
   }
@@ -2135,6 +2157,9 @@ export class SessionStore {
         const e = event as any;
         const sid = String(e.sessionId || "");
         const file = e.sessionFile as string | undefined;
+        // Deletions initiated by another client/prune need the same stale-list
+        // protection as this client's optimistic delete.
+        if (sid) this.recentlyDeleted.set(sid, Date.now());
         this.set({
           sessions: this.state.sessions.filter(
             (s) => s.sessionId !== sid && (!file || s.path !== file),

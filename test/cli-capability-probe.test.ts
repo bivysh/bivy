@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { listRuntimes, refineCapabilitiesFromHelp, resolveCliExecutionMode } from "../src/runtime/index.js";
+import { listRuntimes, refineCapabilitiesFromHelp, resolveCliExecutionMode, invalidateCliProbeCache } from "../src/runtime/index.js";
 
 let failures = 0;
 function check(name: string, fn: () => void) {
@@ -92,6 +92,11 @@ fs.writeFileSync(
   ["#!/bin/sh", 'echo "usage: gemini [-p <prompt>] [--yolo]"', 'echo "a stripped-down build with no model or resume flags"', ""].join("\n"),
   { mode: 0o755 },
 );
+// CLI probes are memoized for the process lifetime, and the catalog is built once
+// at import — before this stub exists and this PATH is set — so `gemini` is already
+// cached as "not found". Drop that cache now that the stub is in place, exactly as
+// an install would, so the probe-on check below actually re-probes the stub.
+invalidateCliProbeCache();
 
 check("probe off by default: gemini keeps its pinned capabilities", () => {
   delete process.env.BIVY_AGENT_PROBE;

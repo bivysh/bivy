@@ -146,7 +146,10 @@ export interface SessionIndexEntry {
   agentServiceAddress?: string;
   updatedAt: string;
 }
-export type SessionAdvert = Omit<SessionIndexEntry, "nodeId" | "updatedAt">;
+/** Node-owned projection. `updatedAt` is the session's actual last activity,
+ * not the time the control plane happened to receive an advert. Older nodes may
+ * omit it, so the store still has a receive-time fallback. */
+export type SessionAdvert = Omit<SessionIndexEntry, "nodeId" | "updatedAt"> & { updatedAt?: string };
 
 /**
  * Ownership + warm-standby routing for a replicated session

@@ -8,7 +8,7 @@ import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypt
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
-import { listRuntimes, catalogRuntimes, cliInstallSpec, isCliAgentId, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { listRuntimes, catalogRuntimes, cliInstallSpec, invalidateCliProbeCache, isCliAgentId, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
@@ -3390,6 +3390,9 @@ const RELAY_COMMANDS: Record<string, Command> = {
     try {
       const before = runtimeList().find((runtime) => runtime.id === spec.id);
       if (before?.status !== "available") await runInstallCommand(spec);
+      // The just-installed binary changes what the CLI probes would report, so drop
+      // their (process-lifetime) cache and let the catalog below re-probe it.
+      invalidateCliProbeCache();
       const activeAgent = active?.runtimeId ?? defaultRuntimeId;
       const runtimes = runtimeList(activeAgent);
       relay?.sendEvent({ type: "runtime.install.done", id: spec.id, runtimes });
@@ -4500,6 +4503,12 @@ function startModelAuthWatcher() {
 let sessionAdvertiseTarget: { controlPlaneUrl: string; enrollmentToken: string } | undefined;
 let advertiseTimer: ReturnType<typeof setTimeout> | undefined;
 let advertiseResyncTimer: ReturnType<typeof setInterval> | undefined;
+// Only one replace-all session advert may be in flight. If an older snapshot
+// (still containing a just-deleted/pruned session) completes after a newer one,
+// the control plane resurrects that row. Changes arriving during a request set
+// this flag and are sent immediately after it completes, in order.
+let advertiseRunning = false;
+let advertiseAgain = false;
 
 // How often the node re-affirms it's online to the control plane. Kept well
 // under the control plane's NODE_ONLINE_TTL_MS (90s) so a missed beat or two
@@ -4719,11 +4728,17 @@ async function advertiseSessions() {
       : [];
     return {
       sessionId: s.id,
-      status: pendingApproval || failureAttention.length ? "needs_action" : (record ? (sessionBusy(record) ? "working" : "idle") : "saved"),
-      needsAction: pendingApproval || failureAttention.length > 0,
+      // Failures (including exhausted credits/rate limits) are outcomes to
+      // review, not blocking questions that keep saying "Needs your response".
+      // Only a still-pending approval/question owns that status.
+      status: pendingApproval ? "needs_action" : (record ? (sessionBusy(record) ? "working" : "idle") : "saved"),
+      needsAction: pendingApproval,
       source: record?.source || meta?.source,
       titleEnc: name ? relay!.sealString(name) : undefined,
       branch: record?.worktree?.branch || meta?.branch,
+      // This is activity time, not advert receive time. A daemon restart/full
+      // resync must not make every historical row appear freshly updated.
+      updatedAt: isoFrom(record?.lastTouchedAt ?? meta?.lastActivityAt ?? meta?.updatedAt ?? s.modified),
       agentServiceAddress,
       githubIssueUrl: record?.githubIssueUrl,
       prUrl: record?.prUrl,
@@ -4741,14 +4756,36 @@ async function advertiseSessions() {
   }
 }
 
-/** Debounced advertise — many session events collapse into one POST. */
+/** Debounced, serialized advertise — many session events collapse into one
+ * POST, and replace-all snapshots can never complete out of order. */
 function scheduleAdvertise() {
-  if (!sessionAdvertiseTarget || advertiseTimer) return;
+  if (!sessionAdvertiseTarget) return;
+  if (advertiseRunning) {
+    advertiseAgain = true;
+    return;
+  }
+  if (advertiseTimer) return;
   advertiseTimer = setTimeout(() => {
     advertiseTimer = undefined;
-    void advertiseSessions();
+    void drainSessionAdverts();
   }, 1000);
   advertiseTimer.unref?.();
+}
+
+async function drainSessionAdverts() {
+  if (advertiseRunning) {
+    advertiseAgain = true;
+    return;
+  }
+  advertiseRunning = true;
+  try {
+    do {
+      advertiseAgain = false;
+      await advertiseSessions();
+    } while (advertiseAgain);
+  } finally {
+    advertiseRunning = false;
+  }
 }
 
 let githubPoller: GitHubTaskPoller | undefined;

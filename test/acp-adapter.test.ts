@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { makeRuntime, listRuntimes, RUNTIME_CATALOG } from "../src/runtime/index.js";
+import { makeRuntime, listRuntimes, invalidateCliProbeCache, RUNTIME_CATALOG } from "../src/runtime/index.js";
 import type { RuntimeEvent } from "../src/runtime/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -100,6 +100,9 @@ await check("gemini: BIVY_GEMINI_ACP=1 promotes it to the governed ACP path end-
   const originalPath = process.env.PATH;
   process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
   process.env.BIVY_GEMINI_ACP = "1";
+  // CLI probes are memoized for the process lifetime (invalidated on install); this
+  // test swaps the binary on PATH, so re-probe as an install would.
+  invalidateCliProbeCache();
   try {
     // Catalog honestly reflects the upgrade: approvals + resume on for gemini now.
     const info = listRuntimes().find((r) => r.id === "gemini")!;
@@ -123,6 +126,7 @@ await check("gemini: BIVY_GEMINI_ACP=1 promotes it to the governed ACP path end-
   } finally {
     delete process.env.BIVY_GEMINI_ACP;
     process.env.PATH = originalPath;
+    invalidateCliProbeCache(); // restore real-PATH probes for later checks
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
 });
@@ -192,12 +196,16 @@ await check("acp: default-on promotion degrades to the pipe when the binary has 
     fs.chmodSync(fake, 0o755);
     process.env.PATH = `${tmp}${path.delimiter}${originalPath}`;
     delete process.env.BIVY_OPENCODE_ACP;
+    // Re-probe the swapped-in fake binary (probes are cached for the process
+    // lifetime and cleared on install; a PATH swap is the same situation).
+    invalidateCliProbeCache();
     const info = listRuntimes().find((r) => r.id === "opencode")!;
     assert.equal((info.capabilities as Record<string, unknown>).toolInterception, false,
       "an opencode without an `acp` subcommand must not advertise per-tool approvals");
     assert.equal(info.executionMode, "pipe", "it must fall back to the honest pipe path");
   } finally {
     process.env.PATH = originalPath;
+    invalidateCliProbeCache(); // restore real-PATH probes for later checks
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
 });

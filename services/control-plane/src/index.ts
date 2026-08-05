@@ -1337,6 +1337,12 @@ function sessionAdvertsFrom(raw: unknown) {
       source: s.source != null ? String(s.source) : undefined,
       titleEnc: s.titleEnc != null ? String(s.titleEnc) : undefined,
       branch: s.branch != null ? String(s.branch) : undefined,
+      // Preserve the node's activity clock. Using database receive time here
+      // made every session read "now" after a daemon/PWA update triggered a
+      // full re-advertise, even when the session had been idle for weeks.
+      updatedAt: s.updatedAt && Number.isFinite(Date.parse(String(s.updatedAt)))
+        ? new Date(String(s.updatedAt)).toISOString()
+        : undefined,
       attention: Array.isArray(s.attention)
         ? s.attention.slice(0, 50).flatMap((rawItem: unknown) => {
             if (!rawItem || typeof rawItem !== "object") return [];
