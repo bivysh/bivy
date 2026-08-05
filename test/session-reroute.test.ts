@@ -180,6 +180,20 @@ await check("does not defer for ordinary short backoff", async () => {
   assert.equal(controller.planResume("socket hang up", "claude-opus", { now: NOW }), null);
 });
 
+await check("floors a past/elapsed reset time so a resume can never be a 0ms tight loop", async () => {
+  // A reset that already lapsed (stale text, clock skew, or one that passed while
+  // the daemon was down) must not schedule a resume at/before now — that arms a
+  // 0ms timer that re-sends, re-hits the limit, and re-schedules 0ms again (100%
+  // CPU). The due time is floored to at least MIN_RESUME_DELAY_MS in the future.
+  const controller = retryController();
+  controller.beginTurn();
+  const past = new Date(NOW - 5 * 60 * 1000).toISOString();
+  const plan = controller.planResume("rate limit reached", "claude-opus", { now: NOW, resetsAtHint: past });
+  assert.ok(plan, "should still plan a resume");
+  assert.ok(plan!.delayMs >= 60_000, `delay must be floored, got ${plan!.delayMs}ms`);
+  assert.ok(Date.parse(plan!.resumeAt) > NOW, "resumeAt must be strictly in the future");
+});
+
 await check("resume budget exhausts after maxAttempts and then parks (no plan)", async () => {
   const controller = retryController();
   controller.beginTurn();

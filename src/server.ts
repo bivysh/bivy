@@ -7173,6 +7173,14 @@ const SESSION_RESUME_SWEEP_MS = 60_000;
 /** Slack around "due": a capped timer may fire a touch early — drive only when
  *  within this of the target, else re-arm. */
 const SESSION_RESUME_TICK_MS = 15_000;
+/** Hard ceiling on consecutive auto-resumes for one session before we give up and
+ *  surface the limit. The reroute controller already caps per turn, but its budget
+ *  is in-memory: a session re-resolved after its child exits on the limit (or a
+ *  daemon restart) gets a fresh controller, so without a durable count a limit that
+ *  never actually clears would re-send every MIN_RESUME_DELAY_MS indefinitely.
+ *  Generous enough to ride out a mis-parsed multi-day window (each wait is ≥1 min,
+ *  usually far longer), low enough to bound a genuinely stuck limit. */
+const MAX_DURABLE_RESUME_ATTEMPTS = 10;
 const sessionResumeTimers = new Map<string, NodeJS.Timeout>();
 // Fire due auto-resumes (a usage/rate limit that has since reset) and re-arm the
 // tail of long waits whose in-process timer was capped or lost to a restart.
@@ -7472,10 +7480,20 @@ function armSessionResumeTimer(id: string, dueMs: number): void {
   sessionResumeTimers.set(id, timer);
 }
 
-/** Persist + arm an auto-resume decided by the session policy. Synchronous so
- *  the caller can atomically suppress the turn's error toast. */
-function scheduleSessionResume(record: SessionRecord, plan: ResumePlan): void {
+/** Persist + arm an auto-resume decided by the session policy. Synchronous so the
+ *  caller can atomically suppress the turn's error toast. Returns false when the
+ *  session has already exhausted its durable auto-resume budget (a limit that never
+ *  clears) — the caller then lets the error surface instead of looping. */
+function scheduleSessionResume(record: SessionRecord, plan: ResumePlan): boolean {
+  const attempts = metadata.getSession(record.id)?.resumeAttempts ?? 0;
+  if (attempts >= MAX_DURABLE_RESUME_ATTEMPTS) {
+    console.warn(`[resume] session ${record.id} hit the durable auto-resume cap (${MAX_DURABLE_RESUME_ATTEMPTS}) without the limit clearing — giving up`);
+    clearSessionResume(record.id);
+    metadata.setResumeAttempts(record.id, 0);
+    return false;
+  }
   metadata.setResumeAt(record.id, plan.resumeAt);
+  metadata.setResumeAttempts(record.id, attempts + 1);
   const when = Date.parse(plan.resumeAt);
   const cond = plan.condition.replace(/_/g, " ");
   broadcast({
@@ -7485,6 +7503,7 @@ function scheduleSessionResume(record: SessionRecord, plan: ResumePlan): void {
     message: `Hit a ${cond} limit — I'll resume this automatically when it resets (${plan.resumeAt}).`,
   });
   armSessionResumeTimer(record.id, Number.isFinite(when) ? when : Date.now());
+  return true;
 }
 
 /** Fire a due auto-resume: re-open the session if needed and re-send the turn's
@@ -7754,6 +7773,10 @@ function attachSessionListeners(record: SessionRecord) {
               resetsAtHint: limitResetHint(record, Date.now()),
             }) ?? null
           : null;
+      // Did this turn end by scheduling another auto-resume? If not, the session
+      // made forward progress (a user turn, a resume that cleared the limit, a
+      // reroute, or a surfaced error), so its durable resume streak resets below.
+      let scheduledResume = false;
       if (reroutePlan) {
         void record.reroute!.applyReroute(reroutePlan, {
           getCurrentModelName: () => record.session.getCurrentModel()?.name,
@@ -7762,12 +7785,14 @@ function attachSessionListeners(record: SessionRecord) {
             await promptWithWatchdog(record, record.lastPrompt!, record.lastPromptOptions);
           },
         });
-      } else if (resumePlan) {
+      } else if (resumePlan && scheduleSessionResume(record, resumePlan)) {
         // Charge the attempt budget so a limit that re-fires after the reset can
         // eventually exhaust (→ surface) instead of looping, then park the turn
-        // as a scheduled resume rather than a dead error.
+        // as a scheduled resume rather than a dead error. scheduleSessionResume
+        // returns false once the durable cap is hit, so this falls through to
+        // surface the limit instead of resuming forever.
         record.reroute!.noteResumeApplied();
-        scheduleSessionResume(record, resumePlan);
+        scheduledResume = true;
       } else if (messageError) {
         // Only the server-owned (pi-ai) path surfaces here; a Claude Code error
         // the runtime already broadcast falls through to avoid a duplicate bubble.
@@ -7794,6 +7819,10 @@ function attachSessionListeners(record: SessionRecord) {
           body: `${sessionNotifyLabel(record)} finished — tap to review the result.`,
         });
       }
+      // Any turn that didn't schedule another resume broke the limit streak —
+      // clear the durable counter so a future limit starts with a full budget
+      // (no-op when it's already 0, so a normal turn never touches the file).
+      if (!scheduledResume) metadata.setResumeAttempts(record.id, 0);
       // First real commit on a repo-backed worktree → publish the branch to the
       // remote (sets upstream), so the work is visible on GitHub. No-op until
       // there's a commit, and only pushes once. Then adopt a PR the agent opened
