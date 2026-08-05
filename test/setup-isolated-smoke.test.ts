@@ -27,6 +27,17 @@ async function freePort(): Promise<number> {
   return port;
 }
 
+async function portIsOpen(port: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const socket = net.connect(port, "127.0.0.1");
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+  });
+}
+
 const nodePort = await freePort();
 const cp = http.createServer((req, res) => {
   res.setHeader("content-type", "application/json");
@@ -69,13 +80,10 @@ daemon.stderr.on("data", (chunk) => { daemonLog += chunk.toString(); });
 try {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${nodePort}/api/status`);
-      if (response.ok) break;
-    } catch { /* node is still starting */ }
+    if (await portIsOpen(nodePort)) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  assert.equal((await fetch(`http://127.0.0.1:${nodePort}/api/status`)).ok, true, `isolated node did not start:\n${daemonLog}`);
+  assert.equal(await portIsOpen(nodePort), true, `isolated node did not start:\n${daemonLog}`);
 
   const setup = spawn(process.execPath, ["bin/bivy.mjs", "setup"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
   let output = "";
