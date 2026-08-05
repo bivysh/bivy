@@ -54,6 +54,7 @@ const env = {
   ...process.env,
   HOME: home,
   BIVY_DATA_DIR: dataDir,
+  BIVY_HOST: "127.0.0.1",
   BIVY_OPEN_BOOTSTRAP: "1",
   BIVY_SETUP_SKIP_SERVICE: "1",
   BIVY_SKIP_AGENT_PREINSTALL: "1",
