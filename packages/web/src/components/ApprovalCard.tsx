@@ -74,7 +74,7 @@ function ApprovalCard({
       {showRaw && <pre className="approval-summary">{f.rawInput}</pre>}
       {pending ? (
         <div className="approval-waiting">
-          Waiting for the node to apply your choice…
+          Waiting for the machine to apply your choice…
           {stalled && (
             <div className="approval-stalled">
               <span>This is taking longer than expected.</span>

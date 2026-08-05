@@ -35,7 +35,7 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
           <p className="muted settings-intro">
             {firstRun
               ? "Connect your own cloud account to run agents on temporary servers. Pick a provider, paste a token, and you're ready — your first message launches the machine."
-              : "Pick a provider and paste a token. Connecting one adds a runner you can pick in the node menu."}
+              : "Pick a provider and paste a token. Connecting one adds a runner you can pick in the machine menu."}
           </p>
           {EPHEMERAL_PROVIDERS.map((p) => {
             const k = keys.find((x) => x.id === p.id);

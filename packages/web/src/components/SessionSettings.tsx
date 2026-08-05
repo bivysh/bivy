@@ -26,10 +26,10 @@ export function SessionSettings({ onClose }: { onClose: () => void }) {
   const sessionTier = activeSession?.sandbox;
   const sessionTierLabel = sessionTier
     ? SANDBOX_TIERS.find((t) => t.id === sessionTier)?.label ?? sessionTier
-    : `Node default${nodeDefault ? ` (${nodeDefault})` : ""}`;
+    : `Machine default${nodeDefault ? ` (${nodeDefault})` : ""}`;
   const sessionTierHint = sessionTier
     ? SANDBOX_TIERS.find((t) => t.id === sessionTier)?.hint
-    : "This session runs at the node's configured sandbox mode.";
+    : "This session runs at the machine's configured sandbox mode.";
 
   return (
     <Sheet title="Session settings" onClose={onClose} autoFocusSearch={false}>
@@ -55,9 +55,9 @@ export function SessionSettings({ onClose }: { onClose: () => void }) {
                 type="button"
                 className={`seg-btn${!draftSandbox ? " active" : ""}`}
                 onClick={() => controller.setSessionSandbox(null)}
-                title="Use the node's default sandbox mode"
+                title="Use the machine's default sandbox mode"
               >
-                Node default{nodeDefault ? ` (${nodeDefault})` : ""}
+                Machine default{nodeDefault ? ` (${nodeDefault})` : ""}
               </button>
               {SANDBOX_TIERS.map((t) => (
                 <button
@@ -74,7 +74,7 @@ export function SessionSettings({ onClose }: { onClose: () => void }) {
             <p className="muted small">
               {draftSandbox
                 ? SANDBOX_TIERS.find((t) => t.id === draftSandbox)?.hint
-                : "Falls back to the node default. Change it in Settings → Nodes."}
+                : "Falls back to the machine default. Change it in Settings → Machines."}
             </p>
             <p className="muted">
               Applies to the next session you start. Existing sessions keep the sandbox they were created with — start a

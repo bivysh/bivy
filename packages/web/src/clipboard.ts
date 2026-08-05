@@ -29,7 +29,7 @@ export function sessionReferenceText(ref: SessionReference): string {
     "Bivy session reference",
     `URL: ${ref.url}`,
     `Session ID: ${ref.sessionId}`,
-    ref.node ? `Node: ${ref.node}` : "",
+    ref.node ? `Machine: ${ref.node}` : "",
     ref.agent ? `Agent: ${ref.agent}` : "",
     ref.worktree ? `Worktree: ${ref.worktree}` : "",
     ref.workspace ? `Workspace: ${ref.workspace}` : "",

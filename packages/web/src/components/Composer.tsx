@@ -491,7 +491,7 @@ export function Composer({
     : nodeDefaultTier
       ? nodeDefaultTier.label
       : state.nodeSettings?.defaultSandbox ?? "";
-  const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (node default)";
+  const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (machine default)";
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
 
   // B2 — a first session exposes exactly four decisions: machine, repo,
@@ -499,7 +499,7 @@ export function Composer({
   // them (the machine otherwise lives only in the topbar switcher), so a new user
   // sees the whole decision set at a glance rather than inferring it from pills.
   const machineLabel = state.nodes.find((n) => n.id === state.currentNodeId)?.name
-    || (controller.direct ? "This node" : "Default node");
+    || (controller.direct ? "This machine" : "Default machine");
   const firstSessionLine = firstSessionSummary({
     machine: machineLabel,
     repo: state.draftRepo || "No repo",

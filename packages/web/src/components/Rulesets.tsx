@@ -33,7 +33,7 @@ const CONDITIONS: Array<{ id: RuleCondition; label: string; hint: string }> = [
   { id: "credits_exhausted", label: "Session / credits", hint: "quota, credit balance, or session usage limit; Retry waits for a supplied reset time" },
   { id: "context_overflow", label: "Context overflow", hint: "prompt exceeds the context window" },
   { id: "auth_failed", label: "Auth failed", hint: "401 / invalid key" },
-  { id: "node_offline", label: "Node offline", hint: "connection refused / unreachable" },
+  { id: "node_offline", label: "Machine offline", hint: "connection refused / unreachable" },
   { id: "transport_error", label: "Transport error", hint: "socket hang up / timeout / 502" },
   { id: "task_failed", label: "Task failed", hint: "tests failed / made no changes" },
   { id: "unknown", label: "Unknown", hint: "anything unclassified" },
@@ -169,10 +169,10 @@ export function RulesetsPanel({ state }: { state: AppState }) {
       )}
 
       <p className="muted settings-intro">
-        A ruleset is policy for what happens when a run fails — a rate limit, an exhausted quota, an offline node.
+        A ruleset is policy for what happens when a run fails — a rate limit, an exhausted quota, an offline machine.
         Each rule matches one or more failure conditions and decides whether to retry, reroute through a fallback
-        chain, or park the run for a human. The <strong>active</strong> ruleset steers this node's work queue; with
-        none active, a safe built-in default applies. Rulesets are stored on this node.
+        chain, or park the run for a human. The <strong>active</strong> ruleset steers this machine's work queue; with
+        none active, a safe built-in default applies. Rulesets are stored on this machine.
       </p>
 
       <div className="picker-list">
@@ -288,7 +288,7 @@ function RulesetEditor({
           <span className="settings-toggle-title">Active for the work queue</span>
           <span className="muted small">
             {appliesToQueue
-              ? "Use this ruleset for unattended queue runs on this node. Only one ruleset is active at a time."
+              ? "Use this ruleset for unattended queue runs on this machine. Only one ruleset is active at a time."
               : "Add the “Work queue” context above to make this ruleset selectable as active."}
           </span>
         </div>
@@ -433,7 +433,7 @@ function ChainEditor({ chain, onChange }: { chain: RulesetRoutingCandidate[]; on
     <div className="ruleset-chain">
       <label className="field-label">Fallback chain</label>
       <p className="muted small">
-        Tried in order; the first candidate with valid credentials on the node wins. Leave a field blank to keep the
+        Tried in order; the first candidate with valid credentials on the machine wins. Leave a field blank to keep the
         failed run's current value.
       </p>
       {chain.map((cand, i) => (
@@ -444,7 +444,7 @@ function ChainEditor({ chain, onChange }: { chain: RulesetRoutingCandidate[]; on
               <input className="picker-search" placeholder="e.g. claude-sonnet" value={cand.model ?? ""} onChange={(e) => setAt(i, { model: e.target.value })} />
             </label>
             <label className="ruleset-chain-field">
-              <span>Runtime</span>
+              <span>Agent</span>
               <input className="picker-search" placeholder="e.g. codex" value={cand.runtimeId ?? ""} onChange={(e) => setAt(i, { runtimeId: e.target.value })} />
             </label>
             <label className="ruleset-chain-field">
