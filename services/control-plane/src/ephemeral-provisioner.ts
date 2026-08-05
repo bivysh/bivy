@@ -44,6 +44,18 @@ export interface ProvisionPlan {
 const DEDUPE_WINDOW_MS = 60 * 60 * 1000; // don't stack hosted machines within an hour
 const MAX_PROVISIONS_PER_HOUR = Math.max(1, Number(process.env.HOSTED_PROVISION_MAX_PER_HOUR ?? 5));
 
+/**
+ * Ephemeral machines are OFF by default (fail-closed) and must be explicitly
+ * enabled with EPHEMERAL_MACHINES_ENABLED=1. A deploy that never sets it — every
+ * production deploy by default — gets no ephemeral provisioning at all. Local/dev
+ * (NODE_ENV !== "production") stays on so development isn't gated; every real
+ * deploy sets NODE_ENV=production, so staging opts in with =1 while production
+ * leaves it off. Mirrors the web VITE_EPHEMERAL_MACHINES_ENABLED build flag.
+ */
+export function ephemeralMachinesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NODE_ENV !== "production" || env.EPHEMERAL_MACHINES_ENABLED === "1";
+}
+
 function withinMs(iso: unknown, ms: number, nowMs: number): boolean {
   if (typeof iso !== "string") return false;
   const t = Date.parse(iso);
@@ -77,6 +89,14 @@ export function resolveAutoProvisionTarget(
 
 /** Decide whether to provision, without launching. Safe to expose for dry-runs. */
 export async function planAutoProvision(store: MeshStore, accountId: string, nowMs = Date.now()): Promise<ProvisionPlan> {
+  // Fail-closed deployment gate: ephemeral machines are off unless the deploy set
+  // EPHEMERAL_MACHINES_ENABLED=1 (production leaves it off). This is the single
+  // choke point for ALL server-initiated auto-launches — both maybeAutoProvision
+  // call sites route through here. Mirrors the /api/ephemeral/exec relay guard
+  // (device-initiated launches) and the web VITE_EPHEMERAL_MACHINES_ENABLED flag.
+  if (!ephemeralMachinesEnabled()) {
+    return { willProvision: false, targetConfigId: null, reason: "ephemeral machines disabled (EPHEMERAL_MACHINES_ENABLED)" };
+  }
   const hosted = await store.getHostedProvisioning(accountId);
   if (!hosted.enabled) return { willProvision: false, targetConfigId: null, reason: "hosted provisioning disabled" };
   const routing = await store.getQueueRouting(accountId);

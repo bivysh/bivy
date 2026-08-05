@@ -8,7 +8,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import Stripe from "stripe";
 import webpush from "web-push";
 import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
@@ -1607,6 +1607,14 @@ app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
   // Quick ephemeral servers are available on every plan. Interactive runner
   // launches do not consume the automation allowance; a runner serving queued work
   // is metered when that work enters `running`, like every other automation job.
+  // Fail-closed deployment gate: ephemeral machines are off unless the deploy set
+  // EPHEMERAL_MACHINES_ENABLED=1 (production leaves it off). Device-initiated
+  // launches route their provider create/destroy calls through this relay, so
+  // refusing here stops them server-side even if a client bypasses the web
+  // VITE_EPHEMERAL_MACHINES_ENABLED flag. Mirrors the planAutoProvision guard.
+  if (!ephemeralMachinesEnabled()) {
+    return res.status(403).json({ error: "Ephemeral machines are disabled." });
+  }
   const account = (req as Request & { account: Account }).account;
   const ent = await store.entitlements(account.id);
   if (enforceEntitlements && !ent.ephemeralEnabled) {
