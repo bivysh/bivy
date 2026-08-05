@@ -388,11 +388,11 @@ function hasModelConfig(config) {
 
 const SETUP_AGENT_CHOICES = [
   { key: "p", label: "Pi (default, sign in to ChatGPT/Claude/Copilot or paste a model key)", runtimeId: "pi", needsBivyModel: true },
-  { key: "c", label: "Claude Code", runtimeId: "claude-code-sdk", needsBivyModel: false, loginHint: "If Claude asks you to sign in, run: claude" },
-  { key: "x", label: "Codex", runtimeId: "codex", needsBivyModel: false, loginHint: "If Codex asks you to sign in, run: codex" },
-  { key: "o", label: "OpenCode", runtimeId: "opencode", needsBivyModel: false },
-  { key: "g", label: "Gemini CLI", runtimeId: "gemini", needsBivyModel: false, loginHint: "If Gemini asks you to sign in, run: gemini" },
-  { key: "q", label: "Qwen Code", runtimeId: "qwen", needsBivyModel: false, loginHint: "If Qwen asks you to sign in, run: qwen" },
+  { key: "c", label: "Claude Code", runtimeId: "claude-code-sdk", command: "claude", authProbe: ["auth", "status"], needsBivyModel: false, loginHint: "Sign in through Claude Code" },
+  { key: "x", label: "Codex", runtimeId: "codex", command: "codex", authProbe: ["login", "status"], needsBivyModel: false, loginHint: "Sign in through Codex" },
+  { key: "o", label: "OpenCode", runtimeId: "opencode", command: "opencode", needsBivyModel: false },
+  { key: "g", label: "Gemini CLI", runtimeId: "gemini", command: "gemini", needsBivyModel: false, loginHint: "Sign in through Gemini" },
+  { key: "q", label: "Qwen Code", runtimeId: "qwen", command: "qwen", needsBivyModel: false, loginHint: "Sign in through Qwen" },
   { key: "a", label: "Aider", runtimeId: "aider", needsBivyModel: true },
   { key: "l", label: "Cline", runtimeId: "cline", needsBivyModel: false },
   { key: "r", label: "Crush", runtimeId: "crush", needsBivyModel: false },
@@ -400,6 +400,25 @@ const SETUP_AGENT_CHOICES = [
 
 function setupAgentByRuntime(runtimeId) {
   return SETUP_AGENT_CHOICES.find((choice) => choice.runtimeId === runtimeId);
+}
+
+function setupAgentDefaultKey(config) {
+  const saved = setupAgentByRuntime(String(config?.env?.BIVY_RUNTIME || ""));
+  if (saved) return saved.key;
+  const installed = SETUP_AGENT_CHOICES.find((choice) => choice.command && commandExists(choice.command));
+  return installed?.key || "p";
+}
+
+function nativeAgentAuthDetected(choice) {
+  if (!choice?.command || !commandExists(choice.command)) return false;
+  if (Array.isArray(choice.authProbe)) {
+    const result = runQuiet(choice.command, choice.authProbe, { timeout: 10_000 });
+    if (result.code === 0) return true;
+  }
+  // Conservative file fallbacks for older CLI versions without a status command.
+  if (choice.command === "codex") return fs.existsSync(path.join(os.homedir(), ".codex", "auth.json"));
+  if (choice.command === "claude") return fs.existsSync(path.join(os.homedir(), ".claude", ".credentials.json"));
+  return false;
 }
 
 function url(config) {
@@ -3205,11 +3224,20 @@ async function cmdSetup(args = []) {
   }
   console.log(c.dim(`Workspace: ${config.workspace}  ·  local port: ${config.port}  (change both in Settings)`));
 
-  // 2. Default agent — stays Pi unless one was already chosen. Pi is the built-in
-  // default and is changeable per-session or in Settings, so setup doesn't ask.
-  // Model/provider sign-in is left to the agent's own CLI/TUI or Settings.
-  const setupAgent = setupAgentByRuntime(String(config.env.BIVY_RUNTIME || "pi")) || setupAgentByRuntime("pi");
-  if (!config.env.BIVY_RUNTIME && setupAgent) {
+  // 2. Agent first: authentication depends on who owns the selected agent's
+  // credentials. Prefer an already-installed native agent on a fresh machine,
+  // while retaining the saved choice when setup is re-run.
+  console.log(c.bold("\n  Agent\n"));
+  const agentChoice = await askChoice(
+    "Which agent do you want to try first?",
+    SETUP_AGENT_CHOICES.map((choice) => ({
+      key: choice.key,
+      label: `${choice.label}${choice.command && commandExists(choice.command) ? " (installed)" : ""}`,
+    })),
+    setupAgentDefaultKey(config),
+  );
+  const setupAgent = SETUP_AGENT_CHOICES.find((choice) => choice.key === agentChoice) || setupAgentByRuntime("pi");
+  if (setupAgent) {
     config.env = { ...config.env, BIVY_RUNTIME: setupAgent.runtimeId };
     saveConfig(config);
   }
@@ -3218,7 +3246,7 @@ async function cmdSetup(args = []) {
     agentReady = await ensureSetupAgent(setupAgent);
     if (!agentReady) console.log(c.yellow(`${setupAgent.label} was not fully installed. Install it later from the app or with 'bivy agents:install'.`));
   }
-  console.log(c.dim(`Default agent: ${setupAgent?.label || "Pi"}  (change in Settings; sign into your model from the agent's CLI/TUI or Settings → Keys & OAuth)`));
+  console.log(c.dim(`Default agent: ${setupAgent?.label || "Pi"}  (change any time in Settings)`));
 
   // 3. Secure remote web/PWA access is what makes a Bivy-managed CLI useful:
   // without a relay/control plane it adds nothing over running the agent
@@ -3306,7 +3334,9 @@ async function cmdSetup(args = []) {
   // Bivy's provider login; offer it inline so setup cannot imply the first task
   // is ready while the required credential is still absent. Agent-native auth is
   // explained in the readiness checklist below because those CLIs own the flow.
-  if (setupAgent?.needsBivyModel && !hasModelConfig(config)) {
+  let agentAuthReady = setupAgent?.needsBivyModel ? hasModelConfig(config) : nativeAgentAuthDetected(setupAgent);
+  if (setupAgent?.needsBivyModel && !agentAuthReady) {
+    console.log("\nBivy stores this credential encrypted on your machine, reuses it with compatible agents, and syncs it E2E-encrypted to your other Bivy nodes. Bivy Cloud never receives it in plaintext.");
     const signInNow = await askYesNo("Sign in to a model now so your first task can run?", true);
     if (signInNow) {
       rl.pause();
@@ -3315,13 +3345,33 @@ async function cmdSetup(args = []) {
       if (loginCode !== 0 || !hasModelConfig(loadConfig())) {
         console.log(c.yellow("Model sign-in did not complete. The node can start, but an agent reply still requires 'bivy login'."));
       }
+      agentAuthReady = hasModelConfig(loadConfig());
+    }
+  } else if (setupAgent && !setupAgent.needsBivyModel) {
+    if (agentAuthReady) {
+      console.log(c.green(`\n  ✓ Existing ${setupAgent.label} login detected — Bivy will reuse it in the terminal and PWA.`));
+    } else if (setupAgent.command) {
+      console.log(`\n${setupAgent.label} owns its login; Bivy reuses that native login and does not copy it into the shared vault.`);
+      const signInNow = await askYesNo(`Open ${setupAgent.label} now to sign in? (Exit it when sign-in is complete.)`, true);
+      if (signInNow) {
+        rl.pause();
+        const loginCode = await run(setupAgent.command, [], { cwd: config.workspace, env: startEnv(config) });
+        rl.resume();
+        agentAuthReady = loginCode === 0 || nativeAgentAuthDetected(setupAgent);
+      }
     }
   }
 
   // 4. Background service — always installed so the node keeps running (and stays
   // reachable remotely) after you close this terminal. No prompt.
   let started = false;
-  if (config.service) {
+  if (process.env.BIVY_SETUP_SKIP_SERVICE === "1") {
+    // Isolation seam for disposable/container smoke tests: the caller starts a
+    // node with this BIVY_DATA_DIR/port and setup exercises the real wizard
+    // without installing or replacing the host user's system service.
+    started = await isReachable(config);
+    console.log(c.dim(`\nBackground-service install skipped; using the isolated node already running at ${url(config)}.`));
+  } else if (config.service) {
     console.log(c.dim("\nBackground service already configured; restarting it."));
     started = restartService();
   } else {
@@ -3337,18 +3387,20 @@ async function cmdSetup(args = []) {
   }
 
   const finalConfig = loadConfig();
-  const modelReady = !setupAgent?.needsBivyModel || hasModelConfig(finalConfig);
+  const modelReady = setupAgent?.needsBivyModel ? hasModelConfig(finalConfig) : agentAuthReady;
   console.log(c.bold(c.green("\n  ✓ Node running. Check first-task readiness below.\n")));
   console.log(`  ${c.green("✓")} node reachable at ${url(finalConfig)}`);
   console.log(`  ${agentReady ? c.green("✓") : c.yellow("!")} runtime ${agentReady ? `${setupAgent?.label || "Pi"} available` : "not installed — run 'bivy agents:install'"}`);
-  console.log(`  ${modelReady ? (setupAgent?.needsBivyModel ? c.green("✓") : c.dim("○")) : c.yellow("!")} model ${modelReady ? (setupAgent?.needsBivyModel ? "credential configured" : "agent-managed — verified by the first task") : "not configured — run 'bivy login'"}`);
+  console.log(`  ${modelReady ? c.green("✓") : c.yellow("!")} model ${modelReady ? (setupAgent?.needsBivyModel ? "credential configured" : "native agent login ready") : (setupAgent?.needsBivyModel ? "not configured — run 'bivy login'" : `${setupAgent?.loginHint || "sign in through the selected agent"}`)}`);
   console.log(`  ${c.dim("○")} repository chosen from the directory where you start Bivy`);
   const ghReady = githubConnected(finalConfig);
   console.log(`  ${ghReady ? c.green("✓") : c.dim("○")} GitHub ${ghReady ? "connected — your repos will list in the app" : c.dim("not connected — 'bivy github:connect' to list repos (optional)")}`);
   console.log(`  ${agentReady && modelReady ? c.green("✓") : c.yellow("!")} first task ${agentReady && modelReady ? "ready to try" : "blocked by the stage above"}`);
   console.log(`  ${fs.existsSync(relayConfigPath) ? c.green("✓") : c.yellow("!")} remote ${fs.existsSync(relayConfigPath) ? "configured" : "not configured — run 'bivy relay:setup'"}\n`);
-  printFirstRunSteps(modelReady, finalConfig);
+  // Get the user into the product immediately; terminal commands are the
+  // fallback/next-step checklist after the remote app has been opened or linked.
   await finishSetupRemote(finalConfig, setupSession);
+  printFirstRunSteps(modelReady, finalConfig, setupAgent);
 }
 
 // Read and delete the one-time account-session handoff written by relay:setup
@@ -3448,10 +3500,15 @@ function githubConnected(config = null) {
   return Boolean(token);
 }
 
-function printFirstRunSteps(modelReady = false, config = null) {
+function printFirstRunSteps(modelReady = false, config = null, setupAgent = null) {
   console.log("  Run your first task:");
   let n = 0;
-  if (!modelReady) console.log(`    ${++n}. Model access:   ${c.cyan("bivy login")}  ${c.dim("(for Pi; other agents use their own login)")}`);
+  if (!modelReady) {
+    const login = setupAgent?.needsBivyModel
+      ? `${c.cyan("bivy login")}  ${c.dim("(stored in Bivy's encrypted vault)")}`
+      : c.cyan(setupAgent?.command || "the selected agent's native CLI");
+    console.log(`    ${++n}. Model access:   ${login}`);
+  }
   // GitHub is optional — "No repo" sessions work without it — so this only shows
   // when nothing is connected yet, and never blocks the flow.
   if (!githubConnected(config)) {

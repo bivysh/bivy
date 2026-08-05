@@ -23,7 +23,7 @@ export function isModelAuthError(raw: string): boolean {
   const text = String(raw || "");
   // Generic: an explicit 401, "unauthorized"/"authentication", or a
   // missing/invalid bearer/api-key/token phrase.
-  if (/\b401\b|unauthorized|authentication|invalid x-api-key|(missing|invalid)[\s\S]*(bearer|api[\s_-]?key|token)/i.test(text))
+  if (/\b401\b|unauthorized|authentication|invalid x-api-key|(missing|no|invalid)[\s\S]*(bearer|api[\s_-]?key|token)/i.test(text))
     return true;
   // Codex app-server: websocket connect rejected with an HTTP 401/403.
   if (/failed to connect to websocket[\s\S]*http error:\s*40[13]/i.test(text)) return true;

@@ -51,6 +51,11 @@ export async function exportProviderAuth(credsDir: string): Promise<Record<strin
   return createCredentialVault(credsDir).exportAll();
 }
 
+/** Export provider revocations for cross-node convergence. */
+export async function exportProviderAuthTombstones(credsDir: string): Promise<Record<string, number>> {
+  return createCredentialVault(credsDir).exportTombstones();
+}
+
 /**
  * Import a cross-node provider auth snapshot into the local vault.
  *
@@ -60,8 +65,12 @@ export async function exportProviderAuth(credsDir: string): Promise<Record<strin
  * snapshot (rotated refresh tokens are single-use). Provider removal propagates
  * via removeProvider() re-pushing, not destructive imports.
  */
-export async function importProviderAuth(credsDir: string, providers: Record<string, unknown>): Promise<void> {
-  await createCredentialVault(credsDir).importAll(providers);
+export async function importProviderAuth(
+  credsDir: string,
+  providers: Record<string, unknown>,
+  deletedAt: Record<string, unknown> = {},
+): Promise<void> {
+  await createCredentialVault(credsDir).importAll(providers, deletedAt);
 }
 
 /** Store an API key for a model provider (shared by every agent via the vault). */

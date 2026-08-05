@@ -1697,7 +1697,7 @@ app.put("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => 
   const node = (req as Request & { node: NodeRecord }).node;
   const ciphertext = String(req.body?.ciphertext ?? "").trim();
   if (!ciphertext) return res.status(400).json({ error: "Missing ciphertext" });
-  const vault = await store.setModelAuthVault(node.accountId, node.id, ciphertext);
+  const vault = await store.setModelAuthVault(node.accountId, node.id, ciphertext, req.body?.rotated === true);
   res.json({ ok: true, vault });
 }));
 

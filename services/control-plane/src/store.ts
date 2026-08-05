@@ -405,6 +405,8 @@ export interface ModelAuthVault {
   ciphertext: string;
   updatedAt: string;
   updatedByNodeId: string;
+  /** A removed node held this vault key; a survivor must re-key before its next push. */
+  needsRotation: boolean;
 }
 
 export interface ModelAuthWrappedKey {
@@ -1081,7 +1083,7 @@ export interface MeshStore {
 
   // Account-wide model provider credentials, shared across enrolled nodes.
   getModelAuthVault(accountId: string): Promise<ModelAuthVault | undefined>;
-  setModelAuthVault(accountId: string, nodeId: string, ciphertext: string): Promise<ModelAuthVault>;
+  setModelAuthVault(accountId: string, nodeId: string, ciphertext: string, rotated?: boolean): Promise<ModelAuthVault>;
   setModelAuthNodePublicKey(accountId: string, nodeId: string, publicKey: string): Promise<void>;
   getModelAuthWrappedKey(accountId: string, nodeId: string): Promise<ModelAuthWrappedKey | undefined>;
   requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<void>;

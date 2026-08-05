@@ -33,7 +33,7 @@ import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } fr
 import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionSource, BivySessionStatus } from "./session/bivy-session.js";
-import { exportProviderAuth, importProviderAuth, listProviders, removeProvider, setProviderApiKey, setProviderCredential } from "./runtime/pi-auth.js";
+import { exportProviderAuth, exportProviderAuthTombstones, importProviderAuth, listProviders, removeProvider, setProviderApiKey, setProviderCredential } from "./runtime/pi-auth.js";
 import {
   loadLocalModels,
   upsertLocalProvider,
@@ -3724,7 +3724,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       // this the relay client (PWA) is stranded on "Working…" forever with
       // only a session.error toast. Clear working so a terminal state reaches it.
       clearSessionWorking(record);
-      broadcast({ type: "session.error", sessionId: record.id, error: String(error?.stack ?? error) });
+      broadcast({ type: "session.error", sessionId: record.id, error: actionableAgentError(record.runtimeId, error) });
     });
   },
   async "session.fork.export"(msg) {
@@ -4016,7 +4016,7 @@ function startRelayIfConfigured() {
 }
 
 type ModelAuthVaultResponse = {
-  vault?: { ciphertext: string; updatedAt: string; updatedByNodeId: string } | null;
+  vault?: { ciphertext: string; updatedAt: string; updatedByNodeId: string; needsRotation?: boolean } | null;
   wrappedKey?: { nodeId: string; wrappedKey: string; wrappedByNodeId: string; wrappedByPublicKey: string } | null;
   // Hosted escrow: the raw vault key, served only for hosted-provisioning accounts
   // so a lone hosted ephemeral can decrypt the vault without a peer (node-less).
@@ -4042,6 +4042,10 @@ function writeLocalModelAuthVaultKey(vaultKeyB64: string) {
   try { fs.chmodSync(modelAuthVaultKeyPath, 0o600); } catch { /* best effort */ }
 }
 
+function forgetLocalModelAuthVaultKey() {
+  try { fs.rmSync(modelAuthVaultKeyPath, { force: true }); } catch { /* best effort */ }
+}
+
 function ensureLocalModelAuthVaultKey(): string {
   const existing = readLocalModelAuthVaultKey();
   if (existing) return existing;
@@ -4055,30 +4059,32 @@ function ensureLocalModelAuthVaultKey(): string {
 // internal credential shape, so nodes on different agent/pi versions can't
 // silently exchange an incompatible structure. `decrypt` tolerates a bare map
 // for forward-safety.
-const MODEL_AUTH_ENVELOPE_VERSION = 1;
+const MODEL_AUTH_ENVELOPE_VERSION = 2;
 // The envelope carries both provider credentials AND Bivy's local-model
 // registry. It is sealed node-side; the control plane only ever stores
 // ciphertext, so adding `localModels` needs no control-plane schema change.
 type ModelAuthEnvelope = {
   v: number;
   providers: Record<string, unknown>;
+  deletedAt?: Record<string, number>;
   localModels?: Record<string, unknown>;
 };
 
 function encryptModelAuthProviders(
   providers: Record<string, unknown>,
+  deletedAt: Record<string, number>,
   localModels: Record<string, unknown>,
   vaultKeyB64: string,
 ): string {
-  const envelope: ModelAuthEnvelope = { v: MODEL_AUTH_ENVELOPE_VERSION, providers, localModels };
+  const envelope: ModelAuthEnvelope = { v: MODEL_AUTH_ENVELOPE_VERSION, providers, deletedAt, localModels };
   return seal(Buffer.from(vaultKeyB64, "base64"), JSON.stringify(envelope));
 }
 
 function decryptModelAuthEnvelope(
   ciphertext: string,
   vaultKeyB64: string,
-): { providers: Record<string, unknown>; localModels: Record<string, unknown> } {
-  const empty = { providers: {}, localModels: {} };
+): { providers: Record<string, unknown>; deletedAt: Record<string, unknown>; localModels: Record<string, unknown> } {
+  const empty = { providers: {}, deletedAt: {}, localModels: {} };
   const parsed = JSON.parse(open(Buffer.from(vaultKeyB64, "base64"), ciphertext)) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
   // Versioned Bivy envelope.
@@ -4086,11 +4092,12 @@ function decryptModelAuthEnvelope(
   if (typeof envelope.v === "number" && envelope.providers && typeof envelope.providers === "object") {
     return {
       providers: envelope.providers as Record<string, unknown>,
+      deletedAt: envelope.deletedAt && typeof envelope.deletedAt === "object" ? envelope.deletedAt : {},
       localModels: (envelope.localModels && typeof envelope.localModels === "object" ? envelope.localModels : {}) as Record<string, unknown>,
     };
   }
   // Back-compat: a bare `{ [id]: Credential }` map (pre-envelope / other sender).
-  return { providers: parsed as Record<string, unknown>, localModels: {} };
+  return { providers: parsed as Record<string, unknown>, deletedAt: {}, localModels: {} };
 }
 
 async function modelAuthFetch(pathname: string, init: RequestInit = {}) {
@@ -4180,8 +4187,22 @@ async function syncModelAuthFromControlPlane() {
     }
 
     if (data.vault?.ciphertext && vaultKeyB64) {
-      const { providers, localModels } = decryptModelAuthEnvelope(data.vault.ciphertext, vaultKeyB64);
-      await importProviderAuth(credsDir, providers);
+      let decrypted;
+      try {
+        decrypted = decryptModelAuthEnvelope(data.vault.ciphertext, vaultKeyB64);
+      } catch (error) {
+        // Most commonly this node cached the previous generation while another
+        // survivor completed a revoke-triggered re-key. Forget it and request a
+        // wrap of the current key; retaining it would make every poll fail forever.
+        forgetLocalModelAuthVaultKey();
+        lastPushedModelAuthCiphertext = "";
+        await modelAuthFetch("/node/model-auth-key/request", { method: "POST", body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64() }) });
+        ensureModelAuthColdStart();
+        console.warn("[auth-sync] cached vault key is stale; requested the rotated key:", (error as Error).message);
+        return;
+      }
+      const { providers, deletedAt, localModels } = decrypted;
+      await importProviderAuth(credsDir, providers, deletedAt);
       importLocalModels(localModelsDir, localModels);
       // A synced key or config change can both alter the projection, so always
       // regenerate it (and refresh the panel) after importing the vault.
@@ -4192,6 +4213,7 @@ async function syncModelAuthFromControlPlane() {
       // the cold-start race is over.
       stopModelAuthColdStart();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
+      if (data.vault.needsRotation) await pushModelAuthToControlPlane(true);
     } else if (data.vault?.ciphertext && !vaultKeyB64) {
       await modelAuthFetch("/node/model-auth-key/request", { method: "POST", body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64() }) });
       // No peer has wrapped our key yet. Fast-retry (bounded) so a short-lived
@@ -4224,7 +4246,7 @@ async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; pub
   }
 }
 
-async function pushModelAuthToControlPlane() {
+async function pushModelAuthToControlPlane(rotateKey = false) {
   if (!sessionAdvertiseTarget) return;
   // Piggyback the (plaintext, non-secret) provider status summary on every
   // trigger that already pushes the encrypted model-auth vault — one "creds
@@ -4234,11 +4256,21 @@ async function pushModelAuthToControlPlane() {
   await pushProviderSummaryToControlPlane();
   try {
     const providers = await exportProviderAuth(credsDir);
+    const deletedAt = await exportProviderAuthTombstones(credsDir);
     const localModels = exportLocalModels(localModelsDir);
-    const vaultKeyB64 = ensureLocalModelAuthVaultKey();
-    const ciphertext = encryptModelAuthProviders(providers, localModels, vaultKeyB64);
-    if (ciphertext === lastPushedModelAuthCiphertext) return;
-    await modelAuthFetch("/node/model-auth-vault", { method: "PUT", body: JSON.stringify({ ciphertext }) });
+    const previousKey = readLocalModelAuthVaultKey();
+    const vaultKeyB64 = rotateKey ? randomBytes(32).toString("base64") : ensureLocalModelAuthVaultKey();
+    if (rotateKey) writeLocalModelAuthVaultKey(vaultKeyB64);
+    const ciphertext = encryptModelAuthProviders(providers, deletedAt, localModels, vaultKeyB64);
+    if (!rotateKey && ciphertext === lastPushedModelAuthCiphertext) return;
+    const push = await modelAuthFetch("/node/model-auth-vault", { method: "PUT", body: JSON.stringify({ ciphertext, rotated: rotateKey }) });
+    if (!push?.ok) {
+      if (rotateKey) {
+        if (previousKey) writeLocalModelAuthVaultKey(previousKey);
+        else forgetLocalModelAuthVaultKey();
+      }
+      throw new Error(`model-auth vault push failed (${push?.status ?? "offline"})`);
+    }
     await modelAuthFetch("/node/model-auth-key/wrapped", {
       method: "PUT",
       body: JSON.stringify({ targetNodeId: identity.nodeId, wrappedByPublicKey: pairingStore.nodePublicKeyB64(), wrappedKey: pairingStore.wrapForNodePublicKey(pairingStore.nodePublicKeyB64(), vaultKeyB64) }),
@@ -7593,6 +7625,18 @@ function humanizeAgentError(raw: string): string {
   return text;
 }
 
+function actionableAgentError(runtimeId: string, error: unknown): string {
+  const raw = humanizeAgentError(error instanceof Error ? error.message : String(error));
+  const id = String(runtimeId || "").toLowerCase();
+  if (isModelAuthError(raw) || /reading ['"]provider['"]|no api key found/i.test(raw)) {
+    if (id.includes("claude")) return "Claude Code is not signed in. Run `claude` once, complete sign-in, then retry; the same login works from Bivy and the PWA.";
+    if (id.startsWith("codex")) return "Codex is not signed in. Run `codex login`, then retry; the same login works from Bivy and the PWA.";
+    if (id === "pi" || id === "aider") return "No model credential is configured. Run `bivy login`, then retry. This is only required once and compatible credentials sync E2E-encrypted to your other Bivy nodes.";
+    return "The selected agent needs model authentication. Sign in through its native CLI, then retry.";
+  }
+  return raw;
+}
+
 /**
  * A turn that ended in a *terminal* model/provider failure the runtime would
  * otherwise swallow. `agent_end` carries the turn's messages and whether the
@@ -7812,7 +7856,7 @@ function attachSessionListeners(record: SessionRecord) {
         record.lastFailureAt = Date.now();
         metadata.touchSession(record.id, "failed");
         scheduleAdvertise();
-        broadcast({ type: "session.error", sessionId: record.id, error: messageError });
+        broadcast({ type: "session.error", sessionId: record.id, error: actionableAgentError(record.runtimeId, messageError) });
         // If the terminal error is an auth failure (expired key/token → 4xx),
         // also raise the sign-in sheet for the failing provider.
         maybeSignalAuthRequired(record, messageError);
@@ -10278,7 +10322,7 @@ app.post("/api/session", async (req, res, next) => {
     }
     res.json({ id: session.id, workspace: session.workspace, source: session.source, branch: session.worktree?.branch, prUrl: session.prUrl, sessionFile: session.sessionFile, name: session.session.getName(), runtimeId: session.runtimeId, agentName: getRuntime(session.runtimeId).displayName, model: publicModel(session.session.getCurrentModel(), session.session.getCurrentModel()) });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    res.status(400).json({ error: actionableAgentError(agentFrom(req.body ?? {}) ?? defaultRuntimeId, error) });
   }
 });
 

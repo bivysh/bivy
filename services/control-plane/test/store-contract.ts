@@ -190,6 +190,30 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(await store.setInboundHookSecret(other.id, hook.id, "nope"), undefined);
   });
 
+  // --- Model-auth vault re-key on node removal --------------------------------
+  await test("model auth vault: removing a key holder requires rotation and re-wraps only survivors", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-model-auth-rotate@example.com");
+    const { node: a } = await store.enrollNode(acct.id, "node-mar-a", "A");
+    const { node: b } = await store.enrollNode(acct.id, "node-mar-b", "B");
+    const { node: c } = await store.enrollNode(acct.id, "node-mar-c", "C");
+    await store.setModelAuthNodePublicKey(acct.id, a.id, "a-pub");
+    await store.setModelAuthNodePublicKey(acct.id, b.id, "b-pub");
+    await store.setModelAuthNodePublicKey(acct.id, c.id, "c-pub");
+    await store.setModelAuthVault(acct.id, a.id, "ciphertext-old");
+    await store.setModelAuthWrappedKey(acct.id, b.id, a.id, "a-pub", "wrapped-old-b");
+    await store.setModelAuthWrappedKey(acct.id, c.id, a.id, "a-pub", "wrapped-old-c");
+
+    assert.equal(await store.removeNode(acct.id, b.id), true);
+    assert.equal((await store.getModelAuthVault(acct.id))?.needsRotation, true);
+    await assert.rejects(() => store.setModelAuthVault(acct.id, c.id, "unsafe-same-key"), /rotation is required/);
+
+    const rotated = await store.setModelAuthVault(acct.id, c.id, "ciphertext-new", true);
+    assert.equal(rotated.needsRotation, false);
+    assert.equal(await store.getModelAuthWrappedKey(acct.id, c.id), undefined, "old survivor wraps are cleared");
+    const requests = await store.listModelAuthKeyRequests(acct.id, c.id);
+    assert.deepEqual(requests.map((request) => request.nodeId), [a.id], "only another currently-enrolled survivor is queued for the new key");
+  });
+
   // --- GitHub App private-key vault (issue #88) -------------------------------
   await test("github app vault: push, request, and wrap round-trip per app", async (store) => {
     const acct = await store.findOrCreateAccount("contract-ghvault@example.com");
