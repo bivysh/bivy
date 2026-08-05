@@ -309,8 +309,10 @@ export class PostgresStore implements MeshStore {
         account_id          TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         ciphertext          TEXT NOT NULL,
         updated_by_node_id  TEXT NOT NULL,
-        updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+        needs_rotation      BOOLEAN NOT NULL DEFAULT false
       );
+      ALTER TABLE model_auth_vaults ADD COLUMN IF NOT EXISTS needs_rotation BOOLEAN NOT NULL DEFAULT false;
 
       CREATE TABLE IF NOT EXISTS model_auth_node_keys (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -1147,31 +1149,46 @@ export class PostgresStore implements MeshStore {
   }
 
   async removeNode(accountId: string, nodeId: string): Promise<boolean> {
-    // Clear any GitHub App hook this node was serving first, so a removed node
-    // never leaves a stale "connected" behind (the ghost delete/reinstall left).
-    await this.query(
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Clear any GitHub App hook this node was serving first, so a removed node
+      // never leaves a stale "connected" behind (the ghost delete/reinstall left).
+      await client.query(
       `UPDATE inbound_hooks SET serving_node_id = NULL, serving_node_seen_at = NULL
        WHERE account_id = $1 AND serving_node_id = $2`,
-      [accountId, nodeId],
-    );
-    // A removed node keeps whatever it already cached locally — deleting its
-    // wrapped_keys row (via the FK cascade below) only stops it from resolving
-    // a key it doesn't have YET. Flag every GitHub App vault it already had a
-    // wrapped key for so a surviving node mints a fresh vault key on its next
-    // sync tick, which is what actually invalidates the removed node's cached
-    // copy (issue #88 acceptance criterion: revocation re-wraps/rotates).
-    await this.query(
+        [accountId, nodeId],
+      );
+      // A removed node keeps whatever it already cached locally — deleting its
+      // wrapped_keys row only stops future resolution. Flag each vault it held,
+      // then delete the node in the SAME transaction so a survivor can never
+      // rotate/re-wrap while the revoked node is still eligible for a fresh key.
+      await client.query(
       `UPDATE github_app_vaults SET needs_rotation = true
        WHERE account_id = $1 AND app_id IN (
          SELECT app_id FROM github_app_wrapped_keys WHERE account_id = $1 AND node_id = $2
        )`,
-      [accountId, nodeId],
-    );
-    const { rowCount } = await this.query(
-      `DELETE FROM nodes WHERE id = $1 AND account_id = $2`,
-      [nodeId, accountId],
-    );
-    return (rowCount ?? 0) > 0;
+        [accountId, nodeId],
+      );
+      await client.query(
+      `UPDATE model_auth_vaults SET needs_rotation = true
+       WHERE account_id = $1 AND EXISTS (
+         SELECT 1 FROM model_auth_wrapped_keys WHERE account_id = $1 AND node_id = $2
+       )`,
+        [accountId, nodeId],
+      );
+      const { rowCount } = await client.query(
+        `DELETE FROM nodes WHERE id = $1 AND account_id = $2`,
+        [nodeId, accountId],
+      );
+      await client.query("COMMIT");
+      return (rowCount ?? 0) > 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async replaceNodeSessions(accountId: string, nodeId: string, sessions: SessionAdvert[]): Promise<number> {
@@ -1604,7 +1621,7 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(`SELECT * FROM model_auth_vaults WHERE account_id = $1`, [accountId]);
     const row = rows[0];
     if (!row) return undefined;
-    return { ciphertext: row.ciphertext, updatedAt: new Date(row.updated_at).toISOString(), updatedByNodeId: row.updated_by_node_id };
+    return { ciphertext: row.ciphertext, updatedAt: new Date(row.updated_at).toISOString(), updatedByNodeId: row.updated_by_node_id, needsRotation: Boolean(row.needs_rotation) };
   }
 
   async getHostedModelAuthVaultKey(accountId: string): Promise<SecretEnvelope | undefined> {
@@ -1623,15 +1640,54 @@ export class PostgresStore implements MeshStore {
     );
   }
 
-  async setModelAuthVault(accountId: string, nodeId: string, ciphertext: string): Promise<ModelAuthVault> {
-    const { rows } = await this.query(
-      `INSERT INTO model_auth_vaults (account_id, ciphertext, updated_by_node_id, updated_at)
-       VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_node_id = EXCLUDED.updated_by_node_id, updated_at = now()
-       RETURNING *`,
-      [accountId, ciphertext, nodeId],
-    );
-    return { ciphertext: rows[0].ciphertext, updatedAt: new Date(rows[0].updated_at).toISOString(), updatedByNodeId: rows[0].updated_by_node_id };
+  async setModelAuthVault(accountId: string, nodeId: string, ciphertext: string, rotated = false): Promise<ModelAuthVault> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Serialize all generation writers on the account row. The lock makes the
+      // check + generation flip atomic: exactly one survivor can consume a
+      // rotation flag, and a stale-key writer cannot clear it accidentally.
+      const current = await client.query(
+        `SELECT needs_rotation FROM model_auth_vaults WHERE account_id = $1 FOR UPDATE`,
+        [accountId],
+      );
+      if (current.rows[0] && Boolean(current.rows[0].needs_rotation) !== rotated) {
+        throw Object.assign(new Error(rotated
+          ? "Model-auth vault was already rotated by another node"
+          : "Model-auth vault key rotation is required before this vault can be updated"), { status: 409 });
+      }
+      const { rows } = await client.query(
+        `INSERT INTO model_auth_vaults (account_id, ciphertext, updated_by_node_id, updated_at, needs_rotation)
+         VALUES ($1, $2, $3, now(), false)
+         ON CONFLICT (account_id) DO UPDATE
+         SET ciphertext = EXCLUDED.ciphertext, updated_by_node_id = EXCLUDED.updated_by_node_id, updated_at = now(), needs_rotation = false
+         RETURNING *`,
+        [accountId, ciphertext, nodeId],
+      );
+      if (rotated) {
+        // Every old wrap protects the removed node's generation. Drop them all
+        // and queue fresh wraps only for currently-enrolled nodes. Keep this in
+        // the same transaction as the generation flip: no stale-key writer can
+        // slip in after needs_rotation clears but before old wraps disappear.
+        await client.query(`DELETE FROM model_auth_wrapped_keys WHERE account_id = $1`, [accountId]);
+        await client.query(
+        `INSERT INTO model_auth_key_requests (account_id, node_id, public_key, created_at)
+         SELECT k.account_id, k.node_id, k.public_key, now()
+         FROM model_auth_node_keys k
+         JOIN nodes n ON n.id = k.node_id AND n.account_id = k.account_id
+         WHERE k.account_id = $1 AND k.node_id <> $2
+         ON CONFLICT (account_id, node_id) DO UPDATE SET public_key = EXCLUDED.public_key, created_at = now()`,
+          [accountId, nodeId],
+        );
+      }
+      await client.query("COMMIT");
+      return { ciphertext: rows[0].ciphertext, updatedAt: new Date(rows[0].updated_at).toISOString(), updatedByNodeId: rows[0].updated_by_node_id, needsRotation: Boolean(rows[0].needs_rotation) };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async setModelAuthNodePublicKey(accountId: string, nodeId: string, publicKey: string): Promise<void> {

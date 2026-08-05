@@ -62,6 +62,9 @@ The `bivy` CLI resolves `secret://`, `op://`, and `env://` values before startin
 - Rotate GitHub tokens in GitHub, then update `github.repo-token`.
 - Rotate a GitHub App's private key from the app's GitHub settings page, then reconnect it (`bivy github:app-connect --app-id <id> --key <new.pem>`) on a node that already holds it. If sync is on (`bivy github:app-sync on`), removing a node from the account flags that app's sync vault for rotation; the next opted-in node to sync mints a fresh vault key automatically (the removed node's cached copy of the OLD vault key stops decrypting anything pushed after that point).
 - Rotate model API keys at the provider, then update the corresponding Pi login or environment/1Password reference.
+- Removing an enrolled node automatically rotates the model-auth sync-vault key
+  before later snapshots are distributed. Signing out of a Bivy-managed provider
+  writes an encrypted tombstone so the deletion converges across enrolled nodes.
 - Delete integration secrets with `bivy secrets delete integration.<id>.api-key` or disconnect the integration in the UI.
 - Revoke a linked PWA/browser device from the app (Settings → Signed-in devices → remove); this rotates the room key and re-wraps it for the remaining devices. To force every device to re-link, remove them all (or reset pairing entirely: delete `.bivy/pairing.json` on the node and restart).
 

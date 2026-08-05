@@ -107,6 +107,28 @@ await check("importAll is rotation-safe: never downgrades a locally-fresher OAut
   assert.equal(all.openrouter.type === "api_key" && all.openrouter.key, "or-key", "new providers are imported");
 });
 
+await check("provider tombstones propagate deletes, block stale resurrection, and yield to a later login", async () => {
+  const source = createCredentialVault(tmpDir());
+  const peer = createCredentialVault(tmpDir());
+  await source.setApiKey("openai", "sk-old");
+  const staleSnapshot = await source.exportAll();
+  await peer.importAll(staleSnapshot);
+
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  await source.delete("openai");
+  const tombstones = await source.exportTombstones();
+  await peer.importAll(await source.exportAll(), tombstones);
+  assert.equal(await peer.read("openai"), undefined, "remote deletion removes the peer credential");
+
+  await peer.importAll(staleSnapshot, tombstones);
+  assert.equal(await peer.read("openai"), undefined, "an old snapshot cannot resurrect a revoked credential");
+
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  await source.setApiKey("openai", "sk-new");
+  await peer.importAll(await source.exportAll(), await source.exportTombstones());
+  assert.equal((await peer.read("openai") as { key?: string })?.key, "sk-new", "a login newer than the tombstone restores the provider");
+});
+
 await check("a corrupt vault reads as empty rather than throwing", async () => {
   const dir = tmpDir();
   const store = new BivyCredentialStore(dir);
