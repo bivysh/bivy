@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Codex and OpenCode are now Supported-tier agents**, alongside Pi and Claude
+  Code. Codex already cleared the bar on the app-server shim (per-tool
+  Approve/Deny, model + reasoning-effort selection, thread resume, usage
+  reporting, native session discovery) — the catalog just hadn't said so, and the
+  support matrix wrongly listed its model picker as missing. Both now pin the
+  exact CLI release they were certified against (Codex 0.145.0, OpenCode 1.18.13).
+- **OpenCode runs over its native ACP server (`opencode acp`) by default**, which
+  is what earns it the tier: per-tool Approve/Deny instead of effect-level
+  sandbox governance only, plus `session/load` resume. Force the previous
+  one-shot pipe path with `BIVY_OPENCODE_ACP=0`.
+
+### Added
+
+- ACP agents get **real model selection**: the shim reads the session's model
+  config option, publishes it to Bivy as a post-`hello` `runtime.models` event,
+  and applies a choice with `session/set_model` (falling back to
+  `session/set_config_option`). The list comes from the live session, so it
+  reflects the providers that node has actually authenticated rather than a
+  hardcoded guess. Previously a promoted agent still advertised the pipe path's
+  model picker while the shim silently ignored `model.set`.
+- Default-on ACP promotion is **gated on a cached `--help` probe** for the
+  agent's ACP subcommand. ACP has no mid-session fallback, so a node whose CLI is
+  too old keeps the pipe path and honestly advertises the lower capabilities
+  instead of opening a session that hangs and dies. `BIVY_<ID>_ACP=1` skips the
+  probe; `=0` forces the pipe path.
+
+### Fixed
+
+- `bin/acp-shim.mjs` no longer hangs when the wrapped agent dies or never speaks
+  ACP: in-flight JSON-RPC requests are rejected on child exit, `initialize` is
+  bounded by a timeout, and the child's stdin has an error handler so an EPIPE
+  reports the cause instead of crashing the shim. A non-ACP binary now fails in
+  milliseconds with the real reason rather than timing out after 30s.
+- The CLI capability help-probe cache is keyed by the resolved binary path rather
+  than the bare command name, so upgrading or installing a CLI while the daemon
+  is running no longer serves a stale capability answer.
+
 ## [0.7.0] - 2026-08-04
 
 ### Added

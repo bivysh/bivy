@@ -57,43 +57,110 @@ function bivy(obj) {
 // --- ACP agent (child JSON-RPC over its stdio) ------------------------------
 const agent = spawn(agentCmd, agentArgs, { stdio: ["pipe", "pipe", "pipe"] });
 agent.stderr.on("data", (d) => process.stderr.write(`[acp-agent] ${d}`));
-agent.on("error", (e) => bivy({ type: "session.error", error: `acp agent spawn failed: ${e.message}` }));
-agent.on("exit", (code) => {
-  if (code && code !== 0) bivy({ type: "session.error", error: `acp agent exited (${code})` });
-});
-
 let nextId = 1;
 const pending = new Map(); // jsonrpc id -> {resolve, reject}
-function agentRequest(method, params) {
+let agentDead = null; // set to an Error once the child is gone
+
+/**
+ * The child is gone (spawn failure or exit). Every in-flight request must be
+ * rejected: without this, a CLI whose ACP mode doesn't exist leaves `initialize`
+ * pending forever and the daemon waits out its whole session.create timeout instead
+ * of surfacing the real reason. Fail fast, with the reason.
+ */
+function killPending(reason) {
+  if (agentDead) return;
+  agentDead = reason instanceof Error ? reason : new Error(String(reason));
+  bivy({ type: "session.error", error: agentDead.message });
+  for (const [id, p] of [...pending]) { pending.delete(id); p.reject(agentDead); }
+}
+agent.on("error", (e) => killPending(`acp agent spawn failed: ${e.message}`));
+agent.on("exit", (code, signal) => {
+  if (code || signal) killPending(`acp agent exited (${code ?? signal})`);
+});
+// Writing to a dead child's stdin raises EPIPE; with no listener that's an uncaught
+// exception that takes the shim down mid-turn instead of reporting the cause.
+agent.stdin.on("error", (e) => killPending(`acp agent stdin closed: ${e.message}`));
+
+function agentWrite(payload) {
+  if (agentDead) throw agentDead;
+  agent.stdin.write(`${JSON.stringify(payload)}\n`);
+}
+function agentRequest(method, params, { timeoutMs } = {}) {
   const id = nextId++;
-  agent.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
-  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+  return new Promise((resolve, reject) => {
+    let timer;
+    pending.set(id, {
+      resolve: (v) => { clearTimeout(timer); resolve(v); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    });
+    if (timeoutMs) {
+      timer = setTimeout(() => {
+        if (pending.delete(id)) reject(new Error(`acp ${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    }
+    try { agentWrite({ jsonrpc: "2.0", id, method, params }); }
+    catch (e) { clearTimeout(timer); pending.delete(id); reject(e); }
+  });
 }
 function agentReply(id, result) {
-  agent.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+  try { agentWrite({ jsonrpc: "2.0", id, result }); } catch { /* child gone; killPending already reported it */ }
 }
 function agentReplyError(id, code, message) {
-  agent.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } })}\n`);
+  try { agentWrite({ jsonrpc: "2.0", id, error: { code, message } }); } catch { /* child gone */ }
 }
 function agentNotify(method, params) {
-  agent.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
+  try { agentWrite({ jsonrpc: "2.0", method, params }); } catch { /* child gone */ }
 }
 
 // --- session state ----------------------------------------------------------
 let sessionId = null;
 let cwd = process.cwd();
 let initialized = false;
+// The ACP config-option id that selects the model (usually "model"), learned from
+// session/new; used for the session/set_config_option fallback.
+let modelConfigId = "model";
+// A model chosen before the ACP session existed, applied once it does.
+let pendingModel = null;
 // toolCallId -> { requestId, options } so a later bivy tool.decision answers the
 // right ACP permission request with a concrete optionId.
 const permissionRequests = new Map();
 
 async function ensureInitialized() {
   if (initialized) return;
+  // Bounded: a binary that accepts the launch args but never speaks ACP would
+  // otherwise hang here until the daemon's own session timeout, hiding the cause.
   await agentRequest("initialize", {
     protocolVersion: 1,
     clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
-  });
+  }, { timeoutMs: 20_000 });
   initialized = true;
+}
+
+/**
+ * ACP exposes a session's selectable models as a `select` config option on the
+ * session/new|load result (opencode: `configOptions: [{id:"model", currentValue,
+ * options:[{value,name}]}]`). Models are per-NODE — they depend on which providers
+ * the user has authenticated in the agent — so a hardcoded list would offer models
+ * the agent rejects. Publish what the agent actually reports, as a post-hello
+ * `runtime.models` event ProtocolRuntime folds into its picker.
+ */
+function publishModels(result) {
+  const options = Array.isArray(result?.configOptions) ? result.configOptions : [];
+  const modelOption = options.find((o) => String(o?.id ?? "") === "model" || String(o?.category ?? "") === "model");
+  const choices = Array.isArray(modelOption?.options) ? modelOption.options : [];
+  const models = choices
+    .map((o) => ({ id: String(o?.value ?? ""), name: String(o?.name ?? o?.value ?? "") }))
+    .filter((m) => m.id)
+    // ACP model ids are `provider/model`; split the provider so Bivy can group and
+    // scope provider-specific settings the same way it does for other runtimes.
+    .map((m) => ({ ...m, provider: m.id.includes("/") ? m.id.split("/")[0] : "agent" }));
+  if (!models.length) return;
+  modelConfigId = String(modelOption?.id ?? "model");
+  bivy({
+    type: "runtime.models",
+    models,
+    ...(modelOption?.currentValue ? { currentModel: String(modelOption.currentValue) } : {}),
+  });
 }
 
 // --- ACP → bivy: streamed session/update notifications ----------------------
@@ -211,6 +278,33 @@ createInterface({ input: agent.stdout }).on("line", (line) => {
   if (msg.method === "session/update") onSessionUpdate(msg.params);
 });
 
+/**
+ * Select a model on the live ACP session. `session/set_model` is the direct form;
+ * agents that only expose the generic config-option surface take the same choice as
+ * `session/set_config_option`. A rejection propagates: ProtocolRuntime only commits
+ * the selection once we ack, so a model the agent won't accept must not look applied.
+ */
+async function setAgentModel(model) {
+  try {
+    await agentRequest("session/set_model", { sessionId, modelId: model }, { timeoutMs: 15_000 });
+  } catch (primary) {
+    try {
+      await agentRequest("session/set_config_option", { sessionId, configId: modelConfigId, value: model }, { timeoutMs: 15_000 });
+    } catch {
+      throw primary;
+    }
+  }
+}
+
+async function applyPendingModel() {
+  if (!pendingModel || !sessionId) return;
+  const model = pendingModel;
+  pendingModel = null;
+  // Best-effort: a stale pick shouldn't block the session from opening.
+  try { await setAgentModel(model); }
+  catch (e) { bivy({ type: "runtime.debug", message: `acp set_model failed: ${e instanceof Error ? e.message : String(e)}` }); }
+}
+
 // --- bivy commands in (daemon → us) -----------------------------------------
 async function onBivyCommand(msg) {
   const type = String(msg.type || "");
@@ -224,6 +318,8 @@ async function onBivyCommand(msg) {
         cwd = String(msg.cwd || msg.workspace || cwd);
         const res = await agentRequest("session/new", { cwd, mcpServers: [] });
         sessionId = res?.sessionId ?? res?.session?.id ?? null;
+        publishModels(res);
+        await applyPendingModel();
         bivy({ replyTo: id, ok: true, runtimeSessionRef: sessionId });
         return;
       }
@@ -235,11 +331,14 @@ async function onBivyCommand(msg) {
         try {
           const res = await agentRequest("session/load", { sessionId: ref, cwd, mcpServers: [] });
           sessionId = res?.sessionId ?? ref;
+          publishModels(res);
         } catch {
           // Agent doesn't support session/load — start fresh so the chat still opens.
           const res = await agentRequest("session/new", { cwd, mcpServers: [] });
           sessionId = res?.sessionId ?? null;
+          publishModels(res);
         }
+        await applyPendingModel();
         bivy({ replyTo: id, ok: true, runtimeSessionRef: sessionId });
         return;
       }
@@ -270,6 +369,19 @@ async function onBivyCommand(msg) {
         }
         return;
       }
+      case "model.set": {
+        const model = String(msg.model ?? "").trim();
+        if (!model) { bivy({ replyTo: id, ok: true }); return; }
+        if (!sessionId) {
+          // Chosen before the session exists — remember and apply at session/new.
+          pendingModel = model;
+          bivy({ replyTo: id, ok: true });
+          return;
+        }
+        await setAgentModel(model);
+        bivy({ replyTo: id, ok: true });
+        return;
+      }
       case "session.abort": {
         if (sessionId) agentNotify("session/cancel", { sessionId });
         if (id !== undefined) bivy({ replyTo: id, ok: true });
@@ -286,8 +398,10 @@ async function onBivyCommand(msg) {
 }
 
 // Announce capabilities: ACP agents are governed (per-tool permission) and
-// resumable (session/load). Models aren't part of the core ACP surface, so we
-// don't advertise a picker we can't drive.
+// resumable (session/load). modelSelection starts FALSE and is upgraded later by a
+// `runtime.models` event if the session reports selectable models — the list is
+// per-node (it depends on the providers the user has authenticated in the agent)
+// and only arrives with session/new, so claiming a picker here would be a guess.
 bivy({ type: "hello", runtime: { capabilities: { toolInterception: true, modelSelection: false, resume: true } } });
 
 createInterface({ input: process.stdin }).on("line", (line) => {

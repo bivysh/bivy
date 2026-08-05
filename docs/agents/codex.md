@@ -6,7 +6,8 @@ Approve/Deny card, and sessions resume by their rollout thread id
 (`codex-approvals` runtime id). A faster, no-approval variant that only governs
 at the sandbox level is also runnable with `BIVY_RUNTIME=codex`.
 
-- **Runtime id:** `codex-approvals` · **Tier:** Beta · **In picker:** Yes
+- **Runtime id:** `codex-approvals` · **Tier:** Supported · **In picker:** Yes
+- **Release-tested against:** Codex CLI 0.145.0
 
 ## Install
 

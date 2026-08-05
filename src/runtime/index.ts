@@ -332,10 +332,18 @@ type CliAgentSpec = {
    * `["--experimental-acp"]`). When set AND preferred (per-agent `BIVY_<ID>_ACP=1`
    * or global `BIVY_PREFER_ACP=1`), the agent is driven through bin/acp-shim.mjs →
    * the governed ProtocolRuntime (per-tool approvals + streaming + resume) INSTEAD
-   * of the one-shot stdout pipe — no other spec change needed. Off by default until
-   * validated for the agent, keeping the pipe path (and honest capabilities) intact.
+   * of the one-shot stdout pipe — no other spec change needed.
+   *
+   * `preferred` promotes the agent to ACP BY DEFAULT — the honest default only for
+   * an agent whose ACP mode we've validated end-to-end, and only when the installed
+   * binary actually evidences it. A default-on promotion is always gated on
+   * `acpSupportedByBinary()` (a cached `--help` probe for `helpToken`), so a node
+   * running an older CLI without the ACP subcommand silently keeps the pipe path
+   * with its honest, lower capabilities instead of failing to open a session.
+   * `BIVY_<ID>_ACP=0` forces the pipe path back on; `=1` forces ACP without the
+   * probe (operator override). Agents without `preferred` stay opt-in.
    */
-  acp?: { args: string[] };
+  acp?: { args: string[]; helpToken?: string; preferred?: boolean };
 };
 
 const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
@@ -370,7 +378,11 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // reply to stdout (the TUI needs a real TTY and would hang over a pipe).
     args: ["run"],
     promptMode: "argv",
-    supportTier: "beta",
+    // Supported tier: OpenCode runs on the governed ACP path by default (per-tool
+    // Approve/Deny + session/load resume + a real model picker), the same bar Pi,
+    // Claude Code, and Codex clear. See `acp` below for the version fallback.
+    supportTier: "supported",
+    testedVersion: "1.18.13",
     blurb: "The most widely used open-source coding harness (OpenCode CLI).",
     // `opencode run -s <id> "<prompt>"` continues a prior session by its own id
     // (`-s, --session  session id to continue`, per `opencode run --help`).
@@ -386,11 +398,14 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
         { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google" },
       ],
     },
-    // OpenCode ships a native ACP server (`opencode acp`, per opencode.ai/docs/acp),
-    // so it can be driven through the governed ProtocolRuntime instead of the pipe —
-    // per-tool approvals + streaming + resume. Opt in with BIVY_OPENCODE_ACP=1 (or
-    // global BIVY_PREFER_ACP=1); off by default until validated for your version.
-    acp: { args: ["acp"] },
+    // `opencode acp` ("start ACP (Agent Client Protocol) server") drives OpenCode
+    // through the governed ProtocolRuntime instead of the one-shot pipe: per-tool
+    // Approve/Deny, streaming, `session/load` resume, and `session/set_model`.
+    // Validated against opencode 1.18.13, so it is ON by default (`preferred`) —
+    // gated on the binary actually listing the `acp` subcommand, so an older
+    // OpenCode falls back to the pipe path rather than opening a dead session.
+    // Force the pipe path back with BIVY_OPENCODE_ACP=0.
+    acp: { args: ["acp"], helpToken: "acp", preferred: true },
     install: { kind: "npm", pkg: "opencode-ai" },
   },
   aider: {
@@ -1054,9 +1069,26 @@ function cliThinkingConfig(id: CliAgentId): ProcessThinkingConfig | undefined {
 // installed binary doesn't actually mention. It never UPGRADES — adding a
 // capability needs the exact arg template, which help text can't safely supply — so
 // probing can only make the catalog MORE honest, never invent a no-op control.
+/**
+ * Absolute path of a command on the current PATH, or null when it isn't there.
+ * Used to key the help-probe cache: caching by the bare NAME would keep serving a
+ * stale answer after the binary behind that name changed (a CLI upgraded or
+ * installed while the daemon is running, or a different PATH entry winning).
+ */
+function resolveCommandPath(command: string): string | null {
+  if (!command.trim()) return null;
+  const res = spawnSync(process.platform === "win32" ? "where" : "command", process.platform === "win32" ? [command] : ["-v", command], {
+    shell: process.platform !== "win32",
+    encoding: "utf8",
+  });
+  if (res.status !== 0) return null;
+  return (res.stdout ?? "").split(/\r?\n/)[0]?.trim() || null;
+}
+
 const HELP_PROBE_CACHE = new Map<string, string | null>();
 function probeHelpText(command: string): string | null {
-  if (HELP_PROBE_CACHE.has(command)) return HELP_PROBE_CACHE.get(command) ?? null;
+  const key = resolveCommandPath(command) ?? command;
+  if (HELP_PROBE_CACHE.has(key)) return HELP_PROBE_CACHE.get(key) ?? null;
   let text: string | null = null;
   try {
     const res = spawnSync(command, ["--help"], { encoding: "utf8", timeout: 4000 });
@@ -1065,7 +1097,7 @@ function probeHelpText(command: string): string | null {
   } catch {
     text = null;
   }
-  HELP_PROBE_CACHE.set(command, text);
+  HELP_PROBE_CACHE.set(key, text);
   return text;
 }
 
@@ -1163,9 +1195,14 @@ function cliAgentInfo(id: CliAgentId): RuntimeInfo {
     // src/harness/mcp-inject.ts + governMcpCall in src/server.ts.
     capabilities: { toolInterception: acpActive, mcpToolApprovals: acpActive || Boolean(process.env.BIVY_MCP_PROXY), modelSelection, resume, packages: false, fork: false, usageReporting, sessionDiscovery: id === "codex" },
     supportTier: spec.supportTier ?? (id === "codex" ? "supported" : "experimental"),
+    testedVersion: spec.testedVersion,
     authOwner: spec.authOwner ?? "agent",
     notes: installed
-      ? `Available on PATH. This process adapter ${spec.parserId && !spec.parserUnverified ? "parses its native JSON stream into a structured transcript" : spec.parserId ? "streams stdout/stderr (a structured JSON parser is available; opt in with BIVY_AGENT_STRUCTURED=1 once validated for your version)" : "streams stdout/stderr"}; Bivy governs its filesystem/exec/MCP effects at the sandbox tier rather than intercepting each tool call. Override its launch flags with BIVY_${id.toUpperCase()}_ARGS if your CLI version differs.`
+      ? acpActive
+        // Promoted to ACP: the description must match the governed path actually in
+        // use, not the pipe path this agent would otherwise take.
+        ? `Available on PATH, driven through its Agent Client Protocol server (\`${spec.command} ${spec.acp?.args.join(" ")}\`): each tool call is gated by Bivy's Approve/Deny before it runs, and sessions resume natively. Force the plain stdout pipe with BIVY_${id.toUpperCase()}_ACP=0.`
+        : `Available on PATH. This process adapter ${spec.parserId && !spec.parserUnverified ? "parses its native JSON stream into a structured transcript" : spec.parserId ? "streams stdout/stderr (a structured JSON parser is available; opt in with BIVY_AGENT_STRUCTURED=1 once validated for your version)" : "streams stdout/stderr"}; Bivy governs its filesystem/exec/MCP effects at the sandbox tier rather than intercepting each tool call. Override its launch flags with BIVY_${id.toUpperCase()}_ARGS if your CLI version differs.`
       : `${spec.command} was not found on PATH. Install it on this node, then select this agent again.`,
     install: installed || !installCommand ? undefined : {
       label: `Install ${spec.displayName}`,
@@ -1181,6 +1218,14 @@ function cliAgentInfo(id: CliAgentId): RuntimeInfo {
 // Approve/Deny card via guardianInterceptor, AND it resumes a prior thread by its
 // rollout id (thread/resume). Governed + resumable in one runtime supersedes the
 // exec path, which stays runnable via `BIVY_RUNTIME=codex` for a no-approval flow.
+/**
+ * The Codex CLI release this adapter was last certified against. Unlike Pi and the
+ * Claude Agent SDK, Codex is an external binary rather than a pinned npm dependency,
+ * so there is no lockfile entry to derive this from — it is bumped deliberately when
+ * the app-server shim is re-validated against a new Codex release.
+ */
+const CODEX_TESTED_VERSION = "0.145.0";
+
 function codexApprovalsInfo(): RuntimeInfo {
   const installed = commandAvailable("codex");
   return {
@@ -1210,7 +1255,12 @@ function codexApprovalsInfo(): RuntimeInfo {
       nativeSessionDiscovery: true,
       nativeSessionAdoption: true,
     },
-    supportTier: "beta",
+    // Supported tier: the app-server shim already clears the same bar as Pi and
+    // Claude Code — per-tool Approve/Deny, model selection, thread resume, usage
+    // reporting, and native session discovery/adoption — all over a bidirectional
+    // protocol rather than a one-shot pipe.
+    supportTier: "supported",
+    testedVersion: CODEX_TESTED_VERSION,
     authOwner: "agent",
     notes: installed
       ? "Drives Codex's experimental app-server so tool calls surface as in-chat approval cards, and resumes a prior thread by its rollout id (thread/resume). Governance AND resume in one runtime."
@@ -1396,14 +1446,44 @@ function acpRuntimeFromEnv(credsDir?: string): ProtocolRuntimeOptions | null {
 }
 
 /**
- * Whether a CLI agent should be driven through ACP rather than the one-shot pipe:
- * it declares an `acp` mode AND ACP is preferred for it (per-agent `BIVY_<ID>_ACP=1`
- * or global `BIVY_PREFER_ACP=1`). This is the data-driven "promote an agent to the
- * high-capability path" switch — no per-agent code, just a spec field + a flag.
+ * Does the INSTALLED binary actually evidence the agent's ACP mode? A default-on
+ * promotion must never be taken on faith: ACP is a hard switch (the pipe path is
+ * unreachable once a session opens), so a CLI too old to have the subcommand would
+ * otherwise hang and die instead of degrading. We reuse the same cached `--help`
+ * probe the opt-in capability refinement uses, and fail CLOSED — a missing binary
+ * or unreadable help keeps the agent on the honest pipe path.
+ */
+function acpSupportedByBinary(id: CliAgentId): boolean {
+  const spec = CLI_AGENT_SPECS[id];
+  if (!spec.acp) return false;
+  if (!commandAvailable(spec.command)) return false;
+  const help = probeHelpText(spec.command);
+  if (!help) return false;
+  const token = (spec.acp.helpToken ?? spec.acp.args[0] ?? "acp").toLowerCase();
+  return help.includes(token);
+}
+
+/**
+ * Whether a CLI agent should be driven through ACP rather than the one-shot pipe.
+ * Three ways in, in precedence order:
+ *   - `BIVY_<ID>_ACP=0` — operator forces the pipe path back (escape hatch).
+ *   - `BIVY_<ID>_ACP=1` / `BIVY_PREFER_ACP=1` — operator forces ACP, no probe (they
+ *     know their binary; an explicit request shouldn't be second-guessed).
+ *   - `spec.acp.preferred` — validated agents are promoted by DEFAULT, but only
+ *     when the installed binary evidences the ACP mode (see acpSupportedByBinary).
+ * Still no per-agent code: a spec field plus a flag.
+ *
+ * Both the catalog (cliAgentInfo) and the launch path (makeCliRuntime) call this,
+ * so what the picker advertises and what actually starts cannot disagree.
  */
 function prefersAcp(id: CliAgentId): boolean {
-  if (!CLI_AGENT_SPECS[id].acp) return false;
-  return process.env.BIVY_PREFER_ACP === "1" || process.env[`BIVY_${id.toUpperCase()}_ACP`] === "1";
+  const spec = CLI_AGENT_SPECS[id];
+  if (!spec.acp) return false;
+  const override = process.env[`BIVY_${id.toUpperCase()}_ACP`];
+  if (override === "0") return false;
+  if (override === "1" || process.env.BIVY_PREFER_ACP === "1") return true;
+  if (!spec.acp.preferred) return false;
+  return acpSupportedByBinary(id);
 }
 
 export type CliExecutionMode = "auto" | "protocol" | "structured-pipe" | "pipe" | "pty";
