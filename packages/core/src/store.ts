@@ -981,6 +981,15 @@ export class SessionStore {
   /** Per-session rendered transcript, so switching back paints instantly. */
   private transcriptCache = new Map<string, TranscriptEntry[]>();
   private static readonly CACHE_MAX = 30;
+  /** Session ids the user just deleted, kept briefly so an authoritative
+   *  full-list refresh that still predates the deletion can't resurrect the row.
+   *  In hosted mode `deleteSession` optimistically drops the row but then
+   *  immediately re-fetches the control-plane session index, which lags the
+   *  node's debounced, best-effort advert — so without this the just-deleted
+   *  session reappears and looks like the delete silently failed. Bounded by TTL
+   *  so a delete that genuinely failed on the node can't hide a row forever. */
+  private recentlyDeleted = new Map<string, number>();
+  private static readonly DELETE_TOMBSTONE_MS = 30_000;
   /** Per-session raw node messages + history cursor (count + hash), so we can
    *  apply append deltas and echo the cursor for incremental backfill. */
   private historyRaw = new Map<string, { messages: any[]; count: number; historyHash: string }>();
@@ -1591,7 +1600,7 @@ export class SessionStore {
    * just because the row object was rebuilt from scratch.
    */
   setSessions(list: unknown): void {
-    const sessions = normalizeSessions(list, this.state.sessions);
+    const sessions = this.withoutRecentlyDeleted(normalizeSessions(list, this.state.sessions));
     const activeId = this.state.activeSessionId;
     this.set({
       sessions: activeId
@@ -1609,7 +1618,7 @@ export class SessionStore {
    */
   seedSessions(list: unknown): void {
     if (this.state.sessions.length > 0) return;
-    const sessions = normalizeSessions(list, this.state.sessions);
+    const sessions = this.withoutRecentlyDeleted(normalizeSessions(list, this.state.sessions));
     if (sessions.length === 0) return;
     this.set({ sessions });
   }
@@ -1897,7 +1906,23 @@ export class SessionStore {
 
   /** Optimistically drop a session-list row before the node's fresh list arrives. */
   removeSessionLocal(sessionId: string): void {
+    // Tombstone the id so a full-list refresh that still predates the deletion
+    // (the control-plane index lags the node's debounced advert) can't add it
+    // back — see setSessions / recentlyDeleted.
+    this.recentlyDeleted.set(sessionId, Date.now());
     this.set({ sessions: this.state.sessions.filter((s) => s.sessionId !== sessionId) });
+  }
+
+  /** Drop rows the user just deleted, pruning expired tombstones as we go, so a
+   *  stale authoritative list can't resurrect a just-deleted session. */
+  private withoutRecentlyDeleted(sessions: SessionSummary[]): SessionSummary[] {
+    if (this.recentlyDeleted.size === 0) return sessions;
+    const now = Date.now();
+    for (const [id, at] of this.recentlyDeleted) {
+      if (now - at > SessionStore.DELETE_TOMBSTONE_MS) this.recentlyDeleted.delete(id);
+    }
+    if (this.recentlyDeleted.size === 0) return sessions;
+    return sessions.filter((s) => !this.recentlyDeleted.has(s.sessionId));
   }
 
   /** Insert or merge a single session-list row (from a `session.created`
