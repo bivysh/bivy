@@ -1277,6 +1277,11 @@ export class AppController {
         const sessionId = String(s.sessionId || s.id || "");
         const nodeId = String(s.nodeId || "");
         const previous = existing.find((row) => row.sessionId === sessionId && (!row.nodeId || row.nodeId === nodeId));
+        // A trial-locked session arrives content-stripped (no titleEnc/source): don't
+        // try to decrypt it or carry stale cached content — show it as a locked stub.
+        if (s.locked) {
+          return { sessionId, nodeId, name: "Locked session", status: s.status, updatedAt: s.updatedAt, locked: true as const };
+        }
         const decryptedName = await this.decryptSessionTitle(s);
         return {
           ...previous,
@@ -1288,6 +1293,7 @@ export class AppController {
           status: s.status,
           attention: Array.isArray(s.attention) ? s.attention : previous?.attention,
           updatedAt: s.updatedAt || previous?.updatedAt,
+          locked: false as const,
         };
       }));
       const live = sessions.filter((s) => s.sessionId && s.nodeId);

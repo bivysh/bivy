@@ -238,6 +238,23 @@ async function runAllowance(accountId: string): Promise<{ limit?: number; used: 
   if (!enforceRunLimit) return { limit, used, warn: false, exhausted: false };
   return { limit, used, warn: used >= limit && used < limit + RUN_GRACE, exhausted: used >= limit + RUN_GRACE };
 }
+// The account's LIFETIME hosted-session trial status. On Bivy Cloud "free" is the
+// pre-subscription trial: the first `limit` distinct sessions surface through the
+// hosted app, then new ones are withheld and Pro is prompted. `enforced` is false
+// on self-host / no-billing stacks (enforceEntitlements off) and on paid plans
+// (limit undefined) — in both cases nothing is ever hidden. `over` is how many
+// sessions currently sit outside the allowance. Sessions keep RUNNING on the user's
+// machine regardless; only hosted visibility is gated. Mirrors runAllowance's shape.
+async function trialStatus(accountId: string): Promise<{ enforced: boolean; limit?: number; used: number; remaining: number; over: number; exhausted: boolean }> {
+  const limit = (await store.entitlements(accountId)).trialSessionLimit;
+  if (!enforceEntitlements || typeof limit !== "number") {
+    return { enforced: false, limit, used: 0, remaining: Infinity, over: 0, exhausted: false };
+  }
+  const used = await store.countTrialSessions(accountId);
+  const over = Math.max(0, used - limit);
+  return { enforced: true, limit, used, remaining: Math.max(0, limit - used), over, exhausted: used >= limit };
+}
+
 const stripePrices: Partial<Record<Plan, string>> = {
   pro: process.env.STRIPE_PRICE_PRO,
   team: process.env.STRIPE_PRICE_TEAM,
@@ -1113,6 +1130,13 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
       // are excluded and unlimited on every plan.
       runsThisWeek: (await runAllowance(account.id)).used,
     },
+    // Lifetime hosted-session trial (Bivy Cloud "free" only). Undefined on self-host
+    // and paid plans, where nothing is metered. Drives the app's usage banner and
+    // the "upgrade to keep your sessions visible" prompt.
+    trial: await (async () => {
+      const t = await trialStatus(account.id);
+      return t.enforced ? { limit: t.limit, used: t.used, remaining: t.remaining, over: t.over, exhausted: t.exhausted } : undefined;
+    })(),
   });
 }));
 
@@ -1352,7 +1376,12 @@ app.post("/node/sessions", requireNode, asyncHandler(async (req, res) => {
   const sessions = sessionAdvertsFrom(req.body?.sessions);
   const newRuns = await store.replaceNodeSessions(node.accountId, node.id, sessions);
   if (newRuns > 0) {
-    recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
+    const plan = (await store.entitlements(node.accountId)).plan;
+    recordFunnelEvent("run_started", "session", plan, newRuns);
+    // A new session that lands a free account past its lifetime trial is withheld
+    // from the hosted app (see listClientSessions). Record it once, here, so the
+    // conversion funnel can size the trial — the read path stays metric-free.
+    if ((await trialStatus(node.accountId)).exhausted) recordFunnelEvent("quota_blocked", "trial", plan);
     await correlateHostedSessions(store, node, sessions);
   }
   res.json({ ok: true, count: sessions.length });
@@ -1393,7 +1422,9 @@ app.put("/internal/nodes/:nodeId/sessions/:sessionId", requireNode, asyncHandler
   let newRuns = 0;
   for (const s of advert) if (await store.upsertNodeSession(node.accountId, node.id, s)) newRuns += 1;
   if (newRuns > 0) {
-    recordFunnelEvent("run_started", "session", (await store.entitlements(node.accountId)).plan, newRuns);
+    const plan = (await store.entitlements(node.accountId)).plan;
+    recordFunnelEvent("run_started", "session", plan, newRuns);
+    if ((await trialStatus(node.accountId)).exhausted) recordFunnelEvent("quota_blocked", "trial", plan);
     await correlateHostedSessions(store, node, advert);
   }
   res.json({ ok: true, count: advert.length });
@@ -1431,10 +1462,30 @@ async function listClientSessions(req: Request, res: Response) {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const all = await store.listAccountSessions(client.accountId);
   const scoped = client.nodeId ? all.filter((s) => s.nodeId === client.nodeId) : all;
+  // Trial gate: on Bivy Cloud a free account past its lifetime session allowance
+  // still sees its earliest sessions, but sessions beyond the cap come back as
+  // content-stripped `locked` stubs — enough to render a "subscribe to view" card,
+  // never their (E2E) title/branch/source. This is the authoritative, server-side
+  // visibility gate; the app is only the messenger. Self-host and paid plans hit
+  // the fast path below (overIds empty) and see everything.
+  const trial = await trialStatus(client.accountId);
+  const overIds = trial.enforced && trial.over > 0 && typeof trial.limit === "number"
+    ? await store.overTrialSessionIds(client.accountId, trial.limit)
+    : new Set<string>();
   // Strip the agent-service address: it is node↔node routing metadata (Stage 2),
   // never needed by — and not exposed to — clients.
-  const forClient = scoped.map(({ agentServiceAddress: _addr, ...s }) => s);
-  res.json({ sessions: forClient });
+  const forClient = scoped.map(({ agentServiceAddress: _addr, ...s }) => {
+    if (!overIds.has(s.sessionId)) return s;
+    // Withhold everything the lock is meant to hide; keep only routing identity and
+    // status so the client can show a placeholder in the right node/position.
+    return { sessionId: s.sessionId, nodeId: s.nodeId, status: s.status, updatedAt: s.updatedAt, locked: true as const };
+  });
+  res.json({
+    sessions: forClient,
+    trial: trial.enforced
+      ? { limit: trial.limit, used: trial.used, remaining: trial.remaining, over: trial.over, exhausted: trial.exhausted }
+      : undefined,
+  });
 }
 
 app.get("/sessions", asyncHandler(listClientSessions));

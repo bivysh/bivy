@@ -50,6 +50,15 @@ export interface Entitlements {
   // return gradually as jobs age out. Optional means unlimited (paid plans).
   // The legacy field name stays wire-compatible with pre-release clients.
   weeklyRunLimit?: number;
+  // LIFETIME hosted-session trial. On Bivy Cloud, "free" is no longer a permanent
+  // tier — it's the pre-subscription trial: the account may surface this many
+  // DISTINCT sessions (any source) through the hosted relay/app before the hosted
+  // index stops showing new ones and prompts for Pro. Unlike weeklyRunLimit this is
+  // cumulative and never resets (a trial, not a rolling allowance); a long-running
+  // session counts once. Undefined = unlimited (paid plans, and self-host where
+  // enforcement is off). Sessions keep running on the user's own machine regardless
+  // — only hosted VISIBILITY is gated, so self-hosting stays the unlimited free path.
+  trialSessionLimit?: number;
   // Quick ephemeral cloud servers brokered from a phone (Fly/Hetzner/AWS/… with the
   // user's own token, proxied through the control-plane cold-start relay). Available
   // on every plan. A runner used by queued work consumes that automation job's run.
@@ -865,11 +874,21 @@ export interface PairedDeviceInfo {
 // Paid plans omit the limit (unlimited automation).
 export const FREE_WEEKLY_RUNS = 10;
 
+// Lifetime hosted-session trial size for the pre-subscription "free" plan. This
+// replaces "unlimited interactive sessions" as the free adoption surface: the
+// commoditized software stays free to SELF-HOST (enforcement off ⇒ unlimited), but
+// the hosted convenience layer (app.bivy.sh's relay + session index) is a
+// usage-trial — the first N sessions are free, then Pro. Env-overridable so the
+// number can be tuned without a deploy. See Entitlements.trialSessionLimit.
+export const TRIAL_SESSIONS = Number(process.env.TRIAL_SESSIONS ?? 25);
+
 export const PLAN_ENTITLEMENTS: Record<Plan, Omit<Entitlements, "plan">> = {
-  // Free is feature-complete: unlimited interactive sessions, nodes, push, and
-  // ephemeral runners. The only cap is FREE_WEEKLY_RUNS queued automation jobs per
-  // rolling 7-day window; paid plans omit it. Every plan omits `maxNodes`.
-  free: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, weeklyRunLimit: FREE_WEEKLY_RUNS, ephemeralEnabled: true },
+  // On Bivy Cloud "free" is the pre-subscription TRIAL: unlimited nodes, push, and
+  // ephemeral runners, plus FREE_WEEKLY_RUNS queued automations per rolling window,
+  // but only trialSessionLimit LIFETIME sessions visible through the hosted app
+  // before an upgrade is required. Self-hosted stacks run with enforcement off, so
+  // both caps are inert there and free stays fully unlimited. Paid plans omit both.
+  free: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, weeklyRunLimit: FREE_WEEKLY_RUNS, trialSessionLimit: TRIAL_SESSIONS, ephemeralEnabled: true },
   pro: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
   team: { pushEnabled: true, relayEnabled: true, workQueueEnabled: true, ephemeralEnabled: true },
 };
@@ -1240,6 +1259,16 @@ export interface MeshStore {
   // can never be counted again, so this is pure housekeeping to keep the table lean;
   // called on an interval by the control plane. Returns how many rows were removed.
   pruneRunStartsBefore(beforeIso: string): Promise<number>;
+  // How many DISTINCT sessions the account has ever surfaced through the hosted
+  // index (the lifetime trial meter). Unlike run_starts this ledger is NEVER pruned,
+  // so it survives the rolling-window cleanup and is the authority for the trial.
+  countTrialSessions(accountId: string): Promise<number>;
+  // The set of session ids that fall OUTSIDE the account's trial allowance: every
+  // session beyond the first `limit` by first-seen order. Returns an empty set when
+  // the account is within allowance. Read-time gate — recording is limit-agnostic,
+  // so raising the limit or upgrading immediately widens what's visible with no
+  // backfill, and self-host (which never calls this) is unaffected.
+  overTrialSessionIds(accountId: string, limit: number): Promise<Set<string>>;
   // Delete expired rows from every short-lived, single-use auth artifact table
   // (login_tokens, sessions, link_grants, relay_tickets, device_logins,
   // oauth_states, and expired auth_rate_limits). Each of

@@ -647,6 +647,21 @@ export class PostgresStore implements MeshStore {
         PRIMARY KEY (account_id, run_key)
       );
 
+      -- Lifetime hosted-session trial meter. One row per DISTINCT session ever
+      -- surfaced through the hosted index, deduped by PRIMARY KEY so re-advertises
+      -- never inflate it. Unlike run_starts this is NEVER pruned — it is durable
+      -- billing state, not a rolling window — so the "first N sessions are free"
+      -- trial can't be reset by ageing rows out. Which sessions fall outside the
+      -- allowance is decided at READ time (by first_seen order vs the plan limit),
+      -- so a session allowed once stays allowed and upgrading needs no backfill.
+      -- Metadata only: an account id, an opaque session id, a timestamp.
+      CREATE TABLE IF NOT EXISTS trial_sessions (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id  TEXT NOT NULL,
+        first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, session_id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_nodes_account ON nodes(account_id);
       CREATE INDEX IF NOT EXISTS idx_nodes_token ON nodes(enrollment_token_hash);
       CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id);
@@ -661,6 +676,7 @@ export class PostgresStore implements MeshStore {
       -- re-label starts a fresh run rather than colliding forever.
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_collapse ON work_items(account_id, collapse_key) WHERE collapse_key IS NOT NULL AND status = 'pending';
       CREATE INDEX IF NOT EXISTS idx_run_starts_account_time ON run_starts(account_id, started_at);
+      CREATE INDEX IF NOT EXISTS idx_trial_sessions_account_seen ON trial_sessions(account_id, first_seen);
     `);
   }
 
@@ -1226,6 +1242,19 @@ export class PostgresStore implements MeshStore {
             [accountId, ...sessions.map((s) => s.sessionId)],
           );
           newRunStarts = insertedRuns.rows.filter((row: { run_key: string }) => !existingKeys.has(row.run_key)).length;
+          // Mirror into the durable, never-pruned trial ledger in the same batch.
+          // Deduped by PRIMARY KEY, so a session's first_seen is pinned the day it
+          // first appears and re-advertises are no-ops — the lifetime trial count is
+          // stable regardless of how often a session is re-advertised. Limit-agnostic
+          // by design: whether a session is inside the allowance is decided at read
+          // time (overTrialSessionIds), so this path needs no plan/enforcement lookup.
+          const trialRows = sessions.map((_, i) => `($1, $${i + 2})`).join(", ");
+          await client.query(
+            `INSERT INTO trial_sessions (account_id, session_id)
+             VALUES ${trialRows}
+             ON CONFLICT (account_id, session_id) DO NOTHING`,
+            [accountId, ...sessions.map((s) => s.sessionId)],
+          );
         }
       }
       await client.query("COMMIT");
@@ -1289,6 +1318,13 @@ export class PostgresStore implements MeshStore {
           [accountId, session.sessionId],
         );
         runStarted = existingRun.rows.length === 0 && insertedRun.rows.length > 0;
+        // Mirror into the durable lifetime trial ledger (see replaceNodeSessions).
+        await client.query(
+          `INSERT INTO trial_sessions (account_id, session_id)
+           VALUES ($1, $2)
+           ON CONFLICT (account_id, session_id) DO NOTHING`,
+          [accountId, session.sessionId],
+        );
       }
       await client.query("COMMIT");
     } catch (error) {
@@ -2529,6 +2565,31 @@ export class PostgresStore implements MeshStore {
       [beforeIso],
     );
     return rowCount ?? 0;
+  }
+
+  async countTrialSessions(accountId: string): Promise<number> {
+    const { rows } = await this.query(
+      `SELECT count(*)::int AS n FROM trial_sessions WHERE account_id = $1`,
+      [accountId],
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  async overTrialSessionIds(accountId: string, limit: number): Promise<Set<string>> {
+    // Everything beyond the first `limit` sessions by first-seen order is outside
+    // the trial. OFFSET past the allowance returns exactly those rows, so the earliest
+    // `limit` sessions stay visible (a running session is never yanked when the wall
+    // is hit) and only newer ones are withheld. Ordered by (first_seen, session_id)
+    // for a stable tiebreak when timestamps collide.
+    if (!Number.isFinite(limit) || limit < 0) return new Set();
+    const { rows } = await this.query(
+      `SELECT session_id FROM trial_sessions
+       WHERE account_id = $1
+       ORDER BY first_seen ASC, session_id ASC
+       OFFSET $2`,
+      [accountId, limit],
+    );
+    return new Set(rows.map((r: { session_id: string }) => r.session_id));
   }
 
   async pruneExpiredAuthTokens(nowIso: string): Promise<number> {

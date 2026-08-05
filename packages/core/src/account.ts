@@ -241,7 +241,20 @@ export interface AccountSessionAdvert {
   branch?: string;
   updatedAt?: string;
   attention?: InboxAdvert[];
+  /** Hosted-trial gate: session is beyond the account's free lifetime allowance,
+   *  returned content-stripped. Renders as a locked "subscribe to view" row. */
+  locked?: boolean;
   [k: string]: unknown;
+}
+
+/** Lifetime hosted-session trial status (Bivy Cloud free plan). Absent on
+ *  self-host and paid plans, where nothing is metered. */
+export interface TrialStatus {
+  limit?: number;
+  used: number;
+  remaining: number;
+  over: number;
+  exhausted: boolean;
 }
 
 function cpBase(store: LocalStore): string {
@@ -295,6 +308,9 @@ export interface AccountMe {
   };
   pricing?: { pro?: PlanPrice; team?: PlanPrice };
   counts?: { nodes?: number; sessions?: number; devices?: number; runsThisWeek?: number };
+  /** Lifetime hosted-session trial (Bivy Cloud free plan). Absent on self-host and
+   *  paid plans. Drives the usage banner and the upgrade prompt. */
+  trial?: TrialStatus;
   [k: string]: unknown;
 }
 

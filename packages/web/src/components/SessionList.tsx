@@ -364,9 +364,20 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
     // calm majority still reads like the legacy drawer. Sort a copy so the
     // store's array identity is untouched.
     return [...matched].sort(
-      (a, b) => attentionRank(b) - attentionRank(a) || toMs(b.updatedAt) - toMs(a.updatedAt),
+      // Trial-locked stubs sink to the bottom — they can't be opened, so they
+      // shouldn't crowd the sessions that need attention. Otherwise: needs-you
+      // first, then newest activity.
+      (a, b) =>
+        (a.locked ? 1 : 0) - (b.locked ? 1 : 0) ||
+        attentionRank(b) - attentionRank(a) ||
+        toMs(b.updatedAt) - toMs(a.updatedAt),
     );
   }, [sessions, query, repoFilter, nodeFilter]);
+
+  // Sessions the control plane withheld because the account is past its free
+  // lifetime-session trial (see listClientSessions). Their presence drives the
+  // paywall banner and per-row lock treatment below.
+  const lockedCount = useMemo(() => sessions.filter((s) => s.locked).length, [sessions]);
 
   // Search spans every session; pagination only bounds the unfiltered list, so a
   // query always reveals all of its matches, never just the first page.
@@ -497,6 +508,21 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
           )}
         </div>
       </div>
+      {lockedCount > 0 && (
+        <div className="trial-wall" role="note">
+          <div className="trial-wall-text">
+            <strong>{lockedCount} session{lockedCount === 1 ? "" : "s"} hidden</strong>
+            <span>
+              You've reached the free Bivy Cloud limit. Subscribe to Pro to view and
+              control every session from anywhere — or run your own self-hosted Bivy
+              server to keep everything free.
+            </span>
+          </div>
+          <button className="trial-wall-cta" type="button" onClick={() => void controller.startCheckout()}>
+            Upgrade to Pro
+          </button>
+        </div>
+      )}
       {filtered.length === 0 && filteredRuns.length === 0 && <div className="session-empty">{emptyText}</div>}
       <ul>
         {filteredRuns.map((t) => {
@@ -522,6 +548,32 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
           );
         })}
         {visible.map((s) => {
+          // Trial-locked stub: no content to show and not openable. Render a muted
+          // lock row that routes to checkout instead of opening the session.
+          if (s.locked) {
+            return (
+              <li key={s.sessionId} className="session-row">
+                <button
+                  className="session-item locked"
+                  type="button"
+                  aria-label="Locked session — upgrade to view"
+                  onClick={() => void controller.startCheckout()}
+                >
+                  <span className="session-lock" aria-hidden>🔒</span>
+                  <span className="session-body">
+                    <span className="session-title-row">
+                      <span className="session-name">Locked session</span>
+                      {relTime(s.updatedAt) && <span className="session-age">{relTime(s.updatedAt)}</span>}
+                    </span>
+                    <span className="session-meta">
+                      <span className="row-hint warn">Subscribe to Pro to view</span>
+                      {nodeName(s.nodeId) ? ` · ${nodeName(s.nodeId)}` : ""}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            );
+          }
           const meta = sessionMeta(s, nodeName(s.nodeId));
           const unseen = isUnseen(s);
           const label = statusLabel(s);
