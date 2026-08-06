@@ -85,7 +85,7 @@ Override the location with `BIVY_DATA_DIR`.
 `bivy setup` (run by the installer, or `npm run setup` in an existing checkout)
 picks sensible defaults for everything and asks two questions:
 
-- **Remote access** — hosted (recommended; one node is free) or self-hosted,
+- **Remote access** — hosted (recommended; the first 25 remotely accessible sessions are free, and nothing caps your local usage) or self-hosted,
   pointing this node at your own control plane + relay,
 - **Remote login** — GitHub sign-in (default) or an email magic link.
 
@@ -130,11 +130,9 @@ The hosted endpoints are baked in. To point at your own deployment, set
 subdomains), or override individually with `BIVY_CONTROL_PLANE_URL` /
 `BIVY_RELAY_URL`.
 
-To pair a remote browser/PWA, run `bivy link` and scan the QR or open the
-link — or use the **Link remote device** button in the app (`bivy open`).
-To revoke a linked device, remove it under Settings → **Signed-in devices**
-(the room key rotates for the remaining devices); remove them all to revoke
-everyone.
+Open the remote app with `bivy open`, then sign in with the same GitHub account
+or email used during setup. Advanced users can explicitly pair a device with
+`bivy link`; paired devices can be revoked under Settings → **Signed-in devices**.
 
 ## Mac development install
 

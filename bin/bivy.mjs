@@ -131,6 +131,7 @@ const packaged = fs.existsSync(path.join(repoRoot, "dist", "server.js"));
 const serverEntry = path.join(repoRoot, packaged ? "dist/server.js" : "src/server.ts");
 const nativePiEntry = path.join(repoRoot, packaged ? "dist/native-pi.js" : "src/native-pi.ts");
 const bivyLoginEntry = path.join(repoRoot, packaged ? "dist/bivy-login.js" : "src/bivy-login.ts");
+const credentialIngestEntry = path.join(repoRoot, packaged ? "dist/credential-ingest-cli.js" : "src/credential-ingest-cli.ts");
 const relaySetupEntry = path.join(repoRoot, packaged ? "dist/relay-setup.js" : "src/relay-setup.ts");
 // Dependency-free hosted-endpoint helper. Shipped to dist/ in the release
 // artifact (src/ is not packaged), so resolve it the same packaged-aware way as
@@ -419,6 +420,17 @@ function nativeAgentAuthDetected(choice) {
   if (choice.command === "codex") return fs.existsSync(path.join(os.homedir(), ".codex", "auth.json"));
   if (choice.command === "claude") return fs.existsSync(path.join(os.homedir(), ".claude", ".credentials.json"));
   return false;
+}
+
+async function ingestSetupAgentLogin(choice) {
+  if (!choice || !["claude-code-sdk", "codex"].includes(choice.runtimeId)) return false;
+  const code = await run(nodeBin, [
+    ...nodeScriptArgs(credentialIngestEntry),
+    choice.runtimeId,
+    path.join(appDir, "credentials"),
+    path.join(appDir, "pi"),
+  ], { cwd: repoRoot, env: process.env, stdio: "ignore" });
+  return code === 0;
 }
 
 function url(config) {
@@ -2655,9 +2667,11 @@ function createPrompter() {
   };
 
   const askChoice = async (question, choices, fallback) => {
-    const labels = choices.map((choice) => `${choice.key}=${choice.label}`).join(", ");
     for (;;) {
-      const answer = (await ask(`${question} (${labels})`, fallback)).toLowerCase();
+      const menu = choices.map((choice) => `    ${c.cyan(choice.key)}  ${choice.label}`).join("\n");
+      const suffix = fallback ? c.dim(` [default: ${fallback}]`) : "";
+      process.stdout.write(`\n${c.cyan("›")} ${question}\n${menu}\n  >${suffix} `);
+      const answer = String(await nextLine()).trim().toLowerCase() || fallback || "";
       const match = choices.find((choice) => answer === choice.key || answer === choice.label.toLowerCase());
       if (match) return match.key;
       console.log(c.yellow(`Please choose one of: ${choices.map((choice) => choice.key).join(", ")}`));
@@ -3266,7 +3280,7 @@ async function cmdSetup(args = []) {
     const syncChoice = await askChoice(
       "Remote access",
       [
-        { key: "h", label: "hosted (recommended — one node is free)" },
+        { key: "h", label: "hosted (recommended — first 25 remotely accessible sessions are free; nothing caps your local usage)" },
         { key: "s", label: "self-hosted (your own control plane + relay)" },
       ],
       selfHostEnv ? "s" : "h",
@@ -3349,15 +3363,17 @@ async function cmdSetup(args = []) {
     }
   } else if (setupAgent && !setupAgent.needsBivyModel) {
     if (agentAuthReady) {
-      console.log(c.green(`\n  ✓ Existing ${setupAgent.label} login detected — Bivy will reuse it in the terminal and PWA.`));
+      const imported = await ingestSetupAgentLogin(setupAgent);
+      console.log(c.green(`\n  ✓ Existing ${setupAgent.label} login detected — Bivy will reuse it in the terminal and PWA${imported ? " and stored it in the encrypted vault" : ""}.`));
     } else if (setupAgent.command) {
-      console.log(`\n${setupAgent.label} owns its login; Bivy reuses that native login and does not copy it into the shared vault.`);
+      console.log(`\n${setupAgent.label} owns its login. After sign-in, Bivy stores compatible credential fields in its encrypted vault so the terminal, PWA, and your other Bivy nodes can reuse them.`);
       const signInNow = await askYesNo(`Open ${setupAgent.label} now to sign in? (Exit it when sign-in is complete.)`, true);
       if (signInNow) {
         rl.pause();
         const loginCode = await run(setupAgent.command, [], { cwd: config.workspace, env: startEnv(config) });
         rl.resume();
         agentAuthReady = loginCode === 0 || nativeAgentAuthDetected(setupAgent);
+        if (agentAuthReady) await ingestSetupAgentLogin(setupAgent);
       }
     }
   }
@@ -3394,13 +3410,13 @@ async function cmdSetup(args = []) {
   console.log(`  ${modelReady ? c.green("✓") : c.yellow("!")} model ${modelReady ? (setupAgent?.needsBivyModel ? "credential configured" : "native agent login ready") : (setupAgent?.needsBivyModel ? "not configured — run 'bivy login'" : `${setupAgent?.loginHint || "sign in through the selected agent"}`)}`);
   console.log(`  ${c.dim("○")} repository chosen from the directory where you start Bivy`);
   const ghReady = githubConnected(finalConfig);
-  console.log(`  ${ghReady ? c.green("✓") : c.dim("○")} GitHub ${ghReady ? "connected — your repos will list in the app" : c.dim("not connected — 'bivy github:connect' to list repos (optional)")}`);
+  console.log(`  ${ghReady ? c.green("✓") : c.dim("○")} GitHub ${ghReady ? "connected — your repos will list in the app" : c.dim("optional — connect later in the app under Settings → GitHub App")}`);
   console.log(`  ${agentReady && modelReady ? c.green("✓") : c.yellow("!")} first task ${agentReady && modelReady ? "ready to try" : "blocked by the stage above"}`);
   console.log(`  ${fs.existsSync(relayConfigPath) ? c.green("✓") : c.yellow("!")} remote ${fs.existsSync(relayConfigPath) ? "configured" : "not configured — run 'bivy relay:setup'"}\n`);
   // Get the user into the product immediately; terminal commands are the
   // fallback/next-step checklist after the remote app has been opened or linked.
   await finishSetupRemote(finalConfig, setupSession);
-  printFirstRunSteps(modelReady, finalConfig, setupAgent);
+  printFirstRunSteps(modelReady, setupAgent);
 }
 
 // Read and delete the one-time account-session handoff written by relay:setup
@@ -3429,20 +3445,18 @@ function consumeSetupSession() {
 // `/nodes` return only this one node, so a user with other nodes appeared to land
 // on a different/empty account until they signed out and back in.
 //
-// The separately minted node-scoped paired link (E2E key embedded) is reserved
-// for the QR below, which is meant to be scanned by *another* device to pair it
-// with this node — there, node-scoping is the right least-privilege choice.
-// Everything is also printed as text so servers without a browser can copy it.
 // Open this node's REMOTE control-plane app in a local browser (best effort) and
-// return the URLs involved. The node no longer hosts a UI, so the web/PWA app
+// return the URL involved. The node no longer hosts a UI, so the web/PWA app
 // always comes from the hosted or self-hosted control plane. Prefers, in order:
 // an account sign-in URL (only available right after `relay:setup`, when a
-// setupSession is supplied) → a freshly minted node-scoped paired link → the
-// plain remote base URL. Prints a clean "Opening <base>" line — never the
-// tokenized fragment, so no session/pairing secret lands in terminal scrollback.
+// setupSession is supplied) → the plain remote base URL, where the user signs
+// in normally. Pairing is deliberately reserved for the explicit `bivy link`
+// command; ordinary setup/open should establish the full account experience.
+// Prints a clean "Opening <base>" line — never the tokenized fragment, so no
+// account secret lands in terminal scrollback.
 // Returns null when no relay is configured (caller should send the user to
 // `bivy relay:setup`).
-async function openRemoteApp(config, { setupSession = null, open = true } = {}) {
+async function openRemoteApp({ setupSession = null, open = true, remotePath = "" } = {}) {
   const relay = loadRelayConfig();
   if (!relay) return null;
 
@@ -3460,31 +3474,15 @@ async function openRemoteApp(config, { setupSession = null, open = true } = {}) 
       session: setupSession.session,
       ...(setupSession.nodeId ? { node: { id: setupSession.nodeId } } : {}),
     };
-    accountUrl = `${remoteBase}/#${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
+    accountUrl = `${remoteBase}${remotePath}/#${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   }
 
-  // Try to mint a node-scoped paired link (safe to embed in a QR another device
-  // scans). Needs the node reachable, so wait briefly first.
-  let pairedUrl = "";
-  await waitForNode(config).catch(() => {});
-  try {
-    const token = await localDeviceToken(config);
-    const data = await localApi(config, "/api/relay/link", {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-      body: "{}",
-    });
-    if (data?.url) pairedUrl = data.url;
-  } catch {
-    // fall back to the plain remote app URL below
-  }
-
-  const openUrl = accountUrl || pairedUrl || remoteBase;
+  const openUrl = accountUrl || `${remoteBase}${remotePath}`;
   if (open && canOpenBrowser() && openUrl) {
     console.log(`  Opening ${c.cyan(remoteBase || openUrl)} …`);
     openBrowser(openUrl);
   }
-  return { relay, remoteBase, accountUrl, pairedUrl, openUrl };
+  return { relay, remoteBase, accountUrl, openUrl };
 }
 
 // Whether GitHub is connected for repo listing/cloning. Bivy's own connect flow
@@ -3500,27 +3498,24 @@ function githubConnected(config = null) {
   return Boolean(token);
 }
 
-function printFirstRunSteps(modelReady = false, config = null, setupAgent = null) {
-  console.log("  Run your first task:");
-  let n = 0;
+function printFirstRunSteps(modelReady = false, setupAgent = null) {
+  console.log("  Start your first session:");
   if (!modelReady) {
     const login = setupAgent?.needsBivyModel
       ? `${c.cyan("bivy login")}  ${c.dim("(stored in Bivy's encrypted vault)")}`
       : c.cyan(setupAgent?.command || "the selected agent's native CLI");
-    console.log(`    ${++n}. Model access:   ${login}`);
+    console.log(`    Model access: ${login}`);
   }
-  // GitHub is optional — "No repo" sessions work without it — so this only shows
-  // when nothing is connected yet, and never blocks the flow.
-  if (!githubConnected(config)) {
-    console.log(`    ${++n}. GitHub ${c.dim("(optional)")}: ${c.cyan("bivy github:connect")}  ${c.dim("— lets the app list your repos; required for private ones")}`);
-  }
-  console.log(`    ${++n}. Start chatting: ${c.cyan("bivy")}`);
-  console.log(`       Starter task:  ${c.cyan('bivy exec "explain this repository and identify one low-risk improvement"')}\n`);
+  const agent = setupAgent?.command || setupAgent?.runtimeId || resolveDefaultAgent();
+  const remoteApp = String(loadRelayConfig()?.clientBaseUrl || "https://app.bivy.sh").replace(/\/+$/, "");
+  console.log(`    • In the terminal: ${c.cyan(`bivy run ${agent}`)}`);
+  console.log(`      Then use the remote app to watch the session or take over in chat.`);
+  console.log(`    • Or start in chat: ${c.cyan(remoteApp)}\n`);
 }
 
 async function finishSetupRemote(config, setupSession = null) {
   const openable = canOpenBrowser();
-  const remote = await openRemoteApp(config, { setupSession });
+  const remote = await openRemoteApp({ setupSession });
 
   if (!remote) {
     console.log("\n  Almost there — enable remote access to open the Bivy app:");
@@ -3529,19 +3524,14 @@ async function finishSetupRemote(config, setupSession = null) {
     return;
   }
 
-  const { remoteBase, pairedUrl } = remote;
-  if (pairedUrl) {
-    const qr = terminalQr(pairedUrl);
-    if (qr) console.log(qr + "\n");
-  }
+  const { remoteBase } = remote;
 
   console.log("\n  Access Bivy from anywhere:");
   if (remoteBase) console.log(`    • Remote app:     ${c.cyan(remoteBase)}  (sign in with the same GitHub/email you just used)`);
-  console.log(`    • Link a device:  ${c.cyan("bivy link")}  (prints a QR to pair a phone/laptop with this node)`);
   console.log(`    • Check status:   ${c.cyan("bivy status")}`);
   if (!openable) {
     console.log(c.dim("\n  No browser on this machine (headless server)? Open the Remote app URL above"));
-    console.log(c.dim("  on your phone or laptop and sign in, or scan the QR above to pair a device with this node."));
+    console.log(c.dim("  on your phone or laptop and sign in with the same GitHub account or email."));
   }
   console.log("");
 }
@@ -4262,7 +4252,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy kill <id>")}    Stop a session/terminal (--delete also removes a saved session)
   ${c.cyan("bivy prune")}         Delete old sessions/workspaces/worktrees (--keep N, --older-than 7d, --dry-run)
   ${c.cyan("bivy exec")} "<prompt>"  One-shot headless run: prints the answer to stdout (pipe-friendly)
-  ${c.cyan("bivy")}              Launch the default agent (pi) as a managed, relay-visible session
+  ${c.cyan("bivy")}              Show this help
   ${c.cyan("bivy setup")}      First-run wizard: workspace, remote access + sign-in, background service
   ${c.cyan("bivy start")}      Run the daemon in the foreground
   ${c.cyan("bivy stop")}       Stop the background service
@@ -4282,7 +4272,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy github:app-create")}            One-click: create + connect a GitHub App
   ${c.cyan("bivy github:app-connect")}           Connect an existing GitHub App (--app-id --key)
   ${c.cyan("bivy github:app-sync")} [on|off]     Sync connected GitHub App keys to this account's other opted-in nodes
-  ${c.cyan("bivy github:connect")} [owner/repo]  Authorize repo access for the repo picker (device flow)
+  ${c.cyan("bivy github:connect")} [owner/repo]  Connect GitHub in the app (or use a configured self-hosted device flow)
   ${c.cyan("bivy secrets")}    list | set | ref | delete | doctor | resolve
   ${c.cyan("bivy voice")}      Configure speech-to-text: provider | key | remove | status
   ${c.cyan("bivy completions")} <bash|zsh|fish>  Print a shell completion script
@@ -4295,10 +4285,7 @@ async function main() {
   const [command, ...args] = argv;
   switch (command) {
     case undefined:
-      // First run opens the guided setup; after setup, bare `bivy` launches the
-      // default agent's native CLI/TUI as a managed, relay-visible `bivy run`.
-      if (fs.existsSync(cliConfigPath)) await cmdRun([]);
-      else await cmdSetup();
+      printHelp();
       break;
     case "setup":
     case "init":
@@ -4435,8 +4422,7 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
         console.log("Usage: bivy open\n\nOpen the remote web/PWA app in your browser (requires 'bivy relay:setup' first).");
         break;
       }
-      const config = loadConfig();
-      const remote = await openRemoteApp(config);
+      const remote = await openRemoteApp();
       if (!remote) {
         console.log("No remote access configured yet.");
         console.log(`Run ${c.cyan("bivy relay:setup")} to enable the web/PWA app, then ${c.cyan("bivy open")}.`);
@@ -4460,7 +4446,17 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "github:connect":
     case "connect-repo":
       if (args.includes("-h") || args.includes("--help")) {
-        console.log("Usage: bivy github:connect [owner/repo]\n\nAuthorize repo access for the repo picker via GitHub's device flow. The resulting repo-scoped token is stored in this node's encrypted local vault.");
+        console.log("Usage: bivy github:connect [owner/repo]\n\nOpen Settings → GitHub App in the remote app. Self-hosted deployments with BIVY_GITHUB_OAUTH_CLIENT_ID configured use GitHub's device flow instead.");
+        break;
+      }
+      if (!String(process.env.BIVY_GITHUB_OAUTH_CLIENT_ID || loadConfig().env?.BIVY_GITHUB_OAUTH_CLIENT_ID || "").trim()) {
+        const remote = await openRemoteApp({ remotePath: "/settings/github" });
+        if (!remote) {
+          console.log("Remote access is not configured yet.");
+          console.log(`Run ${c.cyan("bivy relay:setup")}, then connect GitHub in the app under Settings → GitHub App.`);
+        } else if (!canOpenBrowser()) {
+          console.log(`Open GitHub setup in the Bivy app: ${c.cyan(remote.openUrl)}`);
+        }
         break;
       }
       if (!(await ensureDeps())) process.exit(1);

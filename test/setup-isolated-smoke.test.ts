@@ -93,12 +93,28 @@ try {
   const code = await new Promise<number | null>((resolve) => setup.on("exit", resolve));
   assert.equal(code, 0, output);
   assert.match(output, /Which agent do you want to try first\?/);
+  assert.match(output, /\n\s+p\s+Pi \(default/);
+  assert.match(output, /\n\s+c\s+Claude Code/);
+  assert.doesNotMatch(output, /p=Pi.*c=Claude Code/);
   assert.match(output, /Default agent: Pi/);
   assert.match(output, /Background-service install skipped/);
   assert.match(output, /Remote app:\s+https:\/\/app\.example\.test/);
-  assert.match(output, /Run your first task:/);
-  assert.ok(output.indexOf(remoteApp) < output.indexOf("Run your first task:"), "remote app must be presented before terminal fallback steps");
+  assert.match(output, /Start your first session:/);
+  assert.match(output, /In the terminal:\s+bivy run pi/);
+  assert.match(output, /Or start in chat:\s+https:\/\/app\.example\.test/);
+  assert.doesNotMatch(output, /bivy exec|Start chatting: bivy|bivy github:connect|Link a device|bivy link/);
+  assert.match(output, /take over in chat/);
+  assert.ok(output.indexOf(remoteApp) < output.indexOf("Start your first session:"), "remote app must be presented before terminal fallback steps");
   assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, "cli.json"), "utf8")).port, nodePort, "sandbox setup kept its isolated port");
+
+  const bare = spawn(process.execPath, ["bin/bivy.mjs"], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
+  let bareOutput = "";
+  bare.stdout.on("data", (chunk) => { bareOutput += chunk.toString(); });
+  bare.stderr.on("data", (chunk) => { bareOutput += chunk.toString(); });
+  const bareCode = await new Promise<number | null>((resolve) => bare.on("exit", resolve));
+  assert.equal(bareCode, 0, bareOutput);
+  assert.match(bareOutput, /bivy — Bivy node CLI/);
+  assert.match(bareOutput, /bivy run claude/);
   console.log("setup-isolated-smoke: agent-first setup reaches the remote app without touching the host service");
 } finally {
   daemon.kill("SIGTERM");
