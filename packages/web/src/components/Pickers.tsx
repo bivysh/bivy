@@ -32,7 +32,10 @@ function runtimeCapabilityChips(a: RuntimeInfo): Array<{ label: string; ok: bool
     { label: "Approvals", ok: Boolean(caps.toolInterception) || Boolean(caps.mcpToolApprovals) },
     { label: "Resume", ok: Boolean(caps.resume) },
     { label: "Models", ok: Boolean(caps.modelSelection) },
-    { label: "Fork", ok: Boolean(caps.fork) },
+    // Forking is a Bivy session-layer feature. Every agent can at least receive
+    // the portable seeded continuation; native capabilities only improve its
+    // fidelity and must not make the picker claim other agents cannot fork.
+    { label: "Fork", ok: true },
   ];
 }
 

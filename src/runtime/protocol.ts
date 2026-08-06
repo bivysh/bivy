@@ -13,6 +13,7 @@ import type {
   CatalogProvider,
   DiscoveredNativeSession,
   ForkHistoryMessage,
+  ForkImportContext,
   ModelInfo,
   OpenSessionOptions,
   OpenSessionResult,
@@ -115,7 +116,7 @@ export interface ProtocolRuntimeOptions {
    * `loadHistory`. Best-effort — the fork engine falls back to a seeded prompt if
    * this throws. Absent = no history import for this agent.
    */
-  writeHistory?: (history: ForkHistoryMessage[], ctx: { workspace: string; cwd: string }) => { sessionFile: string; id: string };
+  writeHistory?: (history: ForkHistoryMessage[], ctx: ForkImportContext) => { sessionFile: string; id: string };
   /** Runtime-specific, side-effect-free title request (for example `codex exec --ephemeral`). */
   suggestName?: (firstPrompt: string, context: { cwd: string; model?: string }) => Promise<string | undefined>;
   /**
@@ -800,7 +801,7 @@ export class ProtocolRuntime implements AgentRuntime {
    */
   async importHistoryForFork(
     history: ForkHistoryMessage[],
-    ctx: { workspace: string; cwd: string },
+    ctx: ForkImportContext,
   ): Promise<{ sessionFile: string; id: string }> {
     if (!this.options.writeHistory) throw new Error(`${this.displayName} does not support history import.`);
     return this.options.writeHistory(history, ctx);

@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   AgentSessionRuntime,
@@ -19,6 +20,7 @@ import {
   createAgentSessionRuntime,
   createAgentSessionServices,
   SessionManager,
+  SettingsManager,
   type AgentSession,
   type CreateAgentSessionRuntimeFactory,
   type ExtensionAPI,
@@ -34,6 +36,7 @@ import type {
   AgentRuntime,
   CatalogProvider,
   ForkHistoryMessage,
+  ForkImportContext,
   ForkNativePayload,
   ModelInfo,
   OpenSessionOptions,
@@ -580,7 +583,7 @@ export class PiRuntime implements AgentRuntime {
    */
   async importForFork(
     payload: ForkNativePayload,
-    ctx: { workspace: string; cwd: string },
+    ctx: ForkImportContext,
   ): Promise<{ sessionFile: string; id: string }> {
     if (payload.runtimeId !== this.id || payload.kind !== "pi-messages") {
       throw new Error(`pi.importForFork: unexpected payload ${payload.runtimeId}/${payload.kind}`);
@@ -605,11 +608,50 @@ export class PiRuntime implements AgentRuntime {
    */
   async importHistoryForFork(
     history: ForkHistoryMessage[],
-    ctx: { workspace: string; cwd: string },
+    ctx: ForkImportContext,
   ): Promise<{ sessionFile: string; id: string }> {
-    const sessionManager = SessionManager.create(ctx.cwd || ctx.workspace, this.options.sessionsDir);
-    for (const message of history) {
-      sessionManager.appendMessage({ role: message.role, content: message.text } as unknown as Parameters<typeof sessionManager.appendMessage>[0]);
+    const cwd = ctx.cwd || ctx.workspace;
+    const sessionManager = SessionManager.create(cwd, this.options.sessionsDir);
+    const settings = SettingsManager.create(cwd, this.options.piDir);
+    const defaultProvider = settings.getDefaultProvider();
+    const defaultModel = settings.getDefaultModel();
+    const targetModel = ctx.model ?? (defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined);
+    const timestamp = Date.now();
+    for (const [index, message] of history.entries()) {
+      // SessionManager deliberately persists unvalidated objects. A bare
+      // `{role, content: string}` looks readable in the UI, but is NOT a valid
+      // pi AssistantMessage: the first real prompt later reaches provider and
+      // usage code that expects block-array content plus model/usage metadata.
+      // That was the codex→pi fork crash ("reading 'length'"). Materialise the
+      // portable prose as complete pi-ai messages instead.
+      const imported: UserMessage | AssistantMessage = message.role === "user"
+        ? {
+            role: "user",
+            content: [{ type: "text", text: message.text }],
+            timestamp: timestamp + index,
+          }
+        : {
+            role: "assistant",
+            content: [{ type: "text", text: message.text }],
+            // The target model is enough for pi to restore the requested model
+            // before Bivy applies it again after stand-up. The synthetic API id
+            // intentionally prevents provider-specific reasoning replay rules;
+            // this history contains portable plain text only.
+            api: "bivy-fork",
+            provider: targetModel?.provider ?? "bivy-fork",
+            model: targetModel?.id ?? "portable-history",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: timestamp + index,
+          };
+      sessionManager.appendMessage(imported);
     }
     const sessionFile = sessionManager.getSessionFile();
     if (!sessionFile) throw new Error("pi.importHistoryForFork: session file was not persisted");
