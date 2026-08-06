@@ -56,7 +56,21 @@ export type RuntimeMessage = Record<string, unknown>;
  * UI falls back to today's opaque rendering. The daemon never acts on it — like
  * RuntimeMessage, it exists only for the UI. See src/runtime/tool-call-map.ts.
  */
-export type ToolCallDetail =
+export interface ToolCallProvenance {
+  version: 1;
+  provider: string;
+  protocol: "protocol" | "structured-pipe" | "sdk" | "unknown";
+  rawToolName: string;
+}
+
+export interface ToolResultDetail {
+  text?: string;
+  exitCode?: number;
+  isError?: boolean;
+  truncated?: boolean;
+}
+
+type ToolCallKindDetail =
   | { kind: "shell"; command: string; cwd?: string }
   | { kind: "read"; path: string }
   | { kind: "write"; path: string }
@@ -64,6 +78,13 @@ export type ToolCallDetail =
   | { kind: "search"; query: string; path?: string }
   | { kind: "fetch"; url: string }
   | { kind: "plan"; text?: string };
+
+export type ToolCallDetail = ToolCallKindDetail & {
+  meta: ToolCallProvenance;
+  /** Bounded original input for diagnostics when provider schemas drift. */
+  raw?: unknown;
+  result?: ToolResultDetail;
+};
 
 export interface PromptImage {
   type: "image";
@@ -513,6 +534,22 @@ export interface RuntimeCapabilities {
    * arbitrary shim must opt in before the client will ever try to interrupt it.
    */
   streamingBehaviors?: StreamingBehavior[];
+  /** Exact actions supported by this configured execution path. Missing means
+   * unsupported, not "inherit whatever the agent normally supports". */
+  sessionActions?: {
+    list?: boolean;
+    resume?: boolean;
+    forkConversation?: boolean;
+    forkFromMessage?: boolean;
+    rewindFiles?: boolean;
+    rewindConversation?: boolean;
+  };
+  /** Input lanes accepted by this configured execution path. */
+  inputModes?: {
+    queued?: boolean;
+    steer?: boolean;
+    outOfBand?: boolean;
+  };
   /**
    * The runtime can enumerate its own provider-native sessions that exist on
    * this node's filesystem but that Bivy did not start (see issue #156) —
@@ -585,6 +622,29 @@ export interface TuiLaunchSpec {
   args: string[];
   /** Extra env merged over the terminal's environment (e.g. resolved creds). */
   env?: Record<string, string>;
+}
+
+/** Add the exact action/input surface implied by a concrete runtime path. This
+ * is deliberately fail-closed: no provider reputation or agent-wide feature is
+ * inferred beyond capabilities the selected adapter actually advertises. */
+export function withExactCapabilitySurface<T extends RuntimeCapabilities>(capabilities: T): T {
+  const streaming = capabilities.streamingBehaviors ?? [];
+  return {
+    ...capabilities,
+    sessionActions: capabilities.sessionActions ?? {
+      list: capabilities.nativeSessionDiscovery === true,
+      resume: capabilities.resume === true,
+      forkConversation: capabilities.fork === true,
+      forkFromMessage: false,
+      rewindFiles: false,
+      rewindConversation: false,
+    },
+    inputModes: capabilities.inputModes ?? {
+      queued: true,
+      steer: streaming.includes("steer"),
+      outOfBand: false,
+    },
+  };
 }
 
 /** A pluggable agent backend. One implementation per runtime. */

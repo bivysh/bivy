@@ -26,6 +26,7 @@ import type {
   SessionSummary,
   UsageSnapshot,
 } from "./types.js";
+import { withExactCapabilitySurface } from "./types.js";
 
 /**
  * Model selection for a CLI agent, the general (data-driven) way. A CLI picks its
@@ -595,7 +596,7 @@ export class ProcessRuntime implements AgentRuntime {
   constructor(private readonly options: ProcessRuntimeOptions) {
     this.id = options.id ?? "generic-cli";
     this.displayName = options.displayName ?? "Generic CLI Agent";
-    this.capabilities = {
+    this.capabilities = withExactCapabilitySurface({
       toolInterception: false,
       // Model selection only when a model config with a non-empty list is wired
       // (e.g. Gemini/Qwen/Aider/OpenCode); otherwise the agent runs on its own
@@ -607,7 +608,7 @@ export class ProcessRuntime implements AgentRuntime {
       fork: false,
       // Usage reporting when a usage-emitting parser is wired (see getUsage).
       usageReporting: Boolean(options.usageReporting),
-    };
+    });
   }
 
   /** Session-less catalog contribution: this CLI agent's configured models, grouped by provider. */

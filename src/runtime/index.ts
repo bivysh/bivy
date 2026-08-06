@@ -42,7 +42,7 @@ import { parserFactoryFor } from "./cli-parsers.js";
 import { sandboxTier, sandboxArgsFor, codexSandboxPolicy, type SandboxTier } from "../harness/sandbox.js";
 import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv, type ProtocolRuntimeOptions } from "./protocol.js";
 import { codexSlashCommands, opencodeSlashCommands, type SlashCommandProvider } from "./slash-commands.js";
-import type { AgentRuntime, AttachToChatFn, RuntimeCapabilities } from "./types.js";
+import { withExactCapabilitySurface, type AgentRuntime, type AttachToChatFn, type RuntimeCapabilities } from "./types.js";
 
 /**
  * On-disk slash commands (custom prompts/commands) for the CLI agents that keep
@@ -114,7 +114,7 @@ export interface RuntimeInfo {
   install?: RuntimeInstallInfo;
 }
 
-const PI_CAPABILITIES: RuntimeCapabilities = {
+const PI_CAPABILITIES: RuntimeCapabilities = withExactCapabilitySurface({
   toolInterception: true,
   modelSelection: true,
   packages: true,
@@ -128,9 +128,9 @@ const PI_CAPABILITIES: RuntimeCapabilities = {
   // from the live runtime the client never learns steering is available and
   // force-queues every mid-turn message instead of offering an immediate send.
   streamingBehaviors: ["steer", "followUp"],
-};
+});
 
-const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
+const CLAUDE_CAPABILITIES: RuntimeCapabilities = withExactCapabilitySurface({
   toolInterception: true,
   modelSelection: true,
   packages: false,
@@ -148,7 +148,7 @@ const CLAUDE_CAPABILITIES: RuntimeCapabilities = {
   // straight from runtimes.list — before any session-capabilities merge, which
   // won't fire on a reconnect to an already-running session (the mobile case).
   streamingBehaviors: ["steer"],
-};
+});
 
 function claudeCodeInfo(): RuntimeInfo {
   const installed = claudeSdkInstalled();
@@ -1294,7 +1294,7 @@ function cliAgentInfo(id: string): RuntimeInfo {
     // (BIVY_MCP_PROXY) — an honest, narrower capability than full toolInterception
     // (it governs MCP tools, not the agent's built-in shell/edits). See
     // src/harness/mcp-inject.ts + governMcpCall in src/server.ts.
-    capabilities: { toolInterception: acpActive, mcpToolApprovals: acpActive || Boolean(process.env.BIVY_MCP_PROXY), modelSelection, resume, packages: false, fork: false, usageReporting, sessionDiscovery: id === "codex" },
+    capabilities: withExactCapabilitySurface({ toolInterception: acpActive, mcpToolApprovals: acpActive || Boolean(process.env.BIVY_MCP_PROXY), modelSelection, resume, packages: false, fork: false, usageReporting, sessionDiscovery: id === "codex" }),
     supportTier: spec.supportTier ?? (id === "codex" ? "supported" : "experimental"),
     testedVersion: spec.testedVersion,
     authOwner: spec.authOwner ?? "agent",

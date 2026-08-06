@@ -153,6 +153,11 @@ const claudeCaps = listRuntimes().find((r) => r.id === "claude-code-sdk")!.capab
 assert.deepEqual(claudeCaps.streamingBehaviors, ["steer"], "claude-code-sdk must advertise steer in the catalog");
 const piCaps = listRuntimes().find((r) => r.id === "pi")!.capabilities as Record<string, unknown>;
 assert.deepEqual(piCaps.streamingBehaviors, ["steer", "followUp"], "pi must advertise steer + followUp in the catalog");
+assert.deepEqual(piCaps.inputModes, { queued: true, steer: true, outOfBand: false });
+assert.deepEqual((claudeCaps.sessionActions as Record<string, unknown>).forkConversation, true);
+const aiderCaps = listRuntimes().find((r) => r.id === "aider")!.capabilities as Record<string, unknown>;
+assert.deepEqual(aiderCaps.inputModes, { queued: true, steer: false, outOfBand: false });
+assert.equal((aiderCaps.sessionActions as Record<string, unknown>).resume, false);
 
 // Newly promoted agents are present with their display names.
 const byId = Object.fromEntries(RUNTIME_CATALOG.map((r) => [r.id, r]));
