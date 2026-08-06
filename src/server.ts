@@ -57,6 +57,7 @@ import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } 
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
 import { configuredTurnTimeoutMs } from "./session/turn-watchdog.js";
+import { forceAbortTurn } from "./session/abort-recovery.js";
 import { runRequiredAutomationChecks } from "./automation-checks.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
@@ -951,7 +952,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -2996,8 +2997,27 @@ const RELAY_COMMANDS: Record<string, Command> = {
     ctx.broadcast({ type: "session.renamed", sessionId: rec.id, sessionFile: rec.sessionFile, name: newName });
     scheduleAdvertise();
   },
-  async abort(msg) {
-    await resolveSession(msg.sessionId)?.session.abort();
+  abort(msg, ctx) {
+    const record = resolveSession(msg.sessionId);
+    if (!record || !sessionBusy(record)) return;
+    // A wedged runtime may never resolve abort() or emit agent_end. Settle the
+    // daemon and client first, then make the SDK abort best-effort. The synthetic
+    // agent_end also closes running tool cards and drains visible follow-ups.
+    forceAbortTurn({
+      settle: () => {
+        questionManager.cancelForSession(record.id);
+        approvals.cancelForSession(record.id);
+        clearSessionWorking(record, "idle");
+      },
+      notifySettled: () => ctx.broadcast({
+        type: "session.event",
+        sessionId: record.id,
+        event: { type: "agent_end", aborted: true },
+      }),
+      abort: () => record.session.abort(),
+      onAbortError: (error) => console.warn(`[session-abort] runtime abort failed for ${record.id}:`, error),
+    });
+    record.abortRecovery = recoverRecordAfterAbort(record);
   },
   async "session.command.invoke"(msg, ctx) {
     // Invoke a protocol-mode agent command (AgentCommand.mode === "protocol")
@@ -3694,6 +3714,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       broadcast({ type: "session.error", sessionId: requestedSessionId, error: error instanceof Error ? error.message : String(error) });
       return;
     }
+    await record.abortRecovery;
     record.remoteActive = true;
     if (record.tuiTermId || record.tuiRefreshing) {
       broadcast({ type: "session.error", sessionId: record.id, error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
@@ -7407,7 +7428,7 @@ function armTurnWatchdog(record: SessionRecord): void {
     // Clear/persist first so the session and an ephemeral runner cannot remain
     // pinned in a false working state if the runtime's abort path fails to emit
     // agent_end. abort() is still invoked to kill the underlying process group.
-    clearSessionWorking(record);
+    clearSessionWorking(record, "idle");
     metadata.touchSession(record.id, "failed");
     broadcast({ type: "session.outcome", sessionId: record.id, status: "timed_out", completedAt: new Date().toISOString(), error: message });
     broadcast({ type: "session.error", sessionId: record.id, error: message });
@@ -7446,7 +7467,7 @@ function markSessionWorking(record: SessionRecord, activity: unknown) {
   if (!wasWorking) scheduleAdvertise(); // idle → working transition
 }
 
-function clearSessionWorking(record: SessionRecord) {
+function clearSessionWorking(record: SessionRecord, forcedStatus?: BivySessionStatus) {
   clearTurnWatchdog(record);
   touchSession(record);
   record.isWorking = false;
@@ -7455,7 +7476,10 @@ function clearSessionWorking(record: SessionRecord) {
   // A completed turn clears any pending manual-resume offer: the session has now
   // moved on (whether it was the resume itself or an unrelated new message).
   metadata.setResumePending(record.id, false);
-  persistSessionMetadata(record, sessionStatus(record));
+  // A stuck runtime can keep its own isStreaming bit true forever. Recovery
+  // callers explicitly force idle so that stale SDK state is not persisted as
+  // a permanently-working session after Bivy has settled the turn.
+  persistSessionMetadata(record, forcedStatus ?? sessionStatus(record));
   scheduleAdvertise(); // working → idle transition
 }
 
@@ -8335,6 +8359,65 @@ async function tryAttachLiveRemote(sessionId: string | undefined, options: OpenS
     const gone = classifyAttachFailure(error) === "gone";
     if (gone) await sessionLocations.forget(sessionId).catch(() => {});
     return { result: undefined, gone, error };
+  }
+}
+
+/** Re-open a runtime that still reports streaming shortly after a manual Stop.
+ * The client is settled immediately by the abort handler; prompts arriving from
+ * its follow-up queue await this promise and therefore cannot be steered into the
+ * stale in-process Pi turn. */
+async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
+  const oldSession = record.session;
+  try {
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    if (record.session !== oldSession || !oldSession.isStreaming) return;
+    if (!record.sessionFile) {
+      broadcast({ type: "session.error", sessionId: record.id, error: "The stopped agent did not settle. Reopen this chat to continue." });
+      return;
+    }
+    const rt = await ensureRuntimeAvailable(record.runtimeId, record.sandbox);
+    const workspace = record.worktree?.path || oldSession.cwd || record.workspace;
+    const runtimeSessionOptions = {
+      workspace,
+      toolProvider: integrations.toolProvider({ current: record.id }),
+      ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}),
+    };
+    const { session, warning } = await runtimeHost.openSession(rt, {
+      ...runtimeSessionOptions,
+      sessionFile: record.sessionFile,
+    });
+    // The original abort may have completed while openSession was in flight.
+    if (record.session !== oldSession || !oldSession.isStreaming) {
+      session.dispose();
+      return;
+    }
+    if (session.id !== record.id) {
+      session.dispose();
+      throw new Error(`runtime reopened session as ${session.id} instead of ${record.id}`);
+    }
+    record.unsubscribe?.();
+    record.unsubscribe = undefined;
+    record.session = session;
+    record.sessionFile = session.sessionFile ?? record.sessionFile;
+    record.workspace = session.cwd || workspace;
+    record.warning = warning;
+    oldSession.dispose();
+    attachSessionListeners(record);
+    persistSessionMetadata(record, "idle");
+    broadcast(buildHistoryEvent({
+      sessionId: record.id,
+      workspace: record.workspace,
+      source: record.source,
+      runtimeId: record.runtimeId,
+      isStreaming: false,
+      messages: conversationMessages(record),
+    }));
+    if (warning) broadcast({ type: "session.warning", sessionId: record.id, warning });
+    console.warn(`[session-abort] reopened stuck runtime for ${record.id}`);
+  } catch (error) {
+    broadcast({ type: "session.error", sessionId: record.id, error: `Could not recover the stopped agent: ${error instanceof Error ? error.message : String(error)}` });
+  } finally {
+    record.abortRecovery = undefined;
   }
 }
 
@@ -11051,6 +11134,7 @@ app.post("/api/session/prompt", async (req, res, next) => {
     if (!record) {
       record = await createWorkspaceSession(requestedWorkspace ?? defaultWorkspace, { title: titleText, runtimeId: agentFrom(req.body ?? {}) });
     }
+    await record.abortRecovery;
     if (record.tuiTermId || record.tuiRefreshing) {
       return res.status(409).json({ error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
     }
