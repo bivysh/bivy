@@ -28,9 +28,11 @@ Prereqs:
   - DNS A/AAAA records for both domains pointing at this host
   - ports 80 and 443 open
 
-The script writes deploy/.env and deploy/Caddyfile if they do not already exist,
-then starts control-plane + relay + Caddy (plus a bundled Postgres unless
-DATABASE_URL points at a managed database).
+The script writes deploy/.env if missing and configures the untouched example
+Caddyfile for your domains. Production requires either Resend email or GitHub
+OAuth sign-in; when neither is configured, the script writes setup files and
+stops before Docker. It otherwise starts control-plane + relay + Caddy (plus a
+bundled Postgres unless DATABASE_URL points at a managed database).
 EOF
 }
 
@@ -50,6 +52,14 @@ if [[ "${APP_DOMAIN}" == "" || "${RELAY_DOMAIN}" == "" ]]; then
   echo "Both domains must be non-empty after normalization." >&2
   exit 1
 fi
+
+# Allow an operator/secret manager to provide auth on the first run. If these
+# are absent, the generated .env intentionally leaves them blank and the auth
+# gate below explains how to finish configuration before Docker starts.
+RESEND_API_KEY_INPUT="${RESEND_API_KEY:-}"
+AUTH_EMAIL_FROM_INPUT="${AUTH_EMAIL_FROM:-}"
+GITHUB_OAUTH_CLIENT_ID_INPUT="${GITHUB_OAUTH_CLIENT_ID:-}"
+GITHUB_OAUTH_CLIENT_SECRET_INPUT="${GITHUB_OAUTH_CLIENT_SECRET:-}"
 
 rand() {
   if command -v openssl >/dev/null 2>&1; then openssl rand -base64 "$1"
@@ -99,14 +109,13 @@ POSTGRES_DB=bivy_control_plane
 POSTGRES_USER=bivy
 POSTGRES_PASSWORD=unused
 
-# Optional features. Fill these in when you want login email, GitHub OAuth, or
-# web push on this self-hosted deployment. Billing is deliberately not here —
-# subscriptions exist to run paid hosting, and entitlements stay unenforced on a
-# self-hosted stack, so every feature is already on for every account.
-RESEND_API_KEY=
-AUTH_EMAIL_FROM=Bivy <login@${APP_DOMAIN}>
-GITHUB_OAUTH_CLIENT_ID=
-GITHUB_OAUTH_CLIENT_SECRET=
+# Configure at least one sign-in path (Resend email or GitHub OAuth). Web push
+# remains optional. Billing is deliberately absent: self-hosted entitlements
+# stay unenforced, so every feature is available to every account.
+RESEND_API_KEY=${RESEND_API_KEY_INPUT}
+AUTH_EMAIL_FROM=${AUTH_EMAIL_FROM_INPUT}
+GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID_INPUT}
+GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET_INPUT}
 WEB_PUSH_VAPID_PUBLIC_KEY=
 WEB_PUSH_VAPID_PRIVATE_KEY=
 WEB_PUSH_SUBJECT=mailto:admin@${APP_DOMAIN}
@@ -125,14 +134,13 @@ POSTGRES_DB=bivy_control_plane
 POSTGRES_USER=bivy
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 
-# Optional features. Fill these in when you want login email, GitHub OAuth, or
-# web push on this self-hosted deployment. Billing is deliberately not here —
-# subscriptions exist to run paid hosting, and entitlements stay unenforced on a
-# self-hosted stack, so every feature is already on for every account.
-RESEND_API_KEY=
-AUTH_EMAIL_FROM=Bivy <login@${APP_DOMAIN}>
-GITHUB_OAUTH_CLIENT_ID=
-GITHUB_OAUTH_CLIENT_SECRET=
+# Configure at least one sign-in path (Resend email or GitHub OAuth). Web push
+# remains optional. Billing is deliberately absent: self-hosted entitlements
+# stay unenforced, so every feature is available to every account.
+RESEND_API_KEY=${RESEND_API_KEY_INPUT}
+AUTH_EMAIL_FROM=${AUTH_EMAIL_FROM_INPUT}
+GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID_INPUT}
+GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET_INPUT}
 WEB_PUSH_VAPID_PUBLIC_KEY=
 WEB_PUSH_VAPID_PRIVATE_KEY=
 WEB_PUSH_SUBJECT=mailto:admin@${APP_DOMAIN}
@@ -150,19 +158,89 @@ else
   fi
 fi
 
-if [[ ! -f deploy/Caddyfile ]]; then
+# Replace the repository's untouched app.example.com/relay.example.com template
+# automatically. Preserve any operator-customized Caddyfile on re-runs.
+CADDY_IS_TEMPLATE=0
+# POSIX cksum is available on both supported host families. Match the exact
+# checked-in template so even a one-line operator customization is preserved.
+# Update both values when intentionally changing deploy/Caddyfile.
+if [[ -f deploy/Caddyfile ]]; then
+  read -r CADDY_CHECKSUM CADDY_SIZE _ < <(cksum deploy/Caddyfile)
+  if [[ "${CADDY_CHECKSUM}" == "1183089644" && "${CADDY_SIZE}" == "970" ]]; then
+    CADDY_IS_TEMPLATE=1
+  fi
+fi
+if [[ ! -f deploy/Caddyfile || "${CADDY_IS_TEMPLATE}" == "1" ]]; then
   cat > deploy/Caddyfile <<EOF
 ${APP_DOMAIN} {
-  reverse_proxy control-plane:4400
+  @internal path /metrics* /readyz
+  handle @internal {
+    respond 403
+  }
+  handle {
+    reverse_proxy control-plane:4400
+  }
 }
 
 ${RELAY_DOMAIN} {
-  reverse_proxy relay:4500
+  @internal path /metrics* /readyz
+  handle @internal {
+    respond 403
+  }
+  handle {
+    reverse_proxy relay:4500
+  }
 }
 EOF
-  echo "Wrote deploy/Caddyfile"
+  echo "Wrote deploy/Caddyfile for ${APP_DOMAIN} + ${RELAY_DOMAIN}"
 else
-  echo "Keeping existing deploy/Caddyfile"
+  echo "Keeping existing customized deploy/Caddyfile"
+fi
+
+# A production control plane deliberately disables the unauthenticated dev
+# login. Do not continue into an apparently healthy but unusable deployment:
+# require at least one real sign-in path before Docker is touched. Parse
+# individual keys rather than `source`-ing operator-controlled .env content.
+env_value() {
+  local key="$1"
+  local value
+  value="$(grep -E "^[[:space:]]*${key}=" deploy/.env | tail -n1 | cut -d= -f2- | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' || true)"
+  if [[ ${#value} -ge 2 ]]; then
+    if [[ "${value:0:1}" == '"' && "${value: -1}" == '"' ]] \
+      || [[ "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+  fi
+  printf '%s' "${value}"
+}
+
+RESEND_CONFIGURED="$(env_value RESEND_API_KEY)"
+AUTH_EMAIL_FROM_CONFIGURED="$(env_value AUTH_EMAIL_FROM)"
+GITHUB_CLIENT_ID_CONFIGURED="$(env_value GITHUB_OAUTH_CLIENT_ID)"
+GITHUB_CLIENT_SECRET_CONFIGURED="$(env_value GITHUB_OAUTH_CLIENT_SECRET)"
+if [[ ( -z "${RESEND_CONFIGURED}" || -z "${AUTH_EMAIL_FROM_CONFIGURED}" ) \
+  && ( -z "${GITHUB_CLIENT_ID_CONFIGURED}" || -z "${GITHUB_CLIENT_SECRET_CONFIGURED}" ) ]]; then
+  cat >&2 <<EOF
+
+Bivy configuration was written, but the stack was not started because no
+production sign-in method is configured.
+
+Choose one, edit deploy/.env, then run this same command again:
+  - Email magic links: set RESEND_API_KEY (and a verified AUTH_EMAIL_FROM).
+  - GitHub sign-in: set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.
+    Setup guide: docs/github-oauth-setup.md
+
+The unauthenticated dev login stays disabled. Refusing to start here prevents a
+healthy-looking deployment that nobody can sign into.
+EOF
+  exit 2
+fi
+
+# Test/configuration helper: validate generated files and the auth gate without
+# requiring Docker. Normal deployments never set this.
+if [[ "${BIVY_SELF_HOST_CONFIG_ONLY:-0}" == "1" ]]; then
+  echo "Self-host setup files and auth configuration are valid (Docker not started)."
+  exit 0
 fi
 
 # Reclaim disk before the build writes new image layers: prune docker cruft.
@@ -206,4 +284,8 @@ echo "Control plane: https://${APP_DOMAIN}"
 echo "Relay:         wss://${RELAY_DOMAIN}"
 echo
 echo "Connect a node:"
-echo "  bivy relay:setup --control-plane https://${APP_DOMAIN} --relay wss://${RELAY_DOMAIN} --email you@example.com"
+if [[ -n "${GITHUB_CLIENT_ID_CONFIGURED}" && -n "${GITHUB_CLIENT_SECRET_CONFIGURED}" ]]; then
+  echo "  bivy relay:setup --control-plane https://${APP_DOMAIN} --relay wss://${RELAY_DOMAIN} --github"
+else
+  echo "  bivy relay:setup --control-plane https://${APP_DOMAIN} --relay wss://${RELAY_DOMAIN} --email you@example.com"
+fi

@@ -46,21 +46,27 @@ bash deploy/self-host.sh app.example.com relay.example.com
 The script:
 
 - writes `deploy/.env` if missing;
-- writes `deploy/Caddyfile` if missing;
+- replaces the untouched example Caddyfile with your domains, while preserving
+  customized Caddyfiles on later runs;
 - generates strong `RELAY_SECRET` and Postgres password;
+- requires either Resend email or complete GitHub OAuth configuration;
 - starts Postgres, control-plane, relay, and Caddy with auto-TLS.
 
-It does **not** overwrite an existing `deploy/.env` or `deploy/Caddyfile`.
+On a first run without auth settings, it writes the setup files and stops before
+Docker. Configure one sign-in path in `deploy/.env`, then run the command again.
+You can instead provide the auth variables through the environment on the first
+invocation. Existing `deploy/.env` files are never overwritten.
 
 ## Connect a node
 
 On your development machine:
 
 ```bash
+# For GitHub OAuth deployments (use --email you@example.com for Resend):
 bivy relay:setup \
   --control-plane https://app.example.com \
   --relay wss://relay.example.com \
-  --email you@example.com
+  --github
 bivy start
 ```
 
@@ -78,7 +84,7 @@ RELAY_SECRET=...
 POSTGRES_PASSWORD=...
 ```
 
-Fill optional values when you enable those features:
+Configure at least one of the following production sign-in paths:
 
 ```env
 # Magic-link email

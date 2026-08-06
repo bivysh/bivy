@@ -53,53 +53,43 @@ git clone https://github.com/bivysh/bivy.git .
 own repo root from `$0`), so this has to be a real clone, not just the `deploy/`
 directory copied over.
 
-## 3. Point the checked-in Caddyfile at your domains
+## 3. Generate configuration and choose sign-in
 
-This is the one step people miss: **`deploy/Caddyfile` is not a template you
-copy — it's already tracked in git**, pre-filled with placeholder domains
-(`app.example.com` / `relay.example.com`). `deploy/self-host.sh` only *writes*
-`deploy/Caddyfile` if the file is missing, so on a fresh clone it already
-exists and the script silently keeps it as-is — your real domains never get
-written unless you happen to be using `app.example.com`/`relay.example.com`
-literally.
-
-Do one of:
-
-- Edit `deploy/Caddyfile` in place, replacing both hostnames with your real
-  domains, **or**
-- `rm deploy/Caddyfile` and let step 4 generate a fresh one from the domains
-  you pass it.
-
-## 4. Run the one-command installer
+Run the deployment helper once:
 
 ```bash
 bash deploy/self-host.sh app.example.com relay.example.com
 ```
 
-Reading [`deploy/self-host.sh`](../deploy/self-host.sh), here is exactly what
-it does, in order:
+On a fresh checkout it generates `deploy/.env`, replaces the untouched
+`app.example.com` / `relay.example.com` Caddy template with your domains, and
+then deliberately stops before Docker because production has no sign-in method
+yet. This avoids bringing up a healthy-looking service that nobody can use.
+Choose one sign-in method in `deploy/.env`:
 
-1. Normalizes both domain arguments (strips a leading `http(s)://` and any
-   trailing path).
-2. Writes `deploy/.env` **only if it doesn't already exist** — see the full
-   variable checklist below. It generates `RELAY_SECRET` (48 random bytes,
-   base64) and `POSTGRES_PASSWORD` (32 random bytes, base64) with `openssl
-   rand`, falling back to Node's `crypto.randomBytes` if `openssl` isn't on
-   the box. The file is `chmod 600`.
-3. Writes `deploy/Caddyfile` **only if it doesn't already exist** (see the
-   caveat in step 3 above).
-4. Runs [`deploy/prune.sh`](../deploy/prune.sh) if a previous Bivy stack is
-   already running (skipped on a genuinely first deploy, since there's nothing
-   of ours to reclaim yet). Force it with `BIVY_PRUNE=1`, skip with
-   `BIVY_PRUNE=0`.
-5. `docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d
-   --build` — builds and starts Postgres, the control plane, the relay, and
-   Caddy (which obtains a Let's Encrypt certificate automatically for both
-   domains).
+- **Email magic links:** set `RESEND_API_KEY` and a sender domain/address Resend
+  has verified in `AUTH_EMAIL_FROM`.
+- **GitHub:** set `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` by
+  following [github-oauth-setup.md](github-oauth-setup.md).
 
-It is idempotent and safe to re-run: re-running after editing `deploy/.env` or
-`deploy/Caddyfile` picks up the changes without touching secrets that already
-exist.
+You may instead supply those auth values through the environment on the first
+run. The unauthenticated development login is not an acceptable production
+setup and remains disabled.
+
+## 4. Start the stack
+
+Run the same command after configuring sign-in:
+
+```bash
+bash deploy/self-host.sh app.example.com relay.example.com
+```
+
+The helper validates that a sign-in path exists, checks the merged Compose
+configuration, and starts Postgres, the control plane, relay, and Caddy. It
+generates a 48-byte relay secret and 32-byte database password, writes
+`deploy/.env` with mode 0600, and preserves both the environment file and any
+customized Caddyfile on later runs. On updates it prunes Docker cruft before the
+build; set `BIVY_PRUNE=0` to skip that host-wide prune.
 
 ## 5. Verify the stack is healthy
 
@@ -125,10 +115,14 @@ If either domain doesn't resolve or the TLS handshake fails, see
 From your development machine (not the server):
 
 ```bash
+# GitHub sign-in deployment:
 bivy relay:setup \
   --control-plane https://app.example.com \
   --relay wss://relay.example.com \
-  --email you@example.com
+  --github
+
+# Or, for a Resend/email deployment, replace --github with:
+#   --email you@example.com
 bivy start
 ```
 
@@ -137,11 +131,11 @@ running, `relay connected`.
 
 ## 7. Link a phone or browser
 
-In the node's local web UI sidebar, choose **Link remote device** and scan the
-QR with your phone — or run `bivy link` for a printable QR/URL. This works
-from anywhere afterwards, including cellular, because the phone reaches your
-node through the relay rather than your LAN. See
-[remote-access.md](remote-access.md) for the full pairing/security model.
+The node has no local web UI. Run `bivy link` for a pairing QR/URL, or use
+`bivy open` to open the control-plane-hosted PWA and pair there. This works from
+anywhere afterwards, including cellular, because the phone reaches your node
+through the relay rather than your LAN. See [remote-access.md](remote-access.md)
+for the full pairing/security model.
 
 ## 8. Next steps
 
@@ -176,18 +170,19 @@ otherwise it's inert no matter what you put in the file.
 | `PUBLIC_CONTROL_PLANE_URL` | `https://<app-domain>` | The control plane's own public URL. Used to build the GitHub OAuth `redirect_uri` and magic-link URLs — it must byte-match your real domain or GitHub sign-in and email links break. |
 | `RELAY_PUBLIC_URL` | `wss://<relay-domain>` | The public `wss://` address handed to nodes and phones in relay tickets and pairing QR codes. |
 | `DISABLE_DEV_LOGIN` | `1` | Disables the unauthenticated dev sign-in endpoint. Belt-and-suspenders: `NODE_ENV=production` already disables dev login and refuses to boot at all if `ALLOW_DEV_LOGIN=1` is set. |
-| `ENFORCE_ENTITLEMENTS` | `0` | Self-host default: there's no paid tier here, so nothing is gated — push notifications, etc. work for every signed-in account. **Note:** `docker-compose.yml` currently only forwards `ENFORCE_ENTITLEMENTS` into the **relay** container's environment, not the control plane's — harmless at the `0` default, but if you set it to `1` to gate the control plane too, add it to the `control-plane` service's `environment:` block yourself. |
+| `ENFORCE_ENTITLEMENTS` | `0` | Self-host default: there is no paid tier, so nothing is gated. Compose forwards this to both the control plane and relay. |
 | `RELAY_SECRET` | random, `openssl rand -base64 48` | Shared control-plane↔relay secret used to mint and verify relay tickets. Rotate both services together — see [self-host.md § Secret rotation](self-host.md#secret-rotation). |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | `bivy_control_plane` / `bivy` / random, `openssl rand -base64 32` | Postgres role and database for the **bundled** `postgres` container. `docker-compose.yml` builds `DATABASE_URL` for the control plane from these three at container-start time — don't set `DATABASE_URL` directly in `deploy/.env` in this mode; it isn't read from there. To use a **managed/hosted** Postgres instead (DigitalOcean, Render, Neon, …), layer `deploy/docker-compose.hosted-db.yml` and set `DATABASE_URL` directly — see [self-host.md § Using a managed/hosted Postgres](self-host.md#using-a-managedhosted-postgres). |
 
-### Left blank — fill in only for features you want
+### Sign-in and optional features
 
-`deploy/self-host.sh` writes these as empty keys in `deploy/.env`; the
-services run fine without them, just without the feature.
+`deploy/self-host.sh` writes these keys in `deploy/.env`. At least one sign-in
+path (Resend email or both GitHub OAuth values) is required before the script
+will start Docker; web push remains optional.
 
 | Variable(s) | Feature | Notes |
 | --- | --- | --- |
-| `RESEND_API_KEY`, `AUTH_EMAIL_FROM` | Magic-link email sign-in | Without this *and* without GitHub OAuth configured below, nobody can sign in at all — dev login is off in production and there's no other login path. |
+| `RESEND_API_KEY`, `AUTH_EMAIL_FROM` | Magic-link email sign-in | Configure this or GitHub OAuth. The deployment helper refuses to start when both paths are absent. |
 | `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | "Sign in with GitHub" | See [github-oauth-setup.md](github-oauth-setup.md), now parameterized for self-hosted domains. |
 | `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY` | Web push notifications | Generate with `npx web-push generate-vapid-keys`. Push is silently disabled until **both** are set. Older `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` names are still read as a fallback if you have them from an older setup. |
 | `WEB_PUSH_SUBJECT` | Push contact address | The `mailto:` (or `https:`) subject required by the Web Push protocol. `deploy/self-host.sh` defaults it to `mailto:admin@<app-domain>`; falls back to `mailto:support@bivy.sh` in code if unset entirely. |
@@ -204,7 +199,7 @@ services run fine without them, just without the feature.
 | `RELAY_MAX_CONNECTIONS_PER_IP` | 50 | Yes. |
 | `RELAY_IDLE_TIMEOUT_MS` | 120000 | Yes. |
 | `RELAY_MAX_BUFFERED_BYTES` | 16777216 (16 MiB) | **No.** High-water mark before the relay evicts a slow socket rather than buffering unboundedly. |
-| `RELAY_SHARD_URLS` | falls back to the single `RELAY_PUBLIC_URL` | **No** — read by the control plane (`services/control-plane/src/relay-shards.ts`), but neither `docker-compose.yml` nor `docker-compose.shards.example.yml` sets it on the `control-plane` container. Wire it in yourself alongside the shards override, or sharding silently no-ops back to one relay. |
+| `RELAY_SHARD_URLS` | falls back to the single `RELAY_PUBLIC_URL` | Yes — forwarded to the control plane. Keep the ordered list identical on every replica. |
 | `RELAY_SHARD_ID` | unset | Only set by `docker-compose.shards.example.yml`, for observability (`/healthz`, `/metrics`) — it doesn't affect routing. |
 | `LINK_GRANT_TTL_MS` | 2592000000 (30 days) | **No.** TTL for a device-linking grant minted from a pairing QR. |
 | `DATABASE_POOL_MAX` | 10 | Yes — per control-plane instance. Keep `instances × DATABASE_POOL_MAX` under Postgres's `max_connections` if you ever run more than one control-plane replica. |
