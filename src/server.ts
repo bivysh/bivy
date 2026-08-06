@@ -3000,24 +3000,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
   abort(msg, ctx) {
     const record = resolveSession(msg.sessionId);
     if (!record || !sessionBusy(record)) return;
-    // A wedged runtime may never resolve abort() or emit agent_end. Settle the
-    // daemon and client first, then make the SDK abort best-effort. The synthetic
-    // agent_end also closes running tool cards and drains visible follow-ups.
-    forceAbortTurn({
-      settle: () => {
-        questionManager.cancelForSession(record.id);
-        approvals.cancelForSession(record.id);
-        clearSessionWorking(record, "idle");
-      },
-      notifySettled: () => ctx.broadcast({
-        type: "session.event",
-        sessionId: record.id,
-        event: { type: "agent_end", aborted: true },
-      }),
-      abort: () => record.session.abort(),
-      onAbortError: (error) => console.warn(`[session-abort] runtime abort failed for ${record.id}:`, error),
-    });
-    record.abortRecovery = recoverRecordAfterAbort(record);
+    abortSessionRecord(record, ctx.broadcast);
   },
   async "session.command.invoke"(msg, ctx) {
     // Invoke a protocol-mode agent command (AgentCommand.mode === "protocol")
@@ -8421,6 +8404,28 @@ async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
   }
 }
 
+/** Shared Stop path for relay/web clients and the local HTTP/CLI API. */
+function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => void = broadcast): void {
+  // A wedged runtime may never resolve abort() or emit agent_end. Settle the
+  // daemon and client first, then make the SDK abort best-effort. The synthetic
+  // agent_end also closes running tool cards and drains visible follow-ups.
+  forceAbortTurn({
+    settle: () => {
+      questionManager.cancelForSession(record.id);
+      approvals.cancelForSession(record.id);
+      clearSessionWorking(record, "idle");
+    },
+    notifySettled: () => emit({
+      type: "session.event",
+      sessionId: record.id,
+      event: { type: "agent_end", aborted: true },
+    }),
+    abort: () => record.session.abort(),
+    onAbortError: (error) => console.warn(`[session-abort] runtime abort failed for ${record.id}:`, error),
+  });
+  record.abortRecovery = recoverRecordAfterAbort(record);
+}
+
 async function createSession(workspace = defaultWorkspace, sessionFile?: string, opts: CreateSessionOptions = {}) {
   const makeActive = opts.makeActive !== false;
   // Normalize the resume ref into the token the owning runtime actually expects.
@@ -11206,11 +11211,11 @@ app.post("/api/sessions/pr/refresh", async (_req, res, next) => {
   }
 });
 
-app.post("/api/session/abort", async (req, res, next) => {
+app.post("/api/session/abort", (req, res, next) => {
   try {
     const record = resolveSession(req.body?.sessionId);
     if (!record) return res.status(404).json({ error: "No active session" });
-    await record.session.abort();
+    if (sessionBusy(record)) abortSessionRecord(record);
     res.json({ ok: true });
   } catch (error) {
     next(error);
