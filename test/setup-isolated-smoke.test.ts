@@ -100,7 +100,8 @@ try {
   assert.match(output, /Background-service install skipped/);
   assert.match(output, /Remote app:\s+https:\/\/app\.example\.test/);
   assert.match(output, /Start your first session:/);
-  assert.match(output, /bivy run pi/);
+  assert.match(output, /In the terminal:\s+bivy run pi/);
+  assert.match(output, /Or start in chat:\s+https:\/\/app\.example\.test/);
   assert.doesNotMatch(output, /bivy exec|Start chatting: bivy|bivy github:connect|Link a device|bivy link/);
   assert.match(output, /take over in chat/);
   assert.ok(output.indexOf(remoteApp) < output.indexOf("Start your first session:"), "remote app must be presented before terminal fallback steps");

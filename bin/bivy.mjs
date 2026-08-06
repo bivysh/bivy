@@ -131,6 +131,7 @@ const packaged = fs.existsSync(path.join(repoRoot, "dist", "server.js"));
 const serverEntry = path.join(repoRoot, packaged ? "dist/server.js" : "src/server.ts");
 const nativePiEntry = path.join(repoRoot, packaged ? "dist/native-pi.js" : "src/native-pi.ts");
 const bivyLoginEntry = path.join(repoRoot, packaged ? "dist/bivy-login.js" : "src/bivy-login.ts");
+const credentialIngestEntry = path.join(repoRoot, packaged ? "dist/credential-ingest-cli.js" : "src/credential-ingest-cli.ts");
 const relaySetupEntry = path.join(repoRoot, packaged ? "dist/relay-setup.js" : "src/relay-setup.ts");
 // Dependency-free hosted-endpoint helper. Shipped to dist/ in the release
 // artifact (src/ is not packaged), so resolve it the same packaged-aware way as
@@ -419,6 +420,17 @@ function nativeAgentAuthDetected(choice) {
   if (choice.command === "codex") return fs.existsSync(path.join(os.homedir(), ".codex", "auth.json"));
   if (choice.command === "claude") return fs.existsSync(path.join(os.homedir(), ".claude", ".credentials.json"));
   return false;
+}
+
+async function ingestSetupAgentLogin(choice) {
+  if (!choice || !["claude-code-sdk", "codex"].includes(choice.runtimeId)) return false;
+  const code = await run(nodeBin, [
+    ...nodeScriptArgs(credentialIngestEntry),
+    choice.runtimeId,
+    path.join(appDir, "credentials"),
+    path.join(appDir, "pi"),
+  ], { cwd: repoRoot, env: process.env, stdio: "ignore" });
+  return code === 0;
 }
 
 function url(config) {
@@ -3351,15 +3363,17 @@ async function cmdSetup(args = []) {
     }
   } else if (setupAgent && !setupAgent.needsBivyModel) {
     if (agentAuthReady) {
-      console.log(c.green(`\n  ✓ Existing ${setupAgent.label} login detected — Bivy will reuse it in the terminal and PWA.`));
+      const imported = await ingestSetupAgentLogin(setupAgent);
+      console.log(c.green(`\n  ✓ Existing ${setupAgent.label} login detected — Bivy will reuse it in the terminal and PWA${imported ? " and stored it in the encrypted vault" : ""}.`));
     } else if (setupAgent.command) {
-      console.log(`\n${setupAgent.label} owns its login; Bivy reuses that native login and does not copy it into the shared vault.`);
+      console.log(`\n${setupAgent.label} owns its login. After sign-in, Bivy stores compatible credential fields in its encrypted vault so the terminal, PWA, and your other Bivy nodes can reuse them.`);
       const signInNow = await askYesNo(`Open ${setupAgent.label} now to sign in? (Exit it when sign-in is complete.)`, true);
       if (signInNow) {
         rl.pause();
         const loginCode = await run(setupAgent.command, [], { cwd: config.workspace, env: startEnv(config) });
         rl.resume();
         agentAuthReady = loginCode === 0 || nativeAgentAuthDetected(setupAgent);
+        if (agentAuthReady) await ingestSetupAgentLogin(setupAgent);
       }
     }
   }
@@ -3493,8 +3507,10 @@ function printFirstRunSteps(modelReady = false, setupAgent = null) {
     console.log(`    Model access: ${login}`);
   }
   const agent = setupAgent?.command || setupAgent?.runtimeId || resolveDefaultAgent();
-  console.log(`    ${c.cyan(`bivy run ${agent}`)}`);
-  console.log(`    Then open the remote app to watch the session or take over in chat.\n`);
+  const remoteApp = String(loadRelayConfig()?.clientBaseUrl || "https://app.bivy.sh").replace(/\/+$/, "");
+  console.log(`    • In the terminal: ${c.cyan(`bivy run ${agent}`)}`);
+  console.log(`      Then use the remote app to watch the session or take over in chat.`);
+  console.log(`    • Or start in chat: ${c.cyan(remoteApp)}\n`);
 }
 
 async function finishSetupRemote(config, setupSession = null) {
