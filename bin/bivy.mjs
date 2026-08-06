@@ -2655,9 +2655,11 @@ function createPrompter() {
   };
 
   const askChoice = async (question, choices, fallback) => {
-    const labels = choices.map((choice) => `${choice.key}=${choice.label}`).join(", ");
     for (;;) {
-      const answer = (await ask(`${question} (${labels})`, fallback)).toLowerCase();
+      const menu = choices.map((choice) => `    ${c.cyan(choice.key)}  ${choice.label}`).join("\n");
+      const suffix = fallback ? c.dim(` [default: ${fallback}]`) : "";
+      process.stdout.write(`\n${c.cyan("›")} ${question}\n${menu}\n  >${suffix} `);
+      const answer = String(await nextLine()).trim().toLowerCase() || fallback || "";
       const match = choices.find((choice) => answer === choice.key || answer === choice.label.toLowerCase());
       if (match) return match.key;
       console.log(c.yellow(`Please choose one of: ${choices.map((choice) => choice.key).join(", ")}`));

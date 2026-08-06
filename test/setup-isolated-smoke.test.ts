@@ -93,6 +93,9 @@ try {
   const code = await new Promise<number | null>((resolve) => setup.on("exit", resolve));
   assert.equal(code, 0, output);
   assert.match(output, /Which agent do you want to try first\?/);
+  assert.match(output, /\n\s+p\s+Pi \(default/);
+  assert.match(output, /\n\s+c\s+Claude Code/);
+  assert.doesNotMatch(output, /p=Pi.*c=Claude Code/);
   assert.match(output, /Default agent: Pi/);
   assert.match(output, /Background-service install skipped/);
   assert.match(output, /Remote app:\s+https:\/\/app\.example\.test/);
