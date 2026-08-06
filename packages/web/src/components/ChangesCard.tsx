@@ -6,6 +6,7 @@ import { diffOps } from "@bivy/core";
 import { DiffView, type DiffMode } from "./DiffView.js";
 import { buildFileTree, reviewStates, reviewStateLabel, type FileTreeNode } from "../fileTree.js";
 import { controller } from "../store/useStore.js";
+import { buildChangeSetReviewPrompt, buildFileReviewPrompt } from "../changeReviewPrompt.js";
 
 // Universal Agent Harness — the changed-file review surface (C3).
 //
@@ -55,7 +56,7 @@ function FileRow({ file, mode }: { file: HarnessFileChange; mode: DiffMode }) {
     setBusy(true);
     controller.revertFile(file.path, file.status === "added" ? null : file.oldText);
   };
-  const ask = () => controller.sendPrompt(`About \`${file.path}\`: explain what you changed here and why.`);
+  const ask = () => controller.prefillComposer(buildFileReviewPrompt({ ...file, added, removed }));
   return (
     <div className={`changes-file status-${file.status}`}>
       <div className="changes-file-head">
@@ -166,6 +167,10 @@ export function ChangesCard({
     setShowHistory(next);
     if (next) controller.listCheckpoints();
   };
+  const reviewChanges = () => controller.prefillComposer(buildChangeSetReviewPrompt(
+    changes.files.map((file) => ({ ...file, ...countLines(file) })),
+    checks,
+  ));
 
   return (
     <div className={`changes-card${collapsed ? " collapsed" : ""}`}>
@@ -189,6 +194,9 @@ export function ChangesCard({
           </span>
         </button>
         <div className="changes-actions">
+          <button type="button" className="changes-history-toggle" onClick={reviewChanges} title="Draft a review prompt in the composer">
+            Review with agent
+          </button>
           <div className="changes-mode" role="group" aria-label="Diff view mode">
             <button type="button" className={mode === "unified" ? "active" : ""} onClick={() => setMode("unified")}>Unified</button>
             <button type="button" className={mode === "split" ? "active" : ""} onClick={() => setMode("split")}>Split</button>

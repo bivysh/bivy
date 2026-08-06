@@ -268,6 +268,25 @@ export function Composer({
     });
   }, []);
 
+  // Contextual actions draft text instead of silently spending an agent turn.
+  // Append rather than replace so an in-progress thought is never discarded.
+  useEffect(() => {
+    return controller.onComposerPrefill((draft) => {
+      const clean = draft.trim();
+      if (!clean) return;
+      setText((previous) => previous.trim() ? `${previous.trimEnd()}\n\n${clean}` : clean);
+      setMenuDismissed(false);
+      wantsFocusRef.current = true;
+      requestAnimationFrame(() => {
+        autosize();
+        const input = taRef.current;
+        if (!canGrabFocus(input)) return;
+        input?.focus();
+        input?.setSelectionRange(input.value.length, input.value.length);
+      });
+    });
+  }, []);
+
   // The "/" pill (top-right, above the composer) asks us to open the slash-command
   // menu. Seed a lone "/" so matchSlashCommands lists every advertised command,
   // clear any prior dismissal, and focus the input — the menu renders reactively,
