@@ -29,7 +29,6 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { curateManifest } from "./release-manifest.mjs";
-import { stageBundledPi } from "./bundle-pi.mjs";
 
 const argv = process.argv.slice(2);
 const doPublish = argv.includes("--publish");
@@ -104,7 +103,6 @@ const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 const releaseReadme = fs.readFileSync(path.join(app, "README.md"), "utf8");
 const curatedPkg = curateManifest(pkg, releaseReadme);
 fs.writeFileSync(pkgPath, `${JSON.stringify(curatedPkg, null, 2)}\n`);
-stageBundledPi(root, app, curatedPkg);
 run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: app });
 
 const releasePkg = JSON.parse(fs.readFileSync(path.join(app, "package.json"), "utf8"));

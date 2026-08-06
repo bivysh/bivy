@@ -86,9 +86,9 @@ check("workspaces field is dropped", () => {
   assert.ok(!("workspaces" in staged), "staged manifest must not carry the monorepo workspaces field");
 });
 
-check("staged manifest is publishable and declares the thin pi bundle", () => {
+check("staged manifest is publishable and does not bundle an agent", () => {
   assert.ok(!("private" in staged), "staged manifest must not be private (the repo root is; the staging dir publishes)");
-  assert.deepEqual(staged.bundledDependencies, ["@earendil-works/pi-coding-agent"]);
+  assert.ok(!staged.bundledDependencies, "agents must be resolved normally instead of embedded in Bivy's tarball");
 });
 
 check("release README is explicit in npm registry metadata", () => {
