@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-06
+
+### Added
+
+- TUI-locked sessions now open into a dedicated handoff view with actions to
+  attach the browser terminal or take the session back into chat. Chat sessions
+  also expose a copyable `bivy resume <id>` command for continuing locally.
+
+### Changed
+
+- First-run setup is now agent-first: it detects and imports compatible Claude
+  and Codex credentials into Bivy's encrypted vault, favors normal account
+  sign-in, presents clearer choices, and hands users directly to their selected
+  agent or the remote app. Missing-agent-auth errors now include actionable,
+  agent-specific recovery steps.
+- Hosted trial session locks are preserved across later node refreshes, and a
+  newly opened client now receives the current terminal lock state immediately.
+
+### Fixed
+
+- The agent picker now stays aligned with the active session's runtime when the
+  node's runtime list refreshes, while new-session drafts continue to use the
+  selected default.
+- Uninstalling an npm-global installation now removes its separate `~/.bivy`
+  state directory. Tarball installs and `--keep-sessions` retain their existing
+  state-preservation behavior.
+
+### Security
+
+- Removing a node now atomically rotates the model-credential sync key and wraps
+  the replacement only for surviving nodes. Provider sign-outs propagate as
+  encrypted, timestamped tombstones so stale credentials cannot be restored by
+  another device.
+
 ## [0.8.2] - 2026-08-05
 
 ### Changed
