@@ -2516,10 +2516,17 @@ export class SessionStore {
         // not here — see AppController.maybeRestoreDraftAgent.
         const cur = e.current || runtimes.find((a) => a.id === (this.state.selectedAgentId || e.activeAgent));
         const selectedAgentId = cur?.id || e.activeAgent || this.state.selectedAgentId;
+        // runtimes.list is also requested whenever the agent sheet opens. Its
+        // `current` runtime is the default for the *next* session, not the owner
+        // of the session on screen. Keep the pill tied to activeRuntimeId just
+        // like the sheet checkmark; on a draft both use selectedAgentId instead.
+        const displayedRuntime = this.state.activeSessionId
+          ? runtimes.find((a) => a.id === this.state.activeRuntimeId)
+          : runtimes.find((a) => a.id === selectedAgentId) || cur;
         this.set({
           runtimes,
           selectedAgentId,
-          currentAgentName: agentLabel(runtimes.find((a) => a.id === selectedAgentId) || cur) || this.state.currentAgentName,
+          currentAgentName: agentLabel(displayedRuntime) || this.state.currentAgentName,
           ...(e.type === "runtime.updated" ? { installingRuntimeId: null } : {}),
         });
         return;
