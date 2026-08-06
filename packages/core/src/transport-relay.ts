@@ -25,6 +25,17 @@ export interface RelayTransportOptions {
 }
 
 const MAX_BACKOFF = 15000;
+// Refreshing our view of the node (sessions/models/runtimes/terminals) is worth
+// doing the first time a socket reaches the node, and again if the node keeps
+// flapping for a while — but NOT once per flap. The relay re-sends `peer.online`
+// to this client every time the node re-attaches, and a cold-starting or
+// unstable node can flap many times a minute. Re-firing the whole command burst
+// on each one piles counted frames onto this single long-lived client socket
+// until the relay's per-socket limiter (RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE)
+// trips and closes it — which surfaces as "Rate limit exceeded" in the composer
+// even though the user never sent anything. Throttle the refresh to at most once
+// per this window per socket; queued user frames still flush() on every event.
+const RESYNC_THROTTLE_MS = 15000;
 // A transient reconnect (node blip, brief radio drop, a single-use ticket that
 // raced) recovers on its own via scheduleReconnect(), so surfacing every failed
 // attempt as a toast just spams the user with "ticket request failed" noise
@@ -221,10 +232,27 @@ export class RelayTransport implements Transport {
     this.backoff = Math.min(this.backoff * 2, MAX_BACKOFF);
   }
 
+  /**
+   * True at most once per RESYNC_THROTTLE_MS for the CURRENT socket. A fresh
+   * socket always refreshes on its first link-ready; a flapping node's repeated
+   * `peer.online` events on the same long-lived socket are coalesced so the
+   * refresh burst can't drain the relay's per-socket message budget. State lives
+   * on the socket itself, so a genuine reconnect (new socket) resyncs again.
+   */
+  private shouldResync(): boolean {
+    const ws = this.ws as (WebSocket & { _resyncAt?: number }) | null;
+    if (!ws) return false;
+    const now = Date.now();
+    if (ws._resyncAt !== undefined && now - ws._resyncAt < RESYNC_THROTTLE_MS) return false;
+    ws._resyncAt = now;
+    return true;
+  }
+
   /** Once the relay reports the node reachable: resume if paired, else pair. */
   private async onLinkReady(): Promise<void> {
     if (this.curKey) {
       this.flush();
+      if (!this.shouldResync()) return; // node flap re-fired peer.online; don't re-burst
       const active = this.store.sessions(); // touch to keep parity with legacy loadSessionIndex timing
       void active;
       await this.send({ kind: "sessions.list" });
