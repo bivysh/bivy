@@ -85,7 +85,7 @@ Override the location with `BIVY_DATA_DIR`.
 `bivy setup` (run by the installer, or `npm run setup` in an existing checkout)
 picks sensible defaults for everything and asks two questions:
 
-- **Remote access** — hosted (recommended; one node is free) or self-hosted,
+- **Remote access** — hosted (recommended; the first 25 sessions are free, no card required) or self-hosted,
   pointing this node at your own control plane + relay,
 - **Remote login** — GitHub sign-in (default) or an email magic link.
 

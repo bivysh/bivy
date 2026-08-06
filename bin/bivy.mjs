@@ -3266,7 +3266,7 @@ async function cmdSetup(args = []) {
     const syncChoice = await askChoice(
       "Remote access",
       [
-        { key: "h", label: "hosted (recommended — one node is free)" },
+        { key: "h", label: "hosted (recommended — first 25 sessions are free, no card required)" },
         { key: "s", label: "self-hosted (your own control plane + relay)" },
       ],
       selfHostEnv ? "s" : "h",
@@ -3394,13 +3394,13 @@ async function cmdSetup(args = []) {
   console.log(`  ${modelReady ? c.green("✓") : c.yellow("!")} model ${modelReady ? (setupAgent?.needsBivyModel ? "credential configured" : "native agent login ready") : (setupAgent?.needsBivyModel ? "not configured — run 'bivy login'" : `${setupAgent?.loginHint || "sign in through the selected agent"}`)}`);
   console.log(`  ${c.dim("○")} repository chosen from the directory where you start Bivy`);
   const ghReady = githubConnected(finalConfig);
-  console.log(`  ${ghReady ? c.green("✓") : c.dim("○")} GitHub ${ghReady ? "connected — your repos will list in the app" : c.dim("not connected — 'bivy github:connect' to list repos (optional)")}`);
+  console.log(`  ${ghReady ? c.green("✓") : c.dim("○")} GitHub ${ghReady ? "connected — your repos will list in the app" : c.dim("optional — connect later in the app under Settings → GitHub App")}`);
   console.log(`  ${agentReady && modelReady ? c.green("✓") : c.yellow("!")} first task ${agentReady && modelReady ? "ready to try" : "blocked by the stage above"}`);
   console.log(`  ${fs.existsSync(relayConfigPath) ? c.green("✓") : c.yellow("!")} remote ${fs.existsSync(relayConfigPath) ? "configured" : "not configured — run 'bivy relay:setup'"}\n`);
   // Get the user into the product immediately; terminal commands are the
   // fallback/next-step checklist after the remote app has been opened or linked.
   await finishSetupRemote(finalConfig, setupSession);
-  printFirstRunSteps(modelReady, finalConfig, setupAgent);
+  printFirstRunSteps(modelReady, setupAgent);
 }
 
 // Read and delete the one-time account-session handoff written by relay:setup
@@ -3442,7 +3442,7 @@ function consumeSetupSession() {
 // tokenized fragment, so no session/pairing secret lands in terminal scrollback.
 // Returns null when no relay is configured (caller should send the user to
 // `bivy relay:setup`).
-async function openRemoteApp(config, { setupSession = null, open = true } = {}) {
+async function openRemoteApp(config, { setupSession = null, open = true, remotePath = "" } = {}) {
   const relay = loadRelayConfig();
   if (!relay) return null;
 
@@ -3460,7 +3460,7 @@ async function openRemoteApp(config, { setupSession = null, open = true } = {}) 
       session: setupSession.session,
       ...(setupSession.nodeId ? { node: { id: setupSession.nodeId } } : {}),
     };
-    accountUrl = `${remoteBase}/#${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
+    accountUrl = `${remoteBase}${remotePath}/#${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   }
 
   // Try to mint a node-scoped paired link (safe to embed in a QR another device
@@ -3474,12 +3474,21 @@ async function openRemoteApp(config, { setupSession = null, open = true } = {}) 
       headers: { authorization: `Bearer ${token}` },
       body: "{}",
     });
-    if (data?.url) pairedUrl = data.url;
+    if (data?.url) {
+      pairedUrl = data.url;
+      if (remotePath) {
+        try {
+          const target = new URL(pairedUrl);
+          target.pathname = remotePath;
+          pairedUrl = target.toString();
+        } catch { /* keep the original paired URL */ }
+      }
+    }
   } catch {
     // fall back to the plain remote app URL below
   }
 
-  const openUrl = accountUrl || pairedUrl || remoteBase;
+  const openUrl = accountUrl || pairedUrl || `${remoteBase}${remotePath}`;
   if (open && canOpenBrowser() && openUrl) {
     console.log(`  Opening ${c.cyan(remoteBase || openUrl)} …`);
     openBrowser(openUrl);
@@ -3500,22 +3509,17 @@ function githubConnected(config = null) {
   return Boolean(token);
 }
 
-function printFirstRunSteps(modelReady = false, config = null, setupAgent = null) {
-  console.log("  Run your first task:");
-  let n = 0;
+function printFirstRunSteps(modelReady = false, setupAgent = null) {
+  console.log("  Start your first session:");
   if (!modelReady) {
     const login = setupAgent?.needsBivyModel
       ? `${c.cyan("bivy login")}  ${c.dim("(stored in Bivy's encrypted vault)")}`
       : c.cyan(setupAgent?.command || "the selected agent's native CLI");
-    console.log(`    ${++n}. Model access:   ${login}`);
+    console.log(`    Model access: ${login}`);
   }
-  // GitHub is optional — "No repo" sessions work without it — so this only shows
-  // when nothing is connected yet, and never blocks the flow.
-  if (!githubConnected(config)) {
-    console.log(`    ${++n}. GitHub ${c.dim("(optional)")}: ${c.cyan("bivy github:connect")}  ${c.dim("— lets the app list your repos; required for private ones")}`);
-  }
-  console.log(`    ${++n}. Start chatting: ${c.cyan("bivy")}`);
-  console.log(`       Starter task:  ${c.cyan('bivy exec "explain this repository and identify one low-risk improvement"')}\n`);
+  const agent = setupAgent?.command || setupAgent?.runtimeId || resolveDefaultAgent();
+  console.log(`    ${c.cyan(`bivy run ${agent}`)}`);
+  console.log(`    Then open the remote app to watch the session or take over in chat.\n`);
 }
 
 async function finishSetupRemote(config, setupSession = null) {
@@ -4262,7 +4266,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy kill <id>")}    Stop a session/terminal (--delete also removes a saved session)
   ${c.cyan("bivy prune")}         Delete old sessions/workspaces/worktrees (--keep N, --older-than 7d, --dry-run)
   ${c.cyan("bivy exec")} "<prompt>"  One-shot headless run: prints the answer to stdout (pipe-friendly)
-  ${c.cyan("bivy")}              Launch the default agent (pi) as a managed, relay-visible session
+  ${c.cyan("bivy")}              Show this help
   ${c.cyan("bivy setup")}      First-run wizard: workspace, remote access + sign-in, background service
   ${c.cyan("bivy start")}      Run the daemon in the foreground
   ${c.cyan("bivy stop")}       Stop the background service
@@ -4282,7 +4286,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy github:app-create")}            One-click: create + connect a GitHub App
   ${c.cyan("bivy github:app-connect")}           Connect an existing GitHub App (--app-id --key)
   ${c.cyan("bivy github:app-sync")} [on|off]     Sync connected GitHub App keys to this account's other opted-in nodes
-  ${c.cyan("bivy github:connect")} [owner/repo]  Authorize repo access for the repo picker (device flow)
+  ${c.cyan("bivy github:connect")} [owner/repo]  Connect GitHub in the app (or use a configured self-hosted device flow)
   ${c.cyan("bivy secrets")}    list | set | ref | delete | doctor | resolve
   ${c.cyan("bivy voice")}      Configure speech-to-text: provider | key | remove | status
   ${c.cyan("bivy completions")} <bash|zsh|fish>  Print a shell completion script
@@ -4295,10 +4299,7 @@ async function main() {
   const [command, ...args] = argv;
   switch (command) {
     case undefined:
-      // First run opens the guided setup; after setup, bare `bivy` launches the
-      // default agent's native CLI/TUI as a managed, relay-visible `bivy run`.
-      if (fs.existsSync(cliConfigPath)) await cmdRun([]);
-      else await cmdSetup();
+      printHelp();
       break;
     case "setup":
     case "init":
@@ -4460,7 +4461,17 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "github:connect":
     case "connect-repo":
       if (args.includes("-h") || args.includes("--help")) {
-        console.log("Usage: bivy github:connect [owner/repo]\n\nAuthorize repo access for the repo picker via GitHub's device flow. The resulting repo-scoped token is stored in this node's encrypted local vault.");
+        console.log("Usage: bivy github:connect [owner/repo]\n\nOpen Settings → GitHub App in the remote app. Self-hosted deployments with BIVY_GITHUB_OAUTH_CLIENT_ID configured use GitHub's device flow instead.");
+        break;
+      }
+      if (!String(process.env.BIVY_GITHUB_OAUTH_CLIENT_ID || loadConfig().env?.BIVY_GITHUB_OAUTH_CLIENT_ID || "").trim()) {
+        const remote = await openRemoteApp(loadConfig(), { remotePath: "/settings/github" });
+        if (!remote) {
+          console.log("Remote access is not configured yet.");
+          console.log(`Run ${c.cyan("bivy relay:setup")}, then connect GitHub in the app under Settings → GitHub App.`);
+        } else if (!canOpenBrowser()) {
+          console.log(`Open GitHub setup in the Bivy app: ${c.cyan(remote.openUrl)}`);
+        }
         break;
       }
       if (!(await ensureDeps())) process.exit(1);
