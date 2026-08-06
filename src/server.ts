@@ -8732,15 +8732,10 @@ async function resolveOrResumeSession(sessionId?: unknown, sessionPath?: unknown
   // guard doesn't apply). Treat a missing transcript as "not found" instead.
   if (resumesByPath) {
     try {
-      // `key` passed resolveResumeRef's sessionsDir containment check.
-      // codeql[js/path-injection]: the client-provided ref cannot escape it.
-      if (!fs.existsSync(key)) { // lgtm[js/path-injection]
-        // Path-based runtime, transcript file absent → treated as not-found (see
-        // above). This is the branch that misfired when an id-based runtime was
-        // wrongly classified path-based; the log makes that unmistakable.
-        console.warn(`[resume] not-found id=${id} reason=transcript-missing runtimeId=${runtimeId ?? "-"} resumesByPath=true key=${key}`);
-        return undefined;
-      }
+      const sessionsRoot = fs.realpathSync(path.resolve(sessionsDir));
+      const transcriptPath = fs.realpathSync(path.resolve(sessionsRoot, key));
+      if (!transcriptPath.startsWith(`${sessionsRoot}${path.sep}`)) return undefined;
+      key = transcriptPath;
     } catch (error) {
       console.warn(`[resume] not-found id=${id} reason=transcript-stat-failed runtimeId=${runtimeId ?? "-"} key=${key} — ${error instanceof Error ? error.message : String(error)}`);
       return undefined;

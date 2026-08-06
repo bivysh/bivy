@@ -496,13 +496,14 @@ function findClaudeTranscript(sessionId: string): string | undefined {
   for (const root of claudeProjectDirs()) {
     const projects = path.join(root, "projects");
     try {
-      for (const project of fs.readdirSync(projects, { withFileTypes: true })) {
+      const projectsRoot = fs.realpathSync(path.resolve(projects));
+      for (const project of fs.readdirSync(projectsRoot, { withFileTypes: true })) {
         if (!project.isDirectory()) continue;
-        const candidate = path.join(projects, project.name, fileName);
-        // The project component is a directory entry from `projects`; the file
-        // component is slug-validated above, so neither can traverse.
-        // codeql[js/path-injection]
-        if (fs.existsSync(candidate)) return candidate; // lgtm[js/path-injection]
+        const projectRoot = fs.realpathSync(path.resolve(projectsRoot, project.name));
+        if (!projectRoot.startsWith(`${projectsRoot}${path.sep}`)) continue;
+        const candidate = fs.realpathSync(path.resolve(projectRoot, fileName));
+        if (!candidate.startsWith(`${projectRoot}${path.sep}`)) continue;
+        if (path.basename(candidate) === fileName) return candidate;
       }
     } catch {
       // ignore missing/unreadable Claude stores
@@ -521,10 +522,7 @@ function loadClaudeTranscript(sessionId: string): RuntimeMessage[] {
   // trailing one, where the session actually ended interrupted. See below.
   const restartNoticeIdx: number[] = [];
   try {
-    // `file` can only come from findClaudeTranscript's validated-id and
-    // directory-entry construction above.
-    // codeql[js/path-injection]
-    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) { // lgtm[js/path-injection]
+    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
       if (!line.trim()) continue;
       const entry = JSON.parse(line);
       const rawRole = entry?.message?.role ?? entry?.role;
