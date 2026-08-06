@@ -3230,6 +3230,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
       messages: conversationMessages(record),
       cursor: historyCursorFrom(msg),
     }));
+    // A client opening this session after the TUI was already live (a deep link
+    // or reload on another device) missed the original terminal.tui broadcast,
+    // so its composer would render unlocked and every send would be refused
+    // server-side. Re-assert the single-writer lock here so it shows the
+    // "running in the terminal" window instead of an unusable chat.
+    if (record.tuiTermId || record.tuiRefreshing) broadcastTuiState(record.id, Boolean(record.tuiTermId));
     // A reconnecting/opening client missed the one-shot card broadcast; put
     // any still-pending question/approval back so it can be answered.
     replayPendingInteractions(record.id);
