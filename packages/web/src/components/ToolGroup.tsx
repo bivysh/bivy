@@ -124,7 +124,7 @@ function ToolDetail({ tool, f }: { tool: ToolActivity; f: ToolFormat }) {
 }
 
 function runningSummary(tool: ToolActivity): string {
-  const f = formatTool(tool.name, tool.input);
+  const f = formatTool(tool.name, tool.input, tool.detail);
   if (f.verb === "Agent output") return "Reading agent output…";
   const label = toolRowLabel(f);
   if (f.command) return `Running ${label || "command"}…`;
@@ -149,7 +149,7 @@ function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActivity[];
   // for an Edit/Write call formatTool runs a real LCS diff, so recomputing it
   // separately for the list row, the sheet title, and the detail view would
   // triple that work for no reason.
-  const formatted = selected ? formatTool(selected.name, selected.input) : undefined;
+  const formatted = selected ? formatTool(selected.name, selected.input, selected.detail) : undefined;
 
   // The sheet's scrollable body is a single persistent DOM node (Sheet.tsx's
   // .sheet-content) that this component swaps between the list and a detail
@@ -177,7 +177,7 @@ function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActivity[];
         {selected && formatted ? (
           <ToolDetail tool={selected} f={formatted} />
         ) : tools.length ? (
-          tools.map((t) => <ToolListRow key={t.callId} tool={t} f={formatTool(t.name, t.input)} onSelect={setSelectedId} />)
+          tools.map((t) => <ToolListRow key={t.callId} tool={t} f={formatTool(t.name, t.input, t.detail)} onSelect={setSelectedId} />)
         ) : (
           <div className="tool-detail-value output">No tool activity.</div>
         )}

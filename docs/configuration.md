@@ -211,6 +211,22 @@ These apply to the CLI-driven agents: `codex`, `opencode`, `aider`, `hermes`,
 | `BIVY_<ID>_MODELS` | JSON array of `{id,name?,provider?}` (or bare strings) | the spec's curated list | Supported | Selectable models |
 | `BIVY_<ID>_THINKING` | JSON `{levels[],template[],insertAt?,default?}` | the spec's setting | Supported (advanced) | Reasoning-effort flags. Requires both `levels` and `template` or it is ignored |
 
+### Named custom agents
+
+`BIVY_CUSTOM_AGENTS` registers reusable agents in both the web picker and
+`bivy run`. Its value is a JSON array. Each entry requires a unique lowercase
+`id` and an `extends` value naming a built-in CLI agent; it may override
+`label`, `command`, `args`, `jsonArgs`, `parserId`, `promptMode`, and `hidden`.
+Custom agents inherit the base agent's execution behavior and always appear as
+experimental/unverified. Invalid entries are ignored without affecting built-ins.
+
+```sh
+export BIVY_CUSTOM_AGENTS='[{"id":"company-codex","label":"Company Codex","extends":"codex","command":"company-codex","args":["exec"]}]'
+```
+
+Persist the same value in `cli.json`'s `env` object to make it available to the
+daemon and terminal CLI after restart.
+
 Codex resume is special-cased and does **not** use the generic path:
 
 | Variable | Type | Default | Status |

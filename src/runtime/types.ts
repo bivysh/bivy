@@ -42,6 +42,29 @@ export interface RuntimeEvent {
 /** Opaque conversation message. The UI renders it; the daemon never inspects it. */
 export type RuntimeMessage = Record<string, unknown>;
 
+/**
+ * A normalized description of what a tool call *does*, independent of which agent
+ * emitted it. Different agents name and shape their tool calls differently (Codex
+ * `command_execution` with `{command}`, Claude `Bash` with `{command}`, `Read`
+ * with `{file_path}`, `apply_patch` with `{changes}`, …); this union collapses the
+ * common cases into one shape so the PWA can render a shell command, a diff, or a
+ * file read *identically* for every agent.
+ *
+ * It is a display aid layered on top of the still-opaque tool block, never a
+ * replacement: it rides alongside the raw `input`/`result`, and when a call can't
+ * be classified there is simply no detail (mapToolCall returns undefined) and the
+ * UI falls back to today's opaque rendering. The daemon never acts on it — like
+ * RuntimeMessage, it exists only for the UI. See src/runtime/tool-call-map.ts.
+ */
+export type ToolCallDetail =
+  | { kind: "shell"; command: string; cwd?: string }
+  | { kind: "read"; path: string }
+  | { kind: "write"; path: string }
+  | { kind: "edit"; path: string; oldText?: string; newText?: string }
+  | { kind: "search"; query: string; path?: string }
+  | { kind: "fetch"; url: string }
+  | { kind: "plan"; text?: string };
+
 export interface PromptImage {
   type: "image";
   data: string;

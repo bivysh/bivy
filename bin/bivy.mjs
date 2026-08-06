@@ -638,6 +638,30 @@ function loadAgentManifest() {
   }
 }
 
+function loadCustomAgentManifest() {
+  const raw = process.env.BIVY_CUSTOM_AGENTS || loadConfig().env?.BIVY_CUSTOM_AGENTS;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (!Array.isArray(parsed)) return [];
+    const reserved = new Set(["pi", "claude", "claude-code", "claude-code-sdk", "generic-cli", "codex-approvals", "openclaw", "bivy-agent-protocol", "acp", ...loadAgentManifest().map((agent) => agent.id)]);
+    return parsed.flatMap((item) => {
+      const id = typeof item?.id === "string" ? item.id.trim().toLowerCase() : "";
+      const base = loadAgentManifest().find((agent) => agent.id === item?.extends);
+      const command = typeof item?.command === "string" && item.command.trim() ? item.command.trim() : base?.command;
+      if (!/^[a-z][a-z0-9-]{1,47}$/.test(id) || reserved.has(id) || !command) return [];
+      return [[id, {
+        label: typeof item.label === "string" && item.label.trim() ? item.label.trim() : id,
+        type: "command",
+        command,
+        args: Array.isArray(item.args) && item.args.every((a) => typeof a === "string") ? item.args : [],
+      }]];
+    });
+  } catch {
+    return [];
+  }
+}
+
 // Headless "one-shot" tokens for an agent, derived from the manifest — the
 // fallback for any spec that isn't hand-tuned in AGENT_HEADLESS_FLAGS below, so a
 // newly-added agent still gets one-shot detection with no edit here.
@@ -662,6 +686,7 @@ const BUILTIN_TERMINAL_AGENTS = new Map([
       ...(a.install?.kind === "npm" ? { npmPackage: a.install.pkg } : {}),
     },
   ]),
+  ...loadCustomAgentManifest(),
 ]);
 
 async function ensureTerminalCommand(agent) {

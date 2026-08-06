@@ -81,6 +81,34 @@ describe("formatTool", () => {
     expect(f.title).toBe("Agent output");
     expect(f.output).toBe("working on it");
   });
+
+  it("prefers node-computed detail over the input heuristic (Codex apply_patch → edit)", () => {
+    // Bare, `apply_patch` isn't recognized as an edit by the name heuristic…
+    const bare = formatTool("apply_patch", { changes: { "src/x.ts": {} } });
+    expect(bare.verb).not.toBe("Edited");
+    // …but the node's detail makes it render as a proper edit with a diff.
+    const f = formatTool("apply_patch", { changes: {} }, { kind: "edit", path: "src/x.ts", oldText: "a", newText: "b" });
+    expect(f.verb).toBe("Edited");
+    expect(f.path).toBe("src/x.ts");
+    expect(f.target).toBe("x.ts");
+    expect(f.diffs).toHaveLength(1);
+    expect(f.added).toBe(1);
+    expect(f.removed).toBe(1);
+  });
+
+  it("renders a shell detail as a command even when input lacks a known key", () => {
+    const f = formatTool("local_shell", { argv_hidden: true }, { kind: "shell", command: "git status" });
+    expect(f.verb).toBe("Ran");
+    expect(f.glyph).toBe("terminal");
+    expect(f.command).toBe("git status");
+    expect(f.title).toBe("Bash");
+  });
+
+  it("does not let detail override an agent-output stream", () => {
+    const f = formatTool("agent_output", { stream: "stderr", output: "x" }, { kind: "shell", command: "nope" });
+    expect(f.verb).toBe("Agent output");
+    expect(f.command).toBeUndefined();
+  });
 });
 
 describe("toolGroupSummary", () => {
