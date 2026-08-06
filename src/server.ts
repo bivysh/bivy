@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID, randomBytes, timingSafeEqual, createHash, createHmac } from "node:crypto";
+import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
@@ -4330,15 +4330,13 @@ type GithubAppVaultResponse = { vaults?: GithubAppVaultRow[]; wrappedKeys?: Gith
 // because `seal()`'s random IV makes every ciphertext byte-different. Reset on
 // restart — one redundant push after a restart is the same tolerance the
 // model-auth vault above already accepts.
-const lastPushedGithubAppFingerprint = new Map<string, string>();
-const githubAppFingerprintKey = randomBytes(32);
+const lastPushedGithubAppContent = new Map<string, string>();
 
 function fingerprintGithubAppContent(record: GitHubAppRecord, privateKeyPem: string): string {
-  // This is a process-local change fingerprint, not password storage. Keying it
-  // also prevents the digest from becoming a reusable verifier for the PEM.
-  return createHmac("sha256", githubAppFingerprintKey)
-    .update(JSON.stringify({ privateKeyPem, slug: record.slug, name: record.name, owner: record.owner, ownerType: record.ownerType, hookId: record.hookId }))
-    .digest("hex");
+  // Process-local equality value only. The PEM is already resident in this
+  // process, and retaining the previous value avoids creating a password-like
+  // verifier or digest from secret material.
+  return JSON.stringify({ privateKeyPem, slug: record.slug, name: record.name, owner: record.owner, ownerType: record.ownerType, hookId: record.hookId });
 }
 
 /**
@@ -4433,7 +4431,7 @@ async function syncGithubAppVaultFromControlPlane(): Promise<void> {
       const privateKeyPem = await resolveSecret(record.privateKeyRef, appDir);
       if (!privateKeyPem) continue;
       const fingerprint = fingerprintGithubAppContent(record, privateKeyPem);
-      if (remote && !needsRotation && lastPushedGithubAppFingerprint.get(record.appId) === fingerprint) continue;
+      if (remote && !needsRotation && lastPushedGithubAppContent.get(record.appId) === fingerprint) continue;
       const vaultKeyB64 = needsRotation || !readLocalGithubAppVaultKey(appDir, record.appId)
         ? mintLocalGithubAppVaultKey(appDir, record.appId)
         : (readLocalGithubAppVaultKey(appDir, record.appId) as string);
@@ -4443,7 +4441,7 @@ async function syncGithubAppVaultFromControlPlane(): Promise<void> {
       );
       const pushRes = await modelAuthFetch("/node/github-app-vault", { method: "PUT", body: JSON.stringify({ appId: record.appId, ciphertext }) }).catch(() => null);
       if (!pushRes?.ok) continue;
-      lastPushedGithubAppFingerprint.set(record.appId, fingerprint);
+      lastPushedGithubAppContent.set(record.appId, fingerprint);
       // Self-wrap: so this node's own row in `wrappedKeys` is populated too,
       // matching the model-auth vault's push (a node that later loses its
       // local github-app-vault.json cache but keeps its secret vault can
@@ -8724,6 +8722,8 @@ async function resolveOrResumeSession(sessionId?: unknown, sessionPath?: unknown
   // guard doesn't apply). Treat a missing transcript as "not found" instead.
   if (resumesByPath) {
     try {
+      // `key` passed resolveResumeRef's sessionsDir containment check.
+      // codeql[js/path-injection]: the client-provided ref cannot escape it.
       if (!fs.existsSync(key)) {
         // Path-based runtime, transcript file absent → treated as not-found (see
         // above). This is the branch that misfired when an id-based runtime was

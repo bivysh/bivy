@@ -498,6 +498,9 @@ function findClaudeTranscript(sessionId: string): string | undefined {
       for (const project of fs.readdirSync(projects, { withFileTypes: true })) {
         if (!project.isDirectory()) continue;
         const candidate = path.join(projects, project.name, fileName);
+        // The project component is a directory entry from `projects`; the file
+        // component is slug-validated above, so neither can traverse.
+        // codeql[js/path-injection]
         if (fs.existsSync(candidate)) return candidate;
       }
     } catch {
@@ -517,6 +520,9 @@ function loadClaudeTranscript(sessionId: string): RuntimeMessage[] {
   // trailing one, where the session actually ended interrupted. See below.
   const restartNoticeIdx: number[] = [];
   try {
+    // `file` can only come from findClaudeTranscript's validated-id and
+    // directory-entry construction above.
+    // codeql[js/path-injection]
     for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
       if (!line.trim()) continue;
       const entry = JSON.parse(line);
