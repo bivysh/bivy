@@ -101,7 +101,7 @@ try {
   assert.match(output, /Remote app:\s+https:\/\/app\.example\.test/);
   assert.match(output, /Start your first session:/);
   assert.match(output, /bivy run pi/);
-  assert.doesNotMatch(output, /bivy exec|Start chatting: bivy|bivy github:connect/);
+  assert.doesNotMatch(output, /bivy exec|Start chatting: bivy|bivy github:connect|Link a device|bivy link/);
   assert.match(output, /take over in chat/);
   assert.ok(output.indexOf(remoteApp) < output.indexOf("Start your first session:"), "remote app must be presented before terminal fallback steps");
   assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, "cli.json"), "utf8")).port, nodePort, "sandbox setup kept its isolated port");

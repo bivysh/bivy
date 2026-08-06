@@ -3431,20 +3431,18 @@ function consumeSetupSession() {
 // `/nodes` return only this one node, so a user with other nodes appeared to land
 // on a different/empty account until they signed out and back in.
 //
-// The separately minted node-scoped paired link (E2E key embedded) is reserved
-// for the QR below, which is meant to be scanned by *another* device to pair it
-// with this node — there, node-scoping is the right least-privilege choice.
-// Everything is also printed as text so servers without a browser can copy it.
 // Open this node's REMOTE control-plane app in a local browser (best effort) and
-// return the URLs involved. The node no longer hosts a UI, so the web/PWA app
+// return the URL involved. The node no longer hosts a UI, so the web/PWA app
 // always comes from the hosted or self-hosted control plane. Prefers, in order:
 // an account sign-in URL (only available right after `relay:setup`, when a
-// setupSession is supplied) → a freshly minted node-scoped paired link → the
-// plain remote base URL. Prints a clean "Opening <base>" line — never the
-// tokenized fragment, so no session/pairing secret lands in terminal scrollback.
+// setupSession is supplied) → the plain remote base URL, where the user signs
+// in normally. Pairing is deliberately reserved for the explicit `bivy link`
+// command; ordinary setup/open should establish the full account experience.
+// Prints a clean "Opening <base>" line — never the tokenized fragment, so no
+// account secret lands in terminal scrollback.
 // Returns null when no relay is configured (caller should send the user to
 // `bivy relay:setup`).
-async function openRemoteApp(config, { setupSession = null, open = true, remotePath = "" } = {}) {
+async function openRemoteApp({ setupSession = null, open = true, remotePath = "" } = {}) {
   const relay = loadRelayConfig();
   if (!relay) return null;
 
@@ -3465,37 +3463,12 @@ async function openRemoteApp(config, { setupSession = null, open = true, remoteP
     accountUrl = `${remoteBase}${remotePath}/#${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   }
 
-  // Try to mint a node-scoped paired link (safe to embed in a QR another device
-  // scans). Needs the node reachable, so wait briefly first.
-  let pairedUrl = "";
-  await waitForNode(config).catch(() => {});
-  try {
-    const token = await localDeviceToken(config);
-    const data = await localApi(config, "/api/relay/link", {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}` },
-      body: "{}",
-    });
-    if (data?.url) {
-      pairedUrl = data.url;
-      if (remotePath) {
-        try {
-          const target = new URL(pairedUrl);
-          target.pathname = remotePath;
-          pairedUrl = target.toString();
-        } catch { /* keep the original paired URL */ }
-      }
-    }
-  } catch {
-    // fall back to the plain remote app URL below
-  }
-
-  const openUrl = accountUrl || pairedUrl || `${remoteBase}${remotePath}`;
+  const openUrl = accountUrl || `${remoteBase}${remotePath}`;
   if (open && canOpenBrowser() && openUrl) {
     console.log(`  Opening ${c.cyan(remoteBase || openUrl)} …`);
     openBrowser(openUrl);
   }
-  return { relay, remoteBase, accountUrl, pairedUrl, openUrl };
+  return { relay, remoteBase, accountUrl, openUrl };
 }
 
 // Whether GitHub is connected for repo listing/cloning. Bivy's own connect flow
@@ -3526,7 +3499,7 @@ function printFirstRunSteps(modelReady = false, setupAgent = null) {
 
 async function finishSetupRemote(config, setupSession = null) {
   const openable = canOpenBrowser();
-  const remote = await openRemoteApp(config, { setupSession });
+  const remote = await openRemoteApp({ setupSession });
 
   if (!remote) {
     console.log("\n  Almost there — enable remote access to open the Bivy app:");
@@ -3535,19 +3508,14 @@ async function finishSetupRemote(config, setupSession = null) {
     return;
   }
 
-  const { remoteBase, pairedUrl } = remote;
-  if (pairedUrl) {
-    const qr = terminalQr(pairedUrl);
-    if (qr) console.log(qr + "\n");
-  }
+  const { remoteBase } = remote;
 
   console.log("\n  Access Bivy from anywhere:");
   if (remoteBase) console.log(`    • Remote app:     ${c.cyan(remoteBase)}  (sign in with the same GitHub/email you just used)`);
-  console.log(`    • Link a device:  ${c.cyan("bivy link")}  (prints a QR to pair a phone/laptop with this node)`);
   console.log(`    • Check status:   ${c.cyan("bivy status")}`);
   if (!openable) {
     console.log(c.dim("\n  No browser on this machine (headless server)? Open the Remote app URL above"));
-    console.log(c.dim("  on your phone or laptop and sign in, or scan the QR above to pair a device with this node."));
+    console.log(c.dim("  on your phone or laptop and sign in with the same GitHub account or email."));
   }
   console.log("");
 }
@@ -4438,8 +4406,7 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
         console.log("Usage: bivy open\n\nOpen the remote web/PWA app in your browser (requires 'bivy relay:setup' first).");
         break;
       }
-      const config = loadConfig();
-      const remote = await openRemoteApp(config);
+      const remote = await openRemoteApp();
       if (!remote) {
         console.log("No remote access configured yet.");
         console.log(`Run ${c.cyan("bivy relay:setup")} to enable the web/PWA app, then ${c.cyan("bivy open")}.`);
@@ -4467,7 +4434,7 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
         break;
       }
       if (!String(process.env.BIVY_GITHUB_OAUTH_CLIENT_ID || loadConfig().env?.BIVY_GITHUB_OAUTH_CLIENT_ID || "").trim()) {
-        const remote = await openRemoteApp(loadConfig(), { remotePath: "/settings/github" });
+        const remote = await openRemoteApp({ remotePath: "/settings/github" });
         if (!remote) {
           console.log("Remote access is not configured yet.");
           console.log(`Run ${c.cyan("bivy relay:setup")}, then connect GitHub in the app under Settings → GitHub App.`);
