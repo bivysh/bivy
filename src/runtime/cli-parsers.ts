@@ -22,7 +22,8 @@
 // Unit-tested with fixtures in test/runtime-cli-parsers.test.ts.
 
 import type { RuntimeEvent, RuntimeMessage, UsageSnapshot } from "./types.js";
-import { mapToolCall } from "./tool-call-map.js";
+import { mapToolCall, mapToolResult, type ToolCallMapContext } from "./tool-call-map.js";
+import { traceToolPayload } from "./tool-trace.js";
 
 export interface CliParser {
   /** Feed one complete stdout line; return normalized events to emit. */
@@ -85,6 +86,9 @@ class TurnAccumulator {
   readonly toolUses: Array<Record<string, unknown>> = [];
   readonly toolResults: Array<Record<string, unknown>> = [];
   private readonly out: RuntimeMessage[] = [];
+  private readonly details = new Map<string, ReturnType<typeof mapToolCall>>();
+
+  constructor(private readonly toolContext: ToolCallMapContext) {}
 
   ensureStart(events: RuntimeEvent[]) {
     if (!this.started) {
@@ -119,17 +123,23 @@ class TurnAccumulator {
   }
 
   addToolUse(id: string, name: string, input: unknown, events: RuntimeEvent[]) {
+    traceToolPayload({ phase: "call", context: this.toolContext, name, callId: id, payload: input });
     // Attach a normalized ToolCallDetail (display-only) so the PWA renders this
     // call the same way it renders every other agent's equivalent call. Absent
     // when unrecognized — the block stays opaque and renders as before.
-    const detail = mapToolCall(name, input);
+    const detail = mapToolCall(name, input, this.toolContext);
+    if (detail && id) this.details.set(id, detail);
     this.toolUses.push({ type: "tool_use", id, name, input: input ?? {}, ...(detail ? { detail } : {}) });
     events.push({ type: "tool_call", toolName: name, input, toolCallId: id, ...(detail ? { detail } : {}) });
   }
 
-  addToolResult(toolUseId: string, name: string, content: unknown, events: RuntimeEvent[]) {
-    this.toolResults.push({ type: "tool_result", tool_use_id: toolUseId, content: content ?? "" });
-    events.push({ type: "tool_result", toolName: name, result: { toolCallId: toolUseId, content } });
+  addToolResult(toolUseId: string, name: string, content: unknown, events: RuntimeEvent[], isError = false) {
+    traceToolPayload({ phase: "result", context: this.toolContext, name, callId: toolUseId, payload: content });
+    const prior = this.details.get(toolUseId);
+    const detail = prior ? { ...prior, result: mapToolResult(content, isError) } : undefined;
+    if (detail) this.details.set(toolUseId, detail);
+    this.toolResults.push({ type: "tool_result", tool_use_id: toolUseId, content: content ?? "", ...(detail ? { detail } : {}) });
+    events.push({ type: "tool_result", toolName: name, result: { toolCallId: toolUseId, content }, ...(detail ? { detail } : {}) });
   }
 
   /** Finalize the turn: emit message_end/turn_end/agent_end and record history. */
@@ -158,7 +168,7 @@ class TurnAccumulator {
 
 /** Parser for the bivy-agent-protocol JSONL event vocabulary (the universal path). */
 export function bivyProtocolParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "bivy-protocol", protocol: "protocol" });
   return {
     onLine(line) {
       const events: RuntimeEvent[] = [];
@@ -202,7 +212,7 @@ export function bivyProtocolParser(): CliParser {
 
 /** Parser for Claude Code CLI `--output-format stream-json`. */
 export function claudeStreamJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "claude", protocol: "structured-pipe" });
   return {
     onLine(line) {
       const events: RuntimeEvent[] = [];
@@ -262,7 +272,7 @@ export function claudeStreamJsonParser(): CliParser {
  *   {"type":"error","message":…}   ← transient reconnect noise (non-fatal)
  */
 export function codexJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "codex", protocol: "structured-pipe" });
   const handleItem = (item: Record<string, unknown>, events: RuntimeEvent[]) => {
     const id = String(item.id ?? "");
     switch (String(item.type ?? "")) {
@@ -272,7 +282,7 @@ export function codexJsonParser(): CliParser {
       case "command_execution":
         acc.addToolUse(id, "shell", { command: item.command ?? "" }, events);
         if (item.aggregated_output != null || item.exit_code != null) {
-          acc.addToolResult(id, "shell", item.aggregated_output ?? "", events);
+          acc.addToolResult(id, "shell", { content: item.aggregated_output ?? "", exitCode: item.exit_code }, events, Number(item.exit_code) !== 0);
         }
         break;
       case "mcp_tool_call":
@@ -357,7 +367,7 @@ export function codexJsonParser(): CliParser {
  *   {"type":"complete","total_tokens":…}
  */
 export function gooseStreamJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "goose", protocol: "structured-pipe" });
   return {
     onLine(line) {
       const events: RuntimeEvent[] = [];
@@ -414,7 +424,7 @@ export function gooseStreamJsonParser(): CliParser {
  * We accumulate all stdout and parse it once at close.
  */
 export function geminiJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "gemini", protocol: "structured-pipe" });
   let raw = "";
   return {
     onLine(line) {
@@ -493,7 +503,7 @@ const STREAM_TERMINALS = new Set(["result", "done", "complete", "completed", "tu
  * it can never LOSE the reply (worst case it degrades to the dumb-pipe view).
  */
 export function genericStreamJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "generic", protocol: "structured-pipe" });
   let sawText = false;
   let rawBuffer = "";
   return {
@@ -553,7 +563,7 @@ export function genericStreamJsonParser(): CliParser {
  * reply guarantee as the streaming parser.
  */
 export function genericJsonParser(): CliParser {
-  const acc = new TurnAccumulator();
+  const acc = new TurnAccumulator({ provider: "generic", protocol: "structured-pipe" });
   let raw = "";
   return {
     onLine(line) {

@@ -42,6 +42,8 @@ import type {
   UsageSnapshot,
   UsageWindow,
 } from "./types.js";
+import { withExactCapabilitySurface } from "./types.js";
+import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { depCacheEnv } from "../harness/dep-cache.js";
@@ -720,6 +722,7 @@ class ClaudeSession implements RuntimeSession {
    *  Used only to label a passively-surfaced tool_image (see #292); never
    *  cleared mid-session since a tool_use_id is unique for the session's life. */
   private readonly toolNamesByUseId = new Map<string, string>();
+  private readonly toolDetailsByUseId = new Map<string, ReturnType<typeof mapToolCall>>();
   /** This turn's passive-image noise guard (see PassiveImageBudget); replaced
    *  with a fresh budget at the start of every prompt(). */
   private passiveImageBudget = new PassiveImageBudget();
@@ -1075,7 +1078,9 @@ class ClaudeSession implements RuntimeSession {
         const content = Array.isArray(message.message?.content) ? message.message.content : [];
         for (const block of content) {
           if (block?.type === "tool_use") {
-            this.emit({ type: "tool_call", toolName: block.name, input: block.input, toolUseId: block.id });
+            const detail = mapToolCall(String(block.name ?? "tool"), block.input, { provider: "claude", protocol: "sdk" });
+            if (detail && typeof block.id === "string") this.toolDetailsByUseId.set(block.id, detail);
+            this.emit({ type: "tool_call", toolName: block.name, input: block.input, toolUseId: block.id, ...(detail ? { detail } : {}) });
             if (typeof block.id === "string" && typeof block.name === "string") this.toolNamesByUseId.set(block.id, block.name);
           }
         }
@@ -1118,7 +1123,10 @@ class ClaudeSession implements RuntimeSession {
           // this echo, so it's the one path that must flip every card to "done".
           for (const block of toolResults) {
             this.runningTools.delete(String(block.tool_use_id));
-            this.emit({ type: "tool_result", toolUseId: block.tool_use_id, result: toolResultText(block), isError: Boolean(block.is_error) });
+            const prior = this.toolDetailsByUseId.get(String(block.tool_use_id));
+            const resultText = toolResultText(block);
+            const detail = prior ? { ...prior, result: mapToolResult(resultText, Boolean(block.is_error)) } : undefined;
+            this.emit({ type: "tool_result", toolUseId: block.tool_use_id, result: resultText, isError: Boolean(block.is_error), ...(detail ? { detail } : {}) });
             if (autoAttachToolImagesEnabled()) this.emitPassiveToolImages(block);
           }
           this.emit({ type: "user", raw: message });
@@ -1381,7 +1389,7 @@ class ClaudeSession implements RuntimeSession {
 export class ClaudeCodeRuntime implements AgentRuntime {
   readonly id = "claude-code-sdk";
   readonly displayName = "Claude Code SDK";
-  readonly capabilities: RuntimeCapabilities = {
+  readonly capabilities: RuntimeCapabilities = withExactCapabilitySurface({
     toolInterception: true,
     modelSelection: true,
     packages: false,
@@ -1407,7 +1415,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     // be adopted with a true native resume (see discoverNativeSessions below).
     nativeSessionDiscovery: true,
     nativeSessionAdoption: true,
-  };
+  });
 
   private readonly sessions: ClaudeSession[] = [];
 

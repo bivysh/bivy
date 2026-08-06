@@ -20,7 +20,33 @@
 // Pure and dependency-free (no daemon knowledge), unit-tested in
 // test/runtime-tool-call-map.test.ts.
 
-import type { ToolCallDetail } from "./types.js";
+import type { ToolCallDetail, ToolCallProvenance, ToolResultDetail } from "./types.js";
+
+export interface ToolCallMapContext {
+  provider?: string;
+  protocol?: ToolCallProvenance["protocol"];
+}
+
+const RAW_LIMIT = 4096;
+
+export function boundedToolPayload(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  try {
+    const json = JSON.stringify(value);
+    if (json.length <= RAW_LIMIT) return value;
+    return { truncated: true, preview: json.slice(0, RAW_LIMIT) };
+  } catch {
+    return { unreadable: true };
+  }
+}
+
+function decorate<T extends Omit<ToolCallDetail, "meta">>(detail: T, toolName: string, input: unknown, context: ToolCallMapContext): ToolCallDetail {
+  return {
+    ...detail,
+    meta: { version: 1, provider: context.provider ?? "unknown", protocol: context.protocol ?? "unknown", rawToolName: toolName },
+    ...(input === undefined ? {} : { raw: boundedToolPayload(input) }),
+  } as ToolCallDetail;
+}
 
 /** Lowercase and strip non-alphanumerics so "read_file", "Read", "readFile" and
  *  "read-file" all collapse to the same bucket key. */
@@ -68,13 +94,13 @@ const PATH_KEYS = ["path", "file_path", "filePath", "filename", "fileName", "fil
  * Never throws — a weird/partial input degrades to undefined rather than failing
  * a live turn.
  */
-export function mapToolCall(toolName: string, input: unknown): ToolCallDetail | undefined {
+export function mapToolCall(toolName: string, input: unknown, context: ToolCallMapContext = {}): ToolCallDetail | undefined {
   const key = canon(toolName);
   const o = asRecord(input);
 
   if (SHELL.has(key)) {
     const command = str(o, "command", "cmd", "script", "input", "args");
-    return command ? { kind: "shell", command, ...(str(o, "cwd", "workdir", "workingDir", "directory") ? { cwd: str(o, "cwd", "workdir", "workingDir", "directory") } : {}) } : undefined;
+    return command ? decorate({ kind: "shell", command, ...(str(o, "cwd", "workdir", "workingDir", "directory") ? { cwd: str(o, "cwd", "workdir", "workingDir", "directory") } : {}) }, toolName, input, context) : undefined;
   }
 
   if (EDIT.has(key)) {
@@ -90,32 +116,46 @@ export function mapToolCall(toolName: string, input: unknown): ToolCallDetail | 
     if (!path) return undefined;
     const oldText = str(o, "old_string", "oldString", "old", "before", "search");
     const newText = str(o, "new_string", "newString", "new", "after", "replace", "replacement");
-    return { kind: "edit", path, ...(oldText ? { oldText } : {}), ...(newText ? { newText } : {}) };
+    return decorate({ kind: "edit", path, ...(oldText ? { oldText } : {}), ...(newText ? { newText } : {}) }, toolName, input, context);
   }
 
   if (WRITE.has(key)) {
     const path = str(o, ...PATH_KEYS);
-    return path ? { kind: "write", path } : undefined;
+    return path ? decorate({ kind: "write", path }, toolName, input, context) : undefined;
   }
 
   if (READ.has(key)) {
     const path = str(o, ...PATH_KEYS);
-    return path ? { kind: "read", path } : undefined;
+    return path ? decorate({ kind: "read", path }, toolName, input, context) : undefined;
   }
 
   if (SEARCH.has(key)) {
     const query = str(o, "pattern", "query", "q", "search", "regex", "searchTerm");
-    return query ? { kind: "search", query, ...(str(o, "path", "dir", "directory", "include") ? { path: str(o, "path", "dir", "directory", "include") } : {}) } : undefined;
+    return query ? decorate({ kind: "search", query, ...(str(o, "path", "dir", "directory", "include") ? { path: str(o, "path", "dir", "directory", "include") } : {}) }, toolName, input, context) : undefined;
   }
 
   if (FETCH.has(key)) {
     const url = str(o, "url", "uri", "href", "link");
-    return url ? { kind: "fetch", url } : undefined;
+    return url ? decorate({ kind: "fetch", url }, toolName, input, context) : undefined;
   }
 
   if (PLAN.has(key)) {
-    return { kind: "plan", ...(str(o, "plan", "text", "content", "message") ? { text: str(o, "plan", "text", "content", "message") } : {}) };
+    return decorate({ kind: "plan", ...(str(o, "plan", "text", "content", "message") ? { text: str(o, "plan", "text", "content", "message") } : {}) }, toolName, input, context);
   }
 
   return undefined;
+}
+
+export function mapToolResult(result: unknown, isError = false): ToolResultDetail {
+  const o = asRecord(result);
+  const content = o.content ?? o.output ?? o.text ?? o.aggregated_output ?? result;
+  const rawText = typeof content === "string" ? content : content == null ? "" : JSON.stringify(boundedToolPayload(content));
+  const text = rawText.length > RAW_LIMIT ? rawText.slice(0, RAW_LIMIT) : rawText;
+  const exit = o.exitCode ?? o.exit_code ?? o.code;
+  return {
+    ...(text ? { text } : {}),
+    ...(typeof exit === "number" ? { exitCode: exit } : {}),
+    ...(isError || o.isError === true || o.is_error === true ? { isError: true } : {}),
+    ...(rawText.length > RAW_LIMIT ? { truncated: true } : {}),
+  };
 }

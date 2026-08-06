@@ -2697,13 +2697,13 @@ function persistToolActivityFromEvent(record: SessionRecord, runtimeEvent: Runti
     upsertToolActivityMessage(record.id, {
       ...base,
       id: `bivy-tool-result-${callId}`,
-      content: [{ type: "tool_result", toolUseId: callId, tool_use_id: callId, content: event.message ?? event.result ?? event.output ?? input.output ?? "", isError: Boolean(event.error || event.errorMessage) }],
+      content: [{ type: "tool_result", toolUseId: callId, tool_use_id: callId, content: event.message ?? event.result ?? event.output ?? input.output ?? "", isError: Boolean(event.error || event.errorMessage), ...(event.detail ? { detail: event.detail } : {}) }],
     });
   } else {
     upsertToolActivityMessage(record.id, {
       ...base,
       id: `bivy-tool-call-${callId}`,
-      content: [{ type: "tool_use", id: callId, name, input }],
+      content: [{ type: "tool_use", id: callId, name, input, ...(event.detail ? { detail: event.detail } : {}) }],
     });
   }
 }
@@ -6740,7 +6740,8 @@ function sessionBusy(record: SessionRecord) {
 
 function sessionStatus(record: SessionRecord): BivySessionStatus {
   if (sessionHasPendingApproval(record)) return "needs_attention";
-  return sessionBusy(record) ? "working" : "idle";
+  if (sessionBusy(record)) return "working";
+  return record.lastFailureAt ? "failed" : "idle";
 }
 
 function isoFrom(value: unknown, fallback = Date.now()): string {
@@ -7427,6 +7428,7 @@ function armTurnWatchdog(record: SessionRecord): void {
     // agent_end. abort() is still invoked to kill the underlying process group.
     clearSessionWorking(record, "idle");
     metadata.touchSession(record.id, "failed");
+    broadcast({ type: "session.failed", sessionId: record.id, failedAt: record.lastFailureAt });
     broadcast({ type: "session.outcome", sessionId: record.id, status: "timed_out", completedAt: new Date().toISOString(), error: message });
     broadcast({ type: "session.error", sessionId: record.id, error: message });
     void record.session.abort().catch((error) => {
@@ -7877,16 +7879,17 @@ function attachSessionListeners(record: SessionRecord) {
         // surface the limit instead of resuming forever.
         record.reroute!.noteResumeApplied();
         scheduledResume = true;
-      } else if (messageError) {
+      } else if (turnError) {
         // Only the server-owned (pi-ai) path surfaces here; a Claude Code error
         // the runtime already broadcast falls through to avoid a duplicate bubble.
         record.lastFailureAt = Date.now();
         metadata.touchSession(record.id, "failed");
         scheduleAdvertise();
-        broadcast({ type: "session.error", sessionId: record.id, error: actionableAgentError(record.runtimeId, messageError) });
+        broadcast({ type: "session.failed", sessionId: record.id, failedAt: record.lastFailureAt });
+        if (messageError) broadcast({ type: "session.error", sessionId: record.id, error: actionableAgentError(record.runtimeId, messageError) });
         // If the terminal error is an auth failure (expired key/token → 4xx),
         // also raise the sign-in sheet for the failing provider.
-        maybeSignalAuthRequired(record, messageError);
+        maybeSignalAuthRequired(record, turnError);
         void sendNotificationHint({
           kind: "session_error",
           sessionId: record.id,

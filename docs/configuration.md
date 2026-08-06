@@ -258,6 +258,7 @@ approvals unless the agent speaks the Bivy protocol.
 | `BIVY_AGENT_RESUME_TEMPLATE` | JSON string array with `{id}` | unset (fresh process per prompt) | Supported |
 | `BIVY_AGENT_PARSER` | `claude-stream-json` \| `codex-json` \| `goose-stream-json` \| `gemini-json` | the agent spec's parser | Supported (advanced). An unknown id means raw passthrough |
 | `BIVY_AGENT_STRUCTURED` | `0` disables | on, whenever the agent has a parser | Supported (compat) |
+| `BIVY_TOOL_TRACE_FILE` | absolute path | unset | Diagnostic, explicit opt-in | Appends bounded JSONL call/result payloads for normalization-fixture curation. May contain code, paths, and commands; never enable on sensitive sessions or commit raw traces |
 
 ### Bivy Agent Protocol (`bivy-agent-protocol`)
 

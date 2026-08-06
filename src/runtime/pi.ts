@@ -52,6 +52,8 @@ import type {
   TuiLaunchSpec,
   UsageSnapshot,
 } from "./types.js";
+import { withExactCapabilitySurface } from "./types.js";
+import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 
 /**
  * Extract Pi's own slash commands from a live AgentSession: extension commands
@@ -196,6 +198,8 @@ function toolProviderFactory(provider: ToolProvider): ExtensionFactory {
 }
 
 class PiSession implements RuntimeSession {
+  private readonly toolDetails = new Map<string, ReturnType<typeof mapToolCall>>();
+
   constructor(private readonly runtime: AgentSessionRuntime, private readonly tui: PiTuiLaunch) {}
 
   private get session(): AgentSession {
@@ -266,7 +270,25 @@ class PiSession implements RuntimeSession {
   }
 
   subscribe(listener: (event: any) => void): () => void {
-    return this.session.subscribe(listener);
+    return this.session.subscribe((event: any) => {
+      const type = String(event?.type ?? "");
+      const callId = String(event?.toolCallId ?? event?.toolUseId ?? event?.tool_use_id ?? event?.id ?? "");
+      if (type === "tool_call" || type === "tool_execution_start") {
+        const name = String(event?.toolName ?? event?.name ?? "tool");
+        const input = event?.input ?? event?.args ?? {};
+        const detail = mapToolCall(name, input, { provider: "pi", protocol: "sdk" });
+        if (detail && callId) this.toolDetails.set(callId, detail);
+        listener(detail ? { ...event, detail } : event);
+        return;
+      }
+      if (type === "tool_result" || type === "tool_execution_end") {
+        const prior = this.toolDetails.get(callId);
+        const detail = prior ? { ...prior, result: mapToolResult(event?.result ?? event?.output, Boolean(event?.error)) } : undefined;
+        listener(detail ? { ...event, detail } : event);
+        return;
+      }
+      listener(event);
+    });
   }
 
   /**
@@ -425,7 +447,7 @@ class PiSession implements RuntimeSession {
 export class PiRuntime implements AgentRuntime {
   readonly id = "pi";
   readonly displayName = "Pi";
-  readonly capabilities: RuntimeCapabilities = {
+  readonly capabilities: RuntimeCapabilities = withExactCapabilitySurface({
     toolInterception: true,
     modelSelection: true,
     packages: true,
@@ -446,7 +468,7 @@ export class PiRuntime implements AgentRuntime {
     // The pi-coding-agent SDK implements both explicitly: prompting mid-turn
     // with no streamingBehavior hint throws, forcing every caller to choose.
     streamingBehaviors: ["steer", "followUp"],
-  };
+  });
 
   constructor(private readonly options: PiRuntimeOptions) {}
 

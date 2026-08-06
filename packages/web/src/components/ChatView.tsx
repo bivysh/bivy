@@ -6,6 +6,7 @@ import { ToolGroup } from "./ToolGroup.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { writeClipboard } from "../clipboard.js";
 import { controller } from "../store/useStore.js";
+import { captureChatScroll, restoredChatScrollTop, type ChatScrollMemory } from "../chatScroll.js";
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -393,7 +394,7 @@ export function ChatView({
    *  `/sessions/new` may show the start prompt; `/sessions/:id` always represents
    *  a real session whose empty transcript is still being fetched. */
   draftRoute: boolean;
-  /** Identity of the open session; switching it re-pins to latest + resets the window. */
+  /** Identity of the open session; used to preserve its window and reading position. */
   sessionKey: string | null;
   /** Focus view: hide thinking, tool cards, and interim assistant messages —
    *  leaving user prompts, each turn's final answer, and system notices. */
@@ -411,6 +412,8 @@ export function ChatView({
   const contentRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
   const [limit, setLimit] = useState(INITIAL_WINDOW);
+  const scrollMemory = useRef(new Map<string, ChatScrollMemory>());
+  const limitRef = useRef(limit);
   // Mirror `pinned` into a ref so the layout-effect and ResizeObserver below —
   // which run outside React's render cycle — can read the current value without
   // being re-subscribed on every scroll tick.
@@ -450,14 +453,41 @@ export function ChatView({
   // filtered list so the counts and the visible rows stay in agreement.
   const source = useMemo(() => (collapsed ? collapseInterim(entries) : entries), [collapsed, entries]);
 
-  // Switching sessions must start pinned to that session's latest message with a
-  // fresh window — not inherit the previous session's scroll position or an
-  // expanded "show earlier" limit (which would mount far more rows than intended).
+  // Remember a session's distance from the bottom rather than its absolute
+  // scrollTop. If content grows while it is in the background, returning still
+  // lands on the same passage. A first visit starts at the latest message.
   const total = source.length;
-  useEffect(() => {
-    setLimit(INITIAL_WINDOW);
-    setPinnedState(true);
+  useLayoutEffect(() => {
+    const remembered = scrollMemory.current.get(sessionKey ?? "new");
+    const nextLimit = remembered?.limit ?? INITIAL_WINDOW;
+    limitRef.current = nextLimit;
+    setLimit(nextLimit);
+    setPinnedState(remembered?.pinned ?? true);
+    const frame = requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = restoredChatScrollTop(el, remembered);
+    });
+    return () => cancelAnimationFrame(frame);
   }, [sessionKey, setPinnedState]);
+
+  const rememberScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const isPinned = atBottom();
+    setPinnedState(isPinned);
+    scrollMemory.current.set(
+      sessionKey ?? "new",
+      captureChatScroll(el, isPinned, limitRef.current),
+    );
+  }, [atBottom, sessionKey, setPinnedState]);
+
+  const showEarlier = useCallback(() => {
+    setLimit((current) => {
+      const next = current + WINDOW_STEP;
+      limitRef.current = next;
+      return next;
+    });
+  }, []);
 
   // Keep the view pinned to the newest line as content grows — streamed tool
   // cards, the working row, an assistant reply landing, an inline approval card.
@@ -490,7 +520,7 @@ export function ChatView({
 
   return (
     <div className="chat-wrap">
-      <div className="chat" ref={scrollRef} onScroll={() => setPinnedState(atBottom())}>
+      <div className="chat" ref={scrollRef} onScroll={rememberScroll}>
         <div className="chat-inner" ref={contentRef}>
           {total === 0 && !draftRoute && (
             <div className="chat-loading" role="status" aria-live="polite">
@@ -515,7 +545,7 @@ export function ChatView({
           {start > 0 && (
             <button
               className="load-earlier"
-              onClick={() => setLimit((n) => n + WINDOW_STEP)}
+              onClick={showEarlier}
             >
               ↑ Show earlier messages ({start} more)
             </button>
