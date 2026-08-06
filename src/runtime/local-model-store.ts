@@ -67,14 +67,19 @@ function configPath(dir: string): string {
 
 /** Normalize a provider id the way every path expects (slug-safe). */
 export function normalizeProviderId(id: string): string {
-  return (
-    String(id ?? "")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, "-") // non-slug runs collapse to a single dash
-      .replace(/^-+|-+$/g, "") // no leading/trailing dashes
-      || "local"
-  );
+  let normalized = "";
+  let pendingDash = false;
+  for (const character of String(id ?? "").trim().toLowerCase()) {
+    const isSlugCharacter = (character >= "a" && character <= "z") || (character >= "0" && character <= "9");
+    if (isSlugCharacter) {
+      if (pendingDash && normalized) normalized += "-";
+      normalized += character;
+      pendingDash = false;
+    } else {
+      pendingDash = true;
+    }
+  }
+  return normalized || "local";
 }
 
 function normalizeModel(raw: any): LocalModel | null {

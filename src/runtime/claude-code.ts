@@ -490,6 +490,7 @@ function claudeDiscoveryRoots(): string[] {
 }
 
 function findClaudeTranscript(sessionId: string): string | undefined {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(sessionId)) return undefined;
   const fileName = `${sessionId}.jsonl`;
   for (const root of claudeProjectDirs()) {
     const projects = path.join(root, "projects");

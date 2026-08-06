@@ -11,6 +11,7 @@ import path from "node:path";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import {
   extractAuthCode,
+  escapeOAuthHtml,
   isNativeOAuthProvider,
   nativeOAuthProviderIds,
   loginModelOAuth,
@@ -69,6 +70,13 @@ await check("extractAuthCode handles a redirect URL, code#state, and a raw code"
   assert.equal(extractAuthCode("https://localhost:1455/auth/callback?code=abc123&state=xyz"), "abc123");
   assert.equal(extractAuthCode("thecode#thestate"), "thecode");
   assert.equal(extractAuthCode("  plaincode  "), "plaincode");
+});
+
+await check("OAuth callback HTML escapes provider-controlled text", async () => {
+  assert.equal(
+    escapeOAuthHtml(`<script>alert("x")</script> & 'quoted'`),
+    "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;quoted&#39;",
+  );
 });
 
 await check("Anthropic auth-code login (manual paste) exchanges + persists an oauth credential", async () => {

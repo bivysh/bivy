@@ -21,12 +21,20 @@ import { MODEL_OAUTH_PROVIDERS } from "./oauth/model-oauth-providers.js";
  */
 export function isModelAuthError(raw: string): boolean {
   const text = String(raw || "");
+  const lower = text.toLowerCase();
   // Generic: an explicit 401, "unauthorized"/"authentication", or a
   // missing/invalid bearer/api-key/token phrase.
   if (/\b401\b|unauthorized|authentication|invalid x-api-key|(missing|no|invalid)[\s\S]*(bearer|api[\s_-]?key|token)/i.test(text))
     return true;
   // Codex app-server: websocket connect rejected with an HTTP 401/403.
-  if (/failed to connect to websocket[\s\S]*http error:\s*40[13]/i.test(text)) return true;
+  const websocketFailure = lower.indexOf("failed to connect to websocket");
+  if (websocketFailure >= 0) {
+    const httpError = lower.indexOf("http error:", websocketFailure + 30);
+    if (httpError >= 0) {
+      const status = lower.slice(httpError + "http error:".length).trimStart().slice(0, 3);
+      if (status === "401" || status === "403") return true;
+    }
+  }
   return false;
 }
 

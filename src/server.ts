@@ -4,9 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypto";
+import { randomUUID, randomBytes, timingSafeEqual, createHash, createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { rateLimit } from "express-rate-limit";
 import { WebSocketServer, WebSocket } from "ws";
 import { listRuntimes, catalogRuntimes, cliInstallSpec, invalidateCliProbeCache, isCliAgentId, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
@@ -73,7 +74,7 @@ import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
 import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
-import { parseRepo, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
+import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
   GitHubTaskPoller,
@@ -1930,7 +1931,9 @@ interface RunTerminalSpec {
 // `bivy sessions` and the app's "Running agents" drawer.
 function defaultRunName(agent: string | undefined, command: string, workspace: string): string {
   const base = agent || command.split(/\s+/)[0]?.split(/[\\/]/).pop() || "session";
-  const dir = workspace.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  let trimmedWorkspace = workspace;
+  while (trimmedWorkspace.endsWith("/") || trimmedWorkspace.endsWith("\\")) trimmedWorkspace = trimmedWorkspace.slice(0, -1);
+  const dir = trimmedWorkspace.split(/[\\/]/).pop();
   return dir ? `${base} · ${dir}` : base;
 }
 
@@ -4328,9 +4331,12 @@ type GithubAppVaultResponse = { vaults?: GithubAppVaultRow[]; wrappedKeys?: Gith
 // restart — one redundant push after a restart is the same tolerance the
 // model-auth vault above already accepts.
 const lastPushedGithubAppFingerprint = new Map<string, string>();
+const githubAppFingerprintKey = randomBytes(32);
 
 function fingerprintGithubAppContent(record: GitHubAppRecord, privateKeyPem: string): string {
-  return createHash("sha256")
+  // This is a process-local change fingerprint, not password storage. Keying it
+  // also prevents the digest from becoming a reusable verifier for the PEM.
+  return createHmac("sha256", githubAppFingerprintKey)
     .update(JSON.stringify({ privateKeyPem, slug: record.slug, name: record.name, owner: record.owner, ownerType: record.ownerType, hookId: record.hookId }))
     .digest("hex");
 }
@@ -7206,7 +7212,7 @@ async function deleteSessionFile(opts: { id?: string; path?: string; fallbackAct
       try {
         await runtimeHost.deleteSession(getRuntime(runtimeId), deletedSessionId, hint);
       } catch (error) {
-        console.warn(`[session.delete] runtime ${runtimeId} could not forget ${deletedSessionId}:`, error);
+        console.warn("[session.delete] runtime could not forget session", { runtimeId, deletedSessionId, error });
       }
     }
   }
@@ -9176,6 +9182,22 @@ approvals.onRequest((request: ApprovalRequest) => {
 
 const app = express();
 app.use(express.json({ limit: "25mb" }));
+// Bound request amplification on the node API. Authentication remains the
+// security boundary; these limits constrain brute force and expensive repeated
+// operations if a local process or paired device behaves maliciously.
+const apiRateLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 600,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const sensitiveRateLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+app.use("/api", apiRateLimiter);
 // Defense-in-depth Content-Security-Policy for every node response. The node
 // hosts no web UI — only the JSON API and a couple of minimal, self-owned
 // browser pages (OAuth callback, GitHub App manifest) — so a strict default of
@@ -9216,7 +9238,7 @@ app.get("/healthz", (_req, res) => {
 // redirect from the provider (no auth header), so it must precede the auth
 // middleware. The unguessable `state` (minted server-side when the user starts
 // the flow) is the CSRF guard.
-app.get("/api/integrations/oauth/callback", async (req, res) => {
+app.get("/api/integrations/oauth/callback", sensitiveRateLimiter, async (req, res) => {
   const state = String(req.query.state ?? "");
   const code = String(req.query.code ?? "");
   const oauthError = String(req.query.error ?? "");
@@ -9243,7 +9265,7 @@ app.get("/api/integrations/oauth/callback", async (req, res) => {
 // like the bootstrap endpoint (loopback + the 0600 per-process bootstrap secret,
 // so other local users on a shared host can't harvest tokens). Placed before the
 // /api auth middleware because the helper is a bare process with no device token.
-app.get("/api/git-credential", async (req, res) => {
+app.get("/api/git-credential", sensitiveRateLimiter, async (req, res) => {
   const ctx = resolveAuth(identity, req);
   if (!ctx.loopback) return res.status(403).json({ error: "git-credential is loopback-only" });
   if (!bootstrapSecretAccepted(req)) return res.status(403).json({ error: "bootstrap secret required" });
@@ -9291,7 +9313,7 @@ function bootstrapSecretAccepted(req: express.Request): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-app.post("/api/auth/bootstrap", (req, res) => {
+app.post("/api/auth/bootstrap", sensitiveRateLimiter, (req, res) => {
   const ctx = resolveAuth(identity, req);
   if (!ctx.loopback) return res.status(403).json({ error: "Bootstrap is loopback-only" });
   if (!bootstrapSecretAccepted(req)) {
@@ -10650,9 +10672,12 @@ function persistConnectedGithubToken(token: string): void {
 // repo). One GitHub call; returns null on a non-OK response so the caller can
 // decide whether to retry with a different token.
 async function fetchRepoBranchNames(owner: string, repo: string, token: string | undefined): Promise<{ name: string }[] | null> {
+  if (!isGitHubSlugPart(owner) || !isGitHubSlugPart(repo)) return null;
   const headers: Record<string, string> = { accept: "application/vnd.github+json", "user-agent": "bivy" };
   if (token) headers.authorization = `Bearer ${token}`;
-  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/branches?per_page=100`, { headers });
+  const safeOwner = encodeURIComponent(owner);
+  const safeRepo = encodeURIComponent(repo);
+  const res = await fetch(`https://api.github.com/repos/${safeOwner}/${safeRepo}/branches?per_page=100`, { headers });
   if (!res.ok) return null;
   const raw = (await res.json().catch(() => [])) as Array<Record<string, unknown>>;
   return (Array.isArray(raw) ? raw : []).map((b) => ({ name: String(b.name ?? "") })).filter((b) => b.name);

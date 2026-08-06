@@ -26,14 +26,22 @@ export interface ParsedRepo {
 
 /** Parse "owner/repo" (also tolerates a full github.com URL or trailing .git). */
 export function parseRepo(input: string): ParsedRepo | undefined {
-  const cleaned = String(input)
-    .trim()
-    .replace(/^https?:\/\/github\.com\//i, "")
-    .replace(/^git@github\.com:/i, "")
-    .replace(/\.git$/i, "")
-    .replace(/\/+$/, "");
-  const m = cleaned.match(/^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/);
-  return m ? { owner: m[1], repo: m[2], slug: `${m[1]}/${m[2]}` } : undefined;
+  let cleaned = String(input).trim();
+  const lower = cleaned.toLowerCase();
+  if (lower.startsWith("https://github.com/")) cleaned = cleaned.slice("https://github.com/".length);
+  else if (lower.startsWith("http://github.com/")) cleaned = cleaned.slice("http://github.com/".length);
+  else if (lower.startsWith("git@github.com:")) cleaned = cleaned.slice("git@github.com:".length);
+  if (cleaned.toLowerCase().endsWith(".git")) cleaned = cleaned.slice(0, -4);
+  while (cleaned.endsWith("/")) cleaned = cleaned.slice(0, -1);
+  const parts = cleaned.split("/");
+  if (parts.length !== 2 || !parts.every(isGitHubSlugPart)) return undefined;
+  const [owner, repo] = parts;
+  return { owner, repo, slug: `${owner}/${repo}` };
+}
+
+/** GitHub owner/repository names accepted in API paths. */
+export function isGitHubSlugPart(value: string): boolean {
+  return value.length > 0 && value.length <= 100 && /^[A-Za-z0-9._-]+$/.test(value);
 }
 
 /** Parse a GitHub owner/repo slug from a git remote URL. */

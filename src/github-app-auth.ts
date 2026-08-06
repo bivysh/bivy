@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { createSign } from "node:crypto";
+import { isGitHubSlugPart } from "./repo-workspace.js";
 
 /**
  * GitHub App installation tokens (M2, flavor A: user-owned app, key on the node).
@@ -78,10 +79,13 @@ export async function resolveInstallationId(opts: {
   nowSec?: number;
   fetchImpl?: FetchLike;
 }): Promise<string | undefined> {
+  if (!isGitHubSlugPart(opts.owner) || !isGitHubSlugPart(opts.repo)) return undefined;
   const nowSec = opts.nowSec ?? Math.floor(Date.now() / 1000);
   const jwt = createAppJwt(opts.appId, opts.privateKeyPem, nowSec);
   const doFetch = opts.fetchImpl ?? fetch;
-  const res = await doFetch(`https://api.github.com/repos/${opts.owner}/${opts.repo}/installation`, {
+  const owner = encodeURIComponent(opts.owner);
+  const repo = encodeURIComponent(opts.repo);
+  const res = await doFetch(`https://api.github.com/repos/${owner}/${repo}/installation`, {
     headers: {
       authorization: `Bearer ${jwt}`,
       accept: "application/vnd.github+json",
@@ -132,5 +136,4 @@ export interface GitHubAppConfig {
   appId: string;
   privateKeyPem: string;
 }
-
 

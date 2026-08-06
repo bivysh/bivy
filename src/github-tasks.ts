@@ -252,7 +252,9 @@ export function parseBivyDirectives(body: string | undefined): { runtimeId?: str
 }
 
 async function gh(cfg: GitHubTaskConfig, method: string, apiPath: string, body?: unknown): Promise<Response> {
-  return fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}${apiPath}`, {
+  const owner = encodeURIComponent(cfg.owner);
+  const repo = encodeURIComponent(cfg.repo);
+  return fetch(`https://api.github.com/repos/${owner}/${repo}${apiPath}`, {
     method,
     headers: {
       authorization: `Bearer ${cfg.token}`,
