@@ -314,10 +314,15 @@ const historyImport = new ProtocolRuntime({
 assert.equal(historyImport.capabilities.forkHistoryImport, true, "writeHistory => capability on");
 const imported = await historyImport.importHistoryForFork(
   [{ role: "user", text: "port to rust" }, { role: "assistant", text: "on it" }],
-  { workspace: "/w", cwd: "/w/fork" },
+  { workspace: "/w", cwd: "/w/fork", model: { provider: "provider", id: "model" } },
 );
 assert.deepEqual(imported, { sessionFile: "roll-1", id: "roll-1" }, "delegates to writeHistory's result");
 assert.deepEqual((seen as { history: unknown }).history, [{ role: "user", text: "port to rust" }, { role: "assistant", text: "on it" }]);
+assert.deepEqual((seen as { ctx: unknown }).ctx, {
+  workspace: "/w",
+  cwd: "/w/fork",
+  model: { provider: "provider", id: "model" },
+}, "the generic protocol seam forwards destination context without agent-specific branching");
 
 // --- Credential preflight ---------------------------------------------------
 // A runtime whose preflight reports no usable credential must surface an
