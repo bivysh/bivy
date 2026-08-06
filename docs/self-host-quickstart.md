@@ -193,8 +193,8 @@ will start Docker; web push remains optional.
 | Variable | Code default | Wired into `deploy/docker-compose.yml`? |
 | --- | --- | --- |
 | `RELAY_MAX_FRAME_BYTES` | 262144 (256 KiB) | Yes — compose sets it to `1048576` (1 MiB) unless overridden. |
-| `RELAY_MAX_MESSAGES_PER_MINUTE` (legacy) | none (fallback only) | Yes — compose sets `120`. Only used as a fallback for client sockets; see below. |
-| `RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE` | 600 | **No** — add it to the `relay` service's `environment:` block yourself if you need to change it. |
+| `RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE` | 600 | Yes — compose sets `600`. Per-minute message cap on phone/browser sockets; keep it well above a normal session's burst or the app shows "Rate limit exceeded". |
+| `RELAY_MAX_MESSAGES_PER_MINUTE` (legacy, deprecated) | none (fallback only) | No longer set by compose. Only used as a fallback for the client limit when `RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE` is unset; explicitly ignored for node sockets. |
 | `RELAY_MAX_NODE_MESSAGES_PER_MINUTE` | 6000 | **No** — same as above. Agent sessions can legitimately stream hundreds of events/minute; don't reuse the legacy client limit for nodes. |
 | `RELAY_MAX_CONNECTIONS_PER_IP` | 50 | Yes. |
 | `RELAY_IDLE_TIMEOUT_MS` | 120000 | Yes. |
