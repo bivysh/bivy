@@ -245,6 +245,44 @@ describe("RelayTransport pairing rejection recovery", () => {
     expect(statuses.at(-1)).toBe("online");
   });
 
+  it("coalesces the resync burst when a flapping node replays peer.online (rate-limit guard)", async () => {
+    // The relay re-sends peer.online to this client every time the node
+    // re-attaches. A flapping node used to make the client re-fire its whole
+    // sessions/models/runtimes/terminals refresh burst on each one, piling
+    // counted frames onto this single socket until the relay's per-socket
+    // limiter closed it with "Rate limit exceeded" — with the user never having
+    // sent anything. The refresh must fire once, then be throttled.
+    const { transport } = makeTransport();
+    const store = (transport as unknown as { store: ReturnType<typeof createLocalStore> }).store;
+    const roomKeyBytes = crypto.getRandomValues(new Uint8Array(32));
+    store.addKey("node-1", b64url(roomKeyBytes)); // seed a room key → straight to the curKey branch
+
+    await transport.connect();
+    const ws = FakeWS.instances[0];
+
+    ws.emit({ t: "ready" }); // first link-ready: refresh burst fires
+    await settle();
+    for (let i = 0; i < 5; i++) {
+      ws.emit({ t: "peer.online", clients: 1 }); // node flaps on the SAME socket
+      await settle();
+    }
+
+    // Decrypt everything the client sent and count refresh bursts by sessions.list.
+    const roomKey = await importRoomKey(roomKeyBytes);
+    const reassemble = createFrameReassembler();
+    let sessionsListCount = 0;
+    for (const raw of ws.sent) {
+      const env = JSON.parse(raw) as { t?: string; p?: string };
+      if (env.t !== "frame" || typeof env.p !== "string") continue;
+      const full = reassemble(env as never);
+      if (full === null) continue;
+      const frame = JSON.parse(await open(roomKey, full)) as { data?: { kind?: string } };
+      if (frame.data?.kind === "sessions.list") sessionsListCount++;
+    }
+
+    expect(sessionsListCount).toBe(1); // one refresh despite six link-ready events
+  });
+
   it("stops immediately (no retry) on a permanent rejection and shows the reason", async () => {
     const { transport, statuses, errors } = makeTransport();
     await transport.connect();
