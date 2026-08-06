@@ -1100,6 +1100,39 @@ describe("SessionStore", () => {
     expect(store.getState().activeRuntimeId).toBeNull();
   });
 
+  it("keeps the agent pill and picker on the active session when runtimes refresh", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "session.history",
+      requestId: "r1",
+      sessionId: "s1",
+      runtimeId: "opencode",
+      agentName: "OpenCode",
+      messages: [],
+    });
+
+    // Opening the agent sheet requests runtimes.list. `current` is the default
+    // for new sessions (Pi), while activeRuntimeId is the agent this session
+    // actually uses (OpenCode). The refresh must not change the pill to Pi while
+    // the sheet correctly keeps its checkmark on OpenCode.
+    store.apply({
+      type: "runtimes.list",
+      current: { id: "pi", displayName: "Pi" },
+      activeAgent: "opencode",
+      runtimes: [
+        { id: "opencode", displayName: "OpenCode" },
+        { id: "pi", displayName: "Pi" },
+      ],
+    });
+
+    const state = store.getState();
+    expect(state.activeRuntimeId).toBe("opencode");
+    expect(state.currentAgentName).toBe("OpenCode");
+    // The node default may still be remembered for a future draft without
+    // leaking into the active session's display.
+    expect(state.selectedAgentId).toBe("pi");
+  });
+
   it("beginOpen primes the GitHub pill from the known row so it shows without waiting on history", () => {
     const store = new SessionStore();
     store.apply({
