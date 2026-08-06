@@ -866,6 +866,75 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
   },
 };
 
+/** User-defined agents persisted through cli.json's env block. Custom entries
+ * inherit a built-in spec and override only serializable launch metadata. */
+type CustomAgentConfig = {
+  id: string;
+  label?: string;
+  extends: CliAgentId;
+  command?: string;
+  args?: string[];
+  jsonArgs?: string[];
+  parserId?: string;
+  promptMode?: ProcessPromptMode;
+  hidden?: boolean;
+};
+
+const RESERVED_CUSTOM_AGENT_IDS = new Set([
+  "pi", "claude", "claude-code", "claude-code-sdk", "generic-cli",
+  "codex-approvals", "openclaw", "bivy-agent-protocol", "acp",
+]);
+
+function customAgentSpecs(): Map<string, CliAgentSpec> {
+  const out = new Map<string, CliAgentSpec>();
+  const raw = process.env.BIVY_CUSTOM_AGENTS?.trim();
+  if (!raw) return out;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return out;
+    for (const value of parsed) {
+      if (!value || typeof value !== "object") continue;
+      const item = value as Partial<CustomAgentConfig>;
+      const id = typeof item.id === "string" ? item.id.trim().toLowerCase() : "";
+      if (!/^[a-z][a-z0-9-]{1,47}$/.test(id) || id in CLI_AGENT_SPECS || RESERVED_CUSTOM_AGENT_IDS.has(id) || out.has(id)) continue;
+      if (typeof item.extends !== "string" || !(item.extends in CLI_AGENT_SPECS)) continue;
+      const base = CLI_AGENT_SPECS[item.extends as CliAgentId];
+      const strings = (v: unknown): string[] | undefined => Array.isArray(v) && v.every((x) => typeof x === "string") ? v : undefined;
+      out.set(id, {
+        ...base,
+        displayName: typeof item.label === "string" && item.label.trim() ? item.label.trim() : id,
+        command: typeof item.command === "string" && item.command.trim() ? item.command.trim() : base.command,
+        ...(strings(item.args) ? { args: strings(item.args) } : {}),
+        ...(strings(item.jsonArgs) ? { jsonArgs: strings(item.jsonArgs) } : {}),
+        ...(typeof item.parserId === "string" ? { parserId: item.parserId } : {}),
+        ...(item.promptMode === "stdin" || item.promptMode === "argv" ? { promptMode: item.promptMode } : {}),
+        hidden: item.hidden === true,
+        supportTier: "experimental",
+        testedVersion: undefined,
+        install: undefined,
+      });
+    }
+  } catch {
+    // Invalid operator configuration is ignored; built-in agents remain usable.
+  }
+  return out;
+}
+
+function effectiveCliSpecs(): Map<string, CliAgentSpec> {
+  return new Map<string, CliAgentSpec>([
+    ...Object.entries(CLI_AGENT_SPECS),
+    ...customAgentSpecs(),
+  ]);
+}
+
+function cliSpec(id: string): CliAgentSpec | undefined {
+  return effectiveCliSpecs().get(id);
+}
+
+function isEffectiveCliAgentId(id: string): boolean {
+  return cliSpec(id) !== undefined;
+}
+
 export function isCliAgentId(id: string): id is CliAgentId {
   return Object.prototype.hasOwnProperty.call(CLI_AGENT_SPECS, id);
 }
@@ -883,8 +952,8 @@ export const CLI_AGENT_IDS = Object.keys(CLI_AGENT_SPECS) as CliAgentId[];
  * `prefix` is the node's npm/bin prefix (BIVY_NPM_GLOBAL_PREFIX, default ~/.local).
  * `{bin}` in a curl `shell` expands to `<prefix>/bin`.
  */
-export function cliInstallSpec(id: CliAgentId, prefix: string): { command: string; args: string[]; display: string } | undefined {
-  const install = CLI_AGENT_SPECS[id].install;
+export function cliInstallSpec(id: string, prefix: string): { command: string; args: string[]; display: string } | undefined {
+  const install = cliSpec(id)?.install;
   if (!install) return undefined;
   if (install.kind === "npm") {
     return {
@@ -953,7 +1022,7 @@ export function cliAgentManifest(): Array<{
  * an operator correct a CLI's flags for a version we haven't pinned without a code
  * change (the beta CLI agents ship best-effort defaults). Malformed = ignored.
  */
-function cliArgsOverride(id: CliAgentId): string[] | undefined {
+function cliArgsOverride(id: string): string[] | undefined {
   const raw = process.env[`BIVY_${id.toUpperCase()}_ARGS`]?.trim();
   if (!raw) return undefined;
   try {
@@ -971,7 +1040,7 @@ function cliArgsOverride(id: CliAgentId): string[] | undefined {
  * the spec's built-in template. Returns undefined when the agent has no known
  * resume form — which keeps the catalog honest (resume reported off).
  */
-function cliResumeTemplate(id: CliAgentId): string[] | undefined {
+function cliResumeTemplate(id: string): string[] | undefined {
   const raw = process.env[`BIVY_${id.toUpperCase()}_RESUME_TEMPLATE`]?.trim();
   if (raw) {
     try {
@@ -981,7 +1050,7 @@ function cliResumeTemplate(id: CliAgentId): string[] | undefined {
       // fall through to the spec default
     }
   }
-  return CLI_AGENT_SPECS[id].resume?.template;
+  return cliSpec(id)?.resume?.template;
 }
 
 /**
@@ -990,8 +1059,8 @@ function cliResumeTemplate(id: CliAgentId): string[] | undefined {
  * normalized to a full ModelInfo (the id is the CLI's own model name). Returns an
  * empty list when the agent has no model config and no override.
  */
-function cliModelList(id: CliAgentId): ModelInfo[] {
-  const spec = CLI_AGENT_SPECS[id];
+function cliModelList(id: string): ModelInfo[] {
+  const spec = cliSpec(id)!;
   let entries = spec.model?.models;
   const raw = process.env[`BIVY_${id.toUpperCase()}_MODELS`]?.trim();
   if (raw) {
@@ -1023,8 +1092,8 @@ function cliModelList(id: CliAgentId): ModelInfo[] {
  * agent has no model flag or an empty list (so the runtime honestly reports
  * modelSelection off). The chosen model id is passed as the value of `spec.model.flag`.
  */
-function cliModelConfig(id: CliAgentId): ProcessModelConfig | undefined {
-  const spec = CLI_AGENT_SPECS[id];
+function cliModelConfig(id: string): ProcessModelConfig | undefined {
+  const spec = cliSpec(id)!;
   if (!spec.model) return undefined;
   const models = cliModelList(id);
   if (!models.length) return undefined;
@@ -1040,8 +1109,8 @@ function cliModelConfig(id: CliAgentId): ProcessModelConfig | undefined {
 const USAGE_PARSERS = new Set(["codex-json", "gemini-json", "goose-stream-json"]);
 
 /** Whether a CLI agent runs a usage-emitting structured parser this launch. */
-function cliUsageReporting(id: CliAgentId): boolean {
-  const parserId = process.env.BIVY_AGENT_PARSER || CLI_AGENT_SPECS[id].parserId;
+function cliUsageReporting(id: string): boolean {
+  const parserId = process.env.BIVY_AGENT_PARSER || cliSpec(id)?.parserId;
   return Boolean(parserId) && USAGE_PARSERS.has(parserId!) && process.env.BIVY_AGENT_STRUCTURED !== "0";
 }
 
@@ -1050,8 +1119,8 @@ function cliUsageReporting(id: CliAgentId): boolean {
  * has no reasoning-effort flag. `BIVY_<ID>_THINKING` (JSON
  * `{levels,template,insertAt?,default?}`) overrides/enables it for any agent.
  */
-function cliThinkingConfig(id: CliAgentId): ProcessThinkingConfig | undefined {
-  let cfg = CLI_AGENT_SPECS[id].thinking;
+function cliThinkingConfig(id: string): ProcessThinkingConfig | undefined {
+  let cfg = cliSpec(id)?.thinking;
   const raw = process.env[`BIVY_${id.toUpperCase()}_THINKING`]?.trim();
   if (raw) {
     try {
@@ -1139,7 +1208,7 @@ export function invalidateCliProbeCache(): void {
 // appearing in help would mask a genuinely-missing resume flag.
 const RESUME_HINT = /resume|continue|restore|session|thread|^-s$|^-r$|^-c$|^--id$/i;
 /** The resume-indicative flag/subcommand tokens of a resume template. */
-function resumeTokensFor(id: CliAgentId): string[] {
+function resumeTokensFor(id: string): string[] {
   const tmpl = cliResumeTemplate(id) ?? [];
   return tmpl
     .map((t) => t.replace(/=\{[a-z]+\}/g, "").replace(/\{[a-z]+\}/g, "").trim())
@@ -1168,8 +1237,8 @@ export function refineCapabilitiesFromHelp(
   return { resume, modelSelection };
 }
 
-function cliAgentInfo(id: CliAgentId): RuntimeInfo {
-  const spec = CLI_AGENT_SPECS[id];
+function cliAgentInfo(id: string): RuntimeInfo {
+  const spec = cliSpec(id)!;
   const installed = commandAvailable(spec.command);
   const npmPrefix = process.env.BIVY_NPM_GLOBAL_PREFIX || "~/.local";
   const installCommand = cliInstallSpec(id, npmPrefix);
@@ -1485,8 +1554,8 @@ function acpRuntimeFromEnv(credsDir?: string): ProtocolRuntimeOptions | null {
  * probe the opt-in capability refinement uses, and fail CLOSED — a missing binary
  * or unreadable help keeps the agent on the honest pipe path.
  */
-function acpSupportedByBinary(id: CliAgentId): boolean {
-  const spec = CLI_AGENT_SPECS[id];
+function acpSupportedByBinary(id: string): boolean {
+  const spec = cliSpec(id)!;
   if (!spec.acp) return false;
   if (!commandAvailable(spec.command)) return false;
   const help = probeHelpText(spec.command);
@@ -1508,8 +1577,8 @@ function acpSupportedByBinary(id: CliAgentId): boolean {
  * Both the catalog (cliAgentInfo) and the launch path (makeCliRuntime) call this,
  * so what the picker advertises and what actually starts cannot disagree.
  */
-function prefersAcp(id: CliAgentId): boolean {
-  const spec = CLI_AGENT_SPECS[id];
+function prefersAcp(id: string): boolean {
+  const spec = cliSpec(id)!;
   if (!spec.acp) return false;
   const override = process.env[`BIVY_${id.toUpperCase()}_ACP`];
   if (override === "0") return false;
@@ -1551,7 +1620,7 @@ export function resolveCliExecutionMode(input: {
   return "pipe";
 }
 
-function requestedCliExecutionMode(id: CliAgentId): string | undefined {
+function requestedCliExecutionMode(id: string): string | undefined {
   return process.env[`BIVY_${id.toUpperCase()}_MODE`] ?? process.env.BIVY_AGENT_MODE;
 }
 
@@ -1817,7 +1886,7 @@ function runtimeProtection(runtime: RuntimeInfo): Pick<RuntimeInfo, "protectionL
   // in their own process boundary. The governed Codex path has both native
   // sandbox flags and Bivy interception; label the stronger containment source.
   const nativeSandbox = runtime.id === "claude-code-sdk" || runtime.id === "codex-approvals"
-    || (isCliAgentId(runtime.id) && Boolean(CLI_AGENT_SPECS[runtime.id].composeArgs));
+    || (isEffectiveCliAgentId(runtime.id) && Boolean(cliSpec(runtime.id)?.composeArgs));
   if (nativeSandbox) return {
     protectionLevel: "native-sandbox",
     protectionLabel: "Native sandbox",
@@ -1841,14 +1910,16 @@ function runtimeProtection(runtime: RuntimeInfo): Pick<RuntimeInfo, "protectionL
 }
 
 export function listRuntimes(currentId?: string): (RuntimeInfo & { current: boolean })[] {
-  return RUNTIME_CATALOG
+  const custom = [...customAgentSpecs().keys()].map((id) => cliAgentInfo(id));
+  const pickerIds = new Set([...PICKER_RUNTIME_IDS, ...custom.filter((r) => !cliSpec(r.id)?.hidden).map((r) => r.id)]);
+  return [...RUNTIME_CATALOG, ...custom]
     // Keep the current runtime visible even if hidden, so a session pinned to a
     // hidden agent (e.g. someone running BIVY_RUNTIME=goose) still renders its
     // selection instead of showing an empty picker.
-    .filter((runtime) => PICKER_RUNTIME_IDS.has(runtime.id) || runtime.id === currentId)
+    .filter((runtime) => pickerIds.has(runtime.id) || runtime.id === currentId)
     .map((runtime) => {
       if (runtime.id === "generic-cli") return genericCliInfo();
-      if (isCliAgentId(runtime.id)) return cliAgentInfo(runtime.id);
+      if (isEffectiveCliAgentId(runtime.id)) return cliAgentInfo(runtime.id);
       if (runtime.id === "codex-approvals") return codexApprovalsInfo();
       if (runtime.id === "openclaw") return openClawInfo();
       if (runtime.id === "claude-code-sdk") return claudeCodeInfo();
@@ -1905,7 +1976,7 @@ export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
     default:
       // Every CLI agent in CLI_AGENT_SPECS is dispatched here as data — no per-id
       // case to maintain. Anything that isn't a known CLI agent throws below.
-      if (isCliAgentId(id)) return makeCliRuntime(id, options);
+      if (isEffectiveCliAgentId(id)) return makeCliRuntime(id, options);
       throw new Error(`Unknown or unavailable BIVY_RUNTIME "${id}". Available runtimes: pi, openclaw/codex/opencode/aider/hermes/goose/gemini/qwen/cline/crush/cursor/copilot/grok/amp/auggie/droid/continue/kilocode/rovodev/codebuff (when their CLI is installed), generic-cli (when BIVY_AGENT_COMMAND is set), claude-code-sdk (when @anthropic-ai/claude-agent-sdk is installed).`);
   }
 }
@@ -1916,8 +1987,8 @@ export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
  * effect-level governance, generic resume). Extracted from the makeRuntime switch
  * so adding an agent stays a pure-data change.
  */
-function makeCliRuntime(id: CliAgentId, options: RuntimeFactoryOptions): AgentRuntime {
-      const spec = CLI_AGENT_SPECS[id];
+function makeCliRuntime(id: string, options: RuntimeFactoryOptions): AgentRuntime {
+      const spec = cliSpec(id)!;
       if (!commandAvailable(spec.command)) throw new Error(`${spec.displayName} command not found on PATH: ${spec.command}`);
       // Resolve the mode before launching anything. ACP and structured parsing
       // remain data-driven; explicit mode overrides are fail-closed rather than
@@ -1943,7 +2014,7 @@ function makeCliRuntime(id: CliAgentId, options: RuntimeFactoryOptions): AgentRu
       // BIVY_<ID>_ARGS overrides the launch flags for a CLI version we haven't
       // pinned; else composeArgs (native sandbox) wins; else structured jsonArgs;
       // else the plain args.
-      const runArgs = cliArgsOverride(id as CliAgentId)
+      const runArgs = cliArgsOverride(id)
         ?? (spec.composeArgs
           ? spec.composeArgs({ structured, tier })
           : structured && spec.jsonArgs

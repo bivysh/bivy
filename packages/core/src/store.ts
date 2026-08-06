@@ -19,7 +19,8 @@ import type { AccountNode, EphemeralNodeConfig } from "./account.js";
 import type { InboxAdvert } from "./inbox.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml, extractRemoteImageUrls } from "./markdown.js";
-import { eventKind, normalizeEventType, toolCallId, toolInput, toolName } from "./tool-activity.js";
+import { eventKind, normalizeEventType, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
+import type { ToolCallDetail } from "./tool-format.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import { attachmentFromRef, contentThinking, contentToText, mergeToolInto, nextId, renderHistory, toolEntriesFromContent } from "./store-render.js";
 import {
@@ -145,6 +146,9 @@ export interface ToolActivity {
   input: unknown;
   status: ToolStatus;
   result?: string;
+  /** Node-computed normalized classification (see ToolCallDetail); when present,
+   *  formatTool renders from it instead of re-deriving from `input`. */
+  detail?: ToolCallDetail;
 }
 
 export type TranscriptRole = "user" | "assistant" | "system" | "thinking" | "error";
@@ -3301,6 +3305,7 @@ export class SessionStore {
           name: toolName(event as any),
           input: toolInput(event as any),
           status: "running",
+          detail: toolDetail(event as any),
         });
         this.setWorking(this.workingLabelForTool(event));
         return;
@@ -3310,6 +3315,7 @@ export class SessionStore {
           name: toolName(event as any),
           input: toolInput(event as any),
           status: "running",
+          detail: toolDetail(event as any),
         });
         this.setWorking(this.workingLabelForTool(event));
         return;

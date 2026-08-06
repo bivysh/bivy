@@ -5,7 +5,7 @@
 // `content`/`messages` into the TranscriptEntry[] the view renders; they hold no
 // state beyond the shared `nextId` sequence.
 
-import { isToolResultBlock, isToolUseBlock, toolCallId, toolInput, toolName } from "./tool-activity.js";
+import { isToolResultBlock, isToolUseBlock, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import type { AttachmentRef, PromptAttachment } from "./protocol.js";
 import type { ToolActivity, TranscriptEntry } from "./store.js";
@@ -108,6 +108,7 @@ export function toolEntriesFromContent(content: any): ToolActivity[] {
         name: toolName(block),
         input: toolInput(block),
         status: "running",
+        detail: toolDetail(block),
       });
     } else if (isToolResultBlock(block)) {
       const id = toolCallId(block);

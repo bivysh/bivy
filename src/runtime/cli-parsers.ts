@@ -22,6 +22,7 @@
 // Unit-tested with fixtures in test/runtime-cli-parsers.test.ts.
 
 import type { RuntimeEvent, RuntimeMessage, UsageSnapshot } from "./types.js";
+import { mapToolCall } from "./tool-call-map.js";
 
 export interface CliParser {
   /** Feed one complete stdout line; return normalized events to emit. */
@@ -118,8 +119,12 @@ class TurnAccumulator {
   }
 
   addToolUse(id: string, name: string, input: unknown, events: RuntimeEvent[]) {
-    this.toolUses.push({ type: "tool_use", id, name, input: input ?? {} });
-    events.push({ type: "tool_call", toolName: name, input, toolCallId: id });
+    // Attach a normalized ToolCallDetail (display-only) so the PWA renders this
+    // call the same way it renders every other agent's equivalent call. Absent
+    // when unrecognized — the block stays opaque and renders as before.
+    const detail = mapToolCall(name, input);
+    this.toolUses.push({ type: "tool_use", id, name, input: input ?? {}, ...(detail ? { detail } : {}) });
+    events.push({ type: "tool_call", toolName: name, input, toolCallId: id, ...(detail ? { detail } : {}) });
   }
 
   addToolResult(toolUseId: string, name: string, content: unknown, events: RuntimeEvent[]) {
