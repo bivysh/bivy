@@ -3743,27 +3743,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
     // changes into an E2E bundle the client carries to the destination node.
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
     const rec = resolveSession(msg.sessionId);
-    if (!rec || !rec.sessionFile) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found or not resumable on this node." });
+    if (!rec) {
+      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found on this node." });
       return;
     }
     try {
-      const src = rec.source ?? "";
-      const repoSlug = src.startsWith("repo:") ? src.slice(5) : src.startsWith("issue:") ? src.slice(6).replace(/#\d+$/, "") : undefined;
-      const forkRecord: ForkRecord = {
-        sourceSessionId: rec.id,
-        runtimeId: rec.runtimeId,
-        workspace: rec.workspace,
-        cwd: rec.session.cwd || rec.worktree?.path || rec.workspace,
-        worktree: rec.worktree?.path,
-        branch: rec.worktree?.branch,
-        repoSlug,
-        prUrl: rec.prUrl,
-        source: rec.source,
-        title: rec.session.getName(),
-        model: rec.session.getCurrentModel()?.name,
-        sandbox: rec.sandbox,
-      };
+      const forkRecord = forkRecordFor(rec);
       let dirtyPatch;
       if (rec.worktree) {
         try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort — omit dirty state */ }
@@ -3813,6 +3798,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
         // so cut an independent fork branch instead of trying to adopt it.
         worktree: msg.sameNode === true ? "fresh" : "adopt",
         detectPrereqs: true,
+        // A same-node cross-agent fork can safely retain a non-repo workspace.
+        // A cross-node path belongs to the source machine, so standUpFork keeps
+        // its destination default unless repo metadata lets it reconstruct one.
+        ...(msg.sameNode === true
+          ? { fallback: { workspace: bundle.record.workspace, cwd: bundle.record.cwd } }
+          : {}),
       });
       if (!outcome.ok) {
         relay?.sendEvent({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
@@ -3833,28 +3824,13 @@ const RELAY_COMMANDS: Record<string, Command> = {
     // (model may still change); any node/agent change goes through import above.
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
     const rec = resolveSession(msg.sessionId);
-    if (!rec || !rec.sessionFile) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found or not resumable on this node." });
+    if (!rec) {
+      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found on this node." });
       return;
     }
     try {
       const runtime = getRuntime(rec.runtimeId);
-      const src = rec.source ?? "";
-      const repoSlug = src.startsWith("repo:") ? src.slice(5) : src.startsWith("issue:") ? src.slice(6).replace(/#\d+$/, "") : undefined;
-      const forkRecord: ForkRecord = {
-        sourceSessionId: rec.id,
-        runtimeId: rec.runtimeId,
-        workspace: rec.workspace,
-        cwd: rec.session.cwd || rec.worktree?.path || rec.workspace,
-        worktree: rec.worktree?.path,
-        branch: rec.worktree?.branch,
-        repoSlug,
-        prUrl: rec.prUrl,
-        source: rec.source,
-        title: rec.session.getName(),
-        model: rec.session.getCurrentModel()?.name,
-        sandbox: rec.sandbox,
-      };
+      const forkRecord = forkRecordFor(rec);
       // Carry uncommitted work: capture from the SOURCE worktree; standUpFork
       // re-applies it into the fork's fresh worktree. Local git ops only.
       let dirtyPatch;
@@ -6259,6 +6235,34 @@ async function withRepoLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/** Build the runtime-neutral metadata carried by both local and remote forks. */
+function forkRecordFor(rec: SessionRecord): ForkRecord {
+  const src = rec.source ?? "";
+  const repoSlug = src.startsWith("repo:")
+    ? src.slice(5)
+    : src.startsWith("issue:")
+      ? src.slice(6).replace(/#\d+$/, "")
+      : undefined;
+  const currentModel = rec.session.getCurrentModel();
+  return {
+    sourceSessionId: rec.id,
+    runtimeId: rec.runtimeId,
+    workspace: rec.workspace,
+    cwd: rec.session.cwd || rec.worktree?.path || rec.workspace,
+    worktree: rec.worktree?.path,
+    branch: rec.worktree?.branch,
+    repoSlug,
+    prUrl: rec.prUrl,
+    source: rec.source,
+    title: rec.session.getName(),
+    model: currentModel?.name,
+    ...(currentModel?.provider && currentModel.id
+      ? { modelRef: { provider: String(currentModel.provider), id: String(currentModel.id) } }
+      : {}),
+    sandbox: rec.sandbox,
+  };
+}
+
 /**
  * Best-effort push of a fork SOURCE's branch to origin before the bundle leaves
  * the node, so a cross-node fork's committed work travels via origin (the
@@ -6287,7 +6291,7 @@ interface StandUpForkOptions {
   bundle: ForkBundle;
   /** Runtime to materialise into (may differ from the source for a cross-runtime fork). */
   targetRuntimeId: string;
-  /** Model to bind before the first turn; falls back to the node default. */
+  /** Explicit model to bind before the first turn; otherwise preserve it only for the same runtime. */
   model?: { provider: string; id: string };
   /** Full transcript URL, woven into a seeded (cross-runtime) continuation prompt. */
   transcriptUrl?: string;
@@ -6425,7 +6429,13 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
 
   // Materialise the transcript, then stand the session up — resume the imported
   // transcript (full) or a fresh session the caller seeds with plan.seedPrompt.
-  const plan = await materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd }, seed: { transcriptUrl: opts.transcriptUrl } });
+  // Preserve the source model only when the runtime itself is unchanged. A
+  // cross-agent fork must let the destination choose its own default unless the
+  // caller explicitly supplied a model valid for that target. Thread the final
+  // choice through the generic import context: adapters that need native model
+  // metadata (Pi/Claude) can serialize it; the others simply ignore it.
+  const targetModel = opts.model ?? (targetRuntimeId === bundle.record.runtimeId ? bundle.record.modelRef : undefined);
+  const plan = await materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd, model: targetModel }, seed: { transcriptUrl: opts.transcriptUrl } });
   const record = plan.kind === "resume"
     ? await createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false })
     : await createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false });
@@ -6449,7 +6459,7 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
   // Surface a non-fatal note when the source's uncommitted changes didn't apply
   // cleanly, so the fork isn't silently missing work-in-progress.
   if (dirtyWarning) broadcast({ type: "session.notice", sessionId: record.id, message: dirtyWarning });
-  await applyRequestedModel(record, opts.model ?? nodeDefaultModel() ?? undefined);
+  await applyRequestedModel(record, targetModel);
   persistSessionMetadata(record);
   scheduleAdvertise();
 

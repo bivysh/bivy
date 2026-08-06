@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiRuntime } from "../src/runtime/pi.js";
 import { ClaudeCodeRuntime } from "../src/runtime/claude-code.js";
@@ -145,12 +146,95 @@ async function run() {
       const first = replayed[0] as { content: unknown };
       assert.ok(String(first.content).includes("port this to rust"), "the original prose is preserved verbatim");
 
+      // Display readers accept many loose shapes; the actual Claude resume path
+      // does not. Verify the serializer emitted a provider-native assistant
+      // envelope rather than the bare `{role, content: string}` that broke Pi.
+      const transcriptFile = path.join(dstHome, "projects", "-home-user-ported", `${newId}.jsonl`);
+      const entries = fs.readFileSync(transcriptFile, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+      const assistant = entries.find((entry) => entry.type === "assistant")?.message;
+      assert.ok(Array.isArray(assistant?.content), "Claude assistant history uses content blocks");
+      assert.equal(assistant?.type, "message");
+      assert.equal(assistant?.stop_reason, "end_turn");
+      assert.equal(assistant?.usage?.output_tokens, 0, "synthetic Claude usage is complete and zero-cost");
+      assert.match(String(assistant?.model), /sonnet/, "Claude history records a valid target model");
+
       // Source pi session is untouched by the cross-runtime fork.
       assert.equal(pi.readMessages(sessionFile)!.length, 2, "source transcript is not mutated");
     } finally {
       if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = prev;
     }
+  });
+
+  // --- codex-like runtime -> pi: valid native pi messages, not bare prose ------
+  await test("cross-runtime fork into pi writes prompt-safe pi message shapes", async () => {
+    const source = {
+      id: "codex-approvals",
+      displayName: "Codex",
+      capabilities: { toolInterception: false, modelSelection: true, packages: false, resume: true, fork: true },
+      createSession: async () => { throw new Error("unused"); },
+      openSession: async () => { throw new Error("unused"); },
+      listSessions: async () => [],
+      readMessages: () => [
+        { role: "user", content: "change the license" },
+        { role: "assistant", content: [{ type: "text", text: "I recommend AGPL" }] },
+      ],
+    } as AgentRuntime;
+    const bundle = buildForkBundle({
+      runtime: source,
+      sessionFile: "codex-source",
+      record: record({ runtimeId: source.id }),
+      targetRuntimeId: "pi",
+    });
+
+    const piDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-fork-into-pi-"));
+    const sessions = path.join(piDir, "sessions");
+    fs.mkdirSync(sessions, { recursive: true });
+    const targetModel = { provider: "openai-codex", id: "gpt-5.6-sol" };
+    fs.writeFileSync(path.join(piDir, "settings.json"), JSON.stringify({
+      defaultProvider: targetModel.provider,
+      defaultModel: targetModel.id,
+    }));
+    const pi = new PiRuntime({ credsDir: piDir, piDir, sessionsDir: sessions });
+    const plan = await materializeFork({
+      bundle,
+      targetRuntime: pi,
+      // Cross-agent UI forks deliberately do not carry the source agent's model.
+      // Pi must serialize with its own configured default in that case.
+      ctx: { workspace: process.cwd(), cwd: process.cwd() },
+    });
+    assert.equal(plan.kind, "resume");
+    assert.equal(plan.fidelity, "replayed");
+
+    const messages = pi.readMessages((plan as { sessionFile: string }).sessionFile)!;
+    const user = messages[0] as { content?: unknown };
+    const assistant = messages[1] as {
+      content?: unknown;
+      provider?: string;
+      model?: string;
+      stopReason?: string;
+      usage?: { totalTokens?: number };
+    };
+    assert.equal(messages.length, 2);
+    assert.ok(Array.isArray(user.content), "imported user content uses pi text blocks");
+    assert.ok(Array.isArray(assistant.content), "imported assistant content uses pi text blocks");
+    assert.equal(assistant.provider, targetModel.provider, "assistant metadata restores the target provider");
+    assert.equal(assistant.model, targetModel.id, "assistant metadata restores the target model");
+    assert.equal(assistant.stopReason, "stop");
+    assert.equal(assistant.usage?.totalTokens, 0, "synthetic history has complete zero usage");
+
+    // This is the provider-side normalization performed on the next prompt.
+    // Bare assistant strings (the production regression) throw here because pi
+    // expects AssistantMessage.content.flatMap(...).
+    assert.doesNotThrow(() => transformMessages(
+      messages as unknown as Parameters<typeof transformMessages>[0],
+      {
+        provider: targetModel.provider,
+        id: targetModel.id,
+        api: "openai-codex-responses",
+        input: ["text"],
+      } as unknown as Parameters<typeof transformMessages>[1],
+    ));
   });
 
   // --- fallback: a target with no history import still seeds a prompt ----------
@@ -179,6 +263,62 @@ async function run() {
     assert.ok(seedPrompt.includes("port this to rust"), "recent turns are inlined");
     assert.ok(seedPrompt.includes("Branch: bivy/port"), "carried context appears");
     assert.ok(seedPrompt.includes("https://app.example/sessions/src-1"), "link to the full transcript");
+  });
+
+  // --- generic degradation ladder: native → portable replay → seed ------------
+  await test("a broken native importer degrades to portable replay for any runtime", async () => {
+    const bundle = buildForkBundle({ runtime: fakeRuntime("same", true), sessionFile: "x", record: record({ runtimeId: "same" }) });
+    let replayed = false;
+    const target: AgentRuntime = {
+      ...fakeRuntime("same", true, true),
+      importForFork: async () => { throw new Error("native store changed"); },
+      importHistoryForFork: async (history) => {
+        replayed = history.some((turn) => turn.text.includes("seed me"));
+        return { sessionFile: "portable", id: "portable" };
+      },
+    };
+    const plan = await materializeFork({ bundle, targetRuntime: target, ctx: { workspace: "/w", cwd: "/w" } });
+    assert.equal(plan.kind, "resume");
+    assert.equal(plan.fidelity, "replayed");
+    assert.equal(replayed, true, "the runtime-neutral history was used after native failure");
+  });
+
+  await test("invalid or failing history imports degrade to the universal seeded continuation", async () => {
+    const source = fakeRuntime("source", false);
+    const bundle = buildForkBundle({ runtime: source, sessionFile: "x", record: record({ runtimeId: source.id }) });
+    const invalidTarget: AgentRuntime = {
+      ...fakeRuntime("target", false, true),
+      importHistoryForFork: async () => ({ sessionFile: "", id: "" }),
+    };
+    const invalidPlan = await materializeFork({ bundle, targetRuntime: invalidTarget, ctx: { workspace: "/w", cwd: "/w" } });
+    assert.equal(invalidPlan.kind, "seed", "empty resume refs are rejected rather than opening a broken fork");
+
+    const throwingTarget: AgentRuntime = {
+      ...fakeRuntime("target", false, true),
+      importHistoryForFork: async () => { throw new Error("writer rejected synthetic history"); },
+    };
+    const throwingPlan = await materializeFork({ bundle, targetRuntime: throwingTarget, ctx: { workspace: "/w", cwd: "/w" } });
+    assert.equal(throwingPlan.kind, "seed", "writer exceptions do not block the fork");
+    assert.ok((throwingPlan as { seedPrompt: string }).seedPrompt.includes("seed me"));
+  });
+
+  await test("source adapter failures fall back to live portable history", () => {
+    const source: AgentRuntime = {
+      ...fakeRuntime("flaky-source", true),
+      readMessages: () => { throw new Error("native reader failed"); },
+      exportForFork: () => { throw new Error("native exporter failed"); },
+    };
+    const bundle = buildForkBundle({
+      runtime: source,
+      sessionFile: "native-ref",
+      record: record({ runtimeId: source.id }),
+      liveMessages: [
+        { role: "user", content: "live question" },
+        { role: "assistant", content: [{ type: "text", text: "live answer" }] },
+      ],
+    });
+    assert.equal(bundle.native, undefined, "a failed native export is omitted");
+    assert.deepEqual(bundle.normalized.turns.map((turn) => turn.text), ["live question", "live answer"]);
   });
 
   // --- fidelity gating on capability, not just id -----------------------------
@@ -228,12 +368,11 @@ async function run() {
       // readMessages intentionally absent.
     } as AgentRuntime;
 
-    const withoutLive = buildForkBundle({ runtime: cliLike, sessionFile: "x", record: record({ runtimeId: "generic-cli" }) });
+    const withoutLive = buildForkBundle({ runtime: cliLike, record: record({ runtimeId: "generic-cli" }) });
     assert.equal(withoutLive.normalized.turns.length, 0, "no readMessages and no live transcript => empty history (the old gap)");
 
     const withLive = buildForkBundle({
       runtime: cliLike,
-      sessionFile: "x",
       record: record({ runtimeId: "generic-cli" }),
       liveMessages: [
         { role: "user", content: "add a retry" },
@@ -243,12 +382,18 @@ async function run() {
     });
     assert.equal(withLive.normalized.turns.length, 2, "the live transcript fills the normalized bundle for a CLI-agent source");
     assert.deepEqual(withLive.normalized.turns.map((t) => t.role), ["user", "assistant"]);
+    assert.equal(withLive.native, undefined, "a live-only agent needs no resume ref to fork out");
   });
 
-  await test("the source's sandbox tier round-trips in the bundle record (fork bug #6)", async () => {
+  await test("portable source metadata carries sandbox and typed model identity", async () => {
     const src = fakeRuntime("pi", true);
-    const bundle = buildForkBundle({ runtime: src, sessionFile: "x", record: record({ sandbox: "workspace-write" }) });
-    assert.equal(bundle.record.sandbox, "workspace-write", "so standUpFork can carry it into the forked session's tier");
+    const bundle = buildForkBundle({
+      runtime: src,
+      sessionFile: "x",
+      record: record({ sandbox: "workspace-write", modelRef: { provider: "openai-codex", id: "gpt-5.6-sol" } }),
+    });
+    assert.equal(bundle.record.sandbox, "workspace-write", "stand-up can preserve the source sandbox");
+    assert.deepEqual(bundle.record.modelRef, { provider: "openai-codex", id: "gpt-5.6-sol" }, "same-runtime stand-up can preserve the exact model");
   });
 
   console.log(`fork-transport: all ${passed} tests passed`);
