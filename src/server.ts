@@ -8724,7 +8724,7 @@ async function resolveOrResumeSession(sessionId?: unknown, sessionPath?: unknown
     try {
       // `key` passed resolveResumeRef's sessionsDir containment check.
       // codeql[js/path-injection]: the client-provided ref cannot escape it.
-      if (!fs.existsSync(key)) {
+      if (!fs.existsSync(key)) { // lgtm[js/path-injection]
         // Path-based runtime, transcript file absent → treated as not-found (see
         // above). This is the branch that misfired when an id-based runtime was
         // wrongly classified path-based; the log makes that unmistakable.

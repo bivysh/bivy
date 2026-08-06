@@ -501,7 +501,7 @@ function findClaudeTranscript(sessionId: string): string | undefined {
         // The project component is a directory entry from `projects`; the file
         // component is slug-validated above, so neither can traverse.
         // codeql[js/path-injection]
-        if (fs.existsSync(candidate)) return candidate;
+        if (fs.existsSync(candidate)) return candidate; // lgtm[js/path-injection]
       }
     } catch {
       // ignore missing/unreadable Claude stores
@@ -523,7 +523,7 @@ function loadClaudeTranscript(sessionId: string): RuntimeMessage[] {
     // `file` can only come from findClaudeTranscript's validated-id and
     // directory-entry construction above.
     // codeql[js/path-injection]
-    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) { // lgtm[js/path-injection]
       if (!line.trim()) continue;
       const entry = JSON.parse(line);
       const rawRole = entry?.message?.role ?? entry?.role;
