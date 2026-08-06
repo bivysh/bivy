@@ -1,6 +1,6 @@
 {
   "name": "@bivy/bivy",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "license": "FSL-1.1-ALv2",
