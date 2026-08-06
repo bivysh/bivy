@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, ModelInfo, RuntimeInfo } from "@bivy/core";
@@ -32,7 +32,10 @@ function runtimeCapabilityChips(a: RuntimeInfo): Array<{ label: string; ok: bool
     { label: "Approvals", ok: Boolean(caps.toolInterception) || Boolean(caps.mcpToolApprovals) },
     { label: "Resume", ok: Boolean(caps.resume) },
     { label: "Models", ok: Boolean(caps.modelSelection) },
-    { label: "Fork", ok: Boolean(caps.fork) },
+    // Forking is a Bivy session-layer feature. Every agent can at least receive
+    // the portable seeded continuation; native capabilities only improve its
+    // fidelity and must not make the picker claim other agents cannot fork.
+    { label: "Fork", ok: true },
   ];
 }
 

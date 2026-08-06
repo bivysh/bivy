@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Redact credentials from text before it is persisted to disk. Bivy stores
 // session transcripts and tool-activity sidecars as JSON under `.bivy/`, and

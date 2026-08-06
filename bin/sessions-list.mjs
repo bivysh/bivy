@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Pure list-sizing logic for `bivy sessions` / `bivy ls`, extracted so it can be
 // unit-tested without executing the CLI (bin/bivy.mjs runs main() on import).

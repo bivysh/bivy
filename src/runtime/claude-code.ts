@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Claude Code (Claude Agent SDK) adapter — a second concrete AgentRuntime.
 //
@@ -26,6 +26,7 @@ import type {
   CatalogProvider,
   DiscoveredNativeSession,
   ForkHistoryMessage,
+  ForkImportContext,
   ForkNativePayload,
   ModelInfo,
   OpenSessionOptions,
@@ -490,14 +491,19 @@ function claudeDiscoveryRoots(): string[] {
 }
 
 function findClaudeTranscript(sessionId: string): string | undefined {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(sessionId)) return undefined;
   const fileName = `${sessionId}.jsonl`;
   for (const root of claudeProjectDirs()) {
     const projects = path.join(root, "projects");
     try {
-      for (const project of fs.readdirSync(projects, { withFileTypes: true })) {
+      const projectsRoot = fs.realpathSync(path.resolve(projects));
+      for (const project of fs.readdirSync(projectsRoot, { withFileTypes: true })) {
         if (!project.isDirectory()) continue;
-        const candidate = path.join(projects, project.name, fileName);
-        if (fs.existsSync(candidate)) return candidate;
+        const projectRoot = fs.realpathSync(path.resolve(projectsRoot, project.name));
+        if (!projectRoot.startsWith(`${projectsRoot}${path.sep}`)) continue;
+        const candidate = fs.realpathSync(path.resolve(projectRoot, fileName));
+        if (!candidate.startsWith(`${projectRoot}${path.sep}`)) continue;
+        if (path.basename(candidate) === fileName) return candidate;
       }
     } catch {
       // ignore missing/unreadable Claude stores
@@ -1481,7 +1487,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
    */
   async importForFork(
     payload: ForkNativePayload,
-    ctx: { workspace: string; cwd: string },
+    ctx: ForkImportContext,
   ): Promise<{ sessionFile: string; id: string }> {
     if (payload.runtimeId !== this.id || payload.kind !== "claude-jsonl") {
       throw new Error(`claude.importForFork: unexpected payload ${payload.runtimeId}/${payload.kind}`);
@@ -1527,7 +1533,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
    */
   async importHistoryForFork(
     history: ForkHistoryMessage[],
-    ctx: { workspace: string; cwd: string },
+    ctx: ForkImportContext,
   ): Promise<{ sessionFile: string; id: string }> {
     const newId = randomUUID();
     const cwd = ctx.cwd || ctx.workspace;
@@ -1538,17 +1544,46 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     const projectDir = path.join(root, "projects", projectSlug);
     fs.mkdirSync(projectDir, { recursive: true });
     let parentUuid: string | null = null;
-    const lines = history.map((message) => {
+    const model = ctx.model?.provider === "anthropic"
+      ? ctx.model.id
+      : this.options.defaultModel ?? FALLBACK_MODELS.find((candidate) => candidate.id.includes("sonnet"))!.id;
+    const timestamp = Date.now();
+    const lines = history.map((turn, index) => {
       const uuid = randomUUID();
+      // Claude's store is permissive when read for display, but `--resume` / the
+      // Agent SDK expects provider-native assistant envelopes. Keep the portable
+      // history generic until this final serializer, then emit the same minimum
+      // shape as a real Claude transcript (content blocks, model/id, stop reason,
+      // usage and timestamps). This is the Claude counterpart to pi's native
+      // serializer and prevents a replay that paints correctly but fails on the
+      // first continued prompt.
+      const message = turn.role === "user"
+        ? { role: "user", content: turn.text }
+        : {
+            model,
+            id: `msg_bivy_${uuid.replace(/-/g, "")}`,
+            type: "message",
+            role: "assistant",
+            content: [{ type: "text", text: turn.text }],
+            stop_reason: "end_turn",
+            stop_sequence: null,
+            usage: {
+              input_tokens: 0,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              output_tokens: 0,
+            },
+          };
       const entry = {
         parentUuid,
         isSidechain: false,
         userType: "external",
         cwd,
         sessionId: newId,
-        type: message.role,
-        message: { role: message.role, content: message.text },
+        type: turn.role,
+        message,
         uuid,
+        timestamp: new Date(timestamp + index).toISOString(),
       };
       parentUuid = uuid;
       return JSON.stringify(entry);

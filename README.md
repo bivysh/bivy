@@ -18,7 +18,7 @@ rules, and outcome reports around agents you already use.
 
 - **Website:** [bivy.sh](https://bivy.sh)
 - **Documentation:** [`docs/`](docs/README.md) — start with the [quickstart](docs/quickstart.md)
-- **License:** [FSL-1.1-ALv2](LICENSE) (source-available; converts to Apache-2.0 two years after each release)
+- **License:** [AGPL-3.0-only](LICENSE)
 
 > Bivy is 0.x software. The core loop is solid and used daily, but interfaces
 > and behaviour can change between releases.
@@ -347,11 +347,10 @@ for the trust model and known limitations.
 
 ## License
 
-Bivy Core is licensed under the Functional Source License (FSL-1.1-ALv2): you may
-use, modify, and self-host it for any purpose **except a Competing Use** —
-offering it to others as a product or service that substitutes for Bivy or Bivy
-Cloud. Two years after each release, that version converts to Apache-2.0.
-
-This is a source-available licence, not an OSI-approved open source licence.
+Bivy Core is free and open-source software licensed under the GNU Affero General
+Public License, version 3.0 only (AGPL-3.0-only). You may use, study, modify, and
+self-host it under that license. If you modify Bivy and let users interact with
+it over a network, section 13 requires you to offer those users the corresponding
+source code.
 
 See [`LICENSE`](LICENSE), [`CORE.md`](CORE.md), and [`CLOUD.md`](CLOUD.md).

@@ -1,9 +1,7 @@
 Bivy
 Copyright (c) 2026 Petter André Sjulstad
 
-Bivy is source-available software under the Functional Source License
-(FSL-1.1-ALv2): free to use, modify, and self-host for any purpose except a
-Competing Use, and it converts to Apache-2.0 two years after each release. See
-LICENSE for terms.
+Bivy is free and open-source software licensed under the GNU Affero General
+Public License, version 3.0 only (AGPL-3.0-only). See LICENSE for terms.
 
-Bivy Cloud is a hosted service operated separately from the source-available core.
+Bivy Cloud is a hosted service operated separately from the open-source core.

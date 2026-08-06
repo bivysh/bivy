@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // One-shot cleanup: undo the old local pre-push CI gate. Earlier versions set
 // `core.hooksPath=.githooks` (via the former scripts/setup-hooks.mjs) so a git

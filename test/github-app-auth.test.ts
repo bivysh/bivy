@@ -103,6 +103,13 @@ await check("resolveInstallationId: returns undefined when the app isn't install
   assert.equal(id, undefined);
 });
 
+await check("resolveInstallationId: rejects path-like owner and repo input before fetching", async () => {
+  const s = stubFetch(200, { id: 1 });
+  assert.equal(await resolveInstallationId({ appId: "1", privateKeyPem: privatePem, owner: "safe/../evil", repo: "repo", fetchImpl: s.fetchImpl }), undefined);
+  assert.equal(await resolveInstallationId({ appId: "1", privateKeyPem: privatePem, owner: "safe", repo: "repo?x=/evil", fetchImpl: s.fetchImpl }), undefined);
+  assert.equal(s.calls.length, 0);
+});
+
 await check("InstallationTokenCache: mints once, reuses within TTL, re-mints near expiry", async () => {
   let issued = 0;
   const fetchImpl = (async () => {

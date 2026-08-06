@@ -3,7 +3,7 @@
   "version": "0.9.1",
   "description": "Bivy web PWA — React + Vite view layer over @bivy/core.",
   "type": "module",
-  "license": "FSL-1.1-ALv2",
+  "license": "AGPL-3.0-only",
   "private": true,
   "scripts": {
     "dev": "vite",

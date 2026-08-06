@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Bivy-owned OAuth engine for subscription model providers.
 //
@@ -144,10 +144,24 @@ export function extractAuthCode(value: string): string {
   return hash > 0 ? v.slice(0, hash) : v;
 }
 
+export function escapeOAuthHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character]!);
+}
+
 function respondHtml(res: http.ServerResponse, status: number, title: string, body: string) {
+  const safeTitle = escapeOAuthHtml(title);
+  const safeBody = escapeOAuthHtml(body);
   res.statusCode = status;
   res.setHeader("content-type", "text/html; charset=utf-8");
-  res.end(`<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:16px system-ui;margin:3rem;max-width:32rem"><h2>${title}</h2><p>${body}</p><p>You can close this tab and return to Bivy.</p></body>`);
+  res.setHeader("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'");
+  res.setHeader("x-content-type-options", "nosniff");
+  res.end(`<!doctype html><meta charset="utf-8"><title>${safeTitle}</title><body style="font:16px system-ui;margin:3rem;max-width:32rem"><h2>${safeTitle}</h2><p>${safeBody}</p><p>You can close this tab and return to Bivy.</p></body>`);
 }
 
 /** Local HTTP listener that resolves the authorization code from the provider redirect. */

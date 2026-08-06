@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Runtime-agnostic agent interface.
 //
@@ -447,7 +447,11 @@ export interface RuntimeCapabilities {
    * apply — doing so is what made those sessions un-resumable. Optional; absent = false.
    */
   sessionRefIsPath?: boolean;
-  /** Supports forking a session. */
+  /**
+   * Legacy agent-native fork signal. Bivy's session-layer fork does not gate on
+   * this: every runtime can use the portable seeded route, while forkTransport
+   * and forkHistoryImport advertise higher-fidelity native routes.
+   */
   fork: boolean;
   /**
    * The runtime can EXPORT a session's transcript and IMPORT it back into a fresh
@@ -629,7 +633,7 @@ export interface AgentRuntime {
    */
   importForFork?(
     payload: ForkNativePayload,
-    ctx: { workspace: string; cwd: string },
+    ctx: ForkImportContext,
   ): Promise<{ sessionFile: string; id: string }>;
 
   /**
@@ -646,7 +650,7 @@ export interface AgentRuntime {
    */
   importHistoryForFork?(
     history: ForkHistoryMessage[],
-    ctx: { workspace: string; cwd: string },
+    ctx: ForkImportContext,
   ): Promise<{ sessionFile: string; id: string }>;
 
   /**
@@ -697,6 +701,14 @@ export interface ForkNativePayload {
   kind: string;
   /** Opaque payload; must be JSON-serialisable so it can ride the E2E bundle. */
   data: unknown;
+}
+
+/** Destination context supplied while a runtime materialises fork history. */
+export interface ForkImportContext {
+  workspace: string;
+  cwd: string;
+  /** Requested model for this target runtime. Omitted means use its own default. */
+  model?: { provider: string; id: string };
 }
 
 /**

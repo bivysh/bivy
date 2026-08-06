@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
 import path from "node:path";
@@ -7,6 +7,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 import { randomUUID, randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { rateLimit } from "express-rate-limit";
 import { WebSocketServer, WebSocket } from "ws";
 import { listRuntimes, catalogRuntimes, cliInstallSpec, invalidateCliProbeCache, isCliAgentId, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
@@ -73,7 +74,7 @@ import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
 import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
-import { parseRepo, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
+import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
   GitHubTaskPoller,
@@ -1930,7 +1931,9 @@ interface RunTerminalSpec {
 // `bivy sessions` and the app's "Running agents" drawer.
 function defaultRunName(agent: string | undefined, command: string, workspace: string): string {
   const base = agent || command.split(/\s+/)[0]?.split(/[\\/]/).pop() || "session";
-  const dir = workspace.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  let trimmedWorkspace = workspace;
+  while (trimmedWorkspace.endsWith("/") || trimmedWorkspace.endsWith("\\")) trimmedWorkspace = trimmedWorkspace.slice(0, -1);
+  const dir = trimmedWorkspace.split(/[\\/]/).pop();
   return dir ? `${base} · ${dir}` : base;
 }
 
@@ -3743,27 +3746,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
     // changes into an E2E bundle the client carries to the destination node.
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
     const rec = resolveSession(msg.sessionId);
-    if (!rec || !rec.sessionFile) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found or not resumable on this node." });
+    if (!rec) {
+      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found on this node." });
       return;
     }
     try {
-      const src = rec.source ?? "";
-      const repoSlug = src.startsWith("repo:") ? src.slice(5) : src.startsWith("issue:") ? src.slice(6).replace(/#\d+$/, "") : undefined;
-      const forkRecord: ForkRecord = {
-        sourceSessionId: rec.id,
-        runtimeId: rec.runtimeId,
-        workspace: rec.workspace,
-        cwd: rec.session.cwd || rec.worktree?.path || rec.workspace,
-        worktree: rec.worktree?.path,
-        branch: rec.worktree?.branch,
-        repoSlug,
-        prUrl: rec.prUrl,
-        source: rec.source,
-        title: rec.session.getName(),
-        model: rec.session.getCurrentModel()?.name,
-        sandbox: rec.sandbox,
-      };
+      const forkRecord = forkRecordFor(rec);
       let dirtyPatch;
       if (rec.worktree) {
         try { dirtyPatch = captureDirtyPatch(rec.worktree.path); } catch { /* best effort — omit dirty state */ }
@@ -3813,6 +3801,12 @@ const RELAY_COMMANDS: Record<string, Command> = {
         // so cut an independent fork branch instead of trying to adopt it.
         worktree: msg.sameNode === true ? "fresh" : "adopt",
         detectPrereqs: true,
+        // A same-node cross-agent fork can safely retain a non-repo workspace.
+        // A cross-node path belongs to the source machine, so standUpFork keeps
+        // its destination default unless repo metadata lets it reconstruct one.
+        ...(msg.sameNode === true
+          ? { fallback: { workspace: bundle.record.workspace, cwd: bundle.record.cwd } }
+          : {}),
       });
       if (!outcome.ok) {
         relay?.sendEvent({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
@@ -3833,28 +3827,13 @@ const RELAY_COMMANDS: Record<string, Command> = {
     // (model may still change); any node/agent change goes through import above.
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
     const rec = resolveSession(msg.sessionId);
-    if (!rec || !rec.sessionFile) {
-      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found or not resumable on this node." });
+    if (!rec) {
+      relay?.sendEvent({ type: "session.fork.error", requestId, error: "Session not found on this node." });
       return;
     }
     try {
       const runtime = getRuntime(rec.runtimeId);
-      const src = rec.source ?? "";
-      const repoSlug = src.startsWith("repo:") ? src.slice(5) : src.startsWith("issue:") ? src.slice(6).replace(/#\d+$/, "") : undefined;
-      const forkRecord: ForkRecord = {
-        sourceSessionId: rec.id,
-        runtimeId: rec.runtimeId,
-        workspace: rec.workspace,
-        cwd: rec.session.cwd || rec.worktree?.path || rec.workspace,
-        worktree: rec.worktree?.path,
-        branch: rec.worktree?.branch,
-        repoSlug,
-        prUrl: rec.prUrl,
-        source: rec.source,
-        title: rec.session.getName(),
-        model: rec.session.getCurrentModel()?.name,
-        sandbox: rec.sandbox,
-      };
+      const forkRecord = forkRecordFor(rec);
       // Carry uncommitted work: capture from the SOURCE worktree; standUpFork
       // re-applies it into the fork's fresh worktree. Local git ops only.
       let dirtyPatch;
@@ -4327,12 +4306,13 @@ type GithubAppVaultResponse = { vaults?: GithubAppVaultRow[]; wrappedKeys?: Gith
 // because `seal()`'s random IV makes every ciphertext byte-different. Reset on
 // restart — one redundant push after a restart is the same tolerance the
 // model-auth vault above already accepts.
-const lastPushedGithubAppFingerprint = new Map<string, string>();
+const lastPushedGithubAppContent = new Map<string, string>();
 
 function fingerprintGithubAppContent(record: GitHubAppRecord, privateKeyPem: string): string {
-  return createHash("sha256")
-    .update(JSON.stringify({ privateKeyPem, slug: record.slug, name: record.name, owner: record.owner, ownerType: record.ownerType, hookId: record.hookId }))
-    .digest("hex");
+  // Process-local equality value only. The PEM is already resident in this
+  // process, and retaining the previous value avoids creating a password-like
+  // verifier or digest from secret material.
+  return JSON.stringify({ privateKeyPem, slug: record.slug, name: record.name, owner: record.owner, ownerType: record.ownerType, hookId: record.hookId });
 }
 
 /**
@@ -4427,7 +4407,7 @@ async function syncGithubAppVaultFromControlPlane(): Promise<void> {
       const privateKeyPem = await resolveSecret(record.privateKeyRef, appDir);
       if (!privateKeyPem) continue;
       const fingerprint = fingerprintGithubAppContent(record, privateKeyPem);
-      if (remote && !needsRotation && lastPushedGithubAppFingerprint.get(record.appId) === fingerprint) continue;
+      if (remote && !needsRotation && lastPushedGithubAppContent.get(record.appId) === fingerprint) continue;
       const vaultKeyB64 = needsRotation || !readLocalGithubAppVaultKey(appDir, record.appId)
         ? mintLocalGithubAppVaultKey(appDir, record.appId)
         : (readLocalGithubAppVaultKey(appDir, record.appId) as string);
@@ -4437,7 +4417,7 @@ async function syncGithubAppVaultFromControlPlane(): Promise<void> {
       );
       const pushRes = await modelAuthFetch("/node/github-app-vault", { method: "PUT", body: JSON.stringify({ appId: record.appId, ciphertext }) }).catch(() => null);
       if (!pushRes?.ok) continue;
-      lastPushedGithubAppFingerprint.set(record.appId, fingerprint);
+      lastPushedGithubAppContent.set(record.appId, fingerprint);
       // Self-wrap: so this node's own row in `wrappedKeys` is populated too,
       // matching the model-auth vault's push (a node that later loses its
       // local github-app-vault.json cache but keeps its secret vault can
@@ -6259,6 +6239,34 @@ async function withRepoLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/** Build the runtime-neutral metadata carried by both local and remote forks. */
+function forkRecordFor(rec: SessionRecord): ForkRecord {
+  const src = rec.source ?? "";
+  const repoSlug = src.startsWith("repo:")
+    ? src.slice(5)
+    : src.startsWith("issue:")
+      ? src.slice(6).replace(/#\d+$/, "")
+      : undefined;
+  const currentModel = rec.session.getCurrentModel();
+  return {
+    sourceSessionId: rec.id,
+    runtimeId: rec.runtimeId,
+    workspace: rec.workspace,
+    cwd: rec.session.cwd || rec.worktree?.path || rec.workspace,
+    worktree: rec.worktree?.path,
+    branch: rec.worktree?.branch,
+    repoSlug,
+    prUrl: rec.prUrl,
+    source: rec.source,
+    title: rec.session.getName(),
+    model: currentModel?.name,
+    ...(currentModel?.provider && currentModel.id
+      ? { modelRef: { provider: String(currentModel.provider), id: String(currentModel.id) } }
+      : {}),
+    sandbox: rec.sandbox,
+  };
+}
+
 /**
  * Best-effort push of a fork SOURCE's branch to origin before the bundle leaves
  * the node, so a cross-node fork's committed work travels via origin (the
@@ -6287,7 +6295,7 @@ interface StandUpForkOptions {
   bundle: ForkBundle;
   /** Runtime to materialise into (may differ from the source for a cross-runtime fork). */
   targetRuntimeId: string;
-  /** Model to bind before the first turn; falls back to the node default. */
+  /** Explicit model to bind before the first turn; otherwise preserve it only for the same runtime. */
   model?: { provider: string; id: string };
   /** Full transcript URL, woven into a seeded (cross-runtime) continuation prompt. */
   transcriptUrl?: string;
@@ -6425,7 +6433,13 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
 
   // Materialise the transcript, then stand the session up — resume the imported
   // transcript (full) or a fresh session the caller seeds with plan.seedPrompt.
-  const plan = await materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd }, seed: { transcriptUrl: opts.transcriptUrl } });
+  // Preserve the source model only when the runtime itself is unchanged. A
+  // cross-agent fork must let the destination choose its own default unless the
+  // caller explicitly supplied a model valid for that target. Thread the final
+  // choice through the generic import context: adapters that need native model
+  // metadata (Pi/Claude) can serialize it; the others simply ignore it.
+  const targetModel = opts.model ?? (targetRuntimeId === bundle.record.runtimeId ? bundle.record.modelRef : undefined);
+  const plan = await materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd, model: targetModel }, seed: { transcriptUrl: opts.transcriptUrl } });
   const record = plan.kind === "resume"
     ? await createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false })
     : await createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false });
@@ -6449,7 +6463,7 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
   // Surface a non-fatal note when the source's uncommitted changes didn't apply
   // cleanly, so the fork isn't silently missing work-in-progress.
   if (dirtyWarning) broadcast({ type: "session.notice", sessionId: record.id, message: dirtyWarning });
-  await applyRequestedModel(record, opts.model ?? nodeDefaultModel() ?? undefined);
+  await applyRequestedModel(record, targetModel);
   persistSessionMetadata(record);
   scheduleAdvertise();
 
@@ -7206,7 +7220,7 @@ async function deleteSessionFile(opts: { id?: string; path?: string; fallbackAct
       try {
         await runtimeHost.deleteSession(getRuntime(runtimeId), deletedSessionId, hint);
       } catch (error) {
-        console.warn(`[session.delete] runtime ${runtimeId} could not forget ${deletedSessionId}:`, error);
+        console.warn("[session.delete] runtime could not forget session", { runtimeId, deletedSessionId, error });
       }
     }
   }
@@ -8718,13 +8732,10 @@ async function resolveOrResumeSession(sessionId?: unknown, sessionPath?: unknown
   // guard doesn't apply). Treat a missing transcript as "not found" instead.
   if (resumesByPath) {
     try {
-      if (!fs.existsSync(key)) {
-        // Path-based runtime, transcript file absent → treated as not-found (see
-        // above). This is the branch that misfired when an id-based runtime was
-        // wrongly classified path-based; the log makes that unmistakable.
-        console.warn(`[resume] not-found id=${id} reason=transcript-missing runtimeId=${runtimeId ?? "-"} resumesByPath=true key=${key}`);
-        return undefined;
-      }
+      const sessionsRoot = fs.realpathSync(path.resolve(sessionsDir));
+      const transcriptPath = fs.realpathSync(path.resolve(sessionsRoot, key));
+      if (!transcriptPath.startsWith(`${sessionsRoot}${path.sep}`)) return undefined;
+      key = transcriptPath;
     } catch (error) {
       console.warn(`[resume] not-found id=${id} reason=transcript-stat-failed runtimeId=${runtimeId ?? "-"} key=${key} — ${error instanceof Error ? error.message : String(error)}`);
       return undefined;
@@ -9176,6 +9187,22 @@ approvals.onRequest((request: ApprovalRequest) => {
 
 const app = express();
 app.use(express.json({ limit: "25mb" }));
+// Bound request amplification on the node API. Authentication remains the
+// security boundary; these limits constrain brute force and expensive repeated
+// operations if a local process or paired device behaves maliciously.
+const apiRateLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 600,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const sensitiveRateLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+app.use("/api", apiRateLimiter);
 // Defense-in-depth Content-Security-Policy for every node response. The node
 // hosts no web UI — only the JSON API and a couple of minimal, self-owned
 // browser pages (OAuth callback, GitHub App manifest) — so a strict default of
@@ -9216,7 +9243,7 @@ app.get("/healthz", (_req, res) => {
 // redirect from the provider (no auth header), so it must precede the auth
 // middleware. The unguessable `state` (minted server-side when the user starts
 // the flow) is the CSRF guard.
-app.get("/api/integrations/oauth/callback", async (req, res) => {
+app.get("/api/integrations/oauth/callback", sensitiveRateLimiter, async (req, res) => {
   const state = String(req.query.state ?? "");
   const code = String(req.query.code ?? "");
   const oauthError = String(req.query.error ?? "");
@@ -9243,7 +9270,7 @@ app.get("/api/integrations/oauth/callback", async (req, res) => {
 // like the bootstrap endpoint (loopback + the 0600 per-process bootstrap secret,
 // so other local users on a shared host can't harvest tokens). Placed before the
 // /api auth middleware because the helper is a bare process with no device token.
-app.get("/api/git-credential", async (req, res) => {
+app.get("/api/git-credential", sensitiveRateLimiter, async (req, res) => {
   const ctx = resolveAuth(identity, req);
   if (!ctx.loopback) return res.status(403).json({ error: "git-credential is loopback-only" });
   if (!bootstrapSecretAccepted(req)) return res.status(403).json({ error: "bootstrap secret required" });
@@ -9291,7 +9318,7 @@ function bootstrapSecretAccepted(req: express.Request): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-app.post("/api/auth/bootstrap", (req, res) => {
+app.post("/api/auth/bootstrap", sensitiveRateLimiter, (req, res) => {
   const ctx = resolveAuth(identity, req);
   if (!ctx.loopback) return res.status(403).json({ error: "Bootstrap is loopback-only" });
   if (!bootstrapSecretAccepted(req)) {
@@ -10650,9 +10677,12 @@ function persistConnectedGithubToken(token: string): void {
 // repo). One GitHub call; returns null on a non-OK response so the caller can
 // decide whether to retry with a different token.
 async function fetchRepoBranchNames(owner: string, repo: string, token: string | undefined): Promise<{ name: string }[] | null> {
+  if (!isGitHubSlugPart(owner) || !isGitHubSlugPart(repo)) return null;
   const headers: Record<string, string> = { accept: "application/vnd.github+json", "user-agent": "bivy" };
   if (token) headers.authorization = `Bearer ${token}`;
-  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/branches?per_page=100`, { headers });
+  const safeOwner = encodeURIComponent(owner);
+  const safeRepo = encodeURIComponent(repo);
+  const res = await fetch(`https://api.github.com/repos/${safeOwner}/${safeRepo}/branches?per_page=100`, { headers });
   if (!res.ok) return null;
   const raw = (await res.json().catch(() => [])) as Array<Record<string, unknown>>;
   return (Array.isArray(raw) ? raw : []).map((b) => ({ name: String(b.name ?? "") })).filter((b) => b.name);

@@ -28,6 +28,8 @@ check("rejects junk and injection attempts", () => {
   assert.equal(parseRepo("nope"), undefined);
   assert.equal(parseRepo("a/b/c"), undefined);
   assert.equal(parseRepo("owner/repo; rm -rf /"), undefined);
+  assert.equal(parseRepo("owner/repo/../../evil"), undefined);
+  assert.equal(parseRepo("https://evil.example/owner/repo"), undefined);
   assert.equal(parseRepo(""), undefined);
 });
 

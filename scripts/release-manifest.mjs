@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Curate the repo's package.json into the manifest shipped in the npm release.
 //
@@ -14,9 +14,6 @@ export const KEEP_SCRIPTS = ["setup", "bivy", "start", "dev", "relay:setup", "po
 
 /** dependencies present only for the monorepo's mobile app; the node doesn't need them. */
 export const DROP_DEPENDENCIES = ["expo", "react", "react-native"];
-
-/** Thin dependency staged by scripts/bundle-pi.mjs without upstream's shrinkwrap. */
-export const BUNDLED_DEPENDENCIES = ["@earendil-works/pi-coding-agent"];
 
 /**
  * Return a curated COPY of `pkg` (input is not mutated) suitable for publishing:
@@ -61,10 +58,6 @@ export function curateManifest(pkg, readme) {
   scripts.start = "node dist/server.js";
   scripts.dev = "node dist/server.js";
   out.scripts = scripts;
-
-  // npm will package the thin pi copy staged under node_modules. Its manifest
-  // preserves upstream identity/license while repinning vulnerable dependencies.
-  out.bundledDependencies = [...BUNDLED_DEPENDENCIES];
 
   return out;
 }
