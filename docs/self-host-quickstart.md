@@ -5,7 +5,7 @@ relay stack, tied to the actual files in [`deploy/`](../deploy). For the
 operational deep-dive — backups, restore drills, secret rotation, what the
 security boundary is — see [self-host.md](self-host.md). For "should I even do
 this," see [self-host.md § Maturity and support](self-host.md#maturity-and-support)
-and [faq.md](faq.md): self-hosting the control plane + relay is source-available
+and [faq.md](faq.md): self-hosting the control plane + relay is open-source
 and unsupported — no SLA, community-only Q&A.
 
 If you just want to run agents on your own machine with a browser UI via the

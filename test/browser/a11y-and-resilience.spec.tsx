@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // B4a — accessibility (axe), keyboard/focus, light/dark visual, service-worker
 // update, and reconnect coverage. Follows the suite convention: assert the real
 // source wiring, and exercise a faithful minimal replica with page.setContent so

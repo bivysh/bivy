@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // DirectTransport — the local / same-origin path used by the installed PWA when
 // it points straight at a node (`?local=1`, manifest start_url). Faithful port

@@ -1,9 +1,10 @@
 # Bivy Core
 
-Bivy Core is the source-available, self-hostable part of Bivy, licensed under the
-Functional Source License (FSL-1.1-ALv2): free to use, modify, and self-host for
-any purpose except a Competing Use, converting to Apache-2.0 two years after each
-release.
+Bivy Core is free and open-source software licensed under the GNU Affero General
+Public License, version 3.0 only (AGPL-3.0-only). You may use, study, modify, and
+self-host it under the terms of that license. If you modify Bivy and let users
+interact with it over a network, you must offer those users the corresponding
+source code as required by section 13 of the license.
 
 Core includes:
 

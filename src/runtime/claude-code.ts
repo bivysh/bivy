@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Claude Code (Claude Agent SDK) adapter — a second concrete AgentRuntime.
 //
@@ -491,14 +491,19 @@ function claudeDiscoveryRoots(): string[] {
 }
 
 function findClaudeTranscript(sessionId: string): string | undefined {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(sessionId)) return undefined;
   const fileName = `${sessionId}.jsonl`;
   for (const root of claudeProjectDirs()) {
     const projects = path.join(root, "projects");
     try {
-      for (const project of fs.readdirSync(projects, { withFileTypes: true })) {
+      const projectsRoot = fs.realpathSync(path.resolve(projects));
+      for (const project of fs.readdirSync(projectsRoot, { withFileTypes: true })) {
         if (!project.isDirectory()) continue;
-        const candidate = path.join(projects, project.name, fileName);
-        if (fs.existsSync(candidate)) return candidate;
+        const projectRoot = fs.realpathSync(path.resolve(projectsRoot, project.name));
+        if (!projectRoot.startsWith(`${projectsRoot}${path.sep}`)) continue;
+        const candidate = fs.realpathSync(path.resolve(projectRoot, fileName));
+        if (!candidate.startsWith(`${projectRoot}${path.sep}`)) continue;
+        if (path.basename(candidate) === fileName) return candidate;
       }
     } catch {
       // ignore missing/unreadable Claude stores

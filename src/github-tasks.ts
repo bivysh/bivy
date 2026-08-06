@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -252,7 +252,9 @@ export function parseBivyDirectives(body: string | undefined): { runtimeId?: str
 }
 
 async function gh(cfg: GitHubTaskConfig, method: string, apiPath: string, body?: unknown): Promise<Response> {
-  return fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}${apiPath}`, {
+  const owner = encodeURIComponent(cfg.owner);
+  const repo = encodeURIComponent(cfg.repo);
+  return fetch(`https://api.github.com/repos/${owner}/${repo}${apiPath}`, {
     method,
     headers: {
       authorization: `Bearer ${cfg.token}`,

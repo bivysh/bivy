@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Ephemeral compute — bring-your-own Fly.io / Hetzner / AWS token, spin up a
 // short-lived node, tear it down. Ported from public/app/ephemeral-keys.js and

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
 import path from "node:path";
@@ -69,7 +69,7 @@ for (const lockfile of lockfiles) {
   for (const [pkgPath, meta] of Object.entries(lock.packages ?? {})) {
     if (!pkgPath || meta.link) continue;
     // First-party workspace packages (the root and anything under a workspace
-    // path rather than node_modules/) carry Bivy's own FSL license, which isn't
+    // path rather than node_modules/) carry Bivy's own AGPL license, which isn't
     // in the third-party allowlist. Only audit installed dependencies.
     if (!pkgPath.startsWith("node_modules/")) continue;
     const license = normalizeLicense(meta.license);
