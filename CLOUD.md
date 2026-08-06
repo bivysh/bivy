@@ -18,7 +18,7 @@ Cloud may provide:
 - billing, plan limits, team/org administration, and audit features;
 - managed TLS, backups, monitoring, abuse prevention, and support.
 
-Cloud must not require uploading workspace files, transcripts, prompts, tool output, plaintext model credentials, GitHub repo tokens, or local secrets to the control plane. The node remains the data plane; Cloud coordinates metadata and routing.
+Cloud must not require uploading workspace files, interactive session transcripts or prompts, tool output, plaintext model credentials, GitHub repo tokens, or local secrets to the control plane. The node remains the data plane; Cloud coordinates metadata and routing. Explicit inbound-automation features are the documented exception: Slack commands and generic webhook instructions are sent to the control plane by their source and retained with the queued item; GitHub and Linear issue text is fetched directly by the node.
 
 Paid entitlement checks belong in hosted/account features. They must not prevent self-hosted Core deployments from operating.
 

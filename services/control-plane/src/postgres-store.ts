@@ -76,10 +76,11 @@ const workLeaseExpiry = (): string => new Date(Date.now() + WORK_LEASE_MS).toISO
  * dev/tests otherwise (see pg-mem-store.ts). Both go through `createStore()`
  * (store-factory.ts), so there is no second hand-mirrored implementation.
  *
- * Same hard rule as the rest of the control plane:
- * stores ONLY metadata for sessions/work. Never session content, files, prompts,
- * or tool output. Model provider credentials are the explicit account-vault
- * exception for cross-node model auth. All bearer tokens are stored hashed
+ * Same hard rule as the rest of the control plane: never store interactive
+ * session content, files, transcripts, or tool output. Slack and generic-webhook
+ * instructions are the explicit inbound-automation exception retained in
+ * work-item title/body. Model provider credentials are stored only as encrypted
+ * account-vault ciphertext for cross-node auth. All bearer tokens are stored hashed
  * (SHA-256); raw tokens are returned to the caller exactly once at creation.
  */
 export class PostgresStore implements MeshStore {

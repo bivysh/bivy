@@ -11,11 +11,12 @@ its known limitations — see [`docs/security-model.md`](docs/security-model.md)
 
 | Version | Supported |
 | --- | --- |
-| 0.1.x | Yes |
-| < 0.1 | No |
+| Latest version on npm's `latest` tag | Yes |
+| Older versions and staging builds | No |
 
-Bivy 0.1 is an early public release. Fixes ship on the latest 0.1.x patch; there
-are no backports to older builds. Always report against the newest release.
+Bivy is early 0.x software. Security fixes ship in a new production release; we
+do not backport them to older minor or patch lines yet. Always report against
+and update to the newest `@bivy/bivy` release.
 
 ## Reporting a vulnerability
 
@@ -93,7 +94,7 @@ We follow coordinated disclosure.
   or the `danger-full-access` sandbox tier. These are documented as unsafe;
   reporting that they are unsafe is not a vulnerability.
 - The limitations already documented in
-  [`docs/security-model.md`](docs/security-model.md#known-limitations-for-01) —
+  [`docs/security-model.md`](docs/security-model.md#known-limitations-for-0x) —
   most importantly, that Bivy provides no OS-level sandbox of its own. A report
   that an agent without a native sandbox can act as your user is a known design
   limit, not a finding. A report that a *native* sandbox tier can be escaped

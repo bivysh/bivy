@@ -12,10 +12,12 @@ import type { SecretEnvelope } from "./hosted-crypto.js";
  * (pg-mem, see pg-mem-store.ts) for dev/tests otherwise. Selected by `createStore()`
  * (store-factory.ts). This file holds the interface + shared types/helpers.
  *
- * Hard rule: the control plane stores ONLY metadata for
- * sessions/work. Never session content, files, prompts, or tool output. Model
- * provider credentials are the one explicit account-vault exception so enrolled
- * nodes can share API keys/OAuth logins across the user's runners.
+ * Hard rule: the control plane never stores interactive session content, files,
+ * transcripts, or tool output. Slack and generic-webhook instructions are the
+ * explicit inbound-automation exception: their source submits plaintext to this
+ * service and the queue retains it as title/body. Model provider credentials are
+ * the separate encrypted account-vault exception so enrolled nodes can share
+ * API keys/OAuth logins without the control plane decrypting them.
  */
 
 export type Plan = "free" | "pro" | "team";

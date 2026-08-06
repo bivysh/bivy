@@ -432,7 +432,8 @@ unauthenticated dev login enabled.
 | `RELAY_SHARD_URLS` | comma-separated URLs | falls back to `RELAY_PUBLIC_URL`, then `ws://localhost:4500` | Node→shard mapping is by hash of the node id |
 | `DATABASE_POOL_MAX` | integer ≥ 1 | `10` | |
 | `LINK_GRANT_TTL_MS` | integer ms | `2592000000` (30 days) | TTL of the device-linking grant minted from a pairing QR |
-| `ENFORCE_ENTITLEMENTS` | `1` | **off without Stripe; always on with Stripe** | Stripe-backed hosted deployments always enforce plan gates, regardless of this flag. On no-billing/self-hosted stacks this remains opt-in. Interactive CLI/app sessions remain unlimited; free accounts get `FREE_WEEKLY_RUNS` (10) unattended automations per rolling 7-day window across GitHub, Slack, webhooks, and schedules, with one grace job before refusal. Paid plans have unlimited automation. |
+| `ENFORCE_ENTITLEMENTS` | `1` | **off without Stripe; always on with Stripe** | Stripe-backed hosted deployments always enforce plan gates, regardless of this flag. On Bivy Cloud, free accounts may surface `TRIAL_SESSIONS` (25 by default) distinct sessions through the hosted app and get `FREE_WEEKLY_RUNS` (10) unattended automations per rolling 7-day window, with one grace job before refusal. Local execution/history remains on the node when the hosted-view trial is exhausted. Paid plans omit both limits. On no-billing/self-hosted stacks enforcement remains off and all features are unlimited. |
+| `TRIAL_SESSIONS` | positive integer | `25` | Lifetime number of distinct sessions a free Bivy Cloud account may view through the hosted app. Ignored when entitlement enforcement is off. |
 | `RUN_LIMIT_OBSERVE_ONLY` | `1` | **off** | Observe-only mode for no-billing test/staging deployments with `ENFORCE_ENTITLEMENTS=1`. It is ignored when Stripe billing is configured, where the cap is always enforced. |
 
 ## Authentication

@@ -39,9 +39,12 @@ nodes, paired-device public keys, push subscriptions, single-use relay tickets,
 and a `session_index` of `(node_id, session_id, status, source, branch,
 title_enc, updated_at)`. Session titles are stored encrypted (`title_enc`).
 
-It does **not** receive prompts, transcripts, diffs, or workspace files.
+For interactive terminal/browser/phone sessions, it does **not** receive prompts,
+transcripts, diffs, or workspace files: those frames are end-to-end encrypted
+between the node and its paired devices.
 
-Two exceptions you should know about:
+Inbound automations have a different boundary because Slack and generic webhook
+senders call the control plane directly. The exceptions are:
 
 - **Model-auth vault.** When hosted credential sync is on, the node encrypts a
   vault snapshot locally and uploads only ciphertext, plus per-node wrapped keys
@@ -53,16 +56,19 @@ Two exceptions you should know about:
   the claiming node fetches the live text directly from GitHub with its own
   credentials, immediately before use. See
   [`github-work-queue.md`](github-work-queue.md).
-- **Generic automation webhooks.** Each account hook has a high-entropy signing
-  secret. The control plane verifies `X-Bivy-Signature-256` as an HMAC-SHA256
-  over the exact request bytes before parsing or persisting anything. Requests
-  are capped at 64 KiB, require an account-scoped idempotency key, and accept
-  only the versioned schema documented by the settings example. Metadata is
-  bounded, scalar, and explicitly treated as untrusted context. Events are
-  appended to a fixed instruction template; payloads cannot select runtimes,
-  models, shell commands, JavaScript, or executable templates. Hook secrets and
-  bodies are never logged. Rotation immediately invalidates the old secret, and
-  revocation retains only a disabled endpoint with a newly randomized secret.
+- **Slack and generic automation webhooks.** Their instruction text necessarily
+  reaches the control plane in plaintext because Slack/the webhook sender calls
+  it directly. Bivy stores the Slack prompt as the queue title and stores the
+  generic event instruction plus fixed template in the queue body until that
+  item is deleted. Do not put secrets in either. Generic hooks use a
+  high-entropy signing secret; the control plane verifies
+  `X-Bivy-Signature-256` as HMAC-SHA256 over the exact bytes before parsing or
+  persisting. Requests are capped at 64 KiB, require an account-scoped
+  idempotency key, and accept only the closed schema below. Metadata is bounded,
+  scalar, and untrusted. Payloads cannot select runtimes, models, shell commands,
+  JavaScript, or executable templates. Hook secrets and request bodies are never
+  logged. Rotation immediately invalidates the old secret, and revocation keeps
+  only a disabled endpoint with a newly randomized secret.
 
 Automation events use this closed schema (unknown fields are rejected):
 
@@ -338,9 +344,9 @@ Slack `xox[baprs]-…`).
 
 This is pattern-based. It does not catch a secret shape Bivy has no pattern for.
 
-## Known limitations for 0.1
+## Known limitations for 0.x
 
-Bivy 0.1 is an early public release. Know these before trusting it with anything
+Bivy is early 0.x software. Know these before trusting it with anything
 sensitive.
 
 1. **No Bivy-owned OS sandbox.** As above: agents without a native sandbox run
@@ -389,7 +395,7 @@ sensitive.
     Stripe, Groq, xAI, Google, AWS access-key ids, Slack). A credential shape
     Bivy has no pattern for — including generic high-entropy secrets — will be
     persisted verbatim.
-13. **No third-party security audit.** Bivy 0.1 has not been externally audited.
+13. **No third-party security audit.** Bivy has not been externally audited.
 14. **Approvals expire denied after 5 minutes.** A long-running unattended
     session that hits an approval will stall and then fail rather than proceed.
 

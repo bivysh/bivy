@@ -169,6 +169,27 @@ jobs:
       # which catches cross-boundary imports that tsc --noEmit can miss.
       - run: npm run build:release
 
+  # Install the exact curated npm tarball into a fresh consumer project on both
+  # supported desktop OS families. This catches release-only dependency/audit,
+  # native-module, README metadata, and built-in Pi discovery regressions.
+  release-consumer:
+    needs: changes
+    if: inputs.force_all || needs.changes.outputs.root == 'true'
+    name: Release consumer (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:release-smoke
+
   # The PWA is a principal product client. Playwright parallelizes its test files
   # and desktop/mobile projects within this runner.
   browser:
@@ -287,6 +308,7 @@ jobs:
       - root-quality
       - root-tests
       - root-builds
+      - release-consumer
       - browser
       - docs-links
       - control-plane

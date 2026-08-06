@@ -11,7 +11,12 @@ Bivy can turn a Slack slash command into an unattended agent run on one of your 
 5. In the Slack app, open **Slash Commands**, create `/bivy`, and paste that Request URL.
 6. Install or reinstall the app to your workspace.
 
-Bivy stores the signing secret only to verify Slack's request signatures. Requests older than five minutes and requests with invalid signatures are rejected.
+Bivy stores the signing secret only to verify Slack's request signatures.
+Requests older than five minutes and requests with invalid signatures are
+rejected. The slash-command text necessarily reaches Bivy Cloud in plaintext
+and is retained as the queued run's title until that run is deleted, so do not
+put credentials or other secrets in `/bivy` commands. Repository contents,
+agent transcripts, and model credentials still stay on the node.
 
 ## Commands
 

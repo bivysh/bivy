@@ -7,10 +7,14 @@ prompts into governed agent runs on your laptop, server, or cloud account. Choos
 the node, agent, and model; burst onto a short-lived runner in your own cloud;
 then watch, steer, and approve from a phone, browser, or terminal.
 
-Agents run with your repository, keys, and toolchain. Bivy's relay and control
-plane do not receive repository contents, prompts, transcripts, or model keys.
-Bivy adds routing, durable sessions, approvals, fallback rules, and outcome
-reports around agents you already use.
+Agents run with your repository, keys, and toolchain. Interactive session
+traffic is end-to-end encrypted between your node and devices; Bivy's relay and
+control plane do not receive repository contents, interactive prompts,
+transcripts, or model keys. Inbound Slack commands and generic webhook
+instructions necessarily reach the control plane and are retained with their
+queue item until it is deleted; GitHub and Linear issue text is fetched directly
+by the node instead. Bivy adds routing, durable sessions, approvals, fallback
+rules, and outcome reports around agents you already use.
 
 - **Website:** [bivy.sh](https://bivy.sh)
 - **Documentation:** [`docs/`](docs/README.md) — start with the [quickstart](docs/quickstart.md)
@@ -136,7 +140,9 @@ See [`docs/remote-access.md`](docs/remote-access.md) and
 
 ## Supported agents
 
-Nineteen agents are available in the picker, each driven through its native interface:
+Nineteen agents are available in the picker, each driven through its native interface.
+Pi, Claude Code, Codex, and OpenCode are the release-tested **Supported** paths;
+the rest are explicitly Beta in the picker and support matrix:
 
 | Agent | Command | Notes |
 |---|---|---|
@@ -230,8 +236,10 @@ picker's Protection label. **Bivy does not currently ship its own OS-level jail.
 ## Credentials
 
 Provider credentials stay on the node or in a vault you control. Bivy Cloud does
-not receive model keys, GitHub repository tokens, OAuth refresh tokens, prompts,
-transcripts, or workspace files.
+not receive model keys, GitHub repository tokens, OAuth refresh tokens,
+interactive session prompts, transcripts, or workspace files. See the
+[security model](docs/security-model.md#what-the-control-plane-sees) for the
+separate inbound-automation data boundary.
 
 ```bash
 bivy secrets list
@@ -250,9 +258,11 @@ Label an issue `bivy` (or `bivy/<node>` to target a machine), or mention the Biv
 GitHub App in a comment. A node you own claims the work, runs the agent in an
 isolated worktree, and the agent opens the pull request itself.
 
-Available on every plan: interactive CLI/app sessions are unlimited. Free
-accounts also get 10 unattended automations per rolling 7-day window across
-GitHub, Slack, webhooks, and schedules; Pro removes the automation cap.
+Available on every plan. On Bivy Cloud, the free trial shows the first 25
+distinct sessions in the hosted app and includes 10 unattended automations per
+rolling 7-day window across GitHub, Slack, webhooks, and schedules. Sessions keep
+running on your machines after the hosted trial is exhausted, but new ones are
+hidden from the hosted app until you subscribe. Pro removes both limits.
 Self-hosted stacks are unlimited.
 
 A private GitHub App only installs on the account that owns it, so connect one

@@ -16,7 +16,7 @@
 #     --control-plane https://app.example.com \
 #     --relay wss://relay.example.com \
 #     --email you@example.com
-#   npm run dev   # node dials the relay; use "Link remote device" to pair a phone
+#   npm run dev   # node dials the relay; run `bivy link` to pair a phone
 #
 # NOTE: defaults to NODE_ENV=production, so the services refuse to boot with
 # insecure defaults and dev-login is disabled. For a throwaway staging box that
