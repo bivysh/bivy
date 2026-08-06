@@ -13,6 +13,7 @@ import { SetupNotice } from "./components/SetupNotice.js";
 import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { SessionMenu } from "./components/SessionMenu.js";
+import { TuiLockedView } from "./components/TuiLockedView.js";
 import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
 import { classifySource } from "./sessionSource.js";
@@ -557,120 +558,118 @@ export function App() {
           </div>
         )}
 
-        <ChatView
-          entries={state.transcript}
-          working={state.working}
-          workingLabel={state.workingLabel}
-          // Whether there's no real session behind the current view — driven by
-          // the session store rather than the URL, since the URL now moves to
-          // `/settings/*` while Settings is open without changing (or clearing)
-          // whatever session is open behind it.
-          draftRoute={!state.activeSessionId}
-          sessionKey={state.activeSessionId}
-          collapsed={collapsed}
-          onAction={runCommand}
-          footer={
-            <>
-              <ApprovalStack approvals={activeApprovals} onResolve={(id, ok) => controller.resolveApproval(id, ok)} />
-              <QuestionStack
-                questions={activeQuestions}
-                onAnswer={(id, sessionId, answers) => controller.answerQuestion(id, sessionId, answers)}
-                onCancel={(id, sessionId) => controller.cancelQuestion(id, sessionId)}
-              />
-            </>
-          }
-        />
-
-        <ChangesCard
-          changes={state.changes}
-          checkpoints={state.checkpoints}
-          checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
-          output={activeSession ? runEvidence.get(activeSession.sessionId)?.output : undefined}
-        />
-
-        <div className="composer-gh">
-          {/* The run card now stands for every active session — an automation
-              trigger, a fork, or a plain hand-opened one — carrying whatever
-              applies: source, live status, token usage, fork lineage, and (in
-              its sheet) the run evidence and GitHub links. Only a draft (no
-              session yet) falls back to the bare GithubPill for repo context. */}
-          {activeSession && activeRunSource ? (
-            <RunPill
-              anchorId={`attention-${activeSession.sessionId}`}
-              source={activeRunSource}
-              statusClass={statusClass(activeSession)}
-              statusLabel={statusLabel(activeSession)}
-              gh={state.github}
-              evidence={runEvidence.get(activeSession.sessionId)}
-              finishedAt={activeSession.finishedAt}
-              usage={state.usage}
-              forkedFrom={activeForkedFrom}
-              onRecover={(kind) => {
-                // C2: recover a terminal run using existing capabilities. fix/retry
-                // send a targeted prompt to this session; fork branches it off.
-                const sid = activeSession.sessionId;
-                const ev = runEvidence.get(sid);
-                const failed = ev ? failingCheckNames(ev) : [];
-                if (kind === "fork") { void controller.forkSession(sid); return; }
-                if (kind === "fix") {
-                  controller.sendPrompt(failed.length
-                    ? `The deterministic checks failed (${failed.join(", ")}). Please investigate the failures and fix them, then confirm the checks pass.`
-                    : "This run did not finish cleanly. Please investigate what went wrong and fix it.");
-                  return;
-                }
-                // retry
-                controller.sendPrompt(failed.length
-                  ? `Please re-run the ${failed.join(", ")} check(s) and address anything that still fails.`
-                  : "Please re-run the project checks and address anything that fails.");
-              }}
+        {activeTuiLocked ? (
+          <TuiLockedView
+            sessionName={state.activeTitle}
+            nodeLabel={activeSessionNode?.name}
+            online={state.status !== "offline"}
+            onOpenTerminal={continueInTerminal}
+            onUseChat={takeoverInChat}
+          />
+        ) : (
+          <>
+            <ChatView
+              entries={state.transcript}
+              working={state.working}
+              workingLabel={state.workingLabel}
+              // Whether there's no real session behind the current view — driven by
+              // the session store rather than the URL, since the URL now moves to
+              // `/settings/*` while Settings is open without changing (or clearing)
+              // whatever session is open behind it.
+              draftRoute={!state.activeSessionId}
+              sessionKey={state.activeSessionId}
+              collapsed={collapsed}
+              onAction={runCommand}
+              footer={
+                <>
+                  <ApprovalStack approvals={activeApprovals} onResolve={(id, ok) => controller.resolveApproval(id, ok)} />
+                  <QuestionStack
+                    questions={activeQuestions}
+                    onAnswer={(id, sessionId, answers) => controller.answerQuestion(id, sessionId, answers)}
+                    onCancel={(id, sessionId) => controller.cancelQuestion(id, sessionId)}
+                  />
+                </>
+              }
             />
-          ) : (
-            <GithubPill gh={state.github} />
-          )}
-          {/* Slash-command pill, pushed to the right so it sits top-right over
-              the composer on the same band as the GitHub context. Tapping it
-              (re)initializes a closed session so its commands can be fetched,
-              then opens the composer's "/" menu. Hidden on a draft (new
-              session) — there's no attached session to advertise commands yet. */}
-          {state.activeSessionId && (
-            <button
-              type="button"
-              className="slash-pill"
-              onClick={() => controller.openSlashCommands()}
-              disabled={!canCompose}
-              title="Slash commands"
-              aria-label="Slash commands"
-            >
-              <svg className="slash-glyph" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                <path d="M11 3 5 13" />
-              </svg>
-            </button>
-          )}
-        </div>
 
-        {activeTuiLocked && (
-          <div className="composer-tui-lock" role="status">
-            <span className="composer-tui-lock-text">This session is open in the terminal (TUI).</span>
-            <div className="composer-tui-lock-actions">
-              <button type="button" className="ghost-btn" onClick={continueInTerminal}>
-                Go to terminal
-              </button>
-              <button type="button" className="btn primary" onClick={takeoverInChat}>
-                Take over in chat
-              </button>
+            <ChangesCard
+              changes={state.changes}
+              checkpoints={state.checkpoints}
+              checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
+              output={activeSession ? runEvidence.get(activeSession.sessionId)?.output : undefined}
+            />
+
+            <div className="composer-gh">
+              {/* The run card now stands for every active session — an automation
+                  trigger, a fork, or a plain hand-opened one — carrying whatever
+                  applies: source, live status, token usage, fork lineage, and (in
+                  its sheet) the run evidence and GitHub links. Only a draft (no
+                  session yet) falls back to the bare GithubPill for repo context. */}
+              {activeSession && activeRunSource ? (
+                <RunPill
+                  anchorId={`attention-${activeSession.sessionId}`}
+                  source={activeRunSource}
+                  statusClass={statusClass(activeSession)}
+                  statusLabel={statusLabel(activeSession)}
+                  gh={state.github}
+                  evidence={runEvidence.get(activeSession.sessionId)}
+                  finishedAt={activeSession.finishedAt}
+                  usage={state.usage}
+                  forkedFrom={activeForkedFrom}
+                  onRecover={(kind) => {
+                    // C2: recover a terminal run using existing capabilities. fix/retry
+                    // send a targeted prompt to this session; fork branches it off.
+                    const sid = activeSession.sessionId;
+                    const ev = runEvidence.get(sid);
+                    const failed = ev ? failingCheckNames(ev) : [];
+                    if (kind === "fork") { void controller.forkSession(sid); return; }
+                    if (kind === "fix") {
+                      controller.sendPrompt(failed.length
+                        ? `The deterministic checks failed (${failed.join(", ")}). Please investigate the failures and fix them, then confirm the checks pass.`
+                        : "This run did not finish cleanly. Please investigate what went wrong and fix it.");
+                      return;
+                    }
+                    // retry
+                    controller.sendPrompt(failed.length
+                      ? `Please re-run the ${failed.join(", ")} check(s) and address anything that still fails.`
+                      : "Please re-run the project checks and address anything that fails.");
+                  }}
+                />
+              ) : (
+                <GithubPill gh={state.github} />
+              )}
+              {/* Slash-command pill, pushed to the right so it sits top-right over
+                  the composer on the same band as the GitHub context. Tapping it
+                  (re)initializes a closed session so its commands can be fetched,
+                  then opens the composer's "/" menu. Hidden on a draft (new
+                  session) — there's no attached session to advertise commands yet. */}
+              {state.activeSessionId && (
+                <button
+                  type="button"
+                  className="slash-pill"
+                  onClick={() => controller.openSlashCommands()}
+                  disabled={!canCompose}
+                  title="Slash commands"
+                  aria-label="Slash commands"
+                >
+                  <svg className="slash-glyph" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                    <path d="M11 3 5 13" />
+                  </svg>
+                </button>
+              )}
             </div>
-          </div>
-        )}
 
-        <Composer
-          state={state}
-          disabled={!canCompose}
-          disabledHint={activeTuiLocked ? "Open in the terminal — take over to chat here" : state.status === "offline" ? "Not connected" : "Connecting…"}
-          working={state.working}
-          onSend={(text, attachments) => controller.sendPrompt(text, attachments)}
-          onAbort={() => controller.abort()}
-          onError={(message) => controller.store.setError(message)}
-        />
+            <Composer
+              state={state}
+              disabled={!canCompose}
+              disabledHint={state.status === "offline" ? "Not connected" : "Connecting…"}
+              working={state.working}
+              onSend={(text, attachments) => controller.sendPrompt(text, attachments)}
+              onAbort={() => controller.abort()}
+              onError={(message) => controller.store.setError(message)}
+            />
+          </>
+        )}
       </main>
 
       {settingsRoute && (

@@ -860,17 +860,21 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .composer-gh:empty { display: none; }
 .pill-gh { flex: none; }
 
-/* TUI single-writer lock banner: shown in place of a usable composer while the
-   active session is driven by its interactive terminal. Offers to jump to that
-   terminal or take the session back into chat. */
-.composer-tui-lock {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  margin: 8px 10px 0; padding: 8px 12px;
-  border: 1px solid var(--accent); border-radius: 10px;
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
-}
-.composer-tui-lock-text { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--ink); }
-.composer-tui-lock-actions { flex: none; display: flex; gap: 8px; }
+/* TUI single-writer lock: full session-window interstitial (see
+   TuiLockedView.tsx) shown in place of the chat + composer while the active
+   session is driven by its interactive terminal. Fills the area the chat pane
+   would occupy and centers a compact card; the buttons are the old lock
+   banner's escape hatches (open the terminal / take over in chat) at a more
+   deliberate, explanatory scale. */
+.tui-locked { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px 16px; overflow-y: auto; }
+.tui-locked-card { width: min(440px, 100%); border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface); padding: 28px 24px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; box-shadow: 0 24px 80px rgba(0,0,0,0.18); }
+.tui-locked-icon { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; border-radius: 14px; background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); color: var(--accent); }
+.tui-locked-title { margin: 2px 0 0; font-size: 18px; font-weight: 700; }
+.tui-locked-sub { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; max-width: 38ch; }
+.tui-locked-name { color: var(--ink); font-weight: 600; }
+.tui-locked-node { color: var(--ink); font-weight: 600; }
+.tui-locked-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; justify-content: center; }
+.tui-locked-hint { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
 
 /* "/" slash-command pill: opens the composer's command menu. `margin-left: auto`
    parks it on the right edge of the band (top-right over the composer) whether or
@@ -1203,6 +1207,10 @@ button.action-sheet-item:last-child { border-bottom: 0; }
   padding: 1px 5px; border-radius: 5px; background: var(--surface-2); color: var(--ink);
 }
 .repo-connect-note { margin: 2px 0 0; font-size: 12px; }
+/* Copyable `bivy resume <id>` row in the SessionMenu "Continue in terminal
+   locally" dialog — the same repo-connect command row, full-width so the long
+   id has room before the copy button. */
+.resume-command { width: 100%; box-sizing: border-box; }
 /* The device code the user types at github.com/login/device (status "waiting"). */
 .repo-connect-code {
   align-self: flex-start; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
