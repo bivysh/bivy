@@ -56,6 +56,18 @@ describe("consumeLinkPayload", () => {
     expect(store.pairSecrets().n1).toBe("SEC");
   });
 
+  it("makes the setup wizard's agent the first app draft choice", () => {
+    const store = createLocalStore(mem(), mem());
+    store.setLastChoice({ agentId: "pi" }); // stale choice from another node
+    consumeLinkPayload(store, encode({
+      session: "tok123",
+      node: { id: "new-node" },
+      defaultAgent: " Claude-Code-SDK ",
+    }));
+    expect(store.cur).toBe("new-node");
+    expect(store.lastChoice().agentId).toBe("claude-code-sdk");
+  });
+
   it("returns false for empty/garbage input", () => {
     const store = createLocalStore(mem(), mem());
     expect(consumeLinkPayload(store, "")).toBe(false);

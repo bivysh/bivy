@@ -279,6 +279,33 @@ describe("SessionStore", () => {
     expect(store.getState().githubConnect).toMatchObject({ status: "error", error: "nope" });
   });
 
+  it("keeps the current node online when a stale registry snapshot races the live transport", () => {
+    const store = new SessionStore();
+    store.setCurrentNode("new-node");
+    store.setNodes([
+      { id: "new-node", name: "New node", online: false },
+      { id: "other", name: "Other", online: false },
+    ]);
+
+    // The relay connection is direct evidence that this selected node is live.
+    store.setStatus("online");
+    expect(store.getState().nodes.find((n) => n.id === "new-node")?.online).toBe(true);
+
+    // The relay's fire-and-forget control-plane write may still be in flight;
+    // that late list must not turn the dot grey again.
+    store.setNodes([
+      { id: "new-node", name: "New node", online: false },
+      { id: "other", name: "Other", online: false },
+    ]);
+    expect(store.getState().nodes.find((n) => n.id === "new-node")?.online).toBe(true);
+    expect(store.getState().nodes.find((n) => n.id === "other")?.online).toBe(false);
+
+    // Closing this browser transport (for example, to switch nodes) is not proof
+    // that the daemon went offline, so it must not undo account presence.
+    store.setStatus("offline");
+    expect(store.getState().nodes.find((n) => n.id === "new-node")?.online).toBe(true);
+  });
+
   it("clears nodeSettings on node switch so a new node's panel never shows the previous node's settings (issue #75)", () => {
     const store = new SessionStore();
     store.apply({
