@@ -255,6 +255,8 @@ export class AppController {
   private pendingCrossNodeOpen: { sessionId: string; path?: string } | null = null;
   /** Subscribers that want the composer input focused (e.g. after "New"). */
   private composerFocusListeners = new Set<() => void>();
+  /** Subscribers that accept editable text drafted by contextual UI actions. */
+  private composerPrefillListeners = new Set<(text: string) => void>();
   /** Subscribers that want the composer's slash-command menu opened (the "/" pill). */
   private slashOpenListeners = new Set<() => void>();
 
@@ -615,6 +617,18 @@ export class AppController {
    *  so the user can type immediately. */
   focusComposer(): void {
     for (const fn of this.composerFocusListeners) fn();
+  }
+
+  /** Subscribe to contextual prompt drafts (for example, review a changed file). */
+  onComposerPrefill(fn: (text: string) => void): () => void {
+    this.composerPrefillListeners.add(fn);
+    return () => this.composerPrefillListeners.delete(fn);
+  }
+
+  /** Put a contextual prompt in the composer without sending an agent turn. */
+  prefillComposer(text: string): void {
+    for (const fn of this.composerPrefillListeners) fn(text);
+    this.focusComposer();
   }
 
   /** Subscribe to slash-menu-open requests (the Composer wires its "/" popover
