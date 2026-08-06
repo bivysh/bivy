@@ -46,3 +46,27 @@ export function removeExcept(root, keep) {
   };
   walk(root);
 }
+
+function isInside(parent, candidate) {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+/**
+ * Remove the state directory and, for packaged installs, the install directory.
+ * Tarball installs keep state below the install directory, while npm-global
+ * installs keep it separately (normally ~/.bivy), so both layouts must be
+ * handled without deleting paths requested by --keep-sessions.
+ */
+export function removeInstallAndState(installDir, stateDir, { keepInstall = false, keepState = [] } = {}) {
+  if (keepInstall) {
+    removeExcept(stateDir, keepState);
+    return;
+  }
+  if (isInside(installDir, stateDir)) {
+    removeExcept(installDir, keepState);
+    return;
+  }
+  removeExcept(stateDir, keepState);
+  fs.rmSync(installDir, { recursive: true, force: true });
+}

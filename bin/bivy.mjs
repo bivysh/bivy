@@ -36,7 +36,7 @@ import vm from "node:vm";
 import { selectStaleSessions, sessionActivityMs } from "./prune-sessions.mjs";
 import { resolveSessionsLimit, truncateSavedSessions } from "./sessions-list.mjs";
 import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForShell } from "./shim-path.mjs";
-import { removeExcept } from "./uninstall-paths.mjs";
+import { removeInstallAndState } from "./uninstall-paths.mjs";
 import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
 import { resolveAttachSessionId } from "./attach-session-id.mjs";
 
@@ -4126,14 +4126,13 @@ async function cmdUninstall(args = []) {
       console.log(c.green(`Removed ${removed} worktree(s).`));
     }
 
-    // Delete the app + all local state. A git checkout keeps its source (only
-    // the .bivy state dir goes); a packaged install removes the whole app dir.
-    // With --keep-sessions, the pi transcripts and the session index are left
-    // in place rather than deleted (see removeExcept) — everything else in
-    // that state dir (config, credentials, relay enrollment, …) is still
-    // removed as normal.
+    // Delete all local state and, for a packaged install, the package itself.
+    // npm-global installs keep state outside repoRoot (normally ~/.bivy), while
+    // tarball installs keep it below repoRoot; removeInstallAndState handles
+    // both layouts. With --keep-sessions, the transcripts and session index
+    // remain in place while config, credentials, relay enrollment, etc. go.
     const keepPaths = keepSessions ? [sessionsDir, metadataPath].filter((p) => fs.existsSync(p)) : [];
-    removeExcept(isGitCheckout ? appDir : repoRoot, keepPaths);
+    removeInstallAndState(repoRoot, appDir, { keepInstall: isGitCheckout, keepState: keepPaths });
     fs.rmSync(symlink, { force: true });
 
     console.log(c.green("\nBivy uninstalled from this machine."));
