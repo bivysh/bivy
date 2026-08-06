@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Speech-to-text (voice input) — shared logic for the node server and the CLI.
 //

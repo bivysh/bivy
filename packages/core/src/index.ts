@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // @bivy/core — framework-agnostic client core shared by the web PWA and,
 // later, the Expo app. No DOM, no framework: just protocol, transport, crypto,

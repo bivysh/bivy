@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Small setup-time entry point: normalize a native agent login into Bivy's
 // encrypted model credential vault without passing credential material on argv.

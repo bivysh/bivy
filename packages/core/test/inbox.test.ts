@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 import { buildInboxItems, dedupeInboxItems, inboxItemId, isInboxAdvert, type InboxItem } from "../src/inbox.js";
 import type { AccountAutomationRun, AccountNode, GithubQueueItem } from "../src/account.js";

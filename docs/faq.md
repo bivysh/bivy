@@ -34,7 +34,7 @@ PWA](remote-access.md#4-install-the-pwa).
 ## Can I get support for a self-hosted deployment?
 
 No, not in the sense of an SLA or a support queue. Self-hosting the control
-plane + relay stack is **source-available under FSL-1.1-ALv2** and explicitly
+plane + relay stack is **open-source under AGPL-3.0-only** and explicitly
 unsupported: no uptime, response-time, or data-durability guarantees, and
 breaking changes between versions are likely. If you run it, you own
 operating it — TLS, backups, restores, secret rotation, monitoring, and

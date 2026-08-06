@@ -19,7 +19,7 @@ The two self-host surfaces differ only in how much you have to operate:
 
 **Operating the control-plane + relay stack yourself means:**
 
-- It is **source-available under FSL-1.1-ALv2**, not a managed product. You may run it for any purpose except a [Competing Use](../LICENSE); each release converts to Apache-2.0 two years later.
+- It is **open-source under AGPL-3.0-only**, not a managed product. You may use, modify, and run it under the terms of the [license](../LICENSE); modified network deployments must offer their users corresponding source as required by AGPL section 13.
 - **No uptime, response-time, or data-durability guarantees.** Breaking changes between versions and manual upgrade/migration steps are likely.
 - **You own operations:** TLS, backups, restore drills, secret rotation, monitoring, abuse prevention, and security hardening are your responsibility. This doc gets you started; it does not make them turnkey.
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolActivity, type TranscriptEntry } from "@bivy/core";

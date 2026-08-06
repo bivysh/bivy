@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // A minimal STUB Agent Client Protocol (ACP) agent for testing bin/acp-shim.mjs.
 // Speaks newline-delimited JSON-RPC 2.0 over stdio, implementing just enough of
 // ACP to exercise the shim end-to-end: initialize, session/new, session/load, and

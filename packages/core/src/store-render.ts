@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // Markdown/text/transcript-render helpers for the session store. Split out of
 // store.ts so the reducer keeps only state-folding logic. These turn raw node

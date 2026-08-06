@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-ALv2
+// SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 // `bivy exec "<prompt>"` — one-shot, headless agent run for scripting and pipes.
 // Creates (or resumes) a session, sends one prompt, waits for the turn to finish,
