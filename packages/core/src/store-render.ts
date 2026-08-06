@@ -113,7 +113,7 @@ export function toolEntriesFromContent(content: any): ToolActivity[] {
     } else if (isToolResultBlock(block)) {
       const id = toolCallId(block);
       const result = typeof block?.content === "string" ? block.content : contentToText(block?.content);
-      out.push({ callId: id, name: toolName(block), input: {}, status: "done", result });
+      out.push({ callId: id, name: toolName(block), input: {}, status: "done", result, detail: toolDetail(block) });
     }
   }
   return out;
@@ -128,6 +128,7 @@ function toolEntryFromToolResultMessage(msg: any): ToolActivity | null {
     input: {},
     status: "done",
     result: contentToText(msg?.content),
+    detail: toolDetail(msg),
   };
 }
 
@@ -296,6 +297,7 @@ export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity): v
       ...existing.tool,
       status: tool.status,
       result: tool.result ?? existing.tool.result,
+      detail: tool.detail ?? existing.tool.detail,
       input: tool.status === "running" ? tool.input : existing.tool.input,
     };
   } else {

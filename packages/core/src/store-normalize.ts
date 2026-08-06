@@ -247,6 +247,7 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       // resets them.
       lastSeenAt: previous?.lastSeenAt,
       finishedAt: previous?.finishedAt,
+      failedAt: previous?.failedAt,
     });
   }
   return [...byId.values()];
@@ -255,6 +256,7 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
 function normalizeSessionStatus(status: unknown, needsAction: boolean, isStreaming: boolean): SessionStatus {
   if (needsAction || status === "needs_action") return "needs_action";
   if (status === "working" || isStreaming) return "working";
+  if (status === "failed") return "failed";
   if (status === "saved") return "saved";
   return "idle";
 }

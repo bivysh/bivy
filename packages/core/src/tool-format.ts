@@ -24,7 +24,7 @@ export type ToolGlyph = "terminal" | "pencil" | "create" | "search" | "list" | "
  * own shape here so @bivy/core (shipped to the browser client) never imports
  * daemon code, matching how the codebase already mirrors minimal wire shapes.
  */
-export type ToolCallDetail =
+type ToolCallKindDetail =
   | { kind: "shell"; command: string; cwd?: string }
   | { kind: "read"; path: string }
   | { kind: "write"; path: string }
@@ -32,6 +32,17 @@ export type ToolCallDetail =
   | { kind: "search"; query: string; path?: string }
   | { kind: "fetch"; url: string }
   | { kind: "plan"; text?: string };
+
+export type ToolCallDetail = ToolCallKindDetail & {
+  meta?: {
+    version: 1;
+    provider: string;
+    protocol: "protocol" | "structured-pipe" | "sdk" | "unknown";
+    rawToolName: string;
+  };
+  raw?: unknown;
+  result?: { text?: string; exitCode?: number; isError?: boolean; truncated?: boolean };
+};
 
 const DETAIL_VERB: Record<ToolCallDetail["kind"], string> = {
   shell: "Ran",

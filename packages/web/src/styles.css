@@ -322,6 +322,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    regardless of seen/unseen, since the action stays outstanding either way
    (unlike a finished-and-nothing-to-do run, this can't quietly become "seen"). */
 .session-dot.needs-action { background: var(--danger); }
+.session-dot.failed { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent); }
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 .session-row { position: relative; display: flex; align-items: center; }
 .session-row .session-item { flex: 1; }
@@ -756,6 +757,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .mark-badge.working { background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
 .mark-badge.needs-action { background: var(--danger); }
+.mark-badge.failed { background: var(--danger); }
 .mark-badge.saved { background: transparent; border: 1.5px solid var(--muted); }
 .mark-badge.idle { background: var(--line-strong); }
 /* Finished-and-unseen keeps its own colour whichever base state it rode in on,
@@ -788,6 +790,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .run-pill.working .run-dot, .run-sheet-status .run-dot.working { background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
 .run-pill.needs-action .run-pill-stat { color: var(--danger); }
 .run-pill.needs-action .run-dot, .run-sheet-status .run-dot.needs-action { background: var(--danger); }
+.run-pill.failed .run-pill-stat { color: var(--danger); }
+.run-pill.failed .run-dot, .run-sheet-status .run-dot.failed { background: var(--danger); }
 .run-pill.saved .run-dot, .run-sheet-status .run-dot.saved { background: transparent; border: 1.5px solid var(--muted); }
 .run-pill.idle .run-dot, .run-sheet-status .run-dot.idle { background: var(--line-strong); }
 

@@ -28,6 +28,7 @@ import type {
   TuiLaunchSpec,
   UsageSnapshot,
 } from "./types.js";
+import { withExactCapabilitySurface } from "./types.js";
 import { extractTokenUsage } from "./cli-parsers.js";
 
 /** A protocol `usage` message → UsageSnapshot (reuses the CLI token-key scan). */
@@ -212,7 +213,7 @@ function parseStreamingBehaviors(raw: unknown): StreamingBehavior[] | undefined 
 function capabilitiesFromHello(raw: unknown): RuntimeCapabilities {
   const c = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const streamingBehaviors = parseStreamingBehaviors(c.streamingBehaviors);
-  return {
+  return withExactCapabilitySurface({
     toolInterception: c.toolInterception === true,
     modelSelection: c.modelSelection === true,
     packages: false,
@@ -220,7 +221,7 @@ function capabilitiesFromHello(raw: unknown): RuntimeCapabilities {
     fork: false,
     commands: parseAgentCommands(c.commands),
     ...(streamingBehaviors ? { streamingBehaviors } : {}),
-  };
+  });
 }
 
 /**
@@ -749,7 +750,7 @@ class ProtocolSession implements RuntimeSession {
 export class ProtocolRuntime implements AgentRuntime {
   readonly id: string;
   readonly displayName: string;
-  readonly capabilities: RuntimeCapabilities = { toolInterception: false, modelSelection: false, packages: false, resume: false, fork: false };
+  readonly capabilities: RuntimeCapabilities = withExactCapabilitySurface({ toolInterception: false, modelSelection: false, packages: false, resume: false, fork: false });
   private sessions: ProtocolSession[] = [];
 
   constructor(private readonly options: ProtocolRuntimeOptions) {
@@ -761,7 +762,7 @@ export class ProtocolRuntime implements AgentRuntime {
     // A runtime that can write its own resumable store from portable history
     // (Codex's rollout) supports true cross-runtime replay forks INTO it.
     if (options.writeHistory) this.capabilities.forkHistoryImport = true;
-    if (options.capabilities) Object.assign(this.capabilities, options.capabilities);
+    if (options.capabilities) Object.assign(this.capabilities, withExactCapabilitySurface({ ...this.capabilities, ...options.capabilities }));
   }
 
   listCatalog(): CatalogProvider[] {

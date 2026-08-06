@@ -53,7 +53,7 @@ export {
   repoFromSource,
 } from "./store-normalize.js";
 
-export type SessionStatus = "idle" | "working" | "needs_action" | "saved";
+export type SessionStatus = "idle" | "working" | "needs_action" | "failed" | "saved";
 
 /** A live native-agent PTY started by `bivy run`. These are node-owned terminal
  * sessions rather than structured chat sessions, but they belong in the same
@@ -128,6 +128,8 @@ export interface SessionSummary {
    *  session or a cold sessions.list snapshot never reads as a finished run
    *  someone hasn't looked at yet. */
   finishedAt?: number;
+  /** Client-local timestamp of the latest terminal failed turn. */
+  failedAt?: number;
   /** Content-free unresolved conditions from the account session index. */
   attention?: InboxAdvert[];
   /** Hosted-trial gate: this session is beyond the account's free lifetime session
@@ -2363,6 +2365,11 @@ export class SessionStore {
         }
         return;
       }
+      case "session.failed": {
+        const e = event as any;
+        if (e.sessionId) this.updateSessionRow(e.sessionId, { status: "failed", needsAction: false, failedAt: Number(e.failedAt) || Date.now(), updatedAt: Date.now() });
+        return;
+      }
       case "session.auth_required": {
         // The node reported an auth failure for `provider` (no credential, or an
         // expired/invalid one that 401'd). Raise the "Sign in to your model" sheet
@@ -3094,6 +3101,7 @@ export class SessionStore {
       prs?: PrRef[];
       updatedAt?: number;
       finishedAt?: number;
+      failedAt?: number;
     },
   ): void {
     if (!sessionId) return;
@@ -3115,6 +3123,7 @@ export class SessionStore {
         next.updatedAt !== s.updatedAt ||
         next.lastSeenAt !== s.lastSeenAt ||
         next.finishedAt !== s.finishedAt
+        || next.failedAt !== s.failedAt
       ) changed = true;
       return next;
     });

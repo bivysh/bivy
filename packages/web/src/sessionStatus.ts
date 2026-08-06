@@ -10,6 +10,7 @@ export interface SessionStatusInput {
   needsAction?: boolean;
   lastSeenAt?: number;
   finishedAt?: number;
+  failedAt?: number;
 }
 
 /** Dot shape/base-color class. Shape carries the live/not-live signal (filled
@@ -20,6 +21,7 @@ export interface SessionStatusInput {
 export function statusClass(s: SessionStatusInput): string {
   if (s.needsAction || s.status === "needs_action") return "needs-action";
   if (s.status === "working") return "working";
+  if (s.status === "failed") return "failed";
   if (s.status === "saved") return "saved";
   return "idle";
 }
@@ -45,7 +47,8 @@ export function isUnseen(s: SessionStatusInput): boolean {
  *  source of ranking means the sidebar and any future surface can't disagree
  *  about what counts as "needs you". */
 export function attentionRank(s: SessionStatusInput): number {
-  if (s.needsAction || s.status === "needs_action") return 2;
+  if (s.needsAction || s.status === "needs_action") return 3;
+  if (s.status === "failed") return 2;
   if (isUnseen(s)) return 1;
   return 0;
 }
@@ -55,6 +58,7 @@ export function attentionRank(s: SessionStatusInput): number {
 export function statusLabel(s: SessionStatusInput): string {
   if (s.needsAction || s.status === "needs_action") return "Needs your response";
   if (s.status === "working") return "Agent working";
+  if (s.status === "failed") return "Last turn failed";
   // "saved" means the node has no live record for this session (closed, not
   // attached) — distinct from "idle", where it's open on the node and can be
   // resumed instantly. Both used to render as the same flat grey dot.
