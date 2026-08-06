@@ -79,10 +79,18 @@ try {
     throw new Error("packaged CLI did not discover its built-in Pi runtime");
   }
 
-  const requireFromBivy = createRequire(path.join(consumer, "node_modules", "@bivy", "bivy", "package.json"));
-  let piDir = path.dirname(requireFromBivy.resolve("@earendil-works/pi-coding-agent"));
-  while (piDir !== path.dirname(piDir) && !fs.existsSync(path.join(piDir, "package.json"))) piDir = path.dirname(piDir);
-  const piManifest = path.join(piDir, "package.json");
+  const bivyRoot = path.join(consumer, "node_modules", "@bivy", "bivy");
+  let dependencyRoot = bivyRoot;
+  let piManifest;
+  while (dependencyRoot !== path.dirname(dependencyRoot)) {
+    const candidate = path.join(dependencyRoot, "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
+    if (fs.existsSync(candidate)) {
+      piManifest = candidate;
+      break;
+    }
+    dependencyRoot = path.dirname(dependencyRoot);
+  }
+  if (!piManifest) throw new Error("local install did not resolve Pi as an ordinary dependency");
   const requireFromPi = createRequire(piManifest);
   function resolvedPackageVersion(name) {
     let dir = path.dirname(requireFromPi.resolve(name));
@@ -102,8 +110,11 @@ try {
     throw new Error(`unsafe bundled dependency versions: brace-expansion ${braceVersion}, undici ${undiciVersion}`);
   }
 
-  run("npm", ["audit", "--omit=dev", "--audit-level=high"], { cwd: consumer });
-  console.log(`release smoke passed on ${process.platform}: @bivy/bivy@${version}, clean audit, Pi installed as an ordinary agent dependency`);
+  // Pi's published shrinkwrap makes npm audit report its original transitive
+  // versions even after Bivy's postinstall replaces the vulnerable files.
+  // Check the installed bytes above; root-security separately gates all other
+  // high/critical advisories through scripts/audit-prod.mjs.
+  console.log(`release smoke passed on ${process.platform}: @bivy/bivy@${version}, patched Pi installed as an ordinary agent dependency`);
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
