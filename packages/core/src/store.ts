@@ -1619,7 +1619,22 @@ export class SessionStore {
   }
 
   setStatus(status: ConnectionStatus): void {
-    if (status !== this.state.status) this.set({ status });
+    if (status === this.state.status) return;
+    const currentNodeId = this.state.currentNodeId;
+    // The live transport is more authoritative for the selected node than a
+    // possibly-racing /nodes snapshot. In particular, first install can fetch
+    // the registry while the relay's online write is still in flight; once this
+    // socket reaches online, paint the node online immediately rather than
+    // leaving it grey until the user manually re-selects it.
+    // Only the positive signal is authoritative: `offline` can also mean this
+    // browser intentionally closed its transport while switching nodes, which
+    // says nothing about whether the old node daemon is still connected.
+    this.set({
+      status,
+      ...(currentNodeId && status === "online"
+        ? { nodes: this.state.nodes.map((node) => node.id === currentNodeId ? { ...node, online: true } : node) }
+        : {}),
+    });
   }
 
   /** Reflect whether a control-plane session token is held. Drives the reactive
@@ -1630,7 +1645,15 @@ export class SessionStore {
   }
 
   setNodes(nodes: AccountNode[]): void {
-    this.set({ nodes });
+    // A control-plane list can race just behind the relay connection that made
+    // the current transport online. Preserve the stronger live signal so a late
+    // `{ online:false }` response cannot regress the selected node's dot.
+    const currentNodeId = this.state.currentNodeId;
+    this.set({
+      nodes: currentNodeId && this.state.status === "online"
+        ? nodes.map((node) => node.id === currentNodeId ? { ...node, online: true } : node)
+        : nodes,
+    });
   }
 
   /**

@@ -18,6 +18,8 @@ export interface LinkPayload {
   relay?: string;
   pairSecret?: string;
   node?: { id?: string; pub?: string };
+  /** Agent selected by the node setup wizard for its first app draft. */
+  defaultAgent?: string;
 }
 
 // The kinds of Web Push notification the mesh emits, and their user-facing
@@ -69,6 +71,11 @@ export function consumeLinkPayload(store: LocalStore, text: string): boolean {
     store.cur = p.node.id;
     if (p.node.pub) store.addNodePub(p.node.id, p.node.pub); // X25519 handshake
     if (p.pairSecret) store.setPairSecret(p.node.id, p.pairSecret);
+    // Setup opens the app on a browser that may carry a last-used agent from a
+    // different machine. Treat the explicit installer handoff as the newest
+    // choice so the first draft matches what the user just selected.
+    const defaultAgent = typeof p.defaultAgent === "string" ? p.defaultAgent.trim().toLowerCase() : "";
+    if (defaultAgent) store.setLastChoice({ agentId: defaultAgent });
   }
   return Boolean(p.session || p.node?.id);
 }

@@ -58,6 +58,9 @@ const controlPlaneUrl = `http://127.0.0.1:${cpAddress.port}`;
 const remoteApp = "https://app.example.test";
 
 fs.writeFileSync(path.join(dataDir, "cli.json"), `${JSON.stringify({ workspace, port: nodePort, env: { BIVY_RUNTIME: "pi" }, service: false }, null, 2)}\n`);
+// Simulate a prior Settings choice. Re-running setup and choosing Pi must update
+// this authoritative daemon setting, not only cli.json's BIVY_RUNTIME.
+fs.writeFileSync(path.join(dataDir, "settings.json"), `${JSON.stringify({ defaultAgent: "codex", sessionSync: true }, null, 2)}\n`);
 fs.writeFileSync(path.join(dataDir, "relay.json"), `${JSON.stringify({ url: "ws://127.0.0.1:9", controlPlaneUrl, clientBaseUrl: remoteApp, enrollmentToken: "sandbox-enrollment" }, null, 2)}\n`);
 await createCredentialVault(path.join(dataDir, "credentials")).setApiKey("openai", "sandbox-only-key");
 
@@ -106,6 +109,9 @@ try {
   assert.match(output, /take over in chat/);
   assert.ok(output.indexOf(remoteApp) < output.indexOf("Start your first session:"), "remote app must be presented before terminal fallback steps");
   assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, "cli.json"), "utf8")).port, nodePort, "sandbox setup kept its isolated port");
+  const settings = JSON.parse(fs.readFileSync(path.join(dataDir, "settings.json"), "utf8"));
+  assert.equal(settings.defaultAgent, "pi", "setup choice replaces an older authoritative node default");
+  assert.equal(settings.sessionSync, true, "setup preserves unrelated node settings");
 
   const bare = spawn(process.execPath, ["bin/bivy.mjs"], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
   let bareOutput = "";

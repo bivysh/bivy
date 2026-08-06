@@ -218,9 +218,10 @@ function saveConfig(config) {
   }
 }
 
-// The daemon's agent-neutral settings file (<dataDir>/settings.json), written by
-// src/. We only ever read it here — never author it — so a missing/garbage file
-// is just "no settings".
+// The daemon's agent-neutral settings file (<dataDir>/settings.json). Setup
+// writes the chosen default agent here as well as cli.json's service environment:
+// settings.json is authoritative on daemon boot, so updating only BIVY_RUNTIME
+// would let an older Settings choice silently override the installer choice.
 function loadSettings() {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(appDir, "settings.json"), "utf8"));
@@ -228,6 +229,14 @@ function loadSettings() {
   } catch {
     return {};
   }
+}
+
+function saveDefaultAgentSetting(runtimeId) {
+  fs.mkdirSync(appDir, { recursive: true });
+  const file = path.join(appDir, "settings.json");
+  const settings = { ...loadSettings(), defaultAgent: String(runtimeId).trim().toLowerCase() };
+  fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch { /* best effort */ }
 }
 
 // The default terminal agent when `bivy` / `bivy run` is invoked without an
@@ -3279,6 +3288,10 @@ async function cmdSetup(args = []) {
   if (setupAgent) {
     config.env = { ...config.env, BIVY_RUNTIME: setupAgent.runtimeId };
     saveConfig(config);
+    // Keep the daemon's authoritative node setting aligned with the wizard.
+    // Without this, a prior Settings choice wins over BIVY_RUNTIME at boot and
+    // the app opens a new session on a different agent than the user just chose.
+    saveDefaultAgentSetting(setupAgent.runtimeId);
   }
   let agentReady = true;
   if (setupAgent && setupAgent.runtimeId !== "pi") {
@@ -3498,6 +3511,12 @@ async function openRemoteApp({ setupSession = null, open = true, remotePath = ""
       relay: relay.url,
       session: setupSession.session,
       ...(setupSession.nodeId ? { node: { id: setupSession.nodeId } } : {}),
+      // One-shot first-run preference. The browser may already remember an agent
+      // from another node; carrying the install choice prevents that stale local
+      // preference from replacing what the user selected seconds ago.
+      ...(String(loadConfig().env?.BIVY_RUNTIME || "").trim()
+        ? { defaultAgent: String(loadConfig().env.BIVY_RUNTIME).trim().toLowerCase() }
+        : {}),
     };
     accountUrl = `${remoteBase}${remotePath}/#${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   }
