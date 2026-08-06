@@ -57,7 +57,7 @@ for you, no prompt:
 
 Asked, once, only if remote access is not configured yet:
 
-1. **Remote access** — `hosted` (default; the first 25 remotely accessible sessions are free, and nothing caps your local usage) or `self-hosted`.
+1. **Remote access** — `hosted` (default; the hosted app shows your first 25 distinct sessions free, then requires Pro; execution and local session history on your machine are not deleted or capped) or `self-hosted`.
    Choosing self-hosted then asks for your **control plane URL** and your **relay
    `ws(s)://` URL**.
 2. **Remote login** — `GitHub` (default) or an `email sign-in link`. Choosing

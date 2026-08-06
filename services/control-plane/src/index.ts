@@ -44,8 +44,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * Bivy — Control Plane.
  *
  * Hosted service for accounts, node registry, entitlements, and billing.
- * This is the metadata service we monetize on. It stores ONLY metadata — never
- * session content, files, prompts, tool output, or model credentials.
+ * Interactive session content stays E2E-encrypted and is never stored here.
+ * Slack and generic-webhook instructions are the explicit inbound-automation
+ * exception retained with queue items; model credentials are ciphertext only.
  */
 
 /**

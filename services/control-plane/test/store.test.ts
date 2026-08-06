@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
-import { entitlementsForPlan } from "../src/store.js";
+import { entitlementsForPlan, TRIAL_SESSIONS } from "../src/store.js";
 import { createPgMemStore } from "../src/pg-mem-store.js";
 
 /**
@@ -124,7 +124,8 @@ await test("free vs pro entitlements match the published pricing table", () => {
   assert.equal(free.pushEnabled, true, "free: push notifications included");
   assert.equal(free.relayEnabled, true, "free: hosted relay");
   assert.equal(free.workQueueEnabled, true, "free: hosted work queue included");
-  assert.equal(free.weeklyRunLimit, 10, "free: 10 weekly automations; interactive sessions are unlimited");
+  assert.equal(free.weeklyRunLimit, 10, "free: 10 weekly automations");
+  assert.equal(free.trialSessionLimit, TRIAL_SESSIONS, "free: lifetime hosted-app session trial");
   assert.equal(free.ephemeralEnabled, true, "free: quick ephemeral servers included");
 
   const pro = entitlementsForPlan("pro");
@@ -133,11 +134,13 @@ await test("free vs pro entitlements match the published pricing table", () => {
   assert.equal(pro.relayEnabled, true, "pro: remote relay");
   assert.equal(pro.workQueueEnabled, true, "pro: hosted work queue");
   assert.equal(pro.weeklyRunLimit, undefined, "pro: unlimited runs (no cap)");
+  assert.equal(pro.trialSessionLimit, undefined, "pro: unlimited hosted session visibility");
   assert.equal(pro.ephemeralEnabled, true, "pro: quick ephemeral servers");
 
   const team = entitlementsForPlan("team");
   assert.equal(team.maxNodes, undefined, "team: unlimited nodes (no cap)");
   assert.equal(team.weeklyRunLimit, undefined, "team: unlimited runs (no cap)");
+  assert.equal(team.trialSessionLimit, undefined, "team: unlimited hosted session visibility");
   assert.equal(team.workQueueEnabled, true, "team: hosted work queue");
   assert.equal(team.ephemeralEnabled, true, "team: quick ephemeral servers");
 });

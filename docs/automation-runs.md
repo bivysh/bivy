@@ -86,12 +86,16 @@ context stays available to current nodes and the queue UI.
 
 ## Privacy and metering boundary
 
-The control plane stores routing and source metadata, plus the sanitized
-evidence above. It must not receive agent prompts, transcripts, repository
-files, credentials, diffs, or generated content. GitHub issue/comment title
-and body are not retained at all past webhook routing — the claiming node
-fetches the live text directly from GitHub with its own token, immediately
-before use. Output fields contain references, not their contents.
+Interactive session prompts, transcripts, repository files, credentials, diffs,
+and generated content stay on the node. GitHub and Linear issue text is not
+retained past webhook routing: the claiming node fetches it directly from the
+provider immediately before use. Slack and generic automation webhooks are the
+explicit exception because those providers call the control plane directly:
+Slack prompt text is stored as the run title, and a generic webhook's fixed
+template plus event instruction is stored as the run body until the run is
+deleted. Do not include secrets in either source. Output fields and sanitized
+run evidence contain references and bounded status metadata, not generated
+content.
 
 Webhook receipt and queue browsing are not usage. Hosted free-tier usage is
 recorded only when a claimed automation run enters `running`; self-hosted

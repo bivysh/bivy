@@ -15,6 +15,9 @@ export const KEEP_SCRIPTS = ["setup", "bivy", "start", "dev", "relay:setup", "po
 /** dependencies present only for the monorepo's mobile app; the node doesn't need them. */
 export const DROP_DEPENDENCIES = ["expo", "react", "react-native"];
 
+/** Thin dependency staged by scripts/bundle-pi.mjs without upstream's shrinkwrap. */
+export const BUNDLED_DEPENDENCIES = ["@earendil-works/pi-coding-agent"];
+
 /**
  * Return a curated COPY of `pkg` (input is not mutated) suitable for publishing:
  * only allowlisted scripts survive, runtime entry points point at compiled dist,
@@ -22,8 +25,18 @@ export const DROP_DEPENDENCIES = ["expo", "react", "react-native"];
  * `private` flag is cleared so the staged dir remains publishable even though the
  * repo root is marked private to block a stray root `npm publish`.
  */
-export function curateManifest(pkg) {
+export function curateManifest(pkg, readme) {
   const out = { ...pkg };
+
+  // npm normally infers README.md while publishing, but trusted publishes of
+  // the curated staging directory have reached the registry with empty
+  // readme/readmeFilename metadata even though the file is in the tarball.
+  // Supplying both fields makes the npm package page deterministic. This is
+  // staging-only; the repo manifest does not carry a duplicate markdown blob.
+  if (typeof readme === "string" && readme.trim()) {
+    out.readme = readme;
+    out.readmeFilename = "README.md";
+  }
 
   // The staging dir IS the sanctioned publish path; it must not inherit the repo
   // root's `private: true` (which would make `npm publish` refuse it).
@@ -48,6 +61,10 @@ export function curateManifest(pkg) {
   scripts.start = "node dist/server.js";
   scripts.dev = "node dist/server.js";
   out.scripts = scripts;
+
+  // npm will package the thin pi copy staged under node_modules. Its manifest
+  // preserves upstream identity/license while repinning vulnerable dependencies.
+  out.bundledDependencies = [...BUNDLED_DEPENDENCIES];
 
   return out;
 }

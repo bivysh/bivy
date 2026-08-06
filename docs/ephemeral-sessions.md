@@ -5,7 +5,7 @@
 > the feature is built out. This page documents the design and the code that
 > remains in the tree; it is not linked from the docs index or the site yet.
 
-Ephemeral sessions are short-lived Bivy nodes created for one task/session. The control plane still stores metadata only; prompts, files, tool output, credentials, and agent transcripts remain on the ephemeral machine and are destroyed with it unless the user explicitly exports a branch/PR/artifact.
+Ephemeral sessions are short-lived Bivy nodes created for one task/session. Interactive prompts, files, tool output, credentials, and agent transcripts remain on the ephemeral machine and are destroyed with it unless the user explicitly exports a branch/PR/artifact. The control plane stores routing/outcome metadata; if the task originated from Slack or a generic webhook, that inbound instruction follows the separately documented automation boundary in [security-model.md](security-model.md#what-the-control-plane-sees).
 
 ## Product shape
 

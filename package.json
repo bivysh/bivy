@@ -5,6 +5,14 @@
   "type": "module",
   "license": "FSL-1.1-ALv2",
   "description": "Run coding agents on machines you own. Source-available, self-hostable agent workspace.",
+  "keywords": [
+    "ai-agent",
+    "coding-agent",
+    "claude-code",
+    "codex",
+    "self-hosted",
+    "developer-tools"
+  ],
   "homepage": "https://bivy.sh",
   "repository": {
     "type": "git",
@@ -45,6 +53,7 @@
     "gen:agent-manifest": "tsx scripts/generate-agent-manifest.ts",
     "check:links": "node scripts/check-links.mjs",
     "build:release": "node scripts/build-release.mjs",
+    "test:release-smoke": "node scripts/smoke-release.mjs",
     "publish:npm": "node scripts/build-release.mjs --publish",
     "publish:npm:dry": "node scripts/build-release.mjs --publish --dry-run",
     "test:remote": "tsx test/remote-e2e.ts",
