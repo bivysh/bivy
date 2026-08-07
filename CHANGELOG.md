@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-07
+
+### Added
+
+- `BIVY_CUSTOM_AGENTS` registers named custom agents in both the web picker and
+  `bivy run`: each entry extends a built-in CLI agent with an overrideable
+  label, command, args, and parser, appearing as experimental/unverified while
+  inheriting the base agent's execution behavior.
+- Sessions keep a durable per-session changes history, openable at any time from
+  a new session changes sheet, instead of only the current turn's changes card.
+
+### Changed
+
+- ACP (OpenCode) tool calls now surface structured tool names and real input
+  detail (diffs, paths) as they stream, and turn history is persisted as ordered
+  text/tool blocks exactly as they streamed instead of one merged block.
+- First-run setup opens the self-hosted control plane when you pick self-hosted,
+  and preserves your selected agent and node presence when handing off to the
+  app.
+- Bivy is now licensed under AGPL-3.0.
+
+### Fixed
+
+- Wedged sessions — a runtime that stops responding or stops emitting `agent_end`
+  (opencode's ACP server, a frozen Pi) — are now force-recovered by a stall
+  watchdog and a periodic sweep, and a new prompt to a hung session runs fresh
+  instead of vanishing into the dead turn.
+- Reasoning-log growth is bounded: a length-capped head with a truncation marker
+  is persisted, so a stuck turn can no longer balloon the on-disk transcript.
+- A flapping node no longer trips the relay's rate limiter and shows clients
+  "Rate limit exceeded".
+- Forks are portable across runtimes: resuming a fork restores the correct
+  runtime and transport instead of clobbering the model and stream.
+- Global npm install no longer bundles the Pi package, which broke the published
+  `@bivy/bivy` install.
+
 ## [0.9.0] - 2026-08-06
 
 ### Added
