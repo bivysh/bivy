@@ -87,6 +87,45 @@ await check("acp: drives a stub ACP agent — streaming, governed tool call, res
   }
 });
 
+// opencode's ACP server resolves session/prompt BEFORE its final
+// agent_message_chunk frames are flushed (the end_turn race, opencode#17505), so a
+// naive client finalizes the turn with the reply's tail still unstreamed — the
+// interim message streams live but is missing the moment the session reopens. The
+// shim must hold session.done until the trailing updates drain, so the tail lands
+// in the persisted transcript (getMessages), not just the live stream.
+await check("acp: trailing agent_message_chunk after the prompt reply is drained into history, not lost", async () => {
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_TRAILING_CHUNK = "1";
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((e) => events.push(e));
+    await session.prompt("hello acp");
+    await waitFor(events, (e) => e.type === "agent_end");
+    // Live: the tail streamed (it is an interim message on the way).
+    const streamed = events.filter((e) => e.type === "message_update").map((e) => (e as any).message?.content).filter((c: unknown) => typeof c === "string").join("");
+    assert.match(streamed, /trailing tail that must survive reopen/, `tail should stream live, got: ${streamed}`);
+    // Persisted: the same tail is folded into the assistant message getMessages()
+    // returns — what the daemon snapshots to the base transcript on message_end,
+    // so a re-opened session still shows it.
+    const assistant = session.getMessages().find((m) => m.role === "assistant") as { content?: Array<{ type?: string; text?: string }> } | undefined;
+    const text = (assistant?.content ?? [])
+      .filter((b) => b.type === "text")
+      .map((b) => b.text ?? "")
+      .join("");
+    assert.match(text, /trailing tail that must survive reopen/, `tail must persist to history, got: ${text}`);
+    // The turn ends exactly once — the drained tail is not a second turn.
+    assert.equal(events.filter((e) => e.type === "agent_end").length, 1, "exactly one agent_end after draining the tail");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_TRAILING_CHUNK;
+  }
+});
+
 // Per-agent ACP PROMOTION: an agent that declares `acp` (Gemini) is driven through
 // the governed ProtocolRuntime — not the one-shot pipe — when BIVY_GEMINI_ACP=1,
 // and honestly advertises the upgraded capabilities. This is the data-driven "make

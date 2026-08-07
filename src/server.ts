@@ -117,7 +117,7 @@ import { captureDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { normalizeMessages } from "./session/transcript-normal.js";
 import { buildNativeImportSeedPrompt } from "./session/native-import.js";
-import { EventLog } from "./session/event-log.js";
+import { EventLog, mergeBases } from "./session/event-log.js";
 import { revertFile } from "./session/revert-file.js";
 import { buildDiagnosticsReport, activationRecord } from "./diagnostics.js";
 import { AttachmentStore, isValidAttachmentHash, type AttachmentRef } from "./session/attachment-store.js";
@@ -2625,11 +2625,24 @@ retireTranscriptsDir();
  * with no build-free `readMessages` and no external rollout. Skips the write when the
  * runtime has nothing yet, so a transient empty read can never clobber a good base
  * with `[]`. The log stores it as a bounded delta (see EventLog.appendBaseSnapshot).
+ *
+ * The snapshot must never SHRINK the log. A protocol runtime that resumes via a
+ * blank reconnect (e.g. opencode through the ACP shim: session/load returns no
+ * message history) starts empty and only reports the turns that ran after the
+ * resume — a transcript SHORTER than what the log already holds, despite being
+ * the same ongoing conversation. `appendBaseSnapshot` reads a shorter snapshot
+ * as a compaction and REPLACES the logged base, silently dropping every prior
+ * turn. Rebase the runtime's snapshot onto the logged history instead (the same
+ * union `EventLog.deriveHistory` applies on read): the merged view is exactly
+ * the prefix-extend case the log already handles, so the log grows monotonically.
+ * A genuine runtime compaction isn't a supported feature, so never treating a
+ * snapshot as a shrink is safe.
  */
 function persistTranscriptSnapshot(record: SessionRecord): void {
   const base = record.session.getMessages();
   if (!base.length) return;
-  eventLog.appendBaseSnapshot(record.id, base);
+  const logged = eventLog.readBase(record.id);
+  eventLog.appendBaseSnapshot(record.id, logged.length ? mergeBases(logged, base) : base);
 }
 
 // In-flight dedupe so two sessions (or two turns) referencing the same remote

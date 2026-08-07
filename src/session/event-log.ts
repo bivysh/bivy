@@ -34,6 +34,30 @@ import { normalizedIntermediateText, thinkingTextFromContent, mergeTranscript, t
 import type { RuntimeMessage } from "../runtime/types.js";
 import type { AttachmentRef } from "./attachment-store.js";
 
+/**
+ * Union of a persisted base and a runtime's live transcript, such that the result
+ * is never shorter than either input alone. A live session's runtime transcript
+ * extends the persisted base, so the union is just the runtime's (no duplication).
+ * A resumed runtime that reconnected blank and only re-saw post-resume turns
+ * reports a strict prefix of the persisted base, so the union keeps the persisted
+ * copy. Disjoint inputs (a resumed runtime whose new turns aren't in the log yet)
+ * concatenate in log-then-runtime order. Duplicates are collapsed by message
+ * identity, so the same conversation serialized twice never double-appears.
+ */
+export function mergeBases(logged: RuntimeMessage[], runtime: readonly RuntimeMessage[]): RuntimeMessage[] {
+  if (!logged.length) return runtime as RuntimeMessage[];
+  const known = new Set(logged.map((m) => JSON.stringify(m)));
+  const merged = [...logged];
+  for (const m of runtime) {
+    const key = JSON.stringify(m);
+    if (!known.has(key)) {
+      known.add(key);
+      merged.push(m);
+    }
+  }
+  return merged;
+}
+
 /** One appended overlay record: an intermediate-reasoning or tool-activity entry. */
 export interface EventLogEntry extends SidecarMessage {
   bivyKind: "intermediate" | "tool";
@@ -535,12 +559,21 @@ export class EventLog {
 
   /**
    * The full derived conversation: overlay detail merged into the base transcript.
-   * Prefers the runtime's own live transcript when it has one; otherwise replays the
-   * base persisted in the log (a reopened session on a runtime that can't rebuild it).
-   * This is the single read path — it absorbs the former `mergeConversation` helper.
+   * The base is the UNION of the runtime's live transcript and the base persisted
+   * in the log — never one at the other's expense. A live session's runtime
+   * transcript extends the log (both are the same conversation, the runtime one
+   * message newer), so the union is just the runtime's. But a runtime that resumes
+   * via a blank reconnect (e.g. opencode through the ACP shim: session/load
+   * returns no message history) reports only the turns that ran AFTER the resume —
+   * a truncation of the same conversation, not the whole story. Preferring the
+   * runtime base there would mask every prior turn from every history read, so the
+   * union keeps the log's fuller copy while still surfacing whatever the runtime
+   * alone knows. This is the single read path — it absorbs the former
+   * `mergeConversation` helper.
    */
   deriveHistory(id: string, runtimeBase?: readonly RuntimeMessage[]): RuntimeMessage[] {
-    const base = runtimeBase && runtimeBase.length ? runtimeBase : this.readBase(id);
+    const logged = this.readBase(id);
+    const base = runtimeBase && runtimeBase.length ? mergeBases(logged, runtimeBase) : logged;
     return mergeTranscript(base, this.read(id));
   }
 

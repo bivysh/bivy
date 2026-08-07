@@ -125,6 +125,31 @@ let pendingModel = null;
 // right ACP permission request with a concrete optionId.
 const permissionRequests = new Map();
 
+// --- trailing-update drain ---------------------------------------------------
+// opencode's ACP server resolves `session/prompt` (the end_turn reply) BEFORE the
+// final `agent_message_chunk` frames are flushed — a known upstream ordering race
+// (opencode#17505). If the shim declared session.done the instant the prompt reply
+// arrived, the turn would seal at ProtocolRuntime with the reply's tail still
+// unstreamed: the trailing text then streams live (message_update) but never
+// reaches getMessages(), so it vanishes the moment the session reopens. So the
+// turn is NOT done at prompt-resolve — hold session.done until the session/update
+// stream has been quiet for TRAILING_DRAIN_MS, letting the late chunks land while
+// the turn is still open and get sealed into history.
+const TRAILING_DRAIN_MS = 250;
+let turnDrainTimer = null;
+let turnDraining = false;
+function scheduleTurnDone() {
+  clearTimeout(turnDrainTimer);
+  turnDrainTimer = setTimeout(finishTurnDone, TRAILING_DRAIN_MS);
+}
+function finishTurnDone() {
+  turnDrainTimer = null;
+  if (!turnDraining) return;
+  turnDraining = false;
+  bivy({ type: "session.status", status: "idle" });
+  bivy({ type: "session.done" });
+}
+
 // --- tool-call field normalization -------------------------------------------
 // ACP's `tool_call`/`tool_call_update` carries a free-text `title` (whatever
 // prose the agent chose) AND a small fixed `kind` enum (read/edit/delete/move/
@@ -235,6 +260,10 @@ function publishModels(result) {
 function onSessionUpdate(params) {
   const u = params?.update;
   if (!u || typeof u !== "object") return;
+  // Any update arriving while the turn is draining means the agent is still
+  // emitting the tail of this turn (see the drain note above) — reset the quiet
+  // window so session.done waits for it instead of sealing history short.
+  if (turnDraining) scheduleTurnDone();
   const kind = String(u.sessionUpdate || "");
   const textOf = (content) => {
     if (!content) return "";
@@ -432,8 +461,19 @@ async function onBivyCommand(msg) {
         bivy({ replyTo: id, ok: true });
         bivy({ type: "session.status", status: "working" });
         agentRequest("session/prompt", { sessionId, prompt: [{ type: "text", text: String(msg.text ?? "") }] })
-          .then(() => { bivy({ type: "session.status", status: "idle" }); bivy({ type: "session.done" }); })
-          .catch((e) => bivy({ type: "session.error", error: e instanceof Error ? e.message : String(e) }));
+          .then(() => {
+            // The prompt reply is NOT the end of the turn for opencode — the last
+            // agent_message_chunk frames trail it (see the drain note above). Arm
+            // the drain; session.done fires once the update stream goes quiet.
+            turnDraining = true;
+            scheduleTurnDone();
+          })
+          .catch((e) => {
+            clearTimeout(turnDrainTimer);
+            turnDrainTimer = null;
+            turnDraining = false;
+            bivy({ type: "session.error", error: e instanceof Error ? e.message : String(e) });
+          });
         return;
       }
       case "tool.decision": {
@@ -465,6 +505,11 @@ async function onBivyCommand(msg) {
         return;
       }
       case "session.abort": {
+        // A pending drain must not fire session.done after the user cancelled —
+        // the turn is being torn down, not finishing on its own.
+        clearTimeout(turnDrainTimer);
+        turnDrainTimer = null;
+        turnDraining = false;
         if (sessionId) agentNotify("session/cancel", { sessionId });
         if (id !== undefined) bivy({ replyTo: id, ok: true });
         return;

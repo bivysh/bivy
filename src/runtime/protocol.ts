@@ -517,6 +517,35 @@ class ProtocolSession implements RuntimeSession {
     if (pending) this.turnContent.push({ type: "text", text: pending });
   }
 
+  /**
+   * Fold assistant text that arrives after the turn was sealed (session.done)
+   * onto the last persisted assistant message — the ACP end_turn race (see the
+   * message.delta branch). The daemon's message_end handler re-snapshots the
+   * base transcript, so the tail survives a reopen; live viewers catch up via
+   * the emitted message_update + message_end. Text with no assistant message to
+   * fold onto is dropped (there is nowhere durable for it to go).
+   */
+  private foldLateAssistantDelta(text: string): void {
+    let lastIndex = -1;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i]?.role === "assistant") { lastIndex = i; break; }
+    }
+    if (lastIndex < 0) return;
+    const msg = this.messages[lastIndex]!;
+    const raw = msg.content;
+    const content: Array<{ type: string; text?: string }> = Array.isArray(raw)
+      ? (raw as Array<{ type: string; text?: string }>)
+      : typeof raw === "string" && raw
+        ? [{ type: "text", text: raw }]
+        : [];
+    const lastBlock = content[content.length - 1];
+    if (lastBlock && lastBlock.type === "text") lastBlock.text = `${lastBlock.text ?? ""}${text}`;
+    else content.push({ type: "text", text });
+    msg.content = content;
+    this.emit({ type: "message_update", message: { role: "assistant", content } });
+    this.emit({ type: "message_end", message: { role: "assistant", content } });
+  }
+
   private handleMessage(msg: Record<string, unknown>) {
     this.emitter.emit("protocol-message", msg);
     const replyTo = typeof msg.replyTo === "string" ? msg.replyTo : "";
@@ -553,9 +582,20 @@ class ProtocolSession implements RuntimeSession {
     }
     if (type === "message.delta") {
       const text = String(msg.text ?? "");
-      if (!this.assistantText) this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
-      this.assistantText += text;
-      this.emit({ type: "message_update", message: { role: "assistant", content: this.assistantText } });
+      if (!text) return;
+      if (this.streaming) {
+        if (!this.assistantText) this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
+        this.assistantText += text;
+        this.emit({ type: "message_update", message: { role: "assistant", content: this.assistantText } });
+        return;
+      }
+      // The turn was already sealed (session.done) yet the agent is still
+      // streaming text — the ACP end_turn race where the final agent_message_chunk
+      // frames land after the prompt reply (opencode#17505). The shim drains the
+      // tail before declaring done, but this is the net for a chunk that outlives
+      // the drain: fold it onto the last assistant message so it survives a reopen
+      // instead of opening a fresh draft that is never persisted.
+      this.foldLateAssistantDelta(text);
       return;
     }
     if (type === "message.reasoning" || type === "reasoning.delta") {
