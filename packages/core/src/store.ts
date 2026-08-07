@@ -715,6 +715,15 @@ export interface AppState {
    *  null. Drives the "files changed / undo this turn" card. Cleared on session
    *  switch, when a new turn starts, and after a rewind. */
   changes: TurnChanges | null;
+  /** Every turn's file changes for the active session, oldest first — the
+   *  durable record `changes` above doesn't keep (that field is retired the
+   *  instant the next turn starts, so it can only ever show the most recent
+   *  turn). Appended to on every `session.changes` that touched files; NOT
+   *  cleared when `changes` is retired or on rewind, only on session switch —
+   *  it backs the "session changes" sheet, which the user can open at any
+   *  point to see every turn's diff, not just whichever one happened to be
+   *  live when they looked. */
+  changesHistory: SessionChangeEntry[];
   /** The active session's harness checkpoints (newest first), for the rewind
    *  timeline. Populated on demand via `session.checkpoints`; [] until fetched. */
   checkpoints: Checkpoint[];
@@ -788,6 +797,15 @@ export interface TurnChanges {
   files: HarnessFileChange[];
 }
 
+/** One entry in the session's changes history (see AppState.changesHistory) —
+ *  a TurnChanges plus the bookkeeping the sheet needs to list many of them. */
+export interface SessionChangeEntry extends TurnChanges {
+  /** Stable id for this entry — a React key and the sheet's rewind target. */
+  id: string;
+  /** When this turn's changes were reported, for the sheet's "X ago" label. */
+  at: number;
+}
+
 export function initialState(): AppState {
   return {
     status: "offline",
@@ -847,6 +865,7 @@ export function initialState(): AppState {
     prResult: null,
     prRefreshAllResult: null,
     changes: null,
+    changesHistory: [],
     checkpoints: [],
     commandsBySession: {},
     followupsBySession: {},
@@ -1360,6 +1379,7 @@ export class SessionStore {
       usage: null,
       // Changes are per-session and per-turn; clear until this session reports.
       changes: null,
+      changesHistory: [],
       // Checkpoints are per-session; clear until re-fetched for the new session.
       checkpoints: [],
     });
@@ -1721,6 +1741,7 @@ export class SessionStore {
       // Per-session display state must not blend across nodes either.
       usage: null,
       changes: null,
+      changesHistory: [],
       checkpoints: [],
       // Advertised commands are per session on the previous node; never carry
       // them across a node switch.
@@ -1959,6 +1980,7 @@ export class SessionStore {
       // session has done anything at all.
       usage: null,
       changes: null,
+      changesHistory: [],
       checkpoints: [],
       // A brand-new draft hasn't picked an ephemeral runner yet.
       draftEphemeralConfig: null,
@@ -2823,7 +2845,12 @@ export class SessionStore {
         if (this.isForeignSessionEvent(e.sessionId)) return;
         const files: HarnessFileChange[] = Array.isArray(e.changes) ? e.changes : [];
         if (files.length === 0) { this.set({ changes: null }); return; }
-        this.set({ changes: { before: e.before ? String(e.before) : undefined, after: String(e.after ?? ""), files } });
+        const turn: TurnChanges = { before: e.before ? String(e.before) : undefined, after: String(e.after ?? ""), files };
+        // Also append to the durable per-session history the sheet reads —
+        // `changes` itself is retired the instant the next turn starts (see the
+        // "new turn starting" handler above), so it can't back a "see every
+        // turn's changes" view on its own.
+        this.set({ changes: turn, changesHistory: [...this.state.changesHistory, { ...turn, id: nextId(), at: Date.now() }] });
         return;
       }
       case "session.rewound": {

@@ -30,6 +30,7 @@ import type {
 } from "./types.js";
 import { withExactCapabilitySurface } from "./types.js";
 import { extractTokenUsage } from "./cli-parsers.js";
+import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 
 /** A protocol `usage` message → UsageSnapshot (reuses the CLI token-key scan). */
 function parseProtocolUsage(raw: unknown): UsageSnapshot | undefined {
@@ -290,11 +291,23 @@ class ProtocolSession implements RuntimeSession {
   private reasoningText = "";
   private stderrOutput = "";
   private lastUsage?: UsageSnapshot;
-  // Accumulate the current turn's tool calls/results so getMessages() keeps them
-  // in history — re-opening a session then shows what the agent actually did, not
-  // just its final text. Cleared at the start/end of each turn.
-  private turnToolUses: Array<Record<string, unknown>> = [];
+  // Accumulate the current turn's content blocks (text + tool calls, in the order
+  // they actually happened) and tool results so getMessages() keeps them in
+  // history — re-opening a session then shows what the agent actually did,
+  // interleaved exactly as it happened, not just its final text. Cleared at the
+  // start/end of each turn. `turnTextFlushed` is the prefix of `assistantText`
+  // already sealed into `turnContent` as a text block — each tool call flushes
+  // the text since the last flush before appending its own block, so a turn like
+  // "Let me check." → tool → "Now editing." → tool persists as
+  // [text, tool_use, text, tool_use] instead of collapsing into one text block
+  // followed by every tool (which is what re-flattened on reconcile and read as
+  // interim messages "disappearing"/bundling at the end of the turn).
+  private turnContent: Array<Record<string, unknown>> = [];
+  private turnTextFlushed = "";
   private turnToolResults: Array<Record<string, unknown>> = [];
+  // toolCallId -> the node's normalized classification, so a later tool.result
+  // (or tool.update) can attach/refresh `detail` on the already-pushed block.
+  private toolDetailsByCallId = new Map<string, ReturnType<typeof mapToolCall>>();
 
   constructor(
     private readonly runtimeOptions: ProtocolRuntimeOptions,
@@ -495,6 +508,15 @@ class ProtocolSession implements RuntimeSession {
     }
   }
 
+  /** Seal the assistant text streamed since the last flush as a text block in
+   *  `turnContent`, ahead of a tool call (or at turn end) — see turnContent's
+   *  doc comment for why this preserves interleaving on reconcile. */
+  private flushPendingTurnText(): void {
+    const pending = this.assistantText.slice(this.turnTextFlushed.length);
+    this.turnTextFlushed = this.assistantText;
+    if (pending) this.turnContent.push({ type: "text", text: pending });
+  }
+
   private handleMessage(msg: Record<string, unknown>) {
     this.emitter.emit("protocol-message", msg);
     const replyTo = typeof msg.replyTo === "string" ? msg.replyTo : "";
@@ -558,17 +580,21 @@ class ProtocolSession implements RuntimeSession {
       return;
     }
     if (type === "session.done") {
+      // Whether this turn ever used a tool — checked BEFORE flushing trailing
+      // text, so a tool-free turn (turnContent still empty at this point) keeps
+      // the plain-text message shape it always had instead of gaining a
+      // pointless single-text-block wrapper.
+      const hadTools = this.turnContent.length > 0 || this.turnToolResults.length > 0;
       const message = { role: "assistant", content: this.assistantText };
-      // Persist the assistant turn. When the turn used tools, store content blocks
-      // (text + tool_use) plus a trailing user message carrying the tool_result
-      // blocks, matched by tool_use_id — the same shape the PWA renders from live
-      // streaming, so a re-opened transcript looks identical to what was on screen.
-      // A tool-free turn keeps the plain-text form it always used.
-      if (this.turnToolUses.length || this.turnToolResults.length) {
-        const assistantContent: Array<Record<string, unknown>> = [];
-        if (this.assistantText) assistantContent.push({ type: "text", text: this.assistantText });
-        assistantContent.push(...this.turnToolUses);
-        if (assistantContent.length) this.messages.push({ role: "assistant", content: assistantContent, timestamp: Date.now() });
+      // Persist the assistant turn. When the turn used tools, store the ordered
+      // content blocks (text/tool_use interleaved exactly as they streamed — see
+      // turnContent's doc comment) plus a trailing user message carrying the
+      // tool_result blocks, matched by tool_use_id — the same shape the PWA
+      // renders from live streaming, so a re-opened transcript looks identical to
+      // what was on screen. A tool-free turn keeps the plain-text form it always used.
+      if (hadTools) {
+        this.flushPendingTurnText();
+        if (this.turnContent.length) this.messages.push({ role: "assistant", content: this.turnContent, timestamp: Date.now() });
         if (this.turnToolResults.length) this.messages.push({ role: "user", content: this.turnToolResults, timestamp: Date.now() });
       } else if (this.assistantText) {
         this.messages.push(message);
@@ -577,32 +603,37 @@ class ProtocolSession implements RuntimeSession {
       this.streaming = false;
       this.assistantText = "";
       this.reasoningText = "";
-      this.turnToolUses = [];
+      this.turnContent = [];
+      this.turnTextFlushed = "";
       this.turnToolResults = [];
+      this.toolDetailsByCallId.clear();
       this.emit({ type: "agent_end" });
       return;
     }
     if (type === "session.error") {
       this.streaming = false;
       this.reasoningText = "";
-      this.turnToolUses = [];
+      this.turnContent = [];
+      this.turnTextFlushed = "";
       this.turnToolResults = [];
+      this.toolDetailsByCallId.clear();
       this.emit({ type: "session.error", error: String(msg.error || "Protocol agent error") });
       this.emit({ type: "agent_end" });
       return;
     }
     if (type === "tool.call") {
-      this.turnToolUses.push({
-        type: "tool_use",
-        id: String(msg.toolCallId || msg.id || ""),
-        name: String(msg.name || "tool"),
-        input: msg.input ?? {},
-      });
+      const toolCallId = String(msg.toolCallId || msg.id || "");
+      const toolName = String(msg.name || "tool");
+      const detail = mapToolCall(toolName, msg.input, { provider: this.runtimeOptions.id || "acp", protocol: "protocol" });
+      if (detail) this.toolDetailsByCallId.set(toolCallId, detail);
+      this.flushPendingTurnText();
+      this.turnContent.push({ type: "tool_use", id: toolCallId, name: toolName, input: msg.input ?? {}, ...(detail ? { detail } : {}) });
     }
     if (type === "tool.call" && this.capabilitiesRef.toolInterception && this.toolInterceptor) {
       const toolCallId = String(msg.toolCallId || "");
       const toolName = String(msg.name || "tool");
-      this.emit({ type: "tool_call", toolName, input: msg.input, toolCallId });
+      const detail = this.toolDetailsByCallId.get(toolCallId);
+      this.emit({ type: "tool_call", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}) });
       const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
       try {
         this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, decision: decision?.block ? "deny" : "allow", reason: decision?.reason });
@@ -613,14 +644,39 @@ class ProtocolSession implements RuntimeSession {
       }
       return;
     }
+    if (type === "tool.update") {
+      // A tool call's structured data can arrive progressively (e.g. opencode's
+      // ACP shim often has an empty `rawInput` on the initial notification and
+      // fills in `content`/`locations` on a later update) — refresh the
+      // already-pushed turnContent block in place (never append a duplicate) and
+      // push a live update so an open tool card fills in without waiting for the
+      // turn to end and history to reconcile.
+      const toolCallId = String(msg.toolCallId || "");
+      const toolName = String(msg.name || "tool");
+      const detail = mapToolCall(toolName, msg.input, { provider: this.runtimeOptions.id || "acp", protocol: "protocol" });
+      if (detail) this.toolDetailsByCallId.set(toolCallId, detail);
+      const block = this.turnContent.find((b) => b.type === "tool_use" && b.id === toolCallId);
+      if (block) {
+        block.name = toolName;
+        block.input = msg.input ?? {};
+        if (detail) block.detail = detail;
+      }
+      this.emit({ type: "tool_execution_update", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}) });
+      return;
+    }
     if (type === "tool.result") {
+      const toolCallId = String(msg.toolCallId || msg.tool_use_id || msg.id || "");
       const result = msg.result ?? msg.output ?? msg.content ?? msg.text ?? msg.summary ?? "";
+      const isError = Boolean(msg.isError || msg.is_error);
       this.turnToolResults.push({
         type: "tool_result",
-        tool_use_id: String(msg.toolCallId || msg.tool_use_id || msg.id || ""),
+        tool_use_id: toolCallId,
         content: result,
+        ...(isError ? { is_error: true } : {}),
       });
-      this.emit({ type: "tool_result", toolName: String(msg.name || "tool"), toolCallId: String(msg.toolCallId || msg.tool_use_id || msg.id || ""), result });
+      const priorDetail = this.toolDetailsByCallId.get(toolCallId);
+      const detail = priorDetail ? { ...priorDetail, result: mapToolResult(result, isError) } : undefined;
+      this.emit({ type: "tool_result", toolName: String(msg.name || "tool"), toolCallId, result, ...(detail ? { detail } : {}) });
       return;
     }
     this.emit({ type, ...msg });
@@ -722,8 +778,10 @@ class ProtocolSession implements RuntimeSession {
     this.assistantText = "";
     this.reasoningText = "";
     this.stderrOutput = "";
-    this.turnToolUses = [];
+    this.turnContent = [];
+    this.turnTextFlushed = "";
     this.turnToolResults = [];
+    this.toolDetailsByCallId.clear();
     await this.command("chat.send", {
       sessionId: this.id,
       runtimeSessionRef: this.runtimeSessionRef,

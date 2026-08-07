@@ -19,6 +19,7 @@ import { RunPill } from "./components/RunPill.js";
 import { classifySource } from "./sessionSource.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { ChangesCard } from "./components/ChangesCard.js";
+import { SessionChangesSheet } from "./components/SessionChangesSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Settings } from "./components/Settings.js";
@@ -52,6 +53,9 @@ export function App() {
     if (githubAppReturning) openSettings("github");
   }, [githubAppReturning]);
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
+  // The durable "every turn's file changes" sheet (see SessionChangesSheet) —
+  // separate from ChangesCard, which only ever shows the current turn's diff.
+  const [changesSheetOpen, setChangesSheetOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
    * ordinary shell terminal for the active chat/node. */
@@ -475,6 +479,20 @@ export function App() {
             {!controller.direct && <NodeSwitcher />}
           </div>
           <div className="topbar-actions">
+            {state.activeSessionId && state.changesHistory.length > 0 && (
+              <button
+                className="icon-btn changes-history-btn"
+                onClick={() => setChangesSheetOpen(true)}
+                title="Session changes — every turn's file changes, not just the latest"
+                aria-label="Open session changes"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <path d="M14 2v6h6" />
+                  <path d="M9 15l2 2 4-4" />
+                </svg>
+              </button>
+            )}
             {state.activeSessionId && (
               <button
                 className="icon-btn eye-btn"
@@ -598,6 +616,9 @@ export function App() {
               checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
               output={activeSession ? runEvidence.get(activeSession.sessionId)?.output : undefined}
             />
+            {changesSheetOpen && (
+              <SessionChangesSheet history={state.changesHistory} onClose={() => setChangesSheetOpen(false)} />
+            )}
 
             <div className="composer-gh">
               {/* The run card now stands for every active session — an automation

@@ -53,15 +53,25 @@ assert.equal(decisions.length, 1);
 assert.equal((decisions[0] as { toolName: string }).toolName, "shell");
 
 // History keeps the whole turn: the user prompt, an assistant message whose
-// content blocks pair the reply text with the tool_use, and a trailing user
-// message carrying the tool_result — so re-opening the session shows what the
-// agent did, not just its final sentence.
+// content blocks interleave the reply text with the tool_use in the order they
+// actually streamed (the fixture sends "hello " before the tool call and
+// "world" after it resolves — collapsing those into one merged text block
+// ahead of every tool is exactly the "interim messages disappear/bundle at the
+// end" bug this preserves against), and a trailing user message carrying the
+// tool_result — so re-opening the session shows what the agent did, not just
+// its final sentence.
 const history = session.getMessages() as Array<{ role?: string; content?: unknown }>;
 assert.deepEqual(history.map((m) => m.role), ["user", "assistant", "user"]);
 
 const assistantBlocks = history[1].content as Array<Record<string, unknown>>;
 assert.ok(Array.isArray(assistantBlocks));
-assert.equal(assistantBlocks.find((b) => b.type === "text")?.text, "hello world");
+assert.deepEqual(
+  assistantBlocks.map((b) => b.type),
+  ["text", "tool_use", "text"],
+  "text and tool_use blocks interleave in streamed order, not text-then-all-tools",
+);
+assert.equal(assistantBlocks[0]?.text, "hello ");
+assert.equal(assistantBlocks[2]?.text, "world");
 const toolUse = assistantBlocks.find((b) => b.type === "tool_use");
 assert.equal(toolUse?.name, "shell");
 assert.equal(toolUse?.id, "tc_fixture");

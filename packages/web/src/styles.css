@@ -2157,6 +2157,18 @@ select.picker-search { appearance: auto; }
 .changes-cp-time { font-size: 11px; opacity: 0.55; white-space: nowrap; }
 .changes-cp-btn { font-size: 11px; padding: 3px 8px; }
 
+/* Session changes sheet (components/SessionChangesSheet.tsx) — the durable,
+   every-turn counterpart to the ephemeral current-turn ChangesCard above. */
+.changes-history-btn { display: inline-flex; align-items: center; justify-content: center; }
+.changes-history-btn svg { display: block; }
+.session-changes-list { display: flex; flex-direction: column; gap: 8px; }
+.session-changes-turn { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.session-changes-turn-head { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; padding: 8px 10px; cursor: pointer; color: inherit; text-align: left; font: inherit; }
+.session-changes-turn-head:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.session-changes-turn-title { flex: 1; font-size: 13px; font-weight: 600; }
+.session-changes-turn-time { font-size: 11px; opacity: 0.55; white-space: nowrap; }
+.session-changes-turn-body { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+
 /* Top-level error boundary fallback (see components/ErrorBoundary.tsx). */
 .error-boundary { max-width: 560px; margin: 0 auto; padding: 48px 24px; display: flex; flex-direction: column; gap: 12px; color: var(--ink); }
 .error-boundary h1 { font-size: 18px; margin: 0; }
