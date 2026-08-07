@@ -411,6 +411,17 @@ export interface OpenSessionOptions {
   /** Existing session file to resume; omit to create a fresh session. */
   sessionFile?: string;
   /**
+   * The canonical Bivy session id this resume belongs to, when the daemon
+   * already knows it (a reopen of a session whose metadata row exists). A
+   * runtime whose session identity would otherwise DERIVE from the resume ref
+   * (ProtocolRuntime: an opencode/Codex session's id defaults to its own
+   * `ses_…`/rollout ref) must adopt this id instead, so reopening by the ref
+   * updates the original row rather than persisting a second, ref-keyed row for
+   * the same conversation (issue: duplicate opencode sessions after resume).
+   * Runtimes whose id is already stable across resume ignore it.
+   */
+  canonicalId?: string;
+  /**
    * Interceptor consulted before each tool call. The runtime must call it and
    * honor a `block` decision; runtimes without tool interception cannot back
    * the governance tier (see capabilities.toolInterception).
