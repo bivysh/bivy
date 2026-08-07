@@ -18,6 +18,7 @@ import {
   type AccountAutomationRun,
 } from "@bivy/core";
 import { controller } from "../store/controller.js";
+import { AUTOMATION_TEMPLATES, type ScheduleTemplate } from "./automationTemplates.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -64,7 +65,7 @@ function toLocalInput(date: Date): string {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
-export function AutomationsPanel({ state }: { state: AppState }) {
+export function AutomationsPanel({ state, onNavigate }: { state: AppState; onNavigate?: (view: "webhooks" | "queue") => void }) {
   const [items, setItems] = useState<AccountAutomation[]>([]);
   const [runs, setRuns] = useState<AccountAutomationRun[]>([]);
   const [name, setName] = useState("");
@@ -123,6 +124,26 @@ export function AutomationsPanel({ state }: { state: AppState }) {
     setNlText(preset.phrase);
     setCron(preset.cron);
     setNlError("");
+  }
+
+  // Drop a template's presets into the create form. This produces the same
+  // definition the blank form would; the user reviews and edits before saving.
+  function applyTemplate(template: ScheduleTemplate) {
+    const p = template.prefill;
+    setEditing(null);
+    setError("");
+    setName(p.name);
+    setCiphertext(p.instructions);
+    setKind("cron");
+    setNlText(p.schedule.nlText);
+    setCron(p.schedule.cron);
+    setNlError("");
+    setShowCronField(false);
+    setApprovalMode(p.approvalMode);
+    setSandbox(p.sandbox);
+    document.getElementById("automation-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Defer focus until after the scroll frame so it lands on the named field.
+    setTimeout(() => document.getElementById("automation-name")?.focus(), 0);
   }
 
   async function submit(event: React.FormEvent) {
@@ -212,7 +233,34 @@ export function AutomationsPanel({ state }: { state: AppState }) {
     <div className="automations-layout">
       <div className="automations-main">
       <section className="settings-section">
-        <h3>Scheduled automations</h3>
+        <h3>Start from a template</h3>
+        <p className="settings-hint">
+          Concrete jobs preset over Bivy&apos;s automation system. Pick one to fill in the form below, or start from scratch.
+        </p>
+        <div className="automation-templates">
+          {AUTOMATION_TEMPLATES.map((template) => (
+            <div className="template-card" key={template.key}>
+              <div className="template-card-body">
+                <strong className="template-card-title">{template.title}</strong>
+                <p className="template-card-tagline">{template.tagline}</p>
+              </div>
+              {template.kind === "schedule" ? (
+                <button type="button" className="btn primary template-card-action" onClick={() => applyTemplate(template)}>
+                  Use template
+                </button>
+              ) : onNavigate ? (
+                <button type="button" className="btn template-card-action" onClick={() => onNavigate(template.route)}>
+                  {template.cta}
+                </button>
+              ) : (
+                <span className="settings-hint template-card-action">{template.cta}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="settings-section" id="automation-form">
+        <h3>{editing ? "Edit automation" : "Scheduled automation"}</h3>
         <p className="settings-hint">
           Instructions are encrypted for the assigned machine before upload. The hosted control plane never receives
           plaintext prompts, repository contents, transcripts, credentials, or tool output.
