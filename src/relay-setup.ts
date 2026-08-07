@@ -168,7 +168,13 @@ async function main() {
   const endpoints = hostedEndpoints();
   const controlPlaneUrl = (arg("control-plane", process.env.BIVY_CONTROL_PLANE_URL) ?? endpoints.controlPlane).replace(/\/$/, "");
   const relayUrl = (arg("relay", process.env.BIVY_RELAY_URL) ?? endpoints.relay).replace(/\/$/, "");
-  const clientBaseUrl = (arg("client", process.env.BIVY_CLIENT_BASE_URL) ?? endpoints.clientBaseUrl).replace(/\/$/, "") || controlPlaneUrl;
+  // The remote web client is served by whichever control plane we just resolved,
+  // so default it to `controlPlaneUrl` — NOT `endpoints.clientBaseUrl`, which is
+  // derived from env/baked-in defaults and would point at the hosted app even
+  // when the user picked self-hosted (the control-plane URL arrives via
+  // --control-plane, not the environment). An explicit --client / BIVY_CLIENT_BASE_URL
+  // still wins for setups that serve the web app from a separate origin.
+  const clientBaseUrl = (arg("client", process.env.BIVY_CLIENT_BASE_URL) ?? controlPlaneUrl).replace(/\/$/, "") || controlPlaneUrl;
   const email = arg("email", process.env.BIVY_EMAIL);
   const sessionToken = arg("session-token", process.env.BIVY_SESSION_TOKEN);
   // GitHub is the primary sign-in: used when --github is passed, or by default
