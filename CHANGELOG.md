@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Forks into OpenCode now open on a full copy of the transcript instead of a
+  seeded summary prompt: Bivy materialises the fork's conversation as a real
+  session in OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db`), so
+  `session/load` resumes it and the model replays the whole history — the same
+  "replayed" fidelity Codex's rollout forks get.
+
 ## [0.10.0] - 2026-08-07
 
 ### Added
