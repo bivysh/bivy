@@ -30,7 +30,6 @@ export type SettingsView =
   | "linear"
   | "slack"
   | "queue"
-  | "automations"
   | "webhooks"
   | "rulesets"
   | "nodes"
@@ -49,7 +48,6 @@ const SETTINGS_VIEWS: readonly SettingsView[] = [
   "linear",
   "slack",
   "queue",
-  "automations",
   "webhooks",
   "rulesets",
   "nodes",
@@ -66,10 +64,12 @@ export type Route =
   | { kind: "session"; id: string }
   | { kind: "new" }
   | { kind: "settings"; view: SettingsView | null }
+  | { kind: "automations" }
   | { kind: "root" };
 
 const SESSION_PATH = /^\/sessions\/([^/]+)\/?$/;
 const SETTINGS_PATH = /^\/settings(?:\/([^/]+))?\/?$/;
+const AUTOMATIONS_PATH = /^\/automations\/?$/;
 
 /** Parse the current (or a given) pathname into a Route. */
 export function parseRoute(pathname: string = location.pathname): Route {
@@ -85,6 +85,7 @@ export function parseRoute(pathname: string = location.pathname): Route {
     const raw = settingsMatch[1] ? decodeURIComponent(settingsMatch[1]) : "";
     return { kind: "settings", view: isSettingsView(raw) ? raw : null };
   }
+  if (AUTOMATIONS_PATH.test(pathname)) return { kind: "automations" };
   return { kind: "root" };
 }
 
@@ -104,7 +105,9 @@ export function routePath(route: Route): string {
           ? route.view
             ? `/settings/${route.view}`
             : "/settings"
-          : "/";
+          : route.kind === "automations"
+            ? "/automations"
+            : "/";
   return base + location.search + location.hash;
 }
 
