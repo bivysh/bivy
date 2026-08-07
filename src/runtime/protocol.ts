@@ -455,9 +455,23 @@ class ProtocolSession implements RuntimeSession {
     // gone, so mark the turn stopped and fail any pending commands instead of
     // crashing the process over a normal teardown race.
     child.stdin.on("error", (error) => { this.streaming = false; this.failAll(error instanceof Error ? error : new Error(String(error))); });
-    child.on("error", (error) => this.failAll(error));
+    child.on("error", (error) => {
+      // Spawn/pipe failure — the child never became usable. Forget it so the next
+      // open()/prompt() respawns instead of writing to a dead pipe forever.
+      if (this.child === child) this.markChildGone();
+      this.failAll(error);
+    });
     child.on("close", (code, signal) => {
       this.streaming = false;
+      // The long-lived shim exited — a crash, the user's Stop (SIGKILL), or the
+      // turn-watchdog's abort of a wedged agent. Forget the child AND the fact
+      // that a session was opened on it, so the NEXT open()/prompt() respawns the
+      // shim and re-resumes the agent's own session (by runtimeSessionRef) instead
+      // of every later command throwing "Protocol agent is not running." at the
+      // corpse — which pinned opencode/Codex/Gemini sessions permanently
+      // unresumable after a single stall recovery. Guard on `=== child` so a late
+      // event from a prior child can't null a freshly respawned one.
+      if (this.child === child) this.markChildGone();
       this.failAll(new Error(`Protocol agent exited (${code ?? signal ?? "unknown"})`));
       this.emit({ type: "agent_end", code, signal });
     });
@@ -746,11 +760,34 @@ class ProtocolSession implements RuntimeSession {
     }
   }
 
+  /**
+   * The child process is gone. Reset the spawn/session flags so the next
+   * open()/prompt() transparently respawns the shim and re-resumes (open()
+   * prefers session.resume when a runtimeSessionRef exists). The agent's own
+   * session ref, its loaded history, and the selected model are all preserved —
+   * only the dead OS process handle and the stale read buffer are dropped. This
+   * is the shared crash/abort recovery for every protocol agent.
+   */
+  private markChildGone(): void {
+    this.child = undefined;
+    this.started = false;
+    this.buffer = "";
+  }
+
   async open(): Promise<void> {
     await this.start();
     if (this.started) return;
-    const created = this.resumeRef
-      ? await this.command("session.resume", { workspace: this.cwd, sessionId: this.id, runtimeSessionRef: this.resumeRef, resumeRef: this.resumeRef })
+    // Resume by the agent's own session ref whenever we have one: either passed
+    // at construction (a resumed session) OR learned from an earlier
+    // session.create whose child has since died and been respawned (see
+    // markChildGone). Preferring resume here is what lets a crashed/aborted/
+    // watchdog-recovered turn continue the SAME agent session — keeping opencode's
+    // replayed transcript and prior context — instead of silently forking a fresh
+    // session. Falls back to create when there is no ref or the runtime can't
+    // resume.
+    const resumeRef = this.resumeRef ?? this.runtimeSessionRef;
+    const created = resumeRef && this.capabilitiesRef.resume
+      ? await this.command("session.resume", { workspace: this.cwd, sessionId: this.id, runtimeSessionRef: resumeRef, resumeRef })
       : await this.command("session.create", { workspace: this.cwd, sessionId: this.id });
     if (typeof created.runtimeSessionRef === "string") this.runtimeSessionRef = created.runtimeSessionRef;
     this.started = true;
@@ -850,7 +887,14 @@ class ProtocolSession implements RuntimeSession {
     // (opencode's ACP server stops responding) may ignore SIGTERM or block so
     // its 'close' never fires; without the SIGKILL escalation the child — and
     // therefore `isStreaming` — stays alive, leaving the turn unrecoverable.
-    if (this.started) await this.command("session.abort", { sessionId: this.id }, 5_000).catch(() => undefined);
+    // Only command a live child, and swallow BOTH a sync throw (write() to an
+    // already-dead child raises "Protocol agent is not running.") and an async
+    // reject (a 5s timeout on a wedged shim) — the SIGKILL below is the real
+    // guarantee, so an abort must never reject out of here as an unhandled error.
+    if (this.started && this.child && !this.child.killed) {
+      try { await this.command("session.abort", { sessionId: this.id }, 5_000); }
+      catch { /* child gone or shim wedged — the force-kill below is authoritative */ }
+    }
     try { child.kill("SIGTERM"); } catch { /* already exited */ }
     setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already exited */ } }, 2_000).unref?.();
   }

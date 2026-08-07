@@ -7585,9 +7585,16 @@ async function recoverStalledBeforePrompt(record: SessionRecord): Promise<void> 
 async function promptWithWatchdog(record: SessionRecord, prompt: string, options?: ReturnType<typeof promptOptionsFor>): Promise<void> {
   armTurnWatchdog(record);
   const timeoutSignal = record.turnTimeoutSignal;
+  const promptPromise = record.session.prompt(prompt, options);
+  // When the watchdog wins the race below, this prompt promise is abandoned but
+  // can still reject later — a wedged agent's `chat.send` times out, or its child
+  // is killed mid-turn. Mark it handled so that late rejection doesn't surface as
+  // an unhandledRejection after the turn has already been recovered. Promise.race
+  // still observes the same rejection through the original reference.
+  promptPromise.catch(() => {});
   try {
     await Promise.race([
-      record.session.prompt(prompt, options),
+      promptPromise,
       ...(timeoutSignal ? [timeoutSignal.then(() => { throw new Error(turnTimeoutMessage()); })] : []),
     ]);
   } catch (error) {
