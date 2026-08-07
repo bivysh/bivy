@@ -134,12 +134,15 @@ export function AutomationsView({
   state,
   onClose,
   onOpenSettings,
+  onOpenSession,
 }: {
   state: AppState;
   onClose: () => void;
   /** Jump to a Settings panel (webhook / work-queue templates configure their
    *  trigger there). */
   onOpenSettings: (view: "webhooks" | "queue") => void;
+  /** Open the chat session a run produced, in the unified session list. */
+  onOpenSession: (sessionId: string) => void;
 }) {
   const [items, setItems] = useState<AccountAutomation[]>([]);
   const [runs, setRuns] = useState<AccountAutomationRun[]>([]);
@@ -313,9 +316,14 @@ export function AutomationsView({
                       </div>
                       <div className="settings-hint">{new Date(run.createdAt).toLocaleString()}</div>
                     </div>
-                    {run.output?.prUrl && (
+                    {(run.output?.sessionId || run.output?.prUrl) && (
                       <div className="settings-actions">
-                        <a className="btn" href={run.output.prUrl} target="_blank" rel="noreferrer">View PR</a>
+                        {run.output?.sessionId && (
+                          <button className="btn" onClick={() => onOpenSession(run.output!.sessionId!)}>Open session</button>
+                        )}
+                        {run.output?.prUrl && (
+                          <a className="btn" href={run.output.prUrl} target="_blank" rel="noreferrer">View PR</a>
+                        )}
                       </div>
                     )}
                   </div>

@@ -725,6 +725,16 @@ export function App() {
             closeAutomations(state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" });
             openSettings(view);
           }}
+          onOpenSession={(sessionId) => {
+            // Deep-link a run into the chat session it produced. Resolve the
+            // owning node/path from the unified session list so a cross-node
+            // session opens the same way the sidebar and Settings do; then
+            // dismiss Automations onto that session's route.
+            const s = state.sessions.find((x) => x.sessionId === sessionId);
+            controller.openSessionOnNode(sessionId, s?.path, s?.nodeId);
+            closeAutomations({ kind: "session", id: sessionId });
+            closeDrawer();
+          }}
         />
       )}
 
