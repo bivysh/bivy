@@ -23,7 +23,7 @@ interface RunChecks {
   status: "passed" | "failed" | "skipped";
 }
 
-function countLines(file: HarnessFileChange): { added: number; removed: number } {
+export function countLines(file: HarnessFileChange): { added: number; removed: number } {
   if (typeof file.added === "number" && typeof file.removed === "number") {
     return { added: file.added, removed: file.removed };
   }
@@ -37,7 +37,7 @@ function countLines(file: HarnessFileChange): { added: number; removed: number }
   return { added, removed };
 }
 
-function relTime(ms: number): string {
+export function relTime(ms: number): string {
   if (!ms) return "";
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   if (s < 60) return `${s}s ago`;
@@ -86,7 +86,7 @@ function FileRow({ file, mode }: { file: HarnessFileChange; mode: DiffMode }) {
 }
 
 /** Render the directory tree; files carry a per-file DiffView + actions. */
-function TreeNode({ node, byPath, mode, depth }: { node: FileTreeNode; byPath: Map<string, HarnessFileChange>; mode: DiffMode; depth: number }) {
+export function TreeNode({ node, byPath, mode, depth }: { node: FileTreeNode; byPath: Map<string, HarnessFileChange>; mode: DiffMode; depth: number }) {
   const [open, setOpen] = useState(true);
   if (node.type === "file") {
     const file = byPath.get(node.path);

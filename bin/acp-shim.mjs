@@ -125,6 +125,74 @@ let pendingModel = null;
 // right ACP permission request with a concrete optionId.
 const permissionRequests = new Map();
 
+// --- tool-call field normalization -------------------------------------------
+// ACP's `tool_call`/`tool_call_update` carries a free-text `title` (whatever
+// prose the agent chose) AND a small fixed `kind` enum (read/edit/delete/move/
+// search/execute/think/fetch/other) that matches the node's tool taxonomy
+// (src/runtime/tool-call-map.ts) far better than prose does. It also often
+// splits the substantive data across three places — `rawInput` (frequently
+// empty on the *first* tool_call notification for some agents, opencode
+// included), `locations` (paths the call touches), and `content` (diff/text
+// blocks, usually only populated by a later tool_call_update) — so a naive
+// single-notification read sees "no real information". Accumulate everything
+// we've learned about a call across its whole lifecycle, keyed by toolCallId.
+const toolCallState = new Map();
+
+// The subset of ACP kinds that line up 1:1 with a bucket tool-call-map.ts
+// already recognizes by name; kinds outside this set (delete/move/think/other)
+// have no equivalent normalized rendering yet, so fall back to the agent's own
+// title/kind for display rather than inventing a bucket for them.
+const KIND_TOOL_NAME = { read: "read", edit: "edit", execute: "execute", search: "search", fetch: "fetch" };
+
+function mergeToolCallState(toolCallId, u) {
+  const prev = toolCallState.get(toolCallId) || {};
+  // `content` is normally a ContentBlock[], but some agents send a single block
+  // object (the existing `textOf` helper already tolerates both shapes) — wrap
+  // it so downstream array-walkers (diffContentFields) see it either way.
+  const content = u.content == null ? undefined : Array.isArray(u.content) ? u.content : [u.content];
+  const next = {
+    kind: u.kind ?? prev.kind,
+    title: u.title ?? prev.title,
+    rawInput: u.rawInput && typeof u.rawInput === "object" && Object.keys(u.rawInput).length ? u.rawInput : prev.rawInput,
+    locations: Array.isArray(u.locations) && u.locations.length ? u.locations : prev.locations,
+    content: content && content.length ? content : prev.content,
+  };
+  toolCallState.set(toolCallId, next);
+  return next;
+}
+
+/** The ACP "diff" content block, if the call carries one — the shape opencode
+ *  (and most ACP agents) use to report an edit's before/after text. */
+function diffContentFields(content) {
+  for (const c of content || []) {
+    if (c && c.type === "diff") return { path: c.path, oldText: c.oldText, newText: c.newText };
+  }
+  return {};
+}
+
+/** Merge everything accumulated about a call into one `input` object shaped the
+ *  way tool-call-map.ts's key scan expects (path/command/old_string/new_string/…),
+ *  so a call whose `rawInput` was sparse still classifies once its diff/locations
+ *  arrive. `rawInput` (the underlying tool's own arguments) wins on key conflicts
+ *  since it's the most literal source. */
+function toolCallInput(state) {
+  const input = { ...(state.rawInput || {}) };
+  const diff = diffContentFields(state.content);
+  if (input.path == null && diff.path != null) input.path = diff.path;
+  if (input.old_string == null && diff.oldText != null) input.old_string = diff.oldText;
+  if (input.new_string == null && diff.newText != null) input.new_string = diff.newText;
+  if (input.path == null && state.locations?.[0]?.path != null) input.path = state.locations[0].path;
+  return input;
+}
+
+/** Prefer ACP's structured `kind` (maps straight onto the node's taxonomy) over
+ *  the agent's free-text `title` — a title like "Edit `src/index.ts`" defeats
+ *  both the node's bucket classifier and the client's own name-based heuristic,
+ *  which both expect short tool-name-like tokens, not prose. */
+function toolCallName(state) {
+  return (state.kind && KIND_TOOL_NAME[state.kind]) || state.title || state.kind || "tool";
+}
+
 async function ensureInitialized() {
   if (initialized) return;
   // Bounded: a binary that accepts the launch args but never speaks ACP would
@@ -191,14 +259,27 @@ function onSessionUpdate(params) {
       // An auto-run tool (no permission requested) — surface it so the transcript
       // shows the action; the result arrives via tool_call_update.
       const toolCallId = String(u.toolCallId ?? u.id ?? "");
-      bivy({ type: "tool.call", toolCallId, name: String(u.title || u.kind || "tool"), input: u.rawInput ?? u.input ?? {} });
+      const state = mergeToolCallState(toolCallId, u);
+      bivy({ type: "tool.call", toolCallId, name: toolCallName(state), input: toolCallInput(state) });
       break;
     }
     case "tool_call_update": {
       const toolCallId = String(u.toolCallId ?? u.id ?? "");
+      const state = mergeToolCallState(toolCallId, u);
       const status = String(u.status || "");
       if (status === "completed" || status === "failed") {
-        bivy({ type: "tool.result", toolCallId, name: String(u.title || "tool"), result: textOf(u.content) || status });
+        toolCallState.delete(toolCallId);
+        bivy({
+          type: "tool.result",
+          toolCallId,
+          name: toolCallName(state),
+          result: textOf(u.content) || status,
+          isError: status === "failed",
+        });
+      } else {
+        // Still running: forward the fuller name/input as it fills in so a live
+        // tool card isn't stuck with the sparse initial notification.
+        bivy({ type: "tool.update", toolCallId, name: toolCallName(state), input: toolCallInput(state) });
       }
       break;
     }
@@ -222,7 +303,8 @@ async function onAgentRequest(id, method, params) {
       const toolCallId = String(tc.toolCallId ?? tc.id ?? `perm-${id}`);
       const options = Array.isArray(params?.options) ? params.options : [];
       permissionRequests.set(toolCallId, { requestId: id, options });
-      bivy({ type: "tool.call", toolCallId, name: String(tc.title || tc.kind || "tool"), input: tc.rawInput ?? tc.input ?? {} });
+      const state = mergeToolCallState(toolCallId, tc);
+      bivy({ type: "tool.call", toolCallId, name: toolCallName(state), input: toolCallInput(state) });
       return;
     }
     case "fs/read_text_file": {

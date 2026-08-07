@@ -83,10 +83,25 @@ class TurnAccumulator {
   ended = false;
   reasoning = "";
   usageSnapshot: UsageSnapshot | undefined;
-  readonly toolUses: Array<Record<string, unknown>> = [];
   readonly toolResults: Array<Record<string, unknown>> = [];
+  // Ordered content blocks (text + tool_use, interleaved exactly as they
+  // streamed) for the assistant turn. A prior version tracked `text` and tool
+  // uses separately and always emitted the whole turn's text ahead of every
+  // tool call on finish() — collapsing a turn like "Let me check." → tool →
+  // "Now editing." → tool into one merged text block followed by both tools.
+  // That read as interim messages "disappearing"/bundling at the end once
+  // history reconciled against it. `textFlushed` is the prefix of `text`
+  // already sealed into `content` as its own block.
+  private readonly content: Array<Record<string, unknown>> = [];
+  private textFlushed = "";
   private readonly out: RuntimeMessage[] = [];
   private readonly details = new Map<string, ReturnType<typeof mapToolCall>>();
+
+  private flushPendingText() {
+    const pending = this.text.slice(this.textFlushed.length);
+    this.textFlushed = this.text;
+    if (pending) this.content.push({ type: "text", text: pending });
+  }
 
   constructor(private readonly toolContext: ToolCallMapContext) {}
 
@@ -129,7 +144,8 @@ class TurnAccumulator {
     // when unrecognized — the block stays opaque and renders as before.
     const detail = mapToolCall(name, input, this.toolContext);
     if (detail && id) this.details.set(id, detail);
-    this.toolUses.push({ type: "tool_use", id, name, input: input ?? {}, ...(detail ? { detail } : {}) });
+    this.flushPendingText();
+    this.content.push({ type: "tool_use", id, name, input: input ?? {}, ...(detail ? { detail } : {}) });
     events.push({ type: "tool_call", toolName: name, input, toolCallId: id, ...(detail ? { detail } : {}) });
   }
 
@@ -146,12 +162,15 @@ class TurnAccumulator {
   finish(events: RuntimeEvent[]) {
     if (this.ended) return;
     this.ended = true;
+    // Whether this turn ever used a tool — checked BEFORE flushing trailing
+    // text, so a tool-free turn (content still empty at this point) keeps the
+    // plain-text message shape it always had instead of gaining a pointless
+    // single-text-block wrapper.
+    const hadTools = this.content.length > 0 || this.toolResults.length > 0;
     const message = { role: "assistant", content: this.text };
-    if (this.toolUses.length || this.toolResults.length) {
-      const content: Array<Record<string, unknown>> = [];
-      if (this.text) content.push({ type: "text", text: this.text });
-      content.push(...this.toolUses);
-      if (content.length) this.out.push({ role: "assistant", content });
+    if (hadTools) {
+      this.flushPendingText();
+      if (this.content.length) this.out.push({ role: "assistant", content: this.content });
       if (this.toolResults.length) this.out.push({ role: "user", content: this.toolResults });
     } else if (this.text) {
       this.out.push(message);
