@@ -575,7 +575,15 @@ class ProcessSession implements RuntimeSession {
     // targets *this* turn's process/group, whatever `this.child` points to by
     // the time it fires.
     const child = this.child;
-    if (!child) return;
+    if (!child) {
+      // No live turn process. Settle a stuck `streaming` flag defensively so
+      // abort can never leave the session pinned "working" / un-resumable.
+      if (this.streaming) {
+        this.streaming = false;
+        this.emit({ type: "agent_end", code: null, signal: null });
+      }
+      return;
+    }
     killProcessGroup(child, "SIGTERM");
     setTimeout(() => killProcessGroup(child, "SIGKILL"), 2000).unref();
   }

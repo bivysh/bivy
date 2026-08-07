@@ -16,3 +16,64 @@ export function configuredTurnTimeoutMs(value = process.env.BIVY_TURN_TIMEOUT_MS
   if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_TURN_TIMEOUT_MS;
   return Math.min(MAX_TURN_TIMEOUT_MS, Math.max(1_000, Math.floor(parsed)));
 }
+
+/**
+ * Idle/stall timeout — the second, finer half of the watchdog.
+ *
+ * DEFAULT_TURN_TIMEOUT_MS is a wall-clock CAP: it fires an hour after the turn
+ * started whether the agent is streaming happily or wedged, so a hung agent
+ * (opencode's ACP server stops responding, Pi freezes, a runtime never emits
+ * `agent_end`) pins the session "working" and un-resumable for up to an hour.
+ * This bound instead measures *silence*: a working turn that emits NO progress
+ * event (assistant text, a tool call, a turn boundary) for this long is treated
+ * as stalled and force-recovered, so a hang clears in minutes, not an hour.
+ *
+ * Five minutes is well below the hour cap yet generous enough that a legitimate
+ * long-running tool (a slow build/test with no interim output) isn't mistaken
+ * for a hang. A session genuinely waiting on the human — a pending approval or
+ * question — is never counted as stalled by the caller.
+ */
+export const DEFAULT_TURN_STALL_MS = 5 * 60 * 1000;
+/** Floor so a misconfigured tiny value can't turn the stall check into a
+ *  hair-trigger that kills healthy turns between two stream chunks. */
+export const MIN_TURN_STALL_MS = 30 * 1000;
+/** A turn whose subprocess is already dead but that never emitted `agent_end`
+ *  is unambiguously stuck. Recover it after this brief grace — long enough that
+ *  a turn genuinely completing (process exits, `agent_end` in flight) settles
+ *  itself first, short enough to feel instant. */
+export const PID_DEAD_GRACE_MS = 15 * 1000;
+
+/** Parse BIVY_TURN_STALL_MS. Explicit 0 opts out of stall detection (rely on the
+ * wall-clock cap alone); malformed/negative values fall back to the default. */
+export function configuredTurnStallMs(value = process.env.BIVY_TURN_STALL_MS): number {
+  if (value === undefined || value.trim() === "") return DEFAULT_TURN_STALL_MS;
+  const parsed = Number(value);
+  if (parsed === 0) return 0;
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_TURN_STALL_MS;
+  return Math.max(MIN_TURN_STALL_MS, Math.floor(parsed));
+}
+
+/**
+ * Decide whether a working turn should be force-recovered as stalled. Pure, so
+ * it unit-tests without real time or a live session.
+ *
+ *  - `pidAlive === false` (subprocess gone, no `agent_end`) → stuck once past a
+ *    short grace, regardless of the idle timer.
+ *  - otherwise a turn is stalled when it has emitted no progress for `stallMs`.
+ *  - `stallMs <= 0` disables the idle check (the wall-clock cap still applies),
+ *    but a provably-dead subprocess is still recovered.
+ */
+export function isTurnStalled(opts: {
+  now: number;
+  lastProgressAt: number;
+  stallMs: number;
+  /** Whether the turn's subprocess is alive; undefined when it can't be probed
+   *  (e.g. a remote agent-service session on another host). */
+  pidAlive?: boolean;
+  pidGraceMs?: number;
+}): boolean {
+  const idle = opts.now - opts.lastProgressAt;
+  if (opts.pidAlive === false) return idle >= (opts.pidGraceMs ?? PID_DEAD_GRACE_MS);
+  if (opts.stallMs <= 0) return false;
+  return idle >= opts.stallMs;
+}

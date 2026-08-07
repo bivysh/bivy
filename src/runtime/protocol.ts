@@ -794,9 +794,25 @@ class ProtocolSession implements RuntimeSession {
   }
 
   async abort(): Promise<void> {
-    if (!this.child) return;
+    const child = this.child;
+    if (!child) {
+      // No live turn process. A stuck `streaming` flag (a bug, or an event we
+      // missed) would otherwise pin the session "working" forever and make it
+      // un-resumable, so settle defensively: abort must ALWAYS leave the session
+      // idle. Emitting agent_end lets the daemon clear its working state.
+      if (this.streaming) {
+        this.streaming = false;
+        this.emit({ type: "agent_end", code: null, signal: null });
+      }
+      return;
+    }
+    // Ask the shim to stop the turn cleanly, then force-kill. A wedged agent
+    // (opencode's ACP server stops responding) may ignore SIGTERM or block so
+    // its 'close' never fires; without the SIGKILL escalation the child — and
+    // therefore `isStreaming` — stays alive, leaving the turn unrecoverable.
     if (this.started) await this.command("session.abort", { sessionId: this.id }, 5_000).catch(() => undefined);
-    this.child.kill("SIGTERM");
+    try { child.kill("SIGTERM"); } catch { /* already exited */ }
+    setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already exited */ } }, 2_000).unref?.();
   }
 
   dispose(): void {
