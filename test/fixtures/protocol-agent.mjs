@@ -122,6 +122,13 @@ rl.on('line', (line) => {
     send({ type: 'usage', sessionId: pendingTool?.sessionId || msg.sessionId, usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 } });
     send({ type: 'session.status', sessionId: pendingTool?.sessionId || msg.sessionId, status: 'idle' });
     send({ type: 'session.done', sessionId: pendingTool?.sessionId || msg.sessionId });
+    // opencode's ACP end_turn race: a chunk can land AFTER session.done (its
+    // session/prompt reply resolves before the final agent_message_chunk frames
+    // are flushed). The host must fold it onto the sealed assistant message so it
+    // survives a reopen instead of opening a fresh, never-persisted draft.
+    if (process.env.FIXTURE_LATE_DELTA === '1') {
+      setTimeout(() => send({ type: 'message.delta', sessionId: pendingTool?.sessionId || msg.sessionId, role: 'assistant', text: ' late tail' }), 20);
+    }
     return;
   }
   if (msg.type === 'command.invoke') {

@@ -406,7 +406,7 @@ test("missing logs are empty, but malformed logs and append failures are reporte
   }
 });
 
-test("deriveHistory prefers the runtime base and falls back to the log's base", () => {
+test("deriveHistory unions the runtime base with the log's base and never shrinks", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
   try {
     const pathFor = (id: string) => path.join(dir, `${encodeURIComponent(id)}.jsonl`);
@@ -414,11 +414,45 @@ test("deriveHistory prefers the runtime base and falls back to the log's base", 
     for (const e of STREAMS["tool call then result, interleaved with a later turn"]!) log.append("s1", e);
     log.appendBaseSnapshot("s1", BASE);
     log.flush("s1");
-    // Runtime base present → merged onto it (same as mergeConversation did live).
+    // Runtime base present and matching → merged onto it (same as mergeConversation did live).
     assert.deepEqual(log.deriveHistory("s1", BASE), mergeTranscript(BASE, log.read("s1")));
     // Runtime base empty (reopened process-agent session) → replay the persisted base.
     assert.deepEqual(log.deriveHistory("s1", []), mergeTranscript(BASE, log.read("s1")));
     assert.deepEqual(log.deriveHistory("s1"), mergeTranscript(BASE, log.read("s1")));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deriveHistory: a resumed blank runtime reporting a strict prefix keeps the persisted base", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
+  try {
+    const pathFor = (id: string) => path.join(dir, `${encodeURIComponent(id)}.jsonl`);
+    const log = new EventLog(dir, pathFor, (t) => t, 0);
+    log.appendBaseSnapshot("s1", BASE);
+    log.flush("s1");
+    // opencode resume: session/load returns no history, so the runtime only ever
+    // reports the post-resume tail. The union must keep the full persisted base.
+    const tail = [baseMsg("assistant", "a1", 200)];
+    assert.deepEqual(log.deriveHistory("s1", tail), mergeTranscript(BASE, log.read("s1")));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deriveHistory: a resumed blank runtime's disjoint new turns concatenate after the persisted base", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
+  try {
+    const pathFor = (id: string) => path.join(dir, `${encodeURIComponent(id)}.jsonl`);
+    const log = new EventLog(dir, pathFor, (t) => t, 0);
+    log.appendBaseSnapshot("s1", BASE);
+    log.flush("s1");
+    // The runtime has no history of q1/final, only the brand-new turn 2, so its
+    // base is disjoint from (and shorter than) the log's. Both must survive, in
+    // log-then-runtime order.
+    const newTurn = [baseMsg("user", "q2b", 500), baseMsg("assistant", "a2b", 600)];
+    const derived = log.deriveHistory("s1", newTurn);
+    assert.deepEqual(derived, mergeTranscript([...BASE, ...newTurn], log.read("s1")));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

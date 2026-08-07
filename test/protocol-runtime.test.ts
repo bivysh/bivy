@@ -126,6 +126,43 @@ assert.equal((invoked as { args?: string }).args, "staging --force", "command ar
 
 session.dispose();
 
+// --- Late assistant delta after session.done (the ACP end_turn race) ---------
+// opencode's session/prompt reply resolves before its final agent_message_chunk
+// frames are flushed, so a chunk can land AFTER the turn was sealed. The host must
+// fold it onto the already-persisted assistant message (and re-emit message_end so
+// the daemon re-snapshots the base) rather than opening a fresh draft that never
+// reaches getMessages() — otherwise the tail streams live but vanishes on reopen.
+const lateDeltaRuntime = new ProtocolRuntime({
+  command: process.execPath,
+  args: [fixture],
+  displayName: "Fixture Protocol (late delta)",
+  env: { FIXTURE_LATE_DELTA: "1" },
+});
+const { session: lateSession } = await lateDeltaRuntime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
+const lateEvents: RuntimeEvent[] = [];
+lateSession.subscribe((event) => lateEvents.push(event));
+await lateSession.prompt("say hello");
+await waitFor(lateEvents, (event) => event.type === "agent_end");
+// The 20ms-late chunk arrives after agent_end; the fold re-streams it and re-seals
+// the message so the daemon's message_end re-snapshots the base transcript.
+await waitFor(
+  lateEvents,
+  (event) =>
+    event.type === "message_update" &&
+    JSON.stringify((event as { message?: { content?: unknown } }).message?.content ?? "").includes("late tail"),
+);
+const lateAssistant = lateSession.getMessages().find((m) => (m as { role?: string }).role === "assistant") as
+  | { content?: Array<{ type?: string; text?: string }> }
+  | undefined;
+const lateText = (lateAssistant?.content ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
+assert.equal(lateText, "hello world late tail", "the late delta is folded into the sealed assistant message, not lost");
+assert.equal(
+  lateEvents.filter((e) => e.type === "message_end").length,
+  2,
+  "the fold re-emits message_end so the daemon re-persists the corrected transcript",
+);
+lateSession.dispose();
+
 // A concrete protocol adapter can delegate naming to its own authenticated
 // agent. Codex uses this seam to run an ephemeral title-only Codex turn.
 let namingContext: { cwd: string; model?: string } | undefined;
