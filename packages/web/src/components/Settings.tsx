@@ -404,7 +404,7 @@ export function Settings({
                 onOpenGithubSettings={() => onViewChange("github")}
               />
             )}
-            {activeView === "automations" && <AutomationsPanel state={state} />}
+            {activeView === "automations" && <AutomationsPanel state={state} onNavigate={(view) => onViewChange(view)} />}
             {activeView === "webhooks" && <WebhookTriggersPanel />}
             {activeView === "rulesets" && <RulesetsPanel state={state} />}
             {activeView === "nodes" && <NodesPanel state={state} />}

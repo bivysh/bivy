@@ -1317,6 +1317,20 @@ button.action-sheet-item:last-child { border-bottom: 0; }
   .automations-main { flex: 1; min-width: 0; }
   .automations-aside { flex: none; width: 280px; }
 }
+/* Automations template gallery (Automations.tsx): concrete-job cards above the
+   create form. Schedule templates pre-fill the form; external ones navigate to
+   the panel that owns their trigger (Webhooks / Work Queue). */
+.automation-templates { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 8px; }
+@media (min-width: 560px) { .automation-templates { grid-template-columns: 1fr 1fr; } }
+.template-card {
+  display: flex; flex-direction: column; gap: 10px; justify-content: space-between;
+  border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface-2);
+}
+.template-card-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.template-card-title { font-size: 14px; }
+.template-card-tagline { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.4; overflow-wrap: anywhere; }
+.template-card-action { align-self: flex-start; }
+span.template-card-action { font-size: 12px; }
 /* Automations schedule builder: natural-language field + preset chips + a
    live human-readable preview of the resulting cron, with the raw cron tucked
    behind an "Edit cron expression" disclosure for power users. */
