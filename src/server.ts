@@ -8541,6 +8541,11 @@ async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
     const { session, warning } = await runtimeHost.openSession(rt, {
       ...runtimeSessionOptions,
       sessionFile: record.sessionFile,
+      // Keep the reopened runtime session on THIS record's id. Without it a
+      // ProtocolRuntime session (opencode/Codex) would adopt its agent ref as the
+      // id and trip the identity guard below, so a stall recovery could never
+      // reopen the child — leaving the turn wedged.
+      canonicalId: record.id,
     });
     // The original abort may have completed while openSession was in flight.
     if (record.session !== oldSession || !oldSession.isStreaming) {
@@ -8721,7 +8726,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   }
   const { session, warning: modelFallbackMessage } = attached
     ?? (requestedSessionFile
-      ? await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: requestedSessionFile })
+      // Pass the canonical id of the row we resolved (storedMeta), so a runtime
+      // whose session id would otherwise derive from the resume ref (opencode/
+      // Codex via ProtocolRuntime) keeps the ORIGINAL id and UPDATES that row
+      // instead of persisting a second row keyed by the ref — the cause of
+      // duplicate opencode sessions after a reopen-by-ref.
+      ? await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: requestedSessionFile, ...(storedMeta?.id ? { canonicalId: storedMeta.id } : {}) })
       : await runtimeHost.createSession(rt, runtimeSessionOptions));
   const sessionId = session.id;
   // Now that it's known, unblock any attach_to_chat call this session's agent

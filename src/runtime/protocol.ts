@@ -318,8 +318,15 @@ class ProtocolSession implements RuntimeSession {
     // back to the shim via the generic session.resume primitive so it reconnects
     // instead of starting fresh; also used to preload history.
     resumeRef?: string,
+    // The canonical Bivy session id to adopt (see OpenSessionOptions.canonicalId).
+    // When the daemon reopens a session by its agent ref but already knows the
+    // original id, pass it here so this session keeps that stable id instead of
+    // taking the ref as its id — otherwise the daemon persists a SECOND metadata
+    // row keyed by the ref, duplicating the conversation. Falls back to the ref,
+    // then a fresh UUID, preserving the prior behaviour when no id is supplied.
+    canonicalId?: string,
   ) {
-    this.id = resumeRef || randomUUID();
+    this.id = canonicalId || resumeRef || randomUUID();
     this.resumeRef = resumeRef;
     if (resumeRef) {
       this.runtimeSessionRef = resumeRef;
@@ -935,7 +942,10 @@ export class ProtocolRuntime implements AgentRuntime {
   }
 
   async openSession(options: OpenSessionOptions & { sessionFile: string }): Promise<OpenSessionResult> {
-    const session = new ProtocolSession(this.options, options.workspace, this.capabilities, options.toolInterceptor, options.sessionFile);
+    // Adopt the caller's canonical id (a reopen of a known session) so the
+    // resumed session keeps its original id instead of taking `sessionFile` (the
+    // agent's own ref) as its id — see OpenSessionOptions.canonicalId.
+    const session = new ProtocolSession(this.options, options.workspace, this.capabilities, options.toolInterceptor, options.sessionFile, options.canonicalId);
     await session.start();
     if (!this.options.resumable && !this.capabilities.resume) {
       session.dispose();
