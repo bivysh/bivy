@@ -57,7 +57,7 @@ import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-cli
 import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
-import { configuredTurnTimeoutMs } from "./session/turn-watchdog.js";
+import { configuredTurnTimeoutMs, configuredTurnStallMs, isTurnStalled } from "./session/turn-watchdog.js";
 import { forceAbortTurn } from "./session/abort-recovery.js";
 import { runRequiredAutomationChecks } from "./automation-checks.js";
 import type { ApprovalMode } from "./guard.js";
@@ -953,7 +953,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastProgressAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -2413,6 +2413,28 @@ type ToolActivityMessage = RuntimeMessage & {
 };
 
 const liveIntermediateBySession = new Map<string, IntermediateMessage>();
+// Last thinking text PERSISTED for the active intermediate entry, keyed by
+// session — so a capped-out (unchanging) reasoning stream stops re-appending.
+const lastPersistedIntermediateText = new Map<string, string>();
+
+// Display-only intermediate reasoning is persisted as a length-capped HEAD so a
+// runaway or looping agent can't grow the append-only event log without bound.
+// The log coalesces same-id deltas per flush window but still appends one full
+// snapshot per window; re-persisting an ever-growing blob is therefore O(n²) on
+// disk (one stuck opencode turn wrote a 119 MB log from a 228 KB thought). The
+// live stream the user watches comes from broadcast events, not this store, so
+// capping only bounds what history keeps. HEAD (not tail) is deliberate: once the
+// cap is hit the persisted text stops changing, so persistIntermediateFromEvent
+// stops appending entirely instead of writing a fresh capped line every window.
+const MAX_PERSISTED_THINKING_CHARS = 16_000;
+// The marker is intentionally CONSTANT (no growing dropped-char count): once the
+// text is capped, capThinkingForPersistence returns a stable string, so the
+// skip-when-unchanged check in persistIntermediateFromEvent stops appending for
+// the rest of the stream — the hard bound on log growth.
+function capThinkingForPersistence(text: string): string {
+  if (text.length <= MAX_PERSISTED_THINKING_CHARS) return text;
+  return `${text.slice(0, MAX_PERSISTED_THINKING_CHARS)}\n\n[Bivy truncated a very long reasoning stream to bound session-history size.]`;
+}
 
 // Append the intermediate entry to the append-only log — the sole store (slice 2).
 // De-duplication (same-text/same-anchor merge, id-replace) that the old intermediate
@@ -2743,9 +2765,21 @@ function persistIntermediateFromEvent(record: SessionRecord, event: Record<strin
     ? `${previousText}${delta.delta}`
     : text;
   entry.content = [{ type: "thinking", thinking: nextText }];
-  upsertIntermediateMessage(record.id, entry);
-  if (final) liveIntermediateBySession.delete(record.id);
-  else liveIntermediateBySession.set(record.id, entry);
+  // Persist a length-capped clone (see capThinkingForPersistence). Skip the append
+  // when the capped text is unchanged from what we last wrote — so a capped-out or
+  // otherwise-unchanged stream stops growing the log — but always write the final
+  // snapshot so history keeps the finished reasoning.
+  const capped = capThinkingForPersistence(nextText);
+  if (final || lastPersistedIntermediateText.get(record.id) !== capped) {
+    upsertIntermediateMessage(record.id, { ...entry, content: [{ type: "thinking", thinking: capped }] });
+  }
+  if (final) {
+    liveIntermediateBySession.delete(record.id);
+    lastPersistedIntermediateText.delete(record.id);
+  } else {
+    liveIntermediateBySession.set(record.id, entry);
+    lastPersistedIntermediateText.set(record.id, capped);
+  }
 }
 
 function conversationMessages(record: SessionRecord): RuntimeMessage[] {
@@ -3701,6 +3735,9 @@ const RELAY_COMMANDS: Record<string, Command> = {
       return;
     }
     await record.abortRecovery;
+    // If the current turn is hung, recover it FIRST so this prompt runs a fresh
+    // turn instead of being steered into a dead turn and silently swallowed.
+    await recoverStalledBeforePrompt(record);
     record.remoteActive = true;
     if (record.tuiTermId || record.tuiRefreshing) {
       broadcast({ type: "session.error", sessionId: record.id, error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
@@ -7400,6 +7437,20 @@ const turnTimeoutMs = configuredTurnTimeoutMs();
 if (turnTimeoutMs > 0) console.log(`[turn-watchdog] armed: timeout=${turnTimeoutMs}ms`);
 else console.warn("[turn-watchdog] disabled by BIVY_TURN_TIMEOUT_MS=0");
 
+// Stall watchdog: the finer, activity-based half. The wall-clock timeout above
+// only fires an hour into a turn; this catches a hung agent (no progress event
+// for turnStallMs, or a dead turn subprocess) in minutes and force-recovers the
+// session so it's always resumable. Swept periodically; 0 relies on the cap alone.
+const turnStallMs = configuredTurnStallMs();
+const stallSweepMs = turnStallMs > 0 ? Math.max(15_000, Math.min(60_000, Math.floor(turnStallMs / 4))) : 0;
+if (turnStallMs > 0) {
+  console.log(`[turn-watchdog] stall detection armed: idle=${turnStallMs}ms sweep=${stallSweepMs}ms`);
+  const stallSweepTimer = setInterval(() => sweepStalledTurns(), stallSweepMs);
+  stallSweepTimer.unref?.();
+} else {
+  console.warn("[turn-watchdog] stall detection disabled by BIVY_TURN_STALL_MS=0");
+}
+
 function turnTimeoutMessage(): string {
   return `Agent turn timed out after ${Math.round(turnTimeoutMs / 60_000)} minutes and was stopped.`;
 }
@@ -7418,24 +7469,104 @@ function armTurnWatchdog(record: SessionRecord): void {
   record.turnTimeoutSignal = new Promise<void>((resolve) => { record.turnTimeoutResolve = resolve; });
   record.turnWatchdog = setTimeout(() => {
     record.turnWatchdog = undefined;
-    record.turnTimedOut = true;
-    record.lastFailureAt = Date.now();
-    const message = turnTimeoutMessage();
+    // Unblock any prompt() awaiting the race in promptWithWatchdog, then run the
+    // shared recovery (settle + abort + reopen) so the session lands back at a
+    // clean, resumable idle instead of merely "stopped".
     record.turnTimeoutResolve?.();
     record.turnTimeoutResolve = undefined;
-    // Clear/persist first so the session and an ephemeral runner cannot remain
-    // pinned in a false working state if the runtime's abort path fails to emit
-    // agent_end. abort() is still invoked to kill the underlying process group.
-    clearSessionWorking(record, "idle");
-    metadata.touchSession(record.id, "failed");
-    broadcast({ type: "session.failed", sessionId: record.id, failedAt: record.lastFailureAt });
-    broadcast({ type: "session.outcome", sessionId: record.id, status: "timed_out", completedAt: new Date().toISOString(), error: message });
-    broadcast({ type: "session.error", sessionId: record.id, error: message });
-    void record.session.abort().catch((error) => {
-      console.error(`[turn-watchdog] abort failed for ${record.id}:`, error);
-    }).finally(() => evaluateEphemeralTeardown());
+    recoverStuckTurn(record, turnTimeoutMessage());
   }, turnTimeoutMs);
   record.turnWatchdog.unref?.();
+}
+
+/** Message for a session recovered because it stopped making progress. */
+function turnStallMessage(idleMs: number): string {
+  return `The agent stopped responding (no activity for ${Math.round(idleMs / 60_000)} min) and was recovered. Send a message to continue.`;
+}
+
+/**
+ * Force-recover a session whose turn is stuck — hit the wall-clock cap, went
+ * silent past the stall window, or lost its subprocess without emitting
+ * agent_end. Shared by the turn-watchdog timer, the stall sweep, and the
+ * prompt-time guard so every path settles identically: mark the failure for the
+ * client, then run the full abort→reopen recovery (abortSessionRecord) so the
+ * session returns to a clean, resumable idle state rather than a wedged "working".
+ * Idempotent: a second call while recovery is already in flight is a no-op.
+ */
+function recoverStuckTurn(record: SessionRecord, reason: string): void {
+  if (record.turnTimedOut) return; // already recovering this turn
+  record.turnTimedOut = true;
+  record.lastFailureAt = Date.now();
+  console.warn(`[turn-watchdog] recovering stuck session ${record.id}: ${reason}`);
+  metadata.touchSession(record.id, "failed");
+  broadcast({ type: "session.failed", sessionId: record.id, failedAt: record.lastFailureAt });
+  broadcast({ type: "session.outcome", sessionId: record.id, status: "timed_out", completedAt: new Date().toISOString(), error: reason });
+  broadcast({ type: "session.error", sessionId: record.id, error: reason });
+  // Settle the client, force the runtime abort (SIGKILL escalation guarantees the
+  // wedged child dies), and reopen so a follow-up prompt runs a fresh turn.
+  abortSessionRecord(record);
+  void evaluateEphemeralTeardown();
+}
+
+/**
+ * Is the turn's subprocess still alive? Returns undefined when it can't be told
+ * locally — a remote agent-service session runs on another host, and a session
+ * with no active pid has no process to probe (the idle timer decides those). A
+ * `false` result (pid present but gone) is an unambiguous "stuck" signal the
+ * stall check acts on quickly.
+ */
+function probeTurnPidAlive(record: SessionRecord): boolean | undefined {
+  if (record.agentServiceAddress) return undefined; // process lives on another node
+  const pid = record.session.activePid?.();
+  if (!pid) return undefined;
+  try {
+    process.kill(pid, 0); // signal 0 = liveness probe, kills nothing
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but we can't signal it — still alive.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** Whether a working session's current turn looks stalled (see isTurnStalled).
+ *  A session waiting on the human (pending approval/question), paused, or locked
+ *  to its TUI is deliberately never counted as stalled — it's not hung. */
+function turnLooksStalled(record: SessionRecord, now = Date.now()): boolean {
+  if (turnStallMs <= 0) return false;
+  if (!sessionBusy(record)) return false;
+  if (record.turnTimedOut) return false; // recovery already running
+  if (record.paused) return false;
+  if (record.tuiTermId || record.tuiRefreshing) return false; // driven from the terminal
+  if (sessionHasPendingApproval(record)) return false; // waiting on the user, not hung
+  const lastProgressAt = record.lastProgressAt ?? record.workingStartedAt ?? now;
+  return isTurnStalled({ now, lastProgressAt, stallMs: turnStallMs, pidAlive: probeTurnPidAlive(record) });
+}
+
+/** Periodic sweep: recover any working session whose turn has stalled. This is
+ *  what makes a hang self-heal without the user hitting Stop or waiting out the
+ *  hour-long cap. */
+function sweepStalledTurns(): void {
+  if (turnStallMs <= 0) return;
+  const now = Date.now();
+  for (const record of new Set(openSessions.values())) {
+    if (!turnLooksStalled(record, now)) continue;
+    const idleMs = now - (record.lastProgressAt ?? record.workingStartedAt ?? now);
+    recoverStuckTurn(record, turnStallMessage(idleMs));
+  }
+}
+
+/**
+ * Before dispatching a user prompt, recover the session first if its current
+ * turn is stalled. Without this a message sent to a hung session is silently
+ * turned into a *steer* into the dead turn (promptOptionsFor, which steers while
+ * isStreaming) and vanishes — the exact "I typed and nothing happened, it's
+ * un-resumable" symptom. Recovering first means the prompt runs as a fresh turn.
+ */
+async function recoverStalledBeforePrompt(record: SessionRecord): Promise<void> {
+  if (!turnLooksStalled(record)) return;
+  const idleMs = Date.now() - (record.lastProgressAt ?? record.workingStartedAt ?? Date.now());
+  recoverStuckTurn(record, turnStallMessage(idleMs));
+  await record.abortRecovery?.catch(() => {});
 }
 
 async function promptWithWatchdog(record: SessionRecord, prompt: string, options?: ReturnType<typeof promptOptionsFor>): Promise<void> {
@@ -7460,6 +7591,10 @@ function markSessionWorking(record: SessionRecord, activity: unknown) {
   record.isWorking = true;
   record.lastActivity = activity;
   record.workingStartedAt ||= Date.now();
+  // Every marked-working runtime event is turn PROGRESS — the anchor the stall
+  // watchdog measures silence from. workingStartedAt anchors the wall-clock cap;
+  // this anchors the idle/stall check (see sweepStalledTurns).
+  record.lastProgressAt = Date.now();
   // A new attempt resolves the prior turn's failure condition at its source.
   record.lastFailureAt = undefined;
   metadata.touchSession(record.id, "working");
@@ -7813,9 +7948,10 @@ function attachSessionListeners(record: SessionRecord) {
       // broadcast (not the focus-gated session.event wrap) so every client updates.
       broadcast({ type: "session.capabilities", sessionId: record.id, runtimeId: record.runtimeId, capabilities: capabilitiesWithCommands(record.runtimeId, record.session) });
     }
-    if (event.type === "tool_call" || event.type === "tool_execution_start") liveIntermediateBySession.delete(record.id);
+    if (event.type === "tool_call" || event.type === "tool_execution_start") { liveIntermediateBySession.delete(record.id); lastPersistedIntermediateText.delete(record.id); }
     if (event.type === "agent_end") {
       liveIntermediateBySession.delete(record.id);
+      lastPersistedIntermediateText.delete(record.id);
       clearSessionWorking(record);
       void refreshSessionUsage(record);
       // Snapshot the worktree and broadcast the structured diff this turn made —
@@ -11173,6 +11309,9 @@ app.post("/api/session/prompt", async (req, res, next) => {
       record = await createWorkspaceSession(requestedWorkspace ?? defaultWorkspace, { title: titleText, runtimeId: agentFrom(req.body ?? {}) });
     }
     await record.abortRecovery;
+    // Recover a hung turn before prompting so the message runs fresh, not as a
+    // steer into a dead turn (see recoverStalledBeforePrompt).
+    await recoverStalledBeforePrompt(record);
     if (record.tuiTermId || record.tuiRefreshing) {
       return res.status(409).json({ error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
     }
