@@ -674,7 +674,9 @@ export class AppController {
    */
   private applyRoute(route: Route, opts: { navigate?: boolean } = {}): void {
     if (route.kind === "session") this.openSession(route.id, undefined, opts);
-    else if (route.kind !== "settings") this.newSession(opts);
+    // Settings and Automations are overlays layered on top of whichever session
+    // is open behind them — neither should reset the active session to a draft.
+    else if (route.kind !== "settings" && route.kind !== "automations") this.newSession(opts);
   }
 
   /** Replay the boot route once we're first online (session.open et al. need a

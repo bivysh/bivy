@@ -12,6 +12,8 @@ import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import { SetupNotice } from "./components/SetupNotice.js";
 import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
+import { closeAutomations, getAutomationsRoute, openAutomations, subscribeAutomationsRoute } from "./automationsRoute.js";
+import { AutomationsView } from "./components/AutomationsView.js";
 import { SessionMenu } from "./components/SessionMenu.js";
 import { TuiLockedView } from "./components/TuiLockedView.js";
 import { GithubPill } from "./components/GithubPill.js";
@@ -46,6 +48,9 @@ export function App() {
   // `/settings/:view` route the same way useAppState mirrors the session
   // store, and is null whenever the URL is on anything else (Settings closed).
   const settingsRoute = useSyncExternalStore(subscribeSettingsRoute, getSettingsRoute);
+  // Automations is a first-class destination reached from the sidebar foot,
+  // URL-backed the same overlay way Settings is (see automationsRoute.ts).
+  const automationsOpen = useSyncExternalStore(subscribeAutomationsRoute, getAutomationsRoute);
   // Returning from a GitHub App redirect reloads the SPA — re-open Settings on
   // the GitHub view so the user sees the flow finish.
   const githubAppReturning = state.githubApp?.returning;
@@ -428,6 +433,19 @@ export function App() {
             everything else moved inside the Settings modal. */}
         <div className="sidebar-foot">
           <button
+            className="settings-gear automations-launch"
+            onClick={() => {
+              openAutomations();
+              closeDrawer();
+            }}
+            title="Automations"
+            aria-label="Automations"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
+            </svg>
+          </button>
+          <button
             className="settings-gear"
             onClick={() => {
               openSettings();
@@ -692,6 +710,33 @@ export function App() {
           </>
         )}
       </main>
+
+      {automationsOpen && (
+        <AutomationsView
+          state={state}
+          onClose={() =>
+            closeAutomations(
+              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+            )
+          }
+          onOpenSettings={(view) => {
+            // Leave Automations for the panel that configures this trigger; a
+            // single history replace keeps Back sane.
+            closeAutomations(state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" });
+            openSettings(view);
+          }}
+          onOpenSession={(sessionId) => {
+            // Deep-link a run into the chat session it produced. Resolve the
+            // owning node/path from the unified session list so a cross-node
+            // session opens the same way the sidebar and Settings do; then
+            // dismiss Automations onto that session's route.
+            const s = state.sessions.find((x) => x.sessionId === sessionId);
+            controller.openSessionOnNode(sessionId, s?.path, s?.nodeId);
+            closeAutomations({ kind: "session", id: sessionId });
+            closeDrawer();
+          }}
+        />
+      )}
 
       {settingsRoute && (
         <Settings

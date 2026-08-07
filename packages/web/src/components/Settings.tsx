@@ -9,7 +9,6 @@ import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
-import { AutomationsPanel } from "./Automations.js";
 import { RulesetsPanel } from "./Rulesets.js";
 import { ImportSessionContent } from "./ImportSessionSheet.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
@@ -172,7 +171,6 @@ const TITLES: Record<View, string> = {
   linear: "Linear",
   slack: "Slack",
   queue: "Work Queue",
-  automations: "Automations",
   webhooks: "Webhooks",
   rulesets: "Rulesets",
   nodes: "Nodes",
@@ -194,7 +192,6 @@ const SEARCH_TERMS: Record<View, string> = {
   linear: "linear workspace issue integration",
   slack: "slack workspace channel integration",
   queue: "work queue issue run evidence outcome retry lease checks",
-  automations: "schedule cron unattended recurring task",
   webhooks: "webhook trigger secret event",
   rulesets: "rules policy routing agent runtime model sandbox",
   nodes: "node daemon online offline diagnostics version update storage disk",
@@ -291,7 +288,6 @@ export function Settings({
       label: "Automation & policy",
       items: [
         { id: "queue", label: "Work Queue", icon: <IconQueue /> },
-        { id: "automations", label: "Automations", icon: <IconBolt /> },
         { id: "webhooks", label: "Webhooks", icon: <IconWebhook /> },
         { id: "rulesets", label: "Rulesets", icon: <IconRules /> },
       ],
@@ -404,7 +400,6 @@ export function Settings({
                 onOpenGithubSettings={() => onViewChange("github")}
               />
             )}
-            {activeView === "automations" && <AutomationsPanel state={state} onNavigate={(view) => onViewChange(view)} />}
             {activeView === "webhooks" && <WebhookTriggersPanel />}
             {activeView === "rulesets" && <RulesetsPanel state={state} />}
             {activeView === "nodes" && <NodesPanel state={state} />}
