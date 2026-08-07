@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntime, claudeRuntimeFromEnv, claudeSdkInstalled } from "./claude-code.js";
 import { deleteCodexSession, discoverNativeCodexSessions, loadCodexTranscript, writeCodexRollout } from "./codex-sessions.js";
+import { deleteOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 
 // Args that continue an existing Codex session each prompt. Codex assigns its own
@@ -32,7 +33,7 @@ function codexResumeArgs(sessionId: string, tier: string): string[] {
   // (read-only | workspace-write | danger-full-access), so `tier` needs no mapping.
   return ["exec", "--json", "--sandbox", tier, "resume", sessionId];
 }
-import type { ModelInfo, RuntimeMessage } from "./types.js";
+import type { ModelInfo, RuntimeMessage, ForkHistoryMessage, ForkImportContext } from "./types.js";
 import { PiRuntime, type PiRuntimeOptions } from "./pi.js";
 import { ProcessRuntime, processRuntimeFromEnv, type ProcessModelConfig, type ProcessPromptMode, type ProcessThinkingConfig } from "./process.js";
 import { codexCredentialPreflight } from "./codex-preflight.js";
@@ -1532,6 +1533,20 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
     // ACP handshake doesn't carry them); a bare ACP agent has none.
     ...(slashCommands ? { slashCommands } : {}),
     ...(opts.credsDir ? { credentials: createCredentialStore(opts.credsDir) } : {}),
+    // OpenCode's own store is SQLite under $XDG_DATA_HOME, so an ACP-promoted
+    // opencode can both read a resumed session's transcript back for history
+    // preload (loadHistory), drop it on delete (deleteHistory), and — the fork
+    // win — materialise a cross-runtime fork's portable history as a REAL session
+    // in that store (writeHistory → capabilities.forkHistoryImport → fidelity
+    // "replayed" instead of a seeded summary prompt). Only opencode has this
+    // layout; a bare ACP agent gets none of these hooks.
+    ...(opts.id === "opencode"
+      ? {
+          loadHistory: (sessionRef: string) => loadOpenCodeTranscript(sessionRef),
+          deleteHistory: (sessionRef: string) => void deleteOpenCodeSession(sessionRef),
+          writeHistory: (history: ForkHistoryMessage[], ctx: ForkImportContext) => writeOpenCodeHistory(history, ctx),
+        }
+      : {}),
   };
 }
 

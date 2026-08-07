@@ -50,6 +50,18 @@ On the fallback pipe path (see below) the picker instead offers the curated
 Yes — natively, via the ACP `session/load` for the session's own id. On the
 fallback pipe path, `opencode run -s <id> "<prompt>"` does the same job.
 
+## Session fork
+
+Yes — cross-runtime forks *into* OpenCode are **replayed**, not seeded. Bivy
+writes the fork's portable `{role, text}` transcript as a real session in
+OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db` — `session`,
+`message`, and `part` rows mirroring OpenCode's own layout), so `session/load`
+resumes it and the model opens on the full conversation instead of a summary
+prompt. See [session-fork-plan.md](../session-fork-plan.md) for the fidelity
+tiers. Best-effort like Codex's replay: if the node's OpenCode store is missing
+or on an unknown schema, the fork degrades to the seeded continuation prompt;
+`BIVY_OPENCODE_NO_FORK_REPLAY=1` forces that fallback.
+
 ## How it runs (and the version fallback)
 
 Bivy drives OpenCode through its native
@@ -81,7 +93,7 @@ See [acp.md](acp.md).
 
 - On the fallback pipe path, governance is effect-level (sandbox tier /
   FS-MCP-network channels) rather than per-tool approval cards.
-- No package installs or session fork through this runtime.
+- No package installs through this runtime.
 - Launch flags are pinned against the documented CLI; override with
   `BIVY_OPENCODE_ARGS` if a version differs.
 
