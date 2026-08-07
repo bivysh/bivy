@@ -440,11 +440,17 @@ async function onBivyCommand(msg) {
         cwd = String(msg.cwd || msg.workspace || cwd);
         if (!ref) { bivy({ replyTo: id, ok: false, error: "missing resume ref" }); return; }
         try {
-          const res = await agentRequest("session/load", { sessionId: ref, cwd, mcpServers: [] });
+          // Bounded: a wedged agent (opencode's ACP server can stop responding —
+          // see the drain note) would otherwise leave session/load pending forever,
+          // hanging the reopen with no watchdog to recover it (resume isn't a
+          // "working" turn). On timeout/failure we fall back to a fresh session so
+          // the chat still opens instead of spinning on "Fetching transcript…".
+          const res = await agentRequest("session/load", { sessionId: ref, cwd, mcpServers: [] }, { timeoutMs: 30_000 });
           sessionId = res?.sessionId ?? ref;
           publishModels(res);
         } catch {
-          // Agent doesn't support session/load — start fresh so the chat still opens.
+          // Agent doesn't support session/load (or it timed out) — start fresh so
+          // the chat still opens.
           const res = await agentRequest("session/new", { cwd, mcpServers: [] });
           sessionId = res?.sessionId ?? null;
           publishModels(res);
