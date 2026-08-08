@@ -1308,50 +1308,76 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 /* Automations panel: the form/schedule list and the "Recent results" aside.
    Stacked by default (mobile) so Recent results falls below the list instead of
    being squeezed into a narrow right rail; side-by-side once there's room. */
-/* Automations template gallery (Automations.tsx): concrete-job cards above the
-   create form. Schedule templates pre-fill the form; external ones navigate to
-   the panel that owns their trigger (Webhooks / Work Queue). */
-.automation-templates { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 8px; }
-@media (min-width: 560px) { .automation-templates { grid-template-columns: 1fr 1fr; } }
-.template-card {
-  display: flex; flex-direction: column; gap: 10px; justify-content: space-between;
-  border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface-2);
-}
-.template-card-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.template-card-title { font-size: 14px; }
-.template-card-tagline { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.4; overflow-wrap: anywhere; }
-.template-card-action { align-self: flex-start; }
-span.template-card-action { font-size: 12px; }
-
-/* First-class Automations destination (AutomationsView.tsx): a full-screen
-   surface reached from the sidebar foot, with its own header + scroll body. */
+/* Automations destination (AutomationsView.tsx): full-screen surface with a
+   Grok-inspired suggested-card gallery and a single-page create sheet. */
 .automations-view {
   position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column;
   background: var(--bg); color: var(--ink);
 }
 .automations-view-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--surface);
+  padding: 20px 24px 8px; background: transparent;
 }
-.automations-view-title { display: flex; align-items: center; gap: 10px; }
-.automations-view-title h1 { font-size: 18px; margin: 0; }
-.automations-view-title svg { color: var(--accent); }
+.automations-view-heading {
+  margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.02em;
+  font-family: var(--font-serif);
+}
 .automations-view-head-actions { display: flex; align-items: center; gap: 8px; }
-.automations-view-body {
-  flex: 1; min-height: 0; overflow-y: auto; padding: 8px 20px 40px;
-  width: 100%; max-width: 860px; margin: 0 auto;
+.autom-new-btn {
+  border-radius: 999px; padding: 9px 18px; font-weight: 600;
+  background: var(--ink); border-color: var(--ink); color: var(--bg);
 }
+.autom-new-btn:hover { filter: brightness(1.08); }
+.automations-view-body {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 8px 24px 48px;
+  width: 100%; max-width: 980px; margin: 0 auto;
+}
+.autom-section { margin-top: 22px; }
+.autom-section-label {
+  margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+/* Suggested template cards: soft tile, icon top-left, Add pill top-right. */
+.automation-templates {
+  display: grid; grid-template-columns: 1fr; gap: 12px;
+}
+@media (min-width: 640px) { .automation-templates { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 900px) { .automation-templates { grid-template-columns: 1fr 1fr 1fr; } }
+.template-card {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0;
+  border: 0; border-radius: 18px; padding: 16px 16px 18px;
+  background: var(--surface-2);
+}
+.template-card-top {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+}
+.template-card-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: 12px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+}
+.template-card-add {
+  border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 600;
+  background: var(--surface); color: var(--ink);
+}
+.template-card-title { font-size: 15px; font-weight: 650; line-height: 1.3; }
+.template-card-tagline {
+  margin: 0; font-size: 13px; color: var(--muted); line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
 /* Automation + run rows */
 .automation-list { display: flex; flex-direction: column; gap: 8px; }
 .automation-row {
   display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
-  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; background: var(--surface);
 }
 .automation-row-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .automation-row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .autom-status, .run-status {
   font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px;
-  border: 1px solid var(--line); color: var(--muted); background: var(--surface);
+  border: 1px solid var(--line); color: var(--muted); background: var(--surface-2);
 }
 .autom-status.on { color: var(--accent); border-color: var(--accent); }
 .autom-status.off { color: var(--muted); }
@@ -1360,64 +1386,148 @@ span.template-card-action { font-size: 12px; }
 .run-status.bad { color: var(--danger); border-color: currentColor; }
 .run-status.info { color: var(--muted); }
 
-/* Guided create/edit wizard (AutomationWizard): a centred sheet with a step
-   rail, one pane at a time, and a sticky action row. */
+/* Create/edit sheet: single-page form modal. */
 .wizard-scrim {
-  position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,0.45);
+  position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,0.40);
   display: flex; align-items: center; justify-content: center; padding: 16px;
+  backdrop-filter: blur(2px);
 }
 .wizard {
-  width: 100%; max-width: 560px; max-height: 90vh; display: flex; flex-direction: column;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  width: 100%; max-width: 520px; max-height: 90vh; display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 20px;
+  overflow: hidden; box-shadow: 0 24px 80px rgba(0,0,0,0.22);
 }
-.wizard-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line); }
-.wizard-steps { display: flex; gap: 6px; list-style: none; margin: 0; padding: 12px 16px 0; }
-.wizard-step-tab {
-  display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted);
-  padding: 4px 8px; border-radius: 999px; border: 1px solid transparent;
+.wizard.autom-editor { max-width: 540px; }
+.wizard-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 20px 8px;
 }
-.wizard-step-tab.active { color: var(--ink); border-color: var(--line); background: var(--surface-2); }
-.wizard-step-tab.done { color: var(--accent); }
-.wizard-step-num {
-  display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
-  border-radius: 999px; background: var(--surface-3); font-size: 11px;
+.wizard-head strong { font-size: 17px; font-weight: 700; }
+.wizard-body {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 8px 20px 12px;
+  display: flex; flex-direction: column; gap: 18px;
 }
-.wizard-step-tab.active .wizard-step-num { background: var(--accent); color: var(--accent-contrast); }
-.wizard-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
-.wizard-pane { display: flex; flex-direction: column; gap: 12px; }
-.wizard-pane h4 { margin: 0 0 2px; font-size: 15px; }
 .wizard-advanced { display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
-.wizard-review { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
-.wizard-review dt { color: var(--muted); font-size: 13px; }
-.wizard-review dd { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
-.wizard-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
-/* One-time reveal of a webhook URL / signing secret: a monospace value that can
-   overflow-scroll, with a copy button beside it. Used in the wizard's "Webhook
-   ready" panel and on a webhook automation's row. */
+.wizard-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 14px 20px 18px;
+}
+.autom-save-btn {
+  border-radius: 999px; min-width: 96px; font-weight: 600;
+  background: var(--ink); border-color: var(--ink); color: var(--bg);
+}
+.autom-save-btn:disabled { opacity: 0.45; }
+
+/* Name row: rounded icon + pill input */
+.autom-name-row { display: flex; align-items: center; gap: 10px; }
+.autom-name-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 42px; height: 42px; border-radius: 14px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+}
+.autom-name-input {
+  flex: 1; min-width: 0; height: 42px; padding: 0 14px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 15px;
+}
+.autom-name-input:focus { outline: none; border-color: var(--line-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+
+.autom-field-block { display: flex; flex-direction: column; gap: 8px; }
+.autom-field-label { font-size: 13px; font-weight: 600; color: var(--ink); }
+
+/* + Add Trigger dashed control + menu */
+.autom-trigger-add-wrap { position: relative; }
+.autom-trigger-add {
+  width: 100%; display: flex; align-items: center; justify-content: flex-start;
+  min-height: 46px; padding: 0 16px; border-radius: 999px;
+  border: 1.5px dashed var(--line-strong); background: transparent;
+  color: var(--muted); font: inherit; font-size: 14px; font-weight: 550; cursor: pointer;
+}
+.autom-trigger-add:hover { color: var(--ink); border-color: var(--muted); background: var(--surface-2); }
+.autom-trigger-menu {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 5;
+  padding: 6px; border-radius: 16px; border: 1px solid var(--line);
+  background: var(--surface); box-shadow: 0 16px 48px rgba(0,0,0,0.18);
+  max-height: 320px; overflow-y: auto;
+}
+.autom-trigger-option {
+  width: 100%; display: flex; align-items: flex-start; gap: 12px; text-align: left;
+  padding: 10px 12px; border: 0; border-radius: 12px; background: transparent;
+  color: var(--ink); font: inherit; cursor: pointer;
+}
+.autom-trigger-option:hover { background: var(--surface-2); }
+.autom-trigger-option-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 32px; height: 32px; border-radius: 999px; color: var(--muted);
+  background: var(--surface-2);
+}
+.autom-trigger-option-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.autom-trigger-option-text strong { font-size: 14px; font-weight: 650; }
+.autom-trigger-option-text span { font-size: 12px; color: var(--muted); line-height: 1.35; }
+
+.autom-trigger-chip {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 52px; padding: 8px 12px 8px 10px; border-radius: 16px;
+  border: 1px solid var(--line); background: var(--surface-2);
+}
+.autom-trigger-chip-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 34px; height: 34px; border-radius: 999px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+}
+.autom-trigger-chip-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.autom-trigger-chip-text strong { font-size: 14px; font-weight: 650; }
+.autom-trigger-chip-text span {
+  font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.autom-trigger-clear { font-size: 16px; color: var(--muted); padding: 4px 6px; }
+.autom-trigger-config { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.autom-cron-details { font-size: 12px; color: var(--muted); }
+.autom-cron-details summary { cursor: pointer; font-weight: 600; user-select: none; }
+.autom-cron-details[open] summary { margin-bottom: 6px; }
+
+/* Instructions card with footer bar (machine + advanced) */
+.autom-instructions {
+  border: 1px solid var(--line); border-radius: 16px; background: var(--surface-2);
+  overflow: hidden;
+}
+.autom-instructions-input {
+  display: block; width: 100%; min-height: 140px; resize: vertical;
+  padding: 14px 14px 8px; border: 0; background: transparent;
+  color: var(--ink); font: inherit; font-size: 14px; line-height: 1.45;
+}
+.autom-instructions-input:focus { outline: none; }
+.autom-instructions-input::placeholder { color: var(--muted); }
+.autom-instructions-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px 10px; border-top: 1px solid var(--line);
+}
+.autom-instructions-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.autom-inline-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--muted);
+}
+.autom-inline-select {
+  max-width: 160px; height: 30px; padding: 0 8px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 12px;
+}
+.autom-advanced-link {
+  border: 0; background: none; padding: 4px 2px;
+  color: var(--muted); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
+}
+.autom-advanced-link:hover { color: var(--ink); }
+
+/* One-time reveal of a webhook URL / signing secret. */
 .reveal-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
 .reveal-value {
   flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 6px 8px;
-  border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2);
-  font-family: var(--mono, ui-monospace, monospace); font-size: 12px; color: var(--fg);
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2);
+  font-family: var(--mono, ui-monospace, monospace); font-size: 12px; color: var(--ink);
 }
-/* Automations schedule builder: natural-language field + preset chips + a
-   live human-readable preview of the resulting cron, with the raw cron tucked
-   behind an "Edit cron expression" disclosure for power users. */
-.schedule-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.schedule-preset {
-  font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 999px;
-  border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); cursor: pointer;
-}
-.schedule-preset:hover { color: var(--fg); border-color: var(--muted); }
-.schedule-preset.active { color: var(--accent); border-color: var(--accent); background: var(--surface); }
 .schedule-hint { margin: 8px 0 0; font-size: 13px; line-height: 1.35; }
 .schedule-hint.ok { color: var(--muted); }
 .schedule-hint.warn { color: var(--warn, var(--accent)); }
-.schedule-advanced-toggle {
-  align-self: flex-start; margin-top: 8px; padding: 2px 0; border: 0; background: none;
-  color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer;
-}
-.schedule-advanced-toggle:hover { color: var(--fg); }
 .schedule-cron-input { margin-top: 6px; font-family: var(--mono, ui-monospace, monospace); font-size: 13px; }
 .settings-form code { font-size: 11px; padding: 1px 5px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); }
 .settings-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
