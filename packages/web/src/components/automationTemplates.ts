@@ -71,6 +71,26 @@ const SECURITY_AUDIT_INSTRUCTIONS = `Audit this project's dependencies for known
 
 If the audit is clean, make no changes and report that no known vulnerabilities were found.`;
 
+const LINT_AUTOFIX_INSTRUCTIONS = `Apply this project's own formatter and safe lint autofixes across the codebase.
+
+1. Detect the configured formatter and linter (for example Prettier, ESLint --fix, Ruff, gofmt, or rustfmt) from the project's config and scripts. Use only what the repository already configures — do not add new tools or rules.
+2. Run the formatter and the linter's safe autofixes.
+3. Keep the change mechanical: no behavioural edits, no hand-editing of logic. Limit the diff to formatting and autofixable lint.
+4. Run the project's tests, linter, and type checks to confirm nothing broke.
+5. Commit on a new branch and open a pull request. List any lint issues that cannot be auto-fixed in the description instead of changing code by hand.
+
+If there is nothing to reformat or autofix, make no changes and report that the code is already clean.`;
+
+const FLAKY_TEST_INSTRUCTIONS = `Find and quarantine flaky tests in this project.
+
+1. Run the test suite several times (at least three) to surface tests that pass and fail non-deterministically without any code change.
+2. For each test that flaps, confirm it is genuinely non-deterministic rather than a real, consistent failure.
+3. Quarantine confirmed-flaky tests using the framework's own mechanism (skip/quarantine annotation) and leave a short note linking each to a follow-up. Do not delete tests or weaken assertions to force a pass.
+4. Run the suite once more to confirm it is now stable.
+5. Commit on a new branch and open a pull request listing each quarantined test and the evidence that it was flaky.
+
+If nothing flaps across the repeated runs, make no changes and report that the suite is stable.`;
+
 export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
   {
     kind: "schedule",
@@ -99,10 +119,44 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     },
   },
   {
+    kind: "schedule",
+    key: "lint-format-autofix",
+    title: "Lint & format autofix",
+    tagline: "Sweep the repo with your formatter and safe lint fixes, open a PR.",
+    prefill: {
+      name: "Lint & format autofix",
+      instructions: LINT_AUTOFIX_INSTRUCTIONS,
+      schedule: { nlText: "every monday at 8am", cron: "0 8 * * 1" },
+      approvalMode: "autonomous",
+      sandbox: "workspace-write",
+    },
+  },
+  {
+    kind: "schedule",
+    key: "flaky-test-triage",
+    title: "Flaky-test triage",
+    tagline: "Re-run the suite to find non-deterministic tests and quarantine them.",
+    prefill: {
+      name: "Flaky-test triage",
+      instructions: FLAKY_TEST_INSTRUCTIONS,
+      schedule: { nlText: "every saturday at 3am", cron: "0 3 * * 6" },
+      approvalMode: "autonomous",
+      sandbox: "workspace-write",
+    },
+  },
+  {
     kind: "external",
     key: "fix-failed-ci",
     title: "Fix failed CI",
     tagline: "Turn a CI failure webhook into a diagnosed, tested fix.",
+    route: "webhooks",
+    cta: "Set up in Webhooks",
+  },
+  {
+    kind: "external",
+    key: "fix-error-tracker-issue",
+    title: "Fix errors from your tracker",
+    tagline: "A new Sentry-style error webhook opens a run that reproduces and fixes it.",
     route: "webhooks",
     cta: "Set up in Webhooks",
   },
