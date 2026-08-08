@@ -57,8 +57,7 @@ writes the fork's portable `{role, text}` transcript as a real session in
 OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db` — `session`,
 `message`, and `part` rows mirroring OpenCode's own layout), so `session/load`
 resumes it and the model opens on the full conversation instead of a summary
-prompt. See [session-fork-plan.md](../session-fork-plan.md) for the fidelity
-tiers. Best-effort like Codex's replay: if the node's OpenCode store is missing
+prompt. Best-effort like Codex's replay: if the node's OpenCode store is missing
 or on an unknown schema, the fork degrades to the seeded continuation prompt;
 `BIVY_OPENCODE_NO_FORK_REPLAY=1` forces that fallback.
 

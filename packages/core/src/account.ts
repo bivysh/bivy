@@ -773,12 +773,22 @@ export interface AccountAutomation {
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   enabled: boolean;
+  /** How this automation fires. Absent on legacy rows means "schedule". */
+  trigger?: "schedule" | "webhook" | "manual";
   schedule: AutomationSchedule;
   nextRunAt?: string;
   lastScheduledAt?: string;
+  /** Present for a webhook-triggered automation: the signed endpoint to POST
+   *  events to. The signing secret is returned only once (create/rotate). */
+  webhookUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
+
+export type CreateAutomationInput = Omit<
+  AccountAutomation,
+  "id" | "createdAt" | "updatedAt" | "lastScheduledAt" | "schedule" | "webhookUrl"
+> & { schedule?: AutomationSchedule };
 
 export interface AccountAutomationRun {
   id: string;
@@ -814,10 +824,20 @@ export function fetchAutomations(store: LocalStore, fetchImpl: typeof fetch = fe
 
 export function createAutomation(
   store: LocalStore,
-  input: Omit<AccountAutomation, "id" | "createdAt" | "updatedAt" | "lastScheduledAt">,
+  input: CreateAutomationInput,
   fetchImpl: typeof fetch = fetch,
-): Promise<AccountAutomation> {
+): Promise<AccountAutomation & { webhookSecret?: string }> {
   return automationRequest(store, "/account/automations", { method: "POST", body: JSON.stringify(input) }, fetchImpl);
+}
+
+/** Rotate a webhook automation's signing secret. The new secret is returned
+ *  once; the old one stops working immediately. */
+export function rotateAutomationWebhook(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomation & { webhookSecret: string }> {
+  return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/webhook/rotate`, { method: "POST" }, fetchImpl);
 }
 
 export function updateAutomation(

@@ -159,20 +159,39 @@ for (const agent of SECOND_WAVE) {
     const argsFile = path.join(tmp, `${agent.id}-args.txt`);
     writeStub(agent.bin, argsFile, ["done"]);
 
-    const runtime = makeRuntime({ runtime: agent.id, credsDir: tmp, piDir: tmp, sessionsDir: tmp });
-    assert.equal(runtime.capabilities.resume, agent.resumable, `${agent.id} resume capability should be ${agent.resumable}`);
-
-    const sessionId = `sess-${agent.id}`;
-    const { session } = await runtime.openSession({ workspace: tmp, sessionFile: sessionId });
-    await runToEnd(session);
-
-    const launched = fs.readFileSync(argsFile, "utf8");
-    for (const token of agent.expect) {
-      const needle = token.replace(/SID/g, sessionId);
-      assert.ok(launched.includes(needle), `${agent.id}: expected argv to include '${needle}', got: ${launched}`);
+    // Grok's process path runs a credential preflight that short-circuits with
+    // agent_end (no spawn) when neither an API key nor auth.json is present.
+    // CI runners are clean, so mint a dummy key for the duration of this case
+    // so we exercise the actual argv template rather than the preflight path.
+    const prevXai = process.env.XAI_API_KEY;
+    const prevGrokKey = process.env.GROK_API_KEY;
+    if (agent.id === "grok") {
+      process.env.XAI_API_KEY = "test-xai-key-for-cli-resume";
+      delete process.env.GROK_API_KEY;
     }
-    // The prompt ("hello", from runToEnd) is passed as the trailing argv argument.
-    assert.ok(/(^|\s)hello(\s|$)/.test(launched), `${agent.id}: prompt should be the trailing arg, got: ${launched}`);
+    try {
+      const runtime = makeRuntime({ runtime: agent.id, credsDir: tmp, piDir: tmp, sessionsDir: tmp });
+      assert.equal(runtime.capabilities.resume, agent.resumable, `${agent.id} resume capability should be ${agent.resumable}`);
+
+      const sessionId = `sess-${agent.id}`;
+      const { session } = await runtime.openSession({ workspace: tmp, sessionFile: sessionId });
+      await runToEnd(session);
+
+      const launched = fs.readFileSync(argsFile, "utf8");
+      for (const token of agent.expect) {
+        const needle = token.replace(/SID/g, sessionId);
+        assert.ok(launched.includes(needle), `${agent.id}: expected argv to include '${needle}', got: ${launched}`);
+      }
+      // The prompt ("hello", from runToEnd) is passed as the trailing argv argument.
+      assert.ok(/(^|\s)hello(\s|$)/.test(launched), `${agent.id}: prompt should be the trailing arg, got: ${launched}`);
+    } finally {
+      if (agent.id === "grok") {
+        if (prevXai === undefined) delete process.env.XAI_API_KEY;
+        else process.env.XAI_API_KEY = prevXai;
+        if (prevGrokKey === undefined) delete process.env.GROK_API_KEY;
+        else process.env.GROK_API_KEY = prevGrokKey;
+      }
+    }
   });
 }
 

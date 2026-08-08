@@ -66,7 +66,10 @@ export function classifySource(source: string | undefined): SourceInfo {
   if (s === "queue:schedule" || s === "schedule") {
     return { kind: "schedule", label: "Scheduled run", automation: true };
   }
-  if (s === "queue:webhook" || s === "webhook") {
+  // A signed webhook — the generic `automation:<hookId>` hook and a
+  // webhook-triggered automation definition both carry an `automation:` source
+  // (bare, or `queue:automation:` for a non-repo run).
+  if (s === "queue:webhook" || s === "webhook" || s.startsWith("automation:") || s.startsWith("queue:automation:")) {
     return { kind: "webhook", label: "Webhook", automation: true };
   }
   if (s === "queue:manual" || s === "manual") {
