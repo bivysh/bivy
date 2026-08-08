@@ -58,7 +58,6 @@ type TriggerPick =
   | { id: "once"; label: string; hint: string; trigger: "schedule"; kind: "once" }
   | { id: "webhook"; label: string; hint: string; trigger: "webhook" }
   | { id: "github"; label: string; hint: string; trigger: "source"; source: "github" }
-  | { id: "github_ci"; label: string; hint: string; trigger: "source"; source: "github" }
   | { id: "linear"; label: string; hint: string; trigger: "source"; source: "linear" };
 
 const TRIGGER_OPTIONS: TriggerPick[] = [
@@ -66,9 +65,9 @@ const TRIGGER_OPTIONS: TriggerPick[] = [
   { id: "weekly", label: "Weekly", hint: "Every week on a chosen day", trigger: "schedule", kind: "cron", cron: "0 9 * * 1", nlText: "every monday at 9am" },
   { id: "monthly", label: "Monthly", hint: "Every month on a chosen day", trigger: "schedule", kind: "cron", cron: "0 9 1 * *", nlText: "every month on the 1st at 9am" },
   { id: "once", label: "One time", hint: "Run once at a chosen date and time", trigger: "schedule", kind: "once" },
-  { id: "github", label: "GitHub", hint: "Issue labeled or @mention → session → PR", trigger: "source", source: "github" },
-  { id: "github_ci", label: "GitHub Actions", hint: "Failed workflow run → diagnose and fix", trigger: "source", source: "github" },
-  { id: "linear", label: "Linear", hint: "Assigned / labeled issue → session → PR", trigger: "source", source: "linear" },
+  // One GitHub entry — events (issues, mentions, CI, …) are filters on the job, not sibling triggers.
+  { id: "github", label: "GitHub", hint: "App events you choose — labels, @mentions, failed CI, …", trigger: "source", source: "github" },
+  { id: "linear", label: "Linear", hint: "Labeled issue → session on your machine", trigger: "source", source: "linear" },
   { id: "webhook", label: "Webhook", hint: "When a signed request hits its URL", trigger: "webhook" },
 ];
 
@@ -106,10 +105,13 @@ function scheduleSummary(item: AccountAutomation): string {
   const repos = item.repos?.length ? ` · ${item.repos.join(", ")}` : "";
   const labels = item.labels?.length ? item.labels.join(", ") : "bivy";
   const node = item.nodeLabel ? ` · ${item.nodeLabel}` : "";
-  if (item.trigger === "github") return `GitHub · label ${labels}${repos}${node}`;
+  if (item.trigger === "github") {
+    const events = summarizeGithubEvents(item);
+    return `GitHub · ${events}${repos}${node}`;
+  }
   if (item.trigger === "github_ci") {
     const wf = item.labels?.length ? ` · workflow ${item.labels.join(", ")}` : " · any workflow";
-    return `GitHub Actions · failure${wf}${repos}${node}`;
+    return `GitHub · failed CI${wf}${repos}${node}`;
   }
   if (item.trigger === "linear") return `Linear · label ${labels}${repo || repos}${node}`;
   if (item.trigger === "webhook") return `Webhook · runs on a signed request${repo}`;
@@ -121,6 +123,70 @@ function scheduleSummary(item: AccountAutomation): string {
 
 function isSourceTrigger(t: AccountAutomation["trigger"]): t is "github" | "linear" | "github_ci" {
   return t === "github" || t === "linear" || t === "github_ci";
+}
+
+/** Human summary of GitHub `on` rules (or legacy defaults). */
+function summarizeGithubEvents(item: AccountAutomation): string {
+  const on = item.on;
+  if (!on?.length) {
+    const labels = item.labels?.length ? item.labels.join(", ") : "bivy";
+    return `label ${labels} · @mention`;
+  }
+  const bits: string[] = [];
+  if (on.some((r) => r.event === "issues")) bits.push("issues");
+  if (on.some((r) => r.event === "issue_comment" || r.mention)) bits.push("@mention");
+  if (on.some((r) => r.event === "pull_request")) bits.push("PRs");
+  if (on.some((r) => r.event === "pull_request_review_comment")) bits.push("review @mention");
+  if (on.some((r) => r.event === "workflow_run")) bits.push("failed CI");
+  return bits.length ? bits.join(" · ") : "custom events";
+}
+
+type GithubEventToggles = {
+  issuesLabeled: boolean;
+  issueMention: boolean;
+  prLabeled: boolean;
+  prMention: boolean;
+  workflowFailed: boolean;
+};
+
+function togglesFromAutomation(item: AccountAutomation): GithubEventToggles {
+  if (item.trigger === "github_ci") {
+    return { issuesLabeled: false, issueMention: false, prLabeled: false, prMention: false, workflowFailed: true };
+  }
+  const on = item.on;
+  if (!on?.length) {
+    // Legacy github default.
+    return { issuesLabeled: true, issueMention: true, prLabeled: false, prMention: false, workflowFailed: false };
+  }
+  return {
+    issuesLabeled: on.some((r) => r.event === "issues"),
+    issueMention: on.some((r) => r.event === "issue_comment" && r.mention),
+    prLabeled: on.some((r) => r.event === "pull_request"),
+    prMention: on.some((r) => r.event === "pull_request_review_comment" && r.mention),
+    workflowFailed: on.some((r) => r.event === "workflow_run"),
+  };
+}
+
+function buildGithubOn(
+  toggles: GithubEventToggles,
+  labelList: string[] | undefined,
+  workflowList: string[] | undefined,
+): NonNullable<AccountAutomation["on"]> {
+  const labels = labelList?.length ? labelList : ["bivy"];
+  const on: NonNullable<AccountAutomation["on"]> = [];
+  if (toggles.issuesLabeled) on.push({ event: "issues", labels });
+  if (toggles.issueMention) on.push({ event: "issue_comment", mention: true });
+  if (toggles.prLabeled) on.push({ event: "pull_request", labels });
+  if (toggles.prMention) on.push({ event: "pull_request_review_comment", mention: true });
+  if (toggles.workflowFailed) {
+    on.push({
+      event: "workflow_run",
+      actions: ["completed"],
+      conclusions: ["failure", "timed_out", "startup_failure"],
+      workflows: workflowList?.length ? workflowList : undefined,
+    });
+  }
+  return on;
 }
 
 function nodeLabelSuffix(nodeLabel?: string): string {
@@ -1128,7 +1194,14 @@ function SourceAutomationEditor({
   const trigger = item.trigger as "github" | "linear" | "github_ci";
   const [name, setName] = useState(item.name);
   const [enabled, setEnabled] = useState(item.enabled);
+  const initialToggles = togglesFromAutomation(item);
+  const [events, setEvents] = useState<GithubEventToggles>(initialToggles);
   const [labelsText, setLabelsText] = useState((item.labels ?? (trigger === "github_ci" ? [] : ["bivy"])).join(", "));
+  const [workflowsText, setWorkflowsText] = useState(
+    trigger === "github_ci"
+      ? (item.labels ?? []).join(", ")
+      : (item.on?.find((r) => r.event === "workflow_run")?.workflows ?? []).join(", "),
+  );
   const [reposText, setReposText] = useState((item.repos ?? []).join(", "));
   const [repoDefault, setRepoDefault] = useState(item.repo || "");
   const [nodeSuffix, setNodeSuffix] = useState(nodeLabelSuffix(item.nodeLabel));
@@ -1149,6 +1222,7 @@ function SourceAutomationEditor({
     || trigger === "linear" && linearSourceStatus(sources.linear).tone === "off";
   const isGithub = trigger === "github" || trigger === "github_ci";
   const mention = sources.github?.apps?.find((a) => a.mention)?.mention || "bivy";
+  const anyEvent = events.issuesLabeled || events.issueMention || events.prLabeled || events.prMention || events.workflowFailed;
 
   const parseList = (raw: string): string[] | undefined => {
     const parts = raw.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
@@ -1159,7 +1233,9 @@ function SourceAutomationEditor({
     setBusy(true);
     setError("");
     try {
+      if (isGithub && !anyEvent) throw new Error("Pick at least one GitHub event.");
       const labels = parseList(labelsText);
+      const workflows = parseList(workflowsText);
       const repos = parseList(reposText);
       if (repos) {
         for (const r of repos) {
@@ -1171,7 +1247,7 @@ function SourceAutomationEditor({
       if (repoDefault && (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(repoDefault) || repoDefault.includes(".."))) {
         throw new Error("Default repo must look like owner/name");
       }
-      await updateAutomation(controller.local, item.id, {
+      const patch: Parameters<typeof updateAutomation>[2] = {
         name: name.trim() || item.name,
         enabled,
         labels: labels ?? [],
@@ -1180,7 +1256,16 @@ function SourceAutomationEditor({
         nodeLabel: nodeSuffix.trim() ? `bivy/${nodeSuffix.trim()}` : "",
         runtimeId: runtimeId.trim() || "",
         model: model.trim() || "",
-      });
+      };
+      if (isGithub) {
+        // Persist structured event rules. Legacy github_ci keeps its trigger kind
+        // so existing seeds keep working; labels[] there still means workflows.
+        patch.on = buildGithubOn(events, labels, workflows);
+        if (trigger === "github_ci") {
+          patch.labels = workflows ?? [];
+        }
+      }
+      await updateAutomation(controller.local, item.id, patch);
       if (isGithub && triggerAccessDirty) {
         await controller.setGithubAppTriggerAccess(triggerAccess);
       }
@@ -1193,9 +1278,13 @@ function SourceAutomationEditor({
   }
 
   const title =
-    trigger === "github_ci" ? "Edit Fix failed CI"
+    trigger === "github_ci" ? "Edit GitHub automation (CI)"
       : trigger === "linear" ? "Edit Linear automation"
         : "Edit GitHub automation";
+
+  function toggleEvent<K extends keyof GithubEventToggles>(key: K) {
+    setEvents((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
 
   return (
     <div className="wizard-scrim" onClick={onClose}>
@@ -1211,9 +1300,9 @@ function SourceAutomationEditor({
               <button type="button" className="btn sm primary" style={{ marginLeft: 8 }} onClick={onConnect}>Connect here</button>
             </div>
           )}
-          {trigger === "github_ci" && enabled && !needsConnect && (
+          {events.workflowFailed && enabled && !needsConnect && isGithub && (
             <div className="autom-banner" role="status">
-              Requires <code>workflow_run</code> on the GitHub App (included for apps created in Bivy).
+              Failed CI needs <code>workflow_run</code> on the GitHub App (included for apps created in Bivy).
               Existing apps: add the event + Actions/Checks read in GitHub settings.
             </div>
           )}
@@ -1228,28 +1317,83 @@ function SourceAutomationEditor({
             <span>Enabled — {enabled ? "matching events start sessions" : "events are ignored"}</span>
           </label>
 
-          <div className="settings-field">
-            <label className="field-label" htmlFor="src-labels">
-              {trigger === "github_ci" ? "Workflow names (optional)" : "Labels"}
-            </label>
-            <input
-              id="src-labels"
-              className="picker-search"
-              value={labelsText}
-              onChange={(e) => setLabelsText(e.target.value)}
-              placeholder={trigger === "github_ci" ? "e.g. CI, Build (empty = any failed workflow)" : "e.g. bivy"}
-            />
-            <p className="settings-hint">
-              {trigger === "github_ci"
-                ? "Comma-separated. Empty matches every failed workflow on allowed repos."
-                : (
-                    <>
-                      Comma-separated. Default <code>bivy</code> also matches{" "}
-                      <code>{'bivy/<node>'}</code>. Mentions ignore this filter.
-                    </>
-                  )}
-            </p>
-          </div>
+          {isGithub && (
+            <div className="settings-field">
+              <div className="autom-field-label">When any of these fire</div>
+              <p className="settings-hint" style={{ marginBottom: 6 }}>
+                One GitHub App. Events are filters on this job — the outcome is whatever your instructions say
+                (comment, PR, fix, …).
+              </p>
+              <label className="autom-check-row">
+                <input type="checkbox" checked={events.issuesLabeled} onChange={() => toggleEvent("issuesLabeled")} />
+                <span>Issue labeled <span className="settings-hint">(uses label filter below)</span></span>
+              </label>
+              <label className="autom-check-row">
+                <input type="checkbox" checked={events.issueMention} onChange={() => toggleEvent("issueMention")} />
+                <span>@mention on issue or PR conversation <code>@{mention}</code></span>
+              </label>
+              <label className="autom-check-row">
+                <input type="checkbox" checked={events.prLabeled} onChange={() => toggleEvent("prLabeled")} />
+                <span>Pull request labeled</span>
+              </label>
+              <label className="autom-check-row">
+                <input type="checkbox" checked={events.prMention} onChange={() => toggleEvent("prMention")} />
+                <span>@mention on a PR review comment</span>
+              </label>
+              <label className="autom-check-row">
+                <input type="checkbox" checked={events.workflowFailed} onChange={() => toggleEvent("workflowFailed")} />
+                <span>Workflow failed</span>
+              </label>
+              {!anyEvent && <p className="schedule-hint warn">Select at least one event.</p>}
+            </div>
+          )}
+
+          {isGithub && (events.issuesLabeled || events.prLabeled) && (
+            <div className="settings-field">
+              <label className="field-label" htmlFor="src-labels">Labels</label>
+              <input
+                id="src-labels"
+                className="picker-search"
+                value={labelsText}
+                onChange={(e) => setLabelsText(e.target.value)}
+                placeholder="e.g. bivy"
+              />
+              <p className="settings-hint">
+                Comma-separated. Default <code>bivy</code> also matches <code>{'bivy/<node>'}</code>.
+                @mentions ignore this filter.
+              </p>
+            </div>
+          )}
+
+          {isGithub && events.workflowFailed && (
+            <div className="settings-field">
+              <label className="field-label" htmlFor="src-workflows">Workflow names (optional)</label>
+              <input
+                id="src-workflows"
+                className="picker-search"
+                value={workflowsText}
+                onChange={(e) => setWorkflowsText(e.target.value)}
+                placeholder="e.g. CI, Build (empty = any failed workflow)"
+              />
+              <p className="settings-hint">Comma-separated. Empty matches every failed workflow on allowed repos.</p>
+            </div>
+          )}
+
+          {trigger === "linear" && (
+            <div className="settings-field">
+              <label className="field-label" htmlFor="src-labels-lin">Labels</label>
+              <input
+                id="src-labels-lin"
+                className="picker-search"
+                value={labelsText}
+                onChange={(e) => setLabelsText(e.target.value)}
+                placeholder="e.g. bivy"
+              />
+              <p className="settings-hint">
+                Comma-separated. Default <code>bivy</code> also matches <code>{'bivy/<node>'}</code>.
+              </p>
+            </div>
+          )}
 
           <div className="settings-field">
             <label className="field-label" htmlFor="src-repos">Repository allowlist (optional)</label>
@@ -1614,7 +1758,7 @@ function AutomationEditor({
                             <span className="autom-trigger-option-icon" aria-hidden="true">
                               {opt.id === "webhook"
                                 ? <IconWebhook />
-                                : opt.id === "github" || opt.id === "github_ci" || opt.id === "linear"
+                                : opt.id === "github" || opt.id === "linear"
                                   ? <IconPr />
                                   : <IconClock />}
                             </span>

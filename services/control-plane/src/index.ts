@@ -28,6 +28,9 @@ import {
   pickRoutingLabel,
   parseGithubCommentEvent,
   pickCommentRoutingLabel,
+  parseGithubPullRequestEvent,
+  pickPullRequestRoutingLabel,
+  parseGithubReviewCommentEvent,
   parseInstallationId,
   verifySlackSignature,
   parseSlackCommand,
@@ -46,6 +49,7 @@ import {
   normalizeStringList,
   sourceAutomationSeedInput,
   DEFAULT_FIX_CI_PROMPT,
+  normalizeEventRules,
   type SourceTriggerKind,
 } from "./automation-match.js";
 
@@ -2385,12 +2389,16 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   let repo: string | undefined;
   let labels: string[] | undefined;
   let repos: string[] | undefined;
+  let on: AutomationDefinition["on"] | undefined;
   try {
     repo = normalizeAutomationRepo(req.body?.repo);
     labels = normalizeStringList(req.body?.labels);
     repos = normalizeStringList(req.body?.repos);
     if (repos) {
       for (const r of repos) normalizeAutomationRepo(r); // validate each slug
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "on")) {
+      on = normalizeEventRules(req.body.on);
     }
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
@@ -2411,6 +2419,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     repo,
     labels,
     repos,
+    on,
     templateId: templateId || (isSourceTrigger(trigger) ? "issue-to-pr" : undefined),
     schedule,
     nextRunAt,
@@ -2453,6 +2462,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   let repo = current.repo;
   let labels = current.labels;
   let repos = current.repos;
+  let on = current.on;
   try {
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "repo")) {
       // Empty string clears the workspace target.
@@ -2466,6 +2476,9 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "repos")) {
       repos = req.body.repos === null ? undefined : normalizeStringList(req.body.repos);
       if (repos) for (const r of repos) normalizeAutomationRepo(r);
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "on")) {
+      on = req.body.on === null ? undefined : normalizeEventRules(req.body.on);
     }
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
@@ -2484,6 +2497,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     repo,
     labels,
     repos,
+    on,
     templateId: typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : current.templateId,
   };
   const updated = await store.updateAutomationDefinition(client.accountId, current.id, patch);
@@ -2974,15 +2988,21 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   await ensureSourceAutomations(hook.accountId);
   const automations = await store.listAutomationDefinitions(hook.accountId);
 
-  // workflow_run completed failure → github_ci automations ("Fix failed CI").
+  // Prefer the per-account handle the node registered (the app's unique slug).
+  const triggerLogin = (hook.botMention || process.env.BIVY_GITHUB_BOT_MENTION || "bivy").trim();
+
+  // ── workflow_run (failed CI) ────────────────────────────────────────────
   if (event === "workflow_run") {
     const failure = parseGithubWorkflowRunFailure(payload);
     if (!failure) return res.json({ ok: true, enqueued: false });
     const matched = matchSourceAutomation(automations, {
-      kind: "github_ci",
+      kind: "github",
+      githubEvent: "workflow_run",
+      action: "completed",
       repo: failure.repo,
       labels: [],
       workflowName: failure.workflowName,
+      conclusion: failure.conclusion,
     });
     if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
     const label = applyDefaultNode(matched.nodeLabel || "bivy", hook.defaultNode);
@@ -2993,7 +3013,8 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
       repo: failure.repo,
       url: failure.htmlUrl,
       eventContext: failure.eventContext,
-      // Prefer the operator's E2E template; fall back to the built-in fix-ci prompt.
+      // Prefer the operator's encrypted template; fall back to the built-in fix-ci prompt.
+      // Outcome is whatever those instructions say — not a hard-coded "open a PR" path.
       body: matched.templateCiphertext || DEFAULT_FIX_CI_PROMPT,
       dedupeKey,
       collapseKey: `gh-ci:${failure.repo}:${failure.runId}`,
@@ -3011,49 +3032,34 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
   }
 
-  // issue_comment: an `@`-mention of the bot handle turns the comment into work
-  // routed to a node (the comment text is the instruction the node acts on).
+  // ── issue_comment (issues + PR conversation) @mention ───────────────────
   if (event === "issue_comment") {
-    // Prefer the per-account handle the node registered (the app's unique slug),
-    // so it can't collide with an unrelated real GitHub user. Fall back to the
-    // global env default only for legacy hooks that never registered one.
-    const triggerLogin = (hook.botMention || process.env.BIVY_GITHUB_BOT_MENTION || "bivy").trim();
     const comment = parseGithubCommentEvent(payload, triggerLogin);
     if (!comment) return res.json({ ok: true, enqueued: false });
-    // Issue #259: on a public repo, anyone can `@`-mention the bot in a comment —
-    // gate on the commenter's GitHub `author_association` per the account's
-    // configured access level (Settings → GitHub App). Ack 200 so GitHub doesn't
-    // retry; just enqueue nothing.
     if (!meetsTriggerAccess(comment.authorAssociation, hook.triggerAccess)) {
       return res.json({ ok: true, enqueued: false, reason: "access" });
     }
     const matched = matchSourceAutomation(automations, {
       kind: "github",
+      githubEvent: "issue_comment",
+      action: String((payload as any)?.action ?? ""),
       repo: comment.repo,
       labels: comment.issueLabels,
-      // Mentions skip the label filter; routing still honours `on <node>`.
       mention: true,
     });
     if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
     const rawLabel = pickCommentRoutingLabel(comment.instruction, comment.issueLabels, triggerLogin);
     const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
-    // Case B: if this issue already has an indexed session, CONTINUE it rather than
-    // starting a fresh one, so a follow-up comment lands in the same thread.
     const existingSession = await store.findSessionByIssue(hook.accountId, comment.repo, comment.issueNumber).catch(() => undefined);
     const item = await store.enqueueWorkItem(hook.accountId, {
       label,
       source: "github:comment",
       target: existingSession ? { kind: "existing_session", sessionId: existingSession.sessionId } : undefined,
-      // Issue #153: the control plane no longer retains issue/comment title or
-      // body — the claiming node fetches the live comment directly from GitHub
-      // (see getIssueCommentBody in src/github-tasks.ts) immediately before use.
-      title: `GitHub issue #${comment.issueNumber}`,
+      title: `GitHub #${comment.issueNumber}`,
       repo: comment.repo,
       issueNumber: comment.issueNumber,
       url: comment.url,
       dedupeKey,
-      // Landed on the shared queue with no explicit target → re-routable when the
-      // account's default node changes.
       defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
       installationId,
       appId: hook.appId,
@@ -3068,58 +3074,140 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
   }
 
-  // issues: a `bivy` / `bivy/<node>` label OR an `@`-mention of the bot handle
-  // in the issue description routes the issue to a node. The body mention lets an
-  // issue trigger the moment it's opened, without needing a separate comment.
-  const issue = parseGithubIssueEvent(payload);
-  const triggerLogin = (hook.botMention || process.env.BIVY_GITHUB_BOT_MENTION || "bivy").trim();
-  const rawLabel = issue ? pickIssueRoutingLabel(issue, triggerLogin) : undefined;
-  if (!issue || !rawLabel) return res.json({ ok: true, enqueued: false });
-  // Issue #259: a `bivy`/`bivy/<node>` LABEL already implies collaborator/triage
-  // access (GitHub itself restricts who can apply a label), so only the body-
-  // mention path — anyone can open an issue on a public repo — needs gating on
-  // the author's `author_association`.
-  const isLabelRouted = Boolean(pickRoutingLabel(issue.labels));
-  if (!isLabelRouted && !meetsTriggerAccess(issue.authorAssociation, hook.triggerAccess)) {
-    return res.json({ ok: true, enqueued: false, reason: "access" });
+  // ── pull_request_review_comment @mention ────────────────────────────────
+  if (event === "pull_request_review_comment") {
+    const review = parseGithubReviewCommentEvent(payload, triggerLogin);
+    if (!review) return res.json({ ok: true, enqueued: false });
+    if (!meetsTriggerAccess(review.authorAssociation, hook.triggerAccess)) {
+      return res.json({ ok: true, enqueued: false, reason: "access" });
+    }
+    const matched = matchSourceAutomation(automations, {
+      kind: "github",
+      githubEvent: "pull_request_review_comment",
+      action: String((payload as any)?.action ?? ""),
+      repo: review.repo,
+      labels: review.prLabels,
+      mention: true,
+    });
+    if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
+    const rawLabel = pickCommentRoutingLabel(review.instruction, review.prLabels, triggerLogin);
+    const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
+    const existingSession = await store.findSessionByIssue(hook.accountId, review.repo, review.issueNumber).catch(() => undefined);
+    const item = await store.enqueueWorkItem(hook.accountId, {
+      label,
+      source: "github:review_comment",
+      target: existingSession ? { kind: "existing_session", sessionId: existingSession.sessionId } : undefined,
+      title: `GitHub PR #${review.issueNumber}`,
+      repo: review.repo,
+      issueNumber: review.issueNumber,
+      url: review.url,
+      dedupeKey,
+      defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
+      installationId,
+      appId: hook.appId,
+      definitionId: matched.id,
+      triggerKind: "github",
+      runtimeId: matched.runtimeId,
+      model: matched.model,
+      approvalMode: matched.approvalMode,
+      sandbox: matched.sandbox,
+    });
+    void notifyRelaysWorkAvailable(hook.accountId, item);
+    return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
   }
-  const matched = matchSourceAutomation(automations, {
-    kind: "github",
-    repo: issue.repo,
-    labels: issue.labels,
-  });
-  if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
-  const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
-  // Case B: continue an existing session for this issue if one is already indexed.
-  const existingIssueSession = await store.findSessionByIssue(hook.accountId, issue.repo, issue.issueNumber).catch(() => undefined);
-  const item = await store.enqueueWorkItem(hook.accountId, {
-    label,
-    source: "github:issue",
-    target: existingIssueSession ? { kind: "existing_session", sessionId: existingIssueSession.sessionId } : undefined,
-    // Issue #153: the control plane no longer retains issue title/body — the
-    // claiming node fetches the live issue directly from GitHub (getIssue in
-    // src/github-tasks.ts) immediately before use.
-    title: `GitHub issue #${issue.issueNumber}`,
-    repo: issue.repo,
-    issueNumber: issue.issueNumber,
-    url: issue.url,
-    dedupeKey,
-    // One issue emits several deliveries (opened, labeled, edited). Collapse them
-    // into a single pending item so labelling *and* @-mentioning an issue doesn't
-    // queue it two or three times.
-    collapseKey: `gh-issue:${issue.repo}#${issue.issueNumber}`,
-    defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
-    installationId,
-    appId: hook.appId,
-    definitionId: matched.id,
-    triggerKind: "github",
-    runtimeId: matched.runtimeId,
-    model: matched.model,
-    approvalMode: matched.approvalMode,
-    sandbox: matched.sandbox,
-  });
-  void notifyRelaysWorkAvailable(hook.accountId, item);
-  res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
+
+  // ── pull_request labeled / body @mention ────────────────────────────────
+  if (event === "pull_request") {
+    const pr = parseGithubPullRequestEvent(payload);
+    const rawLabel = pr ? pickPullRequestRoutingLabel(pr, triggerLogin) : undefined;
+    if (!pr || !rawLabel) return res.json({ ok: true, enqueued: false });
+    const isLabelRouted = Boolean(pickRoutingLabel(pr.labels));
+    if (!isLabelRouted && !meetsTriggerAccess(pr.authorAssociation, hook.triggerAccess)) {
+      return res.json({ ok: true, enqueued: false, reason: "access" });
+    }
+    const bodyMention = !isLabelRouted; // routed via @mention in body
+    const matched = matchSourceAutomation(automations, {
+      kind: "github",
+      githubEvent: "pull_request",
+      action: String((payload as any)?.action ?? ""),
+      repo: pr.repo,
+      labels: pr.labels,
+      mention: bodyMention,
+    });
+    if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
+    const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
+    const existingSession = await store.findSessionByIssue(hook.accountId, pr.repo, pr.issueNumber).catch(() => undefined);
+    const item = await store.enqueueWorkItem(hook.accountId, {
+      label,
+      source: "github:pull_request",
+      target: existingSession ? { kind: "existing_session", sessionId: existingSession.sessionId } : undefined,
+      title: `GitHub PR #${pr.issueNumber}`,
+      repo: pr.repo,
+      issueNumber: pr.issueNumber,
+      url: pr.url,
+      dedupeKey,
+      collapseKey: `gh-pr:${pr.repo}#${pr.issueNumber}`,
+      defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
+      installationId,
+      appId: hook.appId,
+      definitionId: matched.id,
+      triggerKind: "github",
+      runtimeId: matched.runtimeId,
+      model: matched.model,
+      approvalMode: matched.approvalMode,
+      sandbox: matched.sandbox,
+    });
+    void notifyRelaysWorkAvailable(hook.accountId, item);
+    return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
+  }
+
+  // ── issues labeled / body @mention ──────────────────────────────────────
+  if (event === "issues") {
+    const issue = parseGithubIssueEvent(payload);
+    const rawLabel = issue ? pickIssueRoutingLabel(issue, triggerLogin) : undefined;
+    if (!issue || !rawLabel) return res.json({ ok: true, enqueued: false });
+    // Label apply already implies triage access; body @mention is gated.
+    const isLabelRouted = Boolean(pickRoutingLabel(issue.labels));
+    if (!isLabelRouted && !meetsTriggerAccess(issue.authorAssociation, hook.triggerAccess)) {
+      return res.json({ ok: true, enqueued: false, reason: "access" });
+    }
+    const matched = matchSourceAutomation(automations, {
+      kind: "github",
+      githubEvent: "issues",
+      action: String((payload as any)?.action ?? ""),
+      repo: issue.repo,
+      labels: issue.labels,
+      mention: !isLabelRouted,
+    });
+    if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
+    const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
+    const existingIssueSession = await store.findSessionByIssue(hook.accountId, issue.repo, issue.issueNumber).catch(() => undefined);
+    const item = await store.enqueueWorkItem(hook.accountId, {
+      label,
+      source: "github:issue",
+      target: existingIssueSession ? { kind: "existing_session", sessionId: existingIssueSession.sessionId } : undefined,
+      title: `GitHub issue #${issue.issueNumber}`,
+      repo: issue.repo,
+      issueNumber: issue.issueNumber,
+      url: issue.url,
+      dedupeKey,
+      collapseKey: `gh-issue:${issue.repo}#${issue.issueNumber}`,
+      defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
+      installationId,
+      appId: hook.appId,
+      definitionId: matched.id,
+      triggerKind: "github",
+      runtimeId: matched.runtimeId,
+      model: matched.model,
+      approvalMode: matched.approvalMode,
+      sandbox: matched.sandbox,
+    });
+    void notifyRelaysWorkAvailable(hook.accountId, item);
+    return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
+  }
+
+  // Unhandled event family — ack so GitHub doesn't retry forever.
+  return res.json({ ok: true, enqueued: false, reason: "ignored_event" });
 }));
 
 // Linear Issue webhook. Applying `bivy` or `bivy/<node>` dispatches the issue.

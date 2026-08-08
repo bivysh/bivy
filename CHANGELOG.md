@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- GitHub automations use structured **event rules** (`on[]`): one GitHub App,
+  jobs pick which deliveries fire (issues/PRs labeled, @mentions on issue/PR/
+  review comments, failed workflow runs). Outcomes are whatever the instructions
+  say — not a special-cased PR path. UI collapses GitHub Actions into GitHub
+  with event toggles; labels and @mentions work on PR surfaces too.
+
 - Automations setup stays on the Automations surface end-to-end: outcome-first
   empty hero with featured jobs, whole-card templates with trigger badges, a
   single-page create sheet (name → trigger → instructions → machine), compact
