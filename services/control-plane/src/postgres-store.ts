@@ -568,6 +568,8 @@ export class PostgresStore implements MeshStore {
         schedule JSONB NOT NULL DEFAULT '{"kind":"once","at":"9999-12-31T00:00:00.000Z"}',
         next_run_at TIMESTAMPTZ,
         last_scheduled_at TIMESTAMPTZ,
+        trigger TEXT,
+        webhook_secret TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
@@ -582,6 +584,11 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS schedule JSONB NOT NULL DEFAULT '{"kind":"once","at":"9999-12-31T00:00:00.000Z"}';
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS last_scheduled_at TIMESTAMPTZ;
+      -- Webhook-triggerable automations (a definition fired by a signed POST
+      -- rather than only its schedule): trigger distinguishes the source and
+      -- webhook_secret is the HMAC key for the /webhooks/automation/run path.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS trigger TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
       CREATE TABLE IF NOT EXISTS trigger_events (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -602,6 +609,9 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS output JSONB;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS approval_mode TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sandbox TEXT;
+      -- Untrusted webhook-payload context for a webhook-triggered automation run,
+      -- appended to the E2E-decrypted operator template on the node as data.
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS event_context TEXT;
       -- Privacy-safe run evidence (issue #153): why this node/runtime was chosen,
       -- declared-check results, and an ordered event timeline. All three are
       -- allowlisted/bounded by run-evidence.ts before they ever reach here.
@@ -2185,12 +2195,13 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
-       approval_mode, sandbox, enabled, schedule, next_run_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+       approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
-        JSON.stringify(input.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), input.nextRunAt ?? null],
+        JSON.stringify(input.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), input.nextRunAt ?? null,
+        input.trigger ?? null, input.webhookSecret ?? null],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -2199,6 +2210,14 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `SELECT * FROM automation_definitions WHERE account_id = $1 AND id = $2`,
       [accountId, id],
+    );
+    return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
+  }
+
+  async getAutomationDefinitionById(id: string): Promise<AutomationDefinition | undefined> {
+    const { rows } = await this.query(
+      `SELECT * FROM automation_definitions WHERE id = $1`,
+      [id],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -2214,12 +2233,13 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `UPDATE automation_definitions SET name=$3, template_ciphertext=$4, runtime_id=$5,
        model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
-       enabled=$11, schedule=$12, next_run_at=$13, updated_at=now()
+       enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
         next.approvalMode ?? null, next.sandbox ?? null, next.enabled ?? false,
-        JSON.stringify(next.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), next.nextRunAt ?? null],
+        JSON.stringify(next.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), next.nextRunAt ?? null,
+        next.trigger ?? null, next.webhookSecret ?? null],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -2360,8 +2380,8 @@ export class PostgresStore implements MeshStore {
       url: input.url,
     };
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox, events)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox, events, event_context)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb, $27)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -2391,6 +2411,7 @@ export class PostgresStore implements MeshStore {
         input.approvalMode ?? definition?.approvalMode ?? null,
         input.sandbox ?? definition?.sandbox ?? null,
         JSON.stringify([triggeredEvent]),
+        input.eventContext ?? null,
       ],
     );
     if (rows[0]) return { run: mapAutomationRun(rows[0]), created: true };
@@ -2737,6 +2758,7 @@ function mapWorkItem(row: any): WorkItem {
     status: row.status,
     title: row.title,
     body: row.body ?? undefined,
+    eventContext: row.event_context ?? undefined,
     repo: row.repo ?? undefined,
     issueNumber: row.issue_number ?? undefined,
     externalId: row.external_id ?? undefined,
@@ -2790,6 +2812,8 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     approvalMode: row.approval_mode ?? undefined,
     sandbox: row.sandbox ?? undefined,
     enabled: Boolean(row.enabled),
+    trigger: row.trigger ?? undefined,
+    webhookSecret: row.webhook_secret ?? undefined,
     schedule: row.schedule,
     nextRunAt: row.next_run_at ? new Date(row.next_run_at).toISOString() : undefined,
     lastScheduledAt: row.last_scheduled_at ? new Date(row.last_scheduled_at).toISOString() : undefined,
@@ -2837,6 +2861,7 @@ function mapAutomationRun(row: any): AutomationRun {
     output: row.output ?? undefined,
     title: row.title,
     body: row.body ?? undefined,
+    eventContext: row.event_context ?? undefined,
     source: row.source,
     sourceRef: Object.keys(sourceRef).length ? sourceRef : undefined,
     createdAt: new Date(row.created_at).toISOString(),

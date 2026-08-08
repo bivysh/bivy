@@ -104,6 +104,50 @@ async function main() {
   await json(port, "DELETE", `/account/automation-hooks/${created.body.id}`, undefined, token);
   const disabled = await trigger(port, created.body.endpoint, rotated.body.secret, raw, "delivery-5");
   expect(disabled.status === 410 && disabled.body.code === "disabled", "revoked hooks return the stable disabled result");
+
+  // --- Webhook-triggered automation *definition* (runs the operator's own
+  //     pre-configured routing/agent/model/sandbox + E2E template) ---
+  const auto = await json(port, "POST", "/account/automations", {
+    name: "Fix CI",
+    trigger: "webhook",
+    templateCiphertext: "bivy-room-v1:node-x:opaque",
+    nodeLabel: "bivy/runner",
+    sandbox: "workspace-write",
+  }, token);
+  expect(auto.status === 201 && auto.body.webhookSecret && auto.body.webhookUrl, "a webhook automation discloses a secret and URL at create");
+  expect(auto.body.trigger === "webhook" && !auto.body.nextRunAt, "a webhook automation is never scheduled");
+
+  const listAuto = await json(port, "GET", "/account/automations", undefined, token);
+  const listedAuto = listAuto.body.find((d: any) => d.id === auto.body.id);
+  expect(listedAuto && !listedAuto.webhookSecret && listedAuto.webhookUrl, "listing shows the URL but never echoes the secret");
+
+  const evtRaw = JSON.stringify({ version: "1", instruction: "Build 8841 failed", title: "CI", metadata: { job: "linux" } });
+  const fired = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, evtRaw, "evt-1");
+  expect(fired.status === 202 && fired.body.code === "accepted", "a signed event fires the configured automation");
+  const dupFired = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, evtRaw, "evt-1");
+  expect(dupFired.status === 200 && dupFired.body.code === "duplicate", "webhook redelivery to a definition is idempotent");
+
+  const runs = await json(port, "GET", "/account/work-items", undefined, token);
+  const defRun = runs.body.find((it: any) => it.definitionId === auto.body.id);
+  expect(!!defRun, "the run is bound to the automation definition");
+  expect(defRun.triggerKind === "webhook", "the run records a webhook trigger");
+  expect(String(defRun.label).includes("runner"), "the run inherits the definition's node routing");
+  expect(defRun.sandbox === "workspace-write", "the run inherits the definition's sandbox (payload cannot override it)");
+
+  const badSig = await trigger(port, auto.body.webhookUrl, "nope", evtRaw, "evt-2");
+  expect(badSig.status === 401, "a bad signature is rejected on the definition path");
+
+  const rot = await json(port, "POST", `/account/automations/${auto.body.id}/webhook/rotate`, undefined, token);
+  expect(rot.status === 200 && rot.body.webhookSecret && rot.body.webhookSecret !== auto.body.webhookSecret, "rotate returns a fresh secret");
+  const oldSig = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, evtRaw, "evt-3");
+  expect(oldSig.status === 401, "the old secret stops working after rotate");
+  const newSig = await trigger(port, auto.body.webhookUrl, rot.body.webhookSecret, evtRaw, "evt-3");
+  expect(newSig.status === 202, "the rotated secret signs new deliveries");
+
+  await json(port, "PUT", `/account/automations/${auto.body.id}`, { enabled: false }, token);
+  const whenDisabled = await trigger(port, auto.body.webhookUrl, rot.body.webhookSecret, evtRaw, "evt-4");
+  expect(whenDisabled.status === 410 && whenDisabled.body.code === "disabled", "a disabled webhook automation refuses events");
+
   console.log("\nAll automation webhook checks passed.");
   finish(0);
 }

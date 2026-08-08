@@ -129,6 +129,21 @@ export function renderAutomationInstruction(templateInstruction: string, event: 
   return parts.filter(Boolean).join("\n\n");
 }
 
+/** Render ONLY the event's untrusted fields (no operator template — that stays
+ *  E2E-encrypted on the definition and is decrypted on the node). Used for a
+ *  webhook that triggers a *configured automation*: the control plane stores this
+ *  plaintext context and the node appends it, clearly framed as data, after
+ *  decrypting the operator's own instructions. */
+export function renderEventContext(event: AutomationEvent): string {
+  const parts = [event.instruction];
+  if (event.externalId) parts.push(`External ID: ${event.externalId}`);
+  if (event.sourceUrl) parts.push(`Source URL: ${event.sourceUrl}`);
+  if (event.metadata && Object.keys(event.metadata).length) {
+    parts.push(`Metadata:\n${JSON.stringify(event.metadata)}`);
+  }
+  return parts.filter(Boolean).join("\n\n");
+}
+
 export interface ParsedLinearIssueWork {
   id: string;
   identifier: string;

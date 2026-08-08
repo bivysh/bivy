@@ -33,6 +33,10 @@ export interface WorkItem {
   status: string;
   title: string;
   body?: string;
+  // Untrusted, plaintext context from a webhook trigger's event payload. The node
+  // appends it to the (E2E-decrypted) operator template as data, clearly framed
+  // as not-instructions. Only present for webhook-triggered automation runs.
+  eventContext?: string;
   repo?: string; // "owner/repo"
   issueNumber?: number;
   externalId?: string; // provider-native id, e.g. Linear issue UUID

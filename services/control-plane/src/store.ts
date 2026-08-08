@@ -599,6 +599,16 @@ export interface AutomationDefinition {
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   enabled?: boolean;
+  /** How this automation fires. Defaults to "schedule" for legacy rows (any row
+   *  with a `schedule` is schedule-triggered). A "webhook" automation is fired by
+   *  a signed POST to /webhooks/automation/run/:id, using this definition's own
+   *  pre-configured routing/agent/model/sandbox and E2E template — the payload
+   *  supplies only node routing + event context, never execution parameters. */
+  trigger?: "schedule" | "webhook" | "manual";
+  /** HMAC signing secret for a webhook-triggered automation. Set/rotated
+   *  server-side, returned to the client only at create/rotate time, and never
+   *  echoed by list/get responses. */
+  webhookSecret?: string;
   schedule?:
     | { kind: "once"; at: string }
     | { kind: "cron"; expression: string; timezone: string };
@@ -653,6 +663,10 @@ export interface AutomationRun {
   events?: RunEvidenceEvent[];
   title: string;
   body?: string;
+  /** Untrusted, plaintext context from a webhook trigger's event payload,
+   *  appended to the (E2E-decrypted) operator template on the node as data — not
+   *  instructions. Only set for webhook-triggered automation runs. */
+  eventContext?: string;
   source: string;
   sourceRef?: TriggerEvent["sourceRef"];
   createdAt: string;
@@ -670,6 +684,8 @@ export interface WorkItem {
   status: WorkItemStatus;
   title: string;
   body?: string;
+  /** See AutomationRun.eventContext — untrusted webhook-payload context. */
+  eventContext?: string;
   repo?: string; // "owner/repo"
   issueNumber?: number;
   externalId?: string; // provider-native id (for example a Linear issue UUID)
@@ -721,6 +737,8 @@ export type WorkItemInput = {
   source: string;
   title: string;
   body?: string;
+  /** See AutomationRun.eventContext — untrusted webhook-payload context. */
+  eventContext?: string;
   repo?: string;
   issueNumber?: number;
   url?: string;
@@ -1224,6 +1242,10 @@ export interface MeshStore {
   updateAutomationDefinition(accountId: string, id: string, input: Partial<Omit<AutomationDefinition, "id" | "accountId" | "createdAt" | "updatedAt" | "lastScheduledAt">>): Promise<AutomationDefinition | undefined>;
   deleteAutomationDefinition(accountId: string, id: string): Promise<boolean>;
   getAutomationDefinition(accountId: string, id: string): Promise<AutomationDefinition | undefined>;
+  /** Resolve a definition by id alone (no account scope) — for the public,
+   *  signature-authenticated webhook endpoint, which knows only the definition
+   *  id in its URL. Callers must still verify the HMAC against webhookSecret. */
+  getAutomationDefinitionById(id: string): Promise<AutomationDefinition | undefined>;
   listAutomationDefinitions(accountId: string): Promise<AutomationDefinition[]>;
   listDueAutomationDefinitions(nowIso: string, limit?: number): Promise<AutomationDefinition[]>;
   enqueueScheduledOccurrence(accountId: string, definitionId: string, occurrenceIso: string, nextRunAt?: string): Promise<AutomationRun | undefined>;
