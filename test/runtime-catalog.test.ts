@@ -89,8 +89,8 @@ for (const id of CLI_ADAPTERS) {
 // cline --id) — wired as a spec.resume template (see CLI_AGENT_SPECS in
 // src/runtime/index.ts). Aider and Crush have no such upstream flag, so they stay
 // off until one exists (see the per-agent comments there).
-const RESUME_CAPABLE = ["opencode", "gemini", "qwen", "goose", "cline", "cursor", "amp", "kilocode", "rovodev"];
-const RESUME_INCAPABLE = ["aider", "crush", "copilot", "grok", "auggie", "droid", "continue"];
+const RESUME_CAPABLE = ["opencode", "gemini", "qwen", "goose", "cline", "cursor", "amp", "kilocode", "rovodev", "grok"];
+const RESUME_INCAPABLE = ["aider", "crush", "copilot", "auggie", "droid", "continue"];
 for (const id of RESUME_CAPABLE) {
   const caps = listRuntimes().find((r) => r.id === id)!.capabilities as Record<string, unknown>;
   assert.equal(caps.resume, true, `${id} should advertise resume (it has a built-in resume template)`);

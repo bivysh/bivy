@@ -382,6 +382,7 @@ export function ChatView({
   working,
   workingLabel,
   draftRoute,
+  opening,
   sessionKey,
   collapsed,
   onAction,
@@ -394,6 +395,11 @@ export function ChatView({
    *  `/sessions/new` may show the start prompt; `/sessions/:id` always represents
    *  a real session whose empty transcript is still being fetched. */
   draftRoute: boolean;
+  /** True while the store is waiting on the first history snapshot for the
+   *  active session. Drives the "Fetching transcript…" spinner — must NOT be
+   *  inferred from an empty entries array, or a legitimately empty session (or
+   *  one whose history never arrives) spins forever. */
+  opening?: boolean;
   /** Identity of the open session; used to preserve its window and reading position. */
   sessionKey: string | null;
   /** Focus view: hide thinking, tool cards, and interim assistant messages —
@@ -522,10 +528,19 @@ export function ChatView({
     <div className="chat-wrap">
       <div className="chat" ref={scrollRef} onScroll={rememberScroll}>
         <div className="chat-inner" ref={contentRef}>
-          {total === 0 && !draftRoute && (
+          {total === 0 && !draftRoute && opening && (
             <div className="chat-loading" role="status" aria-live="polite">
               <span className="chat-loading-spinner" aria-hidden />
               <p>Fetching transcript…</p>
+            </div>
+          )}
+          {total === 0 && !draftRoute && !opening && (
+            <div className="chat-empty">
+              <p className="chat-empty-title">No messages yet</p>
+              <p className="chat-empty-sub">
+                This session has no transcript so far. Send a message below to
+                continue, or open the terminal if it is running there.
+              </p>
             </div>
           )}
           {total === 0 && draftRoute && (

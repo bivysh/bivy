@@ -319,6 +319,13 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
     return () => clearInterval(id);
   }, []);
 
+  // Live `bivy run` rows only arrive via terminal.list on the connected node.
+  // Pull them once on mount (and whenever the user lands back on the list) so a
+  // currently-running agent appears without requiring a manual node re-click.
+  useEffect(() => {
+    controller.refreshSessions();
+  }, []);
+
   // Mirrors NodeSwitcher's own visibility rule (App.tsx: `!controller.direct`)
   // rather than gating on node count — even a single-node relay account still
   // benefits from seeing which (possibly ephemeral) node a session lives on.

@@ -458,6 +458,18 @@ export class AppController {
             // Composer single-writer lock — keyed by (raw) session id, so no node
             // scoping needed; the store folds it into `tuiSessions`.
             this.store.apply(event);
+          } else if (type === "terminal.takeover.result") {
+            // "Continue as chat" can be fired from the Terminal overlay OR from
+            // the run-terminal handoff screen (TuiLockedView) before any PTY is
+            // attached. Handle it here so the handoff path still switches to the
+            // new governed session when the node acks — the overlay path also
+            // listens and closes itself.
+            const p = event as { ok?: boolean; sessionId?: string; error?: string };
+            if (p.ok && p.sessionId) {
+              this.openSession(String(p.sessionId));
+            } else if (p.error) {
+              this.store.setError(String(p.error));
+            }
           }
           for (const fn of this.terminalListeners) fn(event);
           return;

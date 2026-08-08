@@ -987,6 +987,9 @@ const AGENT_HEADLESS_FLAGS = {
 // appear here; others simply run without a pinned id.
 const AGENT_SESSION_ID_FLAG = {
   claude: "--session-id", // `claude --session-id <uuid>` (must be a valid UUID)
+  // Official Grok CLI: `grok --session-id <uuid>` pins a new session UUID under
+  // ~/.grok/sessions/<cwd>/<uuid>/ so takeover / resume has a known target.
+  grok: "--session-id",
 };
 
 // Args that mean the caller already chose a session (pin or resume), so we must
@@ -1001,6 +1004,7 @@ const SESSION_ID_CONFLICTS = ["--session-id", "--resume", "-r", "-c", "--continu
 const AGENT_RESUME_ARGS = {
   claude: (id) => ["--resume", id],
   codex: (id) => ["resume", id],
+  grok: (id) => ["--resume", id],
 };
 function agentResumeArgs(agentId, sessionRef) {
   const fn = AGENT_RESUME_ARGS[(agentId || "").toLowerCase()];

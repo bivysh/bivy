@@ -24,6 +24,7 @@ import type {
   RuntimeMessage,
   RuntimeSession,
   SessionSummary,
+  TuiLaunchSpec,
   UsageSnapshot,
 } from "./types.js";
 import { withExactCapabilitySurface } from "./types.js";
@@ -158,6 +159,24 @@ export interface ProcessRuntimeOptions {
    * Absent = no agent-native commands (the composer shows the empty state).
    */
   slashCommands?: SlashCommandProvider;
+  /**
+   * "Continue in terminal": describe how to resume this session in the agent's
+   * interactive TUI. Receives the resume ref (session id) and a prepared env
+   * (e.g. GROK_HOME). Absent = no interactiveTui capability / command.
+   */
+  interactiveTui?: (info: { sessionRef?: string; cwd: string; env: Record<string, string> }) => TuiLaunchSpec | null;
+  /**
+   * Advertise sessionDiscovery so a `bivy run` terminal without a pinned id can
+   * still be continued as chat when the daemon can locate the on-disk session
+   * (see SESSION_DISCOVERY_BY_AGENT).
+   */
+  sessionDiscovery?: boolean;
+  /**
+   * Optional on-disk session enumeration that replaces the in-memory default.
+   * Used by agents that persist sessions outside Bivy (Grok under ~/.grok/sessions)
+   * so closed `bivy run` sessions still appear in the durable session list.
+   */
+  listDiskSessions?: () => SessionSummary[] | Promise<SessionSummary[]>;
 }
 
 /**
@@ -346,6 +365,31 @@ class ProcessSession implements RuntimeSession {
 
   setName(name: string): void {
     this.name = name;
+  }
+
+  /**
+   * "Continue in terminal": hand this session to the agent's interactive TUI
+   * (see ProcessRuntimeOptions.interactiveTui). Runs prepare() first so auth
+   * env (e.g. GROK_HOME) matches the chat path.
+   */
+  async interactiveTuiCommand(): Promise<TuiLaunchSpec | null> {
+    const hook = this.runtimeOptions.interactiveTui;
+    if (!hook) return null;
+    const sessionRef = this.resumeId ?? this.id;
+    let env: Record<string, string> = {};
+    if (this.runtimeOptions.prepare) {
+      try {
+        const patch = await this.runtimeOptions.prepare({});
+        if (patch && typeof patch === "object") {
+          for (const [k, v] of Object.entries(patch)) {
+            if (typeof v === "string") env[k] = v;
+          }
+        }
+      } catch {
+        env = {};
+      }
+    }
+    return hook({ sessionRef, cwd: this.cwd, env });
   }
 
   /** The agent's on-disk slash commands for this workspace (Codex prompts,
@@ -616,6 +660,10 @@ export class ProcessRuntime implements AgentRuntime {
       fork: false,
       // Usage reporting when a usage-emitting parser is wired (see getUsage).
       usageReporting: Boolean(options.usageReporting),
+      interactiveTui: Boolean(options.interactiveTui),
+      sessionDiscovery: Boolean(options.sessionDiscovery),
+      nativeSessionDiscovery: Boolean(options.listDiskSessions),
+      nativeSessionAdoption: Boolean(options.resumable && options.listDiskSessions),
     });
   }
 
@@ -653,6 +701,16 @@ export class ProcessRuntime implements AgentRuntime {
   }
 
   async listSessions(): Promise<SessionSummary[]> {
+    // Prefer the agent's own on-disk store when wired (Grok, …) so closed
+    // `bivy run` / native TUI sessions still appear in the durable list after
+    // the PTY exits — the in-memory set alone evaporates with the process.
+    if (this.options.listDiskSessions) {
+      try {
+        return await this.options.listDiskSessions();
+      } catch {
+        // fall through to the live handles
+      }
+    }
     return this.sessions.map((session) => ({
       id: session.id,
       cwd: session.cwd,

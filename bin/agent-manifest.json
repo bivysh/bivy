@@ -191,7 +191,8 @@
       "supportTier": "beta",
       "certification": "adapter-tested",
       "headlessFlags": [
-        "-p"
+        "-p",
+        "--resume"
       ],
       "install": {
         "kind": "curl",
