@@ -775,6 +775,8 @@ export interface AccountAutomation {
   enabled: boolean;
   /** How this automation fires. Absent on legacy rows means "schedule". */
   trigger?: "schedule" | "webhook" | "manual";
+  /** Optional GitHub workspace (`owner/name`) for triggers that do not carry a repo. */
+  repo?: string;
   schedule: AutomationSchedule;
   nextRunAt?: string;
   lastScheduledAt?: string;

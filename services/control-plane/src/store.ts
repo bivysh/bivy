@@ -609,6 +609,10 @@ export interface AutomationDefinition {
    *  server-side, returned to the client only at create/rotate time, and never
    *  echoed by list/get responses. */
   webhookSecret?: string;
+  /** Optional GitHub repo workspace target (`owner/name`). Used when the trigger
+   *  does not carry a repo of its own (schedule, many webhooks). The node clones
+   *  this repo before starting the session — the agent does not pick the repo. */
+  repo?: string;
   schedule?:
     | { kind: "once"; at: string }
     | { kind: "cron"; expression: string; timezone: string };

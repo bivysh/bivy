@@ -29,6 +29,9 @@ const definition = await store.createAutomationDefinition(account.id, {
   name: "Health report",
   templateCiphertext: "opaque:v1:ciphertext",
   nodeLabel: "bivy/laptop",
+  // Schedule ticks do not carry a repo — the definition's workspace target is
+  // what the node clones before starting the session.
+  repo: "acme/api",
   enabled: true,
   schedule: cron("0 * * * *", "UTC"),
   nextRunAt: occurrence,
@@ -44,6 +47,11 @@ const runs = (await store.listAutomationRuns(account.id)).filter((r) => r.defini
 assert.equal(runs.length, 1);
 assert.equal(runs[0]?.status, "pending");
 assert.equal(runs[0]?.routing.nodeLabel, "bivy/laptop");
+assert.equal(runs[0]?.sourceRef?.repo, "acme/api");
+// Work-item view (what the node claims) must carry the same workspace target.
+const work = await store.listWorkItems(account.id);
+const scheduled = work.find((w) => w.definitionId === definition.id);
+assert.equal(scheduled?.repo, "acme/api");
 
 // A restart at the same time sees an already-advanced definition.
 assert.equal(await processDueSchedules(store, new Date(occurrence)), 0);

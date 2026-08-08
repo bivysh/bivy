@@ -589,6 +589,8 @@ export class PostgresStore implements MeshStore {
       -- webhook_secret is the HMAC key for the /webhooks/automation/run path.
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS trigger TEXT;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
+      -- Workspace target for triggers that do not carry a repo (schedule, etc.).
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS repo TEXT;
       CREATE TABLE IF NOT EXISTS trigger_events (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -2195,13 +2197,13 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
-       approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+       approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
         JSON.stringify(input.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), input.nextRunAt ?? null,
-        input.trigger ?? null, input.webhookSecret ?? null],
+        input.trigger ?? null, input.webhookSecret ?? null, input.repo ?? null],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -2233,13 +2235,14 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `UPDATE automation_definitions SET name=$3, template_ciphertext=$4, runtime_id=$5,
        model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
-       enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15, updated_at=now()
+       enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
+       repo=$16, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
         next.approvalMode ?? null, next.sandbox ?? null, next.enabled ?? false,
         JSON.stringify(next.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), next.nextRunAt ?? null,
-        next.trigger ?? null, next.webhookSecret ?? null],
+        next.trigger ?? null, next.webhookSecret ?? null, next.repo ?? null],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -2295,6 +2298,8 @@ export class PostgresStore implements MeshStore {
       model: definition.model,
       approvalMode: definition.approvalMode,
       sandbox: definition.sandbox,
+      // Schedule ticks do not name a repo — use the binding's workspace target.
+      repo: definition.repo,
     });
     // Optimistic advance is the scheduler lease: only one scheduler instance can
     // move this exact occurrence. The unique dedupe key separately guarantees
@@ -2348,8 +2353,11 @@ export class PostgresStore implements MeshStore {
     }
     const triggerKind = triggerKindForSource(input.triggerKind, input.source);
     const triggerId = `trigger_${randomUUID()}`;
+    // Prefer an explicit per-run repo (event / caller); fall back to the
+    // definition's workspace target so schedule/webhook/manual stay consistent.
+    const repo = input.repo ?? definition?.repo;
     const sourceRef = {
-      ...(input.repo ? { repo: input.repo } : {}),
+      ...(repo ? { repo } : {}),
       ...(input.issueNumber !== undefined ? { issueNumber: input.issueNumber } : {}),
       ...(input.url ? { url: input.url } : {}),
       ...(input.externalId ? { externalId: input.externalId } : {}),
@@ -2376,7 +2384,7 @@ export class PostgresStore implements MeshStore {
       at: new Date().toISOString(),
       kind: "triggered",
       summary: "Automation run created.",
-      ref: input.repo && input.issueNumber !== undefined ? `${input.repo}#${input.issueNumber}` : undefined,
+      ref: repo && input.issueNumber !== undefined ? `${repo}#${input.issueNumber}` : repo,
       url: input.url,
     };
     const { rows } = await this.query(
@@ -2391,7 +2399,7 @@ export class PostgresStore implements MeshStore {
         input.source,
         input.title,
         input.body ?? null,
-        input.repo ?? null,
+        repo ?? null,
         input.issueNumber ?? null,
         input.url ?? null,
         input.externalId ?? null,
@@ -2814,6 +2822,7 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     enabled: Boolean(row.enabled),
     trigger: row.trigger ?? undefined,
     webhookSecret: row.webhook_secret ?? undefined,
+    repo: row.repo ?? undefined,
     schedule: row.schedule,
     nextRunAt: row.next_run_at ? new Date(row.next_run_at).toISOString() : undefined,
     lastScheduledAt: row.last_scheduled_at ? new Date(row.last_scheduled_at).toISOString() : undefined,

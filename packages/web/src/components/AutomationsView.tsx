@@ -38,20 +38,25 @@ import { WorkQueueSetupSheet } from "./WorkQueueSetupSheet.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
-// Trigger picker options shown under "+ Add Trigger". Each maps onto the
-// existing schedule/webhook fields the control plane already understands.
+// Trigger picker options shown under "+ Add Trigger". Schedule/webhook map onto
+// automation definition fields. GitHub/Linear are source triggers that open the
+// work-queue setup (same session runtime; connect lives next to the trigger).
 type TriggerPick =
   | { id: "daily"; label: string; hint: string; trigger: "schedule"; kind: "cron"; cron: string; nlText: string }
   | { id: "weekly"; label: string; hint: string; trigger: "schedule"; kind: "cron"; cron: string; nlText: string }
   | { id: "monthly"; label: string; hint: string; trigger: "schedule"; kind: "cron"; cron: string; nlText: string }
   | { id: "once"; label: string; hint: string; trigger: "schedule"; kind: "once" }
-  | { id: "webhook"; label: string; hint: string; trigger: "webhook" };
+  | { id: "webhook"; label: string; hint: string; trigger: "webhook" }
+  | { id: "github"; label: string; hint: string; trigger: "source"; source: "github" }
+  | { id: "linear"; label: string; hint: string; trigger: "source"; source: "linear" };
 
 const TRIGGER_OPTIONS: TriggerPick[] = [
   { id: "daily", label: "Daily", hint: "Every day at a chosen time", trigger: "schedule", kind: "cron", cron: "0 9 * * *", nlText: "every day at 9am" },
   { id: "weekly", label: "Weekly", hint: "Every week on a chosen day", trigger: "schedule", kind: "cron", cron: "0 9 * * 1", nlText: "every monday at 9am" },
   { id: "monthly", label: "Monthly", hint: "Every month on a chosen day", trigger: "schedule", kind: "cron", cron: "0 9 1 * *", nlText: "every month on the 1st at 9am" },
   { id: "once", label: "One time", hint: "Run once at a chosen date and time", trigger: "schedule", kind: "once" },
+  { id: "github", label: "GitHub", hint: "Issue labeled or @mention → session → PR", trigger: "source", source: "github" },
+  { id: "linear", label: "Linear", hint: "Assigned / labeled issue → session → PR", trigger: "source", source: "linear" },
   { id: "webhook", label: "Webhook", hint: "When a signed request hits its URL", trigger: "webhook" },
 ];
 
@@ -85,10 +90,12 @@ function toLocalInput(date: Date): string {
 }
 
 function scheduleSummary(item: AccountAutomation): string {
-  if (item.trigger === "webhook") return "Webhook · runs on a signed request";
-  if (!item.schedule) return "Scheduled";
-  if (item.schedule.kind === "once") return `Once · ${new Date(item.schedule.at).toLocaleString()}`;
-  return describeCron(item.schedule.expression) || `${item.schedule.expression} · ${item.schedule.timezone}`;
+  const repo = item.repo ? ` · ${item.repo}` : "";
+  if (item.trigger === "webhook") return `Webhook · runs on a signed request${repo}`;
+  if (!item.schedule) return `Scheduled${repo}`;
+  if (item.schedule.kind === "once") return `Once · ${new Date(item.schedule.at).toLocaleString()}${repo}`;
+  const when = describeCron(item.schedule.expression) || `${item.schedule.expression} · ${item.schedule.timezone}`;
+  return `${when}${repo}`;
 }
 
 function runOutcome(status: AccountAutomationRun["status"]): { label: string; tone: "ok" | "warn" | "bad" | "info" } {
@@ -135,6 +142,8 @@ interface Draft {
   nlText: string;
   timezone: string;
   onceAt: string;
+  /** GitHub repo workspace (`owner/name`) when the trigger does not carry one. */
+  repo: string;
   nodeId: string;
   runtimeId: string;
   model: string;
@@ -154,12 +163,18 @@ function emptyDraft(nodeId: string): Draft {
     nlText: "",
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     onceAt: toLocalInput(new Date(Date.now() + 60 * 60_000)),
+    repo: "",
     nodeId,
     runtimeId: "",
     model: "",
     approvalMode: "autonomous",
     sandbox: "workspace-write",
   };
+}
+
+/** Prefer the composer's current draft repo so templates open pre-filled. */
+function rememberedRepo(state: AppState): string {
+  return state.draftRepo || "";
 }
 
 // Soft glyph for each suggested template card (Grok-style icon-in-circle).
@@ -207,7 +222,12 @@ export function AutomationsView({
   }, []);
 
   useEffect(() => { void refresh().catch((e) => setError(String(e))); }, [refresh]);
-  useEffect(() => { controller.listRuntimes(); controller.listModels(); }, []);
+  useEffect(() => {
+    controller.listRuntimes();
+    controller.listModels();
+    // Repo picker for schedule/webhook workspace targets.
+    controller.listRepos();
+  }, []);
 
   const defaultNodeId = state.currentNodeId || controller.local.cur || "";
 
@@ -223,6 +243,7 @@ export function AutomationsView({
       kind: "cron",
       cron: p.schedule.cron,
       nlText: p.schedule.nlText,
+      repo: rememberedRepo(state),
       approvalMode: p.approvalMode,
       sandbox: p.sandbox,
     });
@@ -237,6 +258,7 @@ export function AutomationsView({
       instructions: p.instructions,
       hasTrigger: true,
       trigger: "webhook",
+      repo: rememberedRepo(state),
       approvalMode: p.approvalMode,
       sandbox: p.sandbox,
     });
@@ -276,6 +298,7 @@ export function AutomationsView({
       hasTrigger: true,
       trigger: item.trigger === "webhook" ? "webhook" : "schedule",
       nodeId,
+      repo: item.repo || "",
       runtimeId: item.runtimeId || "",
       model: item.model || "",
       approvalMode: item.approvalMode ?? "autonomous",
@@ -324,6 +347,51 @@ export function AutomationsView({
 
       <div className="automations-view-body">
         {error && <p className="settings-error">{error}</p>}
+
+        <section className="autom-section">
+          <h2 className="autom-section-label">Sources</h2>
+          <p className="settings-hint" style={{ marginBottom: 8 }}>
+            Sources start automations when something happens outside Bivy. Connecting one is account plumbing — not a separate jobs product.
+          </p>
+          <div className="automation-list">
+            <div className="automation-row">
+              <div className="automation-row-main">
+                <div className="automation-row-title">
+                  <strong>GitHub</strong>
+                  <span className="autom-status on">Issues, mentions via app</span>
+                </div>
+                <div className="settings-hint">Label an issue or @mention → session on your machine → PR</div>
+              </div>
+              <div className="settings-actions">
+                <button type="button" className="btn sm" onClick={() => setWorkQueueOpen(true)}>Connect / manage</button>
+              </div>
+            </div>
+            <div className="automation-row">
+              <div className="automation-row-main">
+                <div className="automation-row-title">
+                  <strong>Linear</strong>
+                  <span className="autom-status off">Issue assigned / labeled</span>
+                </div>
+                <div className="settings-hint">Same issue → session → PR path; bind a default repo when the ticket has no git link</div>
+              </div>
+              <div className="settings-actions">
+                <button type="button" className="btn sm" onClick={() => setWorkQueueOpen(true)}>Connect / manage</button>
+              </div>
+            </div>
+            <div className="automation-row">
+              <div className="automation-row-main">
+                <div className="automation-row-title">
+                  <strong>Schedule &amp; webhook</strong>
+                  <span className="autom-status on">Built in</span>
+                </div>
+                <div className="settings-hint">Cron and signed webhooks are triggers on each automation — pick a repo when the event does not name one</div>
+              </div>
+              <div className="settings-actions">
+                <button type="button" className="btn sm" onClick={startCustom}>New automation</button>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <section className="autom-section">
           <h2 className="autom-section-label">Suggested</h2>
@@ -431,6 +499,10 @@ export function AutomationsView({
           initial={draft}
           onCancel={() => setDraft(null)}
           onSaved={async () => { setDraft(null); await refresh().catch((e) => setError(String(e))); }}
+          onOpenWorkQueue={() => {
+            setDraft(null);
+            setWorkQueueOpen(true);
+          }}
         />
       )}
 
@@ -459,11 +531,14 @@ function AutomationEditor({
   initial,
   onCancel,
   onSaved,
+  onOpenWorkQueue,
 }: {
   state: AppState;
   initial: Draft;
   onCancel: () => void;
   onSaved: () => void;
+  /** Source triggers (GitHub/Linear) leave the form and open work-queue setup. */
+  onOpenWorkQueue: () => void;
 }) {
   const [d, setD] = useState<Draft>(initial);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -499,6 +574,13 @@ function AutomationEditor({
   }
 
   function applyTrigger(opt: TriggerPick) {
+    if (opt.trigger === "source") {
+      // GitHub/Linear start sessions via the work queue — same runtime, connect
+      // flow lives in the setup sheet rather than this definition form.
+      setPickerOpen(false);
+      onOpenWorkQueue();
+      return;
+    }
     if (opt.trigger === "webhook") {
       setD((prev) => ({ ...prev, hasTrigger: true, trigger: "webhook" }));
     } else if (opt.kind === "once") {
@@ -541,6 +623,10 @@ function AutomationEditor({
       if (!d.nodeId || !roomKey) throw new Error("Connect to the assigned machine before saving encrypted instructions.");
       const encrypted = await seal(await importRoomKey(unb64(roomKey)), d.instructions.trim());
       const nodeName = selectedNode?.name;
+      const repo = d.repo.trim();
+      if (repo && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+        throw new Error("Repository must look like owner/name");
+      }
       const input = {
         name: d.name.trim(),
         templateCiphertext: `${TEMPLATE_PREFIX}:${d.nodeId}:${encrypted}`,
@@ -551,6 +637,8 @@ function AutomationEditor({
         sandbox: d.sandbox,
         enabled: true,
         trigger: d.trigger,
+        // Empty string clears on update; omit on create when unset.
+        repo: repo || (d.id ? "" : undefined),
         ...(d.trigger === "schedule"
           ? {
               schedule: d.kind === "cron"
@@ -679,7 +767,11 @@ function AutomationEditor({
                             onClick={() => applyTrigger(opt)}
                           >
                             <span className="autom-trigger-option-icon" aria-hidden="true">
-                              {opt.id === "webhook" ? <IconWebhook /> : <IconClock />}
+                              {opt.id === "webhook"
+                                ? <IconWebhook />
+                                : opt.id === "github" || opt.id === "linear"
+                                  ? <IconPr />
+                                  : <IconClock />}
                             </span>
                             <span className="autom-trigger-option-text">
                               <strong>{opt.label}</strong>
@@ -749,8 +841,41 @@ function AutomationEditor({
                   <p className="settings-hint autom-trigger-config">
                     {d.id
                       ? "Fires on a signed POST to its webhook URL. Copy the URL from the automation row; rotate the secret there if needed."
-                      : "You'll get the signed URL and a one-time signing secret after you save. The event can pick the machine and add context; agent, model, sandbox, and instructions stay as configured here."}
+                      : "You'll get the signed URL and a one-time signing secret after you save. The event can pick the machine, repo, and context; agent, model, sandbox, and instructions stay as configured here."}
                   </p>
+                )}
+
+                {/* Workspace target — required for schedule (event has no repo); optional default for webhook. */}
+                {d.hasTrigger && (
+                  <div className="autom-trigger-config">
+                    <div className="settings-field">
+                      <label className="field-label" htmlFor="autom-repo">
+                        {d.trigger === "schedule" ? "Repository" : "Repository (optional default)"}
+                      </label>
+                      <select
+                        id="autom-repo"
+                        className="picker-search"
+                        value={d.repo}
+                        onChange={(e) => set("repo", e.target.value)}
+                      >
+                        <option value="">{d.trigger === "schedule" ? "Select a GitHub repo…" : "Event may supply the repo"}</option>
+                        {d.repo && !state.repos.some((r) => r.slug === d.repo) && (
+                          <option value={d.repo}>{d.repo}</option>
+                        )}
+                        {state.repos.map((r) => (
+                          <option key={r.slug} value={r.slug}>{r.slug}</option>
+                        ))}
+                      </select>
+                      <p className="settings-hint">
+                        {d.trigger === "schedule"
+                          ? "The node clones this repo before the session starts. Connect GitHub on the machine if the list is empty."
+                          : "Used when the webhook event does not include a repo. Definition wins over the event when both are set."}
+                      </p>
+                      {!d.repo && d.trigger === "schedule" && (
+                        <p className="schedule-hint warn">Pick a repository so scheduled runs land in the right project.</p>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
 
