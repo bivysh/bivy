@@ -296,7 +296,7 @@ export function AutomationsView({
 }: {
   state: AppState;
   onClose: () => void;
-  onOpenSettings: (view: "webhooks" | "queue") => void;
+  onOpenSettings: (view: "webhooks" | "queue" | "github" | "linear") => void;
   onOpenSession: (sessionId: string) => void;
 }) {
   const [items, setItems] = useState<AccountAutomation[]>([]);
@@ -721,9 +721,9 @@ export function AutomationsView({
         <WorkQueueSetupSheet
           state={state}
           onClose={() => setWorkQueueOpen(false)}
-          onOpenFullSettings={() => {
+          onOpenFullSettings={(view = "github") => {
             setWorkQueueOpen(false);
-            onOpenSettings("queue");
+            onOpenSettings(view);
           }}
         />
       )}

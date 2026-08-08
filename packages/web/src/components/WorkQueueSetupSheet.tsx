@@ -41,8 +41,8 @@ export function WorkQueueSetupSheet({
 }: {
   state: AppState;
   onClose: () => void;
-  /** Escape hatch to Settings → GitHub for multi-app / disconnect. */
-  onOpenFullSettings: () => void;
+  /** Escape hatch into Settings for multi-app / disconnect / Linear webhook. */
+  onOpenFullSettings: (view?: "github" | "linear") => void;
 }) {
   const canQuery = !controller.direct;
   const [info, setInfo] = useState<GithubAppInfo | null>(null);
@@ -250,7 +250,7 @@ export function WorkQueueSetupSheet({
                         <p className="schedule-hint warn">
                           No online machine holds this app&apos;s key — queue items won&apos;t be claimed.
                           Connect the key on a machine in{" "}
-                          <button type="button" className="link-btn" onClick={onOpenFullSettings}>Settings → GitHub</button>.
+                          <button type="button" className="link-btn" onClick={() => onOpenFullSettings("github")}>Settings → GitHub</button>.
                         </p>
                       ) : entry.servedBy && (
                         <span className="settings-hint">
@@ -285,7 +285,8 @@ export function WorkQueueSetupSheet({
 
                 {readyToRun && (
                   <div className="banner info inline">
-                    ✓ Ready. Label an issue <code>bivy</code> or comment <code>@{mention} fix this</code>.
+                    ✓ Ready. Label an issue <code>bivy</code> or comment{" "}
+                    <code>@{mention}</code> with what to do.
                   </div>
                 )}
               </div>
@@ -303,7 +304,7 @@ export function WorkQueueSetupSheet({
               ) : (
                 <p className="settings-hint">
                   Not connected. Set up the Linear webhook under{" "}
-                  <button type="button" className="link-btn" onClick={onOpenFullSettings}>Settings → Linear</button>
+                  <button type="button" className="link-btn" onClick={() => onOpenFullSettings("linear")}>Settings → Linear</button>
                   {" "}if you want the same flow from Linear issues.
                 </p>
               )}
@@ -312,7 +313,7 @@ export function WorkQueueSetupSheet({
         </div>
 
         <div className="wizard-actions">
-          <button type="button" className="btn" onClick={onOpenFullSettings}>Open full settings</button>
+          <button type="button" className="btn" onClick={() => onOpenFullSettings("github")}>Open full settings</button>
           <button type="button" className="btn primary autom-save-btn" onClick={onClose}>Done</button>
         </div>
       </div>
