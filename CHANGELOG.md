@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Automations create wizard can now make a **webhook-triggered** automation:
+  pick "On a webhook call", configure machine/agent/instructions as usual, and
+  the wizard reveals the signed URL plus a one-time signing secret. Existing
+  webhook automations show their URL on the row, with Rotate secret / Test run.
+  CI-failure, error-tracker, and production-investigation templates open this
+  flow directly instead of the generic Webhooks settings panel.
 - Forks into OpenCode now open on a full copy of the transcript instead of a
   seeded summary prompt: Bivy materialises the fork's conversation as a real
   session in OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db`), so

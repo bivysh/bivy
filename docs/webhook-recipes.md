@@ -1,8 +1,25 @@
 # Automation webhook recipes
 
-Bivy's generic automation webhooks turn signed events from CI, monitoring, or internal tools into ordinary queued runs. The run is routed to a node you own, uses that node's configured agent and model, and can use your account's ephemeral-runner fallback when no persistent node is online.
+Bivy webhooks turn signed events from CI, monitoring, or internal tools into ordinary queued runs on a machine you own. Prefer a **webhook-triggered automation** when you want a fully pre-configured job (machine, agent, model, sandbox, and encrypted instructions). A standalone hook is still available for ad-hoc instructions.
 
-## Create a webhook
+## Create a webhook-triggered automation (recommended)
+
+In the Bivy app, open **Automations** → **New automation** (or a webhook template such as *Fix failed CI*):
+
+1. Name the job and write the agent instructions (encrypted to the assigned machine).
+2. On **When**, choose **On a webhook call**.
+3. Pick the machine (and optionally agent/model/autonomy), then create.
+4. Copy the webhook URL and signing secret from the reveal panel. The secret is shown only at create/rotate time.
+
+The endpoint is:
+
+```text
+POST /webhooks/automation/run/:definitionId
+```
+
+The payload may choose the node (`routing`) and supply event context; it cannot select runtime, model, sandbox, or the operator template. That boundary is deliberate — a leaked secret must not become RCE config.
+
+## Create a standalone hook
 
 In the Bivy app, open **Settings → Automations → Webhook triggers**.
 
@@ -11,7 +28,7 @@ In the Bivy app, open **Settings → Automations → Webhook triggers**.
 3. Select **Create webhook**.
 4. Save the signing secret immediately. It is only displayed when the hook is created or rotated.
 
-The fixed template is prepended to every event. Event payloads cannot select commands, runtimes, models, or executable templates.
+The fixed template is prepended to every event. Event payloads cannot select commands, runtimes, models, or executable templates. The endpoint is `POST /webhooks/automation/:hookId`.
 
 ## Send an event
 
@@ -22,7 +39,10 @@ Every request needs:
 - `X-Bivy-Idempotency-Key: <stable unique event id>`
 
 ```bash
-endpoint='https://app.bivy.sh/webhooks/automation/YOUR_HOOK_ID'
+# Definition-bound (from Automations → webhook trigger):
+endpoint='https://app.bivy.sh/webhooks/automation/run/YOUR_DEFINITION_ID'
+# Or standalone hook:
+# endpoint='https://app.bivy.sh/webhooks/automation/YOUR_HOOK_ID'
 secret='YOUR_SIGNING_SECRET'
 body='{"version":"1","instruction":"The Linux integration job failed. Reproduce it and fix the cause.","title":"CI follow-up","sourceUrl":"https://ci.example.com/build/123","externalId":"build-123","routing":"linux-runner","metadata":{"environment":"staging","attempt":2}}'
 
@@ -37,7 +57,7 @@ curl -X POST "$endpoint" \
   --data-binary "$body"
 ```
 
-Sign the exact bytes sent with `--data-binary`. Reusing an idempotency key returns the existing run instead of creating a duplicate.
+Sign the exact bytes sent with `--data-binary`. Reusing an idempotency key returns the existing run instead of creating a duplicate. For a definition-bound webhook, `instruction` is untrusted event context appended after the operator template — not a way to override the automation's configured job.
 
 ## Event schema
 

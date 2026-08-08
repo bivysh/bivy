@@ -16,6 +16,7 @@ import {
   fetchAutomationRuns,
   fetchAutomations,
   runAutomationNow,
+  rotateAutomationWebhook,
   updateAutomation,
   importRoomKey,
   seal,
@@ -28,7 +29,7 @@ import {
   type AccountAutomationRun,
 } from "@bivy/core";
 import { controller } from "../store/controller.js";
-import { AUTOMATION_TEMPLATES, type ScheduleTemplate } from "./automationTemplates.js";
+import { AUTOMATION_TEMPLATES, type ScheduleTemplate, type WebhookTemplate } from "./automationTemplates.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -74,8 +75,9 @@ function toLocalInput(date: Date): string {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
-/** A one-line human schedule summary for an automation card. */
+/** A one-line human schedule/trigger summary for an automation card. */
 function scheduleSummary(item: AccountAutomation): string {
+  if (item.trigger === "webhook") return "Webhook · runs on a signed request";
   if (item.schedule.kind === "once") return `Once · ${new Date(item.schedule.at).toLocaleString()}`;
   return describeCron(item.schedule.expression) || `${item.schedule.expression} · ${item.schedule.timezone}`;
 }
@@ -100,6 +102,8 @@ interface Draft {
   id: string | null;
   name: string;
   instructions: string;
+  /** "schedule" runs on the cron/once schedule; "webhook" fires on a signed POST. */
+  trigger: "schedule" | "webhook";
   kind: "cron" | "once";
   cron: string;
   nlText: string;
@@ -117,6 +121,7 @@ function emptyDraft(nodeId: string): Draft {
     id: null,
     name: "",
     instructions: "",
+    trigger: "schedule",
     kind: "cron",
     cron: "0 9 * * 1",
     nlText: "",
@@ -148,6 +153,8 @@ export function AutomationsView({
   const [runs, setRuns] = useState<AccountAutomationRun[]>([]);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
+  // A freshly-rotated webhook secret, shown once inline on its automation's row.
+  const [rotated, setRotated] = useState<{ id: string; secret: string } | null>(null);
 
   const refresh = useCallback(async () => {
     const [definitions, recent] = await Promise.all([
@@ -164,15 +171,29 @@ export function AutomationsView({
   const defaultNodeId = state.currentNodeId || controller.local.cur || "";
 
   // Start a create from a template: pre-fill the draft and open the wizard.
-  function startFromTemplate(template: ScheduleTemplate) {
+  function startFromScheduleTemplate(template: ScheduleTemplate) {
     const p = template.prefill;
     setError("");
     setDraft({
       ...emptyDraft(defaultNodeId),
       name: p.name,
       instructions: p.instructions,
+      trigger: "schedule",
       cron: p.schedule.cron,
       nlText: p.schedule.nlText,
+      approvalMode: p.approvalMode,
+      sandbox: p.sandbox,
+    });
+  }
+
+  function startFromWebhookTemplate(template: WebhookTemplate) {
+    const p = template.prefill;
+    setError("");
+    setDraft({
+      ...emptyDraft(defaultNodeId),
+      name: p.name,
+      instructions: p.instructions,
+      trigger: "webhook",
       approvalMode: p.approvalMode,
       sandbox: p.sandbox,
     });
@@ -202,6 +223,7 @@ export function AutomationsView({
       id: item.id,
       name: item.name,
       instructions,
+      trigger: item.trigger === "webhook" ? "webhook" : "schedule",
       nodeId,
       runtimeId: item.runtimeId || "",
       model: item.model || "",
@@ -224,6 +246,15 @@ export function AutomationsView({
   async function runNow(item: AccountAutomation) {
     try {
       await runAutomationNow(controller.local, item.id);
+      await refresh();
+    } catch (e) { setError(String((e as Error).message || e)); }
+  }
+
+  async function rotate(item: AccountAutomation) {
+    setError("");
+    try {
+      const result = await rotateAutomationWebhook(controller.local, item.id);
+      setRotated({ id: item.id, secret: result.webhookSecret });
       await refresh();
     } catch (e) { setError(String((e as Error).message || e)); }
   }
@@ -257,7 +288,11 @@ export function AutomationsView({
                   <p className="template-card-tagline">{template.tagline}</p>
                 </div>
                 {template.kind === "schedule" ? (
-                  <button type="button" className="btn primary template-card-action" onClick={() => startFromTemplate(template)}>
+                  <button type="button" className="btn primary template-card-action" onClick={() => startFromScheduleTemplate(template)}>
+                    Use template
+                  </button>
+                ) : template.kind === "webhook" ? (
+                  <button type="button" className="btn primary template-card-action" onClick={() => startFromWebhookTemplate(template)}>
                     Use template
                   </button>
                 ) : (
@@ -287,10 +322,24 @@ export function AutomationsView({
                       {scheduleSummary(item)}
                       {item.enabled && item.nextRunAt ? ` · next ${new Date(item.nextRunAt).toLocaleString()}` : ""}
                     </div>
+                    {item.trigger === "webhook" && item.webhookUrl && (
+                      <div className="reveal-row">
+                        <code className="reveal-value">{item.webhookUrl}</code>
+                        <button type="button" className="btn" onClick={() => void navigator.clipboard?.writeText(item.webhookUrl!)}>Copy URL</button>
+                      </div>
+                    )}
+                    {rotated?.id === item.id && (
+                      <div className="reveal-row">
+                        <code className="reveal-value">{rotated.secret}</code>
+                        <button type="button" className="btn" onClick={() => void navigator.clipboard?.writeText(rotated.secret)}>Copy secret</button>
+                        <span className="settings-hint">New signing secret — shown once.</span>
+                      </div>
+                    )}
                   </div>
                   <div className="settings-actions">
-                    <button className="btn" onClick={() => void runNow(item)}>Run now</button>
+                    <button className="btn" onClick={() => void runNow(item)}>{item.trigger === "webhook" ? "Test run" : "Run now"}</button>
                     <button className="btn" onClick={() => void edit(item)}>Edit</button>
+                    {item.trigger === "webhook" && <button className="btn" onClick={() => void rotate(item)}>Rotate secret</button>}
                     <button className="btn" onClick={() => void toggle(item)}>{item.enabled ? "Pause" : "Resume"}</button>
                   </div>
                 </div>
@@ -371,6 +420,9 @@ function AutomationWizard({
   const [nlError, setNlError] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Set after a webhook automation is created: its URL + one-time signing secret,
+  // shown on a reveal panel before the wizard closes.
+  const [created, setCreated] = useState<{ url: string; secret: string } | null>(null);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((prev) => ({ ...prev, [k]: v }));
 
   const tzList = useMemo(() => timezoneOptions(d.timezone), [d.timezone]);
@@ -389,7 +441,10 @@ function AutomationWizard({
   // incomplete step (and Review can't submit an invalid definition).
   const stepValid = (() => {
     if (step === 0) return d.name.trim().length > 0 && d.instructions.trim().length > 0;
-    if (step === 1) return d.kind === "cron" ? Boolean(d.cron.trim()) && Boolean(cronHuman) : Boolean(d.onceAt);
+    if (step === 1) {
+      if (d.trigger === "webhook") return true; // no schedule to validate
+      return d.kind === "cron" ? Boolean(d.cron.trim()) && Boolean(cronHuman) : Boolean(d.onceAt);
+    }
     if (step === 2) return Boolean(d.nodeId) && Boolean(controller.local.keys()[d.nodeId]);
     return true;
   })();
@@ -413,13 +468,30 @@ function AutomationWizard({
         approvalMode: d.approvalMode,
         sandbox: d.sandbox,
         enabled: true,
-        schedule: d.kind === "cron"
-          ? { kind: "cron" as const, expression: d.cron.trim(), timezone: d.timezone.trim() }
-          : { kind: "once" as const, at: new Date(d.onceAt).toISOString() },
+        trigger: d.trigger,
+        // A webhook automation has no schedule; the server parks it and fires it
+        // on a signed POST instead.
+        ...(d.trigger === "schedule"
+          ? {
+              schedule: d.kind === "cron"
+                ? { kind: "cron" as const, expression: d.cron.trim(), timezone: d.timezone.trim() }
+                : { kind: "once" as const, at: new Date(d.onceAt).toISOString() },
+            }
+          : {}),
       };
-      if (d.id) await updateAutomation(controller.local, d.id, input);
-      else await createAutomation(controller.local, input);
-      onSaved();
+      if (d.id) {
+        await updateAutomation(controller.local, d.id, input);
+        onSaved();
+      } else {
+        const result = await createAutomation(controller.local, input);
+        // A new webhook automation's signing secret is shown exactly once — hold
+        // the wizard on a reveal panel instead of closing straight away.
+        if (d.trigger === "webhook" && result.webhookSecret) {
+          setCreated({ url: result.webhookUrl ?? "", secret: result.webhookSecret });
+        } else {
+          onSaved();
+        }
+      }
     } catch (e) {
       setError(String((e as Error).message || e));
     } finally {
@@ -434,14 +506,46 @@ function AutomationWizard({
           <strong>{d.id ? "Edit automation" : "New automation"}</strong>
           <button className="icon-btn" onClick={onCancel} aria-label="Cancel">✕</button>
         </div>
-        <ol className="wizard-steps">
-          {STEPS.map((label, i) => (
-            <li key={label} className={`wizard-step-tab${i === step ? " active" : ""}${i < step ? " done" : ""}`}>
-              <span className="wizard-step-num">{i + 1}</span>{label}
-            </li>
-          ))}
-        </ol>
+        {!created && (
+          <ol className="wizard-steps">
+            {STEPS.map((label, i) => (
+              <li key={label} className={`wizard-step-tab${i === step ? " active" : ""}${i < step ? " done" : ""}`}>
+                <span className="wizard-step-num">{i + 1}</span>{label}
+              </li>
+            ))}
+          </ol>
+        )}
 
+        {created ? (
+          <>
+            <div className="wizard-body">
+              <div className="wizard-pane">
+                <h4>Webhook ready</h4>
+                <p className="settings-hint">Send signed events to this URL. Copy the signing secret now — it isn&apos;t shown again (you can rotate it later).</p>
+                <div className="settings-field">
+                  <label className="field-label">Webhook URL</label>
+                  <div className="reveal-row">
+                    <code className="reveal-value">{created.url}</code>
+                    <button type="button" className="btn" onClick={() => void navigator.clipboard?.writeText(created.url)}>Copy</button>
+                  </div>
+                </div>
+                <div className="settings-field">
+                  <label className="field-label">Signing secret</label>
+                  <div className="reveal-row">
+                    <code className="reveal-value">{created.secret}</code>
+                    <button type="button" className="btn" onClick={() => void navigator.clipboard?.writeText(created.secret)}>Copy</button>
+                  </div>
+                </div>
+                <p className="settings-hint">Sign each request with <code>X-Bivy-Signature-256: sha256=HMAC-SHA256(body)</code> and a unique <code>X-Bivy-Idempotency-Key</code>. See the webhook recipes for examples.</p>
+              </div>
+            </div>
+            <div className="wizard-actions">
+              <span />
+              <button className="btn primary" onClick={onSaved}>Done</button>
+            </div>
+          </>
+        ) : (
+        <>
         <div className="wizard-body">
           {step === 0 && (
             <div className="wizard-pane">
@@ -462,13 +566,31 @@ function AutomationWizard({
             <div className="wizard-pane">
               <h4>When should it run?</h4>
               <div className="settings-field">
-                <label className="field-label" htmlFor="wiz-kind">Frequency</label>
-                <select id="wiz-kind" className="picker-search" value={d.kind} onChange={(e) => set("kind", e.target.value as "cron" | "once")}>
-                  <option value="cron">Recurring</option>
+                <label className="field-label" htmlFor="wiz-freq">Trigger</label>
+                <select
+                  id="wiz-freq"
+                  className="picker-search"
+                  value={d.trigger === "webhook" ? "webhook" : d.kind}
+                  disabled={Boolean(d.id)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "webhook") set("trigger", "webhook");
+                    else { set("trigger", "schedule"); set("kind", v as "cron" | "once"); }
+                  }}
+                >
+                  <option value="cron">Recurring schedule</option>
                   <option value="once">One time</option>
+                  <option value="webhook">On a webhook call</option>
                 </select>
+                {d.id && <p className="settings-hint">The trigger is fixed when the automation is created.</p>}
               </div>
-              {d.kind === "cron" ? (
+              {d.trigger === "webhook" ? (
+                <p className="settings-hint">
+                  {d.id
+                    ? "This automation runs when a signed request hits its webhook URL. The URL is on its row in Your automations; rotate the signing secret there if you need a new one."
+                    : "This automation runs when a signed request hits its webhook URL. You'll get the URL and a signing secret after you create it. Point your CI, error tracker, or internal tools at it — the event payload can choose the machine and add context, but the agent, model, sandbox, and instructions stay exactly as you configure them here."}
+                </p>
+              ) : d.kind === "cron" ? (
                 <>
                   <div className="settings-field">
                     <label className="field-label" htmlFor="wiz-nl">When to run</label>
@@ -574,7 +696,7 @@ function AutomationWizard({
               <h4>Review</h4>
               <dl className="wizard-review">
                 <dt>Name</dt><dd>{d.name}</dd>
-                <dt>Runs</dt><dd>{d.kind === "cron" ? (cronHuman || d.cron) : `once at ${new Date(d.onceAt).toLocaleString()}`}</dd>
+                <dt>Trigger</dt><dd>{d.trigger === "webhook" ? "On a webhook call" : d.kind === "cron" ? (cronHuman || d.cron) : `once at ${new Date(d.onceAt).toLocaleString()}`}</dd>
                 <dt>Machine</dt><dd>{String(selectedNode?.name || d.nodeId)}</dd>
                 <dt>Agent</dt><dd>{d.runtimeId || "machine default"}{d.model ? ` · ${d.model}` : ""}</dd>
                 <dt>Autonomy</dt><dd>{d.approvalMode} · {d.sandbox}</dd>
@@ -594,6 +716,8 @@ function AutomationWizard({
             ? <button className="btn primary" onClick={() => setStep((s) => s + 1)} disabled={!stepValid}>Continue</button>
             : <button className="btn primary" onClick={() => void save()} disabled={busy}>{busy ? "Saving…" : d.id ? "Save changes" : "Create automation"}</button>}
         </div>
+        </>
+        )}
       </div>
     </div>
   );
