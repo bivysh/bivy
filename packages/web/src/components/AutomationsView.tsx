@@ -12,8 +12,12 @@ import { createPortal } from "react-dom";
 import cronstrue from "cronstrue";
 import {
   createAutomation,
+  fetchAccountNodes,
   fetchAutomationRuns,
   fetchAutomations,
+  fetchGithubApp,
+  fetchLinearHook,
+  fetchSlackHook,
   runAutomationNow,
   rotateAutomationWebhook,
   updateAutomation,
@@ -26,6 +30,10 @@ import {
   type AppState,
   type AccountAutomation,
   type AccountAutomationRun,
+  type AccountNode,
+  type GithubAppInfo,
+  type LinearHook,
+  type SlackHook,
 } from "@bivy/core";
 import { controller } from "../store/controller.js";
 import {
@@ -96,14 +104,93 @@ function scheduleSummary(item: AccountAutomation): string {
   const repo = item.repo ? ` · ${item.repo}` : "";
   const repos = item.repos?.length ? ` · ${item.repos.join(", ")}` : "";
   const labels = item.labels?.length ? item.labels.join(", ") : "bivy";
-  if (item.trigger === "github") return `GitHub · label ${labels}${repos}`;
-  if (item.trigger === "github_ci") return `GitHub Actions · workflow failure${repos}`;
-  if (item.trigger === "linear") return `Linear · label ${labels}${repo || repos}`;
+  const node = item.nodeLabel ? ` · ${item.nodeLabel}` : "";
+  if (item.trigger === "github") return `GitHub · label ${labels}${repos}${node}`;
+  if (item.trigger === "github_ci") {
+    const wf = item.labels?.length ? ` · workflow ${item.labels.join(", ")}` : " · any workflow";
+    return `GitHub Actions · failure${wf}${repos}${node}`;
+  }
+  if (item.trigger === "linear") return `Linear · label ${labels}${repo || repos}${node}`;
   if (item.trigger === "webhook") return `Webhook · runs on a signed request${repo}`;
   if (!item.schedule) return `Scheduled${repo}`;
   if (item.schedule.kind === "once") return `Once · ${new Date(item.schedule.at).toLocaleString()}${repo}`;
   const when = describeCron(item.schedule.expression) || `${item.schedule.expression} · ${item.schedule.timezone}`;
   return `${when}${repo}`;
+}
+
+function isSourceTrigger(t: AccountAutomation["trigger"]): t is "github" | "linear" | "github_ci" {
+  return t === "github" || t === "linear" || t === "github_ci";
+}
+
+function nodeLabelSuffix(nodeLabel?: string): string {
+  if (!nodeLabel) return "";
+  return nodeLabel.startsWith("bivy/") ? nodeLabel.slice("bivy/".length) : nodeLabel;
+}
+
+interface SourcesSnapshot {
+  github: GithubAppInfo | null;
+  linear: LinearHook | null;
+  slack: SlackHook | null;
+  nodes: AccountNode[];
+}
+
+function emptySources(): SourcesSnapshot {
+  return { github: null, linear: null, slack: null, nodes: [] };
+}
+
+function githubSourceStatus(gh: GithubAppInfo | null): { tone: "on" | "off" | "warn"; label: string; detail: string } {
+  if (!gh?.connected || !gh.apps?.length) {
+    return { tone: "off", label: "Not connected", detail: "Connect a GitHub App to run issue and CI automations." };
+  }
+  const installed = gh.apps.some((a) => a.installed || (a.installCount ?? 0) > 0);
+  const served = gh.apps.some((a) => a.servedBy?.online);
+  const count = gh.apps.reduce((n, a) => n + (a.installCount ?? (a.installed ? 1 : 0)), 0);
+  if (!installed) {
+    return { tone: "warn", label: "App created · not installed", detail: "Install the app on at least one repository." };
+  }
+  if (!served && !gh.apps.some((a) => a.servedBy)) {
+    return { tone: "warn", label: `Installed${count ? ` · ${count} repo(s)` : ""} · no node`, detail: "No machine is serving the app key yet." };
+  }
+  const online = served ? "online" : "offline";
+  return {
+    tone: served ? "on" : "warn",
+    label: `${count || gh.apps.length} repo(s) · node ${online}`,
+    detail: "Issues, @mentions, and (when enabled) Actions failures can start sessions.",
+  };
+}
+
+function linearSourceStatus(lin: LinearHook | null): { tone: "on" | "off" | "warn"; label: string; detail: string } {
+  if (!lin) return { tone: "off", label: "Not connected", detail: "Connect Linear to turn labeled issues into sessions." };
+  if (lin.enabled === false) return { tone: "warn", label: "Disabled", detail: "Linear hook exists but is turned off." };
+  return { tone: "on", label: "Connected", detail: "Labeled Linear issues can start sessions." };
+}
+
+function slackSourceStatus(slack: SlackHook | null): { tone: "on" | "off" | "warn"; label: string; detail: string } {
+  if (!slack) return { tone: "off", label: "Not connected", detail: "Connect Slack so /bivy commands reach your machines." };
+  if (slack.enabled === false) return { tone: "warn", label: "Disabled", detail: "Slack hook exists but is turned off." };
+  return { tone: "on", label: "Connected", detail: "Slash commands enqueue sessions on the work queue." };
+}
+
+/** Status chip for a source automation given live connect state. */
+function sourceAutomationChip(
+  item: AccountAutomation,
+  sources: SourcesSnapshot,
+): { tone: "on" | "off" | "warn"; label: string } {
+  if (!item.enabled) return { tone: "off", label: "Paused" };
+  if (item.trigger === "github" || item.trigger === "github_ci") {
+    const gh = githubSourceStatus(sources.github);
+    if (gh.tone === "off") return { tone: "warn", label: "Needs GitHub" };
+    if (gh.tone === "warn") return { tone: "warn", label: gh.label };
+    if (item.trigger === "github_ci") return { tone: "on", label: "Active · verify workflow_run" };
+    return { tone: "on", label: "Active" };
+  }
+  if (item.trigger === "linear") {
+    const lin = linearSourceStatus(sources.linear);
+    if (lin.tone === "off") return { tone: "warn", label: "Needs Linear" };
+    if (lin.tone === "warn") return { tone: "warn", label: lin.label };
+    return { tone: "on", label: "Active" };
+  }
+  return { tone: item.enabled ? "on" : "off", label: item.enabled ? "Active" : "Paused" };
 }
 
 function runOutcome(status: AccountAutomationRun["status"]): { label: string; tone: "ok" | "warn" | "bad" | "info" } {
@@ -214,20 +301,28 @@ export function AutomationsView({
 }) {
   const [items, setItems] = useState<AccountAutomation[]>([]);
   const [runs, setRuns] = useState<AccountAutomationRun[]>([]);
+  const [sources, setSources] = useState<SourcesSnapshot>(emptySources);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [sourceEdit, setSourceEdit] = useState<AccountAutomation | null>(null);
   const [rotated, setRotated] = useState<{ id: string; secret: string } | null>(null);
   // In-sheet work-queue setup ("Work issues into PRs") — stays on Automations
   // instead of bouncing to Settings.
   const [workQueueOpen, setWorkQueueOpen] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [definitions, recent] = await Promise.all([
+    const canQuery = !controller.direct;
+    const [definitions, recent, gh, lin, slack, nodes] = await Promise.all([
       fetchAutomations(controller.local),
       fetchAutomationRuns(controller.local, 30),
+      canQuery ? fetchGithubApp(controller.local).catch(() => null) : Promise.resolve(null),
+      canQuery ? fetchLinearHook(controller.local).catch(() => null) : Promise.resolve(null),
+      canQuery ? fetchSlackHook(controller.local).catch(() => null) : Promise.resolve(null),
+      canQuery ? fetchAccountNodes(controller.local).catch(() => [] as AccountNode[]) : Promise.resolve([] as AccountNode[]),
     ]);
     setItems(definitions);
     setRuns(recent);
+    setSources({ github: gh, linear: lin, slack, nodes });
   }, []);
 
   useEffect(() => { void refresh().catch((e) => setError(String(e))); }, [refresh]);
@@ -314,10 +409,9 @@ export function AutomationsView({
 
   async function edit(item: AccountAutomation) {
     setError("");
-    // Source automations (GitHub/Linear) are configured via connect + pause/resume,
-    // not the schedule/webhook instruction form.
-    if (item.trigger === "github" || item.trigger === "linear" || item.trigger === "github_ci") {
-      setWorkQueueOpen(true);
+    // Source automations get a dedicated filters editor (labels/repos/node/agent).
+    if (isSourceTrigger(item.trigger)) {
+      setSourceEdit(item);
       return;
     }
     let instructions = "";
@@ -393,47 +487,82 @@ export function AutomationsView({
         <section className="autom-section">
           <h2 className="autom-section-label">Sources</h2>
           <p className="settings-hint" style={{ marginBottom: 8 }}>
-            Sources start automations when something happens outside Bivy. Connecting one is account plumbing — not a separate jobs product.
+            Sources start automations when something happens outside Bivy. Status below is live from your account hooks.
           </p>
-          <div className="automation-list">
-            <div className="automation-row">
-              <div className="automation-row-main">
-                <div className="automation-row-title">
-                  <strong>GitHub</strong>
-                  <span className="autom-status on">Issues, mentions via app</span>
+          {(() => {
+            const gh = githubSourceStatus(sources.github);
+            const lin = linearSourceStatus(sources.linear);
+            const slack = slackSourceStatus(sources.slack);
+            return (
+              <div className="automation-list">
+                <div className="automation-row">
+                  <div className="automation-row-main">
+                    <div className="automation-row-title">
+                      <strong>GitHub</strong>
+                      <span className={`autom-status ${gh.tone}`}>{gh.label}</span>
+                    </div>
+                    <div className="settings-hint">{gh.detail}</div>
+                  </div>
+                  <div className="settings-actions">
+                    <button type="button" className="btn sm" onClick={() => setWorkQueueOpen(true)}>
+                      {gh.tone === "off" ? "Connect" : "Manage"}
+                    </button>
+                  </div>
                 </div>
-                <div className="settings-hint">Label an issue or @mention → session on your machine → PR</div>
-              </div>
-              <div className="settings-actions">
-                <button type="button" className="btn sm" onClick={() => setWorkQueueOpen(true)}>Connect / manage</button>
-              </div>
-            </div>
-            <div className="automation-row">
-              <div className="automation-row-main">
-                <div className="automation-row-title">
-                  <strong>Linear</strong>
-                  <span className="autom-status off">Issue assigned / labeled</span>
+                <div className="automation-row">
+                  <div className="automation-row-main">
+                    <div className="automation-row-title">
+                      <strong>Linear</strong>
+                      <span className={`autom-status ${lin.tone}`}>{lin.label}</span>
+                    </div>
+                    <div className="settings-hint">{lin.detail}</div>
+                  </div>
+                  <div className="settings-actions">
+                    <button type="button" className="btn sm" onClick={() => setWorkQueueOpen(true)}>
+                      {lin.tone === "off" ? "Connect" : "Manage"}
+                    </button>
+                  </div>
                 </div>
-                <div className="settings-hint">Same issue → session → PR path; bind a default repo when the ticket has no git link</div>
-              </div>
-              <div className="settings-actions">
-                <button type="button" className="btn sm" onClick={() => setWorkQueueOpen(true)}>Connect / manage</button>
-              </div>
-            </div>
-            <div className="automation-row">
-              <div className="automation-row-main">
-                <div className="automation-row-title">
-                  <strong>Schedule &amp; webhook</strong>
-                  <span className="autom-status on">Built in</span>
+                <div className="automation-row">
+                  <div className="automation-row-main">
+                    <div className="automation-row-title">
+                      <strong>Slack</strong>
+                      <span className={`autom-status ${slack.tone}`}>{slack.label}</span>
+                    </div>
+                    <div className="settings-hint">{slack.detail}</div>
+                  </div>
+                  <div className="settings-actions">
+                    <button type="button" className="btn sm" onClick={() => onOpenSettings("webhooks")}>
+                      {slack.tone === "off" ? "Connect" : "Manage"}
+                    </button>
+                  </div>
                 </div>
-                <div className="settings-hint">Cron and signed webhooks are triggers on each automation — pick a repo when the event does not name one</div>
+                <div className="automation-row">
+                  <div className="automation-row-main">
+                    <div className="automation-row-title">
+                      <strong>Schedule &amp; webhook</strong>
+                      <span className="autom-status on">Built in</span>
+                    </div>
+                    <div className="settings-hint">Cron and signed webhooks are triggers on each automation — pick a repo when the event does not name one.</div>
+                  </div>
+                  <div className="settings-actions">
+                    <button type="button" className="btn sm" onClick={startCustom}>New automation</button>
+                  </div>
+                </div>
               </div>
-              <div className="settings-actions">
-                <button type="button" className="btn sm" onClick={startCustom}>New automation</button>
-              </div>
-            </div>
-          </div>
+            );
+          })()}
         </section>
+
+        {items.some((i) => i.trigger === "github_ci" && i.enabled) && sources.github?.connected && (
+          <div className="autom-banner" role="status">
+            <strong>Fix failed CI is on.</strong>{" "}
+            New GitHub Apps created in Bivy receive <code>workflow_run</code> events automatically.
+            Existing apps need <code>workflow_run</code> + Actions/Checks read on the app in GitHub,
+            or failures will never reach Bivy.
+            <button type="button" className="btn sm" style={{ marginLeft: 8 }} onClick={() => setWorkQueueOpen(true)}>Open GitHub setup</button>
+          </div>
+        )}
 
         <section className="autom-section">
           <h2 className="autom-section-label">Suggested</h2>
@@ -465,12 +594,16 @@ export function AutomationsView({
             <p className="settings-hint">Nothing yet. Add a suggestion above, or create a custom automation.</p>
           ) : (
             <div className="automation-list">
-              {items.map((item) => (
+              {items.map((item) => {
+                const chip = isSourceTrigger(item.trigger)
+                  ? sourceAutomationChip(item, sources)
+                  : { tone: item.enabled ? "on" as const : "off" as const, label: item.enabled ? "Active" : "Paused" };
+                return (
                 <div className="automation-row" key={item.id}>
                   <div className="automation-row-main">
                     <div className="automation-row-title">
                       <strong>{item.name}</strong>
-                      <span className={`autom-status ${item.enabled ? "on" : "off"}`}>{item.enabled ? "Active" : "Paused"}</span>
+                      <span className={`autom-status ${chip.tone}`}>{chip.label}</span>
                     </div>
                     <div className="settings-hint">
                       {scheduleSummary(item)}
@@ -491,17 +624,19 @@ export function AutomationsView({
                     )}
                   </div>
                   <div className="settings-actions">
-                    {item.trigger !== "github" && item.trigger !== "linear" && item.trigger !== "github_ci" && (
+                    {!isSourceTrigger(item.trigger) && (
                       <button type="button" className="btn sm" onClick={() => void runNow(item)}>{item.trigger === "webhook" ? "Test run" : "Run now"}</button>
                     )}
-                    <button type="button" className="btn sm" onClick={() => void edit(item)}>
-                      {item.trigger === "github" || item.trigger === "linear" || item.trigger === "github_ci" ? "Manage source" : "Edit"}
-                    </button>
+                    <button type="button" className="btn sm" onClick={() => void edit(item)}>Edit</button>
+                    {isSourceTrigger(item.trigger) && chip.tone === "warn" && chip.label.startsWith("Needs") && (
+                      <button type="button" className="btn sm" onClick={() => setWorkQueueOpen(true)}>Connect</button>
+                    )}
                     {item.trigger === "webhook" && <button type="button" className="btn sm" onClick={() => void rotate(item)}>Rotate secret</button>}
                     <button type="button" className="btn sm" onClick={() => void toggle(item)}>{item.enabled ? "Pause" : "Resume"}</button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
@@ -514,6 +649,8 @@ export function AutomationsView({
             <div className="automation-list">
               {definitionRuns.slice(0, 12).map((run) => {
                 const outcome = runOutcome(run.status);
+                const defName = items.find((i) => i.id === run.definitionId)?.name;
+                const sessionId = run.output?.sessionId;
                 return (
                   <div className="automation-row" key={run.id}>
                     <div className="automation-row-main">
@@ -521,18 +658,27 @@ export function AutomationsView({
                         <strong>{run.title}</strong>
                         <span className={`run-status ${outcome.tone}`}>{outcome.label}</span>
                       </div>
-                      <div className="settings-hint">{new Date(run.createdAt).toLocaleString()}</div>
-                    </div>
-                    {(run.output?.sessionId || run.output?.prUrl) && (
-                      <div className="settings-actions">
-                        {run.output?.sessionId && (
-                          <button type="button" className="btn sm" onClick={() => onOpenSession(run.output!.sessionId!)}>Open session</button>
-                        )}
-                        {run.output?.prUrl && (
-                          <a className="btn sm" href={run.output.prUrl} target="_blank" rel="noreferrer">View PR</a>
-                        )}
+                      <div className="settings-hint">
+                        {[defName, new Date(run.createdAt).toLocaleString(), run.triggerKind].filter(Boolean).join(" · ")}
                       </div>
-                    )}
+                    </div>
+                    <div className="settings-actions">
+                      {sessionId && (
+                        <button
+                          type="button"
+                          className="btn sm primary"
+                          onClick={() => { onOpenSession(sessionId); onClose(); }}
+                        >
+                          Open session
+                        </button>
+                      )}
+                      {run.output?.prUrl && (
+                        <a className="btn sm" href={run.output.prUrl} target="_blank" rel="noreferrer">View PR</a>
+                      )}
+                      {!sessionId && !run.output?.prUrl && (
+                        <span className="settings-hint">{outcome.label}</span>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -554,6 +700,23 @@ export function AutomationsView({
         />
       )}
 
+      {sourceEdit && (
+        <SourceAutomationEditor
+          item={sourceEdit}
+          state={state}
+          sources={sources}
+          onClose={() => setSourceEdit(null)}
+          onSaved={async () => {
+            setSourceEdit(null);
+            await refresh().catch((e) => setError(String(e)));
+          }}
+          onConnect={() => {
+            setSourceEdit(null);
+            setWorkQueueOpen(true);
+          }}
+        />
+      )}
+
       {workQueueOpen && (
         <WorkQueueSetupSheet
           state={state}
@@ -566,6 +729,208 @@ export function AutomationsView({
       )}
     </div>,
     document.body,
+  );
+}
+
+// ── Source automation editor (GitHub / Linear / CI) ─────────────────────────
+// Filters + routing defaults. Connect stays one tap away when the source is missing.
+
+function SourceAutomationEditor({
+  item,
+  state,
+  sources,
+  onClose,
+  onSaved,
+  onConnect,
+}: {
+  item: AccountAutomation;
+  state: AppState;
+  sources: SourcesSnapshot;
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+  onConnect: () => void;
+}) {
+  const trigger = item.trigger as "github" | "linear" | "github_ci";
+  const [name, setName] = useState(item.name);
+  const [enabled, setEnabled] = useState(item.enabled);
+  const [labelsText, setLabelsText] = useState((item.labels ?? (trigger === "github_ci" ? [] : ["bivy"])).join(", "));
+  const [reposText, setReposText] = useState((item.repos ?? []).join(", "));
+  const [repoDefault, setRepoDefault] = useState(item.repo || "");
+  const [nodeSuffix, setNodeSuffix] = useState(nodeLabelSuffix(item.nodeLabel));
+  const [runtimeId, setRuntimeId] = useState(item.runtimeId || "");
+  const [model, setModel] = useState(item.model || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const needsConnect =
+    (trigger === "github" || trigger === "github_ci") && githubSourceStatus(sources.github).tone === "off"
+    || trigger === "linear" && linearSourceStatus(sources.linear).tone === "off";
+
+  const parseList = (raw: string): string[] | undefined => {
+    const parts = raw.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+    return parts.length ? parts : undefined;
+  };
+
+  async function save() {
+    setBusy(true);
+    setError("");
+    try {
+      const labels = parseList(labelsText);
+      const repos = parseList(reposText);
+      if (repos) {
+        for (const r of repos) {
+          if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(r) || r.includes("..")) {
+            throw new Error(`Invalid repo "${r}" — use owner/name`);
+          }
+        }
+      }
+      if (repoDefault && (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(repoDefault) || repoDefault.includes(".."))) {
+        throw new Error("Default repo must look like owner/name");
+      }
+      await updateAutomation(controller.local, item.id, {
+        name: name.trim() || item.name,
+        enabled,
+        labels: labels ?? [],
+        repos: repos ?? [],
+        repo: repoDefault.trim() || "",
+        nodeLabel: nodeSuffix.trim() ? `bivy/${nodeSuffix.trim()}` : "",
+        runtimeId: runtimeId.trim() || "",
+        model: model.trim() || "",
+      });
+      await onSaved();
+    } catch (e) {
+      setError(String((e as Error).message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const title =
+    trigger === "github_ci" ? "Edit Fix failed CI"
+      : trigger === "linear" ? "Edit Linear automation"
+        : "Edit GitHub automation";
+
+  return (
+    <div className="wizard-scrim" onClick={onClose}>
+      <div className="wizard autom-editor" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+        <div className="wizard-head">
+          <strong>{title}</strong>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Cancel">✕</button>
+        </div>
+        <div className="wizard-body">
+          {needsConnect && (
+            <div className="autom-banner" role="status">
+              Connect {trigger === "linear" ? "Linear" : "GitHub"} before this automation can fire.
+              <button type="button" className="btn sm" style={{ marginLeft: 8 }} onClick={onConnect}>Connect</button>
+            </div>
+          )}
+          {trigger === "github_ci" && enabled && !needsConnect && (
+            <div className="autom-banner" role="status">
+              Requires <code>workflow_run</code> on the GitHub App (included for apps created in Bivy).
+              Existing apps: add the event + Actions/Checks read in GitHub settings.
+            </div>
+          )}
+
+          <div className="settings-field">
+            <label className="field-label" htmlFor="src-name">Name</label>
+            <input id="src-name" className="picker-search" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+
+          <label className="autom-check-row">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            <span>Enabled — {enabled ? "matching events start sessions" : "events are ignored"}</span>
+          </label>
+
+          <div className="settings-field">
+            <label className="field-label" htmlFor="src-labels">
+              {trigger === "github_ci" ? "Workflow names (optional)" : "Labels"}
+            </label>
+            <input
+              id="src-labels"
+              className="picker-search"
+              value={labelsText}
+              onChange={(e) => setLabelsText(e.target.value)}
+              placeholder={trigger === "github_ci" ? "e.g. CI, Build (empty = any failed workflow)" : "e.g. bivy"}
+            />
+            <p className="settings-hint">
+              {trigger === "github_ci"
+                ? "Comma-separated. Empty matches every failed workflow on allowed repos."
+                : "Comma-separated. Default bivy also matches bivy/&lt;node&gt;. Mentions ignore this filter."}
+            </p>
+          </div>
+
+          <div className="settings-field">
+            <label className="field-label" htmlFor="src-repos">Repository allowlist (optional)</label>
+            <input
+              id="src-repos"
+              className="picker-search"
+              value={reposText}
+              onChange={(e) => setReposText(e.target.value)}
+              placeholder="owner/repo, owner/other"
+            />
+            <p className="settings-hint">Empty = all installed repos. Use owner/name slugs.</p>
+          </div>
+
+          {(trigger === "linear" || trigger === "github_ci") && (
+            <div className="settings-field">
+              <label className="field-label" htmlFor="src-repo-default">
+                {trigger === "linear" ? "Default repository (when ticket has no git link)" : "Default repository (optional)"}
+              </label>
+              <select
+                id="src-repo-default"
+                className="picker-search"
+                value={repoDefault}
+                onChange={(e) => setRepoDefault(e.target.value)}
+              >
+                <option value="">None</option>
+                {repoDefault && !state.repos.some((r) => r.slug === repoDefault) && (
+                  <option value={repoDefault}>{repoDefault}</option>
+                )}
+                {state.repos.map((r) => (
+                  <option key={r.slug} value={r.slug}>{r.slug}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="settings-field">
+            <label className="field-label" htmlFor="src-node">Default machine</label>
+            <select id="src-node" className="picker-search" value={nodeSuffix} onChange={(e) => setNodeSuffix(e.target.value)}>
+              <option value="">Shared pool / issue label</option>
+              {sources.nodes.map((n) => {
+                const name = String(n.name || n.id);
+                return <option key={n.id} value={name}>{name}{n.online ? "" : " (offline)"}</option>;
+              })}
+            </select>
+          </div>
+
+          <details className="autom-cron-details">
+            <summary>Agent &amp; model defaults</summary>
+            <div className="settings-field">
+              <label className="field-label" htmlFor="src-agent">Agent</label>
+              <select id="src-agent" className="picker-search" value={runtimeId} onChange={(e) => setRuntimeId(e.target.value)}>
+                <option value="">Node default</option>
+                {state.runtimes.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name || r.id}</option>
+                ))}
+              </select>
+            </div>
+            <div className="settings-field">
+              <label className="field-label" htmlFor="src-model">Model</label>
+              <input id="src-model" className="picker-search" value={model} onChange={(e) => setModel(e.target.value)} placeholder="Node default" />
+            </div>
+          </details>
+
+          {error && <p className="settings-error">{error}</p>}
+        </div>
+        <div className="wizard-actions">
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn primary autom-save-btn" disabled={busy} onClick={() => void save()}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

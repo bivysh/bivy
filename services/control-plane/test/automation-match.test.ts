@@ -103,4 +103,43 @@ assert.equal(
   undefined,
 );
 
+// Filters round-trip on update (labels / repos / node) and gate matching.
+await store.updateAutomationDefinition(account.id, seeded[0]!.id, {
+  enabled: true,
+  labels: ["agent"],
+  repos: ["acme/api"],
+  nodeLabel: "bivy/macbook",
+});
+const filtered = await store.listAutomationDefinitions(account.id);
+assert.deepEqual(filtered[0]?.labels, ["agent"]);
+assert.deepEqual(filtered[0]?.repos, ["acme/api"]);
+assert.equal(filtered[0]?.nodeLabel, "bivy/macbook");
+assert.equal(
+  matchSourceAutomation(filtered, { kind: "github", repo: "acme/api", labels: ["agent"] })?.id,
+  filtered[0]?.id,
+);
+assert.equal(
+  matchSourceAutomation(filtered, { kind: "github", repo: "acme/other", labels: ["agent"] }),
+  undefined,
+);
+assert.equal(
+  matchSourceAutomation(filtered, { kind: "github", repo: "acme/api", labels: ["bivy"] }),
+  undefined,
+);
+
+// github_ci seed is paused by default.
+await store.createAutomationDefinition(account.id, sourceAutomationSeedInput("github_ci"));
+const withCi = await store.listAutomationDefinitions(account.id);
+const ci = withCi.find((d) => d.trigger === "github_ci");
+assert.ok(ci);
+assert.equal(ci.enabled, false);
+assert.equal(ci.templateId, "fix-ci");
+assert.equal(
+  matchSourceAutomation(withCi, { kind: "github_ci", repo: "acme/api", labels: [] }),
+  undefined,
+);
+await store.updateAutomationDefinition(account.id, ci.id, { enabled: true });
+const ciOn = await store.listAutomationDefinitions(account.id);
+assert.ok(matchSourceAutomation(ciOn, { kind: "github_ci", repo: "acme/api", labels: [] }));
+
 console.log("automation-match tests passed");

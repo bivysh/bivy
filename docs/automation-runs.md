@@ -138,6 +138,9 @@ Inbound intake is gated by **automation definitions**:
    First match wins (oldest first).
 3. **Pause** the automation → events enqueue nothing (`reason: no_automation`).
 4. Mentions skip the label filter but still honour repo allowlists and enabled.
+5. The Automations UI shows **live source status** (GitHub installs / node,
+   Linear, Slack), a **filters editor** per source automation (labels, repo
+   allowlist, default machine/agent/model), and **Open session** on recent runs.
 
 New GitHub Apps request `workflow_run` + Actions/Checks read so CI failures can
 reach the control plane. Existing apps need those events/permissions added in
