@@ -37,6 +37,7 @@ import {
   parseAutomationEvent,
   renderAutomationInstruction,
   renderEventContext,
+  normalizeAutomationRepo,
 } from "./webhooks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2345,6 +2346,12 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     if (enabled && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
   }
   const webhookSecret = trigger === "webhook" ? randomBytes(32).toString("base64url") : undefined;
+  let repo: string | undefined;
+  try {
+    repo = normalizeAutomationRepo(req.body?.repo);
+  } catch (error) {
+    return res.status(400).json({ error: (error as Error).message });
+  }
   const definition = await store.createAutomationDefinition(client.accountId, {
     name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : undefined,
@@ -2357,6 +2364,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     enabled,
     trigger,
     webhookSecret,
+    repo,
     schedule,
     nextRunAt,
   });
@@ -2396,6 +2404,17 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     // in the past would sit enabled but never run.
     if (recompute && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
   }
+  let repo = current.repo;
+  if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "repo")) {
+    try {
+      // Empty string clears the workspace target.
+      repo = req.body.repo === null || req.body.repo === ""
+        ? undefined
+        : normalizeAutomationRepo(req.body.repo);
+    } catch (error) {
+      return res.status(400).json({ error: (error as Error).message });
+    }
+  }
   const patch = {
     name: typeof req.body?.name === "string" ? req.body.name.trim() || current.name : current.name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : current.templateCiphertext,
@@ -2407,6 +2426,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     enabled,
     schedule,
     nextRunAt,
+    repo,
   };
   const updated = await store.updateAutomationDefinition(client.accountId, current.id, patch);
   res.json(updated ? publicAutomation(updated, req) : updated);
@@ -2447,6 +2467,11 @@ app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
     body: definition.templateCiphertext,
     definitionId: definition.id,
     label: definition.nodeLabel,
+    runtimeId: definition.runtimeId,
+    model: definition.model,
+    approvalMode: definition.approvalMode,
+    sandbox: definition.sandbox,
+    repo: definition.repo,
   });
   void notifyRelaysWorkAvailable(client.accountId, { id: run.id, label: run.routing.nodeLabel });
   res.status(201).json(run);
@@ -2780,6 +2805,8 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
     eventContext: renderEventContext(event),
     url: event.sourceUrl,
     externalId: event.externalId,
+    // Definition workspace wins; event.repo fills in when the automation left it open.
+    repo: def.repo || event.repo,
     dedupeKey,
     defaultRouted: !route && !def.nodeLabel,
   });

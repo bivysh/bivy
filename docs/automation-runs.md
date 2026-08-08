@@ -101,6 +101,25 @@ Webhook receipt and queue browsing are not usage. Hosted free-tier usage is
 recorded only when a claimed automation run enters `running`; self-hosted
 deployments continue to bypass hosted entitlement enforcement.
 
+## Workspace / repository
+
+A run always starts the agent in a **prepared workspace**. The node clones or
+updates the target GitHub repo *before* the session begins — the agent is not
+responsible for choosing or cloning the project on the happy path.
+
+| Trigger | Where the repo comes from |
+|---|---|
+| GitHub issue / mention | The event (`repository.full_name`) |
+| Linear issue | Git link / `repo:owner/name` label / node default |
+| Slack `/bivy in owner/repo …` | The command |
+| **Schedule** | **`definition.repo`** (set in the Automations UI) |
+| Webhook automation | `definition.repo`, else optional `repo` on the event payload |
+
+Schedule is the same kind of trigger as webhook or GitHub — it just needs an
+explicit workspace because a cron tick does not name a repository. Connect the
+GitHub App (or token) on the node so the clone can authenticate; picking the
+repo on the automation is separate from connecting the source.
+
 ## Schedule semantics
 
 Schedule definitions use either a one-time ISO timestamp or a standard

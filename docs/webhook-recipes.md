@@ -7,9 +7,10 @@ Bivy webhooks turn signed events from CI, monitoring, or internal tools into ord
 In the Bivy app, open **Automations** → **New automation** (or a webhook template such as *Fix failed CI*):
 
 1. Name the job and write the agent instructions (encrypted to the assigned machine).
-2. On **When**, choose **On a webhook call**.
-3. Pick the machine (and optionally agent/model/autonomy), then create.
-4. Copy the webhook URL and signing secret from the reveal panel. The secret is shown only at create/rotate time.
+2. On **When**, choose **Webhook** (or a schedule — same form, different trigger).
+3. Optionally set a **Repository** (`owner/name`). The node clones it before the session starts. The event may also send `repo`; the definition wins when both are set.
+4. Pick the machine (and optionally agent/model/autonomy), then create.
+5. Copy the webhook URL and signing secret from the reveal panel. The secret is shown only at create/rotate time.
 
 The endpoint is:
 
@@ -69,6 +70,7 @@ Sign the exact bytes sent with `--data-binary`. Reusing an idempotency key retur
   "sourceUrl": "https://example.com/events/123",
   "externalId": "optional-source-id",
   "routing": "optional-node-name",
+  "repo": "owner/name",
   "metadata": {
     "environment": "staging",
     "attempt": 2,
@@ -77,7 +79,10 @@ Sign the exact bytes sent with `--data-binary`. Reusing an idempotency key retur
 }
 ```
 
-Only these fields are accepted. `metadata` values must be strings, finite numbers, or booleans. Treat metadata as untrusted context; never put credentials or secrets in the payload.
+Only these fields are accepted. `repo` is an optional GitHub slug used when the
+automation definition did not set a workspace. `metadata` values must be strings,
+finite numbers, or booleans. Treat metadata as untrusted context; never put
+credentials or secrets in the payload.
 
 ## Recipe: failed CI build
 

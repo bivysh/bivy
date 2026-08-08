@@ -113,13 +113,16 @@ async function main() {
     templateCiphertext: "bivy-room-v1:node-x:opaque",
     nodeLabel: "bivy/runner",
     sandbox: "workspace-write",
+    repo: "acme/api",
   }, token);
   expect(auto.status === 201 && auto.body.webhookSecret && auto.body.webhookUrl, "a webhook automation discloses a secret and URL at create");
   expect(auto.body.trigger === "webhook" && !auto.body.nextRunAt, "a webhook automation is never scheduled");
+  expect(auto.body.repo === "acme/api", "create echoes the workspace repo");
 
   const listAuto = await json(port, "GET", "/account/automations", undefined, token);
   const listedAuto = listAuto.body.find((d: any) => d.id === auto.body.id);
   expect(listedAuto && !listedAuto.webhookSecret && listedAuto.webhookUrl, "listing shows the URL but never echoes the secret");
+  expect(listedAuto.repo === "acme/api", "listing preserves the workspace repo");
 
   const evtRaw = JSON.stringify({ version: "1", instruction: "Build 8841 failed", title: "CI", metadata: { job: "linux" } });
   const fired = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, evtRaw, "evt-1");
@@ -133,6 +136,22 @@ async function main() {
   expect(defRun.triggerKind === "webhook", "the run records a webhook trigger");
   expect(String(defRun.label).includes("runner"), "the run inherits the definition's node routing");
   expect(defRun.sandbox === "workspace-write", "the run inherits the definition's sandbox (payload cannot override it)");
+  expect(defRun.repo === "acme/api", "the run inherits the definition's workspace repo");
+
+  // Event-supplied repo fills in when the definition left workspace open.
+  const openWs = await json(port, "POST", "/account/automations", {
+    name: "Open workspace",
+    trigger: "webhook",
+    templateCiphertext: "bivy-room-v1:node-x:opaque",
+    nodeLabel: "bivy/runner",
+  }, token);
+  expect(openWs.status === 201, "automation without a repo is allowed");
+  const evtWithRepo = JSON.stringify({ version: "1", instruction: "look here", repo: "acme/other" });
+  const firedRepo = await trigger(port, openWs.body.webhookUrl, openWs.body.webhookSecret, evtWithRepo, "evt-repo-1");
+  expect(firedRepo.status === 202, "event repo is accepted");
+  const runs2 = await json(port, "GET", "/account/work-items", undefined, token);
+  const openRun = runs2.body.find((it: any) => it.definitionId === openWs.body.id);
+  expect(openRun?.repo === "acme/other", "event repo becomes the run workspace when definition has none");
 
   const badSig = await trigger(port, auto.body.webhookUrl, "nope", evtRaw, "evt-2");
   expect(badSig.status === 401, "a bad signature is rejected on the definition path");

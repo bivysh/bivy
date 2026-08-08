@@ -19,6 +19,7 @@ import {
   verifyAutomationSignature,
   parseAutomationEvent,
   renderAutomationInstruction,
+  normalizeAutomationRepo,
   meetsTriggerAccess,
 } from "../src/webhooks.js";
 
@@ -231,6 +232,12 @@ await test("automation schema is versioned and bounded", () => {
   assert.equal(parseAutomationEvent({ version: "1", instruction: "x", command: "rm -rf" }), undefined);
   assert.equal(parseAutomationEvent({ version: "1", instruction: "x", metadata: { token: "x".repeat(501) } }), undefined);
   assert.equal(parseAutomationEvent({ version: "1", instruction: "x", routing: "../../bad" }), undefined);
+  assert.equal(parseAutomationEvent({ version: "1", instruction: "x", repo: "not a slug" }), undefined);
+  const withRepo = parseAutomationEvent({ version: "1", instruction: "fix CI", repo: "acme/api" });
+  assert.equal(withRepo?.repo, "acme/api");
+  assert.equal(normalizeAutomationRepo(" acme/api "), "acme/api");
+  assert.equal(normalizeAutomationRepo(""), undefined);
+  assert.throws(() => normalizeAutomationRepo("../etc"), /owner\/name/);
 });
 
 await test("automation rendering keeps metadata in a non-executable envelope", () => {

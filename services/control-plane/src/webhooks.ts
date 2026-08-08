@@ -50,7 +50,23 @@ export interface AutomationEvent {
   sourceUrl?: string;
   externalId?: string;
   routing?: string;
+  /** Optional GitHub repo (`owner/name`). Overrides nothing on the definition when
+   *  the definition already has a repo; used when the definition left workspace
+   *  open so the event can name where to work. */
+  repo?: string;
   metadata?: Record<string, string | number | boolean>;
+}
+
+/** Accept `owner/name` only — the shape nodes pass to cloneOrUpdateRepo. */
+export function normalizeAutomationRepo(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const repo = value.trim();
+  if (!repo) return undefined;
+  // Reject path tricks (`..`, leading dots) while allowing normal GitHub slugs.
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(repo) || repo.includes("..")) {
+    throw new Error("repo must look like owner/name");
+  }
+  return repo;
 }
 
 const AUTOMATION_LIMITS = {
@@ -68,7 +84,7 @@ const AUTOMATION_LIMITS = {
 export function parseAutomationEvent(payload: unknown): AutomationEvent | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   const o = payload as Record<string, unknown>;
-  const allowed = new Set(["version", "instruction", "title", "sourceUrl", "externalId", "routing", "metadata"]);
+  const allowed = new Set(["version", "instruction", "title", "sourceUrl", "externalId", "routing", "repo", "metadata"]);
   if (Object.keys(o).some((key) => !allowed.has(key)) || o.version !== "1") return undefined;
   if (typeof o.instruction !== "string" || !o.instruction.trim() || o.instruction.length > AUTOMATION_LIMITS.instruction) {
     return undefined;
@@ -84,6 +100,16 @@ export function parseAutomationEvent(payload: unknown): AutomationEvent | undefi
   const externalId = optionalString("externalId");
   const routing = optionalString("routing");
   if (title === null || sourceUrl === null || externalId === null || routing === null) return undefined;
+  let repo: string | undefined;
+  if (o.repo !== undefined) {
+    if (typeof o.repo !== "string" || o.repo.length > 200) return undefined;
+    try {
+      repo = normalizeAutomationRepo(o.repo);
+    } catch {
+      return undefined;
+    }
+    if (!repo) return undefined;
+  }
   if (sourceUrl) {
     try {
       const url = new URL(sourceUrl);
@@ -114,6 +140,7 @@ export function parseAutomationEvent(payload: unknown): AutomationEvent | undefi
     sourceUrl: sourceUrl ?? undefined,
     externalId: externalId ?? undefined,
     routing: routing ?? undefined,
+    repo,
     metadata,
   };
 }
