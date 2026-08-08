@@ -1397,6 +1397,23 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 }
 .autom-status.on { color: var(--accent); border-color: var(--accent); }
 .autom-status.off { color: var(--muted); }
+.autom-status.warn { color: var(--warn, #d4a017); border-color: color-mix(in srgb, var(--warn, #d4a017) 55%, var(--line)); }
+.autom-banner {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--warn, #d4a017) 40%, var(--line));
+  background: color-mix(in srgb, var(--warn, #d4a017) 10%, var(--surface-2));
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.autom-banner code { font-size: 12px; }
+.autom-check-row {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin: 10px 0 14px; font-size: 13px; cursor: pointer;
+}
+.autom-check-row input { margin-top: 2px; }
 .run-status.ok { color: var(--ok); border-color: currentColor; }
 .run-status.warn { color: var(--warn, var(--accent)); border-color: currentColor; }
 .run-status.bad { color: var(--danger); border-color: currentColor; }
