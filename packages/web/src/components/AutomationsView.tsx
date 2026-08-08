@@ -647,10 +647,6 @@ export function AutomationsView({
             status={slackStatus}
             onClick={() => openSetup("slack")}
           />
-          <button type="button" className="autom-source-pill quiet" onClick={startCustom}>
-            <span className="autom-source-pill-name">Schedule / Webhook</span>
-            <span className="autom-status on">Built in</span>
-          </button>
         </section>
 
         {items.some((i) => i.trigger === "github_ci" && i.enabled) && sources.github?.connected && (
