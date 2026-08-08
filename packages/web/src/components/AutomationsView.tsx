@@ -1136,10 +1136,19 @@ function SourceAutomationEditor({
   const [model, setModel] = useState(item.model || "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Account-wide GitHub setting (same control as Settings → GitHub App).
+  const initialTriggerAccess =
+    sources.github?.apps?.find((a) => a.triggerAccess)?.triggerAccess
+    ?? sources.github?.triggerAccess
+    ?? "everyone";
+  const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">(initialTriggerAccess);
+  const [triggerAccessDirty, setTriggerAccessDirty] = useState(false);
 
   const needsConnect =
     (trigger === "github" || trigger === "github_ci") && githubSourceStatus(sources.github).tone === "off"
     || trigger === "linear" && linearSourceStatus(sources.linear).tone === "off";
+  const isGithub = trigger === "github" || trigger === "github_ci";
+  const mention = sources.github?.apps?.find((a) => a.mention)?.mention || "bivy";
 
   const parseList = (raw: string): string[] | undefined => {
     const parts = raw.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
@@ -1172,6 +1181,9 @@ function SourceAutomationEditor({
         runtimeId: runtimeId.trim() || "",
         model: model.trim() || "",
       });
+      if (isGithub && triggerAccessDirty) {
+        await controller.setGithubAppTriggerAccess(triggerAccess);
+      }
       await onSaved();
     } catch (e) {
       setError(String((e as Error).message || e));
@@ -1230,7 +1242,12 @@ function SourceAutomationEditor({
             <p className="settings-hint">
               {trigger === "github_ci"
                 ? "Comma-separated. Empty matches every failed workflow on allowed repos."
-                : "Comma-separated. Default bivy also matches bivy/&lt;node&gt;. Mentions ignore this filter."}
+                : (
+                    <>
+                      Comma-separated. Default <code>bivy</code> also matches{" "}
+                      <code>{'bivy/<node>'}</code>. Mentions ignore this filter.
+                    </>
+                  )}
             </p>
           </div>
 
@@ -1245,6 +1262,29 @@ function SourceAutomationEditor({
             />
             <p className="settings-hint">Empty = all installed repos. Use owner/name slugs.</p>
           </div>
+
+          {isGithub && !needsConnect && (
+            <div className="settings-field">
+              <label className="field-label" htmlFor="src-trigger-access">Who can trigger runs</label>
+              <select
+                id="src-trigger-access"
+                className="picker-search"
+                value={triggerAccess}
+                onChange={(e) => {
+                  setTriggerAccess(e.target.value as "everyone" | "contributor" | "collaborator");
+                  setTriggerAccessDirty(true);
+                }}
+              >
+                <option value="everyone">Everyone — any GitHub user (default)</option>
+                <option value="contributor">Contributors — prior merged contribution, or higher</option>
+                <option value="collaborator">Collaborators only — push access</option>
+              </select>
+              <p className="settings-hint">
+                On a public repo, anyone can open an issue or comment. Restrict who can start a run via{" "}
+                <code>@{mention}</code> or a label. Account-wide — applies to every GitHub App.
+              </p>
+            </div>
+          )}
 
           {(trigger === "linear" || trigger === "github_ci") && (
             <div className="settings-field">
