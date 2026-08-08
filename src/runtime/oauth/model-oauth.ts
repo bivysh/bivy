@@ -52,6 +52,17 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // --- HTTP helpers ------------------------------------------------------------
 
+/** A failed token/device response that keeps the machine-readable OAuth `error`
+ *  code separate from the human `error_description`. The device poll matches on
+ *  the code (e.g. `authorization_pending`) — providers like xAI return a friendly
+ *  description ("User has not yet authorized") that would otherwise mask it. */
+class OAuthTokenError extends Error {
+  constructor(readonly status: number, readonly code: string, readonly description: string) {
+    super(`OAuth token request failed (${status}): ${description || code || "unknown error"}`);
+    this.name = "OAuthTokenError";
+  }
+}
+
 async function postToken(url: string, encoding: "json" | "form", body: Record<string, string>): Promise<Record<string, unknown>> {
   const res = await fetch(url, {
     method: "POST",
@@ -69,8 +80,9 @@ async function postToken(url: string, encoding: "json" | "form", body: Record<st
     throw new Error(`Token endpoint returned non-JSON (${res.status}): ${text.slice(0, 200)}`);
   }
   if (!res.ok) {
-    const err = (payload.error_description || payload.error || text.slice(0, 200)) as string;
-    throw new Error(`OAuth token request failed (${res.status}): ${err}`);
+    const code = typeof payload.error === "string" ? payload.error : "";
+    const description = (typeof payload.error_description === "string" ? payload.error_description : "") || text.slice(0, 200);
+    throw new OAuthTokenError(res.status, code, description);
   }
   return payload;
 }
@@ -305,12 +317,16 @@ async function loginDeviceCode(provider: ModelOAuthProvider, interaction: AuthIn
         device_code: deviceCode,
       });
     } catch (error) {
+      // Prefer the machine-readable OAuth `error` code; fall back to the message
+      // for providers (xAI) that return a friendly description like "User has not
+      // yet authorized" instead of the RFC-8628 `authorization_pending` code.
+      const code = error instanceof OAuthTokenError ? error.code : "";
       const message = error instanceof Error ? error.message : String(error);
-      if (/authorization_pending/i.test(message)) {
+      if (code === "authorization_pending" || /authorization_pending|not yet authorized/i.test(message)) {
         await sleep(interval);
         continue;
       }
-      if (/slow_down/i.test(message)) {
+      if (code === "slow_down" || /slow_down/i.test(message)) {
         interval += 5000;
         await sleep(interval);
         continue;
