@@ -227,6 +227,56 @@ export async function resolveAdoptBaseRef(repoDir: string, branch: string): Prom
 }
 
 /**
+ * Base ref for cutting a NEW fork branch from a source branch (same-node
+ * "fresh" fork). Prefers, in order:
+ *   1. the source worktree's HEAD (exact tip when the tree is still on disk —
+ *      covers a deleted/renamed branch ref and any detached state),
+ *   2. the local branch (holds unpushed commits),
+ *   3. `origin/<branch>` after a fetch (branch lived only on the remote, or the
+ *      local clone was wiped and re-cloned),
+ *   4. the repo's default branch.
+ * Never throws on a missing branch — a fork must degrade rather than fail with
+ * `fatal: invalid reference`. Uncommitted work still rides the dirty patch.
+ */
+export async function resolveForkBaseRef(
+  repoDir: string,
+  branch: string | undefined,
+  sourceWorktree?: string,
+): Promise<string> {
+  // 1. Live source worktree tip — most accurate for a same-node fork whose tree
+  //    is still checked out, even when the branch ref itself is gone.
+  if (sourceWorktree) {
+    try {
+      const { stdout } = await exec("git", ["-C", sourceWorktree, "rev-parse", "HEAD"], { cwd: sourceWorktree });
+      const sha = stdout.trim();
+      if (sha) return sha;
+    } catch {
+      // worktree gone / not a git dir — keep walking the fallback chain
+    }
+  }
+  if (branch) {
+    // 2. Local branch (may hold commits never pushed to origin).
+    try {
+      await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: repoDir });
+      return branch;
+    } catch {
+      // not local
+    }
+    // 3. Pushed origin/<branch> (fetch so a re-cloned workspace still sees it).
+    await fetchOrigin(repoDir);
+    try {
+      await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `origin/${branch}`], { cwd: repoDir });
+      return `origin/${branch}`;
+    } catch {
+      // not on origin either
+    }
+  }
+  // 4. Repo default — fork still stands up; committed source work may be missing
+  //    but the dirty patch + transcript still carry what they can.
+  return resolveDefaultBaseRef(repoDir);
+}
+
+/**
  * Whether an existing Bivy-owned checkout at `dest` can be reused as-is, i.e. it
  * has a `.git` entry AND `git rev-parse` accepts it as a real repository. A
  * `.git` can survive an interrupted/corrupt clone, so presence alone is not

@@ -3,16 +3,19 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveAdoptBaseRef } from "../src/repo-workspace.js";
+import { resolveAdoptBaseRef, resolveForkBaseRef } from "../src/repo-workspace.js";
 import { createWorktree } from "../src/worktree.js";
 
-// Integration coverage for the cross-node fork stand-up path (fork bugs #2, #5):
+// Integration coverage for the fork stand-up path (fork bugs #2, #5 + fresh-base fallback):
 //   - a fork ADOPTS its source branch from the pushed `origin/<branch>`, so
 //     committed work travels (was: based off the destination's DEFAULT branch,
 //     silently dropping every commit);
 //   - the adopted worktree gets a UNIQUE directory, so standing a fork up never
 //     reuses — or, via createWorktree's stale-dir cleanup, deletes — another
-//     live session's worktree.
+//     live session's worktree;
+//   - a same-node "fresh" fork resolves its base through source-worktree HEAD →
+//     local branch → origin/<branch> → default, so a missing local ref no longer
+//     hard-fails with `fatal: invalid reference`.
 // These exercise real git repositories the way standUpFork does on a fresh clone.
 
 let passed = 0;
@@ -119,6 +122,79 @@ async function run() {
       "git refuses a second worktree on the same branch",
     );
     assert.ok(fs.existsSync(path.join(first.path, "feature.txt")), "the first worktree survived the second attempt");
+  });
+
+  await test("resolveForkBaseRef prefers the local branch (unpushed commits travel)", async () => {
+    const { dest } = seedOriginAndClone();
+    // Create a local-only branch with a commit origin does not have.
+    git(dest, ["checkout", "-q", "-b", "local-only"]);
+    fs.writeFileSync(path.join(dest, "local.txt"), "local only\n");
+    git(dest, ["add", "-A"]);
+    git(dest, ["commit", "-qm", "local only commit"]);
+    git(dest, ["checkout", "-q", "main"]);
+
+    const base = await resolveForkBaseRef(dest, "local-only");
+    assert.equal(base, "local-only", "uses the local branch name, not origin or default");
+    const show = execFileSync("git", ["-C", dest, "show", `${base}:local.txt`], { encoding: "utf8" });
+    assert.match(show, /local only/, "local-only commit is reachable from the resolved base");
+  });
+
+  await test("resolveForkBaseRef falls back to origin/<branch> when the local ref is gone", async () => {
+    const { dest } = seedOriginAndClone();
+    // feature exists on origin (seeded) but not as a local branch after a bare clone
+    // checkout of main — which is the "re-cloned workspace lost local branches" case.
+    const base = await resolveForkBaseRef(dest, "feature");
+    assert.equal(base, "origin/feature", "recovers the source branch from origin after local loss");
+  });
+
+  await test("resolveForkBaseRef falls back to the default branch when nothing matches", async () => {
+    const { dest } = seedOriginAndClone();
+    const base = await resolveForkBaseRef(dest, "bivy/never-existed-branch");
+    assert.equal(base, "origin/main", "degrades to the repo default rather than throwing");
+  });
+
+  await test("resolveForkBaseRef prefers a live source worktree HEAD over a missing branch name", async () => {
+    const { dest } = seedOriginAndClone();
+    // Stand up a worktree on feature, then DELETE the branch ref's only local
+    // checkout name from the caller's perspective by resolving via the worktree
+    // path directly — the tip SHA must win over a bogus branch name.
+    const src = await createWorktree({
+      repoDir: dest,
+      id: "src-feature",
+      branch: "bivy/src-feature",
+      base: "origin/feature",
+    });
+    const expectedSha = execFileSync("git", ["-C", src.path, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const base = await resolveForkBaseRef(dest, "bivy/totally-missing", src.path);
+    assert.equal(base, expectedSha, "source worktree HEAD is the most accurate same-node tip");
+  });
+
+  await test("fresh fork worktree still stands up when the source branch ref is missing", async () => {
+    const { dest } = seedOriginAndClone();
+    // Mirrors standUpFork's fresh path after resolveForkBaseRef: cut a new
+    // fork branch from the resolved base even though the named source branch
+    // does not exist locally or on origin.
+    const missing = "bivy/bivy-automation-templates-exploration-eb6d62";
+    const base = await resolveForkBaseRef(dest, missing);
+    const forkBranch = `${missing}-fork-f31cbe`;
+    const wt = await createWorktree({ repoDir: dest, id: forkBranch, branch: forkBranch, base });
+    assert.equal(wt.branch, forkBranch);
+    assert.ok(fs.existsSync(path.join(wt.path, "base.txt")), "fork worktree has repo contents from the fallback base");
+  });
+
+  await test("createWorktree falls back to HEAD when given an invalid base ref", async () => {
+    const { dest } = seedOriginAndClone();
+    // Defense in depth: even if a caller skips resolveForkBaseRef and passes a
+    // raw missing branch name (the pre-fix standUpFork behaviour), the worktree
+    // still stands up instead of throwing `fatal: invalid reference`.
+    const wt = await createWorktree({
+      repoDir: dest,
+      id: "fork-invalid-base",
+      branch: "bivy/fork-invalid-base",
+      base: "bivy/does-not-exist-anywhere",
+    });
+    assert.equal(wt.branch, "bivy/fork-invalid-base");
+    assert.ok(fs.existsSync(path.join(wt.path, "base.txt")), "invalid-base fallback still checked out the repo");
   });
 }
 
