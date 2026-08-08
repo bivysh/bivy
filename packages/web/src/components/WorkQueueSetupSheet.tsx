@@ -263,7 +263,7 @@ export function WorkQueueSetupSheet({
               <div className="autom-field-label">How it fires</div>
               <ol className="wq-how-list">
                 <li>
-                  Add a <code>bivy</code> label (or <code>bivy/&lt;machine&gt;</code> to pin a node) on an issue —
+                  Add a <code>bivy</code> label (or <code>{'bivy/<machine>'}</code> to pin a node) on an issue —
                   or comment <code>@{mention}</code> with what to do.
                 </li>
                 <li>An online machine that holds the app key claims the item, runs your checks, and opens a PR.</li>
@@ -443,7 +443,7 @@ export function WorkQueueSetupSheet({
                 {linErr && <p className="settings-error">{linErr}</p>}
                 {linJustEnabled && linear?.enabled && (
                   <div className="autom-success" role="status">
-                    <strong>Linear is live.</strong> Label an issue <code>bivy</code> (or <code>bivy/&lt;machine&gt;</code>) to enqueue it.
+                    <strong>Linear is live.</strong> Label an issue <code>bivy</code> (or <code>{'bivy/<machine>'}</code>) to enqueue it.
                   </div>
                 )}
                 {!linear ? (
