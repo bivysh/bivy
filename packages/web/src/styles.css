@@ -1444,7 +1444,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .autom-notice-text span { color: var(--ink); opacity: 0.85; }
 .autom-notice-actions { display: flex; align-items: center; gap: 4px; flex: none; }
 
-/* Empty-state hero — invite first-run without a blank list. */
+/* Empty-state hero — the create chooser is the page body. */
 .autom-hero {
   display: flex; flex-direction: column; gap: 18px;
   margin-top: 18px; padding: 4px 0 12px;
@@ -1458,9 +1458,81 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .autom-hero-body {
   margin: 0; font-size: 14px; color: var(--muted); line-height: 1.5;
 }
-.autom-hero-foot {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+
+/* New automation chooser — scratch row + grouped templates (Linear-style). */
+.wizard.autom-chooser { max-width: min(720px, 100%); }
+.autom-chooser-body { gap: 0; }
+.autom-picker { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.autom-scratch-row {
+  display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;
+  padding: 14px 16px; border-radius: 16px;
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); font: inherit; cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+.autom-scratch-row:hover {
+  border-color: var(--line-strong); background: var(--surface-2);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.06);
+  transform: translateY(-1px);
+}
+.autom-scratch-row:active { transform: none; box-shadow: none; }
+.autom-scratch-row:focus-visible {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.autom-scratch-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 42px; height: 42px; border-radius: 14px;
+  background: var(--ink); color: var(--bg);
+}
+.autom-scratch-text {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;
+}
+.autom-scratch-text strong { font-size: 15px; font-weight: 700; line-height: 1.25; }
+.autom-scratch-text span {
+  font-size: 13px; color: var(--muted); line-height: 1.35;
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.autom-scratch-chevron {
+  flex: none; font-size: 18px; font-weight: 600; color: var(--muted);
+}
+.autom-picker-templates-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
   padding-top: 4px;
+}
+.autom-picker-search {
+  flex: 1 1 160px; max-width: 280px; min-width: 0; height: 38px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--ink);
+  /* 16px floor — iOS Safari zooms below that. */
+  font: inherit; font-size: 16px;
+}
+.autom-picker-search:focus {
+  outline: none; border-color: var(--line-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.autom-picker-search::placeholder { color: var(--muted); font-size: 14px; }
+.autom-picker-group { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.autom-picker-group-label {
+  margin: 0; font-size: 12px; font-weight: 700; color: var(--muted);
+  letter-spacing: 0.02em; text-transform: uppercase;
+}
+/* Inside the chooser sheet, templates stay two-up on tablet+ for scan speed. */
+.autom-chooser .automation-templates {
+  grid-template-columns: 1fr;
+}
+@media (min-width: 560px) {
+  .autom-chooser .automation-templates { grid-template-columns: 1fr 1fr; }
+}
+.autom-hero .automation-templates {
+  grid-template-columns: 1fr;
+}
+@media (min-width: 640px) {
+  .autom-hero .automation-templates { grid-template-columns: 1fr 1fr; }
+}
+@media (min-width: 900px) {
+  .autom-hero .automation-templates { grid-template-columns: 1fr 1fr 1fr; }
 }
 
 /* Suggested template cards: whole card is the hit target. */

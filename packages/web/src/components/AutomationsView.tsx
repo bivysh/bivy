@@ -329,7 +329,8 @@ export function AutomationsView({
   const [rotated, setRotated] = useState<{ id: string; secret: string } | null>(null);
   const [setupFocus, setSetupFocus] = useState<SourceSetupFocus | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
-  const [ideasOpen, setIdeasOpen] = useState(false);
+  /** Create chooser (scratch + templates). Opens from New automation. */
+  const [chooserOpen, setChooserOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
@@ -374,11 +375,15 @@ export function AutomationsView({
 
   const defaultNodeId = state.currentNodeId || controller.local.cur || "";
   const isEmpty = !loading && items.length === 0;
-  // Expand ideas by default when the list is empty or short.
-  const showIdeas = isEmpty || ideasOpen || items.length < 3;
 
   function openSetup(focus: SourceSetupFocus) {
     setSetupFocus(focus);
+  }
+
+  function openChooser() {
+    setError("");
+    setNotice(null);
+    setChooserOpen(true);
   }
 
   function startFromScheduleTemplate(template: ScheduleTemplate) {
@@ -477,6 +482,7 @@ export function AutomationsView({
   }
 
   function startFromTemplate(template: AutomationTemplate) {
+    setChooserOpen(false);
     if (template.kind === "schedule") startFromScheduleTemplate(template);
     else if (template.kind === "webhook") startFromWebhookTemplate(template);
     else if (template.kind === "source") void startFromSourceTemplate(template);
@@ -484,7 +490,8 @@ export function AutomationsView({
     else onOpenSettings(template.route);
   }
 
-  function startCustom() {
+  function startFromScratch() {
+    setChooserOpen(false);
     setError("");
     setNotice(null);
     setDraft(emptyDraft(defaultNodeId));
@@ -588,11 +595,6 @@ export function AutomationsView({
   const linStatus = linearSourceStatus(sources.linear);
   const slackStatus = slackSourceStatus(sources.slack);
 
-  // Featured templates for the empty hero — a short curated shortlist.
-  const featuredKeys = ["work-issues-into-prs", "fix-failed-ci", "upgrade-dependencies", "fix-error-tracker-issue"];
-  const featured = AUTOMATION_TEMPLATES.filter((t) => featuredKeys.includes(t.key));
-  const restTemplates = AUTOMATION_TEMPLATES.filter((t) => !featuredKeys.includes(t.key));
-
   return createPortal(
     <div className="automations-view" role="dialog" aria-modal="true" aria-label="Automations">
       <header className="automations-view-head">
@@ -601,7 +603,7 @@ export function AutomationsView({
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="btn autom-new-btn" onClick={startCustom}>New automation</button>
+          <button type="button" className="btn autom-new-btn" onClick={openChooser}>New automation</button>
           <button type="button" className="icon-btn" onClick={onClose} title="Close" aria-label="Close automations">✕</button>
         </div>
       </header>
@@ -664,35 +666,19 @@ export function AutomationsView({
           <p className="settings-hint" style={{ marginTop: 24 }}>Loading your automations…</p>
         )}
 
-        {/* Empty hero — invite, don't dump a blank list. */}
+        {/* Empty state is the create chooser itself — no buried templates. */}
         {isEmpty && (
           <section className="autom-hero">
             <div className="autom-hero-copy">
               <h2 className="autom-hero-title">Put work on autopilot</h2>
               <p className="autom-hero-body">
-                Pick a job below. We&apos;ll set the trigger, encrypt the instructions for your machine,
-                and keep you here until it&apos;s actually running — no detour through Settings.
+                Start from a template or build your own. Setup stays here until it&apos;s running.
               </p>
             </div>
-            <div className="automation-templates featured">
-              {featured.map((template) => (
-                <TemplateCard key={template.key} template={template} onUse={() => startFromTemplate(template)} featured />
-              ))}
-            </div>
-            {restTemplates.length > 0 && (
-              <>
-                <h3 className="autom-section-label" style={{ marginTop: 8 }}>More ideas</h3>
-                <div className="automation-templates">
-                  {restTemplates.map((template) => (
-                    <TemplateCard key={template.key} template={template} onUse={() => startFromTemplate(template)} />
-                  ))}
-                </div>
-              </>
-            )}
-            <div className="autom-hero-foot">
-              <span className="settings-hint">Or start from scratch.</span>
-              <button type="button" className="btn" onClick={startCustom}>Custom automation</button>
-            </div>
+            <NewAutomationPicker
+              onScratch={startFromScratch}
+              onTemplate={startFromTemplate}
+            />
           </section>
         )}
 
@@ -795,29 +781,6 @@ export function AutomationsView({
             </section>
 
             <section className="autom-section">
-              <div className="autom-section-head">
-                <h2 className="autom-section-label">Ideas</h2>
-                {!showIdeas && (
-                  <button type="button" className="link-btn" onClick={() => setIdeasOpen(true)}>
-                    Browse templates
-                  </button>
-                )}
-                {showIdeas && items.length >= 3 && (
-                  <button type="button" className="link-btn" onClick={() => setIdeasOpen(false)}>
-                    Hide
-                  </button>
-                )}
-              </div>
-              {showIdeas && (
-                <div className="automation-templates">
-                  {AUTOMATION_TEMPLATES.map((template) => (
-                    <TemplateCard key={template.key} template={template} onUse={() => startFromTemplate(template)} />
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section className="autom-section">
               <h2 className="autom-section-label">Recent activity</h2>
               {definitionRuns.length === 0 ? (
                 <p className="settings-hint autom-empty-hint">
@@ -863,6 +826,14 @@ export function AutomationsView({
           </>
         )}
       </div>
+
+      {chooserOpen && (
+        <NewAutomationChooser
+          onClose={() => setChooserOpen(false)}
+          onScratch={startFromScratch}
+          onTemplate={startFromTemplate}
+        />
+      )}
 
       {draft && (
         <AutomationEditor
@@ -935,6 +906,152 @@ export function AutomationsView({
       )}
     </div>,
     document.body,
+  );
+}
+
+// ── New automation chooser ──────────────────────────────────────────────────
+// Linear / Notion-style: one primary "from scratch" row, then a browsable
+// template gallery. Used both as the empty-state body and as the New sheet.
+
+const TEMPLATE_GROUPS: Array<{ id: string; label: string; match: (t: AutomationTemplate) => boolean }> = [
+  {
+    id: "events",
+    label: "From GitHub & Linear",
+    match: (t) => t.kind === "source" || (t.kind === "external" && t.route === "queue"),
+  },
+  {
+    id: "schedule",
+    label: "On a schedule",
+    match: (t) => t.kind === "schedule",
+  },
+  {
+    id: "webhook",
+    label: "From a webhook",
+    match: (t) => t.kind === "webhook",
+  },
+];
+
+function NewAutomationChooser({
+  onClose,
+  onScratch,
+  onTemplate,
+}: {
+  onClose: () => void;
+  onScratch: () => void;
+  onTemplate: (t: AutomationTemplate) => void;
+}) {
+  return (
+    <div className="wizard-scrim" onClick={onClose}>
+      <div
+        className="wizard autom-editor autom-chooser"
+        role="dialog"
+        aria-modal="true"
+        aria-label="New automation"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="wizard-head">
+          <div className="wq-head-text">
+            <strong>New automation</strong>
+            <span className="wq-head-sub">Pick a starting point</span>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="wizard-body autom-chooser-body">
+          <NewAutomationPicker onScratch={onScratch} onTemplate={onTemplate} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NewAutomationPicker({
+  onScratch,
+  onTemplate,
+}: {
+  onScratch: () => void;
+  onTemplate: (t: AutomationTemplate) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+
+  const filtered = useMemo(() => {
+    if (!q) return AUTOMATION_TEMPLATES;
+    return AUTOMATION_TEMPLATES.filter((t) => {
+      const hay = `${t.title} ${t.tagline} ${t.key}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [q]);
+
+  const groups = useMemo(() => {
+    return TEMPLATE_GROUPS
+      .map((g) => ({ ...g, items: filtered.filter(g.match) }))
+      .filter((g) => g.items.length > 0);
+  }, [filtered]);
+
+  // Anything that didn't land in a group (future kinds) still shows.
+  const ungrouped = useMemo(() => {
+    const claimed = new Set(groups.flatMap((g) => g.items.map((t) => t.key)));
+    return filtered.filter((t) => !claimed.has(t.key));
+  }, [filtered, groups]);
+
+  return (
+    <div className="autom-picker">
+      <button type="button" className="autom-scratch-row" onClick={onScratch}>
+        <span className="autom-scratch-icon" aria-hidden="true"><IconBolt /></span>
+        <span className="autom-scratch-text">
+          <strong>Start from scratch</strong>
+          <span>Blank automation — pick the trigger, write the instructions</span>
+        </span>
+        <span className="autom-scratch-chevron" aria-hidden="true">→</span>
+      </button>
+
+      <div className="autom-picker-templates-head">
+        <h3 className="autom-section-label" style={{ margin: 0 }}>Templates</h3>
+        <input
+          className="autom-picker-search"
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search templates…"
+          aria-label="Search templates"
+          autoComplete="off"
+        />
+      </div>
+
+      {filtered.length === 0 ? (
+        <p className="settings-hint autom-empty-hint">No templates match “{query.trim()}”.</p>
+      ) : (
+        <>
+          {groups.map((g) => (
+            <div className="autom-picker-group" key={g.id}>
+              <h4 className="autom-picker-group-label">{g.label}</h4>
+              <div className="automation-templates">
+                {g.items.map((template) => (
+                  <TemplateCard
+                    key={template.key}
+                    template={template}
+                    onUse={() => onTemplate(template)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+          {ungrouped.length > 0 && (
+            <div className="autom-picker-group">
+              <div className="automation-templates">
+                {ungrouped.map((template) => (
+                  <TemplateCard
+                    key={template.key}
+                    template={template}
+                    onUse={() => onTemplate(template)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
