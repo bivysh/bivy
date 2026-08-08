@@ -49,6 +49,7 @@ type TriggerPick =
   | { id: "once"; label: string; hint: string; trigger: "schedule"; kind: "once" }
   | { id: "webhook"; label: string; hint: string; trigger: "webhook" }
   | { id: "github"; label: string; hint: string; trigger: "source"; source: "github" }
+  | { id: "github_ci"; label: string; hint: string; trigger: "source"; source: "github" }
   | { id: "linear"; label: string; hint: string; trigger: "source"; source: "linear" };
 
 const TRIGGER_OPTIONS: TriggerPick[] = [
@@ -816,7 +817,7 @@ function AutomationEditor({
                             <span className="autom-trigger-option-icon" aria-hidden="true">
                               {opt.id === "webhook"
                                 ? <IconWebhook />
-                                : opt.id === "github" || opt.id === "linear"
+                                : opt.id === "github" || opt.id === "github_ci" || opt.id === "linear"
                                   ? <IconPr />
                                   : <IconClock />}
                             </span>
