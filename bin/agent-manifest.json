@@ -194,8 +194,9 @@
         "-p"
       ],
       "install": {
-        "kind": "npm",
-        "pkg": "@vibe-kit/grok-cli"
+        "kind": "curl",
+        "display": "curl -fsSL https://x.ai/cli/install.sh | bash",
+        "shell": "curl -fsSL https://x.ai/cli/install.sh | bash"
       }
     },
     {

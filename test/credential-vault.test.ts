@@ -32,6 +32,18 @@ assert.equal(env.GROQ_API_KEY, "gsk-groq-789", "second api-key provider is injec
 assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "oauth-anthropic-xyz", "Anthropic OAuth maps to the Claude Code OAuth var");
 assert.equal(env.ANTHROPIC_API_KEY, undefined, "OAuth subscription is not exposed as an API key");
 
+// xAI API keys are projected as both XAI_API_KEY (official CLI) and GROK_API_KEY
+// (vibe-kit / forks), so either binary works off one Bivy login.
+const xaiDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-cred-xai-"));
+fs.writeFileSync(
+  path.join(xaiDir, "auth.json"),
+  JSON.stringify({ xai: { type: "api_key", key: "xai-key-abc" } }),
+  { mode: 0o600 },
+);
+const xaiEnv = await buildAgentCredentialEnv(createCredentialStore(xaiDir));
+assert.equal(xaiEnv.XAI_API_KEY, "xai-key-abc", "xAI api key maps to XAI_API_KEY");
+assert.equal(xaiEnv.GROK_API_KEY, "xai-key-abc", "xAI api key is also projected as GROK_API_KEY");
+
 // A non-Anthropic OAuth *subscription* (e.g. the ChatGPT/Codex login) can't be
 // handed to an external agent as a plain API key, so it must not be emitted.
 const codexDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-cred-codex-"));
@@ -76,6 +88,7 @@ assert.equal(after.openrouter.key, "or-key", "genuinely new providers from the s
 
 fs.rmSync(dir, { recursive: true, force: true });
 fs.rmSync(codexDir, { recursive: true, force: true });
+fs.rmSync(xaiDir, { recursive: true, force: true });
 fs.rmSync(emptyDir, { recursive: true, force: true });
 fs.rmSync(nodeDir, { recursive: true, force: true });
 

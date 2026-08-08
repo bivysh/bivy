@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createCredentialVault, type StoredCredential } from "./credential-store.js";
 import { resolveCodexHome } from "./codex-auth.js";
+import { grokAuthEntryKey, resolveGrokHome, GROK_OIDC_ISSUER } from "./grok-auth.js";
 import { claudeCredentialFiles } from "./anthropic-preflight.js";
 
 /** Read the `exp` (seconds) claim from a JWT access token → absolute epoch ms. */
@@ -91,6 +92,48 @@ export async function ingestClaudeCredentials(credsDir: string): Promise<number>
   return 0;
 }
 
+/** Map the official Grok CLI's `~/.grok/auth.json` OIDC entry into a Bivy credential. */
+export function grokAuthToCredential(raw: unknown): { providerId: string; credential: StoredCredential } | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const record = raw as Record<string, unknown>;
+  // Prefer the known xAI OIDC entry key; fall back to the first oidc entry whose
+  // issuer is auth.x.ai (covers a client-id change without breaking ingest).
+  const preferredKey = grokAuthEntryKey();
+  let entry = record[preferredKey] as Record<string, unknown> | undefined;
+  if (!entry || typeof entry !== "object") {
+    for (const value of Object.values(record)) {
+      if (!value || typeof value !== "object") continue;
+      const candidate = value as Record<string, unknown>;
+      if (candidate.oidc_issuer === GROK_OIDC_ISSUER || candidate.auth_mode === "oidc") {
+        entry = candidate;
+        break;
+      }
+    }
+  }
+  if (!entry) return undefined;
+  const access = typeof entry.key === "string" ? entry.key : "";
+  const refresh = typeof entry.refresh_token === "string" ? entry.refresh_token : "";
+  if (!access || !refresh) return undefined;
+  const expiresFromField = typeof entry.expires_at === "string" ? Date.parse(entry.expires_at) : NaN;
+  const expires = Number.isFinite(expiresFromField) && expiresFromField > 0
+    ? expiresFromField
+    : (jwtExpiryMs(access) ?? Date.now() + 60 * 60 * 1000);
+  return { providerId: "xai", credential: { type: "oauth", access, refresh, expires } };
+}
+
+/** Fold a login/refresh done in the Grok CLI back into Bivy's vault. */
+export async function ingestGrokCredentials(credsDir: string): Promise<number> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(path.join(resolveGrokHome(), "auth.json"), "utf8"));
+  } catch {
+    return 0; // no Grok login on disk
+  }
+  const mapped = grokAuthToCredential(raw);
+  if (!mapped) return 0;
+  return createCredentialVault(credsDir).importAll({ [mapped.providerId]: mapped.credential });
+}
+
 /**
  * Ingest an agent's native credential store into Bivy's vault. Called when a
  * `bivy run <agent>` terminal exits, so a login done inside that agent's CLI is
@@ -109,6 +152,8 @@ export async function ingestAgentCredentials(agentId: string | undefined, credsD
     case "claude-code":
     case "claude-code-sdk":
       return ingestClaudeCredentials(credsDir);
+    case "grok":
+      return ingestGrokCredentials(credsDir);
     case "pi":
       // Pi's TUI writes a plaintext auth.json in its own dir; fold it back into
       // the shared vault.
