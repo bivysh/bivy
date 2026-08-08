@@ -5705,11 +5705,12 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // reply carries a thread identity the control plane can correlate; a one-shot
   // slash command has none, so it simply falls through to a fresh session.
   if (await continueCorrelatedSession(item, request, report)) return;
+  const sandbox = normalizeSandboxTier(item.sandbox);
   const sessionOpts = {
     makeActive: false,
     title: item.title,
     runtimeId: item.runtimeId,
-    sandbox: normalizeSandboxTier(item.sandbox),
+    sandbox,
   };
   const record = parsedRepo
     ? await createRepoSession(parsedRepo, sessionOpts)
@@ -5734,20 +5735,45 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     await maybePushWorktreeBranch(record);
     await maybeDetectPullRequest(record);
   }
+  // Deterministic, privacy-safe checks — the same gate the GitHub-issue path
+  // applies (reportIssueOutcome) — so a scheduled/Slack/webhook run reads as
+  // success only when the repository's declared checks actually pass, not merely
+  // because the agent claimed success or already opened a PR. Only a run that was
+  // allowed to modify the workspace is verified; a read-only run (an
+  // investigation) changes nothing, so there is nothing to check.
+  const checks = record.worktree && sandbox !== "read-only"
+    ? runRequiredAutomationChecks(record.worktree.path)
+    : [];
+  const failedChecks = checks.filter((check) => check.status === "failed");
+  const now = new Date().toISOString();
+  const events = [
+    ...(record.prUrl
+      ? [{ at: now, kind: "pull_request", summary: "Pull request opened.", ref: record.worktree?.branch, url: record.prUrl }]
+      : []),
+    ...(checks.length
+      ? [{
+          at: now,
+          kind: "completed",
+          summary: failedChecks.length ? `${failedChecks.length} deterministic check(s) failed.` : `${checks.length} deterministic check(s) passed.`,
+          status: failedChecks.length ? "failed" : "passed",
+        }]
+      : []),
+  ];
   await report({
     output: {
       sessionId: record.id,
       branch: record.worktree?.branch,
       prUrl: record.prUrl,
     },
-    events: record.prUrl ? [{
-      at: new Date().toISOString(),
-      kind: "pull_request",
-      summary: "Pull request opened.",
-      ref: record.worktree?.branch,
-      url: record.prUrl,
-    }] : undefined,
+    checks: checks.length ? checks : undefined,
+    events: events.length ? events : undefined,
   });
+  // A failed required check fails the run even if the agent already opened a PR,
+  // so its outcome reads "Checks failed", not silent success. The policy engine
+  // decides retry/park from here.
+  if (failedChecks.length) {
+    throw new Error(`Required checks failed: ${failedChecks.map((check) => check.name).join(", ")}`);
+  }
 }
 
 function startControlPlaneTasksIfConfigured() {
