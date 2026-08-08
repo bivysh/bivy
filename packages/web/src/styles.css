@@ -1972,12 +1972,11 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .evidence-timeline li { display: grid; grid-template-columns: minmax(125px, auto) 1fr auto; gap: 8px; font-size: 12px; }
 .evidence-timeline time, .evidence-timeline small { color: var(--muted); }
 .evidence-checks { margin: 0 0 10px; padding-left: 18px; font-size: 12px; color: var(--muted); }
-/* "Connect existing GitHub App" form (Settings → GitHub App). */
+/* "Connect existing GitHub App" form (Automations → GitHub). */
 .ce-form { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--surface-2); margin-top: 8px; }
 /* 16px floor — iOS Safari zooms the viewport on focus below that. */
 .ce-pem { font-family: var(--mono, ui-monospace, monospace); font-size: 16px; resize: vertical; }
 .ce-file { font-size: 16px; color: var(--muted); }
-.gh-serving-banner { display: block; }
 .picker-action.danger { border-color: var(--danger); color: var(--danger); }
 
 /* ---- Settings modal (redesigned: desktop two-pane / mobile drill-in) ----
@@ -2609,32 +2608,8 @@ select.picker-search { appearance: auto; }
 .setup-error { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--danger); border-left-width: 3px; border-radius: 10px; background: var(--danger-soft, transparent); color: var(--ink); font-size: 13px; line-height: 1.4; text-align: left; }
 /* Setup / connect surfaces prefer a little vertical rhythm on inline banners. */
 .setup-card .banner.inline,
-.setup-email .banner.inline,
-.gh-connected + .banner.inline { border-radius: 8px; margin: 8px 0; }
+.setup-email .banner.inline { border-radius: 8px; margin: 8px 0; }
 
-/* GitHub App — connected status card */
-.gh-connected {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px 14px;
-  margin: 8px 0;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
-}
-.gh-connected-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-}
-.gh-connected-status { color: var(--ok); font-weight: 700; font-size: 13px; white-space: nowrap; }
-.gh-connected-name { font-size: 14px; color: var(--ink); word-break: break-word; }
-.gh-connected-owner { font-size: 12px; color: var(--ink-dim); white-space: nowrap; }
-.gh-connected-edit { margin-left: auto; font-size: 13px; white-space: nowrap; }
-.gh-connected-hint { margin: 0; font-size: 13px; line-height: 1.5; color: var(--muted); }
-.gh-connected-hint code { white-space: nowrap; }
 .node-picker { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .node-pick { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); color: var(--ink); }
 .node-pick:hover { border-color: var(--accent); }

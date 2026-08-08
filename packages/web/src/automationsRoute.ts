@@ -4,12 +4,15 @@
 // Settings it overlays whichever session route sits behind it rather than
 // replacing it — the controller's routing (router.ts, AppController#applyRoute)
 // ignores `automations` routes so the active session never changes just because
-// Automations opened. This module owns only the "is Automations open" half,
-// exposed as a subscribe/getSnapshot pair for useSyncExternalStore.
+// Automations opened. This module owns the "is Automations open" half plus an
+// optional one-shot setup focus (open the GitHub/Linear/Slack connection sheet).
 
 import { navigate, parseRoute, type Route } from "./router.js";
 
 export type AutomationsRouteState = boolean; // true = open
+
+/** Connection setup sheet to open once Automations mounts (consumed once). */
+export type AutomationsSetupFocus = "github" | "linear" | "slack" | "work-queue";
 
 const listeners = new Set<() => void>();
 function notify(): void {
@@ -21,6 +24,8 @@ function fromRoute(route: Route): AutomationsRouteState {
 }
 
 let cached: AutomationsRouteState = fromRoute(parseRoute());
+/** One-shot: Settings / OAuth return asks Automations to open a connection sheet. */
+let pendingSetup: AutomationsSetupFocus | null = null;
 
 if (typeof window !== "undefined") {
   window.addEventListener("popstate", () => {
@@ -39,11 +44,19 @@ export function getAutomationsRoute(): AutomationsRouteState {
 }
 
 /** Open Automations — pushes one history entry so hardware/browser Back closes
- *  it (see closeAutomations). */
-export function openAutomations(): void {
+ *  it (see closeAutomations). Optional `setup` opens the connection sheet once. */
+export function openAutomations(opts?: { setup?: AutomationsSetupFocus }): void {
+  pendingSetup = opts?.setup ?? null;
   navigate({ kind: "automations" });
   cached = true;
   notify();
+}
+
+/** Read and clear a pending connection-setup focus (call once on Automations mount). */
+export function takeAutomationsSetupFocus(): AutomationsSetupFocus | null {
+  const next = pendingSetup;
+  pendingSetup = null;
+  return next;
 }
 
 /** Close Automations back to whichever route sits behind it (the caller computes
@@ -52,5 +65,6 @@ export function openAutomations(): void {
 export function closeAutomations(underlying: Route): void {
   navigate(underlying, { replace: true });
   cached = false;
+  pendingSetup = null;
   notify();
 }

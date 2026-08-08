@@ -13,6 +13,7 @@ import { SetupNotice } from "./components/SetupNotice.js";
 import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { closeAutomations, getAutomationsRoute, openAutomations, subscribeAutomationsRoute } from "./automationsRoute.js";
+// openAutomations({ setup }) is the sole entry for source connection lifecycle.
 import { AutomationsView } from "./components/AutomationsView.js";
 import { SessionMenu } from "./components/SessionMenu.js";
 import { TuiLockedView } from "./components/TuiLockedView.js";
@@ -50,11 +51,11 @@ export function App() {
   // Automations is a first-class destination reached from the sidebar foot,
   // URL-backed the same overlay way Settings is (see automationsRoute.ts).
   const automationsOpen = useSyncExternalStore(subscribeAutomationsRoute, getAutomationsRoute);
-  // Returning from a GitHub App redirect reloads the SPA — re-open Settings on
-  // the GitHub view so the user sees the flow finish.
+  // Returning from a GitHub App redirect reloads the SPA — finish in Automations
+  // (the sole place for source connections), not Settings.
   const githubAppReturning = state.githubApp?.returning;
   useEffect(() => {
-    if (githubAppReturning) openSettings("github");
+    if (githubAppReturning) openAutomations({ setup: "github" });
   }, [githubAppReturning]);
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
   // Full-session file changes sheet — opened from the run pill / summary sheet
@@ -801,6 +802,13 @@ export function App() {
             // importNativeSession already opened + navigated to the new session
             // (with its resume ref); just dismiss Settings onto that route.
             closeSettings({ kind: "session", id });
+            closeDrawer();
+          }}
+          onOpenAutomationsConnections={(focus) => {
+            closeSettings(
+              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+            );
+            openAutomations({ setup: focus });
             closeDrawer();
           }}
           onClose={() =>

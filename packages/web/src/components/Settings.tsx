@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralNodeConfig, QueueRouting, HostedProvisioningStatus, HostedAuditEvent, LocalModelPreset, LocalModelProvider, PairedDevice, GithubAppEntry, GithubAppInfo, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, SlackHook, LinearHook, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, connectSlackHook, disconnectSlackHook, fetchSlackHook, connectLinearHook, disconnectLinearHook, fetchLinearHook, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralNodeConfig, QueueRouting, LocalModelPreset, LocalModelProvider, PairedDevice, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -123,23 +123,6 @@ function formatBuildTime(iso: string | undefined): string {
   return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-/**
- * POST the GitHub App manifest to GitHub. The manifest is too large/nested for a
- * query string, so it must ride as a form field — we build a form and submit it,
- * navigating the tab to GitHub's app-creation confirm page. GitHub then redirects
- * back to our origin (`?bivy_github_app=1&code=…&state=…`), which the controller
- * detects on the next load and relays to the node.
- */
-// Set just before the browser leaves for GitHub, so the return handler
-// recognises the redirect even if GitHub drops our query marker.
-function markGithubAppPending(): void {
-  try {
-    sessionStorage.setItem("bivy.githubAppPending", "1");
-  } catch {
-    /* ignore */
-  }
-}
-
 /** Reactive matchMedia — drives the responsive split (mobile drill-in vs.
  *  desktop two-pane) from CSS's own breakpoint so the two never disagree. */
 function useMediaQuery(query: string): boolean {
@@ -209,6 +192,7 @@ export function Settings({
   onRefreshGithubQueue,
   onPickSession,
   onImported,
+  onOpenAutomationsConnections,
 }: {
   state: AppState;
   onClose: () => void;
@@ -224,6 +208,8 @@ export function Settings({
   /** Fired when the Import-session panel adopts a session — the controller has
    *  already opened/navigated to it, so the caller just dismisses Settings. */
   onImported?: (sessionId: string) => void;
+  /** Source connections (GitHub / Linear / Slack) live only in Automations. */
+  onOpenAutomationsConnections?: (focus: "github" | "linear" | "slack") => void;
 }) {
   const hosted = !controller.direct;
   // Below the CSS breakpoint we behave like the Claude mobile settings: a root
@@ -389,15 +375,36 @@ export function Settings({
             {activeView === "providers" && <ProvidersPanel state={state} />}
             {activeView === "models" && <LocalModelsPanel state={state} />}
             {activeView === "voice" && <VoicePanel state={state} />}
-            {activeView === "github" && <GithubPanel state={state} onOpenGithubQueue={() => onViewChange("queue")} />}
-            {activeView === "linear" && <LinearPanel />}
-            {activeView === "slack" && <SlackPanel />}
+            {activeView === "github" && (
+              <ConnectionsHandoff
+                title="GitHub Apps"
+                body="Add, install, reconnect, or disconnect GitHub Apps in Automations — the single place for source connections. Incoming queue items stay under Work Queue below."
+                cta="Open Automations → GitHub"
+                onOpen={() => onOpenAutomationsConnections?.("github")}
+              />
+            )}
+            {activeView === "linear" && (
+              <ConnectionsHandoff
+                title="Linear"
+                body="Connect or disconnect the Linear webhook in Automations."
+                cta="Open Automations → Linear"
+                onOpen={() => onOpenAutomationsConnections?.("linear")}
+              />
+            )}
+            {activeView === "slack" && (
+              <ConnectionsHandoff
+                title="Slack"
+                body="Connect or disconnect the Slack slash command in Automations."
+                cta="Open Automations → Slack"
+                onOpen={() => onOpenAutomationsConnections?.("slack")}
+              />
+            )}
             {activeView === "queue" && (
               <GithubQueuePanel
                 queue={githubQueue ?? null}
                 onRefresh={() => onRefreshGithubQueue?.()}
                 onPick={(id, path, nodeId) => onPickSession?.(id, path, nodeId)}
-                onOpenGithubSettings={() => onViewChange("github")}
+                onOpenGithubSettings={() => onOpenAutomationsConnections?.("github")}
               />
             )}
             {activeView === "webhooks" && <WebhookTriggersPanel />}
@@ -1451,351 +1458,26 @@ function QueueRoutingSection() {
   );
 }
 
-const HOSTED_PROVIDERS = [
-  { id: "fly", name: "Fly.io" },
-  { id: "hetzner", name: "Hetzner" },
-  { id: "aws", name: "AWS" },
-];
-
-// Unattended (control-plane-orchestrated) provisioning. Lets the control plane
-// launch an ephemeral config when work arrives with no device online. This
-// stores cloud + GitHub credentials on the control plane — see
-// docs/hosted-provisioning-trust-model.md — so it's opt-in and surfaces the
-// trust trade-off, the encryption-key status, and an audit trail here.
-function HostedProvisioningSection() {
-  const [status, setStatus] = useState<HostedProvisioningStatus | null>(null);
-  const [audit, setAudit] = useState<HostedAuditEvent[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [testMsg, setTestMsg] = useState<string | null>(null);
-  const [mode, setMode] = useState<"app" | "pat">("app");
-  const [appId, setAppId] = useState("");
-  const [installationId, setInstallationId] = useState("");
-  const [privateKeyPem, setPrivateKeyPem] = useState("");
-  const [pat, setPat] = useState("");
-  const [provider, setProvider] = useState("fly");
-  const [providerToken, setProviderToken] = useState("");
-  const [confirmEnable, setConfirmEnable] = useState(false);
-
-  const refreshAudit = () => controller.listHostedAudit().then(setAudit).catch(() => {});
-  useEffect(() => {
-    controller.getHostedProvisioning().then(setStatus).catch(() => setStatus(null));
-    refreshAudit();
-  }, []);
-
-  const save = async (patch: Parameters<typeof controller.setHostedProvisioning>[0], done?: () => void) => {
-    setErr(null);
-    setBusy(true);
-    try {
-      setStatus(await controller.setHostedProvisioning(patch));
-      done?.();
-      refreshAudit();
-    } catch (e) {
-      setErr(String((e as Error)?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const runTest = async () => {
-    setErr(null);
-    setTestMsg(null);
-    try {
-      const { plan } = await controller.triggerHostedProvision(false);
-      setTestMsg(plan.willProvision ? `Ready — would provision ${plan.targetConfigId}` : `Would not provision: ${plan.reason}`);
-    } catch (e) {
-      setErr(String((e as Error)?.message || e));
-    }
-  };
-
-  const rotate = async () => {
-    setErr(null);
-    setBusy(true);
-    try {
-      setStatus(await controller.rotateHostedProvisioning());
-      refreshAudit();
-    } catch (e) {
-      setErr(String((e as Error)?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const enabled = Boolean(status?.enabled);
-  const canSaveSecrets = Boolean(status?.encryptionReady);
-
-  return (
-    <>
-      <p className="muted small">
-        Let the control plane launch an ephemeral config for queued work when nothing is online — no device needed.
-        This stores cloud and GitHub credentials on the control plane (encrypted at rest); it is opt-in per account.
-      </p>
-
-      {status && !status.encryptionReady && (
-        <div className="banner error inline">
-          Credential encryption is not configured on the server (<code>HOSTED_CREDENTIAL_KEY</code>). You can enable the
-          flag, but saving credentials is refused until a key is set.
-        </div>
-      )}
-
-      <div className="settings-toggle-row">
-        <div className="settings-toggle-text">
-          <span className="settings-toggle-title">Enable unattended provisioning</span>
-          <span className="muted small">Off by default. When on, the control plane provisions per your queue routing.</span>
-        </div>
-        <Toggle
-          checked={enabled}
-          disabled={busy}
-          onChange={(next) => {
-            if (next) setConfirmEnable(true);
-            else void save({ enabled: false });
-          }}
-          label="Enable unattended provisioning"
-        />
-      </div>
-
-      {enabled && (
-        <>
-          <h4 className="settings-subhead">GitHub credential</h4>
-          <p className="muted small">
-            Current: <span className="chip">{status?.credential === "app" ? `GitHub App ${status.githubAppId ?? ""}` : status?.credential === "pat" ? "Personal token" : "none"}</span>
-            {" "}A GitHub App is recommended — the control plane mints a fresh, short-lived installation token per run instead of holding a long-lived token.
-          </p>
-          <label className="field-label"><span>Credential type</span>
-            <select className="picker-search" value={mode} onChange={(e) => setMode(e.target.value as "app" | "pat")}>
-              <option value="app">GitHub App (recommended)</option>
-              <option value="pat">Personal access token</option>
-            </select>
-          </label>
-          {mode === "app" ? (
-            <>
-              <label className="field-label"><span>App ID</span>
-                <input className="picker-search" value={appId} placeholder="123456" onChange={(e) => setAppId(e.target.value)} />
-              </label>
-              <label className="field-label"><span>Installation ID</span>
-                <input className="picker-search" value={installationId} placeholder="789012" onChange={(e) => setInstallationId(e.target.value)} />
-              </label>
-              <label className="field-label"><span>Private key (PEM)</span>
-                <textarea className="picker-search" rows={4} value={privateKeyPem} placeholder="-----BEGIN RSA PRIVATE KEY-----" onChange={(e) => setPrivateKeyPem(e.target.value)} />
-              </label>
-              <button
-                className="btn primary"
-                disabled={busy || !canSaveSecrets || !appId.trim() || !installationId.trim() || !privateKeyPem.trim()}
-                onClick={() => save({ githubApp: { appId: appId.trim(), installationId: installationId.trim(), privateKeyPem } }, () => { setAppId(""); setInstallationId(""); setPrivateKeyPem(""); })}
-              >
-                {busy ? "Saving…" : "Save GitHub App"}
-              </button>
-            </>
-          ) : (
-            <>
-              <label className="field-label"><span>Fine-grained token (Contents + Pull requests)</span>
-                <input className="picker-search" type="password" value={pat} placeholder="github_pat_…" onChange={(e) => setPat(e.target.value)} />
-              </label>
-              <button className="btn primary" disabled={busy || !canSaveSecrets || !pat.trim()} onClick={() => save({ githubToken: pat.trim() }, () => setPat(""))}>
-                {busy ? "Saving…" : "Save token"}
-              </button>
-            </>
-          )}
-
-          <h4 className="settings-subhead">Cloud provider token</h4>
-          <p className="muted small">Configured: {status?.providers.length ? status.providers.map((p) => <span key={p} className="chip">{p}</span>) : <span className="muted">none</span>}</p>
-          <label className="field-label"><span>Provider</span>
-            <select className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value)}>
-              {HOSTED_PROVIDERS.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
-            </select>
-          </label>
-          <label className="field-label"><span>Token</span>
-            <input className="picker-search" type="password" value={providerToken} placeholder="provider API token" onChange={(e) => setProviderToken(e.target.value)} />
-          </label>
-          <button className="btn primary" disabled={busy || !canSaveSecrets || !providerToken.trim()} onClick={() => save({ providerTokens: { [provider]: providerToken.trim() } }, () => setProviderToken(""))}>
-            {busy ? "Saving…" : `Save ${provider} token`}
-          </button>
-
-          <h4 className="settings-subhead">Encryption</h4>
-          <p className="muted small">
-            Credentials are encrypted at rest{status?.keyId ? <> under key <span className="chip">{status.keyId}</span></> : ""}. Rotating re-seals them under the current primary key.
-          </p>
-          <div className="row-actions">
-            <button className="btn" disabled={busy || !canSaveSecrets} onClick={rotate}>Rotate encryption key</button>
-          </div>
-
-          <h4 className="settings-subhead">Check</h4>
-          <div className="row-actions">
-            <button className="btn" disabled={busy} onClick={runTest}>Dry-run the provisioning decision</button>
-            {testMsg && <span className="chip ok">{testMsg}</span>}
-          </div>
-
-          <h4 className="settings-subhead">Audit</h4>
-          <div className="picker-list">
-            {audit.length === 0 && <div className="picker-empty">No credential activity yet.</div>}
-            {audit.map((e, i) => (
-              <PickerItem
-                key={`${e.at}-${i}`}
-                title={e.action}
-                meta={[new Date(e.at).toLocaleString(), e.provider, e.nodeId, e.detail].filter(Boolean).join(" · ")}
-              />
-            ))}
-          </div>
-        </>
-      )}
-      {err && <span className="chip err">{err}</span>}
-      {confirmEnable && (
-        <ConfirmDialog
-          title="Enable billable unattended runners?"
-          message="When queued work matches your routing policy, the control plane may launch the selected cloud config without another prompt. Your cloud provider bills its displayed hourly rate until teardown; each config's region, size, finish-teardown setting, and TTL backstop control that window. Review the config and use Dry run before relying on it."
-          confirmLabel="Enable provisioning"
-          onCancel={() => setConfirmEnable(false)}
-          onConfirm={() => { setConfirmEnable(false); void save({ enabled: true }); }}
-        />
-      )}
-    </>
-  );
-}
-
-// ---- Linear issue integration ----
-function LinearPanel() {
-  const [hook, setHook] = useState<LinearHook | null>(null);
-  const [secret, setSecret] = useState("");
-  const [route, setRoute] = useState("");
-  const [nodes, setNodes] = useState<AccountNode[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    fetchLinearHook(controller.local).then((next) => {
-      setHook(next);
-      if (next?.defaultNode) setRoute(next.defaultNode);
-    }).catch((e) => setError(e instanceof Error ? e.message : "Could not load Linear integration."));
-    controller.listNodes().then(setNodes).catch(() => {});
-  }, []);
-  const createEndpoint = async () => {
-    setBusy(true); setError("");
-    try { setHook(await connectLinearHook(controller.local, { defaultNode: route || undefined })); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not create Linear endpoint."); }
-    finally { setBusy(false); }
-  };
-  const connect = async () => {
-    setBusy(true); setError("");
-    try {
-      setHook(await connectLinearHook(controller.local, { signingSecret: secret, defaultNode: route || undefined }));
-      setSecret("");
-    } catch (e) { setError(e instanceof Error ? e.message : "Could not connect Linear."); }
-    finally { setBusy(false); }
-  };
-  const disconnect = async () => {
-    if (!confirm("Disconnect Linear? Its webhook URL will stop accepting issues.")) return;
-    setBusy(true); setError("");
-    try { await disconnectLinearHook(controller.local); setHook(null); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not disconnect Linear."); }
-    finally { setBusy(false); }
-  };
+function ConnectionsHandoff({
+  title,
+  body,
+  cta,
+  onOpen,
+}: {
+  title: string;
+  body: string;
+  cta: string;
+  onOpen?: () => void;
+}) {
   return (
     <div className="settings-form">
-      <p className="settings-lead">Turn labelled Linear issues into unattended coding sessions and GitHub pull requests.</p>
-      {error && <div className="banner error inline">{error}</div>}
-      {!hook ? (
-        <section className="settings-section">
-          <h3>Connect Linear</h3>
-          <p className="settings-hint">First create a Bivy webhook URL. You will paste it into Linear, then bring Linear's generated signing secret back here.</p>
-          <label className="field-label">Default node (optional)</label>
-          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
-          <button className="btn primary" disabled={busy} onClick={() => void createEndpoint()}>Create webhook URL</button>
-        </section>
-      ) : (
-        <section className="settings-section">
-          <h3>{hook.enabled ? "Connected" : "Finish connecting"}</h3>
-          <ol className="settings-hint">
-            <li>In <strong>Linear → Settings → API → Webhooks</strong>, create an <strong>Issue</strong> webhook using this URL:</li>
-          </ol>
-          <code className="settings-code">{hook.endpoint}</code>
-          <button className="btn" onClick={() => void navigator.clipboard.writeText(hook.endpoint)}>Copy webhook URL</button>
-          <ol className="settings-hint" start={2}>
-            <li>Copy the signing secret generated by Linear and paste it below.</li>
-            <li>Create Linear labels <code>bivy</code> and optionally <code>bivy/node-name</code>. Applying one dispatches the issue.</li>
-          </ol>
-          <label className="field-label">Linear signing secret</label>
-          <input className="field-input" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={hook.enabled ? "Replace signing secret" : "Signing secret"} />
-          <label className="field-label">Default node (optional)</label>
-          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
-          <button className="btn primary" disabled={busy || secret.trim().length < 16} onClick={() => void connect()}>{hook.enabled ? "Update connection" : "Connect Linear"}</button>
-          <p className="settings-hint">Each runner also needs <code>BIVY_LINEAR_API_KEY</code> and a default <code>BIVY_LINEAR_REPO=owner/repo</code>. A <code>repo:owner/repo</code> issue label can override the repository.</p>
-          <button className="btn danger" disabled={busy} onClick={() => void disconnect()}>Disconnect Linear</button>
-        </section>
-      )}
-    </div>
-  );
-}
-
-// ---- Slack slash-command integration ----
-function SlackPanel() {
-  const [hook, setHook] = useState<SlackHook | null>(null);
-  const [secret, setSecret] = useState("");
-  const [route, setRoute] = useState("");
-  const [nodes, setNodes] = useState<AccountNode[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const refresh = async () => {
-    try {
-      const next = await fetchSlackHook(controller.local);
-      setHook(next);
-      if (next?.defaultNode) setRoute(next.defaultNode);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load Slack integration.");
-    }
-  };
-  useEffect(() => {
-    void refresh();
-    controller.listNodes().then(setNodes).catch(() => {});
-  }, []);
-  const connect = async () => {
-    setBusy(true); setError("");
-    try {
-      setHook(await connectSlackHook(controller.local, { signingSecret: secret, defaultNode: route || undefined }));
-      setSecret("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not connect Slack.");
-    } finally { setBusy(false); }
-  };
-  const disconnect = async () => {
-    if (!confirm("Disconnect Slack? The current slash-command URL will stop accepting requests.")) return;
-    setBusy(true); setError("");
-    try {
-      await disconnectSlackHook(controller.local);
-      setHook(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not disconnect Slack.");
-    } finally { setBusy(false); }
-  };
-  return (
-    <div className="settings-form">
-      <p className="settings-lead">Turn requests from a Slack slash command into unattended agent runs on your nodes.</p>
-      {error && <div className="banner error inline">{error}</div>}
-      {hook ? (
-        <section className="settings-section">
-          <h3>Connected</h3>
-          <p className="settings-hint">Use this as your Slack app's slash-command Request URL:</p>
-          <code className="settings-code">{hook.endpoint}</code>
-          <button className="btn" onClick={() => void navigator.clipboard.writeText(hook.endpoint)}>Copy Request URL</button>
-          <h4 className="settings-subhead">Commands</h4>
-          <code className="settings-code">/bivy fix the failing tests</code>
-          <code className="settings-code">/bivy on macbook fix the failing tests</code>
-          <code className="settings-code">/bivy in owner/repo fix the failing tests</code>
-          <p className="settings-hint">Add <code>in owner/repo</code> to run in an isolated checkout and bring back a pull request. Add <code>on node</code> to select a machine; the clauses can be combined.</p>
-          <button className="btn danger" disabled={busy} onClick={() => void disconnect()}>Disconnect Slack</button>
-        </section>
-      ) : (
-        <section className="settings-section">
-          <h3>Connect a Slack app</h3>
-          <ol className="settings-hint">
-            <li>Create a Slack app, then open <strong>Basic Information</strong>.</li>
-            <li>Copy its <strong>Signing Secret</strong> below.</li>
-            <li>After connecting, create a slash command named <code>/bivy</code> and paste the Request URL shown here.</li>
-          </ol>
-          <label className="field-label">Slack signing secret</label>
-          <input className="field-input" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Signing Secret" />
-          <label className="field-label">Default node (optional)</label>
-          <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
-          <button className="btn primary" disabled={busy || secret.trim().length < 16} onClick={() => void connect()}>Connect Slack</button>
-        </section>
+      <p className="settings-lead">{title}</p>
+      <p className="settings-hint">{body}</p>
+      <button type="button" className="btn primary" onClick={() => onOpen?.()} disabled={!onOpen}>
+        {cta}
+      </button>
+      {!onOpen && (
+        <p className="settings-hint">Open Automations from the sidebar bolt icon to manage connections.</p>
       )}
     </div>
   );
@@ -1916,449 +1598,6 @@ curl -X POST '${revealed.hook.endpoint}' \\
           ? <p className="settings-hint">No accepted triggers yet.</p>
           : outcomes.map((outcome) => <div className="settings-row" key={outcome.id}><span>{outcome.title}</span><span className="settings-hint">{outcome.status}</span></div>)}
       </section>
-    </div>
-  );
-}
-
-// ---- GitHub App ----
-function GithubPanel({ state, onOpenGithubQueue }: { state: AppState; onOpenGithubQueue?: () => void }) {
-  const [org, setOrg] = useState("");
-  // Connected-app info comes from the control plane (account REST), so it's
-  // only available on the hosted/relay client, not direct mode.
-  const canQuery = !controller.direct;
-  const [info, setInfo] = useState<GithubAppInfo | null>(null);
-  const [confirmDisconnect, setConfirmDisconnect] = useState<GithubAppEntry | null>(null);
-  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
-  // Keyed by app so an error stays attached to the row it belongs to.
-  const [disconnectErr, setDisconnectErr] = useState<{ id: string; message: string } | null>(null);
-  const [nodes, setNodes] = useState<AccountNode[]>([]);
-  const [defaultNode, setDefaultNode] = useState("");
-  const [savingDefaultNode, setSavingDefaultNode] = useState(false);
-  const [defaultNodeMsg, setDefaultNodeMsg] = useState<string | null>(null);
-  const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">("everyone");
-  const [savingTriggerAccess, setSavingTriggerAccess] = useState(false);
-  const [triggerAccessMsg, setTriggerAccessMsg] = useState<string | null>(null);
-  // "Connect an existing GitHub App" (App ID + .pem) — for reconnecting an app
-  // this account already set up onto the active node, without creating a new one.
-  // `ceApp` is the connected app the form was opened for (null = a fresh app the
-  // account doesn't know yet); it decides where the form renders and what it pre-fills.
-  const [showConnectExisting, setShowConnectExisting] = useState(false);
-  const [ceApp, setCeApp] = useState<GithubAppEntry | null>(null);
-  const [ceAppId, setCeAppId] = useState("");
-  const [cePem, setCePem] = useState("");
-  const [ceNodeLabel, setCeNodeLabel] = useState("");
-  // Once at least one app is connected, "add another" is a secondary action —
-  // collapse it behind a button instead of always showing the full form, so
-  // the common case (you already have an app) isn't buried under it.
-  const [addAppOpen, setAddAppOpen] = useState(false);
-  const app = state.githubApp;
-  const phase = app?.phase ?? "idle";
-  // Identity for list keys and per-row busy/error state. Hooks created before
-  // Bivy recorded App IDs have neither appId nor slug — fall back to the hook id.
-  const appKey = (entry: GithubAppEntry) => entry.appId || entry.hookId || entry.slug || "";
-  const installHref = (entry: GithubAppEntry) =>
-    entry.installUrl || (entry.slug ? `https://github.com/apps/${entry.slug}/installations/new` : "https://github.com/settings/installations");
-  // Opening the reconnect form for a different app moves it rather than closing it.
-  const toggleConnectExisting = (entry?: GithubAppEntry) => {
-    const target = entry ?? null;
-    const sameApp = showConnectExisting && (ceApp ? appKey(ceApp) : "") === (target ? appKey(target) : "");
-    setShowConnectExisting(!sameApp);
-    setCeApp(target);
-    setCeAppId(target?.appId ?? "");
-  };
-  const submitConnectExisting = () => {
-    controller.githubAppConnectExisting({ appId: ceAppId.trim(), privateKeyPem: cePem.trim(), nodeLabel: ceNodeLabel.trim() || undefined });
-  };
-  // Read a downloaded .pem file straight into the field, so the user never has to
-  // open + copy it — the closest thing to a "flow" GitHub allows for an app that
-  // already exists (it never hands the private key back through a redirect).
-  const onPemFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setCePem(String(reader.result || "").trim());
-    reader.readAsText(file);
-  };
-  const renderConnectExisting = () => (
-    <div className="ce-form">
-      {ceApp?.editUrl && (
-        <p className="muted">
-          Get these from your app on GitHub:{" "}
-          <a href={ceApp.editUrl} target="_blank" rel="noopener noreferrer">
-            open {ceApp.mention ? `@${ceApp.mention}` : "the app"}’s settings →
-          </a>{" "}
-          — the App ID is at the top; scroll to <em>Private keys → Generate a private key</em> to download the .pem.
-        </p>
-      )}
-      <label className="field-label">App ID</label>
-      <input className="picker-search" value={ceAppId} placeholder="e.g. 123456" onChange={(e) => setCeAppId(e.target.value)} />
-      <label className="field-label">Private key (.pem)</label>
-      <input className="ce-file" type="file" accept=".pem,application/x-pem-file,text/plain" onChange={onPemFile} />
-      <textarea
-        className="picker-search ce-pem"
-        value={cePem}
-        rows={4}
-        placeholder="…or paste it here: -----BEGIN RSA PRIVATE KEY----- … -----END RSA PRIVATE KEY-----"
-        onChange={(e) => setCePem(e.target.value)}
-      />
-      <label className="field-label">Pin to this node's label (optional)</label>
-      <input
-        className="picker-search"
-        value={ceNodeLabel}
-        placeholder="e.g. hetzner → this node serves bivy/hetzner"
-        onChange={(e) => setCeNodeLabel(e.target.value)}
-      />
-      <p className="muted">
-        The key stays on this node; the app's existing webhook keeps working (the account's hook is reused).
-      </p>
-      <div className="row-actions">
-        <button
-          className="btn primary"
-          disabled={!ceAppId.trim() || !cePem.trim() || phase === "completing"}
-          onClick={submitConnectExisting}
-        >
-          {phase === "completing" ? "Connecting…" : "Connect app to this node"}
-        </button>
-      </div>
-      {phase === "completing" && <p className="muted">Verifying the key with GitHub on the node…</p>}
-      {phase === "done" && <div className="banner info inline">✓ Connected on this node — its webhook keeps working, nothing else to do.</div>}
-      {phase === "error" && <div className="banner error inline">{app?.error || "Could not connect the app."}</div>}
-    </div>
-  );
-  // Two steps by design: the first tap fetches the manifest from the node (an
-  // async relay round-trip); the second is a **native form submit** to GitHub.
-  // A real <form> + <button type="submit"> (not a scripted form.submit()) is the
-  // most reliable top-level cross-origin POST — installed/standalone PWAs on iOS
-  // routinely drop scripted navigations but honour a genuine submit gesture.
-  const ready = phase === "submitting" && app?.action && app?.manifest;
-
-  const refresh = useCallback(() => {
-    if (!canQuery) return;
-    controller.fetchGithubApp().then(setInfo).catch(() => setInfo(null));
-    controller.listNodes().then(setNodes).catch(() => {});
-  }, [canQuery]);
-  useEffect(() => { refresh(); }, [refresh]);
-  // Re-pull once the create flow reports success, so "connected" appears without
-  // a manual reload.
-  useEffect(() => {
-    if (phase === "done") refresh();
-  }, [phase, refresh]);
-  const apps = info?.apps ?? [];
-  // The default node is one account-level setting written to every app, so any
-  // app that has it answers for all of them.
-  const storedDefaultNode = apps.find((a) => a.defaultNode)?.defaultNode ?? "";
-  // Seed the editable field from the account's stored default whenever it
-  // changes (initial load, or after a save round-trip elsewhere).
-  useEffect(() => { setDefaultNode(storedDefaultNode); }, [storedDefaultNode]);
-  // Same account-wide-preference pattern as the default node: any app that has
-  // it set answers for all of them; "everyone" (no restriction) if none do.
-  const storedTriggerAccess = apps.find((a) => a.triggerAccess)?.triggerAccess ?? "everyone";
-  useEffect(() => { setTriggerAccess(storedTriggerAccess); }, [storedTriggerAccess]);
-
-  // The apps share the same routing copy; show the first one's handle as the example.
-  const primaryMention = apps.find((a) => a.mention)?.mention;
-  const saveDefaultNode = async () => {
-    setDefaultNodeMsg(null);
-    setSavingDefaultNode(true);
-    try {
-      const saved = await controller.setGithubAppDefaultNode(defaultNode.trim());
-      setInfo((cur) => (cur ? { ...cur, defaultNode: saved, apps: cur.apps.map((a) => ({ ...a, defaultNode: saved })) } : cur));
-      setDefaultNodeMsg("Saved");
-      setTimeout(() => setDefaultNodeMsg(null), 1500);
-    } catch (e) {
-      setDefaultNodeMsg(String((e as Error)?.message || e));
-    } finally {
-      setSavingDefaultNode(false);
-    }
-  };
-  const saveTriggerAccess = async (next: "everyone" | "contributor" | "collaborator") => {
-    setTriggerAccessMsg(null);
-    setSavingTriggerAccess(true);
-    const prev = triggerAccess;
-    setTriggerAccess(next); // optimistic — it's a plain select, not a form submit
-    try {
-      const saved = await controller.setGithubAppTriggerAccess(next);
-      setInfo((cur) => (cur ? { ...cur, triggerAccess: saved, apps: cur.apps.map((a) => ({ ...a, triggerAccess: saved })) } : cur));
-      setTriggerAccessMsg("Saved");
-      setTimeout(() => setTriggerAccessMsg(null), 1500);
-    } catch (e) {
-      setTriggerAccess(prev);
-      setTriggerAccessMsg(String((e as Error)?.message || e));
-    } finally {
-      setSavingTriggerAccess(false);
-    }
-  };
-  const disconnect = async (entry: GithubAppEntry) => {
-    const id = appKey(entry);
-    setDisconnectErr(null);
-    setDisconnectingId(id);
-    try {
-      await controller.githubAppDisconnect(entry.appId, entry.hookId);
-      // Re-read the truth rather than optimistically dropping the row: if the hook
-      // is really gone the app leaves the list; if not, say so.
-      const next = await controller.fetchGithubApp();
-      setInfo(next);
-      if (next.apps.some((a) => appKey(a) === id)) {
-        setDisconnectErr({ id, message: "Disconnect didn't take effect. The control plane may be mid-deploy — try again shortly." });
-      } else {
-        // The reconnect form may have been open for the app that just went away.
-        if (ceApp && appKey(ceApp) === id) {
-          setShowConnectExisting(false);
-          setCeApp(null);
-        }
-        refresh();
-      }
-    } catch (e) {
-      setDisconnectErr({ id, message: String((e as Error)?.message || e) });
-    } finally {
-      setDisconnectingId(null);
-    }
-  };
-  const renderApp = (entry: GithubAppEntry) => (
-    <div className="gh-connected" key={appKey(entry)}>
-      <div className="gh-connected-head">
-        <span className="gh-connected-status">✓ Connected</span>
-        <strong className="gh-connected-name">{entry.name}</strong>
-        {/* Which GitHub account this app covers. With several connected, the app
-            names alone are easy to confuse; the owner is what tells them apart. */}
-        {entry.owner ? (
-          <span className="gh-connected-owner">
-            {entry.ownerType === "Organization" ? "org" : "personal"} · {entry.owner}
-          </span>
-        ) : null}
-        {entry.editUrl ? (
-          <a className="gh-connected-edit" href={entry.editUrl} target="_blank" rel="noopener noreferrer">
-            Edit on GitHub →
-          </a>
-        ) : null}
-      </div>
-      {entry.mention ? (
-        <p className="gh-connected-hint">
-          Trigger it in an issue comment with <code>@{entry.mention}</code>
-        </p>
-      ) : null}
-      {entry.installed === false ? (
-        <p className="banner warn inline gh-connected-hint">
-          ⚠ Not installed on any repository — the app can't receive issues or comments until you install it.{" "}
-          <a href={installHref(entry)} target="_blank" rel="noopener noreferrer">
-            Install it now →
-          </a>
-        </p>
-      ) : (
-        <p className="gh-connected-hint">
-          {entry.installed
-            ? `Installed on ${entry.installCount} ${entry.installCount === 1 ? "repository/org" : "repositories/orgs"}. Nothing happening?`
-            : "Nothing happening? The app only receives events from repos it's installed on."}{" "}
-          <a href={installHref(entry)} target="_blank" rel="noopener noreferrer">
-            {entry.installed ? "Add / manage repositories →" : "Install / add repositories →"}
-          </a>
-        </p>
-      )}
-      {/* The account has the app set up, but no online node holds its key — so
-          nothing can run its queue. Offer to (re)connect it on the active node. */}
-      {entry.servedBy === null ? (
-        <div className="banner warn inline gh-serving-banner">
-          ⚠ No online node is running this app right now — queued work won't be picked up. Connect it on a node (this
-          account already has the app, so just add its key here).{" "}
-          <button className="link-btn" onClick={() => toggleConnectExisting(entry)}>
-            {showConnectExisting && ceApp && appKey(ceApp) === appKey(entry) ? "Hide" : "Connect on this node →"}
-          </button>
-        </div>
-      ) : (
-        entry.servedBy && (
-          <p className="gh-connected-hint">
-            Served by <strong>{entry.servedBy.name || entry.servedBy.id}</strong>
-            {entry.servedBy.online ? "" : " (offline)"}.
-          </p>
-        )
-      )}
-      {showConnectExisting && ceApp && appKey(ceApp) === appKey(entry) && renderConnectExisting()}
-      <div className="row-actions">
-        <button
-          className="btn danger-ghost"
-          disabled={disconnectingId !== null}
-          onClick={() => setConfirmDisconnect(entry)}
-        >
-          {disconnectingId === appKey(entry) ? "Disconnecting…" : "Disconnect"}
-        </button>
-      </div>
-      {disconnectErr?.id === appKey(entry) && <div className="banner error inline">{disconnectErr.message}</div>}
-    </div>
-  );
-  // The create + "connect an app you already have" pair. Always available: an
-  // account needs one app per GitHub owner, so "add another" is a normal action,
-  // not something reserved for the empty state.
-  const renderAddApp = () => (
-    <>
-      <label className="field-label">Organization (optional — leave blank for your personal account)</label>
-      <input
-        className="picker-search"
-        value={org}
-        placeholder="my-org"
-        disabled={phase === "starting" || phase === "submitting" || phase === "completing"}
-        onChange={(e) => setOrg(e.target.value)}
-      />
-      {ready ? (
-        <form method="post" action={app!.action} onSubmit={markGithubAppPending}>
-          <input type="hidden" name="manifest" value={JSON.stringify(app!.manifest)} />
-          <button className="btn primary block" type="submit">
-            Continue to GitHub →
-          </button>
-        </form>
-      ) : (
-        <button
-          className="btn primary"
-          disabled={phase === "starting" || phase === "completing"}
-          onClick={() => controller.githubAppManifestStart(org.trim() || undefined)}
-        >
-          {phase === "starting" ? "Preparing…" : phase === "completing" ? "Finishing…" : "Create GitHub App"}
-        </button>
-      )}
-      {/* Both flows share one phase machine, so suppress the create-flow status
-          while the reconnect form (which reports the same phases) is the one running. */}
-      {!showConnectExisting && phase === "completing" && <p className="muted">Exchanging the code on the node…</p>}
-      {!showConnectExisting && phase === "done" && (
-        <div className="banner info inline">
-          ✓ App created — the key is stored on this node. <strong>One step left:</strong> the app won't
-          receive any issues or comments until you install it on a repo.{" "}
-          <a href={app?.installUrl || "https://github.com/settings/installations"} target="_blank" rel="noopener noreferrer">
-            Install it on your repositories →
-          </a>
-        </div>
-      )}
-      {!showConnectExisting && phase === "error" && <div className="banner error inline">{app?.error || "GitHub App setup failed."}</div>}
-
-      <h4 className="settings-subhead">Already have a GitHub App?</h4>
-      <p className="muted">
-        Connect an app you already created (e.g. on another node) by adding its App ID + private key here — no need to
-        create a duplicate.{" "}
-        <button className="link-btn" onClick={() => toggleConnectExisting()}>
-          {showConnectExisting && !ceApp ? "Hide" : "Connect existing app →"}
-        </button>
-      </p>
-      {showConnectExisting && !ceApp && renderConnectExisting()}
-    </>
-  );
-  const hasApps = apps.length > 0;
-  return (
-    <div className="settings-form">
-      {confirmDisconnect && (
-        <ConfirmDialog
-          title="Disconnect GitHub App?"
-          message={
-            confirmDisconnect.appId
-              ? "This node stops handling this app and its key is wiped here. It does not delete the app on GitHub — do that from GitHub's app settings if you want it gone entirely."
-              : "This app was set up before Bivy recorded App IDs, so it can only be disconnected together with every other app on this account. Nothing is deleted on GitHub."
-          }
-          confirmLabel="Disconnect"
-          danger
-          onCancel={() => setConfirmDisconnect(null)}
-          onConfirm={() => { const entry = confirmDisconnect; setConfirmDisconnect(null); disconnect(entry); }}
-        />
-      )}
-
-      {hasApps && <section className="settings-section">{apps.map(renderApp)}</section>}
-
-      <section className="settings-section">
-        <h4 className="settings-subhead">{hasApps ? "Add another app" : "Add an app"}</h4>
-        <p className="muted">
-          {hasApps
-            ? "A GitHub App can only be installed on the account that owns it, so add one per personal account or organization you want Bivy to work in. Each gets its own webhook, and its key is created and kept on this node."
-            : "Bivy reaches GitHub through an app you own: one webhook covering every repo you install it on, with replies posting as the app. The private key is created and kept on this node; the control plane only ever sees the webhook signing secret. An app can only be installed on the account that owns it, so add one per personal account or organization."}
-        </p>
-        {hasApps && !addAppOpen ? (
-          <div className="row-actions">
-            <button className="btn" onClick={() => setAddAppOpen(true)}>+ Add another GitHub App</button>
-          </div>
-        ) : (
-          <>
-            {renderAddApp()}
-            {hasApps && (
-              <div className="row-actions">
-                <button className="link-btn" onClick={() => setAddAppOpen(false)}>Cancel</button>
-              </div>
-            )}
-          </>
-        )}
-      </section>
-
-      {hasApps && (
-        <>
-          <section className="settings-section">
-            <h4 className="settings-subhead">Default node</h4>
-            <p className="muted">
-              Untagged issues and <code>@{primaryMention || "mention"}</code> comments route to the shared <code>bivy</code> queue,
-              where any online node may claim them. Pick a default node so that work lands on one machine instead — it must
-              match the label that node serves (its name below, or whatever it was started with via <code>--node-label</code>).
-              One setting for the whole account: it applies to every app above.
-            </p>
-            <NodeRouteSelect nodes={nodes} value={defaultNode} onChange={setDefaultNode} />
-            <div className="row-actions">
-              <button className="btn primary" disabled={savingDefaultNode} onClick={saveDefaultNode}>
-                {savingDefaultNode ? "Saving…" : "Save"}
-              </button>
-              {defaultNodeMsg && <span className="chip ok">{defaultNodeMsg}</span>}
-            </div>
-          </section>
-
-          <section className="settings-section">
-            <h4 className="settings-subhead">Who can trigger runs</h4>
-            <p className="muted">
-              On a public repository, anyone can open an issue or leave a comment — by default,{" "}
-              <code>@{primaryMention || "mention"}</code>-ing the bot there queues a run for whoever wrote it. Restrict
-              this to people GitHub already trusts with the repo. One setting for the whole account: it applies to
-              every app above.
-            </p>
-            <select
-              className="picker-search"
-              value={triggerAccess}
-              disabled={savingTriggerAccess}
-              onChange={(e) => void saveTriggerAccess(e.target.value as "everyone" | "contributor" | "collaborator")}
-            >
-              <option value="everyone">Everyone — any GitHub user (default)</option>
-              <option value="contributor">Contributors — anyone with a prior merged contribution, or higher</option>
-              <option value="collaborator">Collaborators only — push access (collaborator, member, or owner)</option>
-            </select>
-            {triggerAccessMsg && <span className="chip ok">{triggerAccessMsg}</span>}
-          </section>
-
-          <section className="settings-section">
-            <h4 className="settings-subhead">Routing labels</h4>
-            <p className="muted">Label a GitHub issue (or use the directive in a comment/description) to route it:</p>
-            <ul className="settings-list">
-              <li><code>bivy</code> — shared queue: the default node above, or any online node if none is set.</li>
-              <li><code>bivy/&lt;node&gt;</code> — a specific node's label, e.g. <code>bivy/macbook</code>.</li>
-              <li><code>@{primaryMention || "bivy"} on &lt;node&gt;</code> — in a comment or the issue body, same effect as the label.</li>
-            </ul>
-          </section>
-
-          {EPHEMERAL_MACHINES_ENABLED && (
-            <section className="settings-section">
-              <h4 className="settings-subhead">Queue routing</h4>
-              <QueueRoutingSection />
-            </section>
-          )}
-
-          {EPHEMERAL_MACHINES_ENABLED && (
-            <section className="settings-section">
-              <h4 className="settings-subhead">Unattended provisioning</h4>
-              <HostedProvisioningSection />
-            </section>
-          )}
-        </>
-      )}
-
-      {canQuery && onOpenGithubQueue && (
-        <section className="settings-section">
-          <h4 className="settings-subhead">Incoming queue</h4>
-          <p className="muted">
-            Pending, picked-up, and finished GitHub work now has its own screen instead of a list here.
-          </p>
-          <button className="btn" onClick={onOpenGithubQueue}>
-            Open GitHub Queue →
-          </button>
-        </section>
-      )}
     </div>
   );
 }

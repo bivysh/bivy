@@ -45,6 +45,7 @@ import {
   type WebhookTemplate,
 } from "./automationTemplates.js";
 import { WorkQueueSetupSheet, type SourceSetupFocus } from "./WorkQueueSetupSheet.js";
+import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -420,6 +421,11 @@ export function AutomationsView({
     controller.listRuntimes();
     controller.listModels();
     controller.listRepos();
+  }, []);
+  // Settings / OAuth return can open Automations with a connection sheet already up.
+  useEffect(() => {
+    const focus = takeAutomationsSetupFocus();
+    if (focus) setSetupFocus(focus);
   }, []);
 
   // Close overflow menus on outside click / Escape.
@@ -964,9 +970,8 @@ export function AutomationsView({
             void refresh().catch((e) => setError(String(e)));
           }}
           onChanged={() => { void refresh().catch(() => {}); }}
-          onOpenFullSettings={(view = "github") => {
-            setSetupFocus(null);
-            onOpenSettings(view);
+          onOpenFullSettings={() => {
+            // Connections live only in Automations — keep the sheet open.
           }}
         />
       )}
