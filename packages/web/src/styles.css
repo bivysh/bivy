@@ -785,6 +785,15 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   padding-left: 8px; border-left: 1px solid var(--line); color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* Session-level file edit count — replaces the bulky ChangesCard above the composer. */
+.run-pill-files {
+  flex: none;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
 .run-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
 .run-pill.working .run-pill-stat { color: var(--accent); }
 .run-pill.working .run-dot, .run-sheet-status .run-dot.working { background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
@@ -804,6 +813,13 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .run-sheet-status .session-pr { margin-left: auto; }
 .action-sheet-empty { padding: 14px 16px; color: var(--muted); font-size: 13px; }
+.action-sheet-item.run-sheet-changes {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  text-align: left; font: inherit; color: inherit; cursor: pointer;
+  background: none; border: 0; border-bottom: 1px solid var(--line);
+}
+.run-sheet-changes-icon { flex: none; color: var(--accent); font-size: 14px; }
+.run-sheet-changes-hint { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 500; }
 
 /* Run-pill sheet outcome: the run evidence (checks, attempts, duration,
    branch/commit, agent) joined from the account queue — see runEvidence.ts. */
@@ -2376,6 +2392,18 @@ select.picker-search { appearance: auto; }
    every-turn counterpart to the ephemeral current-turn ChangesCard above. */
 .changes-history-btn { display: inline-flex; align-items: center; justify-content: center; }
 .changes-history-btn svg { display: block; }
+.session-changes-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap;
+  padding: 0 0 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.session-changes-toolbar-meta {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--ink);
+}
+.session-changes-toolbar-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .session-changes-list { display: flex; flex-direction: column; gap: 8px; }
 .session-changes-turn { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .session-changes-turn-head { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; padding: 8px 10px; cursor: pointer; color: inherit; text-align: left; font: inherit; }

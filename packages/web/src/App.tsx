@@ -20,8 +20,7 @@ import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
 import { classifySource } from "./sessionSource.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
-import { ChangesCard } from "./components/ChangesCard.js";
-import { SessionChangesSheet } from "./components/SessionChangesSheet.js";
+import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Settings } from "./components/Settings.js";
@@ -58,8 +57,8 @@ export function App() {
     if (githubAppReturning) openSettings("github");
   }, [githubAppReturning]);
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
-  // The durable "every turn's file changes" sheet (see SessionChangesSheet) —
-  // separate from ChangesCard, which only ever shows the current turn's diff.
+  // Full-session file changes sheet — opened from the run pill / summary sheet
+  // ("N files edited"), not a card stacked above the composer.
   const [changesSheetOpen, setChangesSheetOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
@@ -537,20 +536,6 @@ export function App() {
             {!controller.direct && <NodeSwitcher />}
           </div>
           <div className="topbar-actions">
-            {state.activeSessionId && state.changesHistory.length > 0 && (
-              <button
-                className="icon-btn changes-history-btn"
-                onClick={() => setChangesSheetOpen(true)}
-                title="Session changes — every turn's file changes, not just the latest"
-                aria-label="Open session changes"
-              >
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <path d="M14 2v6h6" />
-                  <path d="M9 15l2 2 4-4" />
-                </svg>
-              </button>
-            )}
             {state.activeSessionId && (
               <button
                 className="icon-btn eye-btn"
@@ -688,22 +673,20 @@ export function App() {
               }
             />
 
-            <ChangesCard
-              changes={state.changes}
-              checkpoints={state.checkpoints}
-              checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
-              output={activeSession ? runEvidence.get(activeSession.sessionId)?.output : undefined}
-            />
             {changesSheetOpen && (
-              <SessionChangesSheet history={state.changesHistory} onClose={() => setChangesSheetOpen(false)} />
+              <SessionChangesSheet
+                history={state.changesHistory}
+                checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
+                onClose={() => setChangesSheetOpen(false)}
+              />
             )}
 
             <div className="composer-gh">
               {/* The run card now stands for every active session — an automation
                   trigger, a fork, or a plain hand-opened one — carrying whatever
-                  applies: source, live status, token usage, fork lineage, and (in
-                  its sheet) the run evidence and GitHub links. Only a draft (no
-                  session yet) falls back to the bare GithubPill for repo context. */}
+                  applies: source, live status, token usage, fork lineage, file
+                  edits, and (in its sheet) the run evidence and GitHub links.
+                  Only a draft (no session yet) falls back to the bare GithubPill. */}
               {activeSession && activeRunSource ? (
                 <RunPill
                   anchorId={`attention-${activeSession.sessionId}`}
@@ -715,6 +698,8 @@ export function App() {
                   finishedAt={activeSession.finishedAt}
                   usage={state.usage}
                   forkedFrom={activeForkedFrom}
+                  filesEdited={countUniqueEditedFiles(state.changesHistory)}
+                  onOpenChanges={() => setChangesSheetOpen(true)}
                   onRecover={(kind) => {
                     // C2: recover a terminal run using existing capabilities. fix/retry
                     // send a targeted prompt to this session; fork branches it off.

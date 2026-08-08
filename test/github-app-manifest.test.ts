@@ -22,10 +22,12 @@ await check("buildAppManifest: requests the queue's permissions + events, points
   assert.equal(m.hook_attributes.url, "https://cp.example/webhooks/github/hook_1");
   assert.equal(m.redirect_url, "http://localhost:4317/github/app/manifest/callback");
   assert.equal(m.public, false);
-  assert.deepEqual(m.default_events, ["issues", "issue_comment"]);
+  assert.deepEqual(m.default_events, ["issues", "issue_comment", "workflow_run"]);
   assert.equal(m.default_permissions.issues, "write");
   assert.equal(m.default_permissions.contents, "write");
   assert.equal(m.default_permissions.pull_requests, "write");
+  assert.equal(m.default_permissions.actions, "read");
+  assert.equal(m.default_permissions.checks, "read");
 });
 
 await check("renderManifestForm: auto-submits the manifest to GitHub with state", () => {

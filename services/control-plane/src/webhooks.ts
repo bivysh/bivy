@@ -486,3 +486,65 @@ export function parseSlackCommand(text: string): ParsedSlackCommand {
   out.prompt = rest;
   return out;
 }
+
+export interface ParsedWorkflowRunFailure {
+  repo: string;
+  workflowName: string;
+  runId: number;
+  runNumber: number;
+  branch?: string;
+  sha?: string;
+  conclusion: string;
+  htmlUrl: string;
+  /** Short event context for the node (untrusted). */
+  eventContext: string;
+  title: string;
+}
+
+/**
+ * Parse a `workflow_run` webhook. Only completed failures (and cancelled as
+ * optional noise skip) become work — successes are ignored. Used by the
+ * `github_ci` automation trigger ("Fix failed CI").
+ */
+export function parseGithubWorkflowRunFailure(payload: unknown): ParsedWorkflowRunFailure | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const o = payload as Record<string, any>;
+  if (String(o.action ?? "") !== "completed") return undefined;
+  const run = o.workflow_run;
+  if (!run || typeof run !== "object") return undefined;
+  const conclusion = String(run.conclusion ?? "");
+  // Only actionable failures — skip success/neutral/skipped.
+  if (conclusion !== "failure" && conclusion !== "timed_out" && conclusion !== "startup_failure") {
+    return undefined;
+  }
+  const repo = o.repository?.full_name ? String(o.repository.full_name) : "";
+  if (!repo) return undefined;
+  const workflowName = String(run.name || o.workflow?.name || "workflow");
+  const runId = Number(run.id);
+  const runNumber = Number(run.run_number);
+  if (!Number.isFinite(runId)) return undefined;
+  const branch = run.head_branch ? String(run.head_branch) : undefined;
+  const sha = run.head_sha ? String(run.head_sha) : undefined;
+  const htmlUrl = String(run.html_url || "");
+  const title = `CI failed: ${workflowName}${Number.isFinite(runNumber) ? ` #${runNumber}` : ""}`;
+  const lines = [
+    `Workflow: ${workflowName}`,
+    Number.isFinite(runNumber) ? `Run number: ${runNumber}` : "",
+    `Conclusion: ${conclusion}`,
+    branch ? `Branch: ${branch}` : "",
+    sha ? `Commit: ${sha}` : "",
+    htmlUrl ? `URL: ${htmlUrl}` : "",
+  ].filter(Boolean);
+  return {
+    repo,
+    workflowName,
+    runId,
+    runNumber: Number.isFinite(runNumber) ? runNumber : 0,
+    branch,
+    sha,
+    conclusion,
+    htmlUrl,
+    title,
+    eventContext: lines.join("\n"),
+  };
+}

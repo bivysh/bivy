@@ -111,6 +111,8 @@ export function RunPill({
   finishedAt,
   usage,
   forkedFrom,
+  filesEdited,
+  onOpenChanges,
   onRecover,
   anchorId,
 }: {
@@ -135,6 +137,12 @@ export function RunPill({
    *  local session list — the parent may live on another node or be gone by
    *  now, so it's best-effort and falls back to a shortened id. */
   forkedFrom?: { sessionId: string; name?: string };
+  /** Unique files touched this session (across turns). Shown on the pill and as
+   *  a sheet row that opens the full changes view — replaces the bulky
+   *  above-composer ChangesCard. */
+  filesEdited?: number;
+  /** Open the full session-changes sheet (diff tree, undo, review). */
+  onOpenChanges?: () => void;
   /** Invoked when the user taps a recovery action on a terminal run (C2). The
    *  parent (App) maps each kind onto a real capability: fix → send a "fix the
    *  failing checks" prompt, retry → re-run the checks, fork → fork the session.
@@ -174,18 +182,23 @@ export function RunPill({
   );
   const hasUsage = hasCost || tokenTotal > 0 || planWindows.length > 0;
 
+  const filesLabel = filesEdited && filesEdited > 0
+    ? `${filesEdited} file${filesEdited === 1 ? "" : "s"} edited`
+    : null;
+
   return (
     <>
       <button
         id={anchorId}
         className={`run-pill src-${source.kind} ${statusClass}`}
         onClick={() => setOpen(true)}
-        title={`${source.label} · ${statusLabel}`}
+        title={[source.label, statusLabel, filesLabel].filter(Boolean).join(" · ")}
       >
         <span className="run-pill-glyph"><SourceGlyph kind={source.kind} /></span>
         <span className="run-pill-label">{short}</span>
         <span className="run-pill-stat"><span className="run-dot" />{statusLabel}</span>
         <PrBadge prs={gh.prs} />
+        {filesLabel && <span className="run-pill-files">{filesLabel}</span>}
       </button>
       {open && (
         <div className="action-sheet open" role="dialog" aria-label={source.label}>
@@ -267,6 +280,18 @@ export function RunPill({
               </div>
             )}
 
+            {filesLabel && onOpenChanges && (
+              <button
+                type="button"
+                className="action-sheet-item run-sheet-changes"
+                onClick={() => { setOpen(false); onOpenChanges(); }}
+              >
+                <span className="run-sheet-changes-icon" aria-hidden>◈</span>
+                <span>{filesLabel}</span>
+                <span className="run-sheet-changes-hint">View diffs</span>
+              </button>
+            )}
+
             {actions.map((a) => (
               <a
                 key={a.url}
@@ -299,7 +324,7 @@ export function RunPill({
                 ))}
               </div>
             )}
-            {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && (
+            {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && !filesLabel && (
               <div className="action-sheet-empty">This session has nothing to report yet.</div>
             )}
           </div>

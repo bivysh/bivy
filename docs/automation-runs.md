@@ -120,20 +120,28 @@ explicit workspace because a cron tick does not name a repository. Connect the
 GitHub App (or token) on the node so the clone can authenticate; picking the
 repo on the automation is separate from connecting the source.
 
-## Source automations (GitHub / Linear)
+## Source automations (GitHub / Linear / CI)
 
-Issue-labeled and @-mention intake is gated by an **automation definition** with
-`trigger: "github"` or `"linear"` (template `issue-to-pr` by default):
+Inbound intake is gated by **automation definitions**:
 
-1. Connecting a GitHub App or Linear hook **seeds** a "Work issues into PRs"
-   automation if the account has none yet (on the next Automations list fetch or
-   the next inbound event).
+| `trigger` | Event | Default template |
+|---|---|---|
+| `github` | Issue labeled / @mention | `issue-to-pr` |
+| `linear` | Linear issue labeled | `issue-to-pr` |
+| `github_ci` | `workflow_run` completed failure | `fix-ci` |
+
+1. Connecting a GitHub App **seeds** "Work issues into PRs" (enabled) and
+   "Fix failed CI" (**paused** until you enable it). Linear seeds its issue
+   automation the same way.
 2. Inbound webhooks **match** enabled source automations by label filter and
-   optional repo allowlist. First match wins (oldest first).
-3. **Pause** the automation → labels and mentions enqueue nothing
-   (`reason: no_automation`). Resume to turn the front door back on.
-4. Mentions skip the label filter (mentioning the bot still starts work) but
-   still honour repo allowlists and the enabled flag.
+   optional repo allowlist (CI can also filter by workflow name via `labels`).
+   First match wins (oldest first).
+3. **Pause** the automation → events enqueue nothing (`reason: no_automation`).
+4. Mentions skip the label filter but still honour repo allowlists and enabled.
+
+New GitHub Apps request `workflow_run` + Actions/Checks read so CI failures can
+reach the control plane. Existing apps need those events/permissions added in
+GitHub settings (or re-create via the manifest flow).
 
 Routing labels (`bivy/<node>`, `on <node>`) and the account default node still
 apply after a match; the automation may also set `nodeLabel` / agent / model.

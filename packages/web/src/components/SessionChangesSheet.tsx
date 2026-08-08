@@ -6,14 +6,12 @@ import { Sheet } from "./Sheet.js";
 import { countLines, TreeNode, relTime } from "./ChangesCard.js";
 import { buildFileTree } from "../fileTree.js";
 import { controller } from "../store/useStore.js";
+import { buildChangeSetReviewPrompt } from "../changeReviewPrompt.js";
 import type { DiffMode } from "./DiffView.js";
 
-// The durable counterpart to ChangesCard: that card only ever shows the
-// CURRENT turn's diff and is retired the instant the next turn starts (see
-// AppState.changes), so a user who steps away mid-review loses the file list
-// as soon as the agent keeps going. `changesHistory` never gets cleared for
-// that reason — this sheet is where every turn's changes stay reachable for as
-// long as the session is open, not just whichever turn happened to be live.
+// Full-session file changes. Reached from the run pill / session summary sheet
+// ("N files edited"), not from a bulky card above the composer — so chat stays
+// clean and review lives with the rest of the session outcome.
 
 function TurnEntry({ entry, mode }: { entry: SessionChangeEntry; mode: DiffMode }) {
   const [open, setOpen] = useState(false);
@@ -72,14 +70,64 @@ function TurnEntry({ entry, mode }: { entry: SessionChangeEntry; mode: DiffMode 
   );
 }
 
-export function SessionChangesSheet({ history, onClose }: { history: SessionChangeEntry[]; onClose: () => void }) {
+/** Unique paths touched across every turn in the session. */
+export function countUniqueEditedFiles(history: SessionChangeEntry[]): number {
+  const paths = new Set<string>();
+  for (const entry of history) {
+    for (const f of entry.files) paths.add(f.path);
+  }
+  return paths.size;
+}
+
+export function SessionChangesSheet({
+  history,
+  onClose,
+  checks,
+}: {
+  history: SessionChangeEntry[];
+  onClose: () => void;
+  checks?: { name: string; status: "passed" | "failed" | "skipped" }[];
+}) {
   const [mode, setMode] = useState<DiffMode>("unified");
+  const [undoing, setUndoing] = useState(false);
   // Newest first — a user opening the sheet mid-session almost always wants
   // "what did it just do", not to scroll past everything to find it.
   const ordered = useMemo(() => [...history].reverse(), [history]);
+  const uniqueFiles = useMemo(() => countUniqueEditedFiles(history), [history]);
+  const latest = ordered[0];
+  const latestTotals = useMemo(() => {
+    if (!latest) return { added: 0, removed: 0 };
+    let added = 0;
+    let removed = 0;
+    for (const f of latest.files) {
+      const c = countLines(f);
+      added += c.added;
+      removed += c.removed;
+    }
+    return { added, removed };
+  }, [latest]);
+
+  const reviewLatest = () => {
+    if (!latest) return;
+    controller.prefillComposer(buildChangeSetReviewPrompt(
+      latest.files.map((file) => ({ ...file, ...countLines(file) })),
+      checks,
+    ));
+    onClose();
+  };
+  const undoLatest = () => {
+    if (!latest?.before) return;
+    setUndoing(true);
+    controller.rewind(latest.before);
+  };
+
+  const title = uniqueFiles > 0
+    ? `${uniqueFiles} file${uniqueFiles === 1 ? "" : "s"} edited`
+    : "Session changes";
+
   return (
     <Sheet
-      title="Session changes"
+      title={title}
       onClose={onClose}
       autoFocusSearch={false}
       headExtra={
@@ -89,6 +137,27 @@ export function SessionChangesSheet({ history, onClose }: { history: SessionChan
         </div>
       }
     >
+      {latest && (
+        <div className="session-changes-toolbar">
+          <span className="session-changes-toolbar-meta">
+            Latest turn
+            {(latestTotals.added > 0 || latestTotals.removed > 0) && (
+              <span className="changes-total">
+                {latestTotals.added > 0 && <span className="add">+{latestTotals.added}</span>}
+                {latestTotals.removed > 0 && <span className="del">−{latestTotals.removed}</span>}
+              </span>
+            )}
+          </span>
+          <div className="session-changes-toolbar-actions">
+            <button type="button" className="btn sm" onClick={reviewLatest}>Review with agent</button>
+            {latest.before && (
+              <button type="button" className="btn sm danger-ghost" onClick={undoLatest} disabled={undoing}>
+                {undoing ? "Undoing…" : "Undo turn"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <div className="session-changes-list">
         {ordered.length === 0 && <div className="changes-binary">No file changes yet this session.</div>}
         {ordered.map((entry) => <TurnEntry key={entry.id} entry={entry} mode={mode} />)}

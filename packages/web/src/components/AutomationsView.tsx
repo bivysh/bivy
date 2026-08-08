@@ -49,6 +49,7 @@ type TriggerPick =
   | { id: "once"; label: string; hint: string; trigger: "schedule"; kind: "once" }
   | { id: "webhook"; label: string; hint: string; trigger: "webhook" }
   | { id: "github"; label: string; hint: string; trigger: "source"; source: "github" }
+  | { id: "github_ci"; label: string; hint: string; trigger: "source"; source: "github" }
   | { id: "linear"; label: string; hint: string; trigger: "source"; source: "linear" };
 
 const TRIGGER_OPTIONS: TriggerPick[] = [
@@ -57,6 +58,7 @@ const TRIGGER_OPTIONS: TriggerPick[] = [
   { id: "monthly", label: "Monthly", hint: "Every month on a chosen day", trigger: "schedule", kind: "cron", cron: "0 9 1 * *", nlText: "every month on the 1st at 9am" },
   { id: "once", label: "One time", hint: "Run once at a chosen date and time", trigger: "schedule", kind: "once" },
   { id: "github", label: "GitHub", hint: "Issue labeled or @mention → session → PR", trigger: "source", source: "github" },
+  { id: "github_ci", label: "GitHub Actions", hint: "Failed workflow run → diagnose and fix", trigger: "source", source: "github" },
   { id: "linear", label: "Linear", hint: "Assigned / labeled issue → session → PR", trigger: "source", source: "linear" },
   { id: "webhook", label: "Webhook", hint: "When a signed request hits its URL", trigger: "webhook" },
 ];
@@ -95,6 +97,7 @@ function scheduleSummary(item: AccountAutomation): string {
   const repos = item.repos?.length ? ` · ${item.repos.join(", ")}` : "";
   const labels = item.labels?.length ? item.labels.join(", ") : "bivy";
   if (item.trigger === "github") return `GitHub · label ${labels}${repos}`;
+  if (item.trigger === "github_ci") return `GitHub Actions · workflow failure${repos}`;
   if (item.trigger === "linear") return `Linear · label ${labels}${repo || repos}`;
   if (item.trigger === "webhook") return `Webhook · runs on a signed request${repo}`;
   if (!item.schedule) return `Scheduled${repo}`;
@@ -313,7 +316,7 @@ export function AutomationsView({
     setError("");
     // Source automations (GitHub/Linear) are configured via connect + pause/resume,
     // not the schedule/webhook instruction form.
-    if (item.trigger === "github" || item.trigger === "linear") {
+    if (item.trigger === "github" || item.trigger === "linear" || item.trigger === "github_ci") {
       setWorkQueueOpen(true);
       return;
     }
@@ -488,11 +491,11 @@ export function AutomationsView({
                     )}
                   </div>
                   <div className="settings-actions">
-                    {item.trigger !== "github" && item.trigger !== "linear" && (
+                    {item.trigger !== "github" && item.trigger !== "linear" && item.trigger !== "github_ci" && (
                       <button type="button" className="btn sm" onClick={() => void runNow(item)}>{item.trigger === "webhook" ? "Test run" : "Run now"}</button>
                     )}
                     <button type="button" className="btn sm" onClick={() => void edit(item)}>
-                      {item.trigger === "github" || item.trigger === "linear" ? "Manage source" : "Edit"}
+                      {item.trigger === "github" || item.trigger === "linear" || item.trigger === "github_ci" ? "Manage source" : "Edit"}
                     </button>
                     {item.trigger === "webhook" && <button type="button" className="btn sm" onClick={() => void rotate(item)}>Rotate secret</button>}
                     <button type="button" className="btn sm" onClick={() => void toggle(item)}>{item.enabled ? "Pause" : "Resume"}</button>
@@ -814,7 +817,7 @@ function AutomationEditor({
                             <span className="autom-trigger-option-icon" aria-hidden="true">
                               {opt.id === "webhook"
                                 ? <IconWebhook />
-                                : opt.id === "github" || opt.id === "linear"
+                                : opt.id === "github" || opt.id === "github_ci" || opt.id === "linear"
                                   ? <IconPr />
                                   : <IconClock />}
                             </span>

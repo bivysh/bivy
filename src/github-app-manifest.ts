@@ -35,8 +35,11 @@ export function buildAppManifest(input: AppManifestInput): Record<string, unknow
       contents: "write",
       pull_requests: "write",
       metadata: "read",
+      // workflow_run failures → Fix failed CI automations (read-only on Actions).
+      actions: "read",
+      checks: "read",
     },
-    default_events: ["issues", "issue_comment"],
+    default_events: ["issues", "issue_comment", "workflow_run"],
   };
 }
 

@@ -38,12 +38,14 @@ import {
   renderAutomationInstruction,
   renderEventContext,
   normalizeAutomationRepo,
+  parseGithubWorkflowRunFailure,
 } from "./webhooks.js";
 import {
   isSourceTrigger,
   matchSourceAutomation,
   normalizeStringList,
   sourceAutomationSeedInput,
+  DEFAULT_FIX_CI_PROMPT,
   type SourceTriggerKind,
 } from "./automation-match.js";
 
@@ -2334,7 +2336,12 @@ async function ensureSourceAutomations(accountId: string): Promise<void> {
     store.listInboundHooks(accountId),
   ]);
   const kinds: SourceTriggerKind[] = [];
-  if (hooks.some((h) => h.kind === "github" || h.kind === "github_app")) kinds.push("github");
+  if (hooks.some((h) => h.kind === "github" || h.kind === "github_app")) {
+    kinds.push("github");
+    // Opt-in CI automation — seeded paused so connecting GitHub does not spam
+    // Fix-CI runs until the user enables it.
+    kinds.push("github_ci");
+  }
   if (hooks.some((h) => h.kind === "linear")) kinds.push("linear");
   for (const kind of kinds) {
     if (defs.some((d) => d.trigger === kind)) continue;
@@ -2356,7 +2363,8 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   if (!name) return res.status(400).json({ error: "name is required" });
   const rawTrigger = typeof req.body?.trigger === "string" ? req.body.trigger : "schedule";
   const trigger: NonNullable<AutomationDefinition["trigger"]> =
-    rawTrigger === "webhook" || rawTrigger === "github" || rawTrigger === "linear" || rawTrigger === "manual"
+    rawTrigger === "webhook" || rawTrigger === "github" || rawTrigger === "linear"
+      || rawTrigger === "github_ci" || rawTrigger === "manual"
       ? rawTrigger
       : "schedule";
   const enabled = req.body?.enabled !== false;
@@ -2961,10 +2969,47 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   // for. Classic per-repo webhooks have none (the node uses its PAT).
   const installationId = parseInstallationId(payload);
 
-  // Source automations (issue-to-pr) gate intake: seed if needed, then match.
-  // Pausing the automation stops labels/mentions from enqueueing work.
+  // Source automations (issue-to-pr / fix-ci) gate intake: seed if needed, then match.
+  // Pausing the automation stops labels/mentions/CI from enqueueing work.
   await ensureSourceAutomations(hook.accountId);
   const automations = await store.listAutomationDefinitions(hook.accountId);
+
+  // workflow_run completed failure → github_ci automations ("Fix failed CI").
+  if (event === "workflow_run") {
+    const failure = parseGithubWorkflowRunFailure(payload);
+    if (!failure) return res.json({ ok: true, enqueued: false });
+    const matched = matchSourceAutomation(automations, {
+      kind: "github_ci",
+      repo: failure.repo,
+      labels: [],
+      workflowName: failure.workflowName,
+    });
+    if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
+    const label = applyDefaultNode(matched.nodeLabel || "bivy", hook.defaultNode);
+    const item = await store.enqueueWorkItem(hook.accountId, {
+      label,
+      source: "github:ci",
+      title: failure.title,
+      repo: failure.repo,
+      url: failure.htmlUrl,
+      eventContext: failure.eventContext,
+      // Prefer the operator's E2E template; fall back to the built-in fix-ci prompt.
+      body: matched.templateCiphertext || DEFAULT_FIX_CI_PROMPT,
+      dedupeKey,
+      collapseKey: `gh-ci:${failure.repo}:${failure.runId}`,
+      defaultRouted: !matched.nodeLabel,
+      installationId,
+      appId: hook.appId,
+      definitionId: matched.id,
+      triggerKind: "github",
+      runtimeId: matched.runtimeId,
+      model: matched.model,
+      approvalMode: matched.approvalMode,
+      sandbox: matched.sandbox,
+    });
+    void notifyRelaysWorkAvailable(hook.accountId, item);
+    return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
+  }
 
   // issue_comment: an `@`-mention of the bot handle turns the comment into work
   // routed to a node (the comment text is the instruction the node acts on).

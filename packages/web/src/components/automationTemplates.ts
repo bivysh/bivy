@@ -61,11 +61,11 @@ export interface ExternalTemplate extends TemplateCard {
  *  queue sheet when the source is missing. */
 export interface SourceTemplate extends TemplateCard {
   kind: "source";
-  trigger: "github" | "linear";
+  trigger: "github" | "linear" | "github_ci";
   prefill: {
     name: string;
     templateId: string;
-    labels: string[];
+    labels?: string[];
   };
   cta: string;
 }
@@ -117,16 +117,6 @@ const FLAKY_TEST_INSTRUCTIONS = `Find and quarantine flaky tests in this project
 5. Commit on a new branch and open a pull request listing each quarantined test and the evidence that it was flaky.
 
 If nothing flaps across the repeated runs, make no changes and report that the suite is stable.`;
-
-const FIX_FAILED_CI_INSTRUCTIONS = `Investigate a failed CI build and prepare a tested fix.
-
-1. Use the incoming event context (build URL, job name, failure category) to locate the failure. Fetch logs with credentials already on this machine — never ask the event for secrets.
-2. Reproduce the failure locally with the project's own test/CI commands.
-3. Make the smallest safe fix. Do not refactor unrelated code.
-4. Run the affected checks and the project's tests, linter, and type checks.
-5. Commit on a new branch and open a pull request that links the failing build and summarises the root cause and the checks that passed.
-
-If the failure cannot be reproduced or is clearly an infrastructure flake, make no code changes and report the evidence.`;
 
 const FIX_ERROR_TRACKER_INSTRUCTIONS = `Reproduce and fix a new error reported by the project's error tracker.
 
@@ -202,16 +192,16 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     },
   },
   {
-    kind: "webhook",
+    kind: "source",
     key: "fix-failed-ci",
     title: "Fix failed CI",
-    tagline: "Turn a CI failure webhook into a diagnosed, tested fix.",
+    tagline: "A failed GitHub Actions run opens a session that diagnoses and fixes it.",
+    trigger: "github_ci",
     prefill: {
       name: "Fix failed CI",
-      instructions: FIX_FAILED_CI_INSTRUCTIONS,
-      approvalMode: "autonomous",
-      sandbox: "workspace-write",
+      templateId: "fix-ci",
     },
+    cta: "Enable",
   },
   {
     kind: "webhook",

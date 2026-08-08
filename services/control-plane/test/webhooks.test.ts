@@ -20,6 +20,7 @@ import {
   parseAutomationEvent,
   renderAutomationInstruction,
   normalizeAutomationRepo,
+  parseGithubWorkflowRunFailure,
   meetsTriggerAccess,
 } from "../src/webhooks.js";
 
@@ -274,6 +275,27 @@ await test("trigger access (issue #259): 'everyone' allows all, 'contributor'/'c
   assert.equal(meetsTriggerAccess("NONE", "collaborator"), false);
   // Case-insensitive (GitHub always sends upper-case, but don't rely on it).
   assert.equal(meetsTriggerAccess("owner", "collaborator"), true);
+});
+
+await test("workflow_run failure parse: only completed failures become work", () => {
+  assert.equal(parseGithubWorkflowRunFailure({ action: "completed", workflow_run: { conclusion: "success" }, repository: { full_name: "a/b" } }), undefined);
+  const fail = parseGithubWorkflowRunFailure({
+    action: "completed",
+    repository: { full_name: "acme/api" },
+    workflow_run: {
+      id: 99,
+      run_number: 12,
+      name: "CI",
+      conclusion: "failure",
+      head_branch: "main",
+      head_sha: "abc",
+      html_url: "https://github.com/acme/api/actions/runs/99",
+    },
+  });
+  assert.ok(fail);
+  assert.equal(fail.repo, "acme/api");
+  assert.equal(fail.workflowName, "CI");
+  assert.match(fail.eventContext, /Workflow: CI/);
 });
 
 console.log(`\nAll ${passed} webhook helper tests passed.`);
