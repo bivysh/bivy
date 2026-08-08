@@ -31,6 +31,7 @@ import { suggestNameFromSelectedModel } from "./runtime/model-namer.js";
 import { isNativeOAuthProvider, loginModelOAuth, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
 import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
 import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } from "./runtime/codex-sessions.js";
+import { discoverGrokSessionForCwd } from "./runtime/grok-sessions.js";
 import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionSource, BivySessionStatus } from "./session/bivy-session.js";
@@ -1977,6 +1978,9 @@ async function openRunTerminal(spec: RunTerminalSpec, emit: (event: unknown) => 
   // Only genuine `bivy run` agents get quiet-agent push hints; an adopted
   // tmux/zellij/screen attach isn't "your agent waiting".
   const notifiable = !spec.mux;
+  // Captured before open so the onExit discovery path (agents that assign their
+  // session id lazily) can correlate by start time.
+  const createdAt = Date.now();
   try {
     const id = terminals.open({
       workspace,
@@ -2013,6 +2017,38 @@ async function openRunTerminal(spec: RunTerminalSpec, emit: (event: unknown) => 
         clearRunIdleNotify(id);
         broadcast({ type: "terminal.exit", termId: id, code });
         broadcast({ type: "terminal.closed", termId: id });
+        // Mark the durable row idle and, for agents that assign their id lazily
+        // (no launch-time pin), discover the on-disk session now so it still
+        // appears in the sidebar after the PTY is gone.
+        if (!spec.mux && spec.agent) {
+          const agentId = spec.agent;
+          void (async () => {
+            let sessionRef = spec.sessionId;
+            if (!sessionRef) {
+              try {
+                sessionRef = await SESSION_DISCOVERY_BY_AGENT[agentId]?.(workspace, createdAt);
+              } catch {
+                /* agent may never have written a session */
+              }
+            }
+            if (sessionRef) {
+              const runtimeId = TAKEOVER_RUNTIME_BY_AGENT[agentId] ?? agentId;
+              try {
+                metadata.upsertSession({
+                  id: sessionRef,
+                  runtimeId,
+                  agentName: agentId,
+                  workspace,
+                  name: name || undefined,
+                  source: "cli",
+                  status: "saved",
+                });
+              } catch {
+                /* best-effort */
+              }
+            }
+          })();
+        }
         // Unify keys, reverse direction: a login done inside the agent's own CLI
         // (e.g. `codex login`) is folded back into Bivy's vault, then synced.
         if (!spec.mux) {
@@ -2028,9 +2064,36 @@ async function openRunTerminal(spec: RunTerminalSpec, emit: (event: unknown) => 
       },
     });
     runTerminals.add(id);
-    const createdAt = Date.now();
+    // Persist a durable metadata row when the run has a known session id (pinned
+    // at launch, e.g. `claude --session-id` / `grok --session-id`). Without this,
+    // a `bivy run` session vanishes from the sidebar the moment the PTY exits —
+    // only live run-terminals were listed. The metadata backfill in
+    // listAllSessions then keeps it resumable after close.
+    if (spec.sessionId && spec.agent && !spec.mux) {
+      const runtimeId = TAKEOVER_RUNTIME_BY_AGENT[spec.agent] ?? spec.agent;
+      try {
+        metadata.upsertSession({
+          id: spec.sessionId,
+          runtimeId,
+          agentName: spec.agent,
+          workspace,
+          name: name || undefined,
+          source: "cli",
+          status: "working",
+        });
+      } catch {
+        /* best-effort: a metadata write must never block the run launch */
+      }
+    }
     emit({ type: "terminal.opened", termId: id, workspace, mode: "run", agent: spec.agent, label, name });
     broadcast({ type: "terminal.created", terminal: { termId: id, workspace, createdAt, lastActivityAt: createdAt, kind: "run", agent: spec.agent, model: spec.model, label, name, command: commandLine, mux: spec.mux, sessionId: spec.sessionId, pid: terminals.pid(id) } });
+    // Surface the durable row so the sidebar keeps the session after the PTY
+    // exits (listAllSessions backfills from metadata). Best-effort broadcast.
+    if (spec.sessionId && !spec.mux) {
+      void listAllSessions()
+        .then((sessions) => broadcast({ type: "sessions.list", sessions: sessions.map((s) => ({ ...s, sessionId: s.id })) }))
+        .catch(() => {});
+    }
     return id;
   } catch (error) {
     emit({ type: "terminal.error", workspace, error: error instanceof Error ? error.message : String(error) });
@@ -2049,12 +2112,16 @@ const TAKEOVER_RUNTIME_BY_AGENT: Record<string, string> = {
   // exec-created session resumes through the app-server with full context), so
   // the adopted chat gets per-tool approvals, not just the exec jail.
   codex: "codex-approvals",
+  // Official Grok CLI: resume by UUID via `grok --resume <id> -p …` (process
+  // runtime) after the interactive TUI is stopped.
+  grok: "grok",
 };
 
 // The CLI command to continue an adopted session back in a terminal.
 const RESUME_CLI_BY_AGENT: Record<string, (id: string) => string> = {
   claude: (id) => `claude --resume ${id}`,
   codex: (id) => `codex resume ${id}`,
+  grok: (id) => `grok --resume ${id}`,
 };
 
 // Same commands, keyed by runtime id instead of the short takeover agent alias
@@ -2066,6 +2133,7 @@ const RESUME_CLI_BY_AGENT: Record<string, (id: string) => string> = {
 const NATIVE_RESUME_CLI_BY_RUNTIME: Record<string, (id: string) => string> = {
   "claude-code-sdk": (id) => `claude --resume ${id}`,
   "codex-approvals": (id) => `codex resume ${id}`,
+  grok: (id) => `grok --resume ${id}`,
 };
 
 // When no resumable session id can be found, why — and what to do about it.
@@ -2075,6 +2143,7 @@ const TAKEOVER_EMPTY_HINT_BY_AGENT: Record<string, string> = {
   codex:
     "Codex writes its session only after the first message. Send one message in the terminal, then continue as chat.",
   pi: "Pi assigns its session once the conversation starts. Send one message in the terminal, then continue as chat.",
+  grok: "Grok writes its session once the conversation starts. Send one message in the terminal, then continue as chat.",
 };
 
 // For agents with no launch-time session-id pin, locate the on-disk session a run
@@ -2088,6 +2157,10 @@ const SESSION_DISCOVERY_BY_AGENT: Record<string, (cwd: string, since: number) =>
     const match = discoverPiSessionForCwd(await runtimeHost.listSessions(getRuntime("pi")), cwd, since);
     return match?.path || match?.id;
   },
+  // Grok can be pinned at launch (`--session-id`) but also assigns ids lazily
+  // when the pin flag is absent; correlate by cwd + start time against
+  // ~/.grok/sessions.
+  grok: (cwd, since) => discoverGrokSessionForCwd(cwd, since)?.id,
 };
 
 // "Continue as chat": stop the native TUI running in a pinned run-terminal and

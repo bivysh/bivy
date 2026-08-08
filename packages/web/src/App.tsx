@@ -72,6 +72,10 @@ export function App() {
   /** "Continue in terminal": the overlay hands the active chat session off to
    *  the runtime's interactive TUI (the reverse of "continue in chat"). */
   const [terminalTui, setTerminalTui] = useState(false);
+  /** A live run-terminal the user picked from the sidebar, before they choose
+   *  Open terminal vs Use chat. The first screen for an in-terminal session —
+   *  mirrors TuiLockedView for chat sessions that already have a TUI open. */
+  const [pendingRunTerm, setPendingRunTerm] = useState<{ termId: string; nodeId?: string } | null>(null);
   // Node picker for the standalone terminal button — only shown when there's
   // more than one node to choose from (see openStandaloneTerminal).
   const [terminalNodePicker, setTerminalNodePicker] = useState(false);
@@ -273,25 +277,59 @@ export function App() {
   // transport, so a cross-node pick must switch (and wait for the new node to
   // come online) before opening the overlay, the same way openSessionOnNode
   // does for chat sessions.
+  //
+  // We do NOT open the terminal overlay immediately: a live run is a
+  // single-writer conversation, so the first screen is the same choice the
+  // TUI-locked chat path shows — Open terminal / Use chat (when takeover is
+  // supported). Auto-opening the PTY was the regression that skipped that
+  // handoff and hid "Continue in chat".
   const pickTerminal = useCallback(
     (termId: string, nodeId?: string) => {
-      const open = () => {
-        setTerminalTarget(termId);
+      const select = () => {
+        setPendingRunTerm({ termId, nodeId });
+        setTerminalOpen(false);
+        setTerminalTarget(null);
         setTerminalStandalone(false);
         setTerminalTui(false);
-        setTerminalOpen(true);
       };
       setDrawerOpen(false);
       if (!controller.direct && nodeId && nodeId !== state.currentNodeId) {
-        void controller.connectToNode(nodeId).then(open).catch((err) => {
+        void controller.connectToNode(nodeId).then(select).catch((err) => {
           controller.store.setError(err instanceof Error ? err.message : String(err));
         });
         return;
       }
-      open();
+      select();
     },
     [state.currentNodeId],
   );
+
+  const openPendingRunTerminal = useCallback(() => {
+    if (!pendingRunTerm) return;
+    setTerminalTarget(pendingRunTerm.termId);
+    setTerminalStandalone(false);
+    setTerminalTui(false);
+    setTerminalOpen(true);
+    // Keep pendingRunTerm so closing the overlay returns to the handoff screen
+    // rather than dumping the user on an empty chat.
+  }, [pendingRunTerm]);
+
+  const takeoverPendingRun = useCallback(() => {
+    if (!pendingRunTerm) return;
+    // Clear the handoff immediately so the next openSession (from
+    // terminal.takeover.result) paints the chat rather than this screen.
+    const termId = pendingRunTerm.termId;
+    setPendingRunTerm(null);
+    controller.sendTerminal({ kind: "terminal.takeover", termId });
+  }, [pendingRunTerm]);
+
+  // Drop the run-terminal handoff if its live PTY disappears (exited/takeover).
+  useEffect(() => {
+    if (!pendingRunTerm) return;
+    if (!state.runTerminals.some((t) => t.termId === pendingRunTerm.termId)) {
+      setPendingRunTerm(null);
+    }
+  }, [pendingRunTerm, state.runTerminals]);
 
   // "Continue in terminal": open the overlay bound to the active chat session in
   // interactive-TUI mode. The overlay sends `terminal.open.tui`, which resumes
@@ -412,6 +450,7 @@ export function App() {
             <button
               className="ghost-btn"
               onClick={() => {
+                setPendingRunTerm(null);
                 controller.newSession();
                 closeDrawer();
               }}
@@ -424,6 +463,7 @@ export function App() {
         <SessionList
           runEvidence={runEvidence}
           onPick={(id, path, nodeId) => {
+            setPendingRunTerm(null);
             controller.openSessionOnNode(id, path, nodeId);
             closeDrawer();
           }}
@@ -594,7 +634,26 @@ export function App() {
           </div>
         )}
 
-        {activeTuiLocked ? (
+        {pendingRunTerm && !terminalOpen ? (
+          (() => {
+            const run = state.runTerminals.find((t) => t.termId === pendingRunTerm.termId);
+            const runName = run?.name || run?.label || run?.agent || "Terminal session";
+            const runNode = state.nodes.find((n) => n.id === (run?.nodeId || pendingRunTerm.nodeId));
+            // Same capability gate the Terminal overlay uses for "Continue in chat".
+            const runtime = state.runtimes.find((r) => r.id === String(run?.agent || ""));
+            const caps = runtime?.capabilities as { sessionDiscovery?: boolean } | undefined;
+            const canTakeover = Boolean(run?.sessionId) || Boolean(caps?.sessionDiscovery);
+            return (
+              <TuiLockedView
+                sessionName={runName}
+                nodeLabel={runNode?.name}
+                online={state.status !== "offline"}
+                onOpenTerminal={openPendingRunTerminal}
+                onUseChat={canTakeover ? takeoverPendingRun : undefined}
+              />
+            );
+          })()
+        ) : activeTuiLocked ? (
           <TuiLockedView
             sessionName={state.activeTitle}
             nodeLabel={activeSessionNode?.name}
@@ -613,6 +672,7 @@ export function App() {
               // `/settings/*` while Settings is open without changing (or clearing)
               // whatever session is open behind it.
               draftRoute={!state.activeSessionId}
+              opening={state.opening}
               sessionKey={state.activeSessionId}
               collapsed={collapsed}
               onAction={runCommand}
@@ -787,6 +847,9 @@ export function App() {
               setTerminalTarget(null);
               setTerminalStandalone(false);
               setTerminalTui(false);
+              // Leaving a run-terminal overlay returns to the handoff screen when
+              // that run was the selection; clear it only when the user dismisses
+              // the handoff itself (new session / other pick).
             }}
           />
         </Suspense>

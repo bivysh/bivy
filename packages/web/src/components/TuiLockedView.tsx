@@ -20,7 +20,8 @@ export function TuiLockedView({
   nodeLabel?: string;
   online: boolean;
   onOpenTerminal: () => void;
-  onUseChat: () => void;
+  /** Undefined hides "Use chat" when takeover isn't supported for this agent. */
+  onUseChat?: () => void;
 }) {
   return (
     <div className="tui-locked" role="status" aria-live="polite">
@@ -40,18 +41,25 @@ export function TuiLockedView({
               {" "}on <span className="tui-locked-node">{nodeLabel}</span>
             </>
           ) : null}
-          . Chat is paused while it&rsquo;s open &mdash; open the terminal to watch it, or take it over to
-          message it here.
+          . Chat is paused while it&rsquo;s open &mdash; open the terminal to watch it
+          {onUseChat ? ", or take it over to message it here" : ""}
+          .
         </p>
         <div className="tui-locked-actions">
           <button type="button" className="btn" onClick={onOpenTerminal} disabled={!online}>
             Open terminal
           </button>
-          <button type="button" className="btn primary" onClick={onUseChat} disabled={!online}>
-            Use chat
-          </button>
+          {onUseChat && (
+            <button type="button" className="btn primary" onClick={onUseChat} disabled={!online}>
+              Use chat
+            </button>
+          )}
         </div>
-        {!online && <p className="tui-locked-hint">Reconnect to the machine to open the terminal or take over in chat.</p>}
+        {!online && (
+          <p className="tui-locked-hint">
+            Reconnect to the machine to open the terminal{onUseChat ? " or take over in chat" : ""}.
+          </p>
+        )}
       </div>
     </div>
   );
