@@ -75,7 +75,7 @@ import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
 import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
-import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
+import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, resolveForkBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
   GitHubTaskPoller,
@@ -6557,10 +6557,14 @@ async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome
     // pickups don't race on `git worktree add` or clobber each other's trees.
     const wt = await withRepoLock(repoDir, async () => {
       if (opts.worktree === "fresh") {
-        // Same-node fork: cut a NEW branch from the source's LOCAL branch (which
-        // holds its latest, possibly-unpushed commits) or the repo default.
+        // Same-node fork: cut a NEW branch off the best available tip of the
+        // source. resolveForkBaseRef walks source-worktree HEAD → local branch
+        // → origin/<branch> → default, so a missing/pruned local ref no longer
+        // hard-fails with `fatal: invalid reference` (the previous behaviour
+        // when base was the raw branch name).
         const forkBranch = `${srcBranch ?? "fork"}-fork-${randomBytes(4).toString("hex")}`;
-        return createWorktree({ repoDir, id: forkBranch, branch: forkBranch, base: srcBranch ?? await resolveDefaultBaseRef(repoDir) });
+        const base = await resolveForkBaseRef(repoDir, srcBranch, bundle.record.worktree);
+        return createWorktree({ repoDir, id: forkBranch, branch: forkBranch, base });
       }
       // Cross-node adopt: the source branch has no LOCAL ref here. Base the
       // adopted branch on the pushed `origin/<branch>` so committed work travels

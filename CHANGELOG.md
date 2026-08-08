@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `session/load` resumes it and the model replays the whole history — the same
   "replayed" fidelity Codex's rollout forks get.
 
+### Fixed
+
+- Same-node session forks no longer die with `fatal: invalid reference` when the
+  source branch is missing locally (pruned worktree, re-cloned workspace, never
+  pushed). The fresh-fork path now resolves its base through the source
+  worktree's HEAD → local branch → `origin/<branch>` → repo default, and
+  `createWorktree` itself falls back to `HEAD` if a caller still passes a bad
+  base — so the fork always stands up.
+
 ## [0.10.0] - 2026-08-07
 
 ### Added

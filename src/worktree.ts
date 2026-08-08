@@ -107,14 +107,25 @@ export async function createWorktree(opts: {
     // first, then check the existing branch out into a fresh worktree.
     const localExists = await refExists(repoRoot, `refs/heads/${branch}`);
     const remoteExists = !localExists && (await refExists(repoRoot, `refs/remotes/origin/${branch}`));
-    if (!localExists && !remoteExists) throw error;
-    await removeWorktree(repoRoot, wtPath);
-    fs.rmSync(wtPath, { recursive: true, force: true });
-    if (localExists) {
-      await exec("git", ["-C", repoRoot, "worktree", "add", wtPath, branch]);
+    if (localExists || remoteExists) {
+      await removeWorktree(repoRoot, wtPath);
+      fs.rmSync(wtPath, { recursive: true, force: true });
+      if (localExists) {
+        await exec("git", ["-C", repoRoot, "worktree", "add", wtPath, branch]);
+      } else {
+        // Recreate the local branch from origin, then check it out in the worktree.
+        await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, `origin/${branch}`]);
+      }
+    } else if (!(await refExists(repoRoot, base)) && base !== "HEAD") {
+      // Caller passed a base that doesn't resolve (pruned session branch, stale
+      // origin/main after a default-branch rename, etc.). Fall back to HEAD so
+      // forks/sessions still stand up rather than dying with
+      // `fatal: invalid reference`. Clear any half-created path first.
+      await removeWorktree(repoRoot, wtPath);
+      fs.rmSync(wtPath, { recursive: true, force: true });
+      await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, "HEAD"]);
     } else {
-      // Recreate the local branch from origin, then check it out in the worktree.
-      await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, `origin/${branch}`]);
+      throw error;
     }
   }
 
