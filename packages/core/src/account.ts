@@ -774,7 +774,7 @@ export interface AccountAutomation {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   enabled: boolean;
   /** How this automation fires. Absent on legacy rows means "schedule". */
-  trigger?: "schedule" | "webhook" | "manual" | "github" | "linear";
+  trigger?: "schedule" | "webhook" | "manual" | "github" | "linear" | "github_ci";
   /** Optional GitHub workspace (`owner/name`) for triggers that do not carry a repo. */
   repo?: string;
   /** Label filter for github/linear source triggers. */

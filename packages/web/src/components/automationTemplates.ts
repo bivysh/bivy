@@ -61,11 +61,11 @@ export interface ExternalTemplate extends TemplateCard {
  *  queue sheet when the source is missing. */
 export interface SourceTemplate extends TemplateCard {
   kind: "source";
-  trigger: "github" | "linear";
+  trigger: "github" | "linear" | "github_ci";
   prefill: {
     name: string;
     templateId: string;
-    labels: string[];
+    labels?: string[];
   };
   cta: string;
 }
@@ -202,16 +202,16 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     },
   },
   {
-    kind: "webhook",
+    kind: "source",
     key: "fix-failed-ci",
     title: "Fix failed CI",
-    tagline: "Turn a CI failure webhook into a diagnosed, tested fix.",
+    tagline: "A failed GitHub Actions run opens a session that diagnoses and fixes it.",
+    trigger: "github_ci",
     prefill: {
       name: "Fix failed CI",
-      instructions: FIX_FAILED_CI_INSTRUCTIONS,
-      approvalMode: "autonomous",
-      sandbox: "workspace-write",
+      templateId: "fix-ci",
     },
+    cta: "Enable",
   },
   {
     kind: "webhook",

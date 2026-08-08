@@ -65,6 +65,24 @@ assert.equal(
   "d",
 );
 
+// CI failures match github_ci by repo (+ optional workflow name via labels).
+const ciDefs = [
+  def({ id: "ci1", trigger: "github_ci", repos: ["acme/api"], createdAt: "2026-01-01T00:00:00.000Z" }),
+  def({ id: "ci2", trigger: "github_ci", labels: ["CI"], createdAt: "2026-01-02T00:00:00.000Z" }),
+];
+assert.equal(
+  matchSourceAutomation(ciDefs, { kind: "github_ci", repo: "acme/api", labels: [], workflowName: "CI" })?.id,
+  "ci1",
+);
+assert.equal(
+  matchSourceAutomation(ciDefs, { kind: "github_ci", repo: "acme/other", labels: [], workflowName: "CI" })?.id,
+  "ci2",
+);
+assert.equal(
+  matchSourceAutomation(ciDefs, { kind: "github_ci", repo: "acme/other", labels: [], workflowName: "Deploy" }),
+  undefined,
+);
+
 // Seed + pause: disabled github automation stops matching after seed path.
 const store = createPgMemStore();
 await store.init();

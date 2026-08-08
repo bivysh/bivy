@@ -603,7 +603,7 @@ export interface AutomationDefinition {
    *  with a `schedule` is schedule-triggered). A "webhook" automation is fired by
    *  a signed POST to /webhooks/automation/run/:id. "github" / "linear" are source
    *  triggers: inbound issue events match this definition and start a session. */
-  trigger?: "schedule" | "webhook" | "manual" | "github" | "linear";
+  trigger?: "schedule" | "webhook" | "manual" | "github" | "linear" | "github_ci";
   /** HMAC signing secret for a webhook-triggered automation. Set/rotated
    *  server-side, returned to the client only at create/rotate time, and never
    *  echoed by list/get responses. */
