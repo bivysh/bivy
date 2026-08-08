@@ -601,10 +601,9 @@ export interface AutomationDefinition {
   enabled?: boolean;
   /** How this automation fires. Defaults to "schedule" for legacy rows (any row
    *  with a `schedule` is schedule-triggered). A "webhook" automation is fired by
-   *  a signed POST to /webhooks/automation/run/:id, using this definition's own
-   *  pre-configured routing/agent/model/sandbox and E2E template — the payload
-   *  supplies only node routing + event context, never execution parameters. */
-  trigger?: "schedule" | "webhook" | "manual";
+   *  a signed POST to /webhooks/automation/run/:id. "github" / "linear" are source
+   *  triggers: inbound issue events match this definition and start a session. */
+  trigger?: "schedule" | "webhook" | "manual" | "github" | "linear";
   /** HMAC signing secret for a webhook-triggered automation. Set/rotated
    *  server-side, returned to the client only at create/rotate time, and never
    *  echoed by list/get responses. */
@@ -613,6 +612,13 @@ export interface AutomationDefinition {
    *  does not carry a repo of its own (schedule, many webhooks). The node clones
    *  this repo before starting the session — the agent does not pick the repo. */
   repo?: string;
+  /** Label filter for github/linear source triggers. Empty/undefined → default
+   *  `bivy` / `bivy/<node>` contract. */
+  labels?: string[];
+  /** Repo allowlist for github/linear (`owner/name`). Empty/undefined → all. */
+  repos?: string[];
+  /** Built-in template id (e.g. `issue-to-pr`) or custom. Display + node hints. */
+  templateId?: string;
   schedule?:
     | { kind: "once"; at: string }
     | { kind: "cron"; expression: string; timezone: string };

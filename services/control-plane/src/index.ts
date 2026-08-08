@@ -39,6 +39,13 @@ import {
   renderEventContext,
   normalizeAutomationRepo,
 } from "./webhooks.js";
+import {
+  isSourceTrigger,
+  matchSourceAutomation,
+  normalizeStringList,
+  sourceAutomationSeedInput,
+  type SourceTriggerKind,
+} from "./automation-match.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2318,9 +2325,27 @@ function publicAutomation(def: AutomationDefinition, req: Request) {
     : rest;
 }
 
+/** Seed github/linear "Work issues into PRs" when the account has the hook but
+ *  no matching automation yet — so existing installs keep working and the UI
+ *  shows a real, pausable automation. Idempotent. */
+async function ensureSourceAutomations(accountId: string): Promise<void> {
+  const [defs, hooks] = await Promise.all([
+    store.listAutomationDefinitions(accountId),
+    store.listInboundHooks(accountId),
+  ]);
+  const kinds: SourceTriggerKind[] = [];
+  if (hooks.some((h) => h.kind === "github" || h.kind === "github_app")) kinds.push("github");
+  if (hooks.some((h) => h.kind === "linear")) kinds.push("linear");
+  for (const kind of kinds) {
+    if (defs.some((d) => d.trigger === kind)) continue;
+    await store.createAutomationDefinition(accountId, sourceAutomationSeedInput(kind));
+  }
+}
+
 app.get("/account/automations", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
+  await ensureSourceAutomations(client.accountId);
   res.json((await store.listAutomationDefinitions(client.accountId)).map((d) => publicAutomation(d, req)));
 }));
 
@@ -2329,11 +2354,14 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
   if (!name) return res.status(400).json({ error: "name is required" });
-  const trigger = req.body?.trigger === "webhook" ? "webhook" : "schedule";
+  const rawTrigger = typeof req.body?.trigger === "string" ? req.body.trigger : "schedule";
+  const trigger: NonNullable<AutomationDefinition["trigger"]> =
+    rawTrigger === "webhook" || rawTrigger === "github" || rawTrigger === "linear" || rawTrigger === "manual"
+      ? rawTrigger
+      : "schedule";
   const enabled = req.body?.enabled !== false;
-  // A webhook-triggered automation has no schedule: it's fired by a signed POST.
-  // Park it on the sentinel schedule with no nextRunAt so the scheduler ignores
-  // it, and mint an HMAC secret (returned once, below).
+  // Webhook + source triggers have no schedule: park on the sentinel so the
+  // scheduler never fires them. Only schedule-triggered rows get nextRunAt.
   let schedule = SENTINEL_SCHEDULE as AutomationDefinition["schedule"];
   let nextRunAt: string | undefined;
   if (trigger === "schedule") {
@@ -2347,11 +2375,19 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   }
   const webhookSecret = trigger === "webhook" ? randomBytes(32).toString("base64url") : undefined;
   let repo: string | undefined;
+  let labels: string[] | undefined;
+  let repos: string[] | undefined;
   try {
     repo = normalizeAutomationRepo(req.body?.repo);
+    labels = normalizeStringList(req.body?.labels);
+    repos = normalizeStringList(req.body?.repos);
+    if (repos) {
+      for (const r of repos) normalizeAutomationRepo(r); // validate each slug
+    }
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
   }
+  const templateId = typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : undefined;
   const definition = await store.createAutomationDefinition(client.accountId, {
     name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : undefined,
@@ -2365,6 +2401,9 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     trigger,
     webhookSecret,
     repo,
+    labels,
+    repos,
+    templateId: templateId || (isSourceTrigger(trigger) ? "issue-to-pr" : undefined),
     schedule,
     nextRunAt,
   });
@@ -2377,14 +2416,13 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!current) return res.status(404).json({ error: "Automation not found" });
-  const isWebhook = current.trigger === "webhook";
+  const isScheduled = !current.trigger || current.trigger === "schedule";
   const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : current.enabled;
-  // A webhook automation has no schedule; enabling/disabling just gates whether
-  // the endpoint admits events. Keep its sentinel schedule and never set a
-  // nextRunAt (the scheduler must never fire it).
+  // Non-schedule automations have no cron; enabling/disabling just gates intake.
+  // Keep the sentinel schedule and never set nextRunAt for them.
   let schedule = current.schedule;
-  let nextRunAt = isWebhook ? undefined : current.nextRunAt;
-  if (!isWebhook) {
+  let nextRunAt = isScheduled ? current.nextRunAt : undefined;
+  if (isScheduled) {
     if (req.body?.schedule !== undefined) {
       try {
         schedule = normalizeSchedule(req.body.schedule);
@@ -2405,15 +2443,24 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     if (recompute && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
   }
   let repo = current.repo;
-  if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "repo")) {
-    try {
+  let labels = current.labels;
+  let repos = current.repos;
+  try {
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "repo")) {
       // Empty string clears the workspace target.
       repo = req.body.repo === null || req.body.repo === ""
         ? undefined
         : normalizeAutomationRepo(req.body.repo);
-    } catch (error) {
-      return res.status(400).json({ error: (error as Error).message });
     }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "labels")) {
+      labels = req.body.labels === null ? undefined : normalizeStringList(req.body.labels);
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "repos")) {
+      repos = req.body.repos === null ? undefined : normalizeStringList(req.body.repos);
+      if (repos) for (const r of repos) normalizeAutomationRepo(r);
+    }
+  } catch (error) {
+    return res.status(400).json({ error: (error as Error).message });
   }
   const patch = {
     name: typeof req.body?.name === "string" ? req.body.name.trim() || current.name : current.name,
@@ -2427,6 +2474,9 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     schedule,
     nextRunAt,
     repo,
+    labels,
+    repos,
+    templateId: typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : current.templateId,
   };
   const updated = await store.updateAutomationDefinition(client.accountId, current.id, patch);
   res.json(updated ? publicAutomation(updated, req) : updated);
@@ -2911,6 +2961,11 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   // for. Classic per-repo webhooks have none (the node uses its PAT).
   const installationId = parseInstallationId(payload);
 
+  // Source automations (issue-to-pr) gate intake: seed if needed, then match.
+  // Pausing the automation stops labels/mentions from enqueueing work.
+  await ensureSourceAutomations(hook.accountId);
+  const automations = await store.listAutomationDefinitions(hook.accountId);
+
   // issue_comment: an `@`-mention of the bot handle turns the comment into work
   // routed to a node (the comment text is the instruction the node acts on).
   if (event === "issue_comment") {
@@ -2927,8 +2982,16 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     if (!meetsTriggerAccess(comment.authorAssociation, hook.triggerAccess)) {
       return res.json({ ok: true, enqueued: false, reason: "access" });
     }
+    const matched = matchSourceAutomation(automations, {
+      kind: "github",
+      repo: comment.repo,
+      labels: comment.issueLabels,
+      // Mentions skip the label filter; routing still honours `on <node>`.
+      mention: true,
+    });
+    if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
     const rawLabel = pickCommentRoutingLabel(comment.instruction, comment.issueLabels, triggerLogin);
-    const label = applyDefaultNode(rawLabel, hook.defaultNode);
+    const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
     // Case B: if this issue already has an indexed session, CONTINUE it rather than
     // starting a fresh one, so a follow-up comment lands in the same thread.
     const existingSession = await store.findSessionByIssue(hook.accountId, comment.repo, comment.issueNumber).catch(() => undefined);
@@ -2946,12 +3009,18 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
       dedupeKey,
       // Landed on the shared queue with no explicit target → re-routable when the
       // account's default node changes.
-      defaultRouted: rawLabel === "bivy",
+      defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
       installationId,
       appId: hook.appId,
+      definitionId: matched.id,
+      triggerKind: "github",
+      runtimeId: matched.runtimeId,
+      model: matched.model,
+      approvalMode: matched.approvalMode,
+      sandbox: matched.sandbox,
     });
     void notifyRelaysWorkAvailable(hook.accountId, item);
-    return res.json({ ok: true, enqueued: true, id: item.id, label });
+    return res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
   }
 
   // issues: a `bivy` / `bivy/<node>` label OR an `@`-mention of the bot handle
@@ -2960,8 +3029,7 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   const issue = parseGithubIssueEvent(payload);
   const triggerLogin = (hook.botMention || process.env.BIVY_GITHUB_BOT_MENTION || "bivy").trim();
   const rawLabel = issue ? pickIssueRoutingLabel(issue, triggerLogin) : undefined;
-  const label = rawLabel ? applyDefaultNode(rawLabel, hook.defaultNode) : undefined;
-  if (!issue || !label || !rawLabel) return res.json({ ok: true, enqueued: false });
+  if (!issue || !rawLabel) return res.json({ ok: true, enqueued: false });
   // Issue #259: a `bivy`/`bivy/<node>` LABEL already implies collaborator/triage
   // access (GitHub itself restricts who can apply a label), so only the body-
   // mention path — anyone can open an issue on a public repo — needs gating on
@@ -2970,6 +3038,13 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
   if (!isLabelRouted && !meetsTriggerAccess(issue.authorAssociation, hook.triggerAccess)) {
     return res.json({ ok: true, enqueued: false, reason: "access" });
   }
+  const matched = matchSourceAutomation(automations, {
+    kind: "github",
+    repo: issue.repo,
+    labels: issue.labels,
+  });
+  if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
+  const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
   // Case B: continue an existing session for this issue if one is already indexed.
   const existingIssueSession = await store.findSessionByIssue(hook.accountId, issue.repo, issue.issueNumber).catch(() => undefined);
   const item = await store.enqueueWorkItem(hook.accountId, {
@@ -2988,12 +3063,18 @@ app.post(["/webhooks/github/:id", "/webhooks/github_app/:id"], asyncHandler(asyn
     // into a single pending item so labelling *and* @-mentioning an issue doesn't
     // queue it two or three times.
     collapseKey: `gh-issue:${issue.repo}#${issue.issueNumber}`,
-    defaultRouted: rawLabel === "bivy",
+    defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
     installationId,
     appId: hook.appId,
+    definitionId: matched.id,
+    triggerKind: "github",
+    runtimeId: matched.runtimeId,
+    model: matched.model,
+    approvalMode: matched.approvalMode,
+    sandbox: matched.sandbox,
   });
   void notifyRelaysWorkAvailable(hook.accountId, item);
-  res.json({ ok: true, enqueued: true, id: item.id, label });
+  res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
 }));
 
 // Linear Issue webhook. Applying `bivy` or `bivy/<node>` dispatches the issue.
@@ -3016,7 +3097,14 @@ app.post("/webhooks/linear/:id", asyncHandler(async (req, res) => {
   if (!issue) return res.json({ ok: true, enqueued: false });
   const rawLabel = pickRoutingLabel(issue.labels);
   if (!rawLabel) return res.json({ ok: true, enqueued: false });
-  const label = applyDefaultNode(rawLabel, hook.defaultNode);
+  await ensureSourceAutomations(hook.accountId);
+  const matched = matchSourceAutomation(await store.listAutomationDefinitions(hook.accountId), {
+    kind: "linear",
+    repo: issue.repo,
+    labels: issue.labels,
+  });
+  if (!matched) return res.json({ ok: true, enqueued: false, reason: "no_automation" });
+  const label = applyDefaultNode(matched.nodeLabel || rawLabel, hook.defaultNode);
   const deliveryId = String(req.headers["linear-delivery"] ?? "").trim();
   // Case B (Linear): if this issue already has an indexed session, CONTINUE it
   // rather than starting a fresh one, so a re-dispatch lands in the same thread and
@@ -3028,15 +3116,22 @@ app.post("/webhooks/linear/:id", asyncHandler(async (req, res) => {
     source: "linear:issue",
     target: existingSession ? { kind: "existing_session", sessionId: existingSession.sessionId } : undefined,
     title: `Linear issue ${issue.identifier}`,
-    repo: issue.repo,
+    // Prefer event repo; fall back to automation workspace default.
+    repo: issue.repo || matched.repo,
     externalId: issue.id,
     url: issue.url,
     dedupeKey: deliveryId ? `linear:${deliveryId}` : undefined,
     collapseKey: `linear-issue:${issue.id}`,
-    defaultRouted: rawLabel === "bivy",
+    defaultRouted: rawLabel === "bivy" && !matched.nodeLabel,
+    definitionId: matched.id,
+    triggerKind: "webhook",
+    runtimeId: matched.runtimeId,
+    model: matched.model,
+    approvalMode: matched.approvalMode,
+    sandbox: matched.sandbox,
   });
   void notifyRelaysWorkAvailable(hook.accountId, item);
-  res.json({ ok: true, enqueued: true, id: item.id, label });
+  res.json({ ok: true, enqueued: true, id: item.id, label, definitionId: matched.id });
 }));
 
 // Slack slash command (`/bivy on <node> <prompt>`). Verifies the Slack signing

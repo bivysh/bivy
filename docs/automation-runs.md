@@ -110,7 +110,7 @@ responsible for choosing or cloning the project on the happy path.
 | Trigger | Where the repo comes from |
 |---|---|
 | GitHub issue / mention | The event (`repository.full_name`) |
-| Linear issue | Git link / `repo:owner/name` label / node default |
+| Linear issue | Git link / `repo:owner/name` label / automation `repo` / node default |
 | Slack `/bivy in owner/repo …` | The command |
 | **Schedule** | **`definition.repo`** (set in the Automations UI) |
 | Webhook automation | `definition.repo`, else optional `repo` on the event payload |
@@ -119,6 +119,24 @@ Schedule is the same kind of trigger as webhook or GitHub — it just needs an
 explicit workspace because a cron tick does not name a repository. Connect the
 GitHub App (or token) on the node so the clone can authenticate; picking the
 repo on the automation is separate from connecting the source.
+
+## Source automations (GitHub / Linear)
+
+Issue-labeled and @-mention intake is gated by an **automation definition** with
+`trigger: "github"` or `"linear"` (template `issue-to-pr` by default):
+
+1. Connecting a GitHub App or Linear hook **seeds** a "Work issues into PRs"
+   automation if the account has none yet (on the next Automations list fetch or
+   the next inbound event).
+2. Inbound webhooks **match** enabled source automations by label filter and
+   optional repo allowlist. First match wins (oldest first).
+3. **Pause** the automation → labels and mentions enqueue nothing
+   (`reason: no_automation`). Resume to turn the front door back on.
+4. Mentions skip the label filter (mentioning the bot still starts work) but
+   still honour repo allowlists and the enabled flag.
+
+Routing labels (`bivy/<node>`, `on <node>`) and the account default node still
+apply after a match; the automation may also set `nodeLabel` / agent / model.
 
 ## Schedule semantics
 

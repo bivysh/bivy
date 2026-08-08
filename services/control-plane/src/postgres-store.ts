@@ -591,6 +591,10 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
       -- Workspace target for triggers that do not carry a repo (schedule, etc.).
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS repo TEXT;
+      -- Source-trigger filters (github/linear) + built-in template id.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS labels JSONB;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS repos JSONB;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS template_id TEXT;
       CREATE TABLE IF NOT EXISTS trigger_events (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -2197,13 +2201,17 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
-       approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+       approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo,
+       labels, repos, template_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
         JSON.stringify(input.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), input.nextRunAt ?? null,
-        input.trigger ?? null, input.webhookSecret ?? null, input.repo ?? null],
+        input.trigger ?? null, input.webhookSecret ?? null, input.repo ?? null,
+        input.labels ? JSON.stringify(input.labels) : null,
+        input.repos ? JSON.stringify(input.repos) : null,
+        input.templateId ?? null],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -2236,13 +2244,16 @@ export class PostgresStore implements MeshStore {
       `UPDATE automation_definitions SET name=$3, template_ciphertext=$4, runtime_id=$5,
        model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
        enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
-       repo=$16, updated_at=now()
+       repo=$16, labels=$17, repos=$18, template_id=$19, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
         next.approvalMode ?? null, next.sandbox ?? null, next.enabled ?? false,
         JSON.stringify(next.schedule ?? { kind: "once", at: "9999-12-31T00:00:00.000Z" }), next.nextRunAt ?? null,
-        next.trigger ?? null, next.webhookSecret ?? null, next.repo ?? null],
+        next.trigger ?? null, next.webhookSecret ?? null, next.repo ?? null,
+        next.labels ? JSON.stringify(next.labels) : null,
+        next.repos ? JSON.stringify(next.repos) : null,
+        next.templateId ?? null],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -2807,6 +2818,20 @@ function triggerKindForSource(explicit: AutomationTriggerKind | undefined, sourc
   return "webhook";
 }
 
+function mapStringList(value: unknown): string[] | undefined {
+  if (value == null) return undefined;
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.map(String) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function mapAutomationDefinition(row: any): AutomationDefinition {
   return {
     id: row.id,
@@ -2823,6 +2848,9 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     trigger: row.trigger ?? undefined,
     webhookSecret: row.webhook_secret ?? undefined,
     repo: row.repo ?? undefined,
+    labels: mapStringList(row.labels),
+    repos: mapStringList(row.repos),
+    templateId: row.template_id ?? undefined,
     schedule: row.schedule,
     nextRunAt: row.next_run_at ? new Date(row.next_run_at).toISOString() : undefined,
     lastScheduledAt: row.last_scheduled_at ? new Date(row.last_scheduled_at).toISOString() : undefined,

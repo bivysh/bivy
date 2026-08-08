@@ -56,7 +56,21 @@ export interface ExternalTemplate extends TemplateCard {
   cta: string;
 }
 
-export type AutomationTemplate = ScheduleTemplate | WebhookTemplate | ExternalTemplate;
+/** A source-triggered automation (GitHub/Linear). Creating it POSTs a real
+ *  definition with trigger=github|linear; connect still happens via the work
+ *  queue sheet when the source is missing. */
+export interface SourceTemplate extends TemplateCard {
+  kind: "source";
+  trigger: "github" | "linear";
+  prefill: {
+    name: string;
+    templateId: string;
+    labels: string[];
+  };
+  cta: string;
+}
+
+export type AutomationTemplate = ScheduleTemplate | WebhookTemplate | ExternalTemplate | SourceTemplate;
 
 // The instruction blocks below become the (client-side encrypted) prompt the
 // node runs. They mirror the shape of Bivy's default issue instructions:
@@ -225,12 +239,29 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     },
   },
   {
-    kind: "external",
+    kind: "source",
     key: "work-issues-into-prs",
     title: "Work issues into PRs",
-    tagline: "Label a GitHub or Linear issue and let a node open the pull request.",
-    route: "queue",
-    // Opens an in-Automations setup sheet (GitHub App + how-to), not Settings.
-    cta: "Set up",
+    tagline: "Label a GitHub issue (or @mention) and let a node open the pull request.",
+    trigger: "github",
+    prefill: {
+      name: "Work issues into PRs",
+      templateId: "issue-to-pr",
+      labels: ["bivy"],
+    },
+    cta: "Enable",
+  },
+  {
+    kind: "source",
+    key: "work-linear-issues-into-prs",
+    title: "Work Linear issues into PRs",
+    tagline: "Label a Linear issue and let a node open the pull request.",
+    trigger: "linear",
+    prefill: {
+      name: "Work Linear issues into PRs",
+      templateId: "issue-to-pr",
+      labels: ["bivy"],
+    },
+    cta: "Enable",
   },
 ];
