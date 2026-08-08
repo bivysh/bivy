@@ -132,6 +132,26 @@ await check("xAI device-code login requests a code, polls, and persists", async 
   assert.equal((cred as { access?: string }).access, "xai-at");
 });
 
+await check("xAI device poll treats a friendly \"not yet authorized\" 400 as pending, not a fatal error", async () => {
+  // xAI returns a human error_description ("User has not yet authorized") with
+  // HTTP 400 for the still-pending state instead of the RFC-8628
+  // `authorization_pending` code — the poll must keep waiting, not abort.
+  const dir = tmpDir();
+  let polls = 0;
+  stubFetch((call) => {
+    if (call.url === "https://auth.x.ai/oauth2/device/code") {
+      return { json: { device_code: "dev", user_code: "USER-CODE", verification_uri: "https://x.ai/device", interval: 0, expires_in: 300 } };
+    }
+    polls += 1;
+    if (polls < 3) return { ok: false, status: 400, json: { error_description: "User has not yet authorized" } };
+    return { json: { access_token: "xai-at", refresh_token: "xai-rt", expires_in: 3600 } };
+  });
+  await loginModelOAuth(dir, "xai", { notify: () => {}, prompt: async () => "" });
+  assert.ok(polls >= 3, "polled through the friendly pending responses instead of throwing");
+  const cred = await createCredentialVault(dir).read("xai");
+  assert.equal((cred as { access?: string }).access, "xai-at");
+});
+
 await check("refresh rotates the token, persists it, and returns the fresh access token", async () => {
   const dir = tmpDir();
   const store = createCredentialVault(dir);
