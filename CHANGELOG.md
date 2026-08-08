@@ -9,15 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Automations UI refresh: a cleaner suggested-template gallery (soft cards with
-  icons + Add) and a single-page create sheet — name, **+ Add trigger** picker
-  (Daily / Weekly / Monthly / One time / Webhook), instructions, and machine —
-  instead of a multi-step wizard. Webhook-triggered automations reveal the signed
-  URL and one-time signing secret after create; existing ones show URL + Rotate
-  secret / Test run on the row. CI-failure, error-tracker, and production-
-  investigation templates open this flow directly. **Work issues into PRs** opens
-  an in-Automations setup sheet (GitHub App create/connect, install, default
-  machine) instead of bouncing to Settings.
+- Automations setup stays on the Automations surface end-to-end: outcome-first
+  empty hero with featured jobs, whole-card templates with trigger badges, a
+  single-page create sheet (name → trigger → instructions → machine), compact
+  live source pills, and in-sheet GitHub / Linear / Slack connect so setup never
+  dumps people into Settings. Success notices offer a clear next step (Run now /
+  Open session); rows use overflow menus; webhook create still reveals the
+  one-time signing secret.
 - Forks into OpenCode now open on a full copy of the transcript instead of a
   seeded summary prompt: Bivy materialises the fork's conversation as a real
   session in OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db`), so
