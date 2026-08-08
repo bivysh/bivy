@@ -32,6 +32,7 @@ import {
   AUTOMATION_TEMPLATES,
   type AutomationTemplate,
   type ScheduleTemplate,
+  type SourceTemplate,
   type WebhookTemplate,
 } from "./automationTemplates.js";
 import { WorkQueueSetupSheet } from "./WorkQueueSetupSheet.js";
@@ -91,6 +92,10 @@ function toLocalInput(date: Date): string {
 
 function scheduleSummary(item: AccountAutomation): string {
   const repo = item.repo ? ` · ${item.repo}` : "";
+  const repos = item.repos?.length ? ` · ${item.repos.join(", ")}` : "";
+  const labels = item.labels?.length ? item.labels.join(", ") : "bivy";
+  if (item.trigger === "github") return `GitHub · label ${labels}${repos}`;
+  if (item.trigger === "linear") return `Linear · label ${labels}${repo || repos}`;
   if (item.trigger === "webhook") return `Webhook · runs on a signed request${repo}`;
   if (!item.schedule) return `Scheduled${repo}`;
   if (item.schedule.kind === "once") return `Once · ${new Date(item.schedule.at).toLocaleString()}${repo}`;
@@ -187,7 +192,8 @@ function templateIcon(key: string): ReactNode {
     case "fix-failed-ci": return <IconCi />;
     case "fix-error-tracker-issue": return <IconBug />;
     case "investigate-production-errors": return <IconRadar />;
-    case "work-issues-into-prs": return <IconPr />;
+    case "work-issues-into-prs":
+    case "work-linear-issues-into-prs": return <IconPr />;
     default: return <IconBolt />;
   }
 }
@@ -264,9 +270,36 @@ export function AutomationsView({
     });
   }
 
+  async function startFromSourceTemplate(template: SourceTemplate) {
+    setError("");
+    try {
+      // Reuse an existing source automation when present (seeded on list); otherwise create.
+      const existing = items.find((i) => i.trigger === template.trigger);
+      if (existing) {
+        if (!existing.enabled) {
+          await updateAutomation(controller.local, existing.id, { enabled: true });
+        }
+      } else {
+        await createAutomation(controller.local, {
+          name: template.prefill.name,
+          trigger: template.trigger,
+          templateId: template.prefill.templateId,
+          labels: template.prefill.labels,
+          enabled: true,
+        });
+      }
+      await refresh();
+      // Connect sheet for GitHub App / Linear when the source is not ready yet.
+      setWorkQueueOpen(true);
+    } catch (e) {
+      setError(String((e as Error).message || e));
+    }
+  }
+
   function startFromTemplate(template: AutomationTemplate) {
     if (template.kind === "schedule") startFromScheduleTemplate(template);
     else if (template.kind === "webhook") startFromWebhookTemplate(template);
+    else if (template.kind === "source") void startFromSourceTemplate(template);
     else if (template.route === "queue") setWorkQueueOpen(true);
     else onOpenSettings(template.route);
   }
@@ -278,6 +311,12 @@ export function AutomationsView({
 
   async function edit(item: AccountAutomation) {
     setError("");
+    // Source automations (GitHub/Linear) are configured via connect + pause/resume,
+    // not the schedule/webhook instruction form.
+    if (item.trigger === "github" || item.trigger === "linear") {
+      setWorkQueueOpen(true);
+      return;
+    }
     let instructions = "";
     const parts = item.templateCiphertext?.split(":");
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
@@ -405,7 +444,9 @@ export function AutomationsView({
                     className="btn sm template-card-add"
                     onClick={() => startFromTemplate(template)}
                   >
-                    {template.kind === "external" ? (template.cta || "Set up") : "Add"}
+                    {template.kind === "external" || template.kind === "source"
+                      ? (template.cta || "Set up")
+                      : "Add"}
                   </button>
                 </div>
                 <strong className="template-card-title">{template.title}</strong>
@@ -447,8 +488,12 @@ export function AutomationsView({
                     )}
                   </div>
                   <div className="settings-actions">
-                    <button type="button" className="btn sm" onClick={() => void runNow(item)}>{item.trigger === "webhook" ? "Test run" : "Run now"}</button>
-                    <button type="button" className="btn sm" onClick={() => void edit(item)}>Edit</button>
+                    {item.trigger !== "github" && item.trigger !== "linear" && (
+                      <button type="button" className="btn sm" onClick={() => void runNow(item)}>{item.trigger === "webhook" ? "Test run" : "Run now"}</button>
+                    )}
+                    <button type="button" className="btn sm" onClick={() => void edit(item)}>
+                      {item.trigger === "github" || item.trigger === "linear" ? "Manage source" : "Edit"}
+                    </button>
                     {item.trigger === "webhook" && <button type="button" className="btn sm" onClick={() => void rotate(item)}>Rotate secret</button>}
                     <button type="button" className="btn sm" onClick={() => void toggle(item)}>{item.enabled ? "Pause" : "Resume"}</button>
                   </div>
