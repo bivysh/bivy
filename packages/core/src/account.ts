@@ -773,7 +773,8 @@ export interface AccountAutomation {
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   enabled: boolean;
-  /** How this automation fires. Absent on legacy rows means "schedule". */
+  /** How this automation fires. Absent on legacy rows means "schedule".
+   *  `github_ci` is legacy; prefer `github` + `on` rules. */
   trigger?: "schedule" | "webhook" | "manual" | "github" | "linear" | "github_ci";
   /** Optional GitHub workspace (`owner/name`) for triggers that do not carry a repo. */
   repo?: string;
@@ -781,6 +782,18 @@ export interface AccountAutomation {
   labels?: string[];
   /** Repo allowlist for github/linear. */
   repos?: string[];
+  /**
+   * GitHub event rules ("when any of these fire"). Outcomes are whatever the
+   * instructions say — not a special-cased PR path.
+   */
+  on?: Array<{
+    event: "issues" | "issue_comment" | "pull_request" | "pull_request_review_comment" | "workflow_run";
+    actions?: string[];
+    labels?: string[];
+    mention?: boolean;
+    conclusions?: string[];
+    workflows?: string[];
+  }>;
   /** Built-in template id (e.g. issue-to-pr). */
   templateId?: string;
   schedule: AutomationSchedule;

@@ -352,10 +352,9 @@ export interface ParsedCommentWork {
 
 /**
  * Pull an actionable request out of a GitHub `issue_comment` webhook payload.
- * Returns undefined unless the comment (action created/edited) is on an *issue*
- * (PR comments are deferred — they need the reply-to-PR path) and `@`-mentions
- * `triggerLogin` (the bot handle, e.g. "bivy"). The comment body is the
- * instruction; routing is applied separately via `pickCommentRoutingLabel`.
+ * Fires on issues *and* pull-request conversation comments (GitHub reuses this
+ * event for both) when the body `@`-mentions `triggerLogin`. Code-review
+ * comments use `pull_request_review_comment` instead.
  */
 export function parseGithubCommentEvent(payload: unknown, triggerLogin: string): ParsedCommentWork | undefined {
   if (!payload || typeof payload !== "object") return undefined;
@@ -363,7 +362,7 @@ export function parseGithubCommentEvent(payload: unknown, triggerLogin: string):
   if (!["created", "edited"].includes(String(o.action ?? ""))) return undefined;
   const issue = o.issue;
   const comment = o.comment;
-  if (!issue || typeof issue !== "object" || issue.pull_request) return undefined; // issues only
+  if (!issue || typeof issue !== "object") return undefined;
   if (!comment || typeof comment !== "object") return undefined;
   const instruction = String(comment.body ?? "");
   const mentions = extractMentions(instruction);
@@ -546,5 +545,89 @@ export function parseGithubWorkflowRunFailure(payload: unknown): ParsedWorkflowR
     htmlUrl,
     title,
     eventContext: lines.join("\n"),
+  };
+}
+
+export interface ParsedPullRequestWork {
+  title: string;
+  body: string;
+  repo: string;
+  issueNumber: number; // PR number (GitHub issue number space)
+  url: string;
+  labels: string[];
+  authorAssociation?: string;
+}
+
+/**
+ * Pull-request deliveries that can carry labels or body @mentions — same
+ * routing contract as issues. Outcomes are instruction-driven (no special PR path).
+ */
+export function parseGithubPullRequestEvent(payload: unknown): ParsedPullRequestWork | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const o = payload as Record<string, any>;
+  const action = String(o.action ?? "");
+  if (!["opened", "reopened", "edited", "labeled", "ready_for_review", "synchronize"].includes(action)) {
+    return undefined;
+  }
+  const pr = o.pull_request;
+  if (!pr || typeof pr !== "object") return undefined;
+  const labels: string[] = Array.isArray(pr.labels)
+    ? pr.labels.map((l: any) => (typeof l === "string" ? l : l?.name)).filter((n: any): n is string => Boolean(n))
+    : [];
+  const repo = o.repository?.full_name ? String(o.repository.full_name) : "";
+  const issueNumber = Number(pr.number) || 0;
+  if (!repo || !issueNumber) return undefined;
+  return {
+    title: String(pr.title ?? ""),
+    body: String(pr.body ?? ""),
+    repo,
+    issueNumber,
+    url: String(pr.html_url ?? ""),
+    labels,
+    authorAssociation: pr.author_association ? String(pr.author_association) : undefined,
+  };
+}
+
+/** Same routing as issues: bivy label or body @mention of the bot. */
+export function pickPullRequestRoutingLabel(pr: ParsedPullRequestWork, triggerLogin = "bivy"): string | undefined {
+  return pickIssueRoutingLabel(pr, triggerLogin);
+}
+
+export interface ParsedReviewCommentWork {
+  instruction: string;
+  repo: string;
+  issueNumber: number;
+  url: string;
+  mentions: string[];
+  prLabels: string[];
+  authorAssociation?: string;
+}
+
+/** Code-review thread comments that @-mention the bot. */
+export function parseGithubReviewCommentEvent(payload: unknown, triggerLogin: string): ParsedReviewCommentWork | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const o = payload as Record<string, any>;
+  if (!["created", "edited"].includes(String(o.action ?? ""))) return undefined;
+  const pr = o.pull_request;
+  const comment = o.comment;
+  if (!pr || typeof pr !== "object" || !comment || typeof comment !== "object") return undefined;
+  const instruction = String(comment.body ?? "");
+  const mentions = extractMentions(instruction);
+  const trigger = triggerLogin.trim().replace(/^@/, "").toLowerCase();
+  if (!trigger || !mentions.some((m) => m.toLowerCase() === trigger)) return undefined;
+  const repo = o.repository?.full_name ? String(o.repository.full_name) : "";
+  const issueNumber = Number(pr.number) || 0;
+  if (!repo || !issueNumber) return undefined;
+  const prLabels: string[] = Array.isArray(pr.labels)
+    ? pr.labels.map((l: any) => (typeof l === "string" ? l : l?.name)).filter((n: any): n is string => Boolean(n))
+    : [];
+  return {
+    instruction,
+    repo,
+    issueNumber,
+    url: String(comment.html_url ?? pr.html_url ?? ""),
+    mentions,
+    prLabels,
+    authorAssociation: comment.author_association ? String(comment.author_association) : undefined,
   };
 }

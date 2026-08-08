@@ -103,7 +103,7 @@ await test("mention extraction: logins only, ignores emails and code paths", () 
   assert.deepEqual(extractMentions("no mentions here"), []);
 });
 
-await test("issue_comment parse: triggers only on a mention of the bot, issues only", () => {
+await test("issue_comment parse: triggers on a mention of the bot (issues and PR conversation)", () => {
   const base = {
     action: "created",
     repository: { full_name: "o/r" },
@@ -122,8 +122,8 @@ await test("issue_comment parse: triggers only on a mention of the bot, issues o
   assert.equal(parseGithubCommentEvent({ ...base, comment: { body: "just a note" } }, "bivy"), undefined);
   // Mention of a different handle → ignored.
   assert.equal(parseGithubCommentEvent({ ...base, comment: { body: "@someone-else help" } }, "bivy"), undefined);
-  // PR comments are deferred (issue.pull_request set) → ignored.
-  assert.equal(parseGithubCommentEvent({ ...base, issue: { ...base.issue, pull_request: {} } }, "bivy"), undefined);
+  // PR conversation comments reuse issue_comment — @mention is honored (same as issues).
+  assert.ok(parseGithubCommentEvent({ ...base, issue: { ...base.issue, pull_request: {} } }, "bivy"));
   // Non-actionable action → ignored.
   assert.equal(parseGithubCommentEvent({ ...base, action: "deleted" }, "bivy"), undefined);
   // Trigger handle is case-insensitive and tolerates a leading @.

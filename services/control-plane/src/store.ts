@@ -602,7 +602,9 @@ export interface AutomationDefinition {
   /** How this automation fires. Defaults to "schedule" for legacy rows (any row
    *  with a `schedule` is schedule-triggered). A "webhook" automation is fired by
    *  a signed POST to /webhooks/automation/run/:id. "github" / "linear" are source
-   *  triggers: inbound issue events match this definition and start a session. */
+   *  triggers: inbound events match this definition and start a session.
+   *  "github_ci" is a legacy alias for a GitHub job gated on workflow_run failures
+   *  — new rows should use trigger=github + `on` rules. */
   trigger?: "schedule" | "webhook" | "manual" | "github" | "linear" | "github_ci";
   /** HMAC signing secret for a webhook-triggered automation. Set/rotated
    *  server-side, returned to the client only at create/rotate time, and never
@@ -613,10 +615,23 @@ export interface AutomationDefinition {
    *  this repo before starting the session — the agent does not pick the repo. */
   repo?: string;
   /** Label filter for github/linear source triggers. Empty/undefined → default
-   *  `bivy` / `bivy/<node>` contract. */
+   *  `bivy` / `bivy/<node>` contract. Prefer per-rule labels on `on` for GitHub. */
   labels?: string[];
   /** Repo allowlist for github/linear (`owner/name`). Empty/undefined → all. */
   repos?: string[];
+  /**
+   * GitHub event rules ("when"). Any matching rule fires the job. Outcomes are
+   * whatever the instructions say — not a special PR path. Legacy rows without
+   * `on` expand via effectiveEventRules() in automation-match.ts.
+   */
+  on?: Array<{
+    event: "issues" | "issue_comment" | "pull_request" | "pull_request_review_comment" | "workflow_run";
+    actions?: string[];
+    labels?: string[];
+    mention?: boolean;
+    conclusions?: string[];
+    workflows?: string[];
+  }>;
   /** Built-in template id (e.g. `issue-to-pr`) or custom. Display + node hints. */
   templateId?: string;
   schedule?:

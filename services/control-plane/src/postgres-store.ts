@@ -595,6 +595,8 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS labels JSONB;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS repos JSONB;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS template_id TEXT;
+      -- GitHub event rules ("when"). JSON array of { event, actions?, labels?, mention?, … }.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS on_events JSONB;
       CREATE TABLE IF NOT EXISTS trigger_events (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -2202,8 +2204,8 @@ export class PostgresStore implements MeshStore {
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
        approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo,
-       labels, repos, template_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
+       labels, repos, template_id, on_events)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
@@ -2211,7 +2213,8 @@ export class PostgresStore implements MeshStore {
         input.trigger ?? null, input.webhookSecret ?? null, input.repo ?? null,
         input.labels ? JSON.stringify(input.labels) : null,
         input.repos ? JSON.stringify(input.repos) : null,
-        input.templateId ?? null],
+        input.templateId ?? null,
+        input.on ? JSON.stringify(input.on) : null],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -2244,7 +2247,7 @@ export class PostgresStore implements MeshStore {
       `UPDATE automation_definitions SET name=$3, template_ciphertext=$4, runtime_id=$5,
        model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
        enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
-       repo=$16, labels=$17, repos=$18, template_id=$19, updated_at=now()
+       repo=$16, labels=$17, repos=$18, template_id=$19, on_events=$20, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
@@ -2253,7 +2256,8 @@ export class PostgresStore implements MeshStore {
         next.trigger ?? null, next.webhookSecret ?? null, next.repo ?? null,
         next.labels ? JSON.stringify(next.labels) : null,
         next.repos ? JSON.stringify(next.repos) : null,
-        next.templateId ?? null],
+        next.templateId ?? null,
+        next.on ? JSON.stringify(next.on) : null],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -2850,6 +2854,7 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     repo: row.repo ?? undefined,
     labels: mapStringList(row.labels),
     repos: mapStringList(row.repos),
+    on: mapEventRules(row.on_events),
     templateId: row.template_id ?? undefined,
     schedule: row.schedule,
     nextRunAt: row.next_run_at ? new Date(row.next_run_at).toISOString() : undefined,
@@ -2857,6 +2862,16 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
+}
+
+function mapEventRules(value: unknown): AutomationDefinition["on"] | undefined {
+  if (value == null) return undefined;
+  let parsed = value;
+  if (typeof value === "string") {
+    try { parsed = JSON.parse(value); } catch { return undefined; }
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+  return parsed as AutomationDefinition["on"];
 }
 
 function mapTriggerEvent(row: any): TriggerEvent {

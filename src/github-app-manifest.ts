@@ -39,7 +39,15 @@ export function buildAppManifest(input: AppManifestInput): Record<string, unknow
       actions: "read",
       checks: "read",
     },
-    default_events: ["issues", "issue_comment", "workflow_run"],
+    // Curated capability set — automations pick subsets via `on` rules.
+    // Labels + @mentions on issues/PRs/comments; failed workflow runs for CI.
+    default_events: [
+      "issues",
+      "issue_comment",
+      "pull_request",
+      "pull_request_review_comment",
+      "workflow_run",
+    ],
   };
 }
 

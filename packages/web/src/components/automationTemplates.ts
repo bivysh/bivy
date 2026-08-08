@@ -196,6 +196,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     key: "fix-failed-ci",
     title: "Fix failed CI",
     tagline: "A failed GitHub Actions run opens a session that diagnoses and fixes it.",
+    // Legacy kind kept so Enable finds the seeded github_ci row; matching is via on[]/effective rules.
     trigger: "github_ci",
     prefill: {
       name: "Fix failed CI",
