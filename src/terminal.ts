@@ -163,7 +163,11 @@ interface TerminalEntry {
  * that by an order of magnitude while adding latency well below the threshold of
  * perception for interactive echo.
  */
-const OUTPUT_FLUSH_MS = 8;
+// 16ms keeps a single chatty TUI under the relay's default node message budget
+// (6000/min ≈ 10ms/frame). At 8ms a fullscreen redraw stream could exceed that
+// and the relay closed the socket with "Rate limit exceeded" the moment a
+// phone/app attached to a live `bivy run` terminal.
+const OUTPUT_FLUSH_MS = 16;
 
 /**
  * How much recent output to retain per terminal for scrollback replay on

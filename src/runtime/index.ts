@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { ClaudeCodeRuntime, claudeRuntimeFromEnv, claudeSdkInstalled } from "./claude-code.js";
 import { deleteCodexSession, discoverNativeCodexSessions, loadCodexTranscript, writeCodexRollout } from "./codex-sessions.js";
 import { deleteOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
+import { discoverNativeGrokSessions, listGrokSessions, loadGrokTranscript } from "./grok-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 
 // Args that continue an existing Codex session each prompt. Codex assigns its own
@@ -695,13 +696,25 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     // subscription → ~/.grok/auth.json (grok-auth.ts), API key → XAI_API_KEY /
     // GROK_API_KEY. The older @vibe-kit/grok-cli only accepts API keys — install
     // the official binary for OAuth to work.
+    //
+    // Resume: `grok --resume <id> -p "<prompt>"` continues a prior session by
+    // UUID (sessions live under ~/.grok/sessions/<cwd>/<id>/). The interactive
+    // TUI uses the same store via `grok --resume <id>`. Model ids match
+    // `grok models` for the official CLI (override with BIVY_GROK_MODELS).
     args: ["-p"],
+    resume: {
+      template: ["--resume", "{id}", "-p"],
+      loadHistory: (sessionId: string) => loadGrokTranscript(sessionId),
+    },
     model: {
       flag: "-m",
       models: [
-        { id: "grok-code-fast-1", name: "Grok Code Fast 1", provider: "xai" },
-        { id: "grok-4-latest", name: "Grok 4", provider: "xai" },
-        { id: "grok-3-fast", name: "Grok 3 Fast", provider: "xai" },
+        // Official Grok CLI (1.x) currently advertises grok-4.5 as the default
+        // subscription model. Older curated ids (grok-4-latest, grok-code-fast-1,
+        // …) return "unknown model id" against current CLIs — keep the list
+        // honest; operators can override with BIVY_GROK_MODELS if their install
+        // exposes more.
+        { id: "grok-4.5", name: "Grok 4.5", provider: "xai" },
       ],
     },
     promptMode: "argv",
@@ -1302,7 +1315,23 @@ function cliAgentInfo(id: string): RuntimeInfo {
     // (BIVY_MCP_PROXY) — an honest, narrower capability than full toolInterception
     // (it governs MCP tools, not the agent's built-in shell/edits). See
     // src/harness/mcp-inject.ts + governMcpCall in src/server.ts.
-    capabilities: withExactCapabilitySurface({ toolInterception: acpActive, mcpToolApprovals: acpActive || Boolean(process.env.BIVY_MCP_PROXY), modelSelection, resume, packages: false, fork: false, usageReporting, sessionDiscovery: id === "codex" }),
+    capabilities: withExactCapabilitySurface({
+      toolInterception: acpActive,
+      mcpToolApprovals: acpActive || Boolean(process.env.BIVY_MCP_PROXY),
+      modelSelection,
+      resume,
+      packages: false,
+      fork: false,
+      usageReporting,
+      // Codex (and Grok) can locate an on-disk session by cwd + start time so a
+      // `bivy run` terminal without a launch-time pin is still takeable as chat.
+      sessionDiscovery: id === "codex" || id === "grok",
+      // Grok also exposes its interactive TUI (`grok --resume <id>`) for the
+      // chat↔terminal hand-off; Codex gets this via the approvals runtime.
+      interactiveTui: id === "grok" && commandAvailable(spec.command),
+      nativeSessionDiscovery: id === "grok" && commandAvailable(spec.command),
+      nativeSessionAdoption: id === "grok" && resume,
+    }),
     supportTier: spec.supportTier ?? (id === "codex" ? "supported" : "experimental"),
     testedVersion: spec.testedVersion,
     authOwner: spec.authOwner ?? "agent",
@@ -2098,5 +2127,50 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions): AgentRuntim
                 ),
             }
           : {};
-      return new ProcessRuntime({ id, displayName: spec.displayName, command: spec.command, args: runArgs, promptMode: spec.promptMode, credentials: createCredentialStore(options.credsDir), parserFactory: parserFactoryFor(parserId), preflight, prepare, model: cliModelConfig(id), thinking: cliThinkingConfig(id), usageReporting: cliUsageReporting(id), slashCommands: cliSlashCommands(id), ...resumeOpts });
+      // Grok-specific: on-disk session enumeration + interactive TUI hand-off so
+      // `bivy run grok` sessions persist after the PTY exits and can be taken
+      // over as chat or reopened in the native TUI.
+      const grokOpts =
+        id === "grok"
+          ? {
+              sessionDiscovery: true,
+              listDiskSessions: () =>
+                listGrokSessions().map((s) => ({
+                  id: s.id,
+                  path: s.dir,
+                  cwd: s.cwd,
+                  name: s.name || s.firstMessage,
+                  created: s.createdAt ? new Date(s.createdAt).toISOString() : undefined,
+                  modified: s.updatedAt ? new Date(s.updatedAt).toISOString() : undefined,
+                  firstMessage: s.firstMessage,
+                })),
+              interactiveTui: ({ sessionRef, env }: { sessionRef?: string; cwd: string; env: Record<string, string> }) =>
+                sessionRef ? { command: "grok", args: ["--resume", sessionRef], env } : null,
+              // discoverNativeSessions is on AgentRuntime; ProcessRuntime doesn't
+              // expose it as an option — wire via a thin subclass below when needed.
+            }
+          : {};
+      const runtime = new ProcessRuntime({
+        id,
+        displayName: spec.displayName,
+        command: spec.command,
+        args: runArgs,
+        promptMode: spec.promptMode,
+        credentials: createCredentialStore(options.credsDir),
+        parserFactory: parserFactoryFor(parserId),
+        preflight,
+        prepare,
+        model: cliModelConfig(id),
+        thinking: cliThinkingConfig(id),
+        usageReporting: cliUsageReporting(id),
+        slashCommands: cliSlashCommands(id),
+        ...resumeOpts,
+        ...grokOpts,
+      });
+      if (id === "grok") {
+        // Issue #156 discovery surface — ProcessRuntime has no options hook for
+        // this; attach it so collectDiscoveredSessions picks Grok sessions up.
+        (runtime as AgentRuntime).discoverNativeSessions = () => discoverNativeGrokSessions();
+      }
+      return runtime;
 }

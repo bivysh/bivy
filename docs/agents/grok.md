@@ -39,17 +39,22 @@ when a Grok session ends.
 
 ## Models
 
-Wired via `-m <id>` (`grok-code-fast-1`, `grok-4-latest`, `grok-3-fast`). Override
-with `BIVY_GROK_MODELS`.
+Wired via `-m <id>`. The curated default matches the official Grok CLI's
+current catalog (`grok-4.5`). Override with `BIVY_GROK_MODELS` (JSON array of
+`{id,name?,provider?}`) if your install exposes more.
 
 ## Resume
 
-**No** for the default headless path (no by-id resume flag on `grok -p`). The
-interactive TUI supports session resume via its own store under `~/.grok/sessions`.
+**Yes** for the official CLI:
+
+- Headless: `grok --resume <id> -p "<prompt>"` (Bivy's process runtime uses this).
+- Interactive: `grok --resume <id>` (chat → terminal hand-off, `bivy resume`).
+- Sessions live under `~/.grok/sessions/<url-encoded-cwd>/<uuid>/`.
+- `bivy run grok` pins a session id at launch (`--session-id`) so takeover and
+  the durable session list have a stable target after the PTY exits.
 
 ## Known gaps
 
-- No by-id resume on the headless pipe path.
 - Governance is effect-level, not per-tool approval cards.
 - Launch flags are best-effort; override with `BIVY_GROK_ARGS`.
 - A node that still has `@vibe-kit/grok-cli` first on `PATH` will keep asking for
