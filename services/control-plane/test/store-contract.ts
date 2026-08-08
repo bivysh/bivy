@@ -442,6 +442,45 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal((await store.listTriggerEvents((await store.findOrCreateAccount("contract-automation-other@example.com")).id)).length, 0);
   });
 
+  await test("automation definitions: webhook trigger fields and event context round-trip", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-webhook-def@example.com");
+    const def = await store.createAutomationDefinition(acct.id, {
+      name: "Fix CI",
+      trigger: "webhook",
+      webhookSecret: "s3cr3t",
+      templateCiphertext: "bivy-room-v1:node-x:opaque",
+      nodeLabel: "bivy/runner",
+      sandbox: "workspace-write",
+      enabled: true,
+    });
+    assert.equal(def.trigger, "webhook");
+    assert.equal(def.webhookSecret, "s3cr3t");
+    // Resolvable by id alone (the public webhook endpoint has no account scope).
+    const byId = await store.getAutomationDefinitionById(def.id);
+    assert.equal(byId?.accountId, acct.id);
+    assert.equal(byId?.webhookSecret, "s3cr3t");
+    assert.equal(await store.getAutomationDefinitionById("automation_does-not-exist"), undefined);
+    // A webhook-triggered run carries the untrusted event context and inherits
+    // the definition's routing/sandbox.
+    const run = await store.enqueueAutomationRun(acct.id, {
+      source: `automation:${def.id}`,
+      triggerKind: "webhook",
+      definitionId: def.id,
+      title: "CI failed",
+      body: def.templateCiphertext,
+      eventContext: "Build 8841 failed",
+      dedupeKey: `automation:${def.id}:evt-1`,
+    });
+    assert.equal(run.eventContext, "Build 8841 failed");
+    assert.equal(run.triggerKind, "webhook");
+    assert.equal(run.routing.sandbox, "workspace-write");
+    assert.ok(run.routing.nodeLabel.includes("runner"));
+    // Rotating the secret persists; the sentinel-scheduled webhook def is never due.
+    const rotated = await store.updateAutomationDefinition(acct.id, def.id, { webhookSecret: "rotated" });
+    assert.equal(rotated?.webhookSecret, "rotated");
+    assert.equal((await store.listDueAutomationDefinitions(new Date().toISOString())).some((d) => d.id === def.id), false);
+  });
+
   await test("work queue: dedupeKey is idempotent per account", async (store) => {
     const acct = await store.findOrCreateAccount("contract-dedupe@example.com");
     const first = await store.enqueueWorkItem(acct.id, { source: "github:issue", title: "Fix", dedupeKey: "gh:1" });

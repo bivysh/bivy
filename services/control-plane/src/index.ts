@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
-import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
@@ -36,6 +36,7 @@ import {
   verifyAutomationSignature,
   parseAutomationEvent,
   renderAutomationInstruction,
+  renderEventContext,
 } from "./webhooks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2301,10 +2302,25 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
 
 // Trigger-neutral automation API. The work-item endpoints below remain
 // compatibility adapters over these same rows.
+// A far-future one-time schedule for webhook/manual-triggered automations: the
+// `schedule` column is NOT NULL, but with no `nextRunAt` the scheduler never
+// selects the row, so this sentinel just parks it.
+const SENTINEL_SCHEDULE = { kind: "once" as const, at: "9999-12-31T00:00:00.000Z" };
+
+// Never echo the HMAC secret in list/get responses; surface the signed URL for a
+// webhook-triggered automation so the client can display it. The secret is
+// returned to the client exactly once, at create/rotate time.
+function publicAutomation(def: AutomationDefinition, req: Request) {
+  const { webhookSecret: _secret, ...rest } = def;
+  return def.trigger === "webhook"
+    ? { ...rest, webhookUrl: `${baseUrl(req)}/webhooks/automation/run/${def.id}` }
+    : rest;
+}
+
 app.get("/account/automations", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  res.json(await store.listAutomationDefinitions(client.accountId));
+  res.json((await store.listAutomationDefinitions(client.accountId)).map((d) => publicAutomation(d, req)));
 }));
 
 app.post("/account/automations", asyncHandler(async (req, res) => {
@@ -2312,15 +2328,23 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
   if (!name) return res.status(400).json({ error: "name is required" });
-  let schedule;
-  try {
-    schedule = normalizeSchedule(req.body?.schedule);
-  } catch (error) {
-    return res.status(400).json({ error: (error as Error).message });
-  }
+  const trigger = req.body?.trigger === "webhook" ? "webhook" : "schedule";
   const enabled = req.body?.enabled !== false;
-  const nextRunAt = enabled ? nextOccurrence(schedule, new Date(Date.now() - 1)) : undefined;
-  if (enabled && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
+  // A webhook-triggered automation has no schedule: it's fired by a signed POST.
+  // Park it on the sentinel schedule with no nextRunAt so the scheduler ignores
+  // it, and mint an HMAC secret (returned once, below).
+  let schedule = SENTINEL_SCHEDULE as AutomationDefinition["schedule"];
+  let nextRunAt: string | undefined;
+  if (trigger === "schedule") {
+    try {
+      schedule = normalizeSchedule(req.body?.schedule);
+    } catch (error) {
+      return res.status(400).json({ error: (error as Error).message });
+    }
+    nextRunAt = enabled ? nextOccurrence(schedule, new Date(Date.now() - 1)) : undefined;
+    if (enabled && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
+  }
+  const webhookSecret = trigger === "webhook" ? randomBytes(32).toString("base64url") : undefined;
   const definition = await store.createAutomationDefinition(client.accountId, {
     name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : undefined,
@@ -2331,10 +2355,13 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : undefined,
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined,
     enabled,
+    trigger,
+    webhookSecret,
     schedule,
     nextRunAt,
   });
-  res.status(201).json(definition);
+  // Return the signing secret exactly once (create). It's never echoed again.
+  res.status(201).json({ ...publicAutomation(definition, req), ...(webhookSecret ? { webhookSecret } : {}) });
 }));
 
 app.put("/account/automations/:id", asyncHandler(async (req, res) => {
@@ -2342,26 +2369,33 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!current) return res.status(404).json({ error: "Automation not found" });
-  let schedule = current.schedule;
-  if (req.body?.schedule !== undefined) {
-    try {
-      schedule = normalizeSchedule(req.body.schedule);
-    } catch (error) {
-      return res.status(400).json({ error: (error as Error).message });
-    }
-  }
-  if (!schedule) return res.status(400).json({ error: "schedule is required" });
+  const isWebhook = current.trigger === "webhook";
   const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : current.enabled;
-  const scheduleChanged = req.body?.schedule !== undefined;
-  // Recompute the occurrence when (re-)enabling or when the schedule changed;
-  // otherwise keep the current occurrence (or clear it while disabled).
-  const recompute = enabled && (scheduleChanged || !current.enabled);
-  const nextRunAt = recompute
-    ? nextOccurrence(schedule, new Date(Date.now() - 1))
-    : enabled ? current.nextRunAt : undefined;
-  // Mirror the create-time guard: an enabled definition whose only occurrence is
-  // in the past would sit enabled but never run.
-  if (recompute && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
+  // A webhook automation has no schedule; enabling/disabling just gates whether
+  // the endpoint admits events. Keep its sentinel schedule and never set a
+  // nextRunAt (the scheduler must never fire it).
+  let schedule = current.schedule;
+  let nextRunAt = isWebhook ? undefined : current.nextRunAt;
+  if (!isWebhook) {
+    if (req.body?.schedule !== undefined) {
+      try {
+        schedule = normalizeSchedule(req.body.schedule);
+      } catch (error) {
+        return res.status(400).json({ error: (error as Error).message });
+      }
+    }
+    if (!schedule) return res.status(400).json({ error: "schedule is required" });
+    const scheduleChanged = req.body?.schedule !== undefined;
+    // Recompute the occurrence when (re-)enabling or when the schedule changed;
+    // otherwise keep the current occurrence (or clear it while disabled).
+    const recompute = enabled && (scheduleChanged || !current.enabled);
+    nextRunAt = recompute
+      ? nextOccurrence(schedule, new Date(Date.now() - 1))
+      : enabled ? current.nextRunAt : undefined;
+    // Mirror the create-time guard: an enabled definition whose only occurrence is
+    // in the past would sit enabled but never run.
+    if (recompute && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
+  }
   const patch = {
     name: typeof req.body?.name === "string" ? req.body.name.trim() || current.name : current.name,
     templateCiphertext: typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : current.templateCiphertext,
@@ -2374,7 +2408,22 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     schedule,
     nextRunAt,
   };
-  res.json(await store.updateAutomationDefinition(client.accountId, current.id, patch));
+  const updated = await store.updateAutomationDefinition(client.accountId, current.id, patch);
+  res.json(updated ? publicAutomation(updated, req) : updated);
+}));
+
+// Rotate a webhook automation's signing secret. The new secret is returned once;
+// the old one stops working immediately.
+app.post("/account/automations/:id/webhook/rotate", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
+  if (!current) return res.status(404).json({ error: "Automation not found" });
+  if (current.trigger !== "webhook") return res.status(400).json({ error: "This automation is not webhook-triggered." });
+  const webhookSecret = randomBytes(32).toString("base64url");
+  const updated = await store.updateAutomationDefinition(client.accountId, current.id, { webhookSecret });
+  if (!updated) return res.status(404).json({ error: "Automation not found" });
+  res.json({ ...publicAutomation(updated, req), webhookSecret });
 }));
 
 app.delete("/account/automations/:id", asyncHandler(async (req, res) => {
@@ -2673,6 +2722,76 @@ function consumeAutomationRate(key: string, limit: number, now = Date.now()): bo
   current.count += 1;
   return current.count <= limit;
 }
+
+// Fire a *configured automation* from a signed webhook. Unlike the standalone
+// hook above, this runs the definition's own E2E template on the machine, agent,
+// model, and sandbox the operator pre-selected; the payload supplies only node
+// routing + untrusted event context (no command/runtime/model/template/sandbox
+// selection — that boundary is deliberate; see the standalone hook's copy).
+app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res) => {
+  const def = await store.getAutomationDefinitionById(String(req.params.definitionId));
+  if (!def || def.trigger !== "webhook") return res.status(404).json({ code: "not_found" });
+  if (def.enabled === false) return res.status(410).json({ code: "disabled" });
+  if (!consumeAutomationRate(`def:${def.id}`, 60)) {
+    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
+  }
+  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!def.webhookSecret || !verifyAutomationSignature(def.webhookSecret, raw, req.headers["x-bivy-signature-256"] as string | undefined)) {
+    return res.status(401).json({ code: "invalid_signature" });
+  }
+  if (!consumeAutomationRate(`account:${def.accountId}`, 300)) {
+    return res.status(429).json({ code: "quota_exhausted", retryAfterSeconds: 60 });
+  }
+  const idempotencyKey = String(req.headers["x-bivy-idempotency-key"] ?? "").trim();
+  if (!idempotencyKey || idempotencyKey.length > 200 || /[^\x21-\x7e]/.test(idempotencyKey)) {
+    return res.status(400).json({ code: "invalid_request", error: "A valid X-Bivy-Idempotency-Key header is required." });
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw.toString("utf8"));
+  } catch {
+    return res.status(400).json({ code: "invalid_request", error: "Invalid JSON." });
+  }
+  const event = parseAutomationEvent(payload);
+  if (!event) return res.status(400).json({ code: "invalid_request", error: "Event does not match automation schema version 1." });
+  const dedupeKey = `automation:${def.id}:${idempotencyKey}`;
+  const replay = await store.getAutomationRunBySourceKey(def.accountId, dedupeKey);
+  if (replay) return res.status(200).json({ code: "duplicate", id: replay.id });
+  const entitlements = await store.entitlements(def.accountId);
+  if (!entitlements.workQueueEnabled) return res.status(429).json({ code: "quota_exhausted" });
+  const allowance = await runAllowance(def.accountId);
+  if (allowance.exhausted) {
+    recordFunnelEvent("quota_blocked", "automation", entitlements.plan);
+    return res.status(429).json({ code: "quota_exhausted", limit: allowance.limit, used: allowance.used });
+  }
+  // The payload may pick the node (routing); everything else comes from the
+  // definition, which the store applies as fallbacks when enqueuing by id.
+  const route = event.routing || undefined;
+  const label = route ? `bivy/${route}` : undefined;
+  const result = await store.enqueueAutomationRunWithResult(def.accountId, {
+    label,
+    source: `automation:${def.id}`,
+    triggerKind: "webhook",
+    definitionId: def.id,
+    title: event.title || def.name,
+    // Operator instructions stay E2E-encrypted; the untrusted event goes in a
+    // separate field the node appends as data, not commands.
+    body: def.templateCiphertext,
+    eventContext: renderEventContext(event),
+    url: event.sourceUrl,
+    externalId: event.externalId,
+    dedupeKey,
+    defaultRouted: !route && !def.nodeLabel,
+  });
+  if (!result.created) {
+    return res.status(200).json({ code: "duplicate", id: result.run.id });
+  }
+  void notifyRelaysWorkAvailable(def.accountId, {
+    id: result.run.id,
+    label: result.run.routing.nodeLabel,
+  });
+  res.status(202).json({ code: "accepted", id: result.run.id, label: result.run.routing.nodeLabel });
+}));
 
 app.post("/webhooks/automation/:id", asyncHandler(async (req, res) => {
   const hook = await store.getInboundHook(String(req.params.id));
