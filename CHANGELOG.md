@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Automations is now the **sole place** to connect, add, reconnect, or
+  disconnect GitHub Apps, Linear, and Slack — full multi-app GitHub lifecycle
+  (create, connect an existing app, install, reconnect a key on this machine,
+  disconnect, default machine, who-can-trigger) lives in the Automations setup
+  sheet. Settings → GitHub App / Linear / Slack are now thin hand-offs that open
+  that same sheet instead of duplicating the flow.
 - GitHub automations use structured **event rules** (`on[]`): one GitHub App,
   jobs pick which deliveries fire (issues/PRs labeled, @mentions on issue/PR/
   review comments, failed workflow runs). Outcomes are whatever the instructions

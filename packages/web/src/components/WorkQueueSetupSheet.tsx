@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// In-Automations source setup. Keeps the user on the Automations surface for
-// GitHub App, Linear webhook, and Slack slash-command connect — instead of
-// bouncing into Settings and losing the thread. Full multi-app disconnect /
-// advanced management still lives in Settings as an escape hatch.
+// Sole connection hub for GitHub App / Linear / Slack. Multi-app lifecycle
+// (add, reconnect key, disconnect), default machine, and who-can-trigger all
+// live here — Settings only deep-links into this sheet.
 import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 import {
   type AccountNode,
@@ -14,6 +13,8 @@ import {
   type SlackHook,
   connectLinearHook,
   connectSlackHook,
+  disconnectLinearHook,
+  disconnectSlackHook,
   fetchLinearHook,
   fetchSlackHook,
 } from "@bivy/core";
@@ -51,27 +52,26 @@ function titleFor(focus: SourceSetupFocus): string {
 function leadFor(focus: SourceSetupFocus): string {
   switch (focus) {
     case "linear":
-      return "Label a Linear issue and a machine you own opens the pull request. Setup stays here — no trip through Settings.";
+      return "Label a Linear issue and a machine you own opens the pull request. This is the only place to connect or disconnect Linear.";
     case "slack":
-      return "Turn a Slack slash command into an unattended run on your machines. You'll leave with a Request URL to paste into Slack.";
+      return "Turn a Slack slash command into an unattended run. Connect, copy the Request URL, or disconnect — all here.";
     case "github":
-      return "Connect a GitHub App so issues, @mentions, and CI failures can start sessions on your machines.";
+      return "Add, install, reconnect, or disconnect GitHub Apps here. One account can hold several apps (personal + orgs).";
     default:
-      return "Label a GitHub or Linear issue and a machine you own opens the pull request. No schedule and no custom webhook — the work queue is the trigger.";
+      return "Connect the sources that start work on your machines. Lifecycle stays in Automations — not Settings.";
   }
 }
 
 export function WorkQueueSetupSheet({
   state,
   onClose,
-  onOpenFullSettings,
   focus = "work-queue",
   onChanged,
 }: {
   state: AppState;
   onClose: () => void;
-  /** Escape hatch into Settings for multi-app / disconnect / rare advanced cases. */
-  onOpenFullSettings: (view?: "github" | "linear" | "slack" | "webhooks") => void;
+  /** @deprecated Connections no longer bounce to Settings. */
+  onOpenFullSettings?: (view?: "github" | "linear" | "slack" | "webhooks") => void;
   /** Which source to emphasise. work-queue shows GitHub + Linear together. */
   focus?: SourceSetupFocus;
   /** Parent refreshes live source chips after a successful connect. */
@@ -90,6 +90,13 @@ export function WorkQueueSetupSheet({
   const [showExisting, setShowExisting] = useState(false);
   const [ceAppId, setCeAppId] = useState("");
   const [cePem, setCePem] = useState("");
+  const [, setCeApp] = useState<GithubAppEntry | null>(null);
+  const [addAppOpen, setAddAppOpen] = useState(false);
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
+  const [disconnectErr, setDisconnectErr] = useState<string | null>(null);
+  const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">("everyone");
+  const [savingAccess, setSavingAccess] = useState(false);
+  const [accessMsg, setAccessMsg] = useState<string | null>(null);
 
   // Linear local form state
   const [linSecret, setLinSecret] = useState("");
@@ -132,6 +139,8 @@ export function WorkQueueSetupSheet({
       setSlack(sl);
       const stored = gh.apps.find((a) => a.defaultNode)?.defaultNode ?? gh.defaultNode ?? "";
       setDefaultNode(stored || "");
+      const access = gh.apps.find((a) => a.triggerAccess)?.triggerAccess ?? gh.triggerAccess ?? "everyone";
+      setTriggerAccess(access);
       if (lin?.defaultNode) setLinRoute(lin.defaultNode);
       if (sl?.defaultNode) setSlackRoute(sl.defaultNode);
     } catch (e) {
@@ -169,6 +178,56 @@ export function WorkQueueSetupSheet({
     } finally {
       setSavingNode(false);
     }
+  }
+
+  async function saveTriggerAccess(next: "everyone" | "contributor" | "collaborator") {
+    setSavingAccess(true);
+    setAccessMsg(null);
+    const prev = triggerAccess;
+    setTriggerAccess(next);
+    try {
+      const saved = await controller.setGithubAppTriggerAccess(next);
+      setTriggerAccess(saved);
+      setInfo((cur) => (cur
+        ? { ...cur, triggerAccess: saved, apps: cur.apps.map((a) => ({ ...a, triggerAccess: saved })) }
+        : cur));
+      setAccessMsg("Saved");
+      onChanged?.();
+      setTimeout(() => setAccessMsg(null), 1500);
+    } catch (e) {
+      setTriggerAccess(prev);
+      setAccessMsg(String((e as Error).message || e));
+    } finally {
+      setSavingAccess(false);
+    }
+  }
+
+  async function disconnectApp(entry: GithubAppEntry) {
+    const id = appKey(entry);
+    if (!confirm(`Disconnect ${entry.name || entry.mention || "this GitHub App"}? The key is wiped on this node; the app is not deleted on GitHub.`)) {
+      return;
+    }
+    setDisconnectErr(null);
+    setDisconnectingId(id);
+    try {
+      await controller.githubAppDisconnect(entry.appId, entry.hookId);
+      await refresh();
+      onChanged?.();
+      const still = (await controller.fetchGithubApp()).apps.some((a) => appKey(a) === id);
+      if (still) setDisconnectErr("Disconnect didn't take effect — try again shortly.");
+    } catch (e) {
+      setDisconnectErr(String((e as Error).message || e));
+    } finally {
+      setDisconnectingId(null);
+    }
+  }
+
+  function openReconnect(entry?: GithubAppEntry) {
+    setCeApp(entry ?? null);
+    setCeAppId(entry?.appId ?? "");
+    setCePem("");
+    setShowExisting(true);
+    setAddAppOpen(true);
   }
 
   function onPemFile(e: ChangeEvent<HTMLInputElement>) {
@@ -212,6 +271,22 @@ export function WorkQueueSetupSheet({
     }
   }
 
+  async function disconnectLinear() {
+    if (!confirm("Disconnect Linear? Its webhook URL will stop accepting issues.")) return;
+    setLinBusy(true);
+    setLinErr("");
+    try {
+      await disconnectLinearHook(controller.local);
+      setLinear(null);
+      setLinJustEnabled(false);
+      onChanged?.();
+    } catch (e) {
+      setLinErr(String((e as Error).message || e));
+    } finally {
+      setLinBusy(false);
+    }
+  }
+
   async function connectSlack() {
     setSlackBusy(true);
     setSlackErr("");
@@ -223,6 +298,22 @@ export function WorkQueueSetupSheet({
       setSlack(next);
       setSlackSecret("");
       setSlackJustConnected(true);
+      onChanged?.();
+    } catch (e) {
+      setSlackErr(String((e as Error).message || e));
+    } finally {
+      setSlackBusy(false);
+    }
+  }
+
+  async function disconnectSlack() {
+    if (!confirm("Disconnect Slack? The slash-command URL will stop accepting requests.")) return;
+    setSlackBusy(true);
+    setSlackErr("");
+    try {
+      await disconnectSlackHook(controller.local);
+      setSlack(null);
+      setSlackJustConnected(false);
       onChanged?.();
     } catch (e) {
       setSlackErr(String((e as Error).message || e));
@@ -386,9 +477,10 @@ export function WorkQueueSetupSheet({
                         )}
                         {entry.servedBy === null ? (
                           <p className="schedule-hint warn">
-                            No online machine holds this app&apos;s key — queue items won&apos;t be claimed.
-                            Connect the key on a machine in{" "}
-                            <button type="button" className="link-btn" onClick={() => onOpenFullSettings("github")}>Settings → GitHub</button>.
+                            No online machine holds this app&apos;s key — queue items won&apos;t be claimed.{" "}
+                            <button type="button" className="link-btn" onClick={() => openReconnect(entry)}>
+                              Connect key on this machine →
+                            </button>
                           </p>
                         ) : entry.servedBy && (
                           <span className="settings-hint">
@@ -396,9 +488,21 @@ export function WorkQueueSetupSheet({
                             {entry.servedBy.online ? "" : " (offline)"}.
                           </span>
                         )}
+                        <div className="row-actions" style={{ marginTop: 6 }}>
+                          <button
+                            type="button"
+                            className="btn sm danger-ghost"
+                            disabled={disconnectingId !== null}
+                            onClick={() => void disconnectApp(entry)}
+                          >
+                            {disconnectingId === appKey(entry) ? "Disconnecting…" : "Disconnect"}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
+
+                  {disconnectErr && <p className="settings-error">{disconnectErr}</p>}
 
                   <div className="settings-field" style={{ marginTop: 4 }}>
                     <label className="field-label" htmlFor="wq-default-node">Default machine for untagged work</label>
@@ -420,6 +524,88 @@ export function WorkQueueSetupSheet({
                       {nodeMsg && <span className="settings-hint">{nodeMsg}</span>}
                     </div>
                   </div>
+
+                  <div className="settings-field">
+                    <label className="field-label" htmlFor="wq-trigger-access">Who can trigger runs</label>
+                    <select
+                      id="wq-trigger-access"
+                      className="picker-search"
+                      value={triggerAccess}
+                      disabled={savingAccess}
+                      onChange={(e) => void saveTriggerAccess(e.target.value as "everyone" | "contributor" | "collaborator")}
+                    >
+                      <option value="everyone">Everyone — any GitHub user (default)</option>
+                      <option value="contributor">Contributors — prior merged contribution, or higher</option>
+                      <option value="collaborator">Collaborators only — push access</option>
+                    </select>
+                    <p className="settings-hint">
+                      Account-wide — applies to every app above. Restrict who can start runs via{" "}
+                      <code>@{mention}</code> on public repos.
+                    </p>
+                    {accessMsg && <span className="settings-hint">{accessMsg}</span>}
+                  </div>
+
+                  {!addAppOpen ? (
+                    <button type="button" className="btn sm" onClick={() => { setAddAppOpen(true); setShowExisting(false); setCeApp(null); }}>
+                      + Add another GitHub App
+                    </button>
+                  ) : (
+                    <div className="wq-status-card" style={{ marginTop: 4 }}>
+                      <div className="autom-field-label">Add another app</div>
+                      <p className="settings-hint">One app per personal account or organization you want Bivy to cover.</p>
+                      <label className="field-label" htmlFor="wq-org-2">Organization (optional)</label>
+                      <input
+                        id="wq-org-2"
+                        className="picker-search"
+                        value={org}
+                        placeholder="leave blank for your personal account"
+                        disabled={phase === "starting" || phase === "submitting" || phase === "completing"}
+                        onChange={(e) => setOrg(e.target.value)}
+                      />
+                      {ready ? (
+                        <form method="post" action={app!.action} onSubmit={markGithubAppPending}>
+                          <input type="hidden" name="manifest" value={JSON.stringify(app!.manifest)} />
+                          <button className="btn primary block" type="submit">Continue to GitHub →</button>
+                        </form>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn primary"
+                          disabled={phase === "starting" || phase === "completing" || !canQuery}
+                          onClick={() => controller.githubAppManifestStart(org.trim() || undefined)}
+                        >
+                          {phase === "starting" ? "Preparing…" : phase === "completing" ? "Finishing…" : "Create GitHub App"}
+                        </button>
+                      )}
+                      <button type="button" className="link-btn" onClick={() => openReconnect()}>
+                        Connect an existing app instead →
+                      </button>
+                      {showExisting && (
+                        <div className="ce-form">
+                          <label className="field-label">App ID</label>
+                          <input className="picker-search" value={ceAppId} placeholder="e.g. 123456" onChange={(e) => setCeAppId(e.target.value)} />
+                          <label className="field-label">Private key (.pem)</label>
+                          <input className="ce-file" type="file" accept=".pem,application/x-pem-file,text/plain" onChange={onPemFile} />
+                          <textarea
+                            className="picker-search ce-pem"
+                            value={cePem}
+                            rows={3}
+                            placeholder="…or paste the PEM here"
+                            onChange={(e) => setCePem(e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            className="btn primary"
+                            disabled={!ceAppId.trim() || !cePem.trim() || phase === "completing"}
+                            onClick={() => controller.githubAppConnectExisting({ appId: ceAppId.trim(), privateKeyPem: cePem.trim() })}
+                          >
+                            {phase === "completing" ? "Connecting…" : "Connect app to this machine"}
+                          </button>
+                        </div>
+                      )}
+                      <button type="button" className="link-btn" onClick={() => setAddAppOpen(false)}>Cancel</button>
+                    </div>
+                  )}
 
                   {readyToRun && (
                     <div className="autom-success" role="status">
@@ -536,6 +722,14 @@ export function WorkQueueSetupSheet({
                     <p className="settings-hint">
                       Each runner also needs <code>BIVY_LINEAR_API_KEY</code> and a default <code>BIVY_LINEAR_REPO=owner/repo</code>.
                     </p>
+                    <button
+                      type="button"
+                      className="btn sm danger-ghost"
+                      disabled={linBusy}
+                      onClick={() => void disconnectLinear()}
+                    >
+                      Disconnect Linear
+                    </button>
                   </>
                 )}
               </div>
@@ -581,6 +775,14 @@ export function WorkQueueSetupSheet({
                     <p className="settings-hint">
                       Add <code>in owner/repo</code> for an isolated checkout + PR. Add <code>on node</code> to pick a machine.
                     </p>
+                    <button
+                      type="button"
+                      className="btn sm danger-ghost"
+                      disabled={slackBusy}
+                      onClick={() => void disconnectSlack()}
+                    >
+                      Disconnect Slack
+                    </button>
                   </>
                 ) : (
                   <>
@@ -629,15 +831,7 @@ export function WorkQueueSetupSheet({
         </div>
 
         <div className="wizard-actions">
-          <button
-            type="button"
-            className="btn ghost-link"
-            onClick={() => onOpenFullSettings(
-              focus === "slack" ? "slack" : focus === "linear" ? "linear" : "github",
-            )}
-          >
-            Advanced settings
-          </button>
+          <span className="settings-hint">Connections are managed only here</span>
           <button type="button" className="btn primary autom-save-btn" onClick={onClose}>
             {primaryDoneLabel}
           </button>
