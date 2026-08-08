@@ -38,7 +38,9 @@ import { PiRuntime, type PiRuntimeOptions } from "./pi.js";
 import { ProcessRuntime, processRuntimeFromEnv, type ProcessModelConfig, type ProcessPromptMode, type ProcessThinkingConfig } from "./process.js";
 import { codexCredentialPreflight } from "./codex-preflight.js";
 import { opencodeCredentialPreflight } from "./opencode-preflight.js";
+import { grokCredentialPreflight } from "./grok-preflight.js";
 import { ensureCodexAuth } from "./codex-auth.js";
+import { ensureGrokAuth } from "./grok-auth.js";
 import { parserFactoryFor } from "./cli-parsers.js";
 import { sandboxTier, sandboxArgsFor, codexSandboxPolicy, type SandboxTier } from "../harness/sandbox.js";
 import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv, type ProtocolRuntimeOptions } from "./protocol.js";
@@ -685,13 +687,14 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
   grok: {
     displayName: "Grok",
     command: "grok",
-    packageName: "@vibe-kit/grok-cli",
+    packageName: "grok (curl -fsSL https://x.ai/cli/install.sh | bash)",
     supportTier: "beta",
-    blurb: "Open-source terminal agent for xAI's Grok models (Grok CLI).",
-    // `grok -p "<prompt>"` runs one prompt and exits (headless); `-m <id>` picks
-    // the model. (The widely-installed @vibe-kit/grok-cli has no by-id resume or
-    // JSON flag; the superagent `grok-dev` fork does — override via env if you run
-    // that one.)
+    blurb: "xAI's official Grok coding agent (Grok CLI) — SuperGrok/X subscription or API key.",
+    // Official CLI: `grok -p "<prompt>"` (alias `--single`) runs one headless
+    // turn; `-m <id>` picks the model. Auth is projected from Bivy's vault:
+    // subscription → ~/.grok/auth.json (grok-auth.ts), API key → XAI_API_KEY /
+    // GROK_API_KEY. The older @vibe-kit/grok-cli only accepts API keys — install
+    // the official binary for OAuth to work.
     args: ["-p"],
     model: {
       flag: "-m",
@@ -702,7 +705,11 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
       ],
     },
     promptMode: "argv",
-    install: { kind: "npm", pkg: "@vibe-kit/grok-cli" },
+    install: {
+      kind: "curl",
+      display: "curl -fsSL https://x.ai/cli/install.sh | bash",
+      shell: "curl -fsSL https://x.ai/cli/install.sh | bash",
+    },
   },
   amp: {
     displayName: "Amp",
@@ -2035,9 +2042,9 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions): AgentRuntim
           : structured && spec.jsonArgs
             ? spec.jsonArgs
             : spec.args);
-      // Codex reads OPENAI_API_KEY or its own `$CODEX_HOME/auth.json`. When the
-      // user connected a ChatGPT/Codex subscription in Bivy (but hasn't run
-      // `codex login`), `prepare` mints that auth file from the shared vault so
+      // Codex / Grok read an API key *or* their own `$…_HOME/auth.json`. When the
+      // user connected a subscription in Bivy (but hasn't run `codex login` /
+      // `grok login`), `prepare` mints that auth file from the shared vault so
       // the run just works; the preflight still catches the genuinely
       // uncredentialed case with an actionable message instead of an opaque 401.
       const preflight =
@@ -2045,13 +2052,21 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions): AgentRuntim
           ? (env: Record<string, string | undefined>) => codexCredentialPreflight(env)
           : id === "opencode"
             ? (env: Record<string, string | undefined>, ctx: { provider?: string }) => opencodeCredentialPreflight(env, ctx)
+            : id === "grok"
+              ? (env: Record<string, string | undefined>) => grokCredentialPreflight(env)
+              : undefined;
+      const prepare =
+        id === "codex"
+          ? async (): Promise<Record<string, string>> => {
+              const home = await ensureCodexAuth(options.credsDir);
+              return home ? { CODEX_HOME: home } : {};
+            }
+          : id === "grok"
+            ? async (): Promise<Record<string, string>> => {
+                const home = await ensureGrokAuth(options.credsDir);
+                return home ? { GROK_HOME: home } : {};
+              }
             : undefined;
-      const prepare = id === "codex"
-        ? async (): Promise<Record<string, string>> => {
-            const home = await ensureCodexAuth(options.credsDir);
-            return home ? { CODEX_HOME: home } : {};
-          }
-        : undefined;
       // Resume, the generic way. Codex keeps its verified path (rollout history +
       // tier-aware `codex exec resume <id> --json`). Every other CLI agent becomes
       // resumable purely as data: a spec.resume template (or a BIVY_<ID>_RESUME_

@@ -138,13 +138,18 @@ export async function buildAgentCredentialEnv(
     if (cred.kind === "oauth") {
       // OAuth *subscription* tokens are provider-specific and are not accepted
       // as a plain API key. Only Anthropic has a documented env var an external
-      // agent reads (Claude Code's OAuth token); other providers' subscription
-      // logins can't be handed off this way, so don't emit a misleading key.
+      // agent reads (Claude Code's OAuth token). Codex and Grok get their
+      // subscription via native auth.json materialization (codex-auth.ts /
+      // grok-auth.ts), not as env keys — so don't emit a misleading key here.
       if (cred.provider !== "anthropic") continue;
       Object.assign(env, cred.env ?? {});
       env.CLAUDE_CODE_OAUTH_TOKEN = cred.token;
     } else {
       env[apiKeyEnvVar(cred.provider)] = cred.token;
+      // vibe-kit/grok-cli (and some forks) read GROK_API_KEY instead of the
+      // official XAI_API_KEY. Project both so either Grok binary works off one
+      // Bivy API-key login.
+      if (cred.provider === "xai") env.GROK_API_KEY = cred.token;
       // A custom endpoint's base URL (and standard-key alias) is injected only
       // when it's the active provider, so it can't hijack the real provider.
       if (isActive && cred.env) {

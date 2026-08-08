@@ -83,6 +83,32 @@ await check("provisionAgentRun for a plain agent projects env without a native s
   assert.ok(!fs.existsSync(path.join(piDir, "auth.json")), "no native store for an env-only agent");
 });
 
+await check("provisionAgentRun('grok') mints ~/.grok/auth.json from an xai OAuth subscription", async () => {
+  const credsDir = tmpDir();
+  const piDir = path.join(credsDir, "pi");
+  const grokHome = tmpDir();
+  process.env.GROK_HOME = grokHome;
+  delete process.env.XAI_API_KEY;
+  delete process.env.GROK_API_KEY;
+  const store = createCredentialVault(credsDir);
+  await store.modify("xai", async () => ({
+    type: "oauth",
+    access: "xai-access",
+    refresh: "xai-refresh",
+    expires: Date.now() + 3_600_000,
+  }));
+  const env = await provisionAgentRun(credsDir, piDir, "grok");
+  assert.equal(env.GROK_HOME, grokHome, "GROK_HOME pinned so the CLI reads the minted file");
+  const authPath = path.join(grokHome, "auth.json");
+  assert.ok(fs.existsSync(authPath), "Grok auth.json materialized");
+  const onDisk = JSON.parse(fs.readFileSync(authPath, "utf8"));
+  const entry = Object.values(onDisk)[0] as { key?: string; refresh_token?: string; auth_mode?: string };
+  assert.equal(entry.key, "xai-access");
+  assert.equal(entry.refresh_token, "xai-refresh");
+  assert.equal(entry.auth_mode, "oidc");
+  delete process.env.GROK_HOME;
+});
+
 if (failures > 0) {
   console.error(`credential-provisioning: ${failures} test(s) failed`);
   process.exit(1);

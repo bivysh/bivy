@@ -21,7 +21,7 @@ what's hidden from the picker — see
 | [Crush](crush.md) | Agent | **No** |
 | [Cursor](cursor.md) | Agent | Yes |
 | [GitHub Copilot](copilot.md) | Agent | **No** |
-| [Grok](grok.md) | Agent | **No** |
+| [Grok](grok.md) | Bivy (OAuth → auth.json or API key) | **No** |
 | [Amp](amp.md) | Agent | Yes (threads) |
 | [Auggie](auggie.md) | Agent | **No** |
 | [Droid](droid.md) | Agent | **No** |

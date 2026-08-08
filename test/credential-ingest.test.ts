@@ -6,7 +6,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
-import { claudeAuthToCredential, codexAuthToCredential, ingestAgentCredentials } from "../src/runtime/credential-ingest.js";
+import { claudeAuthToCredential, codexAuthToCredential, grokAuthToCredential, ingestAgentCredentials } from "../src/runtime/credential-ingest.js";
+import { grokAuthEntryKey } from "../src/runtime/grok-auth.js";
 
 let failures = 0;
 async function check(name: string, fn: () => Promise<void>) {
@@ -91,6 +92,49 @@ await check("ingestAgentCredentials('claude') folds ~/.claude/.credentials.json 
   const stored = await createCredentialVault(piDir).read("anthropic");
   assert.equal((stored as { refresh?: string }).refresh, "c-rt");
   delete process.env.CLAUDE_CONFIG_DIR;
+});
+
+await check("maps a Grok OIDC auth.json entry to an xai oauth credential", async () => {
+  const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+  const mapped = grokAuthToCredential({
+    [grokAuthEntryKey()]: {
+      key: "g-access",
+      refresh_token: "g-rt",
+      auth_mode: "oidc",
+      expires_at: expiresAt,
+      oidc_issuer: "https://auth.x.ai",
+    },
+  });
+  assert.equal(mapped?.providerId, "xai");
+  assert.equal(mapped?.credential.type, "oauth");
+  assert.equal((mapped?.credential as { access?: string }).access, "g-access");
+  assert.equal((mapped?.credential as { refresh?: string }).refresh, "g-rt");
+  assert.equal((mapped?.credential as { expires?: number }).expires, Date.parse(expiresAt));
+});
+
+await check("ingestAgentCredentials('grok') folds ~/.grok/auth.json into the vault", async () => {
+  const piDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-ingest-grok-"));
+  const grokHome = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-ingest-grokhome-"));
+  process.env.GROK_HOME = grokHome;
+  const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+  fs.writeFileSync(
+    path.join(grokHome, "auth.json"),
+    JSON.stringify({
+      [grokAuthEntryKey()]: {
+        key: "g-at",
+        refresh_token: "g-rt-disk",
+        auth_mode: "oidc",
+        expires_at: expiresAt,
+        oidc_issuer: "https://auth.x.ai",
+      },
+    }),
+  );
+
+  const imported = await ingestAgentCredentials("grok", piDir, piDir);
+  assert.equal(imported, 1, "the Grok login is imported");
+  const stored = await createCredentialVault(piDir).read("xai");
+  assert.equal((stored as { refresh?: string }).refresh, "g-rt-disk");
+  delete process.env.GROK_HOME;
 });
 
 await check("an unknown agent is a no-op", async () => {
