@@ -34,6 +34,7 @@ import {
   type ScheduleTemplate,
   type WebhookTemplate,
 } from "./automationTemplates.js";
+import { WorkQueueSetupSheet } from "./WorkQueueSetupSheet.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -192,6 +193,9 @@ export function AutomationsView({
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [rotated, setRotated] = useState<{ id: string; secret: string } | null>(null);
+  // In-sheet work-queue setup ("Work issues into PRs") — stays on Automations
+  // instead of bouncing to Settings.
+  const [workQueueOpen, setWorkQueueOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     const [definitions, recent] = await Promise.all([
@@ -241,6 +245,7 @@ export function AutomationsView({
   function startFromTemplate(template: AutomationTemplate) {
     if (template.kind === "schedule") startFromScheduleTemplate(template);
     else if (template.kind === "webhook") startFromWebhookTemplate(template);
+    else if (template.route === "queue") setWorkQueueOpen(true);
     else onOpenSettings(template.route);
   }
 
@@ -327,15 +332,13 @@ export function AutomationsView({
               <div className="template-card" key={template.key}>
                 <div className="template-card-top">
                   <span className="template-card-icon" aria-hidden="true">{templateIcon(template.key)}</span>
-                  {template.kind === "external" ? (
-                    <button type="button" className="btn sm template-card-add" onClick={() => onOpenSettings(template.route)}>
-                      {template.cta.replace(/^Set up in\s+/i, "") || "Open"}
-                    </button>
-                  ) : (
-                    <button type="button" className="btn sm template-card-add" onClick={() => startFromTemplate(template)}>
-                      Add
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="btn sm template-card-add"
+                    onClick={() => startFromTemplate(template)}
+                  >
+                    {template.kind === "external" ? (template.cta || "Set up") : "Add"}
+                  </button>
                 </div>
                 <strong className="template-card-title">{template.title}</strong>
                 <p className="template-card-tagline">{template.tagline}</p>
@@ -428,6 +431,17 @@ export function AutomationsView({
           initial={draft}
           onCancel={() => setDraft(null)}
           onSaved={async () => { setDraft(null); await refresh().catch((e) => setError(String(e))); }}
+        />
+      )}
+
+      {workQueueOpen && (
+        <WorkQueueSetupSheet
+          state={state}
+          onClose={() => setWorkQueueOpen(false)}
+          onOpenFullSettings={() => {
+            setWorkQueueOpen(false);
+            onOpenSettings("queue");
+          }}
         />
       )}
     </div>,

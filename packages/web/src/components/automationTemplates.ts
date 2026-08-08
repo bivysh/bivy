@@ -230,6 +230,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     title: "Work issues into PRs",
     tagline: "Label a GitHub or Linear issue and let a node open the pull request.",
     route: "queue",
-    cta: "Set up in Work Queue",
+    // Opens an in-Automations setup sheet (GitHub App + how-to), not Settings.
+    cta: "Set up",
   },
 ];

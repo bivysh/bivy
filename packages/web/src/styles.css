@@ -1529,6 +1529,28 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .schedule-hint.ok { color: var(--muted); }
 .schedule-hint.warn { color: var(--warn, var(--accent)); }
 .schedule-cron-input { margin-top: 6px; font-family: var(--mono, ui-monospace, monospace); font-size: 13px; }
+
+/* Work-queue setup sheet (in Automations): status + create GitHub App without
+   leaving the Automations surface. */
+.wizard.wq-setup { max-width: 560px; }
+.wq-how { display: flex; flex-direction: column; gap: 8px; }
+.wq-how-list {
+  margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px;
+  font-size: 13px; color: var(--muted); line-height: 1.45;
+}
+.wq-how-list code {
+  font-size: 12px; padding: 1px 5px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+}
+.wq-status-card {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.wq-app-row { display: flex; flex-direction: column; gap: 4px; }
+.wq-app-row + .wq-app-row { padding-top: 10px; border-top: 1px solid var(--line); }
+.wq-app-row-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.banner.inline { border-radius: 10px; padding: 10px 12px; margin: 0; }
 .settings-form code { font-size: 11px; padding: 1px 5px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); }
 .settings-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .queue-head { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }

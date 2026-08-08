@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of a multi-step wizard. Webhook-triggered automations reveal the signed
   URL and one-time signing secret after create; existing ones show URL + Rotate
   secret / Test run on the row. CI-failure, error-tracker, and production-
-  investigation templates open this flow directly.
+  investigation templates open this flow directly. **Work issues into PRs** opens
+  an in-Automations setup sheet (GitHub App create/connect, install, default
+  machine) instead of bouncing to Settings.
 - Forks into OpenCode now open on a full copy of the transcript instead of a
   seeded summary prompt: Bivy materialises the fork's conversation as a real
   session in OpenCode's own store (`$XDG_DATA_HOME/opencode/opencode.db`), so
