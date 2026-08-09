@@ -634,6 +634,15 @@ export interface AutomationDefinition {
   }>;
   /** Built-in template id (e.g. `issue-to-pr`) or custom. Display + node hints. */
   templateId?: string;
+  /** When set, schedule/manual runs CONTINUE this existing session instead of
+   *  starting a new one (scheduled chat messages). Mirrors WorkItemInput.target;
+   *  only "existing_session" is stored — the default "new_session" is
+   *  represented by absence. */
+  target?: { kind: "existing_session"; sessionId: string };
+  /** When set, schedule/manual runs are plain chat messages rather than
+   *  automation jobs: the node skips the automation boilerplate, auto-push and
+   *  required checks (scheduled "message me later" reminders). */
+  message?: boolean;
   schedule?:
     | { kind: "once"; at: string }
     | { kind: "cron"; expression: string; timezone: string };
@@ -688,6 +697,8 @@ export interface AutomationRun {
   events?: RunEvidenceEvent[];
   title: string;
   body?: string;
+  /** Plain chat message (no automation boilerplate/push/checks). */
+  message?: boolean;
   /** Untrusted, plaintext context from a webhook trigger's event payload,
    *  appended to the (E2E-decrypted) operator template on the node as data — not
    *  instructions. Only set for webhook-triggered automation runs. */
@@ -756,6 +767,8 @@ export interface WorkItem {
   routingReason?: string;
   checks?: RunCheck[];
   events?: RunEvidenceEvent[];
+  /** Plain chat message (no automation boilerplate/push/checks). */
+  message?: boolean;
 }
 export type WorkItemInput = {
   label?: string;
@@ -787,6 +800,8 @@ export type WorkItemInput = {
   definitionId?: string;
   triggerKind?: AutomationTriggerKind;
   target?: AutomationRun["target"];
+  /** Plain chat message (no automation boilerplate/push/checks). */
+  message?: boolean;
 };
 
 // Per-account inbound hook: a stable id + secret a user configures in GitHub /

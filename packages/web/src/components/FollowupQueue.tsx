@@ -22,7 +22,10 @@ function fmtBytes(n: number): string {
 function statusLabel(item: PendingFollowup, position: number): string {
   if (item.status === "sending") return "Sending…";
   if (item.status === "failed") return "Failed — will retry";
-  return `Queued · #${position + 1}`;
+  const base = `Queued · #${position + 1}`;
+  // Account/relay mode: mirrored as a scheduled message on the control plane,
+  // so it sends even if this app closes before the turn ends.
+  return item.scheduledAutomationId ? `${base} · sends on close` : base;
 }
 
 /** One queued item, either its resting display row or an inline editor. */

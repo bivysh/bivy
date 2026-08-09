@@ -227,6 +227,13 @@ export interface PendingFollowup {
   createdAt: number;
   updatedAt: number;
   version: number;
+  /** Account/relay mode: the one-off scheduled-message automation that mirrors
+   *  this queued item on the control plane, so it still sends if the app closes
+   *  or the node was offline at turn-end (the node dedupes against the live
+   *  transcript so the in-app dispatch and this backstop can't double-send).
+   *  Cleared once delivered/cancelled. Client-local bookkeeping — the node and
+   *  control plane don't see it. */
+  scheduledAutomationId?: string;
 }
 
 export type FollowupEditResult =
@@ -1513,7 +1520,7 @@ export class SessionStore {
   /** Append a new queued follow-up. `id` becomes its clientMessageId once sent.
    *  A duplicate id (e.g. a doubled dispatch racing itself) is ignored rather
    *  than creating a second entry. */
-  enqueueFollowup(sessionId: string, item: { id: string; text: string; attachments?: PromptAttachment[] }, now: number): PendingFollowup {
+  enqueueFollowup(sessionId: string, item: { id: string; text: string; attachments?: PromptAttachment[]; scheduledAutomationId?: string }, now: number): PendingFollowup {
     const list = this.getFollowups(sessionId);
     const existing = list.find((f) => f.id === item.id);
     if (existing) return existing;
@@ -1525,9 +1532,25 @@ export class SessionStore {
       createdAt: now,
       updatedAt: now,
       version: 1,
+      scheduledAutomationId: item.scheduledAutomationId,
     };
     this.setFollowupsFor(sessionId, [...list, created]);
     return created;
+  }
+
+  /** Record the control-plane automation that mirrors a queued follow-up (the
+   *  persistence backstop). Only applies while the item is still queued — an
+   *  item already dispatched/sent no longer needs the backstop, so the caller
+   *  (AppController) cancels the automation when this returns false. */
+  attachFollowupAutomation(sessionId: string, id: string, automationId: string): boolean {
+    const list = this.getFollowups(sessionId);
+    const idx = list.findIndex((f) => f.id === id);
+    if (idx < 0 || list[idx]!.status !== "queued") return false;
+    const updated: PendingFollowup = { ...list[idx]!, scheduledAutomationId: automationId };
+    const next = list.slice();
+    next[idx] = updated;
+    this.setFollowupsFor(sessionId, next);
+    return true;
   }
 
   /**
@@ -1553,7 +1576,7 @@ export class SessionStore {
     const item = list[idx]!;
     if (item.status !== "queued") return { ok: false, reason: "not_queued" };
     if (item.version !== expectedVersion) return { ok: false, reason: "stale" };
-    const updated: PendingFollowup = { ...item, text: patch.text, attachments: patch.attachments, version: item.version + 1, updatedAt: now };
+    const updated: PendingFollowup = { ...item, text: patch.text, attachments: patch.attachments, version: item.version + 1, updatedAt: now, scheduledAutomationId: undefined };
     const next = list.slice();
     next[idx] = updated;
     this.setFollowupsFor(sessionId, next);
