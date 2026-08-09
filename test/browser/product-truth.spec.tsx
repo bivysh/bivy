@@ -20,10 +20,27 @@ test("full computer access requires an informed second action", async () => {
 
 test("settings use task-oriented groups and search panel concepts", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/Settings.tsx", import.meta.url), "utf8");
-  for (const group of ["Models & agents", "Machines", "Integrations", "Automation & policy", "App", "Account"]) {
+  for (const group of ["Models & agents", "Machines", "App", "Account"]) {
     expect(source).toContain(`label: "${group}"`);
   }
+  // Integrations (GitHub/Linear/Slack) and automation & policy (Work Queue,
+  // Webhooks, Rulesets) moved to the Automations hub — Settings no longer lists
+  // them, it only redirects stale /settings/:view deep links there.
+  expect(source).not.toContain('label: "Integrations"');
+  expect(source).not.toContain('label: "Automation & policy"');
+  expect(source).toContain("onRedirectToAutomations");
   expect(source).toContain("SEARCH_TERMS[item.id]");
+});
+
+test("automations is the single hub for connections, work queue, webhooks and rulesets", async () => {
+  const source = await readFile(new URL("../../packages/web/src/components/AutomationsView.tsx", import.meta.url), "utf8");
+  for (const tab of ["Overview", "Work Queue", "Webhooks", "Rulesets"]) {
+    expect(source).toContain(`label: "${tab}"`);
+  }
+  // Source connections and the panels reused from Settings all live here now.
+  expect(source).toContain("GithubQueuePanel");
+  expect(source).toContain("RulesetsPanel");
+  expect(source).toContain("WebhooksPanel");
 });
 
 test("provider key save awaits an authoritative acknowledgement", async () => {
