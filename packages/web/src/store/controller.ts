@@ -119,6 +119,9 @@ import {
   unb64,
   createAutomation,
   deleteAutomation,
+  fetchAutomations,
+  updateAutomation,
+  type AccountAutomation,
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
@@ -1565,6 +1568,9 @@ export class AppController {
       openedAfterNodeSwitch = true;
     }
     void this.refreshAccountSessions();
+    // A scheduled message may have delivered while this device was offline —
+    // drop its queue row so it stops showing as "scheduled" (see the method doc).
+    void this.resyncScheduledFollowups();
     // If this is a machine we just launched, seed its vault with the model API
     // keys held on this device (closes the cold-start gap — see the method doc).
     void this.seedEphemeralNodeIfNeeded();
@@ -3062,7 +3068,11 @@ export class AppController {
    *  See packages/core/src/followups.ts's mustQueueFollowup for the (unit
    *  tested) decision itself. */
   private mustQueue(sessionId: string): boolean {
-    return mustQueueFollowup(this.store.getFollowups(sessionId).length, this.store.getState().working);
+    // Only items actually waiting to send NOW gate a fresh prompt: a message
+    // scheduled for later (status "scheduled") is on its own timer and isn't
+    // blocking, so it never forces a send into the queue.
+    const waiting = this.store.getFollowups(sessionId).filter((f) => f.status === "queued").length;
+    return mustQueueFollowup(waiting, this.store.getState().working);
   }
 
   /**
@@ -3111,6 +3121,106 @@ export class AppController {
   private cancelScheduledFollowup(automationId?: string): void {
     if (!automationId) return;
     void deleteAutomation(this.local, automationId).catch(() => {});
+  }
+
+  /**
+   * "Schedule this message for later" (long-press Send → ScheduleSheet): write a
+   * one-off scheduled message to the account's control plane (`message: true`,
+   * E2E-sealed for the owning node) so the always-on node delivers it on time
+   * even when this app is closed, and — for an existing session — surface it as
+   * a timestamped "scheduled" row in the session's follow-up queue, where it's
+   * cancellable next to the composer (it stays out of the turn-end drain; the
+   * automation does the delivering). A new-session draft targets the machine
+   * picked on the draft and has no queue yet, so no row is created. The target
+   * is inferred from the current screen by the caller (SessionSheet only offers
+   * scheduling from an existing session; the draft composer infers new_session)
+   * — see ScheduleSheet. Returns an error message on failure, null on success.
+   */
+  async scheduleMessage(opts: {
+    text: string;
+    at: Date;
+    target: "existing_session" | "new_session";
+    sessionId?: string;
+  }): Promise<string | null> {
+    const { text, at, target, sessionId } = opts;
+    const trimmed = text.trim();
+    if (!trimmed) return "There's nothing to send.";
+    if (!this.accountMode()) return "Sign in to schedule messages for later.";
+    if (!Number.isFinite(at.getTime()) || at.getTime() <= Date.now()) return "Pick a time in the future.";
+    const nodeId =
+      target === "existing_session"
+        ? (sessionId ? this.resolveSessionNodeId(sessionId) : undefined)
+        : this.store.getState().currentNodeId;
+    if (!nodeId) return "No machine selected for this message.";
+    const roomKeyB64 = this.local.keys()[nodeId];
+    if (!roomKeyB64) return "This machine isn't paired on this device — open it first so the message can be encrypted.";
+    try {
+      const roomKey = await importRoomKey(unb64(roomKeyB64));
+      const encrypted = await seal(roomKey, trimmed);
+      const created = await createAutomation(this.local, {
+        name: "Scheduled message",
+        templateCiphertext: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
+        trigger: "schedule",
+        schedule: { kind: "once", at: at.toISOString() },
+        nodeLabel: this.resolveNodeLabel(nodeId),
+        targetKind: target,
+        targetSessionId: target === "existing_session" ? sessionId ?? undefined : undefined,
+        repo: target === "new_session" ? this.store.getState().draftRepo ?? undefined : undefined,
+        message: true,
+        enabled: true,
+      });
+      // The row id IS the automation id, so cancelling the row cancels the
+      // automation and resyncScheduledFollowups drops the row once it fires.
+      if (target === "existing_session" && sessionId) {
+        this.store.enqueueScheduledFollowup(
+          sessionId,
+          { id: created.id, text: trimmed, scheduledAt: at.getTime(), scheduledAutomationId: created.id },
+          Date.now(),
+        );
+      }
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : "Could not schedule the message.";
+    }
+  }
+
+  /** Reschedule a pending scheduled-message row (the queue's "edit schedule"
+   *  action): move the control-plane automation to the new time and update the
+   *  row's fire time in place. The automation keeps its id, so the row id still
+   *  matches it and cancel/resync keep working. Returns an error message on
+   *  failure, null on success. */
+  async editScheduledFollowup(sessionId: string, id: string, at: Date): Promise<string | null> {
+    const item = this.store.getFollowups(sessionId).find((f) => f.id === id);
+    if (!item || item.status !== "scheduled") return "This message is no longer pending.";
+    if (!item.scheduledAutomationId) return "This message has no automation to update.";
+    if (!Number.isFinite(at.getTime()) || at.getTime() <= Date.now()) return "Pick a time in the future.";
+    try {
+      await updateAutomation(this.local, item.scheduledAutomationId, { schedule: { kind: "once", at: at.toISOString() } });
+    } catch (e) {
+      return e instanceof Error ? e.message : "Could not reschedule the message.";
+    }
+    this.store.rescheduleFollowup(sessionId, id, at.getTime(), Date.now());
+    return null;
+  }
+
+  /** Reconcile the queue's "scheduled" rows against the control plane: drop any
+   *  whose automation is gone or no longer pending — it fired (a one-off
+   *  scheduled message flips `enabled` off and clears `nextRunAt` the moment
+   *  it's enqueued for delivery), was cancelled from another device, or was
+   *  deleted. Runs on reconnect so a message that delivered while this app was
+   *  closed stops showing as "scheduled" in the queue. Non-fatal everywhere. */
+  private async resyncScheduledFollowups(): Promise<void> {
+    if (!this.accountMode()) return;
+    let all: AccountAutomation[];
+    try {
+      all = await fetchAutomations(this.local);
+    } catch {
+      return; // offline / control plane unreachable — leave rows in place
+    }
+    const pending = new Set(all.filter((a) => a.enabled && a.nextRunAt != null).map((a) => a.id));
+    for (const sessionId of Object.keys(this.store.getState().followupsBySession)) {
+      this.store.pruneScheduledFollowups(sessionId, pending);
+    }
   }
 
   /** Whether the active runtime has advertised it can safely accept an
