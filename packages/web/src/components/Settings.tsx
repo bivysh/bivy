@@ -2,25 +2,31 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, AutomationHook, AutomationOutcome, EphemeralNodeConfig, QueueRouting, LocalModelPreset, LocalModelProvider, PairedDevice, GithubQueueItem, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, createAutomationHook, fetchAutomationHooks, revokeAutomationHook, rotateAutomationHookSecret, updateAutomationHook } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { OauthStep } from "./ProviderConnect.js";
-import { GithubQueuePanel } from "./GithubQueue.js";
-import { RulesetsPanel } from "./Rulesets.js";
 import { ImportSessionContent } from "./ImportSessionSheet.js";
 import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
-import { SourceGlyph } from "./SourceMark.js";
 
 // The view enumeration lives in router.ts (as `SettingsView`) so the router can
 // validate a `/settings/:view` path without importing this component module;
 // aliased back to `View` here since it's used throughout as local vocabulary.
 type View = SettingsView;
+
+/** Views that moved out of Settings into the Automations hub. They remain valid
+ *  `SettingsView` values only so stale `/settings/:view` deep links parse and can
+ *  be redirected — they are never listed in the Settings nav. */
+type MovedView = "github" | "linear" | "slack" | "queue" | "webhooks" | "rulesets";
+const MOVED_TO_AUTOMATIONS: readonly MovedView[] = ["github", "linear", "slack", "queue", "webhooks", "rulesets"];
+function isMovedView(v: View | null): v is MovedView {
+  return v !== null && (MOVED_TO_AUTOMATIONS as readonly string[]).includes(v);
+}
 
 /** Sandbox tiers (Codex's vocabulary), shared by the node default + per-session picker. */
 export const SANDBOX_TIERS: Array<{ id: SandboxTier; label: string; hint: string }> = [
@@ -47,21 +53,11 @@ const IconKey = () => (
 const IconMic = () => (
   <Glyph><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0" /><path d="M12 19v3" /></Glyph>
 );
-const IconGithub = () => (
-  <Glyph><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" /></Glyph>
-);
-// Reuse the official brand geometry used by run-source marks instead of
-// maintaining approximate line-art versions in Settings.
-const IconSlack = () => <SourceGlyph kind="slack" />;
-const IconLinear = () => <SourceGlyph kind="linear" />;
 const IconUser = () => (
   <Glyph><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Glyph>
 );
 const IconLink = () => (
   <Glyph><path d="M9 17H7A5 5 0 0 1 7 7h2" /><path d="M15 7h2a5 5 0 0 1 0 10h-2" /><line x1="8" y1="12" x2="16" y2="12" /></Glyph>
-);
-const IconQueue = () => (
-  <Glyph><path d="M4 13h4l2 3h4l2-3h4" /><path d="M5.5 5h13l1.5 8v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4z" /></Glyph>
 );
 const IconMonitor = () => (
   <Glyph><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></Glyph>
@@ -71,14 +67,6 @@ const IconServer = () => (
 );
 const IconBolt = () => (
   <Glyph><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" /></Glyph>
-);
-// Webhook glyph — three linked nodes, the conventional inbound-hook mark.
-const IconWebhook = () => (
-  <Glyph><circle cx="6" cy="16" r="2.5" /><circle cx="18" cy="16" r="2.5" /><circle cx="12" cy="5" r="2.5" /><path d="m10.7 7.1-3 5.2M13.3 7.1l3 5.2M8.5 16h7" /></Glyph>
-);
-// Branch/policy glyph for Rulesets — a decision splitting into fallback routes.
-const IconRules = () => (
-  <Glyph><circle cx="6" cy="6" r="2" /><circle cx="6" cy="18" r="2" /><circle cx="18" cy="12" r="2" /><path d="M8 6h4a4 4 0 0 1 4 4M8 18h4a4 4 0 0 0 4-4" /></Glyph>
 );
 const IconCpu = () => (
   <Glyph><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" /></Glyph>
@@ -188,11 +176,8 @@ export function Settings({
   onClose,
   view,
   onViewChange,
-  githubQueue,
-  onRefreshGithubQueue,
-  onPickSession,
   onImported,
-  onOpenAutomationsConnections,
+  onRedirectToAutomations,
 }: {
   state: AppState;
   onClose: () => void;
@@ -200,16 +185,12 @@ export function Settings({
    *  mobile root menu (`/settings`). See settingsRoute.ts (#78). */
   view: View | null;
   onViewChange: (view: View | null) => void;
-  /** GitHub Queue data + handlers — the queue is now a Settings panel (#388),
-   *  not a separate modal. */
-  githubQueue?: GithubQueueItem[] | null;
-  onRefreshGithubQueue?: () => void;
-  onPickSession?: (sessionId: string, path?: string, nodeId?: string) => void;
   /** Fired when the Import-session panel adopts a session — the controller has
    *  already opened/navigated to it, so the caller just dismisses Settings. */
   onImported?: (sessionId: string) => void;
-  /** Source connections (GitHub / Linear / Slack) live only in Automations. */
-  onOpenAutomationsConnections?: (focus: "github" | "linear" | "slack") => void;
+  /** Integrations + automation/policy moved to the Automations hub. A stale deep
+   *  link to one of those `/settings/:view` URLs redirects there instead. */
+  onRedirectToAutomations?: (view: MovedView) => void;
 }) {
   const hosted = !controller.direct;
   // Below the CSS breakpoint we behave like the Claude mobile settings: a root
@@ -227,6 +208,14 @@ export function Settings({
     if (isDesktop && view === null) onViewChange(DEFAULT);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDesktop, view]);
+
+  // Integrations + automation/policy sections moved to the Automations hub. A
+  // stale deep link (bookmark / OAuth return) to one of those `/settings/:view`
+  // URLs bounces there instead of showing an empty panel.
+  useEffect(() => {
+    if (isMovedView(view)) onRedirectToAutomations?.(view);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
 
   // Escape closes; focus starts inside the panel and restores to the opener on
   // close (parity with the Sheet primitive this replaced).
@@ -260,24 +249,9 @@ export function Settings({
           : []),
       ],
     },
-    {
-      label: "Integrations",
-      items: [
-        { id: "github", label: "GitHub App", icon: <IconGithub /> },
-        ...(hosted ? [
-          { id: "linear" as View, label: "Linear", icon: <IconLinear /> },
-          { id: "slack" as View, label: "Slack", icon: <IconSlack /> },
-        ] : []),
-      ],
-    },
-    {
-      label: "Automation & policy",
-      items: [
-        { id: "queue", label: "Work Queue", icon: <IconQueue /> },
-        { id: "webhooks", label: "Webhooks", icon: <IconWebhook /> },
-        { id: "rulesets", label: "Rulesets", icon: <IconRules /> },
-      ],
-    },
+    // Integrations (GitHub / Linear / Slack) and automation & policy (Work Queue,
+    // Webhooks, Rulesets) now live in the Automations hub — reachable from the
+    // sidebar bolt — so Settings no longer lists them.
     {
       label: "App",
       items: [
@@ -375,40 +349,9 @@ export function Settings({
             {activeView === "providers" && <ProvidersPanel state={state} />}
             {activeView === "models" && <LocalModelsPanel state={state} />}
             {activeView === "voice" && <VoicePanel state={state} />}
-            {activeView === "github" && (
-              <ConnectionsHandoff
-                title="GitHub Apps"
-                body="Add, install, reconnect, or disconnect GitHub Apps in Automations — the single place for source connections. Incoming queue items stay under Work Queue below."
-                cta="Open Automations → GitHub"
-                onOpen={() => onOpenAutomationsConnections?.("github")}
-              />
-            )}
-            {activeView === "linear" && (
-              <ConnectionsHandoff
-                title="Linear"
-                body="Connect or disconnect the Linear webhook in Automations."
-                cta="Open Automations → Linear"
-                onOpen={() => onOpenAutomationsConnections?.("linear")}
-              />
-            )}
-            {activeView === "slack" && (
-              <ConnectionsHandoff
-                title="Slack"
-                body="Connect or disconnect the Slack slash command in Automations."
-                cta="Open Automations → Slack"
-                onOpen={() => onOpenAutomationsConnections?.("slack")}
-              />
-            )}
-            {activeView === "queue" && (
-              <GithubQueuePanel
-                queue={githubQueue ?? null}
-                onRefresh={() => onRefreshGithubQueue?.()}
-                onPick={(id, path, nodeId) => onPickSession?.(id, path, nodeId)}
-                onOpenGithubSettings={() => onOpenAutomationsConnections?.("github")}
-              />
-            )}
-            {activeView === "webhooks" && <WebhookTriggersPanel />}
-            {activeView === "rulesets" && <RulesetsPanel state={state} />}
+            {/* github / linear / slack / queue / webhooks / rulesets moved to the
+                Automations hub — a deep link to any of them redirects there (see
+                the redirect effect above), so they render nothing here. */}
             {activeView === "nodes" && <NodesPanel state={state} />}
             {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && <EphemeralPanel />}
             {activeView === "account" && <AccountPanel />}
@@ -1192,412 +1135,6 @@ function VoicePanel({ state }: { state: AppState }) {
           {errById[p.id] && <div className="banner error inline">{errById[p.id]}</div>}
         </div>
       ))}
-    </div>
-  );
-}
-
-// Node-label selector shared by the GitHub App "Default node" field and the
-// generic Automations webhook routing default (issue #166): a dropdown of the
-// account's known nodes, exactly like the GitHub issues flow, so a routing
-// default is picked rather than typed blind. Only falls back to free text when
-// the account has no known nodes yet (nothing to pick from).
-function NodeRouteSelect({
-  nodes,
-  value,
-  onChange,
-  disabled,
-}: {
-  nodes: AccountNode[];
-  value: string;
-  onChange: (v: string) => void;
-  disabled?: boolean;
-}) {
-  if (nodes.length === 0) {
-    return (
-      <input
-        className="picker-search"
-        value={value}
-        placeholder="node label, e.g. macbook"
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    );
-  }
-  return (
-    <select className="picker-search" value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
-      <option value="">Shared queue (any online node)</option>
-      {nodes.map((n) => (
-        <option key={n.id} value={n.name || n.id}>{n.name || n.id}</option>
-      ))}
-      {value && !nodes.some((n) => (n.name || n.id) === value) && <option value={value}>{value}</option>}
-    </select>
-  );
-}
-
-// Account-level "auto-provision an ephemeral server when nothing's online"
-// preference (issue #532), self-contained so both the GitHub App panel and the
-// generic Automations panel can offer it (issue #166) without each keeping a
-// separate copy of the fetch/save plumbing — it's one account setting either
-// way, and (per the trigger-neutral automation-run queue) already covers
-// webhook-triggered runs alongside GitHub ones once enabled.
-type EphemeralConfigDraft = {
-  editing?: string;
-  name: string;
-  provider: string;
-  region: string;
-  size: string;
-  ttlMinutes: number | null;
-  teardownOnAgentFinish: boolean;
-};
-
-const QUEUE_TTL_OPTIONS = [
-  { v: 30, label: "30 min" },
-  { v: 60, label: "1 hour" },
-  { v: 180, label: "3 hours" },
-];
-
-// Account-level queue routing (issue #532 / ephemeral configs). Picks the
-// default runner for queued work — the shared queue, a persistent node, or an
-// ephemeral config (a reusable, named runner template shown "as a node"). A
-// persistent-node primary may carry an ephemeral-config fallback for when the
-// node is offline; an ephemeral-config primary needs none (it's provisioned on
-// demand). Also manages the account's ephemeral configs (create/edit/remove).
-function QueueRoutingSection() {
-  const [nodes, setNodes] = useState<AccountNode[]>([]);
-  const [configs, setConfigs] = useState<EphemeralNodeConfig[]>([]);
-  const [routing, setRouting] = useState<QueueRouting | null>(null);
-  const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [draft, setDraft] = useState<EphemeralConfigDraft | null>(null);
-  const [confirmRemove, setConfirmRemove] = useState<EphemeralNodeConfig | null>(null);
-
-  const refreshConfigs = () => controller.listEphemeralConfigs().then(setConfigs).catch(() => {});
-  useEffect(() => {
-    controller.listNodes().then(setNodes).catch(() => {});
-    controller.listEphemeralKeys().then(setKeys).catch(() => {});
-    controller.getQueueRouting().then(setRouting).catch(() => setRouting(null));
-    refreshConfigs();
-  }, []);
-
-  const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
-  const primaryValue = routing?.primary.kind === "node" ? `node:${routing.primary.node}`
-    : routing?.primary.kind === "config" ? `config:${routing.primary.configId}` : "shared";
-  const fallbackValue = routing?.fallback?.kind === "config" ? `config:${routing.fallback.configId}` : "";
-  const primaryIsNode = routing?.primary.kind === "node";
-  const providerName = (id: string) => keys.find((k) => k.id === id)?.name || id;
-  const providerReady = (id: string) => Boolean(keys.find((k) => k.id === id)?.configured);
-
-  const saveRouting = async (primaryStr: string, fallbackStr: string) => {
-    setErr(null);
-    setBusy(true);
-    try {
-      const primary: QueueRouting["primary"] = primaryStr.startsWith("node:")
-        ? { kind: "node", node: primaryStr.slice("node:".length) }
-        : primaryStr.startsWith("config:")
-          ? { kind: "config", configId: primaryStr.slice("config:".length) }
-          : { kind: "shared" };
-      const next: QueueRouting = primary.kind === "node" && fallbackStr.startsWith("config:")
-        ? { primary, fallback: { kind: "config", configId: fallbackStr.slice("config:".length) } }
-        : { primary };
-      setRouting(await controller.setQueueRouting(next));
-    } catch (e) {
-      setErr(String((e as Error)?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const saveConfig = async () => {
-    if (!draft) return;
-    const name = draft.name.trim();
-    if (!name) { setErr("Config name is required"); return; }
-    if (!draft.provider) { setErr("Choose a provider"); return; }
-    setErr(null);
-    setBusy(true);
-    try {
-      const input = {
-        name, provider: draft.provider,
-        region: draft.region.trim() || null,
-        size: draft.size.trim() || null,
-        ttlMinutes: draft.ttlMinutes ?? null,
-        teardownOnAgentFinish: draft.teardownOnAgentFinish,
-      };
-      if (draft.editing) await controller.updateEphemeralConfig(draft.editing, input);
-      else await controller.createEphemeralConfig(input);
-      setDraft(null);
-      refreshConfigs();
-    } catch (e) {
-      setErr(String((e as Error)?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const removeConfig = async (cfg: EphemeralNodeConfig) => {
-    setConfirmRemove(null);
-    setBusy(true);
-    try {
-      await controller.removeEphemeralConfig(cfg.id);
-      refreshConfigs();
-    } catch (e) {
-      setErr(String((e as Error)?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      <label className="field-label"><span>Primary runner</span>
-        <select className="picker-search" value={primaryValue} disabled={busy} onChange={(e) => saveRouting(e.target.value, fallbackValue)}>
-          <option value="shared">Shared queue (any online node)</option>
-          {persistentNodes.length > 0 && (
-            <optgroup label="Persistent nodes">
-              {persistentNodes.map((n) => (
-                <option key={n.id} value={`node:${n.name || n.id}`}>{n.name || n.id}</option>
-              ))}
-            </optgroup>
-          )}
-          {configs.length > 0 && (
-            <optgroup label="Ephemeral configs">
-              {configs.map((c) => (
-                <option key={c.id} value={`config:${c.id}`}>{c.name} · {c.provider}</option>
-              ))}
-            </optgroup>
-          )}
-        </select>
-      </label>
-      {primaryIsNode && (
-        <label className="field-label"><span>Fallback if node is offline</span>
-          <select className="picker-search" value={fallbackValue} disabled={busy} onChange={(e) => saveRouting(primaryValue, e.target.value)}>
-            <option value="">None — wait for the node</option>
-            {configs.map((c) => (
-              <option key={c.id} value={`config:${c.id}`}>{c.name} · {c.provider}</option>
-            ))}
-          </select>
-        </label>
-      )}
-      <p className="muted small">
-        {primaryIsNode
-          ? "Queued work waits for this node; if it's offline and a fallback is set, that ephemeral config is provisioned instead."
-          : routing?.primary.kind === "config"
-            ? "Queued work provisions a fresh machine from this config when nothing persistent is online."
-            : "Queued work is picked up by any online node."}
-      </p>
-
-      <h4 className="settings-subhead">Ephemeral configs</h4>
-      {draft ? (
-        <div className="settings-form">
-          <label className="field-label"><span>Name</span>
-            <input className="picker-search" value={draft.name} placeholder="e.g. fly-small-iad" onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-          </label>
-          <label className="field-label"><span>Provider</span>
-            <select className="picker-search" value={draft.provider} onChange={(e) => setDraft({ ...draft, provider: e.target.value })}>
-              <option value="" disabled>Choose a provider</option>
-              {keys.map((k) => (
-                <option key={k.id} value={k.id}>{k.name}{k.configured ? "" : " (no token on this device)"}</option>
-              ))}
-            </select>
-          </label>
-          <label className="field-label"><span>Region (optional)</span>
-            <input className="picker-search" value={draft.region} placeholder="provider default" onChange={(e) => setDraft({ ...draft, region: e.target.value })} />
-          </label>
-          <label className="field-label"><span>Server type (optional)</span>
-            <input className="picker-search" value={draft.size} placeholder="provider default" onChange={(e) => setDraft({ ...draft, size: e.target.value })} />
-          </label>
-          <label className="field-label"><span>Auto-destroy after</span>
-            <select className="picker-search" value={draft.ttlMinutes ?? ""} onChange={(e) => setDraft({ ...draft, ttlMinutes: e.target.value ? Number(e.target.value) : null })}>
-              <option value="">Provider default</option>
-              {QUEUE_TTL_OPTIONS.map((o) => (<option key={o.v} value={o.v}>{o.label}</option>))}
-            </select>
-          </label>
-          <div className="settings-toggle-row">
-            <div className="settings-toggle-text">
-              <span className="settings-toggle-title">Destroy after the agent finishes</span>
-              <span className="muted small">Tear the machine down on agent_end; the TTL stays a safety fallback.</span>
-            </div>
-            <Toggle checked={draft.teardownOnAgentFinish} onChange={(v) => setDraft({ ...draft, teardownOnAgentFinish: v })} label="Destroy after the agent finishes" />
-          </div>
-          <div className="row-actions">
-            <button className="btn primary" disabled={busy || !draft.name.trim() || !draft.provider} onClick={saveConfig}>
-              {busy ? "Saving…" : draft.editing ? "Save changes" : "Add config"}
-            </button>
-            <button className="btn" onClick={() => { setErr(null); setDraft(null); }}>Cancel</button>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="picker-list">
-            {configs.length === 0 && <div className="picker-empty">No ephemeral configs yet.</div>}
-            {configs.map((c) => (
-              <PickerItem
-                key={c.id}
-                title={c.name}
-                meta={`${providerName(c.provider)}${c.region ? " · " + c.region : ""}${c.size ? " · " + c.size : ""}${c.ttlMinutes ? " · " + c.ttlMinutes + "m" : ""}${providerReady(c.provider) ? "" : " · no token here"}`}
-                right={<button className="btn danger-ghost sm" onClick={(e) => { e.stopPropagation(); setConfirmRemove(c); }}>Remove</button>}
-                onClick={() => { setErr(null); setDraft({ editing: c.id, name: c.name, provider: c.provider, region: c.region ?? "", size: c.size ?? "", ttlMinutes: c.ttlMinutes ?? null, teardownOnAgentFinish: Boolean(c.teardownOnAgentFinish) }); }}
-              />
-            ))}
-          </div>
-          <button className="btn primary block" onClick={() => { setErr(null); setDraft({ name: "", provider: keys[0]?.id ?? "", region: "", size: "", ttlMinutes: null, teardownOnAgentFinish: false }); }}>+ Add config</button>
-        </>
-      )}
-      {err && <span className="chip err">{err}</span>}
-      {confirmRemove && (
-        <ConfirmDialog
-          title="Remove config?"
-          message={`Remove ${confirmRemove.name}? Queued work routed to it will fall back to the shared queue.`}
-          confirmLabel="Remove"
-          danger
-          onCancel={() => setConfirmRemove(null)}
-          onConfirm={() => removeConfig(confirmRemove)}
-        />
-      )}
-    </>
-  );
-}
-
-function ConnectionsHandoff({
-  title,
-  body,
-  cta,
-  onOpen,
-}: {
-  title: string;
-  body: string;
-  cta: string;
-  onOpen?: () => void;
-}) {
-  return (
-    <div className="settings-form">
-      <p className="settings-lead">{title}</p>
-      <p className="settings-hint">{body}</p>
-      <button type="button" className="btn primary" onClick={() => onOpen?.()} disabled={!onOpen}>
-        {cta}
-      </button>
-      {!onOpen && (
-        <p className="settings-hint">Open Automations from the sidebar bolt icon to manage connections.</p>
-      )}
-    </div>
-  );
-}
-
-// ---- Generic signed automation webhooks ----
-// Signed inbound webhook triggers (from the automation-webhooks feature). Its
-// own "Webhooks" settings view, a sibling of the scheduled-automations panel
-// (imported from ./Automations) — the two used to share one "Automations" view
-// but were split into separate screens since they're independent features.
-function WebhookTriggersPanel() {
-  const [hooks, setHooks] = useState<AutomationHook[]>([]);
-  const [outcomes, setOutcomes] = useState<AutomationOutcome[]>([]);
-  const [template, setTemplate] = useState("Follow the incoming instruction in the current workspace.");
-  const [route, setRoute] = useState("");
-  const [nodes, setNodes] = useState<AccountNode[]>([]);
-  const [revealed, setRevealed] = useState<{ hook: AutomationHook; secret: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const refresh = async () => {
-    try {
-      const data = await fetchAutomationHooks(controller.local);
-      setHooks(data.hooks);
-      setOutcomes(data.outcomes);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load automation hooks.");
-    }
-  };
-  useEffect(() => {
-    void refresh();
-    controller.listNodes().then(setNodes).catch(() => {});
-  }, []);
-  const updateHookRoute = (hook: AutomationHook, next: string) => {
-    void updateAutomationHook(controller.local, hook.id, { routingDefault: next })
-      .then(refresh)
-      .catch((err) => setError(String(err)));
-  };
-  const create = async () => {
-    setBusy(true); setError("");
-    try {
-      const created = await createAutomationHook(controller.local, { templateInstruction: template, routingDefault: route });
-      setRevealed({ hook: created, secret: created.secret });
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not create hook.");
-    } finally { setBusy(false); }
-  };
-  const rotate = async (hook: AutomationHook) => {
-    setBusy(true); setError("");
-    try {
-      const rotated = await rotateAutomationHookSecret(controller.local, hook.id);
-      setRevealed({ hook: rotated, secret: rotated.secret });
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not rotate secret.");
-    } finally { setBusy(false); }
-  };
-  const curl = revealed ? `body='{"version":"1","instruction":"Run the test suite","title":"CI follow-up","sourceUrl":"https://example.com/build/123","externalId":"build-123","metadata":{"environment":"staging"}}'
-signature=$(printf %s "$body" | openssl dgst -sha256 -hmac '${revealed.secret}' -hex | sed 's/^.* //')
-curl -X POST '${revealed.hook.endpoint}' \\
-  -H 'Content-Type: application/json' \\
-  -H "X-Bivy-Signature-256: sha256=$signature" \\
-  -H 'X-Bivy-Idempotency-Key: build-123' \\
-  --data-binary "$body"` : "";
-  return (
-    <div className="settings-form">
-      <p className="settings-lead">Create signed inbound endpoints that turn events from CI, monitoring, or internal tools into ordinary Bivy runs.</p>
-      {error && <div className="banner error inline">{error}</div>}
-      {revealed && (
-        <section className="settings-section">
-          <h3>Save this secret now</h3>
-          <p className="settings-hint">It is shown only after creation or rotation. Rotating immediately invalidates the previous secret.</p>
-          <code className="settings-code">{revealed.secret}</code>
-          <h4 className="settings-subhead">Example curl</h4>
-          <pre className="settings-code" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{curl}</pre>
-          <button className="btn" onClick={() => void navigator.clipboard.writeText(curl)}>Copy example</button>
-        </section>
-      )}
-      <section className="settings-section">
-        <h3>New webhook</h3>
-        <label className="field-label">Safe instruction template</label>
-        <textarea className="field-input" rows={3} value={template} maxLength={2000} onChange={(e) => setTemplate(e.target.value)} />
-        <p className="settings-hint">This fixed instruction is prepended to each event. Payloads cannot select commands, runtimes, models, or executable templates.</p>
-        <label className="field-label">Default node (optional)</label>
-        <NodeRouteSelect nodes={nodes} value={route} onChange={setRoute} disabled={busy} />
-        <button className="btn primary" disabled={busy || !template.trim()} onClick={() => void create()}>Create webhook</button>
-      </section>
-      {EPHEMERAL_MACHINES_ENABLED && (
-        <section className="settings-section">
-          <h4 className="settings-subhead">Queue routing</h4>
-          <QueueRoutingSection />
-        </section>
-      )}
-      {hooks.map((hook) => (
-        <section className="settings-section" key={hook.id}>
-          <div className="settings-row">
-            <div><h3>{hook.id}</h3><code className="settings-code">{hook.endpoint}</code></div>
-            <label><input type="checkbox" checked={hook.enabled} disabled={busy} onChange={(e) => {
-              void updateAutomationHook(controller.local, hook.id, { enabled: e.target.checked }).then(refresh).catch((err) => setError(String(err)));
-            }} /> Enabled</label>
-          </div>
-          <label className="field-label">Default node</label>
-          <NodeRouteSelect nodes={nodes} value={hook.routingDefault} onChange={(v) => updateHookRoute(hook, v)} disabled={busy} />
-          <p className="settings-hint">Routes to {hook.routingDefault ? `bivy/${hook.routingDefault}` : "the shared bivy queue"}.</p>
-          <div className="settings-actions">
-            <button className="btn" disabled={busy} onClick={() => void rotate(hook)}>Rotate secret</button>
-            <button className="btn danger" disabled={busy || !hook.enabled} onClick={() => {
-              if (confirm("Revoke this webhook? Its current secret will stop working immediately.")) {
-                void revokeAutomationHook(controller.local, hook.id).then(refresh).catch((err) => setError(String(err)));
-              }
-            }}>Revoke</button>
-          </div>
-        </section>
-      ))}
-      <section className="settings-section">
-        <h3>Recent trigger outcomes</h3>
-        {outcomes.length === 0
-          ? <p className="settings-hint">No accepted triggers yet.</p>
-          : outcomes.map((outcome) => <div className="settings-row" key={outcome.id}><span>{outcome.title}</span><span className="settings-hint">{outcome.status}</span></div>)}
-      </section>
     </div>
   );
 }

@@ -45,17 +45,6 @@ export interface WebhookTemplate extends TemplateCard {
   };
 }
 
-/** A template whose trigger lives in another panel (work queue). Its action
- *  navigates there rather than pre-filling the wizard, so the Automations page
- *  stays the single place to discover every job. */
-export interface ExternalTemplate extends TemplateCard {
-  kind: "external";
-  /** Which existing settings panel configures this trigger. */
-  route: "webhooks" | "queue";
-  /** Short call-to-action for the button, e.g. "Set up in Work Queue". */
-  cta: string;
-}
-
 /** A source-triggered automation (GitHub/Linear). Creating it POSTs a real
  *  definition with trigger=github|linear; connect still happens via the work
  *  queue sheet when the source is missing. */
@@ -70,7 +59,7 @@ export interface SourceTemplate extends TemplateCard {
   cta: string;
 }
 
-export type AutomationTemplate = ScheduleTemplate | WebhookTemplate | ExternalTemplate | SourceTemplate;
+export type AutomationTemplate = ScheduleTemplate | WebhookTemplate | SourceTemplate;
 
 // The instruction blocks below become the (client-side encrypted) prompt the
 // node runs. They mirror the shape of Bivy's default issue instructions:
