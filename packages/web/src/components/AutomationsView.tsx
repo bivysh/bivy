@@ -28,10 +28,15 @@ import {
   unb64,
   nlToCron,
   isNlCronOk,
+  fetchAutomationHooks,
+  rotateAutomationHookSecret,
+  revokeAutomationHook,
   type AppState,
   type AccountAutomation,
   type AccountAutomationRun,
   type AccountNode,
+  type AutomationHook,
+  type AutomationOutcome,
   type GithubAppInfo,
   type LinearHook,
   type SlackHook,
@@ -45,7 +50,13 @@ import {
   type WebhookTemplate,
 } from "./automationTemplates.js";
 import { WorkQueueSetupSheet, type SourceSetupFocus } from "./WorkQueueSetupSheet.js";
+import { GithubQueuePanel } from "./GithubQueue.js";
+import { RulesetsPanel } from "./Rulesets.js";
+import { QueueRoutingSection } from "./QueueRouting.js";
 import { takeAutomationsSetupFocus } from "../automationsRoute.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import type { AutomationsSection } from "../router.js";
+import type { GithubQueueItem } from "@bivy/core";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -374,16 +385,34 @@ interface Notice {
   action?: { label: string; onClick: () => void };
 }
 
+/** Top-level tabs. Overview owns connections + your automations + activity; the
+ *  other three moved here from Settings so Automations is the single hub. */
+const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | null }> = [
+  { label: "Overview", section: null },
+  { label: "Work Queue", section: "queue" },
+  { label: "Webhooks", section: "webhooks" },
+  { label: "Rulesets", section: "rulesets" },
+];
+
 export function AutomationsView({
   state,
   onClose,
-  onOpenSettings,
+  section,
+  onSectionChange,
   onOpenSession,
+  githubQueue,
+  onRefreshGithubQueue,
 }: {
   state: AppState;
   onClose: () => void;
-  onOpenSettings: (view: "webhooks" | "queue" | "github" | "linear" | "slack") => void;
+  /** Active tab, driven by the URL (`/automations/:section`); null = Overview. */
+  section: AutomationsSection | null;
+  onSectionChange: (section: AutomationsSection | null) => void;
   onOpenSession: (sessionId: string) => void;
+  /** Incoming GitHub/Linear work-queue items — polled at the app shell and
+   *  rendered by the Work Queue tab (was a Settings panel). */
+  githubQueue?: GithubQueueItem[] | null;
+  onRefreshGithubQueue?: () => void;
 }) {
   const [items, setItems] = useState<AccountAutomation[]>([]);
   const [runs, setRuns] = useState<AccountAutomationRun[]>([]);
@@ -557,9 +586,20 @@ export function AutomationsView({
     setChooserOpen(false);
     if (template.kind === "schedule") startFromScheduleTemplate(template);
     else if (template.kind === "webhook") startFromWebhookTemplate(template);
-    else if (template.kind === "source") void startFromSourceTemplate(template);
-    else if (template.route === "queue") openSetup("work-queue");
-    else onOpenSettings(template.route);
+    else void startFromSourceTemplate(template);
+  }
+
+  /** Blank webhook-triggered automation — the canonical way to make a webhook,
+   *  opened from the Webhooks tab's "New webhook" button. */
+  function startFromBlankWebhook() {
+    setError("");
+    setNotice(null);
+    setDraft({
+      ...emptyDraft(defaultNodeId),
+      hasTrigger: true,
+      trigger: "webhook",
+      repo: rememberedRepo(state),
+    });
   }
 
   function startFromScratch() {
@@ -675,10 +715,26 @@ export function AutomationsView({
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="btn autom-new-btn" onClick={openChooser}>New automation</button>
+          {section === null && (
+            <button type="button" className="btn autom-new-btn" onClick={openChooser}>New automation</button>
+          )}
           <button type="button" className="icon-btn" onClick={onClose} title="Close" aria-label="Close automations">✕</button>
         </div>
       </header>
+
+      <nav className="automations-tabs" aria-label="Automations sections">
+        {AUTOMATIONS_TABS.map((tab) => (
+          <button
+            key={tab.label}
+            type="button"
+            className={`automations-tab${section === tab.section ? " active" : ""}`}
+            aria-current={section === tab.section ? "page" : undefined}
+            onClick={() => onSectionChange(tab.section)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
 
       <div className="automations-view-body">
         {error && (
@@ -704,6 +760,8 @@ export function AutomationsView({
           </div>
         )}
 
+        {section === null && (
+        <>
         {/* Compact live source strip — connect stays in-sheet, never Settings. */}
         <section className="autom-sources-strip" aria-label="Connected sources">
           <SourcePill
@@ -779,18 +837,14 @@ export function AutomationsView({
                           {scheduleSummary(item)}
                           {item.enabled && item.nextRunAt ? ` · next ${new Date(item.nextRunAt).toLocaleString()}` : ""}
                         </div>
-                        {item.trigger === "webhook" && item.webhookUrl && (
-                          <div className="reveal-row">
-                            <code className="reveal-value">{item.webhookUrl}</code>
-                            <button type="button" className="btn sm" onClick={() => void navigator.clipboard?.writeText(item.webhookUrl!)}>Copy URL</button>
-                          </div>
-                        )}
-                        {rotated?.id === item.id && (
-                          <div className="reveal-row">
-                            <code className="reveal-value">{rotated.secret}</code>
-                            <button type="button" className="btn sm" onClick={() => void navigator.clipboard?.writeText(rotated.secret)}>Copy secret</button>
-                            <span className="settings-hint">New signing secret — shown once.</span>
-                          </div>
+                        {item.trigger === "webhook" && (
+                          <button
+                            type="button"
+                            className="link-btn autom-inline-link"
+                            onClick={() => onSectionChange("webhooks")}
+                          >
+                            Endpoint &amp; secret in Webhooks →
+                          </button>
                         )}
                       </div>
                       <div className="automation-row-actions">
@@ -824,11 +878,6 @@ export function AutomationsView({
                               <button type="button" className="row-menu-item" role="menuitem" onClick={() => void toggle(item)}>
                                 {item.enabled ? "Pause" : "Resume"}
                               </button>
-                              {item.trigger === "webhook" && (
-                                <button type="button" className="row-menu-item" role="menuitem" onClick={() => void rotate(item)}>
-                                  Rotate secret
-                                </button>
-                              )}
                               {isSourceTrigger(item.trigger) && (
                                 <button
                                   type="button"
@@ -897,6 +946,40 @@ export function AutomationsView({
             </section>
           </>
         )}
+        </>
+        )}
+
+        {section === "queue" && (
+          <>
+            <GithubQueuePanel
+              queue={githubQueue ?? null}
+              onRefresh={() => onRefreshGithubQueue?.()}
+              onPick={(id) => { onOpenSession(id); onClose(); }}
+              onOpenGithubSettings={() => openSetup("github")}
+            />
+            {EPHEMERAL_MACHINES_ENABLED && (
+              <section className="autom-section">
+                <h2 className="autom-section-label">Queue routing</h2>
+                <p className="settings-hint">Where queued work runs by default when an automation doesn&apos;t pin a machine.</p>
+                <QueueRoutingSection />
+              </section>
+            )}
+          </>
+        )}
+
+        {section === "webhooks" && (
+          <WebhooksPanel
+            webhookItems={items.filter((i) => i.trigger === "webhook")}
+            rotated={rotated}
+            onNewWebhook={startFromBlankWebhook}
+            onEdit={(item) => void edit(item)}
+            onTestRun={(item) => void runNow(item)}
+            onRotate={(item) => void rotate(item)}
+            onRemove={(item) => void remove(item)}
+          />
+        )}
+
+        {section === "rulesets" && <RulesetsPanel state={state} />}
       </div>
 
       {chooserOpen && (
@@ -980,6 +1063,192 @@ export function AutomationsView({
   );
 }
 
+// ── Webhooks tab ────────────────────────────────────────────────────────────
+// The single inbound-webhook surface. A webhook is just an automation with
+// trigger="webhook" (full instructions/approval/machine, E2E-encrypted), created
+// through the ordinary wizard — this panel is where its signed endpoint, secret
+// rotation, and the example signed request live. Any pre-existing "legacy" hooks
+// (the older standalone AutomationHook system, whose plaintext instructions the
+// control plane can't re-encrypt into an automation) are listed read-mostly so
+// they keep working and can be rotated/revoked or recreated as automations —
+// there is intentionally no way to create a new legacy hook.
+
+/** Copy a value to the clipboard, no-op if unavailable. */
+function copyText(value: string): void {
+  void navigator.clipboard?.writeText(value);
+}
+
+function WebhooksPanel({
+  webhookItems,
+  rotated,
+  onNewWebhook,
+  onEdit,
+  onTestRun,
+  onRotate,
+  onRemove,
+}: {
+  webhookItems: AccountAutomation[];
+  rotated: { id: string; secret: string } | null;
+  onNewWebhook: () => void;
+  onEdit: (item: AccountAutomation) => void;
+  onTestRun: (item: AccountAutomation) => void;
+  onRotate: (item: AccountAutomation) => void;
+  onRemove: (item: AccountAutomation) => void;
+}) {
+  const [legacy, setLegacy] = useState<AutomationHook[]>([]);
+  const [legacyOutcomes, setLegacyOutcomes] = useState<AutomationOutcome[]>([]);
+  const [legacyRevealed, setLegacyRevealed] = useState<{ id: string; secret: string } | null>(null);
+  const [legacyBusy, setLegacyBusy] = useState(false);
+  const [legacyErr, setLegacyErr] = useState("");
+
+  const refreshLegacy = useCallback(async () => {
+    try {
+      const data = await fetchAutomationHooks(controller.local);
+      setLegacy(data.hooks);
+      setLegacyOutcomes(data.outcomes);
+    } catch {
+      // Legacy hooks are hosted-only and optional; a load failure just hides the
+      // section rather than surfacing an error on the modern webhook surface.
+      setLegacy([]);
+      setLegacyOutcomes([]);
+    }
+  }, []);
+  useEffect(() => { void refreshLegacy(); }, [refreshLegacy]);
+
+  const rotateLegacy = async (hook: AutomationHook) => {
+    setLegacyBusy(true);
+    setLegacyErr("");
+    try {
+      const rotatedHook = await rotateAutomationHookSecret(controller.local, hook.id);
+      setLegacyRevealed({ id: hook.id, secret: rotatedHook.secret });
+      await refreshLegacy();
+    } catch (e) {
+      setLegacyErr(e instanceof Error ? e.message : "Could not rotate secret.");
+    } finally { setLegacyBusy(false); }
+  };
+  const revokeLegacy = async (hook: AutomationHook) => {
+    if (!confirm("Revoke this legacy webhook? Its current secret stops working immediately.")) return;
+    setLegacyBusy(true);
+    setLegacyErr("");
+    try {
+      await revokeAutomationHook(controller.local, hook.id);
+      await refreshLegacy();
+    } catch (e) {
+      setLegacyErr(e instanceof Error ? e.message : "Could not revoke webhook.");
+    } finally { setLegacyBusy(false); }
+  };
+
+  return (
+    <div className="autom-webhooks">
+      <section className="autom-section">
+        <div className="autom-section-head">
+          <h2 className="autom-section-label">Webhooks</h2>
+          <button type="button" className="btn sm primary" onClick={onNewWebhook}>New webhook</button>
+        </div>
+        <p className="settings-hint">
+          Signed inbound endpoints that turn events from CI, monitoring, or internal tools into Bivy runs.
+          Each webhook is an automation: its instructions, machine, and approval mode are fixed by you — the
+          payload only supplies the event context.
+        </p>
+
+        {webhookItems.length === 0 ? (
+          <p className="settings-hint autom-empty-hint">
+            No webhooks yet. <strong>New webhook</strong> creates one and reveals its signed URL and secret.
+          </p>
+        ) : (
+          <div className="automation-list">
+            {webhookItems.map((item) => (
+              <div className={`automation-row${item.enabled ? "" : " is-paused"}`} key={item.id}>
+                <div className="automation-row-main">
+                  <div className="automation-row-title">
+                    <strong>{item.name}</strong>
+                    <span className={`autom-status ${item.enabled ? "on" : "off"}`}>{item.enabled ? "Active" : "Paused"}</span>
+                  </div>
+                  {item.webhookUrl && (
+                    <div className="reveal-row">
+                      <code className="reveal-value">{item.webhookUrl}</code>
+                      <button type="button" className="btn sm" onClick={() => copyText(item.webhookUrl!)}>Copy URL</button>
+                    </div>
+                  )}
+                  {rotated?.id === item.id && (
+                    <div className="reveal-row">
+                      <code className="reveal-value">{rotated.secret}</code>
+                      <button type="button" className="btn sm" onClick={() => copyText(rotated.secret)}>Copy secret</button>
+                      <span className="settings-hint">New signing secret — shown once.</span>
+                    </div>
+                  )}
+                </div>
+                <div className="automation-row-actions">
+                  <button type="button" className="btn sm" onClick={() => onTestRun(item)}>Test run</button>
+                  <button type="button" className="btn sm" onClick={() => onRotate(item)}>Rotate secret</button>
+                  <button type="button" className="btn sm" onClick={() => onEdit(item)}>Edit</button>
+                  <button type="button" className="btn sm danger-ghost" onClick={() => onRemove(item)}>Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {legacy.length > 0 && (
+        <section className="autom-section">
+          <h2 className="autom-section-label">Legacy webhooks</h2>
+          <p className="settings-hint">
+            Created with the older webhook system. They still fire, but can&apos;t be edited here — recreate them
+            as a webhook above to set instructions, machine, and approval. You can still rotate or revoke them.
+          </p>
+          {legacyErr && <div className="banner error inline">{legacyErr}</div>}
+          <div className="automation-list">
+            {legacy.map((hook) => (
+              <div className={`automation-row${hook.enabled ? "" : " is-paused"}`} key={hook.id}>
+                <div className="automation-row-main">
+                  <div className="automation-row-title">
+                    <strong>{hook.id}</strong>
+                    <span className={`autom-status ${hook.enabled ? "on" : "off"}`}>{hook.enabled ? "Active" : "Revoked"}</span>
+                  </div>
+                  <div className="reveal-row">
+                    <code className="reveal-value">{hook.endpoint}</code>
+                    <button type="button" className="btn sm" onClick={() => copyText(hook.endpoint)}>Copy URL</button>
+                  </div>
+                  <div className="settings-hint">
+                    Routes to {hook.routingDefault ? `bivy/${hook.routingDefault}` : "the shared bivy queue"}.
+                  </div>
+                  {legacyRevealed?.id === hook.id && (
+                    <div className="reveal-row">
+                      <code className="reveal-value">{legacyRevealed.secret}</code>
+                      <button type="button" className="btn sm" onClick={() => copyText(legacyRevealed.secret)}>Copy secret</button>
+                      <span className="settings-hint">New signing secret — shown once.</span>
+                    </div>
+                  )}
+                </div>
+                <div className="automation-row-actions">
+                  <button type="button" className="btn sm" disabled={legacyBusy} onClick={() => void rotateLegacy(hook)}>Rotate secret</button>
+                  <button type="button" className="btn sm danger-ghost" disabled={legacyBusy || !hook.enabled} onClick={() => void revokeLegacy(hook)}>Revoke</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {legacyOutcomes.length > 0 && (
+            <>
+              <h3 className="autom-section-label" style={{ marginTop: 16 }}>Recent legacy triggers</h3>
+              <div className="automation-list">
+                {legacyOutcomes.slice(0, 8).map((o) => (
+                  <div className="automation-row" key={o.id}>
+                    <div className="automation-row-main">
+                      <div className="automation-row-title"><strong>{o.title}</strong></div>
+                      <div className="settings-hint">{o.status}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
 // ── New automation chooser ──────────────────────────────────────────────────
 // Linear / Notion-style: one primary "from scratch" row, then a browsable
 // template gallery. Used both as the empty-state body and as the New sheet.
@@ -988,7 +1257,7 @@ const TEMPLATE_GROUPS: Array<{ id: string; label: string; match: (t: AutomationT
   {
     id: "events",
     label: "From GitHub & Linear",
-    match: (t) => t.kind === "source" || (t.kind === "external" && t.route === "queue"),
+    match: (t) => t.kind === "source",
   },
   {
     id: "schedule",
@@ -1159,9 +1428,7 @@ function TemplateCard({
   featured?: boolean;
 }) {
   const badge = triggerBadge(template);
-  const cta = template.kind === "source" || template.kind === "external"
-    ? (template.cta || "Set up")
-    : "Use";
+  const cta = template.kind === "source" ? (template.cta || "Set up") : "Use";
   return (
     <button
       type="button"

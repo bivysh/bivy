@@ -12,7 +12,7 @@ import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import { SetupNotice } from "./components/SetupNotice.js";
 import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
-import { closeAutomations, getAutomationsRoute, openAutomations, subscribeAutomationsRoute } from "./automationsRoute.js";
+import { closeAutomations, getAutomationsRoute, openAutomations, setAutomationsSection, subscribeAutomationsRoute } from "./automationsRoute.js";
 // openAutomations({ setup }) is the sole entry for source connection lifecycle.
 import { AutomationsView } from "./components/AutomationsView.js";
 import { SessionMenu } from "./components/SessionMenu.js";
@@ -760,17 +760,15 @@ export function App() {
       {automationsOpen && (
         <AutomationsView
           state={state}
+          section={automationsOpen.section}
+          onSectionChange={setAutomationsSection}
+          githubQueue={githubQueue}
+          onRefreshGithubQueue={refreshGithubQueue}
           onClose={() =>
             closeAutomations(
               state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
             )
           }
-          onOpenSettings={(view) => {
-            // Leave Automations for the panel that configures this trigger; a
-            // single history replace keeps Back sane.
-            closeAutomations(state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" });
-            openSettings(view);
-          }}
           onOpenSession={(sessionId) => {
             // Deep-link a run into the chat session it produced. Resolve the
             // owning node/path from the unified session list so a cross-node
@@ -789,26 +787,24 @@ export function App() {
           state={state}
           view={settingsRoute.view}
           onViewChange={setSettingsView}
-          githubQueue={githubQueue}
-          onRefreshGithubQueue={refreshGithubQueue}
-          onPickSession={(id, path, nodeId) => {
-            controller.openSessionOnNode(id, path, nodeId);
-            // openSessionOnNode already navigates to `/sessions/:id` itself;
-            // this just resolves Settings back to that same route.
-            closeSettings({ kind: "session", id });
-            closeDrawer();
-          }}
           onImported={(id) => {
             // importNativeSession already opened + navigated to the new session
             // (with its resume ref); just dismiss Settings onto that route.
             closeSettings({ kind: "session", id });
             closeDrawer();
           }}
-          onOpenAutomationsConnections={(focus) => {
+          onRedirectToAutomations={(view) => {
+            // Integrations + automation/policy sections moved to the Automations
+            // hub. A stale `/settings/:view` deep link bounces there: source
+            // connections open the connect sheet; the rest land on their tab.
             closeSettings(
               state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
             );
-            openAutomations({ setup: focus });
+            if (view === "github" || view === "linear" || view === "slack") {
+              openAutomations({ setup: view });
+            } else {
+              openAutomations({ section: view });
+            }
             closeDrawer();
           }}
           onClose={() =>

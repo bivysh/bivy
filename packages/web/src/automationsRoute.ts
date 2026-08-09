@@ -7,9 +7,11 @@
 // Automations opened. This module owns the "is Automations open" half plus an
 // optional one-shot setup focus (open the GitHub/Linear/Slack connection sheet).
 
-import { navigate, parseRoute, type Route } from "./router.js";
+import { navigate, parseRoute, type AutomationsSection, type Route } from "./router.js";
 
-export type AutomationsRouteState = boolean; // true = open
+/** null = Automations closed. Otherwise open, on the given tab (`section: null`
+ *  is the Overview tab). */
+export type AutomationsRouteState = { section: AutomationsSection | null } | null;
 
 /** Connection setup sheet to open once Automations mounts (consumed once). */
 export type AutomationsSetupFocus = "github" | "linear" | "slack" | "work-queue";
@@ -20,7 +22,7 @@ function notify(): void {
 }
 
 function fromRoute(route: Route): AutomationsRouteState {
-  return route.kind === "automations";
+  return route.kind === "automations" ? { section: route.section } : null;
 }
 
 let cached: AutomationsRouteState = fromRoute(parseRoute());
@@ -44,11 +46,22 @@ export function getAutomationsRoute(): AutomationsRouteState {
 }
 
 /** Open Automations — pushes one history entry so hardware/browser Back closes
- *  it (see closeAutomations). Optional `setup` opens the connection sheet once. */
-export function openAutomations(opts?: { setup?: AutomationsSetupFocus }): void {
+ *  it (see closeAutomations). Optional `setup` opens the connection sheet once;
+ *  optional `section` lands on a specific tab (default Overview). */
+export function openAutomations(opts?: { setup?: AutomationsSetupFocus; section?: AutomationsSection | null }): void {
   pendingSetup = opts?.setup ?? null;
-  navigate({ kind: "automations" });
-  cached = true;
+  const section = opts?.section ?? null;
+  navigate({ kind: "automations", section });
+  cached = { section };
+  notify();
+}
+
+/** Switch the active tab in place (nav clicks) — replaces rather than pushes, so
+ *  Automations is never more than one history entry deep regardless of how many
+ *  tabs were visited (parity with setSettingsView). */
+export function setAutomationsSection(section: AutomationsSection | null): void {
+  navigate({ kind: "automations", section }, { replace: true });
+  cached = { section };
   notify();
 }
 
@@ -64,7 +77,7 @@ export function takeAutomationsSetupFocus(): AutomationsSetupFocus | null {
  *  pushes exactly one entry, so replacing it resolves in one step. */
 export function closeAutomations(underlying: Route): void {
   navigate(underlying, { replace: true });
-  cached = false;
+  cached = null;
   pendingSetup = null;
   notify();
 }
