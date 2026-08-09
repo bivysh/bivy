@@ -674,6 +674,15 @@ export class AppController {
     if (sid) {
       const row = s.sessions.find((r) => r.sessionId === sid);
       if (row?.status === "saved") this.openSession(sid);
+    } else {
+      // A draft has no attached session, so its runtime may not have advertised
+      // its commands yet. Warming the selected runtime (the node stands up a
+      // model-query scratch session and re-broadcasts its capabilities) folds any
+      // agent-advertised commands onto the runtime row, which the composer offers
+      // as the draft's command set. The menu renders reactively, so it fills in as
+      // they arrive. (Agents that only learn their commands on the first turn — e.g.
+      // Claude Code — still surface them once a turn has run.)
+      this.listModels();
     }
     for (const fn of this.slashOpenListeners) fn();
   }
@@ -1744,11 +1753,28 @@ export class AppController {
     const s = this.store.getState();
     if (s.activeSessionId) return; // only a fresh draft, never a live session
     const wanted = this.local.lastChoice().agentId;
-    if (!wanted || wanted === s.selectedAgentId) return;
-    const target = s.runtimes.find((r) => r.id === wanted);
-    if (!target) return; // not offered on this node — keep the node default
-    if (String((target as any).status || "available") !== "available") return;
-    this.chooseAgent(target);
+    const target = wanted ? s.runtimes.find((r) => r.id === wanted) : undefined;
+    if (
+      target &&
+      wanted !== s.selectedAgentId &&
+      String((target as any).status || "available") === "available"
+    ) {
+      // Switching to the remembered agent runtime-selects it, and the resulting
+      // runtime.updated drives a fresh, runtime-tagged models.list (see
+      // maybeRefreshModelsForRuntime) — nothing more to do here.
+      this.chooseAgent(target);
+      return;
+    }
+    // The draft's agent is already the one we'd pick (remembered == node default,
+    // or nothing remembered). The connect-time burst's models.list carries no
+    // runtime hint, so the node may have answered it for its global-active
+    // session on a *different* agent — leaving `state.models` tagged for the
+    // wrong runtime (or empty). That's the "no models on the new-session screen
+    // until I send the first message" bug: only session.new ever re-listed for
+    // the draft's real agent. Re-list explicitly for the selected runtime so its
+    // models resolve up front. Guarded on a mismatch so a correct list isn't
+    // needlessly refetched on every runtimes.list.
+    if (s.selectedAgentId && s.modelsRuntimeId !== s.selectedAgentId) this.listModels();
   }
 
   /**

@@ -726,9 +726,12 @@ export function App() {
               {/* Slash-command pill, pushed to the right so it sits top-right over
                   the composer on the same band as the GitHub context. Tapping it
                   (re)initializes a closed session so its commands can be fetched,
-                  then opens the composer's "/" menu. Hidden on a draft (new
-                  session) — there's no attached session to advertise commands yet. */}
-              {state.activeSessionId && (
+                  then opens the composer's "/" menu. Shown on a draft too: the
+                  selected runtime's advertised commands (folded onto its runtime
+                  row when the draft warms it) are offered there, so the menu is a
+                  real affordance rather than dead — an agent with none still gets
+                  the "no slash commands" empty state instead of a hidden button. */}
+              {(state.activeSessionId || !activeTuiLocked) && (
                 <button
                   type="button"
                   className="slash-pill"
@@ -802,8 +805,11 @@ export function App() {
             );
             if (view === "github" || view === "linear" || view === "slack") {
               openAutomations({ setup: view });
-            } else {
+            } else if (view === "queue" || view === "rulesets") {
               openAutomations({ section: view });
+            } else {
+              // Other stale sections (e.g. the removed Webhooks tab) land on Overview.
+              openAutomations();
             }
             closeDrawer();
           }}

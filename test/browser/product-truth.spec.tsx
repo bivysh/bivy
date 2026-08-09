@@ -24,7 +24,7 @@ test("settings use task-oriented groups and search panel concepts", async () => 
     expect(source).toContain(`label: "${group}"`);
   }
   // Integrations (GitHub/Linear/Slack) and automation & policy (Work Queue,
-  // Webhooks, Rulesets) moved to the Automations hub — Settings no longer lists
+  // Rulesets) moved to the Automations hub — Settings no longer lists
   // them, it only redirects stale /settings/:view deep links there.
   expect(source).not.toContain('label: "Integrations"');
   expect(source).not.toContain('label: "Automation & policy"');
@@ -32,15 +32,19 @@ test("settings use task-oriented groups and search panel concepts", async () => 
   expect(source).toContain("SEARCH_TERMS[item.id]");
 });
 
-test("automations is the single hub for connections, work queue, webhooks and rulesets", async () => {
+test("automations is the single hub for connections, work queue and rulesets", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/AutomationsView.tsx", import.meta.url), "utf8");
-  for (const tab of ["Overview", "Work Queue", "Webhooks", "Rulesets"]) {
+  for (const tab of ["Overview", "Work Queue", "Rulesets"]) {
     expect(source).toContain(`label: "${tab}"`);
   }
+  // The standalone Webhooks tab was removed — a webhook is just an automation
+  // whose trigger is "webhook" (configured in Triggers), and its signed
+  // endpoint + secret now live inline on the automation's Overview row.
+  expect(source).not.toContain('label: "Webhooks"');
+  expect(source).not.toContain("WebhooksPanel");
   // Source connections and the panels reused from Settings all live here now.
   expect(source).toContain("GithubQueuePanel");
   expect(source).toContain("RulesetsPanel");
-  expect(source).toContain("WebhooksPanel");
 });
 
 test("provider key save awaits an authoritative acknowledgement", async () => {
