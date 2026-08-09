@@ -28,15 +28,10 @@ import {
   unb64,
   nlToCron,
   isNlCronOk,
-  fetchAutomationHooks,
-  rotateAutomationHookSecret,
-  revokeAutomationHook,
   type AppState,
   type AccountAutomation,
   type AccountAutomationRun,
   type AccountNode,
-  type AutomationHook,
-  type AutomationOutcome,
   type GithubAppInfo,
   type LinearHook,
   type SlackHook,
@@ -1066,12 +1061,8 @@ export function AutomationsView({
 // ── Webhooks tab ────────────────────────────────────────────────────────────
 // The single inbound-webhook surface. A webhook is just an automation with
 // trigger="webhook" (full instructions/approval/machine, E2E-encrypted), created
-// through the ordinary wizard — this panel is where its signed endpoint, secret
-// rotation, and the example signed request live. Any pre-existing "legacy" hooks
-// (the older standalone AutomationHook system, whose plaintext instructions the
-// control plane can't re-encrypt into an automation) are listed read-mostly so
-// they keep working and can be rotated/revoked or recreated as automations —
-// there is intentionally no way to create a new legacy hook.
+// through the ordinary wizard — this panel is where its signed endpoint and
+// secret rotation live.
 
 /** Copy a value to the clipboard, no-op if unavailable. */
 function copyText(value: string): void {
@@ -1095,49 +1086,6 @@ function WebhooksPanel({
   onRotate: (item: AccountAutomation) => void;
   onRemove: (item: AccountAutomation) => void;
 }) {
-  const [legacy, setLegacy] = useState<AutomationHook[]>([]);
-  const [legacyOutcomes, setLegacyOutcomes] = useState<AutomationOutcome[]>([]);
-  const [legacyRevealed, setLegacyRevealed] = useState<{ id: string; secret: string } | null>(null);
-  const [legacyBusy, setLegacyBusy] = useState(false);
-  const [legacyErr, setLegacyErr] = useState("");
-
-  const refreshLegacy = useCallback(async () => {
-    try {
-      const data = await fetchAutomationHooks(controller.local);
-      setLegacy(data.hooks);
-      setLegacyOutcomes(data.outcomes);
-    } catch {
-      // Legacy hooks are hosted-only and optional; a load failure just hides the
-      // section rather than surfacing an error on the modern webhook surface.
-      setLegacy([]);
-      setLegacyOutcomes([]);
-    }
-  }, []);
-  useEffect(() => { void refreshLegacy(); }, [refreshLegacy]);
-
-  const rotateLegacy = async (hook: AutomationHook) => {
-    setLegacyBusy(true);
-    setLegacyErr("");
-    try {
-      const rotatedHook = await rotateAutomationHookSecret(controller.local, hook.id);
-      setLegacyRevealed({ id: hook.id, secret: rotatedHook.secret });
-      await refreshLegacy();
-    } catch (e) {
-      setLegacyErr(e instanceof Error ? e.message : "Could not rotate secret.");
-    } finally { setLegacyBusy(false); }
-  };
-  const revokeLegacy = async (hook: AutomationHook) => {
-    if (!confirm("Revoke this legacy webhook? Its current secret stops working immediately.")) return;
-    setLegacyBusy(true);
-    setLegacyErr("");
-    try {
-      await revokeAutomationHook(controller.local, hook.id);
-      await refreshLegacy();
-    } catch (e) {
-      setLegacyErr(e instanceof Error ? e.message : "Could not revoke webhook.");
-    } finally { setLegacyBusy(false); }
-  };
-
   return (
     <div className="autom-webhooks">
       <section className="autom-section">
@@ -1189,62 +1137,6 @@ function WebhooksPanel({
           </div>
         )}
       </section>
-
-      {legacy.length > 0 && (
-        <section className="autom-section">
-          <h2 className="autom-section-label">Legacy webhooks</h2>
-          <p className="settings-hint">
-            Created with the older webhook system. They still fire, but can&apos;t be edited here — recreate them
-            as a webhook above to set instructions, machine, and approval. You can still rotate or revoke them.
-          </p>
-          {legacyErr && <div className="banner error inline">{legacyErr}</div>}
-          <div className="automation-list">
-            {legacy.map((hook) => (
-              <div className={`automation-row${hook.enabled ? "" : " is-paused"}`} key={hook.id}>
-                <div className="automation-row-main">
-                  <div className="automation-row-title">
-                    <strong>{hook.id}</strong>
-                    <span className={`autom-status ${hook.enabled ? "on" : "off"}`}>{hook.enabled ? "Active" : "Revoked"}</span>
-                  </div>
-                  <div className="reveal-row">
-                    <code className="reveal-value">{hook.endpoint}</code>
-                    <button type="button" className="btn sm" onClick={() => copyText(hook.endpoint)}>Copy URL</button>
-                  </div>
-                  <div className="settings-hint">
-                    Routes to {hook.routingDefault ? `bivy/${hook.routingDefault}` : "the shared bivy queue"}.
-                  </div>
-                  {legacyRevealed?.id === hook.id && (
-                    <div className="reveal-row">
-                      <code className="reveal-value">{legacyRevealed.secret}</code>
-                      <button type="button" className="btn sm" onClick={() => copyText(legacyRevealed.secret)}>Copy secret</button>
-                      <span className="settings-hint">New signing secret — shown once.</span>
-                    </div>
-                  )}
-                </div>
-                <div className="automation-row-actions">
-                  <button type="button" className="btn sm" disabled={legacyBusy} onClick={() => void rotateLegacy(hook)}>Rotate secret</button>
-                  <button type="button" className="btn sm danger-ghost" disabled={legacyBusy || !hook.enabled} onClick={() => void revokeLegacy(hook)}>Revoke</button>
-                </div>
-              </div>
-            ))}
-          </div>
-          {legacyOutcomes.length > 0 && (
-            <>
-              <h3 className="autom-section-label" style={{ marginTop: 16 }}>Recent legacy triggers</h3>
-              <div className="automation-list">
-                {legacyOutcomes.slice(0, 8).map((o) => (
-                  <div className="automation-row" key={o.id}>
-                    <div className="automation-row-main">
-                      <div className="automation-row-title"><strong>{o.title}</strong></div>
-                      <div className="settings-hint">{o.status}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </section>
-      )}
     </div>
   );
 }

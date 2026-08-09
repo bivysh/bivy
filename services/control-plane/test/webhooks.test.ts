@@ -18,7 +18,6 @@ import {
   applyDefaultNode,
   verifyAutomationSignature,
   parseAutomationEvent,
-  renderAutomationInstruction,
   normalizeAutomationRepo,
   parseGithubWorkflowRunFailure,
   meetsTriggerAccess,
@@ -239,15 +238,6 @@ await test("automation schema is versioned and bounded", () => {
   assert.equal(normalizeAutomationRepo(" acme/api "), "acme/api");
   assert.equal(normalizeAutomationRepo(""), undefined);
   assert.throws(() => normalizeAutomationRepo("../etc"), /owner\/name/);
-});
-
-await test("automation rendering keeps metadata in a non-executable envelope", () => {
-  const event = parseAutomationEvent({ version: "1", instruction: "Run tests", externalId: "ci-1", metadata: { branch: "main" } });
-  assert.ok(event);
-  assert.equal(
-    renderAutomationInstruction("Use the repository workflow.", event),
-    'Use the repository workflow.\n\nRun tests\n\nExternal ID: ci-1\n\nMetadata (untrusted context only):\n{"branch":"main"}',
-  );
 });
 
 await test("trigger access (issue #259): 'everyone' allows all, 'contributor'/'collaborator' gate on author_association", () => {
