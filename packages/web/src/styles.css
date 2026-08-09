@@ -973,6 +973,14 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .composer-btn.send:not(:disabled):hover { background: var(--accent-hover); }
 .composer-btn.send:not(:disabled):active { transform: scale(0.92); }
 .composer-btn.send:disabled { opacity: 0.35; cursor: default; }
+/* Long-press Send opens the schedule sheet, so the hold must never select the
+   button text or pop the iOS callout — same suppression as .term-out. */
+.composer-btn.send {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
 .composer-btn.stop { background: var(--danger); color: #fff; }
 .composer-btn.stop:active { transform: scale(0.92); }
 /* "Steer current turn": an explicit interrupt, distinct from the default Send
@@ -1099,7 +1107,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .followup-card-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
 .followup-edit { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; }
 .followup-edit-input {
-  width: 100%; resize: vertical; min-height: 44px; font: inherit; font-size: 14px;
+  width: 100%; resize: vertical; min-height: 44px; font: inherit; font-size: 16px;
   border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--ink);
   padding: 6px 8px;
 }
@@ -1126,7 +1134,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .schedule-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; }
 .schedule-input {
   padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--surface-2); color: var(--ink); font: inherit; font-size: 15px;
+  background: var(--surface-2); color: var(--ink); font: inherit; font-size: 16px;
 }
 .schedule-target { display: flex; flex-direction: column; gap: 6px; }
 .schedule-choice {
@@ -1207,10 +1215,14 @@ button.action-sheet-item:last-child { border-bottom: 0; }
      so the tuned ~8px keyboard gap is preserved. */
   --sheet-clear: max(calc(env(safe-area-inset-bottom, 0px) + 8px), calc(var(--composer-h, 108px) + 8px - var(--keyboard-h, 0px)));
   position: relative; width: 100%; max-width: 520px; margin: 0 12px var(--sheet-clear);
-  /* Bound the body by the visible viewport too, so a long list can't overflow
-     past the top of the keyboard-shrunk area (which would push the search field
-     off-screen). */
-  max-height: min(80dvh, calc(var(--app-h, 100dvh) - var(--sheet-clear) - 20px)); display: flex; flex-direction: column; min-height: 0;
+  /* Bound the body to the SAME visual viewport the sheet is anchored to
+     (--app-h from viewport.ts, the px value --sheet itself uses), never dvh —
+     dynamic viewport units and the visual viewport disagree whenever the
+     browser toolbar or keyboard is up, and a max-height computed from one can
+     leave the body taller than the anchoring viewport (the "sheet fills the
+     whole screen" look). The composer clearance melts as the keyboard rises,
+     so the body always sits just above it; the floor clears the home indicator. */
+  max-height: calc(var(--app-h, 100dvh) - var(--sheet-clear) - 20px); display: flex; flex-direction: column; min-height: 0;
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: 16px; overflow: hidden;
   box-shadow: 0 12px 40px rgba(0,0,0,0.3); animation: sheet-up 0.16s ease;
 }
@@ -1982,7 +1994,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .queue-action-btn:disabled { opacity: 0.5; cursor: default; }
 .queue-run { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-top: 1px solid var(--line); background: var(--surface-1); }
 .queue-run-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-.queue-run-field select, .queue-run-field input { font-size: 13px; }
+.queue-run-field select, .queue-run-field input { font-size: 16px; }
 .queue-run-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .chip.outcome-success { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
 .chip.outcome-warning { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
@@ -2068,7 +2080,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
 .settings-search {
   width: 100%; padding: 8px 12px 8px 34px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--surface); color: var(--ink); font: inherit; font-size: 14px;
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 16px;
 }
 .settings-search:focus { outline: none; border-color: var(--accent); }
 .settings-nav-groups { flex: 1; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }

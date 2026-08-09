@@ -207,7 +207,7 @@ export interface RuntimeInfo {
   [k: string]: unknown;
 }
 
-export type FollowupStatus = "queued" | "sending" | "sent" | "failed";
+export type FollowupStatus = "queued" | "scheduled" | "sending" | "sent" | "failed";
 
 /**
  * A follow-up prompt visible in the composer's queue for a session — see
@@ -227,6 +227,11 @@ export interface PendingFollowup {
   createdAt: number;
   updatedAt: number;
   version: number;
+  /** A message scheduled for later (long-press Send): the epoch-ms time the
+   *  control-plane automation will deliver it. Presence of this field marks the
+   *  row as "scheduled" — rendered in the queue with its fire time and skipped
+   *  by the turn-end drain (it's not a queued follow-up waiting to send now). */
+  scheduledAt?: number;
   /** Account/relay mode: the one-off scheduled-message automation that mirrors
    *  this queued item on the control plane, so it still sends if the app closes
    *  or the node was offline at turn-end (the node dedupes against the live
@@ -1538,6 +1543,32 @@ export class SessionStore {
     return created;
   }
 
+  /** Record a message scheduled for later (long-press Send → ScheduleSheet) as
+   *  a queue row so it's visible next to the composer with its fire time. The
+   *  control-plane automation does the actual delivering; the row is purely
+   *  informational + cancellable (status "scheduled" is never picked up by the
+   *  turn-end drain). The automation id doubles as the row id, so cancelling the
+   *  row cancels the automation and pruneScheduledFollowups can drop rows whose
+   *  automation has fired/gone. A duplicate id is ignored, matching
+   *  enqueueFollowup. */
+  enqueueScheduledFollowup(sessionId: string, item: { id: string; text: string; scheduledAt: number; scheduledAutomationId: string }, now: number): PendingFollowup {
+    const list = this.getFollowups(sessionId);
+    const existing = list.find((f) => f.id === item.id);
+    if (existing) return existing;
+    const created: PendingFollowup = {
+      id: item.id,
+      text: item.text,
+      status: "scheduled",
+      createdAt: now,
+      updatedAt: now,
+      version: 1,
+      scheduledAt: item.scheduledAt,
+      scheduledAutomationId: item.scheduledAutomationId,
+    };
+    this.setFollowupsFor(sessionId, [...list, created]);
+    return created;
+  }
+
   /** Record the control-plane automation that mirrors a queued follow-up (the
    *  persistence backstop). Only applies while the item is still queued — an
    *  item already dispatched/sent no longer needs the backstop, so the caller
@@ -1583,14 +1614,42 @@ export class SessionStore {
     return { ok: true, item: updated };
   }
 
-  /** Remove a still-queued item. No-op (returns false) once it's dispatched —
+  /** Remove a still-queued item — or a scheduled-message row (its automation
+   *  gets cancelled by the caller). No-op (returns false) once it's dispatched —
    *  removing something already sending/sent can't change what the agent
    *  receives, and would desync the visible queue from reality. */
   removeFollowup(sessionId: string, id: string): boolean {
     const list = this.getFollowups(sessionId);
     const item = list.find((f) => f.id === id);
-    if (!item || item.status !== "queued") return false;
+    if (!item || (item.status !== "queued" && item.status !== "scheduled")) return false;
     this.setFollowupsFor(sessionId, list.filter((f) => f.id !== id));
+    return true;
+  }
+
+  /** Drop scheduled-message rows whose control-plane automation no longer
+   *  exists — it fired (and is being/been delivered), was cancelled from
+   *  another device, or the run failed. Keeps the queue's "scheduled" entries
+   *  honest once the message is no longer pending. Only touches rows with status
+   *  "scheduled"; queued follow-ups are left alone. */
+  pruneScheduledFollowups(sessionId: string, keepIds: ReadonlySet<string>): void {
+    const list = this.getFollowups(sessionId);
+    const next = list.filter((f) => f.status !== "scheduled" || (f.scheduledAutomationId ? keepIds.has(f.scheduledAutomationId) : false));
+    if (next.length === list.length) return;
+    this.setFollowupsFor(sessionId, next);
+  }
+
+  /** Move a scheduled-message row to a new fire time. The caller keeps the
+   *  control-plane automation in sync; this only updates the row's timestamp.
+   *  No-op once the row is no longer "scheduled" (the automation already fired,
+   *  or was cancelled). */
+  rescheduleFollowup(sessionId: string, id: string, scheduledAt: number, now: number): boolean {
+    const list = this.getFollowups(sessionId);
+    const idx = list.findIndex((f) => f.id === id);
+    if (idx < 0 || list[idx]!.status !== "scheduled") return false;
+    const updated: PendingFollowup = { ...list[idx]!, scheduledAt, updatedAt: now, version: list[idx]!.version + 1 };
+    const next = list.slice();
+    next[idx] = updated;
+    this.setFollowupsFor(sessionId, next);
     return true;
   }
 

@@ -18,6 +18,11 @@ import type { PendingFollowup } from "./store.js";
  * session has gone idle — sending a fresh prompt straight through while older
  * ones are still queued would jump the queue and reorder ahead of them (the
  * "delivered in the displayed order" acceptance criterion).
+ *
+ * `queueLength` counts only items waiting to send now (status "queued") — a
+ * message scheduled for LATER (status "scheduled", e.g. long-press Send) is
+ * not blocking: a new prompt to an idle session still sends immediately even
+ * when a later-scheduled message is on the books.
  */
 export function mustQueueFollowup(queueLength: number, working: boolean): boolean {
   return queueLength > 0 || working;
@@ -38,7 +43,9 @@ export function supportsSteering(capabilities: { streamingBehaviors?: unknown } 
 /** The next item to deliver from a session's queue: the first still-"queued"
  *  entry in display order. Skips anything already "sending"/"sent"/"failed" —
  *  the queue only ever has one item in flight at a time, but this stays
- *  correct even if that ever changes. Undefined when there's nothing to send. */
+ *  correct even if that ever changes. Also skips status "scheduled": a message
+ *  scheduled for later is delivered by its control-plane automation on its own
+ *  timer, never by the turn-end drain. Undefined when there's nothing to send. */
 export function nextQueuedFollowup(items: readonly PendingFollowup[]): PendingFollowup | undefined {
   return items.find((f) => f.status === "queued");
 }
