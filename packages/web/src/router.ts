@@ -65,9 +65,9 @@ function isSettingsView(v: string): v is SettingsView {
 /** Automations' navigable tabs. `null` (bare `/automations`) is the Overview
  *  tab. Kept here (like `SettingsView`) so the router can validate an
  *  `/automations/:section` path without importing the component module. */
-export type AutomationsSection = "queue" | "webhooks" | "rulesets";
+export type AutomationsSection = "queue" | "rulesets";
 
-const AUTOMATIONS_SECTIONS: readonly AutomationsSection[] = ["queue", "webhooks", "rulesets"];
+const AUTOMATIONS_SECTIONS: readonly AutomationsSection[] = ["queue", "rulesets"];
 
 function isAutomationsSection(v: string): v is AutomationsSection {
   return (AUTOMATIONS_SECTIONS as readonly string[]).includes(v);

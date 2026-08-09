@@ -385,7 +385,6 @@ interface Notice {
 const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | null }> = [
   { label: "Overview", section: null },
   { label: "Work Queue", section: "queue" },
-  { label: "Webhooks", section: "webhooks" },
   { label: "Rulesets", section: "rulesets" },
 ];
 
@@ -582,19 +581,6 @@ export function AutomationsView({
     if (template.kind === "schedule") startFromScheduleTemplate(template);
     else if (template.kind === "webhook") startFromWebhookTemplate(template);
     else void startFromSourceTemplate(template);
-  }
-
-  /** Blank webhook-triggered automation — the canonical way to make a webhook,
-   *  opened from the Webhooks tab's "New webhook" button. */
-  function startFromBlankWebhook() {
-    setError("");
-    setNotice(null);
-    setDraft({
-      ...emptyDraft(defaultNodeId),
-      hasTrigger: true,
-      trigger: "webhook",
-      repo: rememberedRepo(state),
-    });
   }
 
   function startFromScratch() {
@@ -832,14 +818,18 @@ export function AutomationsView({
                           {scheduleSummary(item)}
                           {item.enabled && item.nextRunAt ? ` · next ${new Date(item.nextRunAt).toLocaleString()}` : ""}
                         </div>
-                        {item.trigger === "webhook" && (
-                          <button
-                            type="button"
-                            className="link-btn autom-inline-link"
-                            onClick={() => onSectionChange("webhooks")}
-                          >
-                            Endpoint &amp; secret in Webhooks →
-                          </button>
+                        {item.trigger === "webhook" && item.webhookUrl && (
+                          <div className="reveal-row">
+                            <code className="reveal-value">{item.webhookUrl}</code>
+                            <button type="button" className="btn sm" onClick={() => copyText(item.webhookUrl!)}>Copy URL</button>
+                          </div>
+                        )}
+                        {item.trigger === "webhook" && rotated?.id === item.id && (
+                          <div className="reveal-row">
+                            <code className="reveal-value">{rotated.secret}</code>
+                            <button type="button" className="btn sm" onClick={() => copyText(rotated.secret)}>Copy secret</button>
+                            <span className="settings-hint">New signing secret — shown once.</span>
+                          </div>
                         )}
                       </div>
                       <div className="automation-row-actions">
@@ -856,6 +846,9 @@ export function AutomationsView({
                           <button type="button" className="btn sm" onClick={() => void runNow(item)}>
                             {item.trigger === "webhook" ? "Test run" : "Run now"}
                           </button>
+                        )}
+                        {item.trigger === "webhook" && (
+                          <button type="button" className="btn sm" onClick={() => void rotate(item)}>Rotate secret</button>
                         )}
                         <button type="button" className="btn sm" onClick={() => void edit(item)}>Edit</button>
                         <div className="row-menu" ref={menuId === item.id ? menuRef : undefined}>
@@ -962,18 +955,6 @@ export function AutomationsView({
           </>
         )}
 
-        {section === "webhooks" && (
-          <WebhooksPanel
-            webhookItems={items.filter((i) => i.trigger === "webhook")}
-            rotated={rotated}
-            onNewWebhook={startFromBlankWebhook}
-            onEdit={(item) => void edit(item)}
-            onTestRun={(item) => void runNow(item)}
-            onRotate={(item) => void rotate(item)}
-            onRemove={(item) => void remove(item)}
-          />
-        )}
-
         {section === "rulesets" && <RulesetsPanel state={state} />}
       </div>
 
@@ -1058,87 +1039,9 @@ export function AutomationsView({
   );
 }
 
-// ── Webhooks tab ────────────────────────────────────────────────────────────
-// The single inbound-webhook surface. A webhook is just an automation with
-// trigger="webhook" (full instructions/approval/machine, E2E-encrypted), created
-// through the ordinary wizard — this panel is where its signed endpoint and
-// secret rotation live.
-
 /** Copy a value to the clipboard, no-op if unavailable. */
 function copyText(value: string): void {
   void navigator.clipboard?.writeText(value);
-}
-
-function WebhooksPanel({
-  webhookItems,
-  rotated,
-  onNewWebhook,
-  onEdit,
-  onTestRun,
-  onRotate,
-  onRemove,
-}: {
-  webhookItems: AccountAutomation[];
-  rotated: { id: string; secret: string } | null;
-  onNewWebhook: () => void;
-  onEdit: (item: AccountAutomation) => void;
-  onTestRun: (item: AccountAutomation) => void;
-  onRotate: (item: AccountAutomation) => void;
-  onRemove: (item: AccountAutomation) => void;
-}) {
-  return (
-    <div className="autom-webhooks">
-      <section className="autom-section">
-        <div className="autom-section-head">
-          <h2 className="autom-section-label">Webhooks</h2>
-          <button type="button" className="btn sm primary" onClick={onNewWebhook}>New webhook</button>
-        </div>
-        <p className="settings-hint">
-          Signed inbound endpoints that turn events from CI, monitoring, or internal tools into Bivy runs.
-          Each webhook is an automation: its instructions, machine, and approval mode are fixed by you — the
-          payload only supplies the event context.
-        </p>
-
-        {webhookItems.length === 0 ? (
-          <p className="settings-hint autom-empty-hint">
-            No webhooks yet. <strong>New webhook</strong> creates one and reveals its signed URL and secret.
-          </p>
-        ) : (
-          <div className="automation-list">
-            {webhookItems.map((item) => (
-              <div className={`automation-row${item.enabled ? "" : " is-paused"}`} key={item.id}>
-                <div className="automation-row-main">
-                  <div className="automation-row-title">
-                    <strong>{item.name}</strong>
-                    <span className={`autom-status ${item.enabled ? "on" : "off"}`}>{item.enabled ? "Active" : "Paused"}</span>
-                  </div>
-                  {item.webhookUrl && (
-                    <div className="reveal-row">
-                      <code className="reveal-value">{item.webhookUrl}</code>
-                      <button type="button" className="btn sm" onClick={() => copyText(item.webhookUrl!)}>Copy URL</button>
-                    </div>
-                  )}
-                  {rotated?.id === item.id && (
-                    <div className="reveal-row">
-                      <code className="reveal-value">{rotated.secret}</code>
-                      <button type="button" className="btn sm" onClick={() => copyText(rotated.secret)}>Copy secret</button>
-                      <span className="settings-hint">New signing secret — shown once.</span>
-                    </div>
-                  )}
-                </div>
-                <div className="automation-row-actions">
-                  <button type="button" className="btn sm" onClick={() => onTestRun(item)}>Test run</button>
-                  <button type="button" className="btn sm" onClick={() => onRotate(item)}>Rotate secret</button>
-                  <button type="button" className="btn sm" onClick={() => onEdit(item)}>Edit</button>
-                  <button type="button" className="btn sm danger-ghost" onClick={() => onRemove(item)}>Delete</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
-  );
 }
 
 // ── New automation chooser ──────────────────────────────────────────────────
