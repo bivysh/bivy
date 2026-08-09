@@ -5648,18 +5648,57 @@ async function continueCorrelatedSession(
   item: ControlPlaneWorkItem,
   prompt: string,
   report: (patch: EvidencePatch) => Promise<void>,
+  opts?: { resumeOnMissing?: boolean; isMessage?: boolean },
 ): Promise<boolean> {
   if (item.targetKind !== "existing_session" || !item.targetSessionId) return false;
-  const record = openSessions.get(item.targetSessionId);
+  let record = openSessions.get(item.targetSessionId);
+  if (!record && opts?.resumeOnMissing) {
+    // Same-node resume: reopen a closed session from its durable metadata +
+    // transcript — exactly how a prompt to an old session from the app is
+    // handled (resolveOrResumeSession). Best-effort: an unresolvable session
+    // falls through to the snapshot restore / fail handling below.
+    record = await resolveOrResumeSession(item.targetSessionId).catch(() => undefined);
+  }
   if (!record) {
     await restoreSessionFromSnapshot(item.targetSessionId).catch((e) =>
       console.warn(`[case-b] snapshot restore for ${item.targetSessionId} failed:`, (e as Error).message),
     );
+    record = openSessions.get(item.targetSessionId);
+  }
+  if (!record) {
+    // Strict mode (a scheduled message to a specific session): the session must
+    // be resumed in place, so a genuinely-unavailable one is surfaced as a
+    // failed run rather than silently starting a new session. Everything else
+    // keeps the established best-effort fall-through to a fresh pickup.
+    if (opts?.resumeOnMissing) {
+      throw new Error(`Scheduled message could not be delivered: session ${item.targetSessionId} is not available on this node`);
+    }
     return false;
   }
   const branch = record.worktree?.branch;
+  if (opts?.resumeOnMissing) {
+    // "Send when the turn ends": a scheduled message that fires mid-turn waits
+    // for the session to go idle instead of interrupting it (bounded, so a
+    // stuck session still surfaces as a failed run rather than hanging forever).
+    await waitForSessionIdle(record);
+    // Double-send guard: when the app is open and already delivered this exact
+    // message as a follow-up (and deleted the pending schedule), the scheduled
+    // run must not send it a second time. Matches the last user message, which
+    // is all a text-only scheduled message can have produced.
+    if (lastUserMessageText(record).trim() === prompt.trim()) {
+      await report({
+        output: { sessionId: record.id },
+        events: [{
+          at: new Date().toISOString(),
+          kind: "completed",
+          summary: "Already delivered to this session — skipped.",
+        }],
+      });
+      return true;
+    }
+  }
   await runSessionTurn(record, prompt);
-  if (record.worktree) {
+  if (record.worktree && !opts?.isMessage && !opts?.resumeOnMissing) {
     await maybePushWorktreeBranch(record);
     await maybeDetectPullRequest(record);
   }
@@ -5670,6 +5709,29 @@ async function continueCorrelatedSession(
       : undefined,
   });
   return true;
+}
+
+/** Poll a session until it's not working/streaming (scheduled-message idle wait). */
+async function waitForSessionIdle(record: SessionRecord, capMs = 2 * 60 * 60 * 1000): Promise<void> {
+  const deadline = Date.now() + capMs;
+  while (sessionBusy(record)) {
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for session ${record.id} to finish its current turn`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+}
+
+/** Text of the most recent user message in a session's transcript, if any. */
+function lastUserMessageText(record: SessionRecord): string {
+  const messages = record.session.getMessages();
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message && typeof message === "object" && message.role === "user") {
+      return runtimeContentText(message.content);
+    }
+  }
+  return "";
 }
 
 async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>) {
@@ -5787,12 +5849,25 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // workspace (and gains worktree isolation when that workspace is a checkout).
   const parsedRepo = item.repo ? parseRepo(item.repo) : undefined;
   if (item.repo && !parsedRepo) throw new Error(`work item ${item.id} has an invalid repo "${item.repo}"`);
-  const request = item.body ? `${item.title}\n\n${item.body}` : item.title;
+  // A scheduled run's body is the operator's (decrypted) template — the
+  // definition name is metadata, not part of the instructions, so don't fold it
+  // into the prompt. A scheduled chat message must arrive verbatim; the name is
+  // only the run/session label.
+  const request = item.source === "schedule"
+    ? (item.body || item.title)
+    : item.body ? `${item.title}\n\n${item.body}` : item.title;
+  // Plain chat messages (scheduled "message me later" reminders) skip the
+  // automation boilerplate, auto-push and required checks — even when a
+  // workspace target happens to be a git checkout.
+  const isMessage = item.message === true;
   // Case B (provider-agnostic): a follow-up the control plane correlated to an
   // existing session continues it as a normal chat. Reached by Slack the moment a
   // reply carries a thread identity the control plane can correlate; a one-shot
   // slash command has none, so it simply falls through to a fresh session.
-  if (await continueCorrelatedSession(item, request, report)) return;
+  // Scheduled runs targeting an existing session are STRICT: the message must
+  // land in that session (resumed from disk if needed), never silently in a new
+  // one — so a session that can't be resumed fails the run instead.
+  if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: item.source === "schedule", isMessage })) return;
   const sandbox = normalizeSandboxTier(item.sandbox);
   const sessionOpts = {
     makeActive: false,
@@ -5810,16 +5885,18 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
   }
-  const prompt = parsedRepo || record.worktree
-    ? [
-        request,
-        "",
-        "Work carefully in this repository and implement the request completely. Run the relevant tests, linter, and type-checker.",
-        "When finished, commit and push your changes, then open a pull request with a clear title and description. If you cannot open it, leave the changes committed on this branch.",
-      ].join("\n")
-    : request;
+  const prompt = isMessage
+    ? request
+    : (parsedRepo || record.worktree)
+      ? [
+          request,
+          "",
+          "Work carefully in this repository and implement the request completely. Run the relevant tests, linter, and type-checker.",
+          "When finished, commit and push your changes, then open a pull request with a clear title and description. If you cannot open it, leave the changes committed on this branch.",
+        ].join("\n")
+      : request;
   await runSessionTurn(record, prompt);
-  if (record.worktree) {
+  if (!isMessage && record.worktree) {
     await maybePushWorktreeBranch(record);
     await maybeDetectPullRequest(record);
   }
@@ -5829,7 +5906,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // because the agent claimed success or already opened a PR. Only a run that was
   // allowed to modify the workspace is verified; a read-only run (an
   // investigation) changes nothing, so there is nothing to check.
-  const checks = record.worktree && sandbox !== "read-only"
+  const checks = !isMessage && record.worktree && sandbox !== "read-only"
     ? runRequiredAutomationChecks(record.worktree.path)
     : [];
   const failedChecks = checks.filter((check) => check.status === "failed");

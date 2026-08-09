@@ -1112,6 +1112,45 @@ button.action-sheet-item:last-child { border-bottom: 0; }
   min-width: 32px; min-height: 32px;
 }
 
+/* "Schedule this message for later" sheet (long-press Send — ScheduleSheet.tsx).
+   A one-off scheduled message is sealed for the session's node and written to
+   the account's control plane, so the always-on node delivers it on time even
+   with the app closed. */
+.schedule-sheet { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px 8px; }
+.schedule-preview {
+  margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface-2); color: var(--ink); font-size: 13.5px;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow-y: auto;
+}
+.schedule-field { display: flex; flex-direction: column; gap: 4px; }
+.schedule-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.02em; }
+.schedule-input {
+  padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface-2); color: var(--ink); font: inherit; font-size: 15px;
+}
+.schedule-target { display: flex; flex-direction: column; gap: 6px; }
+.schedule-choice {
+  display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); cursor: pointer;
+}
+.schedule-choice.active { border-color: var(--accent); }
+.schedule-choice input { margin-top: 3px; accent-color: var(--accent); }
+.schedule-choice > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.schedule-choice-title { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.schedule-choice-meta { font-size: 12px; color: var(--muted); }
+.schedule-error { margin: 0; color: var(--danger, #d9525a); font-size: 12.5px; }
+.schedule-ok { margin: 0; color: var(--accent); font-size: 12.5px; }
+.schedule-send { align-self: flex-end; padding: 8px 18px; font-size: 13px; }
+.schedule-send:disabled { opacity: 0.55; cursor: default; }
+.schedule-pending { display: flex; flex-direction: column; gap: 6px; }
+.schedule-pending-head { font-size: 12px; font-weight: 600; color: var(--muted); }
+.schedule-pending-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.schedule-pending-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px 6px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2);
+}
+.schedule-pending-when { font-size: 13px; color: var(--ink); }
+
 /* Drag-and-drop drop zone over the composer card. */
 .composer-card.dragging { border-color: var(--accent); }
 .composer-drop {

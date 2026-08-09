@@ -115,6 +115,10 @@ import {
   importRoomKey,
   open as openSealed,
   unb64url,
+  seal,
+  unb64,
+  createAutomation,
+  deleteAutomation,
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
@@ -169,6 +173,9 @@ function clientMessageId(): string {
 }
 
 const LOOPBACK = /^(localhost|127\.0\.0\.1|\[?::1\]?)$/;
+
+// E2E template envelope for scheduled chat messages (mirrors AutomationsView).
+const TEMPLATE_PREFIX = "bivy-room-v1";
 
 /** How long to wait after a launched ephemeral runner comes online before
  *  concluding it has no model credentials and raising the first-run sign-in
@@ -1761,6 +1768,10 @@ export class AppController {
     if (active) {
       if (this.mustQueue(active)) {
         this.store.enqueueFollowup(active, { id: cmid, text: trimmed, attachments: files }, Date.now());
+        // Account/relay mode: mirror this queued item as a one-off scheduled
+        // message so it still sends if the app closes or the node was offline at
+        // turn-end (see persistScheduledFollowup).
+        void this.persistScheduledFollowup(active, cmid, trimmed);
         // If the turn happened to settle between the mustQueue check and here,
         // send it straight away rather than waiting for the next settle edge.
         this.drainFollowups(active);
@@ -3027,6 +3038,23 @@ export class AppController {
   // steerNow). See SessionStore's queued-follow-ups CRUD for the data-shape
   // invariants; everything here is about *when* to call it.
 
+  /** Whether this device is signed in to a control plane (account/relay mode),
+   *  so scheduled-message persistence has somewhere durable to land. */
+  private accountMode(): boolean {
+    return Boolean(this.local.s && this.local.cp);
+  }
+
+  /** The node that owns a session (SessionSummary.nodeId), when known. */
+  private resolveSessionNodeId(sessionId: string): string | undefined {
+    return this.store.getState().sessions.find((s) => s.sessionId === sessionId)?.nodeId;
+  }
+
+  /** The routing label a node serves, from its enrolled name (`bivy/<name>`). */
+  private resolveNodeLabel(nodeId: string): string | undefined {
+    const node = this.store.getState().nodes.find((n) => n.id === nodeId);
+    return node?.name ? `bivy/${node.name}` : undefined;
+  }
+
   /** A new prompt for this session must be held in the visible queue rather
    *  than sent immediately: the session is mid-turn, or earlier queued items
    *  are still waiting (sending straight through would silently jump the
@@ -3035,6 +3063,54 @@ export class AppController {
    *  tested) decision itself. */
   private mustQueue(sessionId: string): boolean {
     return mustQueueFollowup(this.store.getFollowups(sessionId).length, this.store.getState().working);
+  }
+
+  /**
+   * "Send when the turn ends, even if I close the app": mirror a queued
+   * follow-up as a one-off scheduled message on the control plane (kind "once",
+   * ~60s out, message:true → plain chat turn, targeting this existing session),
+   * E2E-sealed with this session's node room key. The node waits for the session
+   * to go idle and dedupes against the transcript, so this backstop can never
+   * double-send a follow-up the app already delivered in-app — it only fires if
+   * the app never got to deliver it. Non-fatal everywhere: failure just means
+   * the in-memory queue is the only delivery path.
+   */
+  private async persistScheduledFollowup(sessionId: string, id: string, text: string): Promise<void> {
+    if (!this.accountMode() || !text) return;
+    const nodeId = this.resolveSessionNodeId(sessionId);
+    if (!nodeId) return;
+    const roomKeyB64 = this.local.keys()[nodeId];
+    if (!roomKeyB64) return;
+    try {
+      const roomKey = await importRoomKey(unb64(roomKeyB64));
+      const encrypted = await seal(roomKey, text);
+      const at = new Date(Date.now() + 60_000).toISOString();
+      const created = await createAutomation(this.local, {
+        name: "Follow-up",
+        templateCiphertext: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
+        trigger: "schedule",
+        schedule: { kind: "once", at },
+        nodeLabel: this.resolveNodeLabel(nodeId),
+        targetKind: "existing_session",
+        targetSessionId: sessionId,
+        message: true,
+        enabled: true,
+      });
+      // If the item already dispatched/confirmed while the create round-trip was
+      // in flight, it no longer needs the backstop — cancel it.
+      if (!this.store.attachFollowupAutomation(sessionId, id, created.id)) {
+        this.cancelScheduledFollowup(created.id);
+      }
+    } catch {
+      // Best-effort: keep the in-memory queue path as the only delivery.
+    }
+  }
+
+  /** Drop the control-plane backstop for a follow-up (user cancelled it, or it
+   *  was delivered in-app). */
+  private cancelScheduledFollowup(automationId?: string): void {
+    if (!automationId) return;
+    void deleteAutomation(this.local, automationId).catch(() => {});
   }
 
   /** Whether the active runtime has advertised it can safely accept an
@@ -3065,12 +3141,23 @@ export class AppController {
    *  caller should show the current (already-reactive) state and let the user
    *  retry instead of reapplying their edit over it. */
   editFollowup(sessionId: string, id: string, patch: { text: string; attachments?: PromptAttachment[] }, expectedVersion: number): FollowupEditResult {
-    return this.store.editFollowup(sessionId, id, patch, expectedVersion, Date.now());
+    const item = this.store.getFollowups(sessionId).find((f) => f.id === id);
+    const result = this.store.editFollowup(sessionId, id, patch, expectedVersion, Date.now());
+    // Keep the persisted backstop in sync: drop the automation mirroring the old
+    // text, then re-create it for the edited text (see persistScheduledFollowup).
+    if (result.ok) {
+      this.cancelScheduledFollowup(item?.scheduledAutomationId);
+      void this.persistScheduledFollowup(sessionId, id, result.item.text);
+    }
+    return result;
   }
 
   /** Remove a still-queued item. No-op once it's already dispatched. */
   removeFollowup(sessionId: string, id: string): boolean {
-    return this.store.removeFollowup(sessionId, id);
+    const item = this.store.getFollowups(sessionId).find((f) => f.id === id);
+    const ok = this.store.removeFollowup(sessionId, id);
+    if (ok) this.cancelScheduledFollowup(item?.scheduledAutomationId);
+    return ok;
   }
 
   /** Reorder a still-queued item to `toIndex` among the queue. No-op once it's
@@ -3164,6 +3251,9 @@ export class AppController {
     const sid = event.sessionId || this.store.getState().activeSessionId;
     const cmid = typeof event.clientMessageId === "string" ? event.clientMessageId : undefined;
     if (!sid || !cmid) return;
+    // Delivered in-app — retire the control-plane backstop so it can't fire.
+    const item = this.store.getFollowups(sid).find((f) => f.id === cmid);
+    if (item) this.cancelScheduledFollowup(item.scheduledAutomationId);
     this.store.confirmFollowupSent(sid, cmid);
   }
 

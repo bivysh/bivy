@@ -86,4 +86,34 @@ await test("enqueue carries an existing_session target end-to-end", async () => 
   assert.equal(fresh.targetSessionId, undefined);
 });
 
+await test("scheduled-message automation definition round-trips target + message", async () => {
+  const store = await makeStore();
+  const acct = await store.findOrCreateAccount("dm@example.com");
+  const def = await store.createAutomationDefinition(acct.id, {
+    name: "Scheduled message",
+    templateCiphertext: "bivy-room-v1:node-x:cipher",
+    nodeLabel: "bivy/laptop",
+    schedule: { kind: "once", at: "2026-07-27T09:00:00.000Z" },
+    nextRunAt: "2026-07-27T09:00:00.000Z",
+    target: { kind: "existing_session", sessionId: "sess-9" },
+    message: true,
+    enabled: true,
+  });
+  const got = await store.getAutomationDefinition(acct.id, def.id);
+  assert.deepEqual(got?.target, { kind: "existing_session", sessionId: "sess-9" });
+  assert.equal(got?.message, true);
+  // Updating clears the target (back to a fresh session) and flips message off.
+  const updated = await store.updateAutomationDefinition(acct.id, def.id, { target: undefined, message: false });
+  assert.equal(updated?.target, undefined);
+  assert.equal(updated?.message, undefined);
+  // A plain automation defaults to no target and no message flag.
+  const plain = await store.createAutomationDefinition(acct.id, {
+    name: "Nightly", enabled: true,
+    schedule: { kind: "once", at: "2026-07-28T09:00:00.000Z" },
+    nextRunAt: "2026-07-28T09:00:00.000Z",
+  });
+  assert.equal(plain.target, undefined);
+  assert.equal(plain.message, undefined);
+});
+
 console.log(`case-b-targeting: ${passed} test(s) passed`);

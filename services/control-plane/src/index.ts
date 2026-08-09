@@ -138,6 +138,7 @@ try {
 const automationScheduler = new AutomationScheduler(
   store,
   Math.max(1_000, Number(process.env.AUTOMATION_SCHEDULER_INTERVAL_MS) || 15_000),
+  (accountId, run) => void notifyRelaysWorkAvailable(accountId, { id: run.id, label: run.routing.nodeLabel }),
 );
 automationScheduler.start();
 
@@ -2299,6 +2300,8 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     definitionId: w.definitionId,
     attempt: w.attempt,
     targetKind: w.targetKind,
+    targetSessionId: w.targetSessionId,
+    message: w.message,
     startedAt: w.startedAt,
     output: w.output,
     approvalMode: w.approvalMode,
@@ -2325,10 +2328,11 @@ const SENTINEL_SCHEDULE = { kind: "once" as const, at: "9999-12-31T00:00:00.000Z
 // webhook-triggered automation so the client can display it. The secret is
 // returned to the client exactly once, at create/rotate time.
 function publicAutomation(def: AutomationDefinition, req: Request) {
-  const { webhookSecret: _secret, ...rest } = def;
+  const { webhookSecret: _secret, target, ...rest } = def;
+  const base = { ...rest, targetKind: target?.kind, targetSessionId: target?.sessionId };
   return def.trigger === "webhook"
-    ? { ...rest, webhookUrl: `${baseUrl(req)}/webhooks/automation/run/${def.id}` }
-    : rest;
+    ? { ...base, webhookUrl: `${baseUrl(req)}/webhooks/automation/run/${def.id}` }
+    : base;
 }
 
 /** Seed github/linear "Work issues into PRs" when the account has the hook but
@@ -2390,6 +2394,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
   let labels: string[] | undefined;
   let repos: string[] | undefined;
   let on: AutomationDefinition["on"] | undefined;
+  let target: AutomationDefinition["target"];
   try {
     repo = normalizeAutomationRepo(req.body?.repo);
     labels = normalizeStringList(req.body?.labels);
@@ -2399,6 +2404,11 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     }
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "on")) {
       on = normalizeEventRules(req.body.on);
+    }
+    if (req.body?.targetKind === "existing_session") {
+      const targetSessionId = typeof req.body?.targetSessionId === "string" ? req.body.targetSessionId.trim() : "";
+      if (!targetSessionId) return res.status(400).json({ error: "targetSessionId is required when targetKind is existing_session" });
+      target = { kind: "existing_session", sessionId: targetSessionId };
     }
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
@@ -2420,9 +2430,11 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     labels,
     repos,
     on,
+    target,
     templateId: templateId || (isSourceTrigger(trigger) ? "issue-to-pr" : undefined),
     schedule,
     nextRunAt,
+    message: req.body?.message === true,
   });
   // Return the signing secret exactly once (create). It's never echoed again.
   res.status(201).json({ ...publicAutomation(definition, req), ...(webhookSecret ? { webhookSecret } : {}) });
@@ -2463,6 +2475,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   let labels = current.labels;
   let repos = current.repos;
   let on = current.on;
+  let target = current.target;
   try {
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "repo")) {
       // Empty string clears the workspace target.
@@ -2479,6 +2492,15 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     }
     if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "on")) {
       on = req.body.on === null ? undefined : normalizeEventRules(req.body.on);
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "targetKind")) {
+      if (req.body.targetKind === "existing_session") {
+        const targetSessionId = typeof req.body?.targetSessionId === "string" ? req.body.targetSessionId.trim() : "";
+        if (!targetSessionId) return res.status(400).json({ error: "targetSessionId is required when targetKind is existing_session" });
+        target = { kind: "existing_session", sessionId: targetSessionId };
+      } else {
+        target = undefined;
+      }
     }
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
@@ -2498,7 +2520,9 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     labels,
     repos,
     on,
+    target,
     templateId: typeof req.body?.templateId === "string" ? req.body.templateId.trim() || undefined : current.templateId,
+    message: typeof req.body?.message === "boolean" ? req.body.message : current.message,
   };
   const updated = await store.updateAutomationDefinition(client.accountId, current.id, patch);
   res.json(updated ? publicAutomation(updated, req) : updated);
@@ -2543,6 +2567,8 @@ app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
     model: definition.model,
     approvalMode: definition.approvalMode,
     sandbox: definition.sandbox,
+    target: definition.target,
+    message: definition.message,
     repo: definition.repo,
   });
   void notifyRelaysWorkAvailable(client.accountId, { id: run.id, label: run.routing.nodeLabel });

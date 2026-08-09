@@ -729,6 +729,8 @@ export interface GithubQueueItem {
   definitionId?: string;
   attempt?: number;
   targetKind?: "new_session" | "existing_session";
+  targetSessionId?: string;
+  message?: boolean;
   startedAt?: string;
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
@@ -797,6 +799,13 @@ export interface AccountAutomation {
   /** Built-in template id (e.g. issue-to-pr). */
   templateId?: string;
   schedule: AutomationSchedule;
+  /** When set, schedule-triggered runs CONTINUE this existing session instead of
+   *  starting a new one (a scheduled chat message). */
+  targetKind?: "new_session" | "existing_session";
+  targetSessionId?: string;
+  /** When set, schedule-triggered runs are plain chat messages rather than
+   *  automation jobs (no boilerplate/push/checks). */
+  message?: boolean;
   nextRunAt?: string;
   lastScheduledAt?: string;
   /** Present for a webhook-triggered automation: the signed endpoint to POST
@@ -817,6 +826,9 @@ export interface AccountAutomationRun {
   triggerKind: string;
   status: "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled";
   title: string;
+  message?: boolean;
+  targetKind?: "new_session" | "existing_session";
+  targetSessionId?: string;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;

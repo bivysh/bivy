@@ -53,6 +53,7 @@ export interface WorkItem {
   // (mapWorkItem); typed here so it isn't silently dropped.
   targetKind?: "new_session" | "existing_session";
   targetSessionId?: string;
+  message?: boolean;
   leaseExpiresAt?: string;
 }
 

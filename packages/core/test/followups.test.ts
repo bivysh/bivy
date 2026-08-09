@@ -250,3 +250,47 @@ describe("SessionStore queued follow-ups", () => {
     expect(store.getFollowups("s1")).toEqual([]);
   });
 });
+
+describe("scheduled-message backstop bookkeeping (scheduledAutomationId)", () => {
+  it("records the control-plane automation on a fresh enqueue", () => {
+    const store = new SessionStore();
+    store.enqueueFollowup("s1", { id: "f1", text: "one", scheduledAutomationId: "auto-1" }, 1000);
+    expect(store.getFollowups("s1")[0]!.scheduledAutomationId).toBe("auto-1");
+  });
+
+  it("attachFollowupAutomation links a queued item, and only a queued item", () => {
+    const store = new SessionStore();
+    store.enqueueFollowup("s1", { id: "f1", text: "one" }, 1000);
+    expect(store.attachFollowupAutomation("s1", "f1", "auto-1")).toBe(true);
+    expect(store.getFollowups("s1")[0]!.scheduledAutomationId).toBe("auto-1");
+    // A ghost id or a dispatched item is refused so the caller cancels the
+    // automation (the item no longer needs the backstop).
+    expect(store.attachFollowupAutomation("s1", "ghost", "auto-x")).toBe(false);
+    store.markFollowupSending("s1", "f1", 1001);
+    expect(store.attachFollowupAutomation("s1", "f1", "auto-2")).toBe(false);
+  });
+
+  it("dropping the item clears its backstop id", () => {
+    const store = new SessionStore();
+    store.enqueueFollowup("s1", { id: "f1", text: "one", scheduledAutomationId: "auto-1" }, 1000);
+    expect(store.removeFollowup("s1", "f1")).toBe(true);
+    expect(store.getFollowups("s1")).toEqual([]);
+  });
+
+  it("an edit clears the stale automation id so the controller re-creates it for the new text", () => {
+    const store = new SessionStore();
+    store.enqueueFollowup("s1", { id: "f1", text: "one", scheduledAutomationId: "auto-1" }, 1000);
+    const result = store.editFollowup("s1", "f1", { text: "edited" }, 1, 1001);
+    expect(result.ok).toBe(true);
+    expect(store.getFollowups("s1")[0]!.scheduledAutomationId).toBeUndefined();
+    expect(store.getFollowups("s1")[0]!.text).toBe("edited");
+  });
+
+  it("confirming delivery drops the item and its backstop id (no stale handle to cancel)", () => {
+    const store = new SessionStore();
+    store.enqueueFollowup("s1", { id: "f1", text: "one", scheduledAutomationId: "auto-1" }, 1000);
+    store.markFollowupSending("s1", "f1", 1001);
+    store.confirmFollowupSent("s1", "f1");
+    expect(store.getFollowups("s1")).toEqual([]);
+  });
+});

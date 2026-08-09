@@ -597,6 +597,13 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS template_id TEXT;
       -- GitHub event rules ("when"). JSON array of { event, actions?, labels?, mention?, … }.
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS on_events JSONB;
+      -- Scheduled runs that CONTINUE an existing session (scheduled chat
+      -- messages) instead of starting a new one. Mirrors work_items.target_*.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS target_kind TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS target_session_id TEXT;
+      -- Scheduled/manual runs that are plain chat messages rather than automation
+      -- jobs (the node skips the boilerplate/push/checks).
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS message BOOLEAN NOT NULL DEFAULT false;
       CREATE TABLE IF NOT EXISTS trigger_events (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -613,6 +620,7 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 1;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS target_kind TEXT NOT NULL DEFAULT 'new_session';
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS target_session_id TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS message BOOLEAN NOT NULL DEFAULT false;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS output JSONB;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS approval_mode TEXT;
@@ -2204,8 +2212,8 @@ export class PostgresStore implements MeshStore {
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
        approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo,
-       labels, repos, template_id, on_events)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
+       labels, repos, template_id, on_events, target_kind, target_session_id, message)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
@@ -2214,7 +2222,10 @@ export class PostgresStore implements MeshStore {
         input.labels ? JSON.stringify(input.labels) : null,
         input.repos ? JSON.stringify(input.repos) : null,
         input.templateId ?? null,
-        input.on ? JSON.stringify(input.on) : null],
+        input.on ? JSON.stringify(input.on) : null,
+        input.target?.kind === "existing_session" ? input.target.kind : null,
+        input.target?.kind === "existing_session" ? input.target.sessionId : null,
+        input.message ?? false],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -2247,7 +2258,8 @@ export class PostgresStore implements MeshStore {
       `UPDATE automation_definitions SET name=$3, template_ciphertext=$4, runtime_id=$5,
        model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
        enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
-       repo=$16, labels=$17, repos=$18, template_id=$19, on_events=$20, updated_at=now()
+       repo=$16, labels=$17, repos=$18, template_id=$19, on_events=$20,
+       target_kind=$21, target_session_id=$22, message=$23, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
@@ -2257,7 +2269,10 @@ export class PostgresStore implements MeshStore {
         next.labels ? JSON.stringify(next.labels) : null,
         next.repos ? JSON.stringify(next.repos) : null,
         next.templateId ?? null,
-        next.on ? JSON.stringify(next.on) : null],
+        next.on ? JSON.stringify(next.on) : null,
+        next.target?.kind === "existing_session" ? next.target.kind : null,
+        next.target?.kind === "existing_session" ? next.target.sessionId : null,
+        next.message ?? false],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -2313,6 +2328,8 @@ export class PostgresStore implements MeshStore {
       model: definition.model,
       approvalMode: definition.approvalMode,
       sandbox: definition.sandbox,
+      target: definition.target,
+      message: definition.message,
       // Schedule ticks do not name a repo — use the binding's workspace target.
       repo: definition.repo,
     });
@@ -2403,8 +2420,8 @@ export class PostgresStore implements MeshStore {
       url: input.url,
     };
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, ephemeral, approval_mode, sandbox, events, event_context)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb, $27)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, message, ephemeral, approval_mode, sandbox, events, event_context)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27::jsonb, $28)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -2430,6 +2447,7 @@ export class PostgresStore implements MeshStore {
         triggerKind,
         target.kind,
         target.kind === "existing_session" ? target.sessionId : null,
+        input.message ?? definition?.message ?? false,
         input.ephemeral ?? definition?.ephemeral ?? null,
         input.approvalMode ?? definition?.approvalMode ?? null,
         input.sandbox ?? definition?.sandbox ?? null,
@@ -2807,6 +2825,7 @@ function mapWorkItem(row: any): WorkItem {
     attempt: Number(row.attempt ?? 1),
     targetKind: row.target_kind ?? "new_session",
     targetSessionId: row.target_session_id ?? undefined,
+    message: Boolean(row.message) || undefined,
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : undefined,
     output: row.output ?? undefined,
     ...mapEvidenceFields(row),
@@ -2856,6 +2875,10 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     repos: mapStringList(row.repos),
     on: mapEventRules(row.on_events),
     templateId: row.template_id ?? undefined,
+    target: row.target_kind === "existing_session" && row.target_session_id
+      ? { kind: "existing_session", sessionId: row.target_session_id }
+      : undefined,
+    message: Boolean(row.message) || undefined,
     schedule: row.schedule,
     nextRunAt: row.next_run_at ? new Date(row.next_run_at).toISOString() : undefined,
     lastScheduledAt: row.last_scheduled_at ? new Date(row.last_scheduled_at).toISOString() : undefined,
@@ -2913,6 +2936,7 @@ function mapAutomationRun(row: any): AutomationRun {
     output: row.output ?? undefined,
     title: row.title,
     body: row.body ?? undefined,
+    message: Boolean(row.message) || undefined,
     eventContext: row.event_context ?? undefined,
     source: row.source,
     sourceRef: Object.keys(sourceRef).length ? sourceRef : undefined,

@@ -8,6 +8,7 @@ import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
 import { firstSessionSummary } from "../firstSession.js";
 import { FollowupQueue } from "./FollowupQueue.js";
+import { ScheduleSheet } from "./ScheduleSheet.js";
 import { SANDBOX_TIERS } from "./Settings.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
@@ -143,6 +144,12 @@ export function Composer({
   const [readingCount, setReadingCount] = useState(0);
   const [viewing, setViewing] = useState<string | null>(null);
   const dragDepth = useRef(0);
+  // Long-press Send opens the "schedule this for later" sheet (account/relay
+  // mode only — the always-on node + control plane is what makes a scheduled
+  // message deliverable while the app is closed).
+  const [scheduling, setScheduling] = useState(false);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressFired = useRef(false);
 
   // Some runtimes (e.g. Codex / Codex approvals) own model selection themselves
   // and expose no in-app model list — advertised via
@@ -512,6 +519,25 @@ export function Composer({
       : state.nodeSettings?.defaultSandbox ?? "";
   const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (machine default)";
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
+  // Scheduled messages land on the account's control plane and are delivered by
+  // the always-on node, so the affordance only exists when signed in.
+  const accountMode = Boolean(controller.local.s && controller.local.cp);
+
+  // Long-press (hold ~500ms) on Send schedules instead of sending. The held
+  // pointer would otherwise submit the form on release, so the button's onClick
+  // swallows the click that follows a fired long-press.
+  function startLongPress() {
+    if (!accountMode || !canSend) return;
+    longPressTimer.current = setTimeout(() => {
+      longPressFired.current = true;
+      setScheduling(true);
+    }, 500);
+  }
+  function cancelLongPress() {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    longPressTimer.current = null;
+  }
+  useEffect(() => () => cancelLongPress(), []);
 
   // B2 — a first session exposes exactly four decisions: machine, repo,
   // agent/model, protection. On a draft we render a single explicit summary of
@@ -795,7 +821,24 @@ export function Composer({
                 ■
               </button>
             ) : (
-              <button type="submit" className="composer-btn send" disabled={!canSend} title={working ? "Queue follow-up" : "Send"}>
+              <button
+                type="submit"
+                className="composer-btn send"
+                disabled={!canSend}
+                title={working ? "Queue follow-up" : accountMode ? "Send — hold to schedule for later" : "Send"}
+                onPointerDown={startLongPress}
+                onPointerUp={cancelLongPress}
+                onPointerLeave={cancelLongPress}
+                onPointerCancel={cancelLongPress}
+                onClick={(e) => {
+                  if (longPressFired.current) {
+                    // A long-press already opened the schedule sheet; the release
+                    // click must not also submit the form.
+                    e.preventDefault();
+                    longPressFired.current = false;
+                  }
+                }}
+              >
                 ↑
               </button>
             )}
@@ -806,6 +849,14 @@ export function Composer({
       {picker === "sandbox" && <SandboxPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "agent" && <AgentPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "model" && modelSelectable && <ModelPicker state={state} onClose={() => setPicker(null)} />}
+      {scheduling && accountMode && (
+        <ScheduleSheet
+          state={state}
+          text={text}
+          onClose={() => setScheduling(false)}
+          onScheduled={clearComposer}
+        />
+      )}
       {/* Portal to <body>. Like the pickers' Sheet, the viewer is
           `position: fixed` but rendered from deep inside the `.chat` scroll
           container. On iOS a fixed element does NOT escape a scrolling ancestor
