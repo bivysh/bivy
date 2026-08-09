@@ -525,13 +525,33 @@ export function Composer({
 
   // Long-press (hold ~500ms) on Send schedules instead of sending. The held
   // pointer would otherwise submit the form on release, so the button's onClick
-  // swallows the click that follows a fired long-press.
+  // swallows the click that follows a fired long-press, and a one-shot capture
+  // click listener swallows that release click wherever it lands — the sheet is
+  // mounted under the still-held finger, so without it the release would hit
+  // the just-opened sheet (or its backdrop) and dismiss it the instant it opens.
+  // iOS: text selection / the callout bubble preempt the pointer stream and
+  // fire pointercancel before the timer elapses, so the same gesture is also
+  // wired to touch events (harmless double-run on iOS 13+: each press resets
+  // the same timer). The button's CSS kills selection + callout, and
+  // onContextMenu suppresses the long-press context menu.
+  const LONG_PRESS_MS = 500;
   function startLongPress() {
     if (!accountMode || !canSend) return;
+    // A fresh press always starts clean: a stale flag from an earlier
+    // long-press (whose release click landed on the sheet, not this button)
+    // must not swallow the next real tap.
+    longPressFired.current = false;
     longPressTimer.current = setTimeout(() => {
+      if (longPressFired.current) return;
       longPressFired.current = true;
+      const swallow = (ev: MouseEvent) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        window.removeEventListener("click", swallow, true);
+      };
+      window.addEventListener("click", swallow, true);
       setScheduling(true);
-    }, 500);
+    }, LONG_PRESS_MS);
   }
   function cancelLongPress() {
     if (longPressTimer.current) clearTimeout(longPressTimer.current);
@@ -826,14 +846,28 @@ export function Composer({
                 className="composer-btn send"
                 disabled={!canSend}
                 title={working ? "Queue follow-up" : accountMode ? "Send — hold to schedule for later" : "Send"}
-                onPointerDown={startLongPress}
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  startLongPress();
+                }}
                 onPointerUp={cancelLongPress}
                 onPointerLeave={cancelLongPress}
                 onPointerCancel={cancelLongPress}
+                onTouchStart={() => {
+                  // iOS long-press: the browser's text-selection takeover can
+                  // fire pointercancel before 500ms; the touch handlers keep
+                  // the timer armed regardless.
+                  startLongPress();
+                }}
+                onTouchMove={cancelLongPress}
+                onTouchEnd={cancelLongPress}
+                onTouchCancel={cancelLongPress}
+                onContextMenu={(e) => e.preventDefault()}
                 onClick={(e) => {
                   if (longPressFired.current) {
                     // A long-press already opened the schedule sheet; the release
-                    // click must not also submit the form.
+                    // click must not also submit the form. (The capture listener
+                    // above usually intercepts it first — this is the fallback.)
                     e.preventDefault();
                     longPressFired.current = false;
                   }
