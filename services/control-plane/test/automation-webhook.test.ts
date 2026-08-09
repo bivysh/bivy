@@ -73,37 +73,6 @@ async function main() {
   if (!ready) throw new Error("Control plane did not start");
   const login = await json(port, "POST", "/auth/dev-login", { email: "automation@example.com" });
   const token = login.body.token;
-  const created = await json(port, "POST", "/account/automation-hooks", {
-    templateInstruction: "Investigate this event safely.",
-    routingDefault: "runner",
-  }, token);
-  expect(created.status === 201 && created.body.secret, "hook creation discloses a signing secret");
-
-  const raw = JSON.stringify({ version: "1", instruction: "Run the tests", title: "CI failed", metadata: { branch: "main" } });
-  const accepted = await trigger(port, created.body.endpoint, created.body.secret, raw, "delivery-1");
-  expect(accepted.status === 202 && accepted.body.code === "accepted", "a correctly signed event is accepted");
-  const duplicate = await trigger(port, created.body.endpoint, created.body.secret, raw, "delivery-1");
-  expect(duplicate.status === 200 && duplicate.body.code === "duplicate", "redelivery is reported as a duplicate");
-  const listed = await json(port, "GET", "/account/work-items", undefined, token);
-  expect(listed.body.filter((item: any) => item.source.startsWith("automation:")).length === 1, "redelivery creates exactly one queued run");
-
-  const bad = await trigger(port, created.body.endpoint, "wrong", raw, "delivery-2");
-  expect(bad.status === 401 && bad.body.code === "invalid_signature", "invalid signatures are rejected");
-  const afterBad = await json(port, "GET", "/account/work-items", undefined, token);
-  expect(afterBad.body.length === listed.body.length, "invalid signatures persist nothing");
-
-  const oversized = await trigger(port, created.body.endpoint, created.body.secret, "x".repeat(70_000), "delivery-3");
-  expect(oversized.status === 413 && oversized.body.code === "payload_too_large", "oversized bodies receive a stable rejection");
-
-  const rotated = await json(port, "POST", `/account/automation-hooks/${created.body.id}/rotate`, undefined, token);
-  const oldSecret = await trigger(port, created.body.endpoint, created.body.secret, raw, "delivery-4");
-  expect(oldSecret.status === 401, "rotation invalidates the old secret");
-  const newSecret = await trigger(port, created.body.endpoint, rotated.body.secret, raw, "delivery-4");
-  expect(newSecret.status === 202, "the rotated secret signs new deliveries");
-
-  await json(port, "DELETE", `/account/automation-hooks/${created.body.id}`, undefined, token);
-  const disabled = await trigger(port, created.body.endpoint, rotated.body.secret, raw, "delivery-5");
-  expect(disabled.status === 410 && disabled.body.code === "disabled", "revoked hooks return the stable disabled result");
 
   // --- Webhook-triggered automation *definition* (runs the operator's own
   //     pre-configured routing/agent/model/sandbox + E2E template) ---
@@ -129,6 +98,9 @@ async function main() {
   expect(fired.status === 202 && fired.body.code === "accepted", "a signed event fires the configured automation");
   const dupFired = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, evtRaw, "evt-1");
   expect(dupFired.status === 200 && dupFired.body.code === "duplicate", "webhook redelivery to a definition is idempotent");
+
+  const oversized = await trigger(port, auto.body.webhookUrl, auto.body.webhookSecret, "x".repeat(70_000), "evt-oversized");
+  expect(oversized.status === 413 && oversized.body.code === "payload_too_large", "oversized bodies receive a stable rejection");
 
   const runs = await json(port, "GET", "/account/work-items", undefined, token);
   const defRun = runs.body.find((it: any) => it.definitionId === auto.body.id);

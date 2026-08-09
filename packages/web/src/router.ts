@@ -7,6 +7,8 @@
 //   /sessions/:id         — an open session
 //   /settings             — the Settings overlay, root menu
 //   /settings/:view       — the Settings overlay, on a specific section
+//   /automations          — the Automations overlay, Overview tab
+//   /automations/:section — the Automations overlay, on a specific tab
 // Anything else (notably `/`) is treated as the "root" home, which renders the
 // same empty/first-run shell a fresh draft does. Keeping this in one small
 // module means the controller owns *when* to navigate while the URL parsing and
@@ -60,16 +62,27 @@ function isSettingsView(v: string): v is SettingsView {
   return (SETTINGS_VIEWS as readonly string[]).includes(v);
 }
 
+/** Automations' navigable tabs. `null` (bare `/automations`) is the Overview
+ *  tab. Kept here (like `SettingsView`) so the router can validate an
+ *  `/automations/:section` path without importing the component module. */
+export type AutomationsSection = "queue" | "webhooks" | "rulesets";
+
+const AUTOMATIONS_SECTIONS: readonly AutomationsSection[] = ["queue", "webhooks", "rulesets"];
+
+function isAutomationsSection(v: string): v is AutomationsSection {
+  return (AUTOMATIONS_SECTIONS as readonly string[]).includes(v);
+}
+
 export type Route =
   | { kind: "session"; id: string }
   | { kind: "new" }
   | { kind: "settings"; view: SettingsView | null }
-  | { kind: "automations" }
+  | { kind: "automations"; section: AutomationsSection | null }
   | { kind: "root" };
 
 const SESSION_PATH = /^\/sessions\/([^/]+)\/?$/;
 const SETTINGS_PATH = /^\/settings(?:\/([^/]+))?\/?$/;
-const AUTOMATIONS_PATH = /^\/automations\/?$/;
+const AUTOMATIONS_PATH = /^\/automations(?:\/([^/]+))?\/?$/;
 
 /** Parse the current (or a given) pathname into a Route. */
 export function parseRoute(pathname: string = location.pathname): Route {
@@ -85,7 +98,11 @@ export function parseRoute(pathname: string = location.pathname): Route {
     const raw = settingsMatch[1] ? decodeURIComponent(settingsMatch[1]) : "";
     return { kind: "settings", view: isSettingsView(raw) ? raw : null };
   }
-  if (AUTOMATIONS_PATH.test(pathname)) return { kind: "automations" };
+  const automationsMatch = AUTOMATIONS_PATH.exec(pathname);
+  if (automationsMatch) {
+    const raw = automationsMatch[1] ? decodeURIComponent(automationsMatch[1]) : "";
+    return { kind: "automations", section: isAutomationsSection(raw) ? raw : null };
+  }
   return { kind: "root" };
 }
 
@@ -106,7 +123,9 @@ export function routePath(route: Route): string {
             ? `/settings/${route.view}`
             : "/settings"
           : route.kind === "automations"
-            ? "/automations"
+            ? route.section
+              ? `/automations/${route.section}`
+              : "/automations"
             : "/";
   return base + location.search + location.hash;
 }
