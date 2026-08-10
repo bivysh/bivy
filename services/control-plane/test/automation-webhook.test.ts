@@ -97,6 +97,10 @@ async function main() {
   expect(managedUpdate.status === 200 && managedUpdate.body.id === managed.body.id, "re-applying a config key updates instead of duplicating");
   const managedList = await json(port, "GET", "/node/automation-config", undefined, nodeToken);
   expect(managedList.body.automations.filter((d: any) => d.configKey === "managed-ci").length === 1, "managed definitions list by stable config key");
+  const pwaEdit = await json(port, "PUT", `/account/automations/${managed.body.id}`, { name: "UI overwrite" }, token);
+  expect(pwaEdit.status === 409, "the account/PWA API cannot overwrite a file-managed automation");
+  const pwaDelete = await json(port, "DELETE", `/account/automations/${managed.body.id}`, undefined, token);
+  expect(pwaDelete.status === 409, "the account/PWA API cannot delete a file-managed automation");
   const wrongNode = await json(port, "PUT", "/node/automation-config/wrong-node", { ...managedInput, configKey: "wrong-node", templateCiphertext: "bivy-room-v1:somebody-else:opaque" }, nodeToken);
   expect(wrongNode.status === 400, "a node cannot apply instructions encrypted for another node");
   const managedRun = await json(port, "POST", `/account/automations/${managed.body.id}/run`, undefined, token);

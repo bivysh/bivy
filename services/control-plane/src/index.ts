@@ -2459,6 +2459,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!current) return res.status(404).json({ error: "Automation not found" });
+  if (current.configKey) return res.status(409).json({ error: `Automation is managed by .bivy/automations.yaml (${current.configKey})` });
   const isScheduled = !current.trigger || current.trigger === "schedule";
   const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : current.enabled;
   // Non-schedule automations have no cron; enabling/disabling just gates intake.
@@ -2560,9 +2561,10 @@ app.post("/account/automations/:id/webhook/rotate", asyncHandler(async (req, res
 app.delete("/account/automations/:id", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  if (!(await store.deleteAutomationDefinition(client.accountId, String(req.params.id)))) {
-    return res.status(404).json({ error: "Automation not found" });
-  }
+  const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
+  if (!current) return res.status(404).json({ error: "Automation not found" });
+  if (current.configKey) return res.status(409).json({ error: `Automation is managed by .bivy/automations.yaml (${current.configKey})` });
+  await store.deleteAutomationDefinition(client.accountId, current.id);
   res.status(204).end();
 }));
 
