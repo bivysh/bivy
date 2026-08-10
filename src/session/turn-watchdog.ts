@@ -72,8 +72,40 @@ export function isTurnStalled(opts: {
   pidAlive?: boolean;
   pidGraceMs?: number;
 }): boolean {
+  return classifyStallTrigger(opts) !== null;
+}
+
+/**
+ * Why a turn was force-recovered — a diagnostic label, not a control input.
+ *  - `pid_dead`   — the subprocess exited but never emitted `agent_end`.
+ *  - `stalled`    — the turn went silent past the idle/stall window.
+ *  - `wall_clock` — the turn hit the absolute wall-clock cap (decided at the
+ *                   timer callsite, not here — this classifier only sees the
+ *                   idle/pid signals).
+ * Exported so the daemon can attribute recoveries per runtime (see
+ * docs/session-reliability-plan.md, Phase 1) instead of losing the reason to a
+ * log line.
+ */
+export type StallTrigger = "pid_dead" | "stalled" | "wall_clock";
+
+/**
+ * The finer sibling of isTurnStalled: returns *which* condition makes a working
+ * turn count as stalled, or null when it still looks healthy. Pure, so it
+ * unit-tests without real time or a live session. A provably-dead subprocess
+ * (`pidAlive === false`) past the grace wins over the idle timer; otherwise a
+ * turn silent for `stallMs` is `stalled`. `stallMs <= 0` disables the idle check
+ * (the wall-clock cap still applies elsewhere) but a dead subprocess is still
+ * reported.
+ */
+export function classifyStallTrigger(opts: {
+  now: number;
+  lastProgressAt: number;
+  stallMs: number;
+  pidAlive?: boolean;
+  pidGraceMs?: number;
+}): StallTrigger | null {
   const idle = opts.now - opts.lastProgressAt;
-  if (opts.pidAlive === false) return idle >= (opts.pidGraceMs ?? PID_DEAD_GRACE_MS);
-  if (opts.stallMs <= 0) return false;
-  return idle >= opts.stallMs;
+  if (opts.pidAlive === false) return idle >= (opts.pidGraceMs ?? PID_DEAD_GRACE_MS) ? "pid_dead" : null;
+  if (opts.stallMs <= 0) return null;
+  return idle >= opts.stallMs ? "stalled" : null;
 }

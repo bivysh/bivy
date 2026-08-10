@@ -58,7 +58,7 @@ import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-cli
 import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
-import { configuredTurnTimeoutMs, configuredTurnStallMs, isTurnStalled } from "./session/turn-watchdog.js";
+import { configuredTurnTimeoutMs, configuredTurnStallMs, classifyStallTrigger, type StallTrigger } from "./session/turn-watchdog.js";
 import { forceAbortTurn } from "./session/abort-recovery.js";
 import { runRequiredAutomationChecks } from "./automation-checks.js";
 import type { ApprovalMode } from "./guard.js";
@@ -7678,7 +7678,7 @@ function armTurnWatchdog(record: SessionRecord): void {
     // clean, resumable idle instead of merely "stopped".
     record.turnTimeoutResolve?.();
     record.turnTimeoutResolve = undefined;
-    recoverStuckTurn(record, turnTimeoutMessage());
+    recoverStuckTurn(record, turnTimeoutMessage(), { trigger: "wall_clock", idleMs: Date.now() - (record.workingStartedAt ?? Date.now()) });
   }, turnTimeoutMs);
   record.turnWatchdog.unref?.();
 }
@@ -7686,6 +7686,22 @@ function armTurnWatchdog(record: SessionRecord): void {
 /** Message for a session recovered because it stopped making progress. */
 function turnStallMessage(idleMs: number): string {
   return `The agent stopped responding (no activity for ${Math.round(idleMs / 60_000)} min) and was recovered. Send a message to continue.`;
+}
+
+/**
+ * Aggregate turn-recovery counters, keyed `"<runtimeId>:<trigger>"`. A privacy-
+ * safe histogram (counts only, no session content) surfaced in the redacted
+ * /api/diagnostics health bag so operators can see which runtime hangs and how —
+ * subprocess died vs went silent vs hit the wall-clock cap. See
+ * docs/session-reliability-plan.md (Phase 1).
+ */
+const turnRecoveryCounts = new Map<string, number>();
+function recordTurnRecovery(runtimeId: string, trigger: StallTrigger): void {
+  const key = `${runtimeId}:${trigger}`;
+  turnRecoveryCounts.set(key, (turnRecoveryCounts.get(key) ?? 0) + 1);
+}
+function turnRecoveryStats(): Record<string, number> {
+  return Object.fromEntries([...turnRecoveryCounts.entries()].sort(([a], [b]) => a.localeCompare(b)));
 }
 
 /**
@@ -7697,11 +7713,27 @@ function turnStallMessage(idleMs: number): string {
  * session returns to a clean, resumable idle state rather than a wedged "working".
  * Idempotent: a second call while recovery is already in flight is a no-op.
  */
-function recoverStuckTurn(record: SessionRecord, reason: string): void {
+function recoverStuckTurn(record: SessionRecord, reason: string, diag?: { trigger: StallTrigger; idleMs?: number }): void {
   if (record.turnTimedOut) return; // already recovering this turn
   record.turnTimedOut = true;
   record.lastFailureAt = Date.now();
-  console.warn(`[turn-watchdog] recovering stuck session ${record.id}: ${reason}`);
+  const trigger = diag?.trigger ?? "stalled";
+  const turnMs = record.workingStartedAt ? record.lastFailureAt - record.workingStartedAt : undefined;
+  console.warn(`[turn-watchdog] recovering stuck session ${record.id} (runtime=${record.runtimeId} trigger=${trigger}): ${reason}`);
+  // Attribute the recovery so operators can see WHICH runtime/transport hangs and
+  // how (subprocess died vs went silent vs hit the wall-clock cap) instead of
+  // losing it to a log line — see docs/session-reliability-plan.md (Phase 1).
+  recordTurnRecovery(record.runtimeId, trigger);
+  broadcast({
+    type: "session.diagnostic",
+    sessionId: record.id,
+    kind: "turn_recovered",
+    runtimeId: record.runtimeId,
+    trigger,
+    ...(diag?.idleMs != null ? { idleMs: diag.idleMs } : {}),
+    ...(turnMs != null ? { turnMs } : {}),
+    at: record.lastFailureAt,
+  });
   metadata.touchSession(record.id, "failed");
   broadcast({ type: "session.failed", sessionId: record.id, failedAt: record.lastFailureAt });
   broadcast({ type: "session.outcome", sessionId: record.id, status: "timed_out", completedAt: new Date().toISOString(), error: reason });
@@ -7732,18 +7764,24 @@ function probeTurnPidAlive(record: SessionRecord): boolean | undefined {
   }
 }
 
-/** Whether a working session's current turn looks stalled (see isTurnStalled).
- *  A session waiting on the human (pending approval/question), paused, or locked
- *  to its TUI is deliberately never counted as stalled — it's not hung. */
-function turnLooksStalled(record: SessionRecord, now = Date.now()): boolean {
-  if (turnStallMs <= 0) return false;
-  if (!sessionBusy(record)) return false;
-  if (record.turnTimedOut) return false; // recovery already running
-  if (record.paused) return false;
-  if (record.tuiTermId || record.tuiRefreshing) return false; // driven from the terminal
-  if (sessionHasPendingApproval(record)) return false; // waiting on the user, not hung
+/** Which stall condition (if any) a working session's current turn has hit —
+ *  the diagnostic trigger the recovery path attributes per runtime. A session
+ *  waiting on the human (pending approval/question), paused, or locked to its
+ *  TUI is deliberately never counted as stalled — it's not hung. */
+function stallTriggerFor(record: SessionRecord, now = Date.now()): StallTrigger | null {
+  if (turnStallMs <= 0) return null;
+  if (!sessionBusy(record)) return null;
+  if (record.turnTimedOut) return null; // recovery already running
+  if (record.paused) return null;
+  if (record.tuiTermId || record.tuiRefreshing) return null; // driven from the terminal
+  if (sessionHasPendingApproval(record)) return null; // waiting on the user, not hung
   const lastProgressAt = record.lastProgressAt ?? record.workingStartedAt ?? now;
-  return isTurnStalled({ now, lastProgressAt, stallMs: turnStallMs, pidAlive: probeTurnPidAlive(record) });
+  return classifyStallTrigger({ now, lastProgressAt, stallMs: turnStallMs, pidAlive: probeTurnPidAlive(record) });
+}
+
+/** Whether a working session's current turn looks stalled. */
+function turnLooksStalled(record: SessionRecord, now = Date.now()): boolean {
+  return stallTriggerFor(record, now) !== null;
 }
 
 /** Periodic sweep: recover any working session whose turn has stalled. This is
@@ -7753,9 +7791,10 @@ function sweepStalledTurns(): void {
   if (turnStallMs <= 0) return;
   const now = Date.now();
   for (const record of new Set(openSessions.values())) {
-    if (!turnLooksStalled(record, now)) continue;
+    const trigger = stallTriggerFor(record, now);
+    if (!trigger) continue;
     const idleMs = now - (record.lastProgressAt ?? record.workingStartedAt ?? now);
-    recoverStuckTurn(record, turnStallMessage(idleMs));
+    recoverStuckTurn(record, turnStallMessage(idleMs), { trigger, idleMs });
   }
 }
 
@@ -7767,9 +7806,10 @@ function sweepStalledTurns(): void {
  * un-resumable" symptom. Recovering first means the prompt runs as a fresh turn.
  */
 async function recoverStalledBeforePrompt(record: SessionRecord): Promise<void> {
-  if (!turnLooksStalled(record)) return;
+  const trigger = stallTriggerFor(record);
+  if (!trigger) return;
   const idleMs = Date.now() - (record.lastProgressAt ?? record.workingStartedAt ?? Date.now());
-  recoverStuckTurn(record, turnStallMessage(idleMs));
+  recoverStuckTurn(record, turnStallMessage(idleMs), { trigger, idleMs });
   await record.abortRecovery?.catch(() => {});
 }
 
@@ -9857,6 +9897,7 @@ app.get("/api/diagnostics", (_req, res) => {
       enforcementLevel: runtimeInfo?.protectionLevel ?? "user-permissions",
       approvalMode,
       relayConnected: Boolean(relay?.connected),
+      turnRecoveries: turnRecoveryStats(),
     },
     env: process.env as Record<string, string | undefined>,
     // The node knows it is online and which runtime is selectable; the client's

@@ -8,6 +8,7 @@ import {
   MIN_TURN_STALL_MS,
   PID_DEAD_GRACE_MS,
   isTurnStalled,
+  classifyStallTrigger,
 } from "../src/session/turn-watchdog.js";
 
 assert.equal(configuredTurnTimeoutMs(undefined), DEFAULT_TURN_TIMEOUT_MS, "missing config uses a finite default");
@@ -64,6 +65,47 @@ assert.equal(
   isTurnStalled({ now: 1_000_000, lastProgressAt: 1_000_000 - PID_DEAD_GRACE_MS, stallMs: 0, pidAlive: false }),
   true,
   "a dead subprocess is still recovered even with idle detection disabled",
+);
+
+// ---- stall trigger classification (diagnostics) -----------------------------
+// classifyStallTrigger is the finer sibling of isTurnStalled: same decision, but
+// it names WHY so the daemon can attribute recoveries per runtime.
+assert.equal(
+  classifyStallTrigger({ now: 1_000_000, lastProgressAt: 1_000_000 - 60_000, stallMs }),
+  null,
+  "recent progress → not stalled → no trigger",
+);
+assert.equal(
+  classifyStallTrigger({ now: 1_000_000, lastProgressAt: 1_000_000 - stallMs, stallMs }),
+  "stalled",
+  "silence past the idle window is classified as a stall",
+);
+assert.equal(
+  classifyStallTrigger({ now: 1_000_000, lastProgressAt: 1_000_000 - PID_DEAD_GRACE_MS, stallMs, pidAlive: false }),
+  "pid_dead",
+  "a dead subprocess past the grace is classified pid_dead, not stalled",
+);
+assert.equal(
+  classifyStallTrigger({ now: 1_000_000, lastProgressAt: 1_000_000 - 1_000, stallMs, pidAlive: false }),
+  null,
+  "a just-exited subprocess inside the grace has no trigger yet",
+);
+assert.equal(
+  classifyStallTrigger({ now: 1_000_000, lastProgressAt: 1_000_000 - stallMs, stallMs: 0 }),
+  null,
+  "stallMs<=0 disables the idle trigger",
+);
+// pid_dead wins over the idle timer even when idle detection is off.
+assert.equal(
+  classifyStallTrigger({ now: 1_000_000, lastProgressAt: 1_000_000 - PID_DEAD_GRACE_MS, stallMs: 0, pidAlive: false }),
+  "pid_dead",
+  "a dead subprocess is reported even with idle detection disabled",
+);
+// isTurnStalled stays a boolean view of the same decision.
+assert.equal(
+  isTurnStalled({ now: 1_000_000, lastProgressAt: 1_000_000 - stallMs, stallMs }),
+  classifyStallTrigger({ now: 1_000_000, lastProgressAt: 1_000_000 - stallMs, stallMs }) !== null,
+  "isTurnStalled agrees with classifyStallTrigger",
 );
 
 console.log("turn-watchdog: all tests passed");
