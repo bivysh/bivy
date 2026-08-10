@@ -47,7 +47,7 @@ Phases are ordered so that each is independently shippable and the earlier,
 lower-risk phases improve *observability* first — so the higher-risk transport
 work is guided by data instead of guesswork.
 
-### Phase 1 — Observability & surfacing (this PR) ✅
+### Phase 1 — Observability & surfacing ✅
 
 Additive, fully unit-tested, no behavior removed.
 
@@ -68,23 +68,31 @@ Additive, fully unit-tested, no behavior removed.
   flaky?" from a guess into a per-runtime histogram — the prerequisite for
   targeting Phases 2–4.
 
-### Phase 2 — Sequenced, replayable event delivery (largest reliability win)
+### Phase 2 — Sequenced, replayable event delivery (largest reliability win) ✅
 
-Make live daemon→client delivery lossless.
+Make live daemon→client delivery lossless. Landed:
 
-- Add a monotonic **per-session `seq`** to every user-visible event and a node-side
-  **bounded resend buffer** (ring, e.g. last N events / M seconds per session).
-- On reconnect the client sends its `last-seq`; the node replays the tail. A
-  client-detected `seq` gap triggers a targeted resend — which also makes
-  chunked-frame loss self-healing (the gap is detected at the event layer, not by
-  a stuck reassembly group).
-- Generalize the event envelope: lift the provenance idea from tool calls up to
-  every event → `{id, seq, ts (node-receive time), fidelity, source, payload,
-  raw}`. `ts` simultaneously fixes the transcript time-anchoring fallback that
-  clumps overlays for agents that emit no timestamps (`transcript-merge.ts`).
-- **Requires live-relay + paired-node end-to-end validation** (see
-  `packages/web/STATUS.md`: RelayTransport is not yet live-validated). Build the
-  reconnect/replay integration harness first.
+- Every fanned-out `session.event` carries a monotonic **per-session `seq`** (plus
+  a node-receive `ts` and a stream `epoch`), stamped at the fan-out boundary so
+  seq order === delivery order and coalesced/superseded `message_update`s don't
+  burn a seq (`src/session/event-sequencer.ts`, wired in `src/server.ts`).
+- The node keeps a **bounded contiguous replay ring** per session. A client that
+  detects a `seq` gap (or is told its buffer evicted) asks to replay via the
+  `session.replay` surface (RELAY_COMMAND + `GET /api/session/replay`); the node
+  returns the missed tail or `reset` → the client full-resyncs from history. The
+  gap is detected at the event layer, so a lost chunked frame self-heals too.
+- The client reassembles in order (`packages/core/src/seq-reassembler.ts`): drops
+  duplicates/replays, holds a forward event on a gap (so a missed tool card can't
+  be overtaken by later streamed text), and baselines its cursor to the
+  `headSeq`/`streamEpoch` a history sync now carries (so a daemon restart
+  re-baselines instead of dropping the new stream as stale duplicates).
+- Unsequenced events from an older node pass straight through — fully additive on
+  the wire.
+
+Not yet done in this phase (follow-ups): sequencing the lower-frequency
+session-scoped events beyond `session.event` (`session.notice`/`error`), and
+lifting `fidelity`/`source` onto a fully generalized envelope. The node-receive
+`ts` is in place and can back-fill the transcript time-anchoring fallback next.
 
 ### Phase 3 — Explicit session state machine
 
