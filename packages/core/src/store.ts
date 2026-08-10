@@ -20,6 +20,7 @@ import type { InboxAdvert } from "./inbox.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml, extractRemoteImageUrls } from "./markdown.js";
 import { eventKind, normalizeEventType, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
+import { SeqReassembler } from "./seq-reassembler.js";
 import type { ToolCallDetail } from "./tool-format.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import { attachmentFromRef, contentThinking, contentToText, mergeToolInto, nextId, renderHistory, toolEntriesFromContent } from "./store-render.js";
@@ -1079,6 +1080,28 @@ export class SessionStore {
   private awaitingOpenHistory = false;
   /** Persist a session's raw transcript + cursor (wired to IndexedDB by the controller). */
   onHistoryPersist?: (sessionId: string, messages: any[], count: number, historyHash: string) => void;
+  /** Ask the controller to replay the live events this client missed for a
+   *  session, starting after `afterSeq` — wired to a `session.replay` request.
+   *  Ordered live delivery: reassembles the active session's `session.event`
+   *  stream and asks for a replay on a detected gap (Phase 2). */
+  requestReplay?: (sessionId: string, afterSeq: number) => void;
+  // Ordered-reassembly state for the ACTIVE session's live stream. Only the
+  // focused session is tracked (its events are the only ones applied); switching
+  // focus or crossing a stream epoch (daemon restart) resets it.
+  private seqReassembler = new SeqReassembler();
+  private seqSessionId?: string;
+  private seqEpoch?: string;
+
+  /** (Re)point the reassembler at a session/epoch, resetting on any change. Returns
+   *  true when it now tracks (sessionId, epoch). */
+  private trackSeqStream(sessionId: string, epoch: unknown): void {
+    const ep = typeof epoch === "string" ? epoch : undefined;
+    if (this.seqSessionId !== sessionId || this.seqEpoch !== ep) {
+      this.seqReassembler.reset();
+      this.seqSessionId = sessionId;
+      this.seqEpoch = ep;
+    }
+  }
   /** Ask the controller to re-request canonical history once a live turn settles. */
   requestFreshHistory?: () => void;
   /** A live turn just finished. Wired to refresh the session list — a brand new
@@ -2898,8 +2921,36 @@ export class SessionStore {
           // session.error case attributes it to *this* chat and renders it inline
           // rather than as a disconnected global toast.
           const innerWithSid = sid && !(inner as { sessionId?: unknown }).sessionId ? { ...inner, sessionId: sid } : inner;
-          this.apply(innerWithSid);
+          const seq = (e as { seq?: unknown }).seq;
+          // Sequenced stream (Phase 2): reassemble in order for the active session
+          // so a frame lost on an uplink blip is detected (a seq gap) and replayed
+          // instead of silently dropped. An unsequenced event (older node) has no
+          // `seq` and passes straight through.
+          if (typeof seq === "number" && sid) {
+            this.trackSeqStream(sid, (e as { epoch?: unknown }).epoch);
+            const res = this.seqReassembler.accept(seq, innerWithSid);
+            for (const ready of res.ready) this.apply(ready as ServerEvent);
+            if (res.overflow) this.requestFreshHistory?.();
+            else if (res.gapFrom !== undefined) this.requestReplay?.(sid, res.gapFrom);
+          } else {
+            this.apply(innerWithSid);
+          }
         }
+        return;
+      }
+      case "session.replay": {
+        // The node's answer to requestReplay: the missed session.event envelopes
+        // (re-fed through this reducer so the reassembler orders + dedups them), or
+        // mode:"reset" when the ring evicted past our cursor → full history resync.
+        const e = event as any;
+        const sid = e.sessionId as string | undefined;
+        if (sid && this.state.activeSessionId && sid !== this.state.activeSessionId) return;
+        if (e.mode === "reset") {
+          this.requestFreshHistory?.();
+          return;
+        }
+        const events: any[] = Array.isArray(e.events) ? e.events : [];
+        for (const ev of events) this.apply(ev as ServerEvent);
         return;
       }
       case "session.usage": {
@@ -3088,6 +3139,15 @@ export class SessionStore {
       opening: false,
       usage: normalizeUsage(e.usage),
     });
+    // Baseline the live-stream reassembler now that this session is focused: the
+    // transcript reflects everything through `headSeq`, so the next live event we
+    // expect is headSeq+1. Reset first when the stream epoch changed (a daemon
+    // restart) so its seq counter starting over doesn't read as a flood of
+    // duplicates (docs/session-reliability-plan.md, Phase 2).
+    if (sessionId && typeof e.headSeq === "number") {
+      this.trackSeqStream(sessionId, e.streamEpoch);
+      this.seqReassembler.baseline(e.headSeq);
+    }
   }
 
   /**

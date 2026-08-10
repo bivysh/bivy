@@ -281,6 +281,13 @@ export class AppController {
       const sid = this.store.getState().activeSessionId;
       if (sid) this.requestHistory(sid);
     };
+    // The reassembler detected a live-stream gap (a frame lost on an uplink blip)
+    // — ask the node to replay the events after the last seq we hold. The node
+    // answers with the missed tail, or mode:"reset" (→ requestFreshHistory) when
+    // its ring has already evicted past our cursor (Phase 2).
+    this.store.requestReplay = (sessionId, afterSeq) => {
+      void this.send({ kind: "session.replay", sessionId, afterSeq });
+    };
     // A brand-new session's first turn can finish naming/persisting it on the
     // node after the one-shot refresh in maybeFlushPendingPrompt already ran —
     // that race left it invisible in the sidebar until the next reconnect.

@@ -226,6 +226,18 @@ export class DirectTransport implements Transport {
           this.emit(await this.directApi(`/api/session/history?${params}`));
           break;
         }
+        case "session.replay": {
+          // Live-stream gap recovery (Phase 2): fetch the session.events we missed
+          // after `afterSeq`; the node returns them (or mode:"reset") and the store
+          // reassembles/dedups them. Mirrors the relay transport's session.replay
+          // RELAY_COMMAND.
+          const params = new URLSearchParams({
+            ...(obj.sessionId ? { sessionId: String(obj.sessionId) } : {}),
+            afterSeq: String((obj as { afterSeq?: unknown }).afterSeq ?? 0),
+          });
+          this.emit(await this.directApi(`/api/session/replay?${params}`));
+          break;
+        }
         case "sessions.list":
           this.emit({ type: "sessions.list", sessions: await this.directApi("/api/sessions") });
           break;
