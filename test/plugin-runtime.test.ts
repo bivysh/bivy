@@ -136,12 +136,18 @@ test("plugin agents cannot replace built-in or config-defined runtime ids", () =
       .replace("    - id: company-plugin", "    - id: company-agent")
       .replace("      name: company-plugin", "      name: Plugin loses"));
     installPlugin(config, { dataDir: dir });
+    const alias = path.join(dir, "alias.yaml");
+    fs.writeFileSync(alias, manifest("claude", `        kind: process
+        command: node
+`));
+    installPlugin(alias, { dataDir: dir });
 
     const rows = listRuntimes();
     assert.equal(rows.filter((row) => row.id === "pi").length, 1);
     assert.equal(rows.find((row) => row.id === "company-agent")?.displayName, "Config wins");
     assert.match(pluginAgentConflictDiagnostics().join("\n"), /agent id pi conflicts with a built-in runtime/);
     assert.match(pluginAgentConflictDiagnostics().join("\n"), /agent id company-agent conflicts with node configuration/);
+    assert.match(pluginAgentConflictDiagnostics().join("\n"), /agent id claude conflicts with a built-in runtime/);
     assert.deepEqual(rows.find((row) => row.id === "company-agent")?.source, { kind: "config" });
   } finally {
     if (oldPluginDir === undefined) delete process.env.BIVY_PLUGIN_DIR;

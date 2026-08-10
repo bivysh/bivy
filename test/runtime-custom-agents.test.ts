@@ -8,6 +8,9 @@ try {
     { id: "my-codex", label: "My Codex", extends: "codex", command: "node", args: ["--version"] },
     { id: "Bad id", extends: "codex", command: "node" },
     { id: "missing-base", extends: "not-real", command: "node" },
+    { id: "prototype-base", extends: "constructor", command: "node" },
+    { id: "pi", label: "Config must not win", extends: "codex", command: "node" },
+    { id: "claude", label: "Alias must not win", extends: "codex", command: "node" },
   ]);
 
   const custom = listRuntimes().find((runtime) => runtime.id === "my-codex");
@@ -15,7 +18,11 @@ try {
   assert.equal(custom.displayName, "My Codex");
   assert.equal(custom.supportTier, "experimental");
   assert.equal(custom.certification, "unverified");
+  assert.deepEqual(custom.source, { kind: "config" });
   assert.equal(listRuntimes().some((runtime) => runtime.id === "missing-base"), false);
+  assert.equal(listRuntimes().some((runtime) => runtime.id === "prototype-base"), false);
+  assert.deepEqual(listRuntimes().find((runtime) => runtime.id === "pi")?.source, { kind: "builtin" });
+  assert.equal(listRuntimes().some((runtime) => runtime.id === "claude"), false);
 
   const runtime = makeRuntime({ runtime: "my-codex", credsDir: "/tmp/bivy-custom-agent-test" });
   assert.equal(runtime.id, "my-codex");

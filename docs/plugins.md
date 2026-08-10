@@ -29,6 +29,22 @@ tool broker between upstream MCP providers and downstream agents so policy,
 approvals, and audit remain authoritative. MCP prompts will not silently become
 trusted skills.
 
+## One agent registry
+
+Built-in, node-configured, and plugin-contributed agents enter the same ordered
+registry. Every registration owns the same lifecycle hooks: identity and aliases,
+source metadata, visibility, catalog description, runtime factory, and optional
+allowlisted installer. The registry is the only path used by discovery,
+selection, creation, conflict handling, and installation.
+
+Built-ins are registered first, node configuration second, and installed plugins
+third. Earlier registrations win conflicts, so external code cannot replace a
+trusted built-in or machine-owned definition. This is explicit provenance and
+precedence—not a separate execution path: after registration, all agents are
+listed and created through the same APIs. Native Pi/Claude factories remain
+in-process Bivy implementations, while public plugin factories remain strictly
+out of process.
+
 ## Quick start: ACP agent
 
 Create `bivy.plugin.yaml`:

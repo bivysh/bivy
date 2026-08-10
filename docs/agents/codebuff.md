@@ -35,4 +35,5 @@ BIVY_RUNTIME=codebuff bivy run codebuff
 ```
 
 If your Codebuff version gains a headless flag, point Bivy at it with
-`BIVY_CODEBUFF_ARGS` and add `codebuff` to `PICKER_RUNTIME_IDS` to surface it.
+`BIVY_CODEBUFF_ARGS` and set the built-in registration's `hidden` metadata to
+`false` to surface it.

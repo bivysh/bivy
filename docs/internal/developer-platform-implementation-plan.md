@@ -103,6 +103,9 @@ repository or loading code into the daemon.
 **Goal:** make the contracts pleasant to build against and make a connected tool
 available consistently across agent adapters.
 
+- [x] Route built-in, node-configured, and plugin-contributed agents through one
+  registration lifecycle for aliases, provenance, visibility, catalog, runtime
+  creation, conflicts, and allowlisted installation.
 - [x] Add a publishable `@bivy/plugin-sdk` workspace package with canonical
   manifest types, validation helpers, executable diagnostics, and JSON Schema.
 - [ ] Publish the SDK and add protocol clients/fixtures to its public contract.

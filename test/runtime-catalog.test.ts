@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { listRuntimes, RUNTIME_CATALOG } from "../src/runtime/index.js";
+import { listRegisteredAgents, listRuntimes } from "../src/runtime/index.js";
 
 // OpenCode is promoted to the governed ACP path by default, but only when the
 // binary on THIS machine evidences the `acp` subcommand — so its advertised
@@ -45,12 +45,13 @@ assert.equal(listed.length, EXPECTED_PICKER.length, `the picker should show ${EX
 // from the picker: it has no verified non-TTY headless mode upstream yet, so a
 // picker entry would hang on a pipe. It must be in the catalog but NOT the picker
 // — the same honest treatment as hermes/openclaw.
-assert.ok(RUNTIME_CATALOG.some((r) => r.id === "codebuff"), "codebuff must exist in the catalog");
+assert.ok(listRegisteredAgents().some((r) => r.id === "codebuff"), "codebuff must exist in the registry");
 assert.ok(!listed.includes("codebuff"), "codebuff must stay hidden from the picker (no verified headless mode)");
 assert.ok(!listed.includes("hermes") && !listed.includes("openclaw"), "hermes/openclaw stay hidden");
 
 // Every listed agent must carry a support tier and a description the UI renders.
 for (const runtime of listRuntimes()) {
+  assert.deepEqual(runtime.source, { kind: "builtin" }, `${runtime.id} must carry explicit built-in registry provenance`);
   assert.ok(runtime.supportTier, `${runtime.id} must declare a supportTier`);
   assert.ok(runtime.description && runtime.description.length > 0, `${runtime.id} must have a description`);
   assert.ok(runtime.capabilities, `${runtime.id} must declare capabilities`);
@@ -160,7 +161,7 @@ assert.deepEqual(aiderCaps.inputModes, { queued: true, steer: false, outOfBand: 
 assert.equal((aiderCaps.sessionActions as Record<string, unknown>).resume, false);
 
 // Newly promoted agents are present with their display names.
-const byId = Object.fromEntries(RUNTIME_CATALOG.map((r) => [r.id, r]));
+const byId = Object.fromEntries(listRegisteredAgents().map((r) => [r.id, r]));
 assert.equal(byId.qwen.displayName, "Qwen Code");
 assert.equal(byId.cline.displayName, "Cline");
 assert.equal(byId.crush.displayName, "Crush");

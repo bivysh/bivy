@@ -12,6 +12,7 @@ import { deleteCodexSession, discoverNativeCodexSessions, loadCodexTranscript, w
 import { deleteOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
 import { discoverNativeGrokSessions, listGrokSessions, loadGrokTranscript } from "./grok-sessions.js";
 import { createCredentialStore } from "./credentials.js";
+import { AgentRegistry, type AgentRegistryEntry } from "./agent-registry.js";
 
 // Args that continue an existing Codex session each prompt. Codex assigns its own
 // session id (no launch-time pin), so a resumed run threads it via `exec resume`.
@@ -109,6 +110,8 @@ export interface RuntimeInfo {
   language?: string;
   capabilities: Partial<RuntimeCapabilities>;
   supportTier: RuntimeSupportTier;
+  /** Adapter fact consumed by the shared protection classifier. */
+  nativeSandbox?: boolean;
   /** Effective protection advertised for this exact configured runtime path. */
   protectionLevel?: RuntimeProtectionLevel;
   protectionLabel?: string;
@@ -125,6 +128,9 @@ export interface RuntimeInfo {
   notes?: string;
   install?: RuntimeInstallInfo;
 }
+
+const PI_TESTED_VERSION = "0.83.0";
+const CLAUDE_TESTED_VERSION = "0.3.220";
 
 const PI_CAPABILITIES: RuntimeCapabilities = withExactCapabilitySurface({
   toolInterception: true,
@@ -175,7 +181,9 @@ function claudeCodeInfo(): RuntimeInfo {
     // The interactive TUI is a chat<->CLI hand-off; only advertise it when the
     // standalone `claude` CLI is actually installed on this node.
     capabilities: { ...CLAUDE_CAPABILITIES, interactiveTui: commandAvailable("claude") },
+    nativeSandbox: true,
     supportTier: "supported",
+    testedVersion: CLAUDE_TESTED_VERSION,
     authOwner: "mixed",
     notes: installed
       ? "Multi-turn sessions over a streaming-input query(); approvals map to canUseTool. Set BIVY_CLAUDE_MODEL to pick a default model."
@@ -883,7 +891,7 @@ const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
     displayName: "Codebuff",
     command: "codebuff",
     packageName: "codebuff",
-    // Hidden from the picker (see PICKER_RUNTIME_IDS). The `codebuff` binary has no
+    // Hidden from the picker by this registration metadata. The `codebuff` binary has no
     // verified non-TTY headless / print-and-exit mode upstream — its trailing-arg
     // `codebuff "<prompt>"` seeds the interactive TUI, and true automation is meant
     // to go through @codebuff/sdk. We keep the spec so it's runnable via
@@ -914,13 +922,6 @@ type CustomAgentConfig = {
   hidden?: boolean;
 };
 
-const RESERVED_CUSTOM_AGENT_IDS = new Set([
-  "pi", "claude", "claude-code", "claude-code-sdk", "generic-cli",
-  "codex-approvals", "openclaw", "bivy-agent-protocol", "acp",
-  "openhands", "swe-agent", "openai-agents-sdk", "langgraph", "google-adk",
-  "autogen", "crew-ai",
-]);
-
 function customAgentSpecs(): Map<string, CliAgentSpec> {
   const out = new Map<string, CliAgentSpec>();
   const raw = process.env.BIVY_CUSTOM_AGENTS?.trim();
@@ -932,9 +933,9 @@ function customAgentSpecs(): Map<string, CliAgentSpec> {
       if (!value || typeof value !== "object") continue;
       const item = value as Partial<CustomAgentConfig>;
       const id = typeof item.id === "string" ? item.id.trim().toLowerCase() : "";
-      if (!/^[a-z][a-z0-9-]{1,47}$/.test(id) || id in CLI_AGENT_SPECS || RESERVED_CUSTOM_AGENT_IDS.has(id) || out.has(id)) continue;
-      if (typeof item.extends !== "string" || !(item.extends in CLI_AGENT_SPECS)) continue;
-      const base = CLI_AGENT_SPECS[item.extends as CliAgentId];
+      if (!/^[a-z][a-z0-9-]{1,47}$/.test(id) || out.has(id)) continue;
+      if (typeof item.extends !== "string" || !isCliAgentId(item.extends)) continue;
+      const base = CLI_AGENT_SPECS[item.extends];
       const strings = (v: unknown): string[] | undefined => Array.isArray(v) && v.every((x) => typeof x === "string") ? v : undefined;
       out.set(id, {
         ...base,
@@ -960,81 +961,57 @@ function customAgentSpecs(): Map<string, CliAgentSpec> {
 export function pluginAgentConflictDiagnostics(): string[] {
   const installed = installedAgentContributions();
   const errors = [...installed.errors];
-  const configured = customAgentSpecs();
-  for (const contribution of installed.agents) {
-    const id = contribution.agent.id;
-    if (id in CLI_AGENT_SPECS || RESERVED_CUSTOM_AGENT_IDS.has(id)) {
-      errors.push(`${contribution.pluginId}: agent id ${id} conflicts with a built-in runtime`);
-    } else if (configured.has(id)) {
-      errors.push(`${contribution.pluginId}: agent id ${id} conflicts with node configuration`);
-    }
+  for (const conflict of agentRegistry().diagnostics()) {
+    if (!conflict.rejectedSource.startsWith("plugin ")) continue;
+    const pluginId = conflict.rejectedSource.slice("plugin ".length);
+    errors.push(`${pluginId}: agent id ${conflict.id} conflicts with ${conflict.retainedSource}`);
   }
   return errors;
 }
 
-function pluginAgentSpecs(): Map<string, CliAgentSpec> {
-  const out = new Map<string, CliAgentSpec>();
-  const configured = customAgentSpecs();
-  for (const contribution of installedAgentContributions().agents) {
-    const { agent } = contribution;
-    if (agent.id in CLI_AGENT_SPECS || RESERVED_CUSTOM_AGENT_IDS.has(agent.id) || configured.has(agent.id) || out.has(agent.id)) continue;
-    const common = {
-      displayName: agent.name,
-      command: agent.adapter.command,
-      packageName: `${contribution.pluginName} plugin`,
-      promptMode: "stdin" as ProcessPromptMode,
-      hidden: agent.hidden === true,
-      supportTier: "experimental" as RuntimeSupportTier,
-      authOwner: agent.authOwner ?? "agent" as const,
-      blurb: agent.description ?? `Agent contributed by ${contribution.pluginName}.`,
-      install: undefined,
-      source: { kind: "plugin", pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion } as RuntimeSource,
-    };
-    if (agent.adapter.kind === "acp") {
-      out.set(agent.id, {
-        ...common,
-        args: [],
-        acp: { args: agent.adapter.args ?? [], preferred: true, declared: true },
-        protocolOnly: true,
-      });
-      continue;
-    }
-    out.set(agent.id, {
+type InstalledAgentContribution = ReturnType<typeof installedAgentContributions>["agents"][number];
+
+/** Translate a public manifest contribution into the shared CLI adapter shape. */
+function pluginAgentSpec(contribution: InstalledAgentContribution): CliAgentSpec {
+  const { agent } = contribution;
+  const common = {
+    displayName: agent.name,
+    command: agent.adapter.command,
+    packageName: `${contribution.pluginName} plugin`,
+    promptMode: "stdin" as ProcessPromptMode,
+    hidden: agent.hidden === true,
+    supportTier: "experimental" as RuntimeSupportTier,
+    authOwner: agent.authOwner ?? "agent" as const,
+    blurb: agent.description ?? `Agent contributed by ${contribution.pluginName}.`,
+    install: undefined,
+    source: { kind: "plugin", pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion } as RuntimeSource,
+  };
+  if (agent.adapter.kind === "acp") {
+    return {
       ...common,
-      args: agent.adapter.args ?? [],
-      promptMode: agent.adapter.promptMode ?? "stdin",
-      ...(agent.adapter.structured
-        ? { jsonArgs: agent.adapter.structured.args, parserId: agent.adapter.structured.parser }
-        : {}),
-      ...(agent.adapter.resume ? { resume: { template: agent.adapter.resume.args } } : {}),
-      ...(agent.adapter.model
-        ? {
-            model: {
-              flag: agent.adapter.model.flag,
-              insertAt: agent.adapter.model.insertAt,
-              models: agent.adapter.model.choices,
-            },
-          }
-        : {}),
-    });
+      args: [],
+      acp: { args: agent.adapter.args ?? [], preferred: true, declared: true },
+      protocolOnly: true,
+    };
   }
-  return out;
-}
-
-function effectiveCliSpecs(): Map<string, CliAgentSpec> {
-  return new Map<string, CliAgentSpec>([
-    ...Object.entries(CLI_AGENT_SPECS),
-    ...pluginAgentSpecs(),
-    ...customAgentSpecs(),
-  ]);
-}
-
-function cliSpec(id: string): CliAgentSpec | undefined {
-  return effectiveCliSpecs().get(id);
-}
-
-function isEffectiveCliAgentId(id: string): boolean {
-  return cliSpec(id) !== undefined;
+  return {
+    ...common,
+    args: agent.adapter.args ?? [],
+    promptMode: agent.adapter.promptMode ?? "stdin",
+    ...(agent.adapter.structured
+      ? { jsonArgs: agent.adapter.structured.args, parserId: agent.adapter.structured.parser }
+      : {}),
+    ...(agent.adapter.resume ? { resume: { template: agent.adapter.resume.args } } : {}),
+    ...(agent.adapter.model
+      ? {
+          model: {
+            flag: agent.adapter.model.flag,
+            insertAt: agent.adapter.model.insertAt,
+            models: agent.adapter.model.choices,
+          },
+        }
+      : {}),
+  };
 }
 
 export function isCliAgentId(id: string): id is CliAgentId {
@@ -1054,8 +1031,8 @@ export const CLI_AGENT_IDS = Object.keys(CLI_AGENT_SPECS) as CliAgentId[];
  * `prefix` is the node's npm/bin prefix (BIVY_NPM_GLOBAL_PREFIX, default ~/.local).
  * `{bin}` in a curl `shell` expands to `<prefix>/bin`.
  */
-export function cliInstallSpec(id: string, prefix: string): { command: string; args: string[]; display: string } | undefined {
-  const install = cliSpec(id)?.install;
+function installSpecForCliAgent(spec: CliAgentSpec, prefix: string): { command: string; args: string[]; display: string } | undefined {
+  const install = spec.install;
   if (!install) return undefined;
   if (install.kind === "npm") {
     return {
@@ -1076,6 +1053,10 @@ export function cliInstallSpec(id: string, prefix: string): { command: string; a
   // curl / script: `{bin}` → the node's <prefix>/bin so binaries land on PATH.
   const shell = install.shell.replace(/\{bin\}/g, `${prefix}/bin`);
   return { command: "sh", args: ["-c", shell], display: install.display };
+}
+
+export function cliInstallSpec(id: string, prefix: string): { command: string; args: string[]; display: string } | undefined {
+  return isCliAgentId(id) ? installSpecForCliAgent(CLI_AGENT_SPECS[id], prefix) : undefined;
 }
 
 /**
@@ -1142,7 +1123,7 @@ function cliArgsOverride(id: string): string[] | undefined {
  * the spec's built-in template. Returns undefined when the agent has no known
  * resume form — which keeps the catalog honest (resume reported off).
  */
-function cliResumeTemplate(id: string): string[] | undefined {
+function cliResumeTemplate(id: string, spec: CliAgentSpec): string[] | undefined {
   const raw = process.env[`BIVY_${id.toUpperCase()}_RESUME_TEMPLATE`]?.trim();
   if (raw) {
     try {
@@ -1152,7 +1133,7 @@ function cliResumeTemplate(id: string): string[] | undefined {
       // fall through to the spec default
     }
   }
-  return cliSpec(id)?.resume?.template;
+  return spec.resume?.template;
 }
 
 /**
@@ -1161,8 +1142,7 @@ function cliResumeTemplate(id: string): string[] | undefined {
  * normalized to a full ModelInfo (the id is the CLI's own model name). Returns an
  * empty list when the agent has no model config and no override.
  */
-function cliModelList(id: string): ModelInfo[] {
-  const spec = cliSpec(id)!;
+function cliModelList(id: string, spec: CliAgentSpec): ModelInfo[] {
   let entries = spec.model?.models;
   const raw = process.env[`BIVY_${id.toUpperCase()}_MODELS`]?.trim();
   if (raw) {
@@ -1194,10 +1174,9 @@ function cliModelList(id: string): ModelInfo[] {
  * agent has no model flag or an empty list (so the runtime honestly reports
  * modelSelection off). The chosen model id is passed as the value of `spec.model.flag`.
  */
-function cliModelConfig(id: string): ProcessModelConfig | undefined {
-  const spec = cliSpec(id)!;
+function cliModelConfig(id: string, spec: CliAgentSpec): ProcessModelConfig | undefined {
   if (!spec.model) return undefined;
-  const models = cliModelList(id);
+  const models = cliModelList(id, spec);
   if (!models.length) return undefined;
   return {
     models,
@@ -1211,8 +1190,8 @@ function cliModelConfig(id: string): ProcessModelConfig | undefined {
 const USAGE_PARSERS = new Set(["codex-json", "gemini-json", "goose-stream-json"]);
 
 /** Whether a CLI agent runs a usage-emitting structured parser this launch. */
-function cliUsageReporting(id: string): boolean {
-  const parserId = process.env.BIVY_AGENT_PARSER || cliSpec(id)?.parserId;
+function cliUsageReporting(spec: CliAgentSpec): boolean {
+  const parserId = process.env.BIVY_AGENT_PARSER || spec.parserId;
   return Boolean(parserId) && USAGE_PARSERS.has(parserId!) && process.env.BIVY_AGENT_STRUCTURED !== "0";
 }
 
@@ -1221,8 +1200,8 @@ function cliUsageReporting(id: string): boolean {
  * has no reasoning-effort flag. `BIVY_<ID>_THINKING` (JSON
  * `{levels,template,insertAt?,default?}`) overrides/enables it for any agent.
  */
-function cliThinkingConfig(id: string): ProcessThinkingConfig | undefined {
-  let cfg = cliSpec(id)?.thinking;
+function cliThinkingConfig(id: string, spec: CliAgentSpec): ProcessThinkingConfig | undefined {
+  let cfg = spec.thinking;
   const raw = process.env[`BIVY_${id.toUpperCase()}_THINKING`]?.trim();
   if (raw) {
     try {
@@ -1310,8 +1289,8 @@ export function invalidateCliProbeCache(): void {
 // appearing in help would mask a genuinely-missing resume flag.
 const RESUME_HINT = /resume|continue|restore|session|thread|^-s$|^-r$|^-c$|^--id$/i;
 /** The resume-indicative flag/subcommand tokens of a resume template. */
-function resumeTokensFor(id: string): string[] {
-  const tmpl = cliResumeTemplate(id) ?? [];
+function resumeTokensFor(id: string, spec: CliAgentSpec): string[] {
+  const tmpl = cliResumeTemplate(id, spec) ?? [];
   return tmpl
     .map((t) => t.replace(/=\{[a-z]+\}/g, "").replace(/\{[a-z]+\}/g, "").trim())
     .filter((t) => t && !t.startsWith("{") && RESUME_HINT.test(t));
@@ -1339,11 +1318,10 @@ export function refineCapabilitiesFromHelp(
   return { resume, modelSelection };
 }
 
-function cliAgentInfo(id: string): RuntimeInfo {
-  const spec = cliSpec(id)!;
+function cliAgentInfo(id: string, spec: CliAgentSpec): RuntimeInfo {
   const installed = commandAvailable(spec.command);
   const npmPrefix = process.env.BIVY_NPM_GLOBAL_PREFIX || "~/.local";
-  const installCommand = cliInstallSpec(id, npmPrefix);
+  const installCommand = installSpecForCliAgent(spec, npmPrefix);
   // Honesty invariant (see docs/agents-not-fully-supported.md): capabilities must
   // reflect what the ProcessRuntime path actually delivers, or the PWA renders a
   // picker that silently no-ops. These CLI adapters stream stdout (structured via
@@ -1353,15 +1331,15 @@ function cliAgentInfo(id: string): RuntimeInfo {
   // agent has a known resume form (spec.resume or a BIVY_<ID>_RESUME_TEMPLATE
   // override) — Codex is the built-in example; the rest are fresh-process-per-
   // prompt until a resume template is wired.
-  let resume = id === "codex" || Boolean(cliResumeTemplate(id));
-  let modelSelection = Boolean(cliModelConfig(id));
-  const usageReporting = cliUsageReporting(id);
+  let resume = id === "codex" || Boolean(cliResumeTemplate(id, spec));
+  let modelSelection = Boolean(cliModelConfig(id, spec));
+  const usageReporting = cliUsageReporting(spec);
   const structuredPref = process.env.BIVY_AGENT_STRUCTURED;
   const structuredAvailable = Boolean(process.env.BIVY_AGENT_PARSER || spec.parserId) && (!spec.parserUnverified || structuredPref === "1") && structuredPref !== "0";
   // When the agent is promoted to ACP (spec.acp + BIVY_<ID>_ACP / BIVY_PREFER_ACP),
   // it runs through the governed ProtocolRuntime — so it honestly gains per-tool
   // approvals and resume. Reflect that in the catalog the picker reads.
-  const acpActive = prefersAcp(id);
+  const acpActive = prefersAcp(id, spec);
   // Catalog discovery must remain usable even when an operator has configured
   // an invalid mode. The actual launch path resolves strictly and reports the
   // actionable error; the picker falls back to the honest default here.
@@ -1378,7 +1356,7 @@ function cliAgentInfo(id: string): RuntimeInfo {
   if (process.env.BIVY_AGENT_PROBE === "1" && installed && id !== "codex") {
     const help = probeHelpText(spec.command);
     if (help) {
-      const refined = refineCapabilitiesFromHelp(help, { resume, modelSelection }, { resumeTokens: resumeTokensFor(id), modelFlag: spec.model?.flag });
+      const refined = refineCapabilitiesFromHelp(help, { resume, modelSelection }, { resumeTokens: resumeTokensFor(id, spec), modelFlag: spec.model?.flag });
       resume = refined.resume;
       modelSelection = refined.modelSelection;
     }
@@ -1412,6 +1390,7 @@ function cliAgentInfo(id: string): RuntimeInfo {
       nativeSessionDiscovery: id === "grok" && commandAvailable(spec.command),
       nativeSessionAdoption: id === "grok" && resume,
     }),
+    nativeSandbox: Boolean(spec.composeArgs),
     supportTier: spec.supportTier ?? (id === "codex" ? "supported" : "experimental"),
     testedVersion: spec.testedVersion,
     source: spec.source,
@@ -1478,6 +1457,7 @@ function codexApprovalsInfo(): RuntimeInfo {
     // Claude Code — per-tool Approve/Deny, model selection, thread resume, usage
     // reporting, and native session discovery/adoption — all over a bidirectional
     // protocol rather than a one-shot pipe.
+    nativeSandbox: true,
     supportTier: "supported",
     testedVersion: CODEX_TESTED_VERSION,
     authOwner: "agent",
@@ -1686,8 +1666,7 @@ function acpRuntimeFromEnv(credsDir?: string): ProtocolRuntimeOptions | null {
  * probe the opt-in capability refinement uses, and fail CLOSED — a missing binary
  * or unreadable help keeps the agent on the honest pipe path.
  */
-function acpSupportedByBinary(id: string): boolean {
-  const spec = cliSpec(id)!;
+function acpSupportedByBinary(spec: CliAgentSpec): boolean {
   if (!spec.acp) return false;
   if (!commandAvailable(spec.command)) return false;
   const help = probeHelpText(spec.command);
@@ -1709,8 +1688,7 @@ function acpSupportedByBinary(id: string): boolean {
  * Both the catalog (cliAgentInfo) and the launch path (makeCliRuntime) call this,
  * so what the picker advertises and what actually starts cannot disagree.
  */
-function prefersAcp(id: string): boolean {
-  const spec = cliSpec(id)!;
+function prefersAcp(id: string, spec: CliAgentSpec): boolean {
   if (!spec.acp) return false;
   // Installing an ACP plugin is itself the operator's explicit declaration that
   // this command speaks ACP. Unlike a built-in promotion, it has no pipe mode to
@@ -1720,7 +1698,7 @@ function prefersAcp(id: string): boolean {
   if (override === "0") return false;
   if (override === "1" || process.env.BIVY_PREFER_ACP === "1") return true;
   if (!spec.acp.preferred) return false;
-  return acpSupportedByBinary(id);
+  return acpSupportedByBinary(spec);
 }
 
 export type CliExecutionMode = "auto" | "protocol" | "structured-pipe" | "pipe" | "pty";
@@ -1861,7 +1839,7 @@ function protocolInfo(): RuntimeInfo {
   };
 }
 
-export const RUNTIME_CATALOG: RuntimeInfo[] = [
+const BUILTIN_AGENT_INFOS: RuntimeInfo[] = [
   {
     id: "pi",
     executionMode: "protocol",
@@ -1872,15 +1850,16 @@ export const RUNTIME_CATALOG: RuntimeInfo[] = [
     language: "TypeScript",
     capabilities: PI_CAPABILITIES,
     supportTier: "supported",
+    testedVersion: PI_TESTED_VERSION,
     authOwner: "bivy",
   },
   genericCliInfo(),
   // `codex` sits before the governed shim it feeds; the rest of the CLI agents are
   // derived straight from CLI_AGENT_SPECS (adding a spec = one data edit, no list
   // to keep in sync here).
-  cliAgentInfo("codex"),
+  cliAgentInfo("codex", CLI_AGENT_SPECS.codex),
   codexApprovalsInfo(),
-  ...CLI_AGENT_IDS.filter((id) => id !== "codex").map(cliAgentInfo),
+  ...CLI_AGENT_IDS.filter((id) => id !== "codex").map((id) => cliAgentInfo(id, CLI_AGENT_SPECS[id])),
   openClawInfo(),
   claudeCodeInfo(),
   protocolInfo(),
@@ -1992,7 +1971,7 @@ export const RUNTIME_CATALOG: RuntimeInfo[] = [
 // strictly supersedes the plain `codex` exec runtime; that exec path stays
 // runnable via `BIVY_RUNTIME=codex` for the fast, no-approval flow.
 //
-// Everything else in RUNTIME_CATALOG is an extension hook that only works once
+// Everything else in the built-in contribution set is an extension hook that only works once
 // configured via env (generic-cli, bivy-agent-protocol), a niche/phase-1 adapter
 // (hermes, openclaw), or an aspirational "planned" placeholder with no adapter.
 // They are hidden from the picker to keep it honest, but remain fully runnable via
@@ -2004,15 +1983,110 @@ export const RUNTIME_CATALOG: RuntimeInfo[] = [
 // The picker = the native/shim runtimes that aren't CLI-agent specs, PLUS every
 // non-hidden CLI agent. Visibility lives on the spec (`hidden`), so promoting or
 // demoting an agent is a single data edit with no id list to drift.
-const NON_CLI_PICKER_IDS = ["pi", "claude-code-sdk", "codex-approvals"];
-const PICKER_RUNTIME_IDS = new Set<string>([
-  ...NON_CLI_PICKER_IDS,
-  ...CLI_AGENT_IDS.filter((id) => !CLI_AGENT_SPECS[id].hidden),
-]);
+const NON_CLI_PICKER_IDS = new Set(["pi", "claude-code-sdk", "codex-approvals"]);
+
+type AgentInstallCommand = { command: string; args: string[]; display: string };
+type RuntimeRegistration = AgentRegistryEntry<RuntimeInfo, RuntimeFactoryOptions, AgentRuntime, AgentInstallCommand>;
+const BUILTIN_AGENT_ALIASES: Record<string, string[]> = {
+  opencode: ["open-code"],
+  gemini: ["gemini-cli"],
+  qwen: ["qwen-code"],
+  openclaw: ["open-claw"],
+  "claude-code-sdk": ["claude", "claude-code"],
+};
+
+function describeBuiltinAgent(base: RuntimeInfo): RuntimeInfo {
+  const id = base.id;
+  const info = id === "generic-cli"
+      ? genericCliInfo()
+      : id === "codex-approvals"
+        ? codexApprovalsInfo()
+        : id === "openclaw"
+          ? openClawInfo()
+          : id === "claude-code-sdk"
+            ? claudeCodeInfo()
+            : id === "bivy-agent-protocol"
+              ? protocolInfo()
+              : id === "acp"
+                ? acpInfo()
+                : base;
+  return { ...info, source: { kind: "builtin" } };
+}
+
+function builtinInstallCommand(id: string, prefix: string): AgentInstallCommand | undefined {
+  if (isCliAgentId(id)) return cliInstallSpec(id, prefix);
+  if (id === "claude-code-sdk") {
+    return { command: "npm", args: ["install", "@anthropic-ai/claude-agent-sdk"], display: "npm install @anthropic-ai/claude-agent-sdk" };
+  }
+  if (id === "openclaw") {
+    return {
+      command: "npm",
+      args: ["install", "--global", "--prefix", prefix, "openclaw"],
+      display: `npm install --global --prefix ${prefix} openclaw`,
+    };
+  }
+  return undefined;
+}
+
+function cliRegistration(id: string, spec: CliAgentSpec, sourceLabel: string): RuntimeRegistration {
+  return {
+    id,
+    visible: !spec.hidden,
+    sourceLabel,
+    describe: () => cliAgentInfo(id, spec),
+    create: (options) => makeCliRuntime(id, options, spec),
+    ...(spec.install ? { install: (prefix: string) => installSpecForCliAgent(spec, prefix) } : {}),
+  };
+}
+
+/** Build the one authoritative registry in precedence order. */
+function agentRegistry(): AgentRegistry<RuntimeInfo, RuntimeFactoryOptions, AgentRuntime, AgentInstallCommand> {
+  const registry = new AgentRegistry<RuntimeInfo, RuntimeFactoryOptions, AgentRuntime, AgentInstallCommand>();
+
+  for (const base of BUILTIN_AGENT_INFOS) {
+    const id = base.id;
+    const cli = isCliAgentId(id) ? CLI_AGENT_SPECS[id] : undefined;
+    registry.register({
+      id,
+      ...(BUILTIN_AGENT_ALIASES[id] ? { aliases: BUILTIN_AGENT_ALIASES[id] } : {}),
+      visible: cli ? !cli.hidden : NON_CLI_PICKER_IDS.has(id),
+      sourceLabel: "a built-in runtime",
+      describe: () => cli ? { ...cliAgentInfo(id, cli), source: { kind: "builtin" } } : describeBuiltinAgent(base),
+      ...(base.supportTier !== "planned"
+        ? { create: (options: RuntimeFactoryOptions) => cli ? makeCliRuntime(id, options, cli) : createBuiltinRuntime(id, options) }
+        : {}),
+      ...(builtinInstallCommand(id, process.env.BIVY_NPM_GLOBAL_PREFIX || "~/.local")
+        ? { install: (prefix: string) => builtinInstallCommand(id, prefix) }
+        : {}),
+    });
+  }
+
+  // Machine configuration and installed manifests use the exact same
+  // registration lifecycle as built-ins. Earlier registrations win; a plugin
+  // can therefore never replace a built-in or a node-owned configured agent.
+  for (const [id, spec] of customAgentSpecs()) registry.register(cliRegistration(id, spec, "node configuration"));
+  for (const contribution of installedAgentContributions().agents) {
+    registry.register(cliRegistration(contribution.agent.id, pluginAgentSpec(contribution), `plugin ${contribution.pluginId}`));
+  }
+  return registry;
+}
+
+/** All registered contributions, including hidden/planned rows, for diagnostics. */
+export function listRegisteredAgents(): RuntimeInfo[] {
+  return agentRegistry().list().map((entry) => entry.describe());
+}
+
+/** Resolve an id or historical alias through the authoritative registry. */
+export function canonicalAgentId(id: string): string | undefined {
+  return agentRegistry().get(id.toLowerCase())?.id;
+}
+
+/** Resolve an allowlisted installer from the same registration the picker uses. */
+export function agentInstallSpec(id: string, prefix: string): AgentInstallCommand | undefined {
+  return agentRegistry().get(id.toLowerCase())?.install?.(prefix);
+}
 
 function runtimeCertification(runtime: RuntimeInfo): Pick<RuntimeInfo, "certification" | "testedVersion"> {
-  if (runtime.id === "pi") return { certification: "release-tested", testedVersion: "0.83.0" };
-  if (runtime.id === "claude-code-sdk") return { certification: "release-tested", testedVersion: "0.3.220" };
   if (runtime.testedVersion) return { certification: "release-tested", testedVersion: runtime.testedVersion };
   return { certification: runtime.supportTier === "beta" ? "adapter-tested" : "unverified" };
 }
@@ -2021,9 +2095,7 @@ function runtimeProtection(runtime: RuntimeInfo): Pick<RuntimeInfo, "protectionL
   // Native SDK/CLI sandboxes receive the requested read-only/workspace/full tier
   // in their own process boundary. The governed Codex path has both native
   // sandbox flags and Bivy interception; label the stronger containment source.
-  const nativeSandbox = runtime.id === "claude-code-sdk" || runtime.id === "codex-approvals"
-    || (isEffectiveCliAgentId(runtime.id) && Boolean(cliSpec(runtime.id)?.composeArgs));
-  if (nativeSandbox) return {
+  if (runtime.nativeSandbox) return {
     protectionLevel: "native-sandbox",
     protectionLabel: "Native sandbox",
     protectionDetail: "This agent enforces Bivy's selected access tier in its native sandbox. Bivy tool controls may add approvals, but are not an OS jail of their own.",
@@ -2046,29 +2118,22 @@ function runtimeProtection(runtime: RuntimeInfo): Pick<RuntimeInfo, "protectionL
 }
 
 export function listRuntimes(currentId?: string): (RuntimeInfo & { current: boolean })[] {
-  const external = [...effectiveCliSpecs().keys()]
-    .filter((id) => !Object.prototype.hasOwnProperty.call(CLI_AGENT_SPECS, id))
-    .map((id) => cliAgentInfo(id));
-  const pickerIds = new Set([...PICKER_RUNTIME_IDS, ...external.filter((r) => !cliSpec(r.id)?.hidden).map((r) => r.id)]);
-  return [...RUNTIME_CATALOG, ...external]
+  const registry = agentRegistry();
+  const selected = currentId ? registry.get(currentId.toLowerCase())?.id : undefined;
+  return registry.list()
     // Keep the current runtime visible even if hidden, so a session pinned to a
-    // hidden agent (e.g. someone running BIVY_RUNTIME=goose) still renders its
-    // selection instead of showing an empty picker.
-    .filter((runtime) => pickerIds.has(runtime.id) || runtime.id === currentId)
-    .map((runtime) => {
-      if (runtime.id === "generic-cli") return genericCliInfo();
-      if (isEffectiveCliAgentId(runtime.id)) return cliAgentInfo(runtime.id);
-      if (runtime.id === "codex-approvals") return codexApprovalsInfo();
-      if (runtime.id === "openclaw") return openClawInfo();
-      if (runtime.id === "claude-code-sdk") return claudeCodeInfo();
-      if (runtime.id === "bivy-agent-protocol") return protocolInfo();
-      if (runtime.id === "acp") return acpInfo();
-      return runtime;
-    }).map((runtime) => ({ ...runtime, ...runtimeProtection(runtime), ...runtimeCertification(runtime), current: runtime.id === currentId }));
+    // hidden contribution still renders its selection instead of an empty picker.
+    .filter((entry) => entry.visible || entry.id === selected)
+    .map((entry) => entry.describe())
+    .map((runtime) => ({
+      ...runtime,
+      ...runtimeProtection(runtime),
+      ...runtimeCertification(runtime),
+      current: runtime.id === selected,
+    }));
 }
 
-export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
-  const id = (options.runtime ?? process.env.BIVY_RUNTIME ?? "pi").toLowerCase();
+function createBuiltinRuntime(id: string, options: RuntimeFactoryOptions): AgentRuntime {
   switch (id) {
     case "pi":
       return new PiRuntime(options);
@@ -2105,18 +2170,25 @@ export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
       if (!acpOptions) throw new Error("acp requires BIVY_ACP_COMMAND to be set (the ACP agent's launch command, e.g. gemini).");
       return new ProtocolRuntime(acpOptions);
     }
-    case "claude":
-    case "claude-code":
     case "claude-code-sdk":
       // Share the node's provider logins (the shared vault) so the user doesn't
       // re-auth Anthropic for this agent.
       return new ClaudeCodeRuntime({ ...claudeRuntimeFromEnv(), credentials: createCredentialStore(options.credsDir), sandbox: options.sandbox, attachToChat: options.attachToChat });
     default:
-      // Every CLI agent in CLI_AGENT_SPECS is dispatched here as data — no per-id
-      // case to maintain. Anything that isn't a known CLI agent throws below.
-      if (isEffectiveCliAgentId(id)) return makeCliRuntime(id, options);
-      throw new Error(`Unknown or unavailable BIVY_RUNTIME "${id}". Available runtimes: pi, openclaw/codex/opencode/aider/hermes/goose/gemini/qwen/cline/crush/cursor/copilot/grok/amp/auggie/droid/continue/kilocode/rovodev/codebuff (when their CLI is installed), generic-cli (when BIVY_AGENT_COMMAND is set), claude-code-sdk (when @anthropic-ai/claude-agent-sdk is installed).`);
+      throw new Error(`Built-in runtime "${id}" has no implementation factory.`);
   }
+}
+
+/** Resolve every built-in, configured, and plugin agent through one registry. */
+export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
+  const requested = (options.runtime ?? process.env.BIVY_RUNTIME ?? "pi").toLowerCase();
+  const registry = agentRegistry();
+  const registration = registry.get(requested);
+  if (!registration?.create) {
+    const available = registry.list().filter((entry) => Boolean(entry.create)).map((entry) => entry.id).join(", ");
+    throw new Error(`Unknown or unavailable BIVY_RUNTIME "${requested}". Registered runtimes: ${available}`);
+  }
+  return registration.create({ ...options, runtime: registration.id });
 }
 
 /**
@@ -2125,8 +2197,7 @@ export function makeRuntime(options: RuntimeFactoryOptions): AgentRuntime {
  * effect-level governance, generic resume). Extracted from the makeRuntime switch
  * so adding an agent stays a pure-data change.
  */
-function makeCliRuntime(id: string, options: RuntimeFactoryOptions): AgentRuntime {
-      const spec = cliSpec(id)!;
+function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: CliAgentSpec): AgentRuntime {
       if (!commandAvailable(spec.command)) throw new Error(`${spec.displayName} command not found on PATH: ${spec.command}`);
       // Resolve the mode before launching anything. ACP and structured parsing
       // remain data-driven; explicit mode overrides are fail-closed rather than
@@ -2137,7 +2208,7 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions): AgentRuntim
         requested: requestedCliExecutionMode(id),
         protocolAvailable: Boolean(spec.acp),
         structuredAvailable,
-        protocolPreferred: prefersAcp(id),
+        protocolPreferred: prefersAcp(id, spec),
       });
       if (spec.protocolOnly && executionMode !== "protocol") {
         throw new Error(`${spec.displayName} is an ACP-only plugin agent; execution mode ${executionMode} is unavailable.`);
@@ -2193,7 +2264,7 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions): AgentRuntim
       // prompt — no per-agent code. Absent = fresh process per prompt (resume
       // stays off; see the per-agent comments in CLI_AGENT_SPECS for why some
       // genuinely have no native "continue session <id>" form).
-      const resumeTemplate = id === "codex" ? undefined : cliResumeTemplate(id as CliAgentId);
+      const resumeTemplate = id === "codex" ? undefined : cliResumeTemplate(id, spec);
       const resumeOpts = id === "codex"
         ? {
             resumable: true,
@@ -2250,9 +2321,9 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions): AgentRuntim
         parserFactory: parserFactoryFor(parserId),
         preflight,
         prepare,
-        model: cliModelConfig(id),
-        thinking: cliThinkingConfig(id),
-        usageReporting: cliUsageReporting(id),
+        model: cliModelConfig(id, spec),
+        thinking: cliThinkingConfig(id, spec),
+        usageReporting: cliUsageReporting(spec),
         slashCommands: cliSlashCommands(id),
         ...resumeOpts,
         ...grokOpts,

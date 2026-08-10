@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 import { WebSocketServer, WebSocket } from "ws";
-import { listRuntimes, catalogRuntimes, cliInstallSpec, invalidateCliProbeCache, isCliAgentId, pluginAgentConflictDiagnostics, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { listRuntimes, catalogRuntimes, agentInstallSpec, canonicalAgentId, invalidateCliProbeCache, pluginAgentConflictDiagnostics, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
@@ -868,36 +868,14 @@ function runBivyUpdate(): { ok: boolean; error?: string } {
 type RuntimeInstallSpec = { id: string; command: string; args: string[]; cwd: string; displayCommand?: string };
 
 function runtimeInstallSpec(requested?: string): RuntimeInstallSpec | undefined {
-  let id = String(requested ?? "").trim().toLowerCase();
-  // Normalize a few historical aliases to their canonical runtime id.
-  const alias: Record<string, string> = {
-    "open-code": "opencode",
-    "gemini-cli": "gemini",
-    "qwen-code": "qwen",
-    "open-claw": "openclaw",
-    claude: "claude-code-sdk",
-    "claude-code": "claude-code-sdk",
-  };
-  id = alias[id] ?? id;
+  const id = canonicalAgentId(String(requested ?? "").trim().toLowerCase());
+  if (!id) return undefined;
 
-  // Claude Code SDK is a node dependency installed into the repo (not a global
-  // CLI), and OpenClaw is a phase-1 adapter that isn't a CLI_AGENT_SPECS entry —
-  // both stay bespoke. Everything else derives from the agent's structured
-  // `install` descriptor via cliInstallSpec (the SAME source the catalog "Install"
-  // button reads), so there's a single install definition per agent, not two.
-  if (id === "claude-code-sdk") {
-    return { id: "claude-code-sdk", command: "npm", args: ["install", "@anthropic-ai/claude-agent-sdk"], cwd: repoRoot };
-  }
-  if (id === "openclaw") {
-    return { id: "openclaw", command: "npm", args: ["install", "--global", "--prefix", userLocalPrefix, "openclaw"], cwd: repoRoot, displayCommand: `npm install --global --prefix ${userLocalPrefix} openclaw` };
-  }
-  if (isCliAgentId(id)) {
-    const spec = cliInstallSpec(id, userLocalPrefix);
-    // No `install` descriptor (e.g. Rovo Dev's `acli`, installed out of band) →
-    // no allowlisted auto-install; the catalog shows the agent as external.
-    return spec ? { id, command: spec.command, args: spec.args, cwd: repoRoot, displayCommand: spec.display } : undefined;
-  }
-  return undefined;
+  // Install metadata is owned by the same registration as catalog and runtime
+  // creation. Agents installed out of band and external plugins intentionally
+  // return no allowlisted installer.
+  const spec = agentInstallSpec(id, userLocalPrefix);
+  return spec ? { id, command: spec.command, args: spec.args, cwd: repoRoot, displayCommand: spec.display } : undefined;
 }
 
 function installCommandText(spec: RuntimeInstallSpec): string {
