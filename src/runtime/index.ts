@@ -47,6 +47,7 @@ import { sandboxTier, sandboxArgsFor, codexSandboxPolicy, type SandboxTier } fro
 import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv, type ProtocolRuntimeOptions } from "./protocol.js";
 import { codexSlashCommands, opencodeSlashCommands, type SlashCommandProvider } from "./slash-commands.js";
 import { withExactCapabilitySurface, type AgentRuntime, type AttachToChatFn, type RuntimeCapabilities } from "./types.js";
+import { installedAgentContributions } from "../plugins/store.js";
 
 /**
  * On-disk slash commands (custom prompts/commands) for the CLI agents that keep
@@ -85,6 +86,10 @@ export type RuntimeSupportTier = "supported" | "beta" | "experimental" | "planne
  * controls, and ordinary user permissions have materially different boundaries. */
 export type RuntimeProtectionLevel = "native-sandbox" | "tool-controls" | "mcp-controls" | "user-permissions";
 export type RuntimeCertification = "release-tested" | "adapter-tested" | "unverified";
+export type RuntimeSource =
+  | { kind: "builtin" }
+  | { kind: "config" }
+  | { kind: "plugin"; pluginId: string; pluginVersion: string };
 
 export interface RuntimeInstallInfo {
   label: string;
@@ -110,6 +115,9 @@ export interface RuntimeInfo {
   protectionDetail?: string;
   /** Release confidence, separate from whether an adapter merely exists. */
   certification?: RuntimeCertification;
+  /** Where this exact runtime definition came from. Absent means built-in for
+   *  compatibility with older clients. */
+  source?: RuntimeSource;
   /** Exact external package/CLI version exercised when release-tested. */
   testedVersion?: string;
   /** Who owns the first-run credential/login UX for this runtime. */
@@ -359,7 +367,12 @@ type CliAgentSpec = {
    * `BIVY_<ID>_ACP=0` forces the pipe path back on; `=1` forces ACP without the
    * probe (operator override). Agents without `preferred` stay opt-in.
    */
-  acp?: { args: string[]; helpToken?: string; preferred?: boolean };
+  acp?: { args: string[]; helpToken?: string; preferred?: boolean; declared?: boolean };
+  /** The manifest declares ACP as the only valid adapter; there is no process
+   *  fallback to select when protocol startup is unavailable. */
+  protocolOnly?: boolean;
+  /** Origin metadata for external catalog rows. */
+  source?: RuntimeSource;
 };
 
 const CLI_AGENT_SPECS: Record<CliAgentId, CliAgentSpec> = {
@@ -904,6 +917,8 @@ type CustomAgentConfig = {
 const RESERVED_CUSTOM_AGENT_IDS = new Set([
   "pi", "claude", "claude-code", "claude-code-sdk", "generic-cli",
   "codex-approvals", "openclaw", "bivy-agent-protocol", "acp",
+  "openhands", "swe-agent", "openai-agents-sdk", "langgraph", "google-adk",
+  "autogen", "crew-ai",
 ]);
 
 function customAgentSpecs(): Map<string, CliAgentSpec> {
@@ -933,6 +948,7 @@ function customAgentSpecs(): Map<string, CliAgentSpec> {
         supportTier: "experimental",
         testedVersion: undefined,
         install: undefined,
+        source: { kind: "config" },
       });
     }
   } catch {
@@ -941,9 +957,74 @@ function customAgentSpecs(): Map<string, CliAgentSpec> {
   return out;
 }
 
+export function pluginAgentConflictDiagnostics(): string[] {
+  const installed = installedAgentContributions();
+  const errors = [...installed.errors];
+  const configured = customAgentSpecs();
+  for (const contribution of installed.agents) {
+    const id = contribution.agent.id;
+    if (id in CLI_AGENT_SPECS || RESERVED_CUSTOM_AGENT_IDS.has(id)) {
+      errors.push(`${contribution.pluginId}: agent id ${id} conflicts with a built-in runtime`);
+    } else if (configured.has(id)) {
+      errors.push(`${contribution.pluginId}: agent id ${id} conflicts with node configuration`);
+    }
+  }
+  return errors;
+}
+
+function pluginAgentSpecs(): Map<string, CliAgentSpec> {
+  const out = new Map<string, CliAgentSpec>();
+  const configured = customAgentSpecs();
+  for (const contribution of installedAgentContributions().agents) {
+    const { agent } = contribution;
+    if (agent.id in CLI_AGENT_SPECS || RESERVED_CUSTOM_AGENT_IDS.has(agent.id) || configured.has(agent.id) || out.has(agent.id)) continue;
+    const common = {
+      displayName: agent.name,
+      command: agent.adapter.command,
+      packageName: `${contribution.pluginName} plugin`,
+      promptMode: "stdin" as ProcessPromptMode,
+      hidden: agent.hidden === true,
+      supportTier: "experimental" as RuntimeSupportTier,
+      authOwner: agent.authOwner ?? "agent" as const,
+      blurb: agent.description ?? `Agent contributed by ${contribution.pluginName}.`,
+      install: undefined,
+      source: { kind: "plugin", pluginId: contribution.pluginId, pluginVersion: contribution.pluginVersion } as RuntimeSource,
+    };
+    if (agent.adapter.kind === "acp") {
+      out.set(agent.id, {
+        ...common,
+        args: [],
+        acp: { args: agent.adapter.args ?? [], preferred: true, declared: true },
+        protocolOnly: true,
+      });
+      continue;
+    }
+    out.set(agent.id, {
+      ...common,
+      args: agent.adapter.args ?? [],
+      promptMode: agent.adapter.promptMode ?? "stdin",
+      ...(agent.adapter.structured
+        ? { jsonArgs: agent.adapter.structured.args, parserId: agent.adapter.structured.parser }
+        : {}),
+      ...(agent.adapter.resume ? { resume: { template: agent.adapter.resume.args } } : {}),
+      ...(agent.adapter.model
+        ? {
+            model: {
+              flag: agent.adapter.model.flag,
+              insertAt: agent.adapter.model.insertAt,
+              models: agent.adapter.model.choices,
+            },
+          }
+        : {}),
+    });
+  }
+  return out;
+}
+
 function effectiveCliSpecs(): Map<string, CliAgentSpec> {
   return new Map<string, CliAgentSpec>([
     ...Object.entries(CLI_AGENT_SPECS),
+    ...pluginAgentSpecs(),
     ...customAgentSpecs(),
   ]);
 }
@@ -1288,9 +1369,8 @@ function cliAgentInfo(id: string): RuntimeInfo {
   try {
     executionMode = resolveCliExecutionMode({ requested: requestedCliExecutionMode(id), protocolAvailable: Boolean(spec.acp), structuredAvailable, protocolPreferred: acpActive });
   } catch {
-    executionMode = structuredAvailable ? "structured-pipe" : "pipe";
+    executionMode = spec.protocolOnly ? "protocol" : structuredAvailable ? "structured-pipe" : "pipe";
   }
-  const structured = executionMode === "structured-pipe";
   if (acpActive) resume = true;
   // Opt-in self-healing: if the installed binary's --help doesn't evidence a
   // resume/model flag we advertise, downgrade it (never upgrade). Codex keeps its
@@ -1334,6 +1414,7 @@ function cliAgentInfo(id: string): RuntimeInfo {
     }),
     supportTier: spec.supportTier ?? (id === "codex" ? "supported" : "experimental"),
     testedVersion: spec.testedVersion,
+    source: spec.source,
     authOwner: spec.authOwner ?? "agent",
     notes: installed
       ? acpActive
@@ -1631,6 +1712,10 @@ function acpSupportedByBinary(id: string): boolean {
 function prefersAcp(id: string): boolean {
   const spec = cliSpec(id)!;
   if (!spec.acp) return false;
+  // Installing an ACP plugin is itself the operator's explicit declaration that
+  // this command speaks ACP. Unlike a built-in promotion, it has no pipe mode to
+  // probe or fall back to.
+  if (spec.acp.declared) return true;
   const override = process.env[`BIVY_${id.toUpperCase()}_ACP`];
   if (override === "0") return false;
   if (override === "1" || process.env.BIVY_PREFER_ACP === "1") return true;
@@ -1961,9 +2046,11 @@ function runtimeProtection(runtime: RuntimeInfo): Pick<RuntimeInfo, "protectionL
 }
 
 export function listRuntimes(currentId?: string): (RuntimeInfo & { current: boolean })[] {
-  const custom = [...customAgentSpecs().keys()].map((id) => cliAgentInfo(id));
-  const pickerIds = new Set([...PICKER_RUNTIME_IDS, ...custom.filter((r) => !cliSpec(r.id)?.hidden).map((r) => r.id)]);
-  return [...RUNTIME_CATALOG, ...custom]
+  const external = [...effectiveCliSpecs().keys()]
+    .filter((id) => !Object.prototype.hasOwnProperty.call(CLI_AGENT_SPECS, id))
+    .map((id) => cliAgentInfo(id));
+  const pickerIds = new Set([...PICKER_RUNTIME_IDS, ...external.filter((r) => !cliSpec(r.id)?.hidden).map((r) => r.id)]);
+  return [...RUNTIME_CATALOG, ...external]
     // Keep the current runtime visible even if hidden, so a session pinned to a
     // hidden agent (e.g. someone running BIVY_RUNTIME=goose) still renders its
     // selection instead of showing an empty picker.
@@ -2052,6 +2139,9 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions): AgentRuntim
         structuredAvailable,
         protocolPreferred: prefersAcp(id),
       });
+      if (spec.protocolOnly && executionMode !== "protocol") {
+        throw new Error(`${spec.displayName} is an ACP-only plugin agent; execution mode ${executionMode} is unavailable.`);
+      }
       if (executionMode === "pty") {
         throw new Error(`PTY mode is for interactive terminal launches. Use 'bivy run ${spec.command}' instead of a governed chat session.`);
       }

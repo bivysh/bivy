@@ -217,6 +217,10 @@ export interface RuntimeInfo {
   protectionLabel?: string;
   protectionDetail?: string;
   certification?: "release-tested" | "adapter-tested" | "unverified";
+  source?:
+    | { kind: "builtin" }
+    | { kind: "config" }
+    | { kind: "plugin"; pluginId: string; pluginVersion: string };
   testedVersion?: string;
   [k: string]: unknown;
 }

@@ -150,6 +150,21 @@ bivy agents
 bivy agents --json
 ```
 
+### `bivy plugin <validate|install|list|remove>`
+
+Manage node-local declarative agent plugins:
+
+```bash
+bivy plugin validate ./bivy.plugin.yaml
+bivy plugin install ./bivy.plugin.yaml
+bivy plugin list --json
+bivy plugin remove company-agent
+```
+
+`install` accepts `--force` to replace the same plugin id. Install/remove require
+`bivy restart`. Plugin installation validates and copies a manifest; it never
+downloads a package or runs an installer. See [plugins.md](plugins.md).
+
 ### `bivy agents:install`
 
 Alias: `bivy runtimes:install`.

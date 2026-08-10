@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Declarative agent plugins: `bivy plugin validate|install|list|remove` installs
+  strict `bivy.sh/v1alpha1` manifests from local files. Plugins can contribute
+  process or ACP agents to the CLI and web runtime catalog without a Bivy source
+  change; executable code remains out of process and external rows are always
+  Experimental / Unverified.
 - Automations is now the **sole place** to connect, add, reconnect, or
   disconnect GitHub Apps, Linear, and Slack — full multi-app GitHub lifecycle
   (create, connect an existing app, install, reconnect a key on this machine,

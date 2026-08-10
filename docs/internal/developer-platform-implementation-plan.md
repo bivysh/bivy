@@ -51,27 +51,29 @@ Initial contribution categories:
 
 ## Phase 1 — declarative agent plugins
 
+**Status:** Implemented in this branch.
+
 **Goal:** an external developer can add an agent to Bivy without changing this
 repository or loading code into the daemon.
 
 ### Scope
 
-- [ ] Define the alpha `bivy.sh/v1alpha1` plugin manifest.
-- [ ] Support agent contributions using either:
+- [x] Define the alpha `bivy.sh/v1alpha1` plugin manifest.
+- [x] Support agent contributions using either:
   - a headless process adapter; or
   - an ACP adapter.
-- [ ] Validate identifiers, commands, argument bounds, parser identifiers,
+- [x] Validate identifiers, commands, argument bounds, parser identifiers,
   resume templates, model metadata, and unknown fields.
-- [ ] Add a node-local plugin store under `<data-dir>/plugins` with atomic
+- [x] Add a node-local plugin store under `<data-dir>/plugins` with atomic
   install/remove operations.
-- [ ] Add `bivy plugin validate|install|list|remove` and JSON output where useful.
-- [ ] Merge installed agent contributions into the existing runtime catalog.
-- [ ] Mark external agents Experimental and Unverified; never inherit a built-in
+- [x] Add `bivy plugin validate|install|list|remove` and JSON output where useful.
+- [x] Merge installed agent contributions into the existing runtime catalog.
+- [x] Mark external agents Experimental and Unverified; never inherit a built-in
   certification.
-- [ ] Surface manifest/source diagnostics without preventing built-ins from
+- [x] Surface manifest/source diagnostics without preventing built-ins from
   starting when one installed plugin is invalid.
-- [ ] Add parser/store/runtime/CLI tests.
-- [ ] Document authoring, installation, trust, and current limitations.
+- [x] Add parser/store/runtime/CLI tests.
+- [x] Document authoring, installation, trust, and current limitations.
 
 ### Non-goals
 
