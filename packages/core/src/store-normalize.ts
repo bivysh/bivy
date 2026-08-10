@@ -14,6 +14,7 @@ import type {
   PrState,
   RuntimeInfo,
   SandboxTier,
+  SessionState,
   SessionStatus,
   SessionSummary,
   ThinkingState,
@@ -205,13 +206,17 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
         nodeId: s?.nodeId || previous.nodeId,
         name: "Locked session",
         updatedAt: s?.updatedAt || s?.modified || previous.updatedAt,
-        status: normalizeSessionStatus(s?.status, Boolean(s?.needsAction), Boolean(s?.isStreaming)),
+        status: normalizeSessionStatus(s?.status, Boolean(s?.needsAction), Boolean(s?.isStreaming), normalizeSessionState(s?.sessionState)),
         locked: true,
         lastSeenAt: previous.lastSeenAt,
         finishedAt: previous.finishedAt,
       });
       continue;
     }
+    // List rows receive live state at the top level. Do not treat a closed row's
+    // archival bivySession envelope as live evidence: it has no attached process
+    // and must remain `saved`, not be projected back to `idle`.
+    const sessionState = normalizeSessionState(s?.sessionState);
     byId.set(sessionId, {
       sessionId,
       path: s?.path || s?.sessionFile || undefined,
@@ -224,8 +229,9 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       runtimeId: s?.runtimeId,
       agentName: s?.agentName,
       updatedAt: s?.updatedAt || s?.modified,
-      needsAction: Boolean(s?.needsAction),
-      status: normalizeSessionStatus(s?.status, Boolean(s?.needsAction), Boolean(s?.isStreaming)),
+      needsAction: sessionState?.agent === "awaiting-input" || Boolean(s?.needsAction),
+      status: normalizeSessionStatus(s?.status, Boolean(s?.needsAction), Boolean(s?.isStreaming), sessionState),
+      sessionState,
       branch: s?.branch || undefined,
       // Honored only when explicitly set on the incoming row (the client re-derives
       // it each refresh for still-torn-down sessions). NOT carried over from prev, so
@@ -253,11 +259,31 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
   return [...byId.values()];
 }
 
-function normalizeSessionStatus(status: unknown, needsAction: boolean, isStreaming: boolean): SessionStatus {
+export function normalizeSessionState(value: unknown): SessionState | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const s = value as Record<string, unknown>;
+  if (s.transport !== "reachable" && s.transport !== "unreachable") return undefined;
+  if (s.process !== "alive" && s.process !== "exited" && s.process !== "none") return undefined;
+  if (s.agent !== "idle" && s.agent !== "working" && s.agent !== "awaiting-input") return undefined;
+  if (s.workspace !== "clean" && s.workspace !== "dirty" && s.workspace !== "checkpointing") return undefined;
+  if (s.displayStatus !== "idle" && s.displayStatus !== "working" && s.displayStatus !== "needs_attention" && s.displayStatus !== "failed") return undefined;
+  return s as unknown as SessionState;
+}
+
+export function sessionStatusFromState(state: SessionState | undefined): SessionStatus | undefined {
+  if (state?.displayStatus === "needs_attention") return "needs_action";
+  return state?.displayStatus;
+}
+
+function normalizeSessionStatus(status: unknown, needsAction: boolean, isStreaming: boolean, state?: SessionState): SessionStatus {
+  // "saved" means no live record exists, so there is no live state to project.
+  if (status === "saved") return "saved";
+  // Otherwise the explicit state machine is authoritative when available.
+  const explicit = sessionStatusFromState(state);
+  if (explicit) return explicit;
   if (needsAction || status === "needs_action") return "needs_action";
   if (status === "working" || isStreaming) return "working";
   if (status === "failed") return "failed";
-  if (status === "saved") return "saved";
   return "idle";
 }
 

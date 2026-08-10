@@ -33,10 +33,12 @@ import {
   normalizeNodeStats,
   normalizePrs,
   normalizeSessions,
+  normalizeSessionState,
   normalizeThinking,
   normalizeUsage,
   sameCommandList,
   sameModel,
+  sessionStatusFromState,
   upsertApproval,
   validUserQuestions,
 } from "./store-normalize.js";
@@ -55,6 +57,16 @@ export {
 } from "./store-normalize.js";
 
 export type SessionStatus = "idle" | "working" | "needs_action" | "failed" | "saved";
+
+/** Explicit live-session axes supplied by Phase 3 nodes. Optional on summaries
+ * for compatibility with older nodes and persisted account-index rows. */
+export interface SessionState {
+  transport: "reachable" | "unreachable";
+  process: "alive" | "exited" | "none";
+  agent: "idle" | "working" | "awaiting-input";
+  workspace: "clean" | "dirty" | "checkpointing";
+  displayStatus: "idle" | "working" | "needs_attention" | "failed";
+}
 
 /** A live native-agent PTY started by `bivy run`. These are node-owned terminal
  * sessions rather than structured chat sessions, but they belong in the same
@@ -99,6 +111,7 @@ export interface SessionSummary {
   updatedAt?: number;
   needsAction?: boolean;
   status?: SessionStatus;
+  sessionState?: SessionState;
   /** Repo-backed session's worktree branch, when known (sessions.list already
    *  carries this from the node — see src/server.ts — it was previously dropped
    *  here, which is why the sidebar had no branch/PR context per row). */
@@ -2255,6 +2268,7 @@ export class SessionStore {
         const sid = String(e.sessionId || e.id || "");
         if (sid) {
           const known = this.state.sessions.find((s) => s.sessionId === sid);
+          const sessionState = normalizeSessionState(e.sessionState ?? e.bivySession?.state);
           this.upsertSession({
             sessionId: sid,
             path: e.sessionFile || e.path,
@@ -2278,8 +2292,9 @@ export class SessionStore {
             // very bottom of the sidebar (0 < every real timestamp) until the next
             // full sessions.list refresh caught up (see SessionList's toMs/sort).
             updatedAt: e.updatedAt || e.modified || (known ? undefined : Date.now()),
-            status: "idle",
-            needsAction: false,
+            status: sessionStatusFromState(sessionState) ?? "idle",
+            sessionState,
+            needsAction: sessionState?.agent === "awaiting-input" ? true : false,
           });
         }
         // Fold the live runtime's refined capabilities (e.g. modelSelection from
@@ -2289,6 +2304,21 @@ export class SessionStore {
         this.mergeRuntimeCapabilities(e.runtimeId, e.capabilities);
         if (sid) this.setSessionCommands(sid, e.capabilities);
         this.onSessionCreatedElsewhere?.();
+        return;
+      }
+      case "session.state": {
+        const e = event as any;
+        const sid = String(e.sessionId || "");
+        const sessionState = normalizeSessionState(e.state ?? e.sessionState);
+        if (!sid || !sessionState) return;
+        this.updateSessionRow(sid, {
+          sessionState,
+          status: sessionStatusFromState(sessionState),
+          needsAction: sessionState.agent === "awaiting-input",
+        });
+        if (sid === this.state.activeSessionId) {
+          this.set({ working: sessionState.agent === "working", ...(sessionState.agent !== "working" ? { workingLabel: "" } : {}) });
+        }
         return;
       }
       case "session.capabilities": {
@@ -2906,9 +2936,13 @@ export class SessionStore {
           // (see closeRunningTools' comment), so it doubles as "posed its final
           // message" even for a turn that ended in an error with no reply.
           const justFinished = innerKind === "agent_end";
+          const sessionState = normalizeSessionState(e.state ?? e.sessionState);
           this.updateSessionRow(sid, {
-            status: justFinished ? "idle" : "working",
-            needsAction: false,
+            // Phase-3 nodes own this projection. Fall back to the inner-event
+            // heuristic only for older nodes that don't send explicit axes.
+            status: sessionStatusFromState(sessionState) ?? (justFinished ? "idle" : "working"),
+            sessionState,
+            needsAction: sessionState ? sessionState.agent === "awaiting-input" : false,
             ...(justFinished ? { updatedAt: Date.now(), finishedAt: Date.now() } : {}),
           });
         }
@@ -3123,6 +3157,14 @@ export class SessionStore {
     if (!adopt) return;
     this.draft = freshDraft();
     this.deferredHistory = null;
+    const sessionState = normalizeSessionState(e.sessionState ?? e.bivySession?.state);
+    if (sessionId && sessionState) {
+      this.updateSessionRow(sessionId, {
+        sessionState,
+        status: sessionStatusFromState(sessionState),
+        needsAction: sessionState.agent === "awaiting-input",
+      });
+    }
     // Open-paint delivered; subsequent unsolicited mid-turn snapshots defer again.
     this.awaitingOpenHistory = false;
     // Keep optimistic prompts the node hasn't confirmed yet: a new session's
@@ -3135,7 +3177,7 @@ export class SessionStore {
       currentAgentName: e.agentName || this.state.currentAgentName,
       github: githubContext(e),
       transcript: this.withPendingUserEntries(withAttachments),
-      working: Boolean(e.isStreaming),
+      working: sessionState ? sessionState.agent === "working" : Boolean(e.isStreaming),
       opening: false,
       usage: normalizeUsage(e.usage),
     });
@@ -3288,6 +3330,7 @@ export class SessionStore {
     patch: {
       status?: SessionStatus;
       needsAction?: boolean;
+      sessionState?: SessionState;
       branch?: string;
       prUrl?: string;
       prs?: PrRef[];
@@ -3309,6 +3352,7 @@ export class SessionStore {
       if (
         next.status !== s.status ||
         next.needsAction !== s.needsAction ||
+        JSON.stringify(next.sessionState) !== JSON.stringify(s.sessionState) ||
         next.branch !== s.branch ||
         next.prUrl !== s.prUrl ||
         JSON.stringify(next.prs) !== JSON.stringify(s.prs) ||
