@@ -18,6 +18,69 @@ function run(args: string[], env: Record<string, string>): ReturnType<typeof spa
   });
 }
 
+test("plugin CLI scaffolds a schema-linked, compatible manifest", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-plugin-init-"));
+  const target = path.join(dir, "sample-plugin");
+  try {
+    const initialized = run(["init", target, "--id", "sample-agent", "--name", "Sample Agent", "--adapter", "process", "--json"], { BIVY_DATA_DIR: dir });
+    assert.equal(initialized.status, 0, initialized.stderr);
+    const body = JSON.parse(initialized.stdout);
+    assert.equal(body.plugin.id, "sample-agent");
+    const manifest = fs.readFileSync(path.join(target, "bivy.plugin.yaml"), "utf8");
+    assert.match(manifest, /yaml-language-server.*plugin-sdk\/schema\/bivy\.plugin\.schema\.json/);
+    assert.match(manifest, /requires:\n {2}bivy: ">=0\.10\.1 <0\.11\.0"/);
+    assert.match(manifest, /kind: process/);
+
+    const validated = run(["validate", target, "--json"], { BIVY_DATA_DIR: dir });
+    assert.equal(validated.status, 0, validated.stderr);
+    assert.equal(JSON.parse(validated.stdout).compatibility.compatible, true);
+
+    const doctor = run(["doctor", target, "--json"], { BIVY_DATA_DIR: dir, PATH: process.env.PATH ?? "" });
+    assert.equal(doctor.status, 1);
+    assert.match(JSON.parse(doctor.stdout).errors.join("\n"), /sample-agent was not found/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("plugin CLI doctor and test perform a real ACP handshake", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-plugin-conformance-"));
+  const file = path.join(dir, "bivy.plugin.yaml");
+  const fixture = path.join(root, "test", "fixtures", "acp-agent.mjs");
+  fs.writeFileSync(file, `
+apiVersion: bivy.sh/v1alpha1
+kind: Plugin
+metadata:
+  id: conformance-agent
+  name: Conformance Agent
+  version: 1.0.0
+requires:
+  bivy: ">=0.10.0 <0.11.0"
+contributes:
+  agents:
+    - id: conformance-agent
+      name: Conformance Agent
+      adapter:
+        kind: acp
+        command: node
+        args: [${JSON.stringify(fixture)}]
+`);
+  const env = { BIVY_DATA_DIR: dir };
+  try {
+    const doctor = run(["doctor", file, "--json"], env);
+    assert.equal(doctor.status, 0, doctor.stderr);
+    assert.equal(JSON.parse(doctor.stdout).checks.some((check: { name: string; status: string }) => check.name === "executable" && check.status === "pass"), true);
+
+    const tested = run(["test", file, "--json"], env);
+    assert.equal(tested.status, 0, tested.stderr);
+    const body = JSON.parse(tested.stdout);
+    assert.equal(body.ok, true);
+    assert.equal(body.checks.some((check: { name: string; message: string }) => check.name === "conformance" && /ACP initialize/.test(check.message)), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("plugin CLI validates, installs, lists, and removes a manifest", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-plugin-cli-"));
   const file = path.join(dir, "bivy.plugin.yaml");

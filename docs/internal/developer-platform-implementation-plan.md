@@ -22,15 +22,20 @@ Use these terms consistently:
 - **Contribution** — a capability supplied by a plugin.
 - **Connection** — configured credentials/account state for a contribution.
 - **Agent adapter** — the technical way Bivy drives an agent.
+- **Tool** — a governed callable operation with an input schema and risk metadata.
+- **Skill** — versioned procedural context (for example `SKILL.md`), never an
+  executable capability or permission grant.
+- **MCP provider** — an upstream or downstream protocol endpoint for tools and
+  context; MCP is transport, not the plugin or tool itself.
 - **Agent profile** — a user-selectable composition of adapter, model, policy,
-  tools, credentials, and compute defaults.
+  skills, tools, credentials, and compute defaults.
 - **Connector** — receives or emits normalized external events.
 - **Recipe** — a declarative automation template.
 
 Initial contribution categories:
 
-1. agents;
-2. tools;
+1. agents and agent profiles;
+2. tool providers and skills;
 3. triggers and notification sinks;
 4. checks and artifacts;
 5. compute providers.
@@ -98,14 +103,20 @@ repository or loading code into the daemon.
 **Goal:** make the contracts pleasant to build against and make a connected tool
 available consistently across agent adapters.
 
-- [ ] Publish a supported `@bivy/plugin-sdk` package with manifest types,
-  validation helpers, protocol clients, and fixtures.
-- [ ] Add `bivy plugin init|dev|test|pack|doctor`.
-- [ ] Define plugin compatibility ranges and a lockfile.
+- [x] Add a publishable `@bivy/plugin-sdk` workspace package with canonical
+  manifest types, validation helpers, executable diagnostics, and JSON Schema.
+- [ ] Publish the SDK and add protocol clients/fixtures to its public contract.
+- [x] Add `bivy plugin init|test|doctor` with bounded ACP conformance.
+- [ ] Add `bivy plugin dev|pack`.
+- [x] Define and enforce `requires.bivy` compatibility ranges.
+- [ ] Define a plugin lockfile.
 - [ ] Add provenance/signature metadata and Official/Verified/Community/Local
   trust tiers.
-- [ ] Make the node tool broker authoritative.
-- [ ] Expose tool providers through MCP for adapters that cannot consume the
+- [ ] Define canonical Tool and Skill contracts; treat MCP and `SKILL.md` as
+  adapters rather than competing extension systems.
+- [ ] Make the node tool broker authoritative for both upstream MCP providers and
+  downstream agent access.
+- [ ] Expose brokered tools through MCP for adapters that cannot consume the
   in-process `ToolProvider` interface.
 - [ ] Split tool connections from inbound automation connectors in product
   naming and APIs.

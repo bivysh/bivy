@@ -1,0 +1,149 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Petter André Sjulstad
+/** JSON Schema for editor integration and non-TypeScript plugin tooling. */
+export const PLUGIN_MANIFEST_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  $id: "https://bivy.sh/schemas/plugin/v1alpha1.json",
+  title: "Bivy plugin manifest",
+  description: "A declarative Bivy agent plugin manifest.",
+  type: "object",
+  additionalProperties: false,
+  required: ["apiVersion", "kind", "metadata", "contributes"],
+  properties: {
+    apiVersion: { const: "bivy.sh/v1alpha1" },
+    kind: { const: "Plugin" },
+    metadata: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "name", "version"],
+      properties: {
+        id: { type: "string", pattern: "^[a-z][a-z0-9-]{1,47}$", maxLength: 48 },
+        name: { type: "string", minLength: 1, maxLength: 120 },
+        version: {
+          type: "string",
+          maxLength: 64,
+          pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+        },
+        description: { type: "string", minLength: 1, maxLength: 500 },
+        homepage: { type: "string", format: "uri", maxLength: 1000 },
+      },
+    },
+    requires: {
+      type: "object",
+      additionalProperties: false,
+      required: ["bivy"],
+      properties: {
+        bivy: { type: "string", minLength: 1, maxLength: 120 },
+      },
+    },
+    contributes: {
+      type: "object",
+      additionalProperties: false,
+      required: ["agents"],
+      properties: {
+        agents: {
+          type: "array",
+          minItems: 1,
+          maxItems: 20,
+          items: { $ref: "#/$defs/agent" },
+        },
+      },
+    },
+  },
+  $defs: {
+    stringArgs: {
+      type: "array",
+      maxItems: 100,
+      items: { type: "string", maxLength: 4096 },
+    },
+    agent: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "name", "adapter"],
+      properties: {
+        id: { type: "string", pattern: "^[a-z][a-z0-9-]{1,47}$", maxLength: 48 },
+        name: { type: "string", minLength: 1, maxLength: 120 },
+        description: { type: "string", minLength: 1, maxLength: 500 },
+        hidden: { type: "boolean" },
+        authOwner: { enum: ["agent", "bivy", "mixed"] },
+        adapter: {
+          oneOf: [
+            { $ref: "#/$defs/processAdapter" },
+            { $ref: "#/$defs/acpAdapter" },
+          ],
+        },
+      },
+    },
+    processAdapter: {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "command"],
+      properties: {
+        kind: { const: "process" },
+        command: { type: "string", minLength: 1, maxLength: 500 },
+        args: { $ref: "#/$defs/stringArgs" },
+        promptMode: { enum: ["argv", "stdin"] },
+        structured: {
+          type: "object",
+          additionalProperties: false,
+          required: ["args", "parser"],
+          properties: {
+            args: { $ref: "#/$defs/stringArgs" },
+            parser: {
+              enum: [
+                "bivy-protocol",
+                "claude-stream-json",
+                "codex-json",
+                "goose-stream-json",
+                "gemini-json",
+                "generic-stream-json",
+                "generic-json"
+              ],
+            },
+          },
+        },
+        resume: {
+          type: "object",
+          additionalProperties: false,
+          required: ["args"],
+          properties: { args: { $ref: "#/$defs/stringArgs" } },
+        },
+        model: {
+          type: "object",
+          additionalProperties: false,
+          required: ["flag", "choices"],
+          properties: {
+            flag: { type: "string", minLength: 1, maxLength: 120 },
+            insertAt: { type: "integer", minimum: 0, maximum: 20 },
+            choices: {
+              type: "array",
+              minItems: 1,
+              maxItems: 100,
+              items: { $ref: "#/$defs/model" },
+            },
+          },
+        },
+      },
+    },
+    acpAdapter: {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "command"],
+      properties: {
+        kind: { const: "acp" },
+        command: { type: "string", minLength: 1, maxLength: 500 },
+        args: { $ref: "#/$defs/stringArgs" },
+      },
+    },
+    model: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id"],
+      properties: {
+        id: { type: "string", minLength: 1, maxLength: 300 },
+        name: { type: "string", minLength: 1, maxLength: 120 },
+        provider: { type: "string", minLength: 1, maxLength: 120 },
+      },
+    },
+  },
+} as const;

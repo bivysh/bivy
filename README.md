@@ -169,8 +169,9 @@ the rest are explicitly Beta in the picker and support matrix:
 Any other command works via `bivy run -- ./your-agent --flags`. ACP-capable
 agents can be promoted to Bivy's governed protocol path for per-tool approvals
 and native resume. To add a reusable process or ACP agent to both the CLI and web
-picker without changing Bivy, install a declarative
-[plugin manifest](docs/plugins.md).
+picker without changing Bivy, scaffold and install a declarative
+[plugin manifest](docs/plugins.md) with `bivy plugin init`; the plugin SDK,
+JSON Schema, diagnostics, and ACP conformance test support external authors.
 
 [`docs/runtime-support-matrix.md`](docs/runtime-support-matrix.md) lists exactly
 what each agent supports — resume, model selection, approvals, sandboxing.

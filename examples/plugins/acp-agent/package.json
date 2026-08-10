@@ -1,0 +1,9 @@
+{
+  "name": "bivy-example-acp-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "bivy-example-acp-agent": "agent.mjs"
+  }
+}

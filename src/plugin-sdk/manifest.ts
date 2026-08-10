@@ -7,6 +7,7 @@
  * executes code inside the daemon: process agents are ordinary child processes;
  * ACP agents are launched through Bivy's existing out-of-process ACP bridge.
  */
+import { parse as parseSemver, satisfies, valid, validRange } from "semver";
 import { parse as parseYaml } from "yaml";
 
 export const PLUGIN_API_VERSION = "bivy.sh/v1alpha1" as const;
@@ -65,6 +66,9 @@ export interface PluginManifest {
     description?: string;
     homepage?: string;
   };
+  requires?: {
+    bivy: string;
+  };
   contributes: {
     agents: PluginAgentContribution[];
   };
@@ -74,6 +78,13 @@ export interface PluginManifestResult {
   ok: boolean;
   manifest?: PluginManifest;
   errors: string[];
+}
+
+export interface PluginCompatibilityResult {
+  compatible: boolean;
+  currentVersion: string;
+  requiredRange?: string;
+  message: string;
 }
 
 const ID_RE = /^[a-z][a-z0-9-]{1,47}$/;
@@ -273,7 +284,7 @@ export function validatePluginManifest(value: unknown): PluginManifestResult {
   const errors: string[] = [];
   const root = object(value);
   if (!root) return { ok: false, errors: ["manifest must be an object"] };
-  rejectUnknown(root, ["apiVersion", "kind", "metadata", "contributes"], "manifest", errors);
+  rejectUnknown(root, ["apiVersion", "kind", "metadata", "requires", "contributes"], "manifest", errors);
   if (root.apiVersion !== PLUGIN_API_VERSION) errors.push(`apiVersion must be ${PLUGIN_API_VERSION}`);
   if (root.kind !== PLUGIN_KIND) errors.push(`kind must be ${PLUGIN_KIND}`);
 
@@ -296,6 +307,18 @@ export function validatePluginManifest(value: unknown): PluginManifestResult {
       } catch { errors.push("metadata.homepage must be a valid URL"); }
     }
     if (id && name && version) metadata = { id, name, version, ...(description ? { description } : {}), ...(homepage ? { homepage } : {}) };
+  }
+
+  const requiresRaw = object(root.requires);
+  let requirements: PluginManifest["requires"] | undefined;
+  if (root.requires !== undefined) {
+    if (!requiresRaw) errors.push("requires must be an object");
+    else {
+      rejectUnknown(requiresRaw, ["bivy"], "requires", errors);
+      const bivy = requiredString(requiresRaw.bivy, "requires.bivy", errors, 120);
+      if (bivy && !validRange(bivy)) errors.push("requires.bivy must be a valid semantic-version range such as >=0.10.0 <0.11.0");
+      if (bivy && validRange(bivy)) requirements = { bivy };
+    }
   }
 
   const contributesRaw = object(root.contributes);
@@ -323,6 +346,7 @@ export function validatePluginManifest(value: unknown): PluginManifestResult {
       apiVersion: PLUGIN_API_VERSION,
       kind: PLUGIN_KIND,
       metadata,
+      ...(requirements ? { requires: requirements } : {}),
       contributes: { agents },
     },
   };
@@ -334,4 +358,46 @@ export function parsePluginManifest(text: string): PluginManifestResult {
   } catch (error) {
     return { ok: false, errors: [`YAML/JSON: ${error instanceof Error ? error.message : String(error)}`] };
   }
+}
+
+/** Compare a validated manifest's declared Bivy range with a running version. */
+export function checkPluginCompatibility(manifest: PluginManifest, currentVersion: string): PluginCompatibilityResult {
+  const requiredRange = manifest.requires?.bivy;
+  if (!valid(currentVersion)) {
+    return {
+      compatible: false,
+      currentVersion,
+      ...(requiredRange ? { requiredRange } : {}),
+      message: `Running Bivy version ${currentVersion} is not a valid semantic version`,
+    };
+  }
+  if (!requiredRange) {
+    return {
+      compatible: true,
+      currentVersion,
+      message: "Manifest does not declare requires.bivy; compatibility is not pinned",
+    };
+  }
+  const parsedCurrent = parseSemver(currentVersion);
+  const stableCurrent = parsedCurrent ? `${parsedCurrent.major}.${parsedCurrent.minor}.${parsedCurrent.patch}` : currentVersion;
+  // Staging builds use X.Y.Z-staging.N. Plugin compatibility tracks the API at
+  // X.Y.Z, so a prerelease build of that exact source line may satisfy a stable
+  // lower bound such as >=X.Y.Z.
+  const compatible = satisfies(currentVersion, requiredRange, { includePrerelease: true })
+    || (stableCurrent !== currentVersion && satisfies(stableCurrent, requiredRange));
+  return {
+    compatible,
+    currentVersion,
+    requiredRange,
+    message: compatible
+      ? `Bivy ${currentVersion} satisfies ${requiredRange}`
+      : `Plugin requires Bivy ${requiredRange}, but this node runs ${currentVersion}`,
+  };
+}
+
+/** Recommend a bounded range for manifests scaffolded by this Bivy build. */
+export function recommendedBivyRange(currentVersion: string): string {
+  const parsed = parseSemver(currentVersion);
+  if (!parsed) throw new Error(`Cannot generate a compatibility range from invalid Bivy version ${currentVersion}`);
+  return `>=${parsed.major}.${parsed.minor}.${parsed.patch} <${parsed.major}.${parsed.minor + 1}.0`;
 }

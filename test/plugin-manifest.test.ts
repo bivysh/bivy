@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { parsePluginManifest } from "../src/plugins/manifest.js";
+import { checkPluginCompatibility, parsePluginManifest, PLUGIN_MANIFEST_SCHEMA, recommendedBivyRange } from "../src/plugin-sdk/index.js";
 import { installPlugin, installedAgentContributions, listInstalledPlugins, removePlugin } from "../src/plugins/store.js";
 
 const valid = `
@@ -51,6 +51,26 @@ test("plugin manifest validates and normalizes a process agent", () => {
     assert.deepEqual(agent.adapter.resume?.args, ["run", "--resume", "{id}"]);
     assert.equal(agent.adapter.model?.choices[0]?.id, "fast");
   }
+});
+
+test("plugin manifest validates compatibility ranges and checks the running version", () => {
+  const result = parsePluginManifest(valid.replace("contributes:", "requires:\n  bivy: \">=0.10.0 <0.11.0\"\ncontributes:"));
+  assert.equal(result.ok, true, result.errors.join("\n"));
+  assert.equal(checkPluginCompatibility(result.manifest!, "0.10.1").compatible, true);
+  assert.equal(checkPluginCompatibility(result.manifest!, "0.10.1-staging.42").compatible, true);
+  assert.equal(recommendedBivyRange("0.10.1-staging.42"), ">=0.10.1 <0.11.0");
+  const incompatible = checkPluginCompatibility(result.manifest!, "0.11.0");
+  assert.equal(incompatible.compatible, false);
+  assert.match(incompatible.message, /requires Bivy/);
+
+  const malformed = parsePluginManifest(valid.replace("contributes:", "requires:\n  bivy: definitely-not-semver\ncontributes:"));
+  assert.equal(malformed.ok, false);
+  assert.match(malformed.errors.join("\n"), /valid semantic-version range/);
+});
+
+test("packaged JSON Schema is generated from the SDK schema object", () => {
+  const file = path.resolve(import.meta.dirname, "../packages/plugin-sdk/schema/bivy.plugin.schema.json");
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), PLUGIN_MANIFEST_SCHEMA);
 });
 
 test("plugin manifest fails closed on unknown fields and unsafe shapes", () => {
@@ -103,6 +123,20 @@ test("plugin store installs atomically, lists, replaces, and removes", () => {
     assert.equal(removePlugin("review-bot", dir), true);
     assert.equal(removePlugin("review-bot", dir), false);
     assert.deepEqual(listInstalledPlugins(dir), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("plugin store rejects incompatible installs and omits incompatible installed contributions", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-plugin-compatibility-"));
+  const source = path.join(dir, "bivy.plugin.yaml");
+  fs.writeFileSync(source, valid.replace("contributes:", "requires:\n  bivy: \">=0.10.0 <0.11.0\"\ncontributes:"));
+  try {
+    assert.throws(() => installPlugin(source, { dataDir: dir, bivyVersion: "0.11.0" }), /requires Bivy/);
+    installPlugin(source, { dataDir: dir, bivyVersion: "0.10.1" });
+    assert.deepEqual(installedAgentContributions(dir).agents.map((item) => item.agent.id), ["review-bot"]);
+    assert.equal(listInstalledPlugins(dir, "0.11.0")[0]?.errors.length, 1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
