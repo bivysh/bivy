@@ -221,7 +221,15 @@ export function matchSourceAutomation(
       return d.trigger === "github" || d.trigger === "github_ci";
     })
     .slice()
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    .sort((a, b) => {
+      // Definitions from one automations-as-code file preserve file order even
+      // after an update (createdAt cannot represent a reorder). UI-managed and
+      // mixed definitions retain the historical oldest-first contract.
+      if (a.configKey && b.configKey && a.configOrder !== undefined && b.configOrder !== undefined) {
+        return a.configOrder - b.configOrder || a.createdAt.localeCompare(b.createdAt);
+      }
+      return a.createdAt.localeCompare(b.createdAt);
+    });
 
   for (const def of candidates) {
     if (!repoAllowed(def.repos, event.repo)) continue;

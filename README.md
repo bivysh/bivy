@@ -33,7 +33,7 @@ macOS and Linux. Requires Node.js 22.19 or newer; the installer installs it for
 you on Debian/Ubuntu and otherwise points you at nodejs.org. It installs the
 [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package from npm, puts
 the `bivy` command on your `PATH`, then runs the guided `bivy setup` wizard —
-workspace, relay/control-plane sign-in, and an auto-start background service
+agent choice, relay/control-plane sign-in, and an auto-start background service
 (launchd on macOS, systemd on Linux). Re-running it on a machine that already
 has Bivy just applies the latest build and restarts the service.
 
@@ -176,11 +176,13 @@ what each agent supports — resume, model selection, approvals, sandboxing.
 ## Common commands
 
 ```bash
-bivy                  # launch the default agent as a durable session
-bivy run claude       # run a specific agent
+bivy                  # show the command overview
+bivy run pi           # launch Pi as a durable session
+bivy run claude       # run a different agent
 bivy sessions         # list live and saved sessions
 bivy resume           # resume the most recent session
 bivy open             # open the web app (requires relay setup)
+bivy automation init  # create .bivy/automations.yaml
 bivy status           # config summary and node reachability
 bivy doctor           # health check
 bivy logs -f          # tail node logs
@@ -199,7 +201,18 @@ BIVY_SANDBOX=read-only          # read-only | workspace-write (default) | danger
 BIVY_APPROVAL_MODE=risky        # never | risky | always | autonomous (default)
 ```
 
-Every environment variable, config file, and precedence rule:
+Create and inspect the typed node configuration, or add repository-owned
+safety/check/retry policy:
+
+```bash
+bivy config init
+bivy config set defaults.agent codex
+bivy config explain defaults.sandbox
+bivy config init --project       # .bivy/policy.yaml
+```
+
+See [`docs/config-as-code.md`](docs/config-as-code.md). Every environment
+variable and precedence rule remains in
 [`docs/configuration.md`](docs/configuration.md).
 
 ## Approvals and sandboxing
@@ -251,6 +264,23 @@ bivy secrets doctor
 `secret://`, `env://`, and `op://` (1Password) references are resolved on demand
 when the daemon provisions an agent run, so the raw values never sit in your
 config. See [`docs/key-management.md`](docs/key-management.md).
+
+## Automations as code
+
+Define governed jobs in `.bivy/automations.yaml`, validate them, and simulate
+trigger events locally before applying anything:
+
+```bash
+bivy automation init
+bivy automation validate
+bivy automation test --event .bivy/events/failed-ci.yaml
+bivy automation apply
+```
+
+Instructions are encrypted on the applying node before upload. Safety policy
+lives beside the job—sandbox, approval mode, and a hard attempt ceiling that
+retry/fallback rules cannot exceed. See
+[`docs/automations-as-code.md`](docs/automations-as-code.md).
 
 ## GitHub work queue
 

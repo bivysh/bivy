@@ -25,8 +25,11 @@ get shell completion.
 | Keep the node running in the background | `bivy service install` |
 | See why something is broken | `bivy doctor`, then `bivy logs -f` |
 | Store an API token safely | `bivy secrets set <id>` |
+| Inspect or edit typed node configuration | `bivy config show`, `bivy config set …`, `bivy config explain …` |
+| Create repository safety/check policy | `bivy config init --project` |
 | Turn on voice input | `bivy voice key groq` |
 | Connect GitHub issue pickup | `bivy github:app-create` |
+| Manage version-controlled automations | `bivy automation init`, then `validate`, `test`, and `apply` |
 | Reclaim disk | `bivy prune` |
 | Upgrade | `bivy update` |
 | Remove Bivy | `bivy uninstall` |
@@ -72,8 +75,8 @@ bivy setup
 
 ### `bivy` (no arguments)
 
-If `<data-dir>/cli.json` exists, this is the same as `bivy run` with no agent —
-it launches the default agent. If it does not exist, it runs `bivy setup`.
+Prints the short command overview. Use `bivy setup` for first-run configuration
+and `bivy run <agent>` to launch an agent.
 
 ### `bivy completions <bash|zsh|fish>`
 
@@ -226,6 +229,51 @@ id; anything else as a run-terminal id.
 ```bash
 bivy takeover 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
 ```
+
+## Configuration as code
+
+### `bivy config <init|validate|show|get|set|unset|explain|path>`
+
+Manages the typed `<data-dir>/config.yaml`. `init` migrates existing `cli.json`
+and `settings.json`; those files then remain generated compatibility
+projections. The web Settings screen edits the same canonical YAML.
+
+```bash
+bivy config init
+bivy config validate
+bivy config show
+bivy config get defaults.agent
+bivy config set defaults.agent codex
+bivy config explain defaults.sandbox
+bivy config init --project
+bivy config validate --project
+```
+
+The project form creates/validates `.bivy/policy.yaml`: repository-owned sandbox
+and approval bounds, deterministic checks, and retry/fallback rules. See
+[config-as-code.md](config-as-code.md).
+
+## Automations as code
+
+### `bivy automation <init|validate|plan|test|apply>`
+
+Defines coding-agent automations in `.bivy/automations.yaml` and reconciles them
+to the enrolled control plane. Validation, planning, and event simulation run
+locally and do not create runs or upload instructions.
+
+```bash
+bivy automation init
+bivy automation validate
+bivy automation plan --json
+bivy automation test --event .bivy/events/failed-ci.yaml
+bivy automation apply
+bivy automation apply --prune
+```
+
+`apply` encrypts instructions for the applying node before upload. `--prune`
+removes only source-controlled definitions absent from the file, never
+app-created definitions. See [automations-as-code.md](automations-as-code.md) for
+the schema, fixture fields, and safety behavior.
 
 ## Sessions
 

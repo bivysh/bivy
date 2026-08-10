@@ -235,6 +235,28 @@ assert.deepEqual(filtered[0]?.labels, ["agent"]);
 assert.deepEqual(filtered[0]?.repos, ["acme/api"]);
 assert.equal(filtered[0]?.nodeLabel, "bivy/macbook");
 assert.equal(filtered[0]?.on?.[0]?.event, "issues");
+
+// Automation-as-code metadata survives storage and becomes the hard ceiling on
+// every run created from the definition.
+const managed = await store.createAutomationDefinition(account.id, {
+  name: "Managed CI",
+  configKey: "managed-ci",
+  configOrder: 0,
+  enabled: true,
+  trigger: "manual",
+  maxAttempts: 2,
+});
+assert.equal((await store.listAutomationDefinitions(account.id)).find((d) => d.id === managed.id)?.configKey, "managed-ci");
+assert.equal((await store.listAutomationDefinitions(account.id)).find((d) => d.id === managed.id)?.configOrder, 0);
+assert.equal((await store.listAutomationDefinitions(account.id)).find((d) => d.id === managed.id)?.maxAttempts, 2);
+const managedRun = await store.enqueueAutomationRun(account.id, {
+  source: "manual",
+  title: "Managed CI",
+  definitionId: managed.id,
+});
+const managedWork = (await store.listWorkItems(account.id)).find((w) => w.id === managedRun.id);
+assert.equal(managedWork?.maxAttempts, 2);
+
 assert.equal(
   matchSourceAutomation(filtered, {
     kind: "github",

@@ -10,7 +10,7 @@ Core includes:
 
 - the local node daemon and CLI;
 - the agent-agnostic runtime layer and local session management: the daemon drives every agent through one runtime interface, with Pi as the first adapter among equals (Claude Code, Codex, and the rest), not privileged core code;
-- local browser UI and shared PWA assets;
+- shared PWA protocol and client assets (the browser UI is served by the control plane);
 - terminal mode and approval/guardrail logic;
 - E2E relay protocol and pairing primitives;
 - self-hostable relay and control-plane services (self-hosting is unsupported, no SLA — you own operations; see `docs/self-host.md`);

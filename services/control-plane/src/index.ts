@@ -2213,6 +2213,7 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     output: w.output,
     approvalMode: w.approvalMode,
     sandbox: w.sandbox,
+    maxAttempts: w.maxAttempts,
     // Privacy-safe run evidence (issue #153): why this node/runtime was picked,
     // declared-check pass/fail/exit status, and a bounded event timeline. Never
     // a prompt, transcript, diff, file content, secret, token, or raw command/
@@ -2241,6 +2242,111 @@ function publicAutomation(def: AutomationDefinition, req: Request) {
     ? { ...base, webhookUrl: `${baseUrl(req)}/webhooks/automation/run/${def.id}` }
     : base;
 }
+
+// Node-authenticated reconciliation surface for `.bivy/automations.yaml`.
+// A definition applied from a node is deliberately bound to that node: its
+// instructions are encrypted with that node's room key, so allowing another
+// route would create a job that can be claimed but never decrypted.
+app.get("/node/automation-config", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const ownLabel = `bivy/${node.name}`;
+  const definitions = (await store.listAutomationDefinitions(node.accountId))
+    .filter((d) => Boolean(d.configKey) && d.nodeLabel === ownLabel);
+  res.json({ automations: definitions.map((d) => publicAutomation(d, req)) });
+}));
+
+app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const configKey = String(req.params.key ?? "").trim();
+  if (!/^[a-z][a-z0-9-]{1,62}$/.test(configKey) || req.body?.configKey !== configKey) {
+    return res.status(400).json({ error: "configKey must match the lowercase slug in the URL" });
+  }
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const templateCiphertext = typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : "";
+  if (!name || name.length > 120) return res.status(400).json({ error: "name is required and must be at most 120 characters" });
+  if (!templateCiphertext.startsWith(`bivy-room-v1:${node.id}:`)) {
+    return res.status(400).json({ error: "instructions must be encrypted for the applying node" });
+  }
+  const rawTrigger = String(req.body?.trigger ?? "");
+  if (!["schedule", "webhook", "manual", "github", "linear"].includes(rawTrigger)) {
+    return res.status(400).json({ error: "unsupported automation trigger" });
+  }
+  const trigger = rawTrigger as NonNullable<AutomationDefinition["trigger"]>;
+  const expectedLabel = `bivy/${node.name}`;
+  if (req.body?.nodeLabel && req.body.nodeLabel !== expectedLabel) {
+    return res.status(400).json({ error: `automation instructions are encrypted for ${node.name}; routing.node must be ${node.name} or omitted` });
+  }
+  const configOrder = Number(req.body?.configOrder);
+  if (!Number.isInteger(configOrder) || configOrder < 0 || configOrder > 999) {
+    return res.status(400).json({ error: "configOrder must be an integer from 0 to 999" });
+  }
+  const maxAttempts = Number(req.body?.maxAttempts ?? 2);
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) {
+    return res.status(400).json({ error: "maxAttempts must be an integer from 1 to 10" });
+  }
+  let repo: string | undefined;
+  let repos: string[] | undefined;
+  let labels: string[] | undefined;
+  let on: AutomationDefinition["on"] | undefined;
+  let schedule = SENTINEL_SCHEDULE as AutomationDefinition["schedule"];
+  let nextRunAt: string | undefined;
+  try {
+    repo = normalizeAutomationRepo(req.body?.repo);
+    repos = normalizeStringList(req.body?.repos);
+    if (repos) for (const item of repos) normalizeAutomationRepo(item);
+    labels = normalizeStringList(req.body?.labels);
+    on = trigger === "github" ? normalizeEventRules(req.body?.on) : undefined;
+    if (trigger === "schedule") {
+      schedule = normalizeSchedule(req.body?.schedule);
+      nextRunAt = req.body?.enabled === false ? undefined : nextOccurrence(schedule, new Date(Date.now() - 1));
+      if (req.body?.enabled !== false && !nextRunAt) return res.status(400).json({ error: "The one-time timestamp must be in the future." });
+    }
+  } catch (error) {
+    return res.status(400).json({ error: (error as Error).message });
+  }
+  const rawApproval = req.body?.approvalMode ?? "risky";
+  const rawSandbox = req.body?.sandbox ?? "workspace-write";
+  if (!["never", "risky", "always", "autonomous"].includes(rawApproval)) {
+    return res.status(400).json({ error: "unsupported approvalMode" });
+  }
+  if (!["read-only", "workspace-write", "danger-full-access"].includes(rawSandbox)) {
+    return res.status(400).json({ error: "unsupported sandbox" });
+  }
+  const approvalMode = rawApproval as NonNullable<AutomationDefinition["approvalMode"]>;
+  const sandbox = rawSandbox as NonNullable<AutomationDefinition["sandbox"]>;
+  const all = await store.listAutomationDefinitions(node.accountId);
+  const current = all.find((d) => d.configKey === configKey);
+  if (current && current.nodeLabel !== expectedLabel) {
+    return res.status(409).json({ error: `configKey ${configKey} is already managed by another node` });
+  }
+  const common = {
+    name, configKey, configOrder, templateCiphertext,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() || undefined : undefined,
+    model: typeof req.body?.model === "string" ? req.body.model.trim() || undefined : undefined,
+    nodeLabel: expectedLabel,
+    ephemeral: req.body?.ephemeral === true || undefined,
+    approvalMode, sandbox, maxAttempts,
+    enabled: req.body?.enabled !== false,
+    trigger, repo, repos: repos?.length ? repos : repo && (trigger === "github" || trigger === "linear") ? [repo] : repos, labels, on, schedule, nextRunAt,
+  };
+  if (current) {
+    const updated = await store.updateAutomationDefinition(node.accountId, current.id, common);
+    return res.json(publicAutomation(updated!, req));
+  }
+  const webhookSecret = trigger === "webhook" ? randomBytes(32).toString("base64url") : undefined;
+  const created = await store.createAutomationDefinition(node.accountId, { ...common, webhookSecret });
+  return res.status(201).json({ ...publicAutomation(created, req), ...(webhookSecret ? { webhookSecret } : {}) });
+}));
+
+app.delete("/node/automation-config/:key", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const key = String(req.params.key ?? "");
+  const current = (await store.listAutomationDefinitions(node.accountId))
+    .find((d) => d.configKey === key && d.nodeLabel === `bivy/${node.name}`);
+  if (!current) return res.status(404).json({ error: "Managed automation not found on this node" });
+  await store.deleteAutomationDefinition(node.accountId, current.id);
+  res.status(204).end();
+}));
 
 /** Seed github/linear "Work issues into PRs" when the account has the hook but
  *  no matching automation yet — so existing installs keep working and the UI
@@ -2330,6 +2436,7 @@ app.post("/account/automations", asyncHandler(async (req, res) => {
     ephemeral: typeof req.body?.ephemeral === "boolean" ? req.body.ephemeral : undefined,
     approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : undefined,
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined,
+    maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : undefined,
     enabled,
     trigger,
     webhookSecret,
@@ -2420,6 +2527,7 @@ app.put("/account/automations/:id", asyncHandler(async (req, res) => {
     nodeLabel: typeof req.body?.nodeLabel === "string" ? req.body.nodeLabel.trim() || undefined : current.nodeLabel,
     approvalMode: ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : current.approvalMode,
     sandbox: ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : current.sandbox,
+    maxAttempts: Number.isInteger(req.body?.maxAttempts) && req.body.maxAttempts >= 1 && req.body.maxAttempts <= 10 ? req.body.maxAttempts : current.maxAttempts,
     enabled,
     schedule,
     nextRunAt,

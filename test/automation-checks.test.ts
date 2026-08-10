@@ -28,6 +28,18 @@ try {
   const selected = runRequiredAutomationChecks(dir, { BIVY_AUTOMATION_CHECKS: '["lint","build","bad shell ;"]', BIVY_AUTOMATION_CHECK_TIMEOUT_MS: "250" }, fakeRun);
   assert.deepEqual(selected.map((r) => r.name), ["lint", "build"]);
   assert.ok(calls.every((c) => c.timeout === 1_000), "check timeouts have a safe minimum");
+
+  // Repository policy wins over node/environment defaults and is found from a
+  // nested worktree path, matching real automation sessions.
+  const nested = path.join(dir, "worktree", "src");
+  fs.mkdirSync(path.join(dir, ".bivy"), { recursive: true });
+  fs.mkdirSync(nested, { recursive: true });
+  fs.writeFileSync(path.join(dir, ".bivy", "policy.yaml"), `version: 1\nchecks:\n  scripts: [build]\n  timeoutMinutes: 2\n`);
+  fs.copyFileSync(path.join(dir, "package.json"), path.join(dir, "worktree", "package.json"));
+  calls.length = 0;
+  const projectSelected = runRequiredAutomationChecks(path.join(dir, "worktree"), { BIVY_AUTOMATION_CHECKS: "test" }, fakeRun);
+  assert.deepEqual(projectSelected.map((r) => r.name), ["build"]);
+  assert.equal(calls[0]?.timeout, 120_000);
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });
 }

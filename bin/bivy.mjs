@@ -8,7 +8,7 @@
  * relay-setup with long flags, npm run dev, hand-written launchd/systemd files)
  * into a single guided flow:
  *
- *   bivy setup     first-run wizard: deps, remote sync + sign-in, background service
+ *   bivy setup     first-run wizard: agent, model login, remote sign-in, background service
  *   bivy start     run the daemon in the foreground
  *   bivy stop      stop the background service
  *   bivy restart   restart the background service (waits for active sessions to finish; --force to skip)
@@ -79,6 +79,19 @@ function detectInstallKind() {
   return "packaged";
 }
 const cliConfigPath = path.join(appDir, "cli.json");
+const canonicalConfigPath = path.join(appDir, "config.yaml");
+let canonicalConfig = null;
+async function hydrateCanonicalConfig() {
+  if (!fs.existsSync(canonicalConfigPath)) return;
+  try {
+    const { parse } = await import("yaml");
+    const value = parse(fs.readFileSync(canonicalConfigPath, "utf8"), { uniqueKeys: true });
+    if (!value || typeof value !== "object" || value.version !== 1) throw new Error("version must be 1");
+    canonicalConfig = value;
+  } catch (error) {
+    throw new Error(`Invalid ${canonicalConfigPath}: ${error?.message || String(error)}. Run 'bivy config validate'.`);
+  }
+}
 const relayConfigPath = path.join(appDir, "relay.json");
 // Short-lived handoff: relay:setup writes the account session it just obtained
 // here (0600) so `bivy setup` can open the remote app signed into the *account*
@@ -132,6 +145,8 @@ const serverEntry = path.join(repoRoot, packaged ? "dist/server.js" : "src/serve
 const nativePiEntry = path.join(repoRoot, packaged ? "dist/native-pi.js" : "src/native-pi.ts");
 const bivyLoginEntry = path.join(repoRoot, packaged ? "dist/bivy-login.js" : "src/bivy-login.ts");
 const credentialIngestEntry = path.join(repoRoot, packaged ? "dist/credential-ingest-cli.js" : "src/credential-ingest-cli.ts");
+const automationEntry = path.join(repoRoot, packaged ? "dist/automation-cli.js" : "src/automation-cli.ts");
+const configEntry = path.join(repoRoot, packaged ? "dist/config-cli.js" : "src/config-cli.ts");
 const relaySetupEntry = path.join(repoRoot, packaged ? "dist/relay-setup.js" : "src/relay-setup.ts");
 // Dependency-free hosted-endpoint helper. Shipped to dist/ in the release
 // artifact (src/ is not packaged), so resolve it the same packaged-aware way as
@@ -195,17 +210,19 @@ const c = {
 // --- config -----------------------------------------------------------------
 
 function loadConfig() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(cliConfigPath, "utf8"));
-    return {
-      workspace: typeof raw.workspace === "string" ? raw.workspace : repoRoot,
-      port: Number(raw.port) || 4317,
-      env: raw.env && typeof raw.env === "object" ? raw.env : {},
-      service: raw.service === true,
-    };
-  } catch {
-    return { workspace: repoRoot, port: 4317, env: {}, service: false };
-  }
+  let raw = {};
+  try { raw = JSON.parse(fs.readFileSync(cliConfigPath, "utf8")); } catch { /* first run */ }
+  const node = canonicalConfig?.node && typeof canonicalConfig.node === "object" ? canonicalConfig.node : {};
+  const advanced = canonicalConfig?.environment && typeof canonicalConfig.environment === "object" ? canonicalConfig.environment : {};
+  const agents = canonicalConfig?.agents && typeof canonicalConfig.agents === "object"
+    ? { BIVY_CUSTOM_AGENTS: JSON.stringify(Object.entries(canonicalConfig.agents).map(([id, spec]) => ({ id, ...spec }))) }
+    : {};
+  return {
+    workspace: typeof node.workspace === "string" ? node.workspace : typeof raw.workspace === "string" ? raw.workspace : repoRoot,
+    port: Number(node.port) || Number(raw.port) || 4317,
+    env: { ...(raw.env && typeof raw.env === "object" ? raw.env : {}), ...advanced, ...agents },
+    service: raw.service === true,
+  };
 }
 
 function saveConfig(config) {
@@ -223,12 +240,29 @@ function saveConfig(config) {
 // settings.json is authoritative on daemon boot, so updating only BIVY_RUNTIME
 // would let an older Settings choice silently override the installer choice.
 function loadSettings() {
+  let raw = {};
   try {
-    const raw = JSON.parse(fs.readFileSync(path.join(appDir, "settings.json"), "utf8"));
-    return raw && typeof raw === "object" ? raw : {};
-  } catch {
-    return {};
-  }
+    const parsed = JSON.parse(fs.readFileSync(path.join(appDir, "settings.json"), "utf8"));
+    if (parsed && typeof parsed === "object") raw = parsed;
+  } catch { /* first run */ }
+  const defaults = canonicalConfig?.defaults && typeof canonicalConfig.defaults === "object" ? canonicalConfig.defaults : {};
+  const sessions = canonicalConfig?.sessions && typeof canonicalConfig.sessions === "object" ? canonicalConfig.sessions : {};
+  const node = canonicalConfig?.node && typeof canonicalConfig.node === "object" ? canonicalConfig.node : {};
+  const github = canonicalConfig?.github && typeof canonicalConfig.github === "object" ? canonicalConfig.github : {};
+  return {
+    ...raw,
+    ...(defaults.agent ? { defaultAgent: defaults.agent } : {}),
+    ...(Object.hasOwn(defaults, "model") ? { defaultModel: defaults.model } : {}),
+    ...(defaults.sandbox ? { defaultSandbox: defaults.sandbox } : {}),
+    ...(defaults.approval ? { approvalMode: defaults.approval } : {}),
+    ...(node.maxConcurrentAutomations !== undefined ? { githubMaxConcurrent: node.maxConcurrentAutomations } : {}),
+    ...(sessions.sync !== undefined ? { sessionSync: sessions.sync } : {}),
+    ...(sessions.worktreeSync !== undefined ? { worktreeSync: sessions.worktreeSync } : {}),
+    ...(sessions.standbyNodeId ? { syncStandbyNodeId: sessions.standbyNodeId } : {}),
+    ...(sessions.resume ? { sessionResumeMode: sessions.resume } : {}),
+    ...(sessions.autoAttachToolImages !== undefined ? { autoAttachToolImages: sessions.autoAttachToolImages } : {}),
+    ...(github.issuePrompt ? { githubIssuePrompt: github.issuePrompt } : {}),
+  };
 }
 
 function saveDefaultAgentSetting(runtimeId) {
@@ -378,10 +412,10 @@ function migrateGithubTokenToVault(config) {
 
 function startEnv(config) {
   return {
-    ...process.env,
-    PORT: String(config.port),
-    BIVY_WORKSPACE: config.workspace,
     ...resolveEnvSecrets(config.env),
+    ...process.env,
+    PORT: String(process.env.PORT || config.port),
+    BIVY_WORKSPACE: process.env.BIVY_WORKSPACE || config.workspace,
   };
 }
 
@@ -1619,7 +1653,7 @@ function cmdCompletions(args = []) {
   const commands = [
     "run", "sessions", "ls", "resume", "promote", "rename", "nodes", "agents", "agents:install", "shim", "takeover", "token", "exec",
     "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "logs", "login",
-    "update", "update:log", "open", "service", "secrets", "voice", "link", "relay:setup",
+    "update", "update:log", "automation", "config", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
   const agents = [...BUILTIN_TERMINAL_AGENTS.keys()];
@@ -2976,10 +3010,16 @@ async function reconcileNodePort(config) {
 // was (re)started. Used by `bivy restart` and `bivy update` — the paths that
 // previously trusted the saved port verbatim.
 async function restartServiceReconciled(config) {
-  const { file } = servicePaths();
-  if (fs.existsSync(file) && (await reconcileNodePort(config))) {
-    return await installService(config);
-  }
+  const { kind, file } = servicePaths();
+  if (!fs.existsSync(file)) return restartService();
+  const portChanged = await reconcileNodePort(config);
+  const expected = kind === "launchd" ? plistContent(config) : kind === "systemd" ? systemdContent(config) : "";
+  let configChanged = false;
+  try { configChanged = Boolean(expected) && fs.readFileSync(file, "utf8") !== expected; } catch { configChanged = true; }
+  // A typed config edit may change workspace, port, or environment without
+  // touching the old unit. Reinstall on content drift so `bivy restart` really
+  // applies the canonical file instead of reviving stale baked-in values.
+  if (portChanged || configChanged) return await installService(config);
   return restartService();
 }
 
@@ -3233,7 +3273,7 @@ function terminalQr(text) {
 
 async function cmdSetup(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy setup\n\nFirst-run wizard: workspace, remote access + sign-in, and background service. Safe to re-run later to change the workspace, default agent, or remote access.");
+    console.log("Usage: bivy setup\n\nFirst-run wizard: agent choice, model login, remote access + sign-in, and background service. Workspace and port get safe defaults. Re-run later to change the default agent or remote access.");
     return;
   }
   console.log(c.bold("\n  Bivy — node setup\n"));
@@ -3419,6 +3459,16 @@ async function cmdSetup(args = []) {
       }
     }
   }
+
+  // Materialize canonical typed config before starting/restarting the daemon,
+  // so this setup run's workspace/port/agent choices are effective immediately.
+  // Existing config keeps every advanced field.
+  await run(nodeBin, [...nodeScriptArgs(configEntry), "migrate", "--from-legacy", "--quiet"], {
+    cwd: repoRoot,
+    env: process.env,
+    stdio: "ignore",
+  }).catch(() => {});
+  await hydrateCanonicalConfig().catch(() => {});
 
   // 4. Background service — always installed so the node keeps running (and stays
   // reachable remotely) after you close this terminal. No prompt.
@@ -4299,8 +4349,10 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy kill <id>")}    Stop a session/terminal (--delete also removes a saved session)
   ${c.cyan("bivy prune")}         Delete old sessions/workspaces/worktrees (--keep N, --older-than 7d, --dry-run)
   ${c.cyan("bivy exec")} "<prompt>"  One-shot headless run: prints the answer to stdout (pipe-friendly)
+  ${c.cyan("bivy automation")}  init | validate | plan | test | apply (automations as code)
+  ${c.cyan("bivy config")}      init | validate | show | get | set | explain (typed node config)
   ${c.cyan("bivy")}              Show this help
-  ${c.cyan("bivy setup")}      First-run wizard: workspace, remote access + sign-in, background service
+  ${c.cyan("bivy setup")}      First-run wizard: agent, model login, remote sign-in, background service
   ${c.cyan("bivy start")}      Run the daemon in the foreground
   ${c.cyan("bivy stop")}       Stop the background service
   ${c.cyan("bivy restart")}    Restart the background service (waits for active sessions to finish a turn; --force to skip)
@@ -4328,6 +4380,7 @@ ${c.bold("bivy")} — Bivy node CLI
 }
 
 async function main() {
+  await hydrateCanonicalConfig();
   const argv = process.argv.slice(2);
   const [command, ...args] = argv;
   switch (command) {
@@ -4407,6 +4460,17 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "completion":
       cmdCompletions(args);
       break;
+    case "automation":
+    case "automations": {
+      if (!(await ensureDeps())) process.exit(1);
+      process.exit(await run(nodeBin, [...nodeScriptArgs(automationEntry), ...args], { cwd: process.cwd(), env: process.env }));
+      break;
+    }
+    case "config": {
+      if (!(await ensureDeps())) process.exit(1);
+      process.exit(await run(nodeBin, [...nodeScriptArgs(configEntry), ...args], { cwd: process.cwd(), env: process.env }));
+      break;
+    }
     case "stop":
       if (args.includes("-h") || args.includes("--help")) { console.log("Usage: bivy stop\n\nStop the background service."); break; }
       stopService();

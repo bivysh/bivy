@@ -62,6 +62,8 @@ import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } 
 import { configuredTurnTimeoutMs, configuredTurnStallMs, classifyStallTrigger, type StallTrigger } from "./session/turn-watchdog.js";
 import { forceAbortTurn } from "./session/abort-recovery.js";
 import { runRequiredAutomationChecks } from "./automation-checks.js";
+import { configToLegacySettings, mergeLegacyIntoNodeConfig, readNodeConfig, writeNodeConfig, type NodeConfig } from "./node-config.js";
+import { loadProjectPolicy, resolveProjectSafety } from "./project-policy.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
@@ -200,6 +202,40 @@ try {
   }
 } catch {
   // No cli.json / unreadable — fall back to the process env as provided.
+}
+
+// `config.yaml` is the canonical user-authored node configuration. Older JSON
+// files remain generated/readable compatibility projections during migration.
+// Create the YAML once from existing settings, then apply advanced environment
+// values only when the real process environment did not already override them.
+let canonicalNodeConfig: NodeConfig;
+try {
+  const existing = readNodeConfig(appDir);
+  if (existing) canonicalNodeConfig = existing;
+  else {
+    const readLegacy = (name: string): Record<string, unknown> => {
+      try {
+        const value = JSON.parse(fs.readFileSync(path.join(appDir, name), "utf8"));
+        return value && typeof value === "object" ? value : {};
+      } catch { return {}; }
+    };
+    canonicalNodeConfig = mergeLegacyIntoNodeConfig(readLegacy("cli.json"), readLegacy("settings.json"));
+    writeNodeConfig(appDir, canonicalNodeConfig);
+  }
+  for (const [key, value] of Object.entries(canonicalNodeConfig.environment ?? {})) {
+    if (process.env[key] === undefined) process.env[key] = value;
+  }
+  if (canonicalNodeConfig.agents && process.env.BIVY_CUSTOM_AGENTS === undefined) {
+    process.env.BIVY_CUSTOM_AGENTS = JSON.stringify(Object.entries(canonicalNodeConfig.agents).map(([id, spec]) => ({ id, ...spec })));
+  }
+  if (canonicalNodeConfig.automation?.checks && process.env.BIVY_AUTOMATION_CHECKS === undefined) {
+    process.env.BIVY_AUTOMATION_CHECKS = JSON.stringify(canonicalNodeConfig.automation.checks);
+  }
+  if (canonicalNodeConfig.automation?.checkTimeoutMinutes && process.env.BIVY_AUTOMATION_CHECK_TIMEOUT_MS === undefined) {
+    process.env.BIVY_AUTOMATION_CHECK_TIMEOUT_MS = String(canonicalNodeConfig.automation.checkTimeoutMinutes * 60_000);
+  }
+} catch (error) {
+  throw new Error(`Could not load node config: ${error instanceof Error ? error.message : String(error)}`);
 }
 // Point every agent/terminal subprocess's package managers at one shared
 // download cache (npm/yarn/pip/cargo/go) when BIVY_SHARED_DEP_CACHE is set, so N
@@ -449,10 +485,10 @@ const metadata = MetadataStore.load(appDir);
 // The ids it returns are exactly the sessions cut off mid-turn by the death —
 // the resume reconciler (reconcileInterruptedSessions) picks them up.
 const interruptedSessionIds = metadata.resetStaleWorking();
-const defaultWorkspace = process.env.BIVY_WORKSPACE ?? repoRoot;
+const defaultWorkspace = process.env.BIVY_WORKSPACE ?? canonicalNodeConfig.node?.workspace ?? repoRoot;
 // Where repo-backed sessions clone GitHub repos (one checkout per repo, reused).
 const reposRoot = process.env.BIVY_REPOS_DIR ?? path.join(appDir, "repos");
-const port = Number(process.env.PORT ?? 4317);
+const port = Number(process.env.PORT ?? canonicalNodeConfig.node?.port ?? 4317);
 // Bind to loopback by default. This port's HTTP/WS API grants full control of
 // the node (sessions, terminals, git credentials) to any caller that can
 // reach it — remote access is expected to arrive via the relay, which this
@@ -1391,35 +1427,80 @@ function approvalModeFrom(value: unknown): ApprovalMode | undefined {
   return value === "never" || value === "risky" || value === "always" || value === "autonomous" ? value : undefined;
 }
 
+function assertProjectModel(workspace: string, model?: string): void {
+  const allowed = loadProjectPolicy(workspace)?.routing?.allowedModels;
+  if (model && allowed?.length && !allowed.includes(model)) {
+    throw new Error(`Repository policy does not allow model ${model}`);
+  }
+}
+function assertSessionModel(record: SessionRecord, model?: string): void {
+  assertProjectModel(record.worktree?.path ?? record.workspace, model);
+}
+
+function projectSafety(workspace: string, requestedSandbox?: SandboxTier, requestedApproval?: ApprovalMode): { sandbox: SandboxTier; approval: ApprovalMode } {
+  const nodeBounded = resolveProjectSafety(
+    canonicalNodeConfig.safety,
+    requestedSandbox ?? sandboxTier(),
+    requestedApproval ?? approvalMode,
+  );
+  return resolveProjectSafety(
+    loadProjectPolicy(workspace)?.safety,
+    nodeBounded.sandbox,
+    nodeBounded.approval,
+  );
+}
+
 function loadApprovalMode(): ApprovalMode {
   const envMode = approvalModeFrom(process.env.BIVY_APPROVAL_MODE);
   if (envMode) return envMode;
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-    return approvalModeFrom(settings.approvalMode) ?? "autonomous";
-  } catch {
-    // Default: run without per-action approval ("autonomous"). Safety comes from
-    // the boundary — catastrophic commands and writes outside the workspace are
-    // blocked outright in every mode, and a small backstop set (force-push,
-    // publish, deploy, sudo) still pauses for a human. "risky"/"always" keep the
-    // old prompt-heavy behaviour for users who want it.
-    return "autonomous";
-  }
+  return approvalModeFrom(readSettings().approvalMode) ?? "autonomous";
 }
 
 let approvalMode = loadApprovalMode();
 
 function readSettings(): Record<string, unknown> {
+  let legacy: Record<string, unknown> = {};
   try {
-    return fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, "utf8")) : {};
-  } catch {
-    return {};
-  }
+    legacy = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, "utf8")) : {};
+  } catch { /* compatibility projection is best-effort */ }
+  try {
+    canonicalNodeConfig = readNodeConfig(appDir) ?? canonicalNodeConfig;
+  } catch { /* startup validation already surfaced malformed YAML */ }
+  // Canonical YAML wins over the generated legacy projection.
+  return { ...legacy, ...configToLegacySettings(canonicalNodeConfig) };
 }
 
 function writeSettings(settings: Record<string, unknown>) {
   fs.mkdirSync(appDir, { recursive: true });
-  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  // The web UI and local API edit the SAME typed config the CLI exposes. Keep
+  // settings.json only as a compatibility projection for older binaries.
+  const next = structuredClone(canonicalNodeConfig);
+  next.node = {
+    ...next.node,
+    maxConcurrentAutomations: Number.isFinite(Number(settings.githubMaxConcurrent)) ? Math.max(0, Math.floor(Number(settings.githubMaxConcurrent))) : next.node?.maxConcurrentAutomations,
+  };
+  next.defaults = {
+    ...next.defaults,
+    ...(typeof settings.defaultAgent === "string" ? { agent: settings.defaultAgent } : {}),
+    ...("defaultModel" in settings ? { model: settings.defaultModel as NodeConfig["defaults"] extends { model?: infer M } ? M : never } : {}),
+    ...(normalizeSandboxTier(settings.defaultSandbox) ? { sandbox: normalizeSandboxTier(settings.defaultSandbox)! } : {}),
+    ...(approvalModeFrom(settings.approvalMode) ? { approval: approvalModeFrom(settings.approvalMode)! } : {}),
+  };
+  next.sessions = {
+    ...next.sessions,
+    ...(typeof settings.sessionSync === "boolean" ? { sync: settings.sessionSync } : {}),
+    ...(typeof settings.worktreeSync === "boolean" ? { worktreeSync: settings.worktreeSync } : {}),
+    ...("syncStandbyNodeId" in settings ? { standbyNodeId: typeof settings.syncStandbyNodeId === "string" ? settings.syncStandbyNodeId || undefined : undefined } : {}),
+    ...(settings.sessionResumeMode === "auto" || settings.sessionResumeMode === "manual" ? { resume: settings.sessionResumeMode } : {}),
+    ...(typeof settings.autoAttachToolImages === "boolean" ? { autoAttachToolImages: settings.autoAttachToolImages } : {}),
+  };
+  next.github = {
+    ...next.github,
+    ...("githubIssuePrompt" in settings ? { issuePrompt: typeof settings.githubIssuePrompt === "string" ? settings.githubIssuePrompt || undefined : undefined } : {}),
+  };
+  writeNodeConfig(appDir, next);
+  canonicalNodeConfig = next;
 }
 
 function resolveWorkspacePath(value: unknown): string {
@@ -1506,10 +1587,10 @@ function saveApprovalMode(mode: ApprovalMode) {
   return mode;
 }
 
-// --- Node settings (per-node defaults, settings.json) -----------------------
-// Editable from the web Settings → Nodes section. These are the node's defaults
-// for new sessions plus its GitHub-queue concurrency cap. The node NAME lives in
-// node.json (identity), the rest in settings.json.
+// --- Node settings (per-node defaults, config.yaml) -------------------------
+// Editable from the web Settings → Nodes section and `bivy config`. These are
+// the node's defaults for new sessions plus its automation concurrency cap. The
+// node NAME remains identity state in node.json; settings.json is compatibility.
 
 type NodeSettings = {
   name: string;
@@ -1655,14 +1736,14 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
 }
 
 // Apply persisted node settings at boot: seed the effective sandbox tier and the
-// default runtime from settings.json (env still wins for the sandbox), plus the
+// default runtime from canonical config (env still wins), plus the
 // passive tool-image-attachment gate (issue #292; BIVY_AUTO_ATTACH_TOOL_IMAGES
 // still wins — see src/harness/tool-image-attachments.ts).
 setConfiguredSandboxTier(readSettings().defaultSandbox);
 setConfiguredAutoAttachToolImages(readSettings().autoAttachToolImages);
 {
   const savedAgent = readSettings().defaultAgent;
-  if (typeof savedAgent === "string" && savedAgent.trim()) {
+  if (!process.env.BIVY_RUNTIME && typeof savedAgent === "string" && savedAgent.trim()) {
     try { defaultRuntimeId = runtimeHost.resolveRuntimeId(savedAgent.trim(), defaultRuntimeId); } catch { /* not available; keep current default */ }
   }
 }
@@ -3586,6 +3667,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
     if (!provider || !id) return;
     const session = record.session;
     try {
+      assertSessionModel(record, id);
       await session.setModel(provider, id);
     } catch (error) {
       relay?.sendEvent({ type: "session.error", sessionId: record.id, error: error instanceof Error ? error.message : "Model is not available on this node." });
@@ -5087,6 +5169,8 @@ function withIssueLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 interface RunIssueOverrides {
   runtimeId?: string;
   model?: string;
+  sandbox?: SandboxTier;
+  approvalMode?: ApprovalMode;
   /** Issue #153 — forward a sanitized evidence patch to the hosted control
    *  plane's run-evidence endpoint. Only set for control-plane-dispatched runs
    *  (self-hosted direct GitHub polling has no control-plane run to attach to). */
@@ -5139,6 +5223,12 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   // which now adopts the existing remote branch rather than colliding.
   const existing = findIssueSession(source);
   if (existing?.worktree && fs.existsSync(existing.worktree.path)) {
+    const currentSandbox = existing.sandbox ?? sandboxTier();
+    const safety = projectSafety(existing.worktree.path, overrides.sandbox ?? currentSandbox, overrides.approvalMode);
+    if (safety.sandbox !== currentSandbox) {
+      throw new Error(`Repository policy now requires ${safety.sandbox}; refusing to continue a session opened as ${currentSandbox}`);
+    }
+    existing.approvalMode = safety.approval;
     return runIssueFollowUp(cfg, issue, existing, emit, overrides);
   }
 
@@ -5200,11 +5290,14 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   // identical fetchOrigin-then-resolveDefaultBaseRef pattern for repo sessions.
   await fetchOrigin(cfg.repoDir);
   const base = await resolveDefaultBaseRef(cfg.repoDir);
+  const safety = projectSafety(cfg.repoDir, overrides.sandbox, overrides.approvalMode);
   const record = await createSession(cfg.repoDir, undefined, {
     worktree: { branch, base },
     makeActive: false,
     source,
     runtimeId: directives.runtimeId,
+    sandbox: safety.sandbox,
+    approvalMode: safety.approval,
   });
   record.githubIssueUrl = `https://github.com/${cfg.owner}/${cfg.repo}/issues/${issue.number}`;
   // Title the session from the issue up front so it never shows as "Untitled
@@ -5214,7 +5307,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   setSessionName(record, issueSessionTitle(issue));
   // Best-effort model selection for runtimes that support it (e.g. claude-code, pi).
   if (directives.model && typeof (record.session as any).setModel === "function") {
-    try { await (record.session as any).setModel("", directives.model); } catch {}
+    try { assertSessionModel(record, directives.model); await (record.session as any).setModel("", directives.model); } catch {}
   }
   if (!record.worktree) throw new Error("worktree was not created for the issue session");
 
@@ -5805,6 +5898,16 @@ async function continueCorrelatedSession(
       return true;
     }
   }
+  const currentSandbox = record.sandbox ?? sandboxTier();
+  const safety = projectSafety(
+    record.worktree?.path ?? record.workspace,
+    normalizeSandboxTier(item.sandbox) ?? currentSandbox,
+    approvalModeFrom(item.approvalMode) ?? record.approvalMode,
+  );
+  if (safety.sandbox !== currentSandbox) {
+    throw new Error(`Repository policy requires ${safety.sandbox}; refusing to continue a session opened as ${currentSandbox}`);
+  }
+  record.approvalMode = safety.approval;
   await runSessionTurn(record, prompt);
   if (record.worktree && !opts?.isMessage && !opts?.resumeOnMissing) {
     await maybePushWorktreeBranch(record);
@@ -5913,7 +6016,14 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
         console.warn(`[case-b] snapshot restore for ${item.targetSessionId} failed:`, (e as Error).message);
       });
     }
-    await runIssueTask(cfg, issue, { runtimeId: item.runtimeId, model: item.model, onEvidence: report });
+    assertProjectModel(cfg.repoDir, item.model);
+    await runIssueTask(cfg, issue, {
+      runtimeId: item.runtimeId,
+      model: item.model,
+      sandbox: normalizeSandboxTier(item.sandbox),
+      approvalMode: approvalModeFrom(item.approvalMode),
+      onEvidence: report,
+    });
     return;
   }
   if (item.source === "linear:issue" && item.externalId) {
@@ -5934,13 +6044,15 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     await fetchOrigin(repoDir);
     const base = await resolveDefaultBaseRef(repoDir);
     const branch = linearBranchName(issue.identifier);
+    assertProjectModel(repoDir, item.model);
+    const safety = projectSafety(repoDir, normalizeSandboxTier(item.sandbox), approvalModeFrom(item.approvalMode));
     const record = await createSession(repoDir, undefined, {
       worktree: { branch, base },
       makeActive: false,
       source: linearSessionSource(item.externalId),
       runtimeId: item.runtimeId || nodeConfiguredDefaultAgent(),
-      sandbox: normalizeSandboxTier(item.sandbox),
-      approvalMode: approvalModeFrom(item.approvalMode),
+      sandbox: safety.sandbox,
+      approvalMode: safety.approval,
     });
     setSessionName(record, `${issue.identifier}: ${issue.title}`);
     if (item.model) { try { await record.session.setModel("", item.model); } catch {} }
@@ -5976,20 +6088,30 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // land in that session (resumed from disk if needed), never silently in a new
   // one — so a session that can't be resumed fails the run instead.
   if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: item.source === "schedule", isMessage })) return;
-  const sandbox = normalizeSandboxTier(item.sandbox);
+  const requestedSandbox = normalizeSandboxTier(item.sandbox);
+  // Prepare an explicit repository before resolving its policy. Otherwise a
+  // first-ever run would inspect a not-yet-cloned path and miss the policy on
+  // the exact run where it matters most.
+  const preparedRepo = parsedRepo
+    ? await cloneOrUpdateRepo({ owner: parsedRepo.owner, repo: parsedRepo.repo, token: await resolveTokenForRepo(parsedRepo.owner, parsedRepo.repo), root: reposRoot })
+    : undefined;
+  const policyWorkspace = preparedRepo ?? defaultWorkspace;
+  assertProjectModel(policyWorkspace, item.model);
+  const safety = projectSafety(policyWorkspace, requestedSandbox, approvalModeFrom(item.approvalMode));
+  const sandbox = safety.sandbox;
   const sessionOpts = {
     makeActive: false,
     title: item.title,
     runtimeId: item.runtimeId,
     sandbox,
   };
-  const record = parsedRepo
-    ? await createRepoSession(parsedRepo, sessionOpts)
+  const record = parsedRepo && preparedRepo
+    ? await createGitWorkspaceSession(preparedRepo, parsedRepo, sessionOpts)
     : await createWorkspaceSession(defaultWorkspace, sessionOpts);
   // Preserve queue provenance for non-repo work. Repo-backed sessions retain
   // `repo:owner/repo`, which is required by branch push/PR detection.
   if (!parsedRepo && !record.worktree) record.source = `queue:${item.source}`;
-  record.approvalMode = approvalModeFrom(item.approvalMode);
+  record.approvalMode = safety.approval;
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
   }
@@ -6071,7 +6193,22 @@ function startControlPlaneTasksIfConfigured() {
   // limit, park quota/auth/context); user-authored rulesets can add fallback
   // chains. Queue runs are unattended, so they act automatically within bounds.
   controlPlanePoller = new ControlPlaneTaskPoller(cfg, runWorkItem, nodeGithubMaxConcurrent, {
-    policy: queueRunPolicy,
+    policy: (item) => {
+      // Repository policy is version-controlled with the code and wins over the
+      // node-global UI ruleset for this run. The shared clone exists by the time
+      // a run can fail; default-workspace jobs may carry policy there too.
+      const parsed = item.repo ? parseRepo(item.repo) : undefined;
+      const workspace = parsed ? path.join(reposRoot, `${parsed.owner}__${parsed.repo}`) : defaultWorkspace;
+      try {
+        const projectRuleset = loadProjectPolicy(workspace)?.ruleset;
+        return projectRuleset
+          ? createRunPolicy({ context: "queue", ruleset: projectRuleset })
+          : queueRunPolicy;
+      } catch (error) {
+        console.warn(`[policy] ${error instanceof Error ? error.message : String(error)}`);
+        return queueRunPolicy;
+      }
+    },
   });
   controlPlanePoller.start();
 }
@@ -6563,6 +6700,7 @@ function modelFrom(msg: Record<string, unknown>): { provider: string; id: string
 async function applyRequestedModel(record: SessionRecord, model: { provider: string; id: string } | undefined): Promise<void> {
   if (!model) return;
   try {
+    assertSessionModel(record, model.id);
     await record.session.setModel(model.provider, model.id);
     broadcast({ type: "model.updated", sessionId: record.id, model: publicModel(record.session.getCurrentModel(), record.session.getCurrentModel()) });
   } catch (error) {
@@ -8398,7 +8536,7 @@ function attachSessionListeners(record: SessionRecord) {
       if (reroutePlan) {
         void record.reroute!.applyReroute(reroutePlan, {
           getCurrentModelName: () => record.session.getCurrentModel()?.name,
-          setModel: (p, i) => record.session.setModel(p, i),
+          setModel: (p, i) => { assertSessionModel(record, i); return record.session.setModel(p, i); },
           reprompt: async () => {
             await promptWithWatchdog(record, record.lastPrompt!, record.lastPromptOptions);
           },
@@ -9017,8 +9155,18 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // lifetime; retaining `undefined` here
   // made governance unable to tell that a defaulted session had full access and
   // also let a later node-default change alter its tier on resume.
-  const sessionSandbox = sandboxTier(opts.sandbox ?? storedMeta?.sandbox);
+  const policyWorkspace = requestedSessionFile ? (restoredWorktree?.path ?? storedMeta?.workspace ?? workspace) : workspace;
+  const sessionSafety = projectSafety(
+    policyWorkspace,
+    sandboxTier(opts.sandbox ?? storedMeta?.sandbox),
+    opts.approvalMode ?? approvalMode,
+  );
+  const sessionSandbox = sessionSafety.sandbox;
   const rt = await ensureRuntimeAvailable(opts.runtimeId ?? storedMeta?.runtimeId, sessionSandbox);
+  const allowedAgents = loadProjectPolicy(policyWorkspace)?.routing?.allowedAgents;
+  if (allowedAgents?.length && !allowedAgents.includes(rt.id)) {
+    throw new Error(`Repository policy does not allow agent ${rt.id}`);
+  }
 
   // Optional git-worktree isolation (fresh sessions only). The agent then runs in
   // the worktree, and the A1 boundary confines writes there.
@@ -9141,7 +9289,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // bump it to now (only real activity should reorder the sidebar). A brand-new
   // session legitimately starts "active now".
   const resumedLastActive = requestedSessionFile ? metaLastActiveMs(storedMeta) : undefined;
-  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: opts.approvalMode, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
+  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: sessionSafety.approval, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
   // Apply this session's sandbox network policy as a per-session egress proxy
   // (its own proxy/decider, never the node-global one). Opt-in via BIVY_SANDBOX_NET:
   // a read-only session then actually blocks outbound network even for a CLI agent
@@ -10338,9 +10486,10 @@ app.post("/api/models/select", async (req, res, next) => {
 
     const session = record.session;
     try {
+      assertSessionModel(record, id);
       await session.setModel(provider, id);
-    } catch {
-      return res.status(404).json({ error: "Model is not available" });
+    } catch (error) {
+      return res.status(404).json({ error: error instanceof Error ? error.message : "Model is not available" });
     }
     const selected = publicModel(session.getCurrentModel(), session.getCurrentModel());
     const thinking = publicThinkingInfo(session);

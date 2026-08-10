@@ -590,6 +590,10 @@ export interface AutomationDefinition {
   id: string;
   accountId: string;
   name: string;
+  /** Stable source-control key used by `bivy automation apply`. Undefined for UI-managed definitions. */
+  configKey?: string;
+  /** File order for source-controlled first-match semantics. */
+  configOrder?: number;
   /** End-to-end encrypted template; the control plane cannot inspect instructions. */
   templateCiphertext?: string;
   runtimeId?: string;
@@ -598,6 +602,8 @@ export interface AutomationDefinition {
   ephemeral?: boolean;
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  /** Hard per-run attempt ceiling, independent of the active retry/fallback ruleset. */
+  maxAttempts?: number;
   enabled?: boolean;
   /** How this automation fires. Defaults to "schedule" for legacy rows (any row
    *  with a `schedule` is schedule-triggered). A "webhook" automation is fired by
@@ -747,6 +753,7 @@ export interface WorkItem {
   model?: string; // model override (manual trigger); node default when unset
   approvalMode?: AutomationDefinition["approvalMode"];
   sandbox?: AutomationDefinition["sandbox"];
+  maxAttempts?: number;
   installationId?: string; // GitHub App installation id — the node mints a token for it
   appId?: string; // which GitHub App that installation belongs to (a node may serve several)
   // True when a device dispatched this item to a freshly-provisioned ephemeral
@@ -794,6 +801,7 @@ export type WorkItemInput = {
   model?: string;
   approvalMode?: AutomationDefinition["approvalMode"];
   sandbox?: AutomationDefinition["sandbox"];
+  maxAttempts?: number;
   ephemeral?: boolean;
   installationId?: string;
   appId?: string;
