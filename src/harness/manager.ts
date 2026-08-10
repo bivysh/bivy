@@ -56,6 +56,14 @@ export class HarnessManager {
     return this.stores.has(sessionId);
   }
 
+  /** Whether the tracked worktree differs from its checked-out HEAD. Undefined
+   * for a non-git/untracked session. Used only for the session-state workspace
+   * axis; checkpoint/diff behavior never depends on this display probe. */
+  async isDirty(sessionId: string): Promise<boolean | undefined> {
+    const store = this.stores.get(sessionId);
+    return store ? await store.isDirty() : undefined;
+  }
+
   /**
    * Snapshot the workspace at the start of a turn. Safe no-op for untracked
    * (non-repo) sessions. Idempotent within a turn: a second call before endTurn

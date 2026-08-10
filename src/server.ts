@@ -35,6 +35,7 @@ import { discoverGrokSessionForCwd } from "./runtime/grok-sessions.js";
 import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionSource, BivySessionStatus } from "./session/bivy-session.js";
+import { deriveSessionState, type SessionState, type SessionWorkspaceState } from "./session/session-state.js";
 import { exportProviderAuth, exportProviderAuthTombstones, importProviderAuth, listProviders, removeProvider, setProviderApiKey, setProviderCredential } from "./runtime/pi-auth.js";
 import {
   loadLocalModels,
@@ -535,6 +536,8 @@ const questionManager = new QuestionManager();
 questionManager.onRequest((request) => {
   scheduleAdvertise();
   broadcast({ type: "session.question", sessionId: request.sessionId, requestId: request.id, questions: request.questions, createdAt: request.createdAt });
+  const record = openSessions.get(request.sessionId);
+  if (record) broadcastSessionState(record);
   // Notify unconditionally: a clarifying question always fires mid-turn (the
   // session is "working"), and it's a hard blocker the user must see to unblock
   // — matching the pre-refactor behavior.
@@ -552,6 +555,8 @@ questionManager.onResolved((request) => {
   // session.question.resolved handler removes it.
   scheduleAdvertise();
   broadcast({ type: "session.question.resolved", sessionId: request.sessionId, requestId: request.id });
+  const record = openSessions.get(request.sessionId);
+  if (record) broadcastSessionState(record);
 });
 
 /**
@@ -606,7 +611,11 @@ function resolveApproval(id: string, approved: boolean) {
   const ok = approvals.resolve(id, approved);
   if (ok) {
     const resolved = approvals.list().find((a) => a.id === id);
-    if (resolved) persistApprovalRequest(resolved, Date.now());
+    if (resolved) {
+      persistApprovalRequest(resolved, Date.now());
+      const record = openSessions.get(resolved.sessionId);
+      if (record) broadcastSessionState(record);
+    }
   }
   return ok;
 }
@@ -955,7 +964,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastProgressAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastProgressAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; workspaceState?: SessionWorkspaceState; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -1036,23 +1045,37 @@ function harnessBeginTurn(record: SessionRecord): void {
   const dir = harnessDirFor(record);
   record.harnessTurnReady = undefined;
   if (!dir) return;
+  const previous = record.workspaceState === "dirty" ? "dirty" : "clean";
+  record.workspaceState = "checkpointing";
+  broadcastSessionState(record);
   record.harnessTurnReady = (async () => {
     try {
-      if (!(await harness.attach(record.id, dir))) return;
+      if (!(await harness.attach(record.id, dir))) {
+        record.workspaceState = previous;
+        return;
+      }
       await harness.beginTurn(record.id, `before turn @ ${new Date().toISOString()}`);
+      record.workspaceState = (await harness.isDirty(record.id)) ? "dirty" : "clean";
     } catch {
-      // Harness is best-effort; ignore.
+      // Harness is best-effort; retain the last known non-transitional state.
+      record.workspaceState = previous;
+    } finally {
+      broadcastSessionState(record);
     }
   })();
 }
 
 /** After a turn, snapshot again and broadcast the structured diff it produced. */
 async function harnessEndTurn(record: SessionRecord): Promise<void> {
+  const previous = record.workspaceState === "dirty" ? "dirty" : "clean";
   try {
     // Ensure the pre-turn snapshot finished before diffing against it (it was
     // started non-blocking in harnessBeginTurn so the prompt didn't wait on git).
     await record.harnessTurnReady;
+    record.workspaceState = "checkpointing";
+    broadcastSessionState(record);
     const result = await harness.endTurn(record.id, `after turn @ ${new Date().toISOString()}`);
+    record.workspaceState = (await harness.isDirty(record.id)) ? "dirty" : "clean";
     if (!result || result.changes.length === 0) return;
     broadcast({
       type: "session.changes",
@@ -1062,7 +1085,10 @@ async function harnessEndTurn(record: SessionRecord): Promise<void> {
       changes: result.changes,
     });
   } catch {
-    // Harness is best-effort; ignore.
+    // Harness is best-effort; ignore and restore the last known state.
+    record.workspaceState = previous;
+  } finally {
+    broadcastSessionState(record);
   }
 }
 
@@ -2946,6 +2972,9 @@ function buildHistoryEvent(opts: {
     agentName: getRuntime(opts.runtimeId).displayName,
     name: record?.session.getName() ?? opts.name,
     isStreaming: opts.isStreaming,
+    // Explicit Phase-3 axes. Additive: older clients continue using isStreaming;
+    // newer clients use this canonical projection for status and diagnostics.
+    sessionState: record ? sessionState(record) : undefined,
     mode: delta.mode,
     baseCount: delta.baseCount,
     count: delta.count,
@@ -3097,12 +3126,19 @@ const RELAY_COMMANDS: Record<string, Command> = {
       ctx.reply({ type: "session.error", sessionId: record.id, error: "Stop the current turn before rewinding." });
       return;
     }
+    const previousWorkspaceState = record.workspaceState === "dirty" ? "dirty" : "clean";
     try {
+      record.workspaceState = "checkpointing";
+      broadcastSessionState(record);
       await harness.rewind(record.id, checkpointId);
+      record.workspaceState = (await harness.isDirty(record.id)) ? "dirty" : "clean";
+      broadcastSessionState(record);
       const event = { type: "session.rewound", sessionId: record.id, checkpointId };
       ctx.reply(event);
       ctx.broadcast(event);
     } catch (error) {
+      record.workspaceState = previousWorkspaceState;
+      broadcastSessionState(record);
       ctx.reply({ type: "session.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) });
     }
   },
@@ -3357,7 +3393,8 @@ const RELAY_COMMANDS: Record<string, Command> = {
         sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,
-        status: pendingApproval ? "needs_action" : (rec ? (sessionBusy(rec) ? "working" : "idle") : "saved"),
+        status: pendingApproval ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
+        sessionState: rec ? sessionState(rec) : undefined,
         open: Boolean(rec),
         needsAction: pendingApproval,
         bivySession: bivySessionEnvelopeFromSummary(s, rec, meta),
@@ -4957,7 +4994,7 @@ async function advertiseSessions() {
       // Failures (including exhausted credits/rate limits) are outcomes to
       // review, not blocking questions that keep saying "Needs your response".
       // Only a still-pending approval/question owns that status.
-      status: pendingApproval ? "needs_action" : (record ? (sessionBusy(record) ? "working" : "idle") : "saved"),
+      status: pendingApproval ? "needs_action" : (record ? sessionState(record).displayStatus : "saved"),
       needsAction: pendingApproval,
       source: record?.source || meta?.source,
       titleEnc: name ? relay!.sealString(name) : undefined,
@@ -7050,10 +7087,32 @@ function sessionBusy(record: SessionRecord) {
   return Boolean(record.isWorking || record.session.isStreaming);
 }
 
+/** The explicit four-axis state sent to clients. Runtime adapters that expose a
+ * child PID get an independent liveness axis; SDK/in-process runtimes correctly
+ * report process:"none" rather than inventing a process from agent activity. */
+function sessionState(record: SessionRecord): SessionState {
+  const pid = record.session.activePid?.();
+  const processAlive = pid
+    ? (record.agentServiceAddress ? true : probeTurnPidAlive(record))
+    : undefined;
+  return deriveSessionState({
+    transportReachable: clients.size > 0 || Boolean(relay?.connected),
+    processAlive,
+    working: sessionBusy(record),
+    awaitingInput: sessionHasPendingApproval(record),
+    workspace: record.workspaceState ?? "clean",
+    lastTurnFailed: Boolean(record.lastFailureAt),
+  });
+}
+
+/** Push axis-only transitions (checkpointing, question/approval changes) that
+ * don't necessarily have a runtime event to carry the state envelope. */
+function broadcastSessionState(record: SessionRecord): void {
+  broadcast({ type: "session.state", sessionId: record.id, state: sessionState(record) });
+}
+
 function sessionStatus(record: SessionRecord): BivySessionStatus {
-  if (sessionHasPendingApproval(record)) return "needs_attention";
-  if (sessionBusy(record)) return "working";
-  return record.lastFailureAt ? "failed" : "idle";
+  return sessionState(record).displayStatus;
 }
 
 function isoFrom(value: unknown, fallback = Date.now()): string {
@@ -7105,6 +7164,7 @@ function bivySessionEnvelope(record: SessionRecord): BivySessionRecord {
     titleLocal: record.session.getName(),
     source: record.source ?? "manual",
     status: sessionStatus(record),
+    state: sessionState(record),
     createdAt: isoFrom(record.sessionFile ? undefined : touched, touched),
     updatedAt: isoFrom(touched, now),
     lastActivityAt: isoFrom(record.workingStartedAt ?? touched, now),
@@ -7184,6 +7244,12 @@ function bivySessionEnvelopeFromSummary(s: SessionSummary & { agent: string; age
     titleLocal: meta?.name ?? s.name,
     source,
     status: "idle",
+    state: deriveSessionState({
+      transportReachable: clients.size > 0 || Boolean(relay?.connected),
+      working: false,
+      awaitingInput: false,
+      workspace: "clean",
+    }),
     createdAt: isoFrom(meta?.createdAt ?? s.created, fallback),
     updatedAt: modified,
     lastActivityAt: isoFrom(meta?.lastActivityAt ?? modified, fallback),
@@ -7924,7 +7990,10 @@ function markSessionWorking(record: SessionRecord, activity: unknown) {
   // A new attempt resolves the prior turn's failure condition at its source.
   record.lastFailureAt = undefined;
   metadata.touchSession(record.id, "working");
-  if (!wasWorking) scheduleAdvertise(); // idle → working transition
+  if (!wasWorking) {
+    scheduleAdvertise(); // idle → working transition
+    broadcastSessionState(record);
+  }
 }
 
 function clearSessionWorking(record: SessionRecord, forcedStatus?: BivySessionStatus) {
@@ -7940,6 +8009,7 @@ function clearSessionWorking(record: SessionRecord, forcedStatus?: BivySessionSt
   // callers explicitly force idle so that stale SDK state is not persisted as
   // a permanently-working session after Bivy has settled the turn.
   persistSessionMetadata(record, forcedStatus ?? sessionStatus(record));
+  broadcastSessionState(record);
   scheduleAdvertise(); // working → idle transition
 }
 
@@ -8382,7 +8452,7 @@ function attachSessionListeners(record: SessionRecord) {
       // to consider self-teardown promptly (the idle sweep is the backstop).
       evaluateEphemeralTeardown();
     }
-    const sessionEventPayload = { type: "session.event", sessionId: record.id, event };
+    const sessionEventPayload = { type: "session.event", sessionId: record.id, state: sessionState(record), event };
     if (event.type === "message_update") {
       // Superseding full-content update — coalesce instead of broadcasting every
       // agent stdout line. The flush above (on the next non-update event) and
@@ -9071,7 +9141,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // bump it to now (only real activity should reorder the sidebar). A brand-new
   // session legitimately starts "active now".
   const resumedLastActive = requestedSessionFile ? metaLastActiveMs(storedMeta) : undefined;
-  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: opts.approvalMode, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral };
+  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: opts.approvalMode, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
   // Apply this session's sandbox network policy as a per-session egress proxy
   // (its own proxy/decider, never the node-global one). Opt-in via BIVY_SANDBOX_NET:
   // a read-only session then actually blocks outbound network even for a CLI agent
@@ -9649,6 +9719,7 @@ approvals.onRequest((request: ApprovalRequest) => {
   }
   broadcast({ type: "approval.created", approval: request });
   const rec = resolveSession(request.sessionId);
+  if (rec) broadcastSessionState(rec);
   if (!rec?.isWorking && !rec?.remoteActive) {
     void sendNotificationHint({
       kind: "approval_requested",
@@ -10793,7 +10864,8 @@ app.get("/api/sessions", async (_req, res, next) => {
         branch: rec?.worktree?.branch ?? meta?.branch,
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,
-        status: pendingApproval ? "needs_action" : (rec ? (sessionBusy(rec) ? "working" : "idle") : "saved"),
+        status: pendingApproval ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
+        sessionState: rec ? sessionState(rec) : undefined,
         open: Boolean(rec),
         needsAction: pendingApproval,
         costUsd: rec?.costUsd ?? meta?.costUsd,
@@ -10819,6 +10891,7 @@ app.post("/api/sessions/open", async (req, res, next) => {
       name: session.session.getName(),
       messages: conversationMessages(session),
       isStreaming: sessionBusy(session),
+      sessionState: sessionState(session),
       lastActivity: session.lastActivity,
       workingStartedAt: session.workingStartedAt,
       source: session.source,
@@ -10847,7 +10920,7 @@ app.post("/api/sessions/delete", async (req, res, next) => {
 app.get("/api/session", (_req, res) => {
   res.json(
     active
-      ? { id: active.id, workspace: active.workspace, sessionFile: active.sessionFile, name: active.session.getName(), isStreaming: sessionBusy(active), lastActivity: active.lastActivity, workingStartedAt: active.workingStartedAt, source: active.source, branch: active.worktree?.branch, prUrl: active.prUrl }
+      ? { id: active.id, workspace: active.workspace, sessionFile: active.sessionFile, name: active.session.getName(), isStreaming: sessionBusy(active), sessionState: sessionState(active), lastActivity: active.lastActivity, workingStartedAt: active.workingStartedAt, source: active.source, branch: active.worktree?.branch, prUrl: active.prUrl }
       : null,
   );
 });
@@ -10928,7 +11001,7 @@ app.post("/api/session", async (req, res, next) => {
       if (parsed) return res.status(502).json({ error: `Could not clone ${parsed.slug}: ${error instanceof Error ? error.message : String(error)}` });
       throw error;
     }
-    res.json({ id: session.id, workspace: session.workspace, source: session.source, branch: session.worktree?.branch, prUrl: session.prUrl, sessionFile: session.sessionFile, name: session.session.getName(), runtimeId: session.runtimeId, agentName: getRuntime(session.runtimeId).displayName, model: publicModel(session.session.getCurrentModel(), session.session.getCurrentModel()) });
+    res.json({ id: session.id, workspace: session.workspace, source: session.source, branch: session.worktree?.branch, prUrl: session.prUrl, sessionFile: session.sessionFile, name: session.session.getName(), runtimeId: session.runtimeId, agentName: getRuntime(session.runtimeId).displayName, model: publicModel(session.session.getCurrentModel(), session.session.getCurrentModel()), sessionState: sessionState(session) });
   } catch (error) {
     res.status(400).json({ error: actionableAgentError(agentFrom(req.body ?? {}) ?? defaultRuntimeId, error) });
   }
@@ -11843,7 +11916,18 @@ app.post("/api/session/rewind", async (req, res, next) => {
     if (!record) return res.status(404).json({ error: "No active session" });
     if (!checkpointId) return res.status(400).json({ error: "Missing checkpointId" });
     if (sessionBusy(record)) return res.status(409).json({ error: "Stop the current turn before rewinding." });
-    await harness.rewind(record.id, checkpointId);
+    const previousWorkspaceState = record.workspaceState === "dirty" ? "dirty" : "clean";
+    record.workspaceState = "checkpointing";
+    broadcastSessionState(record);
+    try {
+      await harness.rewind(record.id, checkpointId);
+      record.workspaceState = (await harness.isDirty(record.id)) ? "dirty" : "clean";
+    } catch (error) {
+      record.workspaceState = previousWorkspaceState;
+      throw error;
+    } finally {
+      broadcastSessionState(record);
+    }
     broadcast({ type: "session.rewound", sessionId: record.id, checkpointId });
     res.json({ ok: true, sessionId: record.id, checkpointId });
   } catch (error) {
@@ -11959,7 +12043,7 @@ wss.on("connection", (socket, req) => {
   // Stable id for this socket, keying its per-terminal size so several clients
   // sharing a PTY size it to their min (see TerminalManager.setClientSize).
   const clientTerminalId = `sock-${randomUUID()}`;
-  socket.send(JSON.stringify({ type: "hello", activeSessionId: active?.id, activeSession: active ? { id: active.id, isStreaming: sessionBusy(active), lastActivity: active.lastActivity, workingStartedAt: active.workingStartedAt } : null }));
+  socket.send(JSON.stringify({ type: "hello", activeSessionId: active?.id, activeSession: active ? { id: active.id, isStreaming: sessionBusy(active), sessionState: sessionState(active), lastActivity: active.lastActivity, workingStartedAt: active.workingStartedAt } : null }));
   // Authoritative version status on every connect: `latest` set means this node
   // is behind (banner shows); absent means up to date (banner + any "Updating…"
   // state clear — this is how the banner disappears after an update lands and
