@@ -8,6 +8,27 @@ Bivy does not import third-party JavaScript into the node.
 The API is alpha (`bivy.sh/v1alpha1`). Pin and review manifests like any other
 executable tool configuration; fields may evolve before a stable v1.
 
+## Terminology and boundaries
+
+These concepts occupy different layers:
+
+- a **plugin** is the versioned distribution unit;
+- a **contribution** is a capability declared by a plugin;
+- a **connection** is configured credentials/account state;
+- a **tool** is a governed callable operation;
+- **MCP** is a preferred protocol for discovering and invoking tool/context
+  providers, not the package itself;
+- a **skill** is procedural context (for example, `SKILL.md`), not executable
+  capability and never a permission grant;
+- an **agent profile** composes an adapter, model, skills, tools, policy,
+  credentials, and compute defaults.
+
+Not every MCP server needs a plugin, not every tool uses MCP, and repository-local
+skills do not need to be installed globally. Future tool support will put Bivy's
+tool broker between upstream MCP providers and downstream agents so policy,
+approvals, and audit remain authoritative. MCP prompts will not silently become
+trusted skills.
+
 ## Quick start: ACP agent
 
 Create `bivy.plugin.yaml`:
@@ -20,6 +41,8 @@ metadata:
   name: Company Agent
   version: 0.1.0
   description: Internal coding agent exposed over ACP.
+requires:
+  bivy: ">=0.10.1 <0.11.0"
 contributes:
   agents:
     - id: company-agent
@@ -32,10 +55,12 @@ contributes:
         args: [acp]
 ```
 
-Then validate and install it:
+Then validate, conformance-test, and install it:
 
 ```bash
 bivy plugin validate ./bivy.plugin.yaml
+bivy plugin doctor ./bivy.plugin.yaml
+bivy plugin test ./bivy.plugin.yaml
 bivy plugin install ./bivy.plugin.yaml
 bivy plugin list
 bivy restart
@@ -114,6 +139,8 @@ metadata:
   version: 1.2.3            # required
   description: Optional
   homepage: https://example.com
+requires:
+  bivy: ">=0.10.1 <0.11.0" # optional semver range; recommended
 contributes:
   agents: []                # 1-20 entries in v1alpha1
 ```
@@ -130,10 +157,41 @@ Commands and arguments are bounded during validation. Resume arguments must
 contain an `{id}` placeholder. Model choices and agent ids must be unique within
 the manifest.
 
+## SDK, schema, and developer loop
+
+The repository's publishable `@bivy/plugin-sdk` workspace package contains the
+canonical TypeScript manifest types, parser, validator, compatibility check,
+executable diagnostics, and JSON Schema. The schema is exported as
+`PLUGIN_MANIFEST_SCHEMA` and packaged at `@bivy/plugin-sdk/schema.json` for
+editors and non-TypeScript tooling. Public npm publication remains a separate
+release step while the alpha contract is exercised in-tree.
+
+Scaffold a manifest and run local diagnostics:
+
+```bash
+bivy plugin init ./company-agent --adapter acp
+# Edit the generated command and arguments.
+bivy plugin validate ./company-agent
+bivy plugin doctor ./company-agent
+bivy plugin test ./company-agent
+```
+
+`doctor` checks `requires.bivy` and resolves every adapter executable without
+invoking it. `test` repeats those checks and drives ACP adapters through the real
+Bivy bridge; each must complete `initialize` and `session/new` within 15 seconds.
+Process adapters receive static conformance only because automatically prompting
+an arbitrary command could spend money or mutate a workspace.
+
+A complete runnable plugin is available under
+[`../examples/plugins/acp-agent`](../examples/plugins/acp-agent).
+
 ## CLI
 
 ```bash
+bivy plugin init [directory] [--id <slug>] [--name <name>] [--adapter acp|process] [--json]
 bivy plugin validate <file-or-directory> [--json]
+bivy plugin doctor <file-or-directory> [--json]
+bivy plugin test <file-or-directory> [--json]
 bivy plugin install <file-or-directory> [--force] [--json]
 bivy plugin list [--json]
 bivy plugin remove <plugin-id> [--json]
@@ -154,8 +212,11 @@ Set `BIVY_PLUGIN_DIR` to override the store location for testing or managed
 deployments.
 
 `bivy plugin list` reports malformed installed manifests and duplicate agent ids.
-An invalid plugin is omitted from the runtime catalog and does not prevent
-built-in agents from starting.
+An invalid or incompatible plugin is omitted from the runtime catalog and does
+not prevent built-in agents from starting. Installation fails when the current
+Bivy version does not satisfy a declared `requires.bivy` range. Manifests that
+omit the range remain compatible for Phase 1 backwards compatibility, while
+`doctor` reports the missing pin as a warning.
 
 ## Trust and protection
 
@@ -184,7 +245,8 @@ through channels you already trust, pin their versions, and install locally.
 - trigger connectors, checks, artifacts, or compute providers;
 - plugin install scripts or dependency downloads;
 - arbitrary daemon or web UI hooks;
-- compatibility ranges, lockfiles, signatures, or marketplace trust tiers.
+- plugin lockfiles, signatures, or marketplace trust tiers;
+- `plugin dev` hot reload and distributable `plugin pack` archives.
 
 The staged roadmap is in
 [`internal/developer-platform-implementation-plan.md`](internal/developer-platform-implementation-plan.md).

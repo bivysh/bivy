@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=../../../packages/plugin-sdk/schema/bivy.plugin.schema.json
+apiVersion: bivy.sh/v1alpha1
+kind: Plugin
+metadata:
+  id: example-acp-agent
+  name: Example ACP Agent
+  version: 0.1.0
+  description: Minimal runnable ACP plugin used to demonstrate Bivy conformance.
+  homepage: https://github.com/bivysh/bivy/tree/main/examples/plugins/acp-agent
+requires:
+  bivy: ">=0.10.1 <0.11.0"
+contributes:
+  agents:
+    - id: example-acp-agent
+      name: Example ACP Agent
+      description: Echoes prompts over the Agent Client Protocol.
+      authOwner: agent
+      adapter:
+        kind: acp
+        command: bivy-example-acp-agent

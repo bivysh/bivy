@@ -4398,7 +4398,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy exec")} "<prompt>"  One-shot headless run: prints the answer to stdout (pipe-friendly)
   ${c.cyan("bivy automation")}  init | validate | plan | test | apply (automations as code)
   ${c.cyan("bivy config")}      init | validate | show | get | set | explain (typed node config)
-  ${c.cyan("bivy plugin")}      validate | install | list | remove (declarative extensions)
+  ${c.cyan("bivy plugin")}      init | validate | doctor | test | install | list | remove
   ${c.cyan("bivy")}              Show this help
   ${c.cyan("bivy setup")}      First-run wizard: agent, model login, remote sign-in, background service
   ${c.cyan("bivy start")}      Run the daemon in the foreground
