@@ -27,7 +27,9 @@ import { isModelAuthError, authProviderForSession } from "./runtime/auth-errors.
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { provisionAgentRun } from "./runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
-import { suggestNameFromSelectedModel } from "./runtime/model-namer.js";
+import { createSessionNamer, fallbackSessionName } from "./session/session-namer.js";
+import { createBranchPublish } from "./session/branch-publish.js";
+import { createForkStandUp } from "./session/fork-standup.js";
 import { isNativeOAuthProvider, loginModelOAuth, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
 import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
 import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } from "./runtime/codex-sessions.js";
@@ -59,7 +61,9 @@ import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-cli
 import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
-import { configuredTurnTimeoutMs, configuredTurnStallMs, configuredTurnActivityStallMs, classifyStallTrigger, type StallTrigger } from "./session/turn-watchdog.js";
+import { configuredTurnTimeoutMs, configuredTurnStallMs, configuredTurnActivityStallMs } from "./session/turn-watchdog.js";
+import { createTurnWatchdog, probeTurnPidAlive } from "./session/turn-watchdog-runtime.js";
+import { createPrDetection } from "./session/pr-detection.js";
 import { forceAbortTurn } from "./session/abort-recovery.js";
 import { runRequiredAutomationChecks } from "./automation-checks.js";
 import { configToLegacySettings, mergeLegacyIntoNodeConfig, readNodeConfig, writeNodeConfig, type NodeConfig } from "./node-config.js";
@@ -69,7 +73,7 @@ import { PolicyEngine } from "./policy/policy-engine.js";
 import { TerminalManager } from "./terminal.js";
 import { commandLaunch } from "./command-launch.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
-import { createWorktree, removeWorktree, branchSlug, gitRepoRoot, type Worktree } from "./worktree.js";
+import { createWorktree, removeWorktree, gitRepoRoot, type Worktree } from "./worktree.js";
 import { HarnessManager } from "./harness/manager.js";
 import { startEgressProxyIfEnabled, applySessionSandboxEgress, stopSessionEgress } from "./harness/egress.js";
 import { initSharedDepCache, sharedDepCacheRoot } from "./harness/dep-cache.js";
@@ -1001,7 +1005,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastProgressAt?: number; lastStructuralProgressAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; workspaceState?: SessionWorkspaceState; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastProgressAt?: number; lastStructuralProgressAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; workspaceState?: SessionWorkspaceState; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -1756,7 +1760,7 @@ const commands: MeshCommand[] = [
   { name: "/issue", description: "Pick up a configured GitHub issue on this computer.", kind: "server" },
   { name: "/github-status", description: "Force a fresh GitHub PR status check for this session.", kind: "server", run: async () => {
     if (!active) return { ok: false, error: "No active session" };
-    const changed = await refreshPullRequests(active);
+    const changed = await prDetection.refreshPullRequests(active);
     return { ok: true, changed, prUrl: active.prUrl, prs: active.prs };
   } },
   { name: "/new", description: "Start a new agent session in the current workspace.", kind: "server", run: () => createSession(active?.workspace ?? defaultWorkspace).then(({ id, workspace, sessionFile }) => ({ id, workspace, sessionFile })) },
@@ -3262,11 +3266,11 @@ const RELAY_COMMANDS: Record<string, Command> = {
       ctx.reply({ type: "session.pr_result", sessionId: msg.sessionId, ok: false, error: "Session not found" });
       return;
     }
-    await refreshPullRequests(rec);
+    await prDetection.refreshPullRequests(rec);
     ctx.reply({ type: "session.pr_result", sessionId: rec.id, ok: true, prUrl: rec.prUrl, prs: rec.prs });
   },
   async "sessions.pr.refresh_all"(_msg, ctx) {
-    const result = await refreshAllPullRequestStatuses();
+    const result = await prDetection.refreshAllPullRequestStatuses();
     ctx.reply({ type: "sessions.pr_refresh_result", ok: true, ...result });
   },
   "node.rename"(msg, ctx) {
@@ -4014,7 +4018,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
     await record.abortRecovery;
     // If the current turn is hung, recover it FIRST so this prompt runs a fresh
     // turn instead of being steered into a dead turn and silently swallowed.
-    await recoverStalledBeforePrompt(record);
+    await turnWatchdog.recoverStalledBeforePrompt(record);
     record.remoteActive = true;
     if (record.tuiTermId || record.tuiRefreshing) {
       broadcast({ type: "session.error", sessionId: record.id, error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
@@ -4034,7 +4038,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
     const cmid = typeof msg.clientMessageId === "string" && msg.clientMessageId ? msg.clientMessageId : undefined;
     void dedupePrompt(cmid, async () => {
       broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: msg.clientMessageId });
-      void maybeNameSession(record, promptText);
+      void sessionNamer.maybeNameSession(record, promptText);
       harnessBeginTurn(record);
       // Capture the turn's prompt so an in-session model reroute can re-drive it
       // on a fallback model, and reset the per-turn reroute budget.
@@ -4044,7 +4048,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       // The user is driving this turn manually — supersede any pending auto-resume
       // that was scheduled after a prior limit so it can't re-fire on top of them.
       clearSessionResume(record.id);
-      await promptWithWatchdog(record, agentPrompt, record.lastPromptOptions);
+      await turnWatchdog.promptWithWatchdog(record, agentPrompt, record.lastPromptOptions);
     }).catch((error) => {
       // Mirror the HTTP path (see the /prompt route): a rejected turn after
       // the runtime marked the session working emits no agent_end, so without
@@ -4076,7 +4080,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       // for a genuine cross-node fork — a same-node cross-agent fork adopts the
       // LOCAL branch and needs no push. Best-effort: a no-token/offline node just
       // falls back to the default base downstream.
-      if (msg.crossNode === true) await pushForkSourceBranch(rec);
+      if (msg.crossNode === true) await branchPublish.pushForkSourceBranch(rec);
       // Refresh the account model-auth vault so the destination node can pull
       // this session's model credentials during import (fork credential-move,
       // docs/session-fork-plan.md). Best-effort: local-only nodes just skip it.
@@ -4105,7 +4109,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
     try {
       // Cross-node fork: adopt the source's branch on this node and run full
       // prerequisite detection. See standUpFork / fork-prereqs.ts.
-      const outcome = await standUpFork({
+      const outcome = await forkStandUp.standUpFork({
         bundle,
         targetRuntimeId: agentFrom(msg) ?? bundle.record.runtimeId,
         model: modelFrom(msg),
@@ -4158,7 +4162,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
       const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages() });
       // Cut a fresh fork branch (the source still holds its own); skip prereq
       // detection (same node + same runtime ⇒ agent and repo are present).
-      const outcome = await standUpFork({
+      const outcome = await forkStandUp.standUpFork({
         bundle,
         targetRuntimeId: rec.runtimeId,
         model: modelFrom(msg),
@@ -5305,7 +5309,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   // session" in the sidebar — issue title + number is a good, stable start (the
   // agent-written PR title later gives the richer summary). Deterministic, so it
   // doesn't depend on the runtime naming itself.
-  setSessionName(record, issueSessionTitle(issue));
+  sessionNamer.setSessionName(record, issueSessionTitle(issue));
   // Best-effort model selection for runtimes that support it (e.g. claude-code, pi).
   if (directives.model && typeof (record.session as any).setModel === "function") {
     try { assertSessionModel(record, directives.model); await (record.session as any).setModel("", directives.model); } catch {}
@@ -5419,8 +5423,8 @@ async function reportIssueOutcome(
   const base = await resolveDefaultBaseRef(wt.path);
   const ahead = gitAheadCount(base, wt.path) > 0;
 
-  await maybePushWorktreeBranch(record);
-  await maybeDetectPullRequest(record);
+  await branchPublish.maybePushWorktreeBranch(record);
+  await prDetection.maybeDetectPullRequest(record);
 
   if (record.prUrl) {
     emit(record, "pr_opened", `Pull request ready for issue #${issue.number}.`, { prUrl: record.prUrl });
@@ -5510,19 +5514,8 @@ async function runSessionTurn(record: SessionRecord, prompt: string): Promise<vo
       }
     });
   });
-  await promptWithWatchdog(record, prompt);
+  await turnWatchdog.promptWithWatchdog(record, prompt);
   await finished;
-}
-
-/** Set + persist + broadcast a session's display name (used by issue pickup). */
-function setSessionName(record: SessionRecord, name: string): void {
-  const clean = name.trim();
-  if (!clean) return;
-  record.session.setName(clean);
-  record.namedFromFirstPrompt = true; // don't let the first-prompt namer overwrite it
-  persistSessionMetadata(record);
-  broadcast({ type: "session.renamed", sessionId: record.id, sessionFile: record.sessionFile, name: clean, branch: record.worktree?.branch });
-  scheduleAdvertise();
 }
 
 async function anthropicHeadersFromNodeCredential(): Promise<Record<string, string> | undefined> {
@@ -5911,8 +5904,8 @@ async function continueCorrelatedSession(
   record.approvalMode = safety.approval;
   await runSessionTurn(record, prompt);
   if (record.worktree && !opts?.isMessage && !opts?.resumeOnMissing) {
-    await maybePushWorktreeBranch(record);
-    await maybeDetectPullRequest(record);
+    await branchPublish.maybePushWorktreeBranch(record);
+    await prDetection.maybeDetectPullRequest(record);
   }
   await report({
     output: { sessionId: record.id, branch, prUrl: record.prUrl },
@@ -6055,12 +6048,12 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       sandbox: safety.sandbox,
       approvalMode: safety.approval,
     });
-    setSessionName(record, `${issue.identifier}: ${issue.title}`);
+    sessionNamer.setSessionName(record, `${issue.identifier}: ${issue.title}`);
     if (item.model) { try { await record.session.setModel("", item.model); } catch {} }
     await report({ output: { sessionId: record.id, branch }, events: [{ at: new Date().toISOString(), kind: "branch", summary: "Linear issue working branch and session created.", ref: branch, url: issue.url }] });
     await runSessionTurn(record, buildLinearTaskPrompt(issue));
-    await maybePushWorktreeBranch(record);
-    await maybeDetectPullRequest(record);
+    await branchPublish.maybePushWorktreeBranch(record);
+    await prDetection.maybeDetectPullRequest(record);
     await report({ output: { sessionId: record.id, branch, prUrl: record.prUrl }, events: record.prUrl ? [{ at: new Date().toISOString(), kind: "pull_request", summary: "Pull request opened.", ref: branch, url: record.prUrl }] : undefined });
     return;
   }
@@ -6128,8 +6121,8 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       : request;
   await runSessionTurn(record, prompt);
   if (!isMessage && record.worktree) {
-    await maybePushWorktreeBranch(record);
-    await maybeDetectPullRequest(record);
+    await branchPublish.maybePushWorktreeBranch(record);
+    await prDetection.maybeDetectPullRequest(record);
   }
   // Deterministic, privacy-safe checks — the same gate the GitHub-issue path
   // applies (reportIssueOutcome) — so a scheduled/Slack/webhook run reads as
@@ -6320,6 +6313,13 @@ function runGit(args: string[], cwd: string) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 2000 });
   if (result.error || result.status !== 0) return undefined;
   return String(result.stdout ?? "").trim();
+}
+
+/** Commits on HEAD ahead of `base` in `cwd`. Shared by branch publishing and the
+ *  issue-task "did the agent commit anything?" checks. */
+function gitAheadCount(base: string, cwd: string): number {
+  const ahead = runGit(["rev-list", "--count", `${base}..HEAD`], cwd);
+  return ahead ? Number(ahead) || 0 : 0;
 }
 
 function gitStatus(workspace: string) {
@@ -6753,215 +6753,6 @@ function forkRecordFor(rec: SessionRecord): ForkRecord {
       : {}),
     sandbox: rec.sandbox,
   };
-}
-
-/**
- * Best-effort push of a fork SOURCE's branch to origin before the bundle leaves
- * the node, so a cross-node fork's committed work travels via origin (the
- * destination bases its adopted worktree on `origin/<branch>` — see
- * `resolveAdoptBaseRef`). Guarded by a token + repo backing; a failure just
- * means the destination falls back to the default base and the dirty patch.
- */
-async function pushForkSourceBranch(rec: SessionRecord): Promise<void> {
-  const parts = repoSessionParts(rec);
-  if (!parts) return;
-  const { wt, parsed } = parts;
-  try {
-    const token = await resolveTokenForRepo(parsed.owner, parsed.repo);
-    if (!token) return;
-    const cfg: GitHubTaskConfig = { token, owner: parsed.owner, repo: parsed.repo, repoDir: wt.repoRoot, label: "bivy", claimLabel: "bivy:in-progress", pollMs: 60_000 };
-    await pushBranch(cfg, wt.path, wt.branch);
-    rec.branchPushed = true;
-  } catch {
-    // offline / no rights / protected branch — committed work may not reach a
-    // cross-node destination, but the fork still proceeds from the best base.
-  }
-}
-
-/** Options controlling how a fork bundle is stood up (docs/session-fork-plan.md). */
-interface StandUpForkOptions {
-  bundle: ForkBundle;
-  /** Runtime to materialise into (may differ from the source for a cross-runtime fork). */
-  targetRuntimeId: string;
-  /** Explicit model to bind before the first turn; otherwise preserve it only for the same runtime. */
-  model?: { provider: string; id: string };
-  /** Full transcript URL, woven into a seeded (cross-runtime) continuation prompt. */
-  transcriptUrl?: string;
-  /**
-   * Worktree strategy for a repo-backed source:
-   *   - "adopt" — check out the source's branch (cross-node import; the source
-   *     lives on a different node, so there's no local branch collision).
-   *   - "fresh" — cut a NEW `<branch>-fork-<hex>` branch from the source branch
-   *     (same-node fork; git forbids two worktrees on one branch and the source
-   *     still holds it).
-   */
-  worktree: "adopt" | "fresh";
-  /**
-   * Run full prerequisite detection (a missing target agent is a hard blocker;
-   * a missing model login / unreachable repo are surfaced as non-blocking
-   * `missing[]`). Skipped for a same-node local fork, where the agent and repo
-   * are self-evidently present. See fork-prereqs.ts.
-   */
-  detectPrereqs: boolean;
-  /** cwd/workspace to use when the source is NOT repo-backed (no worktree). */
-  fallback?: { workspace: string; cwd: string };
-}
-
-type StandUpForkOutcome =
-  | { ok: false; error: string; missing: ForkPrereq[] }
-  | { ok: true; record: SessionRecord; plan: ForkPlan; missing: ForkPrereq[] };
-
-/**
- * Stand a forked session up on THIS node from a `ForkBundle`: credential-move,
- * (optional) prerequisite detection, repo/worktree reconstruction, transcript
- * materialisation, and session creation. Shared by the cross-node
- * `session.fork.import` and the same-node `session.fork.local` paths — the only
- * differences between them are captured in `StandUpForkOptions`. Pure of `relay`:
- * it returns an outcome the handler turns into an event.
- */
-async function standUpFork(opts: StandUpForkOptions): Promise<StandUpForkOutcome> {
-  const { bundle, targetRuntimeId } = opts;
-  const fallback = opts.fallback ?? { workspace: defaultWorkspace, cwd: defaultWorkspace };
-  // Carry the source's sandbox tier so a sandboxed session forks into a
-  // sandboxed one, rather than defaulting to this node's tier (fork.ts).
-  const forkSandbox = normalizeSandboxTier(bundle.record.sandbox);
-
-  // Credential-move: if the chosen model's provider isn't logged in on this node,
-  // pull the account model-auth vault (a login done on another node carries over),
-  // then re-check. Best-effort — a local-only node just skips it.
-  const modelProvider = opts.model?.provider;
-  const providerConfigured = async () =>
-    modelProvider ? Boolean(await createCredentialStore(credsDir).getCredential(modelProvider).catch(() => undefined)) : undefined;
-  let modelConfigured = await providerConfigured();
-  if (modelProvider && modelConfigured === false) {
-    await syncModelAuthFromControlPlane().catch(() => {});
-    modelConfigured = await providerConfigured();
-  }
-
-  // Prerequisite detection. A missing AGENT is a hard blocker — stop before any
-  // clone/worktree work. Skipped for a same-node local fork. Read the agent's
-  // availability + display name from the runtime REGISTRY (which never throws)
-  // rather than resolving the runtime up front: `getRuntime` throws for a
-  // known-but-not-installed agent, which — called eagerly — surfaced a raw
-  // "not available" string with an empty `missing[]` instead of this friendly
-  // install checklist. An unknown id (no registry entry) is treated as
-  // unavailable so it, too, degrades to the checklist rather than a getRuntime throw.
-  const agentInfo = listRuntimes().find((r) => r.id === targetRuntimeId);
-  const agentAvailable = agentInfo ? (agentInfo as { status?: string }).status === "available" : false;
-  const agentDisplayName = agentInfo?.displayName ?? targetRuntimeId;
-  const prereqInput: ForkPrereqInput = {
-    agent: { id: targetRuntimeId, displayName: agentDisplayName, available: agentAvailable },
-    ...(modelProvider ? { model: { provider: modelProvider, configured: Boolean(modelConfigured) } } : {}),
-  };
-  if (opts.detectPrereqs) {
-    const early = evaluateForkPrereqs(prereqInput);
-    if (blockingForkPrereqs(early).length > 0) {
-      return { ok: false, error: `${agentDisplayName} is not installed on the destination node.`, missing: missingForkPrereqs(early) };
-    }
-  }
-
-  // Safe now: the agent is available (or this is a same-node local fork whose
-  // agent is self-evidently present). The per-session sandbox tier bakes into
-  // the runtime's launch flags.
-  const targetRuntime = getRuntime(targetRuntimeId, forkSandbox);
-
-  // Reconstruct repo + worktree when the source was repo-backed.
-  let workspace = fallback.workspace;
-  let cwd = fallback.cwd;
-  let repoReachable: boolean | undefined;
-  let worktree: Worktree | undefined;
-  let dirtyWarning: string | undefined;
-  const parsed = bundle.record.repoSlug ? parseRepo(bundle.record.repoSlug) : undefined;
-  if (parsed) {
-    const token = await resolveTokenForRepo(parsed.owner, parsed.repo);
-    repoReachable = Boolean(token);
-    const repoDir = await cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token, root: reposRoot });
-    const srcBranch = bundle.record.branch;
-    // Serialize clone-adjacent worktree ops on this repo so concurrent forks /
-    // pickups don't race on `git worktree add` or clobber each other's trees.
-    const wt = await withRepoLock(repoDir, async () => {
-      if (opts.worktree === "fresh") {
-        // Same-node fork: cut a NEW branch from the source's LOCAL branch (which
-        // holds its latest, possibly-unpushed commits) or the repo default.
-        const forkBranch = `${srcBranch ?? "fork"}-fork-${randomBytes(4).toString("hex")}`;
-        return createWorktree({ repoDir, id: forkBranch, branch: forkBranch, base: srcBranch ?? await resolveDefaultBaseRef(repoDir) });
-      }
-      // Cross-node adopt: the source branch has no LOCAL ref here. Base the
-      // adopted branch on the pushed `origin/<branch>` so committed work travels
-      // (was: undefined → the destination's DEFAULT branch, silently dropping
-      // every commit). Give the worktree DIR a unique suffix so a same-branch
-      // adopt never reuses — or, via createWorktree's stale-dir cleanup, deletes
-      // — another live session's tree.
-      const dirId = `${srcBranch ?? "fork"}-${randomBytes(4).toString("hex")}`;
-      const base = srcBranch ? await resolveAdoptBaseRef(repoDir, srcBranch) : await resolveDefaultBaseRef(repoDir);
-      return createWorktree({ repoDir, id: dirId, branch: srcBranch, base });
-    });
-    const applied = applyDirtyPatch(wt.path, bundle.dirtyPatch);
-    if (applied.warning) dirtyWarning = applied.warning;
-    workspace = repoDir;
-    cwd = wt.path;
-    worktree = wt;
-  } else {
-    // Non-repo-backed source. The fork would otherwise reuse the PARENT's cwd,
-    // putting two sessions in one working tree — so when that cwd is itself a git
-    // checkout (a local repo without a GitHub origin), cut the fork its own
-    // worktree on a fresh branch. Best-effort: a non-git workspace has no tree to
-    // isolate, so the fork keeps the fallback cwd (no git collisions possible).
-    const forkRepoRoot = await gitRepoRoot(cwd);
-    if (forkRepoRoot) {
-      const forkBranch = `bivy/fork-${randomBytes(6).toString("hex")}`;
-      const wt = await withRepoLock(forkRepoRoot, () => createWorktree({ repoDir: forkRepoRoot, id: forkBranch, branch: forkBranch }));
-      const applied = applyDirtyPatch(wt.path, bundle.dirtyPatch);
-      if (applied.warning) dirtyWarning = applied.warning;
-      workspace = forkRepoRoot;
-      cwd = wt.path;
-      worktree = wt;
-    }
-  }
-
-  // Materialise the transcript, then stand the session up — resume the imported
-  // transcript (full) or a fresh session the caller seeds with plan.seedPrompt.
-  // Preserve the source model only when the runtime itself is unchanged. A
-  // cross-agent fork must let the destination choose its own default unless the
-  // caller explicitly supplied a model valid for that target. Thread the final
-  // choice through the generic import context: adapters that need native model
-  // metadata (Pi/Claude) can serialize it; the others simply ignore it.
-  const targetModel = opts.model ?? (targetRuntimeId === bundle.record.runtimeId ? bundle.record.modelRef : undefined);
-  const plan = await materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd, model: targetModel }, seed: { transcriptUrl: opts.transcriptUrl } });
-  const record = plan.kind === "resume"
-    ? await createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false })
-    : await createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false });
-  // Mark the new session as a fork of its source, so the run card can show
-  // "Forked from …" and the lineage survives a reload (persisted below). Just
-  // the parent's session id — an identifier, not content, so it's safe to
-  // carry into metadata the same way branch/prUrl already are.
-  record.forkedFrom = bundle.record.sourceSessionId;
-  // Attach the reconstructed worktree to the record. createSession only
-  // populates record.worktree when it provisions one itself (fresh repo session)
-  // or restores it from stored metadata (resume) — neither happens for a fork,
-  // whose worktree we cut above. Without this, repoSessionParts() can't see the
-  // fork as repo-backed, so branch-push, PR detection and /pr all silently bail
-  // (a PR opened inside the fork would never light up its badge). Mirror it onto
-  // the persisted metadata so the association survives a reload, too.
-  if (worktree && !record.worktree) {
-    record.worktree = worktree;
-    broadcast({ type: "session.updated", sessionId: record.id, sessionFile: record.sessionFile, bivySession: bivySessionEnvelope(record) });
-  }
-  if (bundle.record.title && !record.session.getName()) record.session.setName(bundle.record.title);
-  // Surface a non-fatal note when the source's uncommitted changes didn't apply
-  // cleanly, so the fork isn't silently missing work-in-progress.
-  if (dirtyWarning) broadcast({ type: "session.notice", sessionId: record.id, message: dirtyWarning });
-  await applyRequestedModel(record, targetModel);
-  persistSessionMetadata(record);
-  scheduleAdvertise();
-
-  const missing = opts.detectPrereqs
-    ? missingForkPrereqs(evaluateForkPrereqs({
-        ...prereqInput,
-        ...(parsed ? { repo: { slug: parsed.slug, reachable: Boolean(repoReachable) } } : {}),
-      }))
-    : [];
-  return { ok: true, record, plan, missing };
 }
 
 /** Build the `session.fork.done` event both fork paths emit from a stood-up session. */
@@ -7938,216 +7729,27 @@ const turnActivityStallMs = configuredTurnActivityStallMs(
 // The sweep must tick fast enough to serve whichever band is enabled.
 const stallSweepBasis = [turnStallMs, turnActivityStallMs].filter((ms) => ms > 0);
 const stallSweepMs = stallSweepBasis.length ? Math.max(15_000, Math.min(60_000, Math.floor(Math.min(...stallSweepBasis) / 4))) : 0;
+// The stall/timeout orchestration lives in ./session/turn-watchdog-runtime; its
+// whole coupling surface to the daemon is this deps object. The narrow
+// WatchdogSession it operates on is structurally satisfied by SessionRecord.
+const turnWatchdog = createTurnWatchdog({
+  turnTimeoutMs,
+  turnStallMs,
+  turnActivityStallMs,
+  broadcast,
+  markSessionFailed: (id) => metadata.touchSession(id, "failed"),
+  abortSessionRecord: (record) => abortSessionRecord(record as SessionRecord),
+  evaluateEphemeralTeardown,
+  sessionBusy: (record) => sessionBusy(record as SessionRecord),
+  sessionHasPendingApproval: (record) => sessionHasPendingApproval(record as SessionRecord),
+  listSessions: () => openSessions.values(),
+});
 if (turnStallMs > 0 || turnActivityStallMs > 0) {
   console.log(`[turn-watchdog] stall detection armed: idle=${turnStallMs}ms wedged=${turnActivityStallMs}ms sweep=${stallSweepMs}ms`);
-  const stallSweepTimer = setInterval(() => sweepStalledTurns(), stallSweepMs);
+  const stallSweepTimer = setInterval(() => turnWatchdog.sweepStalledTurns(), stallSweepMs);
   stallSweepTimer.unref?.();
 } else {
   console.warn("[turn-watchdog] stall detection disabled by BIVY_TURN_STALL_MS=0");
-}
-
-function turnTimeoutMessage(): string {
-  return `Agent turn timed out after ${Math.round(turnTimeoutMs / 60_000)} minutes and was stopped.`;
-}
-
-function clearTurnWatchdog(record: SessionRecord): void {
-  if (record.turnWatchdog) clearTimeout(record.turnWatchdog);
-  record.turnWatchdog = undefined;
-  record.turnTimeoutSignal = undefined;
-  record.turnTimeoutResolve = undefined;
-}
-
-function armTurnWatchdog(record: SessionRecord): void {
-  clearTurnWatchdog(record);
-  record.turnTimedOut = false;
-  if (turnTimeoutMs <= 0) return;
-  record.turnTimeoutSignal = new Promise<void>((resolve) => { record.turnTimeoutResolve = resolve; });
-  record.turnWatchdog = setTimeout(() => {
-    record.turnWatchdog = undefined;
-    // Unblock any prompt() awaiting the race in promptWithWatchdog, then run the
-    // shared recovery (settle + abort + reopen) so the session lands back at a
-    // clean, resumable idle instead of merely "stopped".
-    record.turnTimeoutResolve?.();
-    record.turnTimeoutResolve = undefined;
-    recoverStuckTurn(record, turnTimeoutMessage(), { trigger: "wall_clock", idleMs: Date.now() - (record.workingStartedAt ?? Date.now()) });
-  }, turnTimeoutMs);
-  record.turnWatchdog.unref?.();
-}
-
-/** Message for a session recovered because it stopped making progress. A wedged
- *  turn was still emitting output, so word it as "no progress" rather than the
- *  "no activity" the silence stall reports. */
-function turnStallMessage(idleMs: number, trigger: StallTrigger = "stalled"): string {
-  const mins = Math.round(idleMs / 60_000);
-  if (trigger === "wedged") return `A tool call ran for ${mins} min without making progress and was recovered. Send a message to continue.`;
-  return `The agent stopped responding (no activity for ${mins} min) and was recovered. Send a message to continue.`;
-}
-
-/** Idle used for a stall's diagnostic/message. A `wedged` turn is measured from
- *  the last STRUCTURAL progress (raw output kept flowing), every other trigger
- *  from the last progress of any kind. */
-function stallIdleMs(record: SessionRecord, trigger: StallTrigger, now: number): number {
-  const anchor = trigger === "wedged"
-    ? record.lastStructuralProgressAt ?? record.workingStartedAt ?? now
-    : record.lastProgressAt ?? record.workingStartedAt ?? now;
-  return now - anchor;
-}
-
-/**
- * Aggregate turn-recovery counters, keyed `"<runtimeId>:<trigger>"`. A privacy-
- * safe histogram (counts only, no session content) surfaced in the redacted
- * /api/diagnostics health bag so operators can see which runtime hangs and how —
- * subprocess died vs went silent vs hit the wall-clock cap. See
- * docs/session-reliability-plan.md (Phase 1).
- */
-const turnRecoveryCounts = new Map<string, number>();
-function recordTurnRecovery(runtimeId: string, trigger: StallTrigger): void {
-  const key = `${runtimeId}:${trigger}`;
-  turnRecoveryCounts.set(key, (turnRecoveryCounts.get(key) ?? 0) + 1);
-}
-function turnRecoveryStats(): Record<string, number> {
-  return Object.fromEntries([...turnRecoveryCounts.entries()].sort(([a], [b]) => a.localeCompare(b)));
-}
-
-/**
- * Force-recover a session whose turn is stuck — hit the wall-clock cap, went
- * silent past the stall window, or lost its subprocess without emitting
- * agent_end. Shared by the turn-watchdog timer, the stall sweep, and the
- * prompt-time guard so every path settles identically: mark the failure for the
- * client, then run the full abort→reopen recovery (abortSessionRecord) so the
- * session returns to a clean, resumable idle state rather than a wedged "working".
- * Idempotent: a second call while recovery is already in flight is a no-op.
- */
-function recoverStuckTurn(record: SessionRecord, reason: string, diag?: { trigger: StallTrigger; idleMs?: number }): void {
-  if (record.turnTimedOut) return; // already recovering this turn
-  record.turnTimedOut = true;
-  record.lastFailureAt = Date.now();
-  const trigger = diag?.trigger ?? "stalled";
-  const turnMs = record.workingStartedAt ? record.lastFailureAt - record.workingStartedAt : undefined;
-  console.warn(`[turn-watchdog] recovering stuck session ${record.id} (runtime=${record.runtimeId} trigger=${trigger}): ${reason}`);
-  // Attribute the recovery so operators can see WHICH runtime/transport hangs and
-  // how (subprocess died vs went silent vs hit the wall-clock cap) instead of
-  // losing it to a log line — see docs/session-reliability-plan.md (Phase 1).
-  recordTurnRecovery(record.runtimeId, trigger);
-  broadcast({
-    type: "session.diagnostic",
-    sessionId: record.id,
-    kind: "turn_recovered",
-    runtimeId: record.runtimeId,
-    trigger,
-    ...(diag?.idleMs != null ? { idleMs: diag.idleMs } : {}),
-    ...(turnMs != null ? { turnMs } : {}),
-    at: record.lastFailureAt,
-  });
-  metadata.touchSession(record.id, "failed");
-  broadcast({ type: "session.failed", sessionId: record.id, failedAt: record.lastFailureAt });
-  broadcast({ type: "session.outcome", sessionId: record.id, status: "timed_out", completedAt: new Date().toISOString(), error: reason });
-  broadcast({ type: "session.error", sessionId: record.id, error: reason });
-  // Settle the client, force the runtime abort (SIGKILL escalation guarantees the
-  // wedged child dies), and reopen so a follow-up prompt runs a fresh turn.
-  abortSessionRecord(record);
-  void evaluateEphemeralTeardown();
-}
-
-/**
- * Is the turn's subprocess still alive? Returns undefined when it can't be told
- * locally — a remote agent-service session runs on another host, and a session
- * with no active pid has no process to probe (the idle timer decides those). A
- * `false` result (pid present but gone) is an unambiguous "stuck" signal the
- * stall check acts on quickly.
- */
-function probeTurnPidAlive(record: SessionRecord): boolean | undefined {
-  if (record.agentServiceAddress) return undefined; // process lives on another node
-  const pid = record.session.activePid?.();
-  if (!pid) return undefined;
-  try {
-    process.kill(pid, 0); // signal 0 = liveness probe, kills nothing
-    return true;
-  } catch (error) {
-    // EPERM means the process exists but we can't signal it — still alive.
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-/** Which stall condition (if any) a working session's current turn has hit —
- *  the diagnostic trigger the recovery path attributes per runtime. A session
- *  waiting on the human (pending approval/question), paused, or locked to its
- *  TUI is deliberately never counted as stalled — it's not hung. */
-function stallTriggerFor(record: SessionRecord, now = Date.now()): StallTrigger | null {
-  if (turnStallMs <= 0 && turnActivityStallMs <= 0) return null;
-  if (!sessionBusy(record)) return null;
-  if (record.turnTimedOut) return null; // recovery already running
-  if (record.paused) return null;
-  if (record.tuiTermId || record.tuiRefreshing) return null; // driven from the terminal
-  if (sessionHasPendingApproval(record)) return null; // waiting on the user, not hung
-  const lastProgressAt = record.lastProgressAt ?? record.workingStartedAt ?? now;
-  const lastStructuralProgressAt = record.lastStructuralProgressAt ?? record.workingStartedAt ?? now;
-  return classifyStallTrigger({
-    now,
-    lastProgressAt,
-    stallMs: turnStallMs,
-    pidAlive: probeTurnPidAlive(record),
-    lastStructuralProgressAt,
-    activityStallMs: turnActivityStallMs,
-  });
-}
-
-/** Whether a working session's current turn looks stalled. */
-function turnLooksStalled(record: SessionRecord, now = Date.now()): boolean {
-  return stallTriggerFor(record, now) !== null;
-}
-
-/** Periodic sweep: recover any working session whose turn has stalled. This is
- *  what makes a hang self-heal without the user hitting Stop or waiting out the
- *  hour-long cap. */
-function sweepStalledTurns(): void {
-  if (turnStallMs <= 0 && turnActivityStallMs <= 0) return;
-  const now = Date.now();
-  for (const record of new Set(openSessions.values())) {
-    const trigger = stallTriggerFor(record, now);
-    if (!trigger) continue;
-    const idleMs = stallIdleMs(record, trigger, now);
-    recoverStuckTurn(record, turnStallMessage(idleMs, trigger), { trigger, idleMs });
-  }
-}
-
-/**
- * Before dispatching a user prompt, recover the session first if its current
- * turn is stalled. Without this a message sent to a hung session is silently
- * turned into a *steer* into the dead turn (promptOptionsFor, which steers while
- * isStreaming) and vanishes — the exact "I typed and nothing happened, it's
- * un-resumable" symptom. Recovering first means the prompt runs as a fresh turn.
- */
-async function recoverStalledBeforePrompt(record: SessionRecord): Promise<void> {
-  const now = Date.now();
-  const trigger = stallTriggerFor(record, now);
-  if (!trigger) return;
-  const idleMs = stallIdleMs(record, trigger, now);
-  recoverStuckTurn(record, turnStallMessage(idleMs, trigger), { trigger, idleMs });
-  await record.abortRecovery?.catch(() => {});
-}
-
-async function promptWithWatchdog(record: SessionRecord, prompt: string, options?: ReturnType<typeof promptOptionsFor>): Promise<void> {
-  armTurnWatchdog(record);
-  const timeoutSignal = record.turnTimeoutSignal;
-  const promptPromise = record.session.prompt(prompt, options);
-  // When the watchdog wins the race below, this prompt promise is abandoned but
-  // can still reject later — a wedged agent's `chat.send` times out, or its child
-  // is killed mid-turn. Mark it handled so that late rejection doesn't surface as
-  // an unhandledRejection after the turn has already been recovered. Promise.race
-  // still observes the same rejection through the original reference.
-  promptPromise.catch(() => {});
-  try {
-    await Promise.race([
-      promptPromise,
-      ...(timeoutSignal ? [timeoutSignal.then(() => { throw new Error(turnTimeoutMessage()); })] : []),
-    ]);
-  } catch (error) {
-    // The timeout callback already cleared/persisted the session. For an ordinary
-    // prompt failure, disarm here and let the caller publish its actionable error.
-    if (!record.turnTimedOut) clearTurnWatchdog(record);
-    throw error;
-  }
 }
 
 function markSessionWorking(record: SessionRecord, activity: unknown, opts?: { structural?: boolean }) {
@@ -8176,7 +7778,7 @@ function markSessionWorking(record: SessionRecord, activity: unknown, opts?: { s
 }
 
 function clearSessionWorking(record: SessionRecord, forcedStatus?: BivySessionStatus) {
-  clearTurnWatchdog(record);
+  turnWatchdog.clearTurnWatchdog(record);
   touchSession(record);
   record.isWorking = false;
   record.lastActivity = undefined;
@@ -8314,7 +7916,7 @@ async function driveSessionResume(id: string): Promise<void> {
     const prompt = record.lastPrompt ?? buildInteractiveResumePrompt();
     console.log(`[resume] auto-resuming session ${id} — provider limit has reset`);
     broadcast({ type: "session.notice", sessionId: id, level: "info", message: "The limit has reset — resuming now." });
-    await promptWithWatchdog(record, prompt, record.lastPromptOptions);
+    await turnWatchdog.promptWithWatchdog(record, prompt, record.lastPromptOptions);
   } catch (error) {
     console.warn(`[resume] auto-resume after a provider limit failed for ${id}`, error);
   }
@@ -8585,7 +8187,7 @@ function attachSessionListeners(record: SessionRecord) {
           getCurrentModelName: () => record.session.getCurrentModel()?.name,
           setModel: (p, i) => { assertSessionModel(record, i); return record.session.setModel(p, i); },
           reprompt: async () => {
-            await promptWithWatchdog(record, record.lastPrompt!, record.lastPromptOptions);
+            await turnWatchdog.promptWithWatchdog(record, record.lastPrompt!, record.lastPromptOptions);
           },
         });
       } else if (resumePlan && scheduleSessionResume(record, resumePlan)) {
@@ -8631,8 +8233,8 @@ function attachSessionListeners(record: SessionRecord) {
       // remote (sets upstream), so the work is visible on GitHub. No-op until
       // there's a commit, and only pushes once. Then adopt a PR the agent opened
       // itself (gh/API/web) so the badge lights up.
-      void maybePushWorktreeBranch(record)
-        .then(() => maybeDetectPullRequest(record));
+      void branchPublish.maybePushWorktreeBranch(record)
+        .then(() => prDetection.maybeDetectPullRequest(record));
       // On a disposable machine, a finished turn with nobody watching is the cue
       // to consider self-teardown promptly (the idle sweep is the backstop).
       evaluateEphemeralTeardown();
@@ -8690,234 +8292,17 @@ async function refreshRecordAfterTui(record: SessionRecord) {
   }
 }
 
-function fallbackSessionName(firstPrompt: string): string | undefined {
-  const words = firstPrompt
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/https?:\/\/\S+/g, " ")
-    .replace(/[#*_`>\[\]{}()]/g, " ")
-    .split(/\s+/)
-    .map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
-    .filter(Boolean)
-    .slice(0, 6);
-  if (!words.length) return undefined;
-  const title = words.join(" ");
-  return title.length > 80 ? `${title.slice(0, 77).trim()}…` : title;
-}
-
-function branchFromSessionName(name: string, previousBranch?: string): string {
-  const suffix = previousBranch?.match(/-([0-9a-f]{6})$/i)?.[1] ?? randomBytes(3).toString("hex");
-  return `bivy/${branchSlug(name || "session")}-${suffix}`;
-}
-
-function maybeRenameWorktreeBranch(record: SessionRecord, name: string) {
-  const wt = record.worktree;
-  if (!wt || record.branchPushed || record.branchPushing) return;
-  const next = branchFromSessionName(name, wt.branch);
-  if (!next || next === wt.branch) return;
-
-  const result = spawnSync("git", ["-C", wt.path, "branch", "-m", wt.branch, next], { encoding: "utf8", timeout: 10_000 });
-  if (result.error || result.status !== 0) {
-    const detail = String(result.stderr || result.error || "git branch rename failed").trim();
-    // Pass the branch names as args, not spliced into the format string: a branch
-    // name containing a %-specifier would otherwise be interpreted by console.warn
-    // (CodeQL js/tainted-format-string).
-    console.warn("[branch-rename] could not rename %s to %s:", wt.branch, next, detail);
-    return;
-  }
-
-  wt.branch = next;
-  broadcast({ type: "session.branch_renamed", sessionId: record.id, branch: next });
-}
-
-function cleanSessionName(value: string): string {
-  return value
-    .replace(/[\r\n"'`]/g, " ")
-    .replace(/\p{Control}/gu, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[.?!,:;\-–—]+$/g, "")
-    .slice(0, 60)
-    .trim();
-}
-
-/**
- * A runtime-independent session namer. The Pi and Claude Code SDK adapters name
- * a session with their own model, but the CLI agents (codex, opencode, aider, …)
- * run the generic "dumb-pipe" ProcessRuntime, which has no model — so their
- * sessions never got an agent-written title, only the deterministic
- * fallbackSessionName. This closes that gap using whatever Anthropic credential
- * the node already holds (API key or a Claude Pro/Max OAuth token, resolved from
- * the shared vault or ambient env), so a codex session gets the same concise
- * title + branch as a Pi one. Best-effort: any missing credential / API error returns undefined and
- * the caller keeps the deterministic title. Mirrors ClaudeSession.suggestName's
- * request so behaviour matches the runtimes that name natively.
- */
-/**
- * For process/CLI agents, ask the same provider/model the user selected for the
- * session to title it (via the node-level fallback namer, which resolves the
- * model through the borrowed catalog and the shared vault's credentials). If the
- * CLI uses an opaque local model or a short alias we can't resolve, this returns
- * undefined and the Anthropic node-level fallback (or deterministic title) stands.
- * The Pi inference SDK it uses lives in src/runtime/model-namer.ts so the core
- * daemon imports no Pi SDK package directly.
- */
-async function suggestSessionNameFromSelectedModel(record: SessionRecord, firstPrompt: string): Promise<string | undefined> {
-  const current = record.session.getCurrentModel();
-  if (!firstPrompt.trim() || !current) return undefined;
-  return suggestNameFromSelectedModel({
-    credsDir,
-    piDir,
-    provider: current.provider,
-    id: current.id,
-    firstPrompt,
-    sessionId: record.id,
-  });
-}
-
-async function suggestSessionNameFromNode(firstPrompt: string): Promise<string | undefined> {
-  const prompt = firstPrompt.trim();
-  if (!prompt) return undefined;
-  try {
-    const headers = await anthropicHeadersFromNodeCredential();
-    if (!headers) return undefined;
-    // OAuth (Claude Pro/Max) credentials use a Bearer authorization header and
-    // are only authorized for Claude Code, so a raw /v1/messages call must lead
-    // with the Claude Code identity system block or it's rejected (which left
-    // sessions stuck on the first-line fallback name). API keys (x-api-key)
-    // carry no such restriction.
-    const useOAuth = "authorization" in headers;
-    const namingInstruction = "Name chat sessions from the user's entire first message, not just its first line. Return only a concise title, 2-6 words. No quotes, punctuation, prefixes, or explanations.";
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: "claude-3-5-haiku-latest",
-        max_tokens: 24,
-        temperature: 0.2,
-        system: useOAuth
-          ? [
-              { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
-              { type: "text", text: namingInstruction },
-            ]
-          : namingInstruction,
-        messages: [{ role: "user", content: `Create a short title for this coding-agent session using the full first message below:\n\n${prompt.slice(0, 4000)}` }],
-      }),
-    });
-    if (!response.ok) return undefined;
-    const json = (await response.json()) as { content?: Array<{ type?: string; text?: string }> };
-    const text = (json.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join(" ");
-    return cleanSessionName(text) || undefined;
-  } catch (error) {
-    console.warn("Node-level session naming failed", error);
-    return undefined;
-  }
-}
-
 /**
  * The auto-generated stand-ins a session carries BEFORE it has been named from
  * its first message: an empty/"Untitled session" title, or the `Session <id>`
  * placeholder set at creation. Any other value is a real name — from the
- * first-prompt namer or a manual rename — and must never be re-derived.
+ * first-prompt namer or a manual rename — and must never be re-derived. Shared by
+ * the session namer (injected) and session-discovery.
  */
 function isPlaceholderSessionName(name: string | undefined, id: string): boolean {
   return isEmptyUntitledTitle(name) || String(name ?? "").trim() === `Session ${id.slice(0, 8)}`;
 }
 
-async function maybeNameSession(record: SessionRecord, firstPrompt: string) {
-  if (record.naming || record.namedFromFirstPrompt) return;
-  // `namedFromFirstPrompt` lives only in memory — it was never persisted, and a
-  // resumed session gets its stored name restored onto the runtime (see
-  // createSession) but starts with the flag false. So after any reopen (idle
-  // close, PWA reconnect, node restart) the next prompt fell through to naming
-  // again and re-derived BOTH the title and the branch from that later
-  // message's first line — which is exactly the "session/branch renames on
-  // every message" the UI showed. Treat an already-real name as named and leave
-  // it (and the branch) untouched; only the creation-time placeholders get a
-  // first-message name. This also lets an agent-written name survive: once the
-  // runtime sets a real title, later prompts keep it instead of overwriting.
-  if (!isPlaceholderSessionName(record.session.getName(), record.id)) {
-    record.namedFromFirstPrompt = true;
-    return;
-  }
-  // Once the fallback rename below lands, the title is no longer a
-  // "placeholder" by isPlaceholderSessionName's definition — so a retry triggered
-  // by a *later* prompt must still title from the session's actual first
-  // message, not whatever text happens to trigger the retry. Capture it once
-  // and reuse it on every attempt; otherwise a retry would rename (and
-  // re-branch) the session from a much later message, which is exactly the
-  // "renames on every message" bug this function exists to prevent.
-  if (!record.firstNamingPrompt) record.firstNamingPrompt = firstPrompt.trim();
-  const prompt = record.firstNamingPrompt;
-  if (!prompt) return;
-
-  const MAX_NAMING_ATTEMPTS = 3;
-
-  record.naming = true;
-  try {
-    // This deterministic rename (unlike the LLM refinement below) must not be
-    // allowed to fail silently: maybeNameSession is always invoked fire-and-
-    // forget (`void maybeNameSession(...)`), so an exception here previously
-    // had no catch anywhere in its call chain — it became an unhandled
-    // rejection, and because `namedFromFirstPrompt` is only set true at the
-    // very end, the session was left permanently stranded on its creation-time
-    // "Session <hex>" placeholder with no retry (a later prompt would still
-    // see `record.naming` reset to false by `finally` below and could retry,
-    // but the *first* message's name was lost, and if the failure was
-    // deterministic — e.g. a metadata-store I/O error — every later prompt
-    // would fail the same way and the placeholder would never clear).
-    try {
-      const fallback = fallbackSessionName(prompt) || `Session ${record.id.slice(0, 8)}`;
-      // Always rename deterministically from the first user message, then let the
-      // runtime/agent refine it. This keeps the UI useful even if model-based
-      // naming fails, and keeps repo branches away from raw prompt text.
-      record.session.setName(fallback);
-      persistSessionMetadata(record);
-      maybeRenameWorktreeBranch(record, fallback);
-      broadcast({ type: "session.renamed", sessionId: record.id, sessionFile: record.sessionFile, name: fallback, branch: record.worktree?.branch });
-      scheduleAdvertise();
-
-      let finalName = fallback;
-      let smartNamed = false;
-      try {
-        // Prefer the runtime's own model-based name (Pi, Claude Code SDK). CLI
-        // agents on the dumb-pipe ProcessRuntime return undefined here, so next
-        // ask the same provider/model selected for that session when it maps to
-        // Pi's registry; only then fall back to the node-level Anthropic namer.
-        const suggested = (await record.session.suggestName(prompt)) || (await suggestSessionNameFromSelectedModel(record, prompt)) || (await suggestSessionNameFromNode(prompt));
-        if (suggested && suggested !== fallback) { finalName = suggested; smartNamed = true; }
-      } catch (error) {
-        console.warn("Session naming suggestion failed", error);
-      }
-
-      if (finalName !== fallback) {
-        record.session.setName(finalName);
-        persistSessionMetadata(record);
-        maybeRenameWorktreeBranch(record, finalName);
-        broadcast({ type: "session.renamed", sessionId: record.id, sessionFile: record.sessionFile, name: finalName, branch: record.worktree?.branch });
-        scheduleAdvertise();
-      }
-      // Only lock the title in once a model actually produced one, or once
-      // enough attempts have failed that further retries aren't worth it.
-      // Previously this was set unconditionally here, so a single transient
-      // failure of all three naming tiers (rate limit, network blip, a
-      // credential mid-rotation) permanently froze the session on the blunt
-      // word-truncated fallback — every session that hit it stayed on the
-      // dumb title forever, with the retry the comment above promises never
-      // actually happening. Leaving the flag false lets the next prompt's
-      // fire-and-forget call retry the smart-naming tiers (still against the
-      // captured first prompt above), up to a small cap so a session with no
-      // usable credential at all doesn't retry on every single message forever.
-      record.namingAttempts = (record.namingAttempts ?? 0) + 1;
-      if (smartNamed || record.namingAttempts >= MAX_NAMING_ATTEMPTS) {
-        record.namedFromFirstPrompt = true;
-      }
-    } catch (error) {
-      console.error(`Session naming failed for ${record.id} — leaving the placeholder title in place; a later prompt will retry`, error);
-    }
-  } finally {
-    record.naming = false;
-  }
-}
 
 function restoredWorktreeFromMetadata(meta?: MetadataSession): Worktree | undefined {
   if (!meta?.worktree || !meta.branch) return undefined;
@@ -9622,7 +9007,7 @@ async function createGitWorkspaceSession(repoDir: string, parsed: ParsedRepo, op
   // exist on the remote, rather than silently falling back to the default.
   const base = opts.branch ? await resolveBranchBaseRef(repoDir, opts.branch) : await resolveDefaultBaseRef(repoDir);
   // Start from an opaque, git-safe unique branch. The first user message then
-  // triggers maybeNameSession(), which renames both the session and local branch
+  // triggers sessionNamer.maybeNameSession(), which renames both the session and local branch
   // before the first publish/PR attempt.
   const branch = `bivy/session-${randomBytes(6).toString("hex")}`;
   const record = await createSession(repoDir, undefined, {
@@ -9664,50 +9049,6 @@ function repoSessionParts(record: SessionRecord): { wt: Worktree; parsed: Parsed
   return wt && parsed ? { wt, parsed } : undefined;
 }
 
-function gitAheadCount(base: string, cwd: string): number {
-  const ahead = runGit(["rev-list", "--count", `${base}..HEAD`], cwd);
-  return ahead ? Number(ahead) || 0 : 0;
-}
-
-/**
- * Publish a repo-backed session's worktree branch to the remote on its first
- * commit, so the work shows up on GitHub (and the branch has an upstream for
- * later pushes). Idempotent: no-op until the branch is ahead of origin's default
- * branch, and pushes only once per session. Best-effort — a failure (offline,
- * no token, no push rights) just leaves the branch local and retries next turn.
- */
-async function maybePushWorktreeBranch(record: SessionRecord) {
-  const parts = repoSessionParts(record);
-  if (!parts || record.branchPushed || record.branchPushing) return;
-  const { wt, parsed } = parts;
-
-  record.branchPushing = true; // synchronous re-entry guard across turns
-  try {
-    const base = await resolveDefaultBaseRef(wt.repoRoot);
-    if (gitAheadCount(base, wt.path) <= 0) return; // no commits yet — nothing to publish
-
-    const token = await resolveTokenForRepo(parsed.owner, parsed.repo);
-    if (!token) return; // can't push without a token; the branch stays local
-
-    const cfg: GitHubTaskConfig = { token, owner: parsed.owner, repo: parsed.repo, repoDir: wt.repoRoot, label: "bivy", claimLabel: "bivy:in-progress", pollMs: 60_000 };
-    await pushBranch(cfg, wt.path, wt.branch);
-    record.branchPushed = true;
-    broadcast({ type: "session.notice", sessionId: record.id, message: `Published branch ${wt.branch} to ${parsed.slug}.` });
-    scheduleAdvertise();
-  } finally {
-    record.branchPushing = false;
-  }
-}
-
-/** The single "primary" PR to surface on a one-badge row: an open PR if there
- *  is one, else the most-relevant recent one (the list is ordered open-first). */
-function primaryPr(prs?: PrRef[]): PrRef | undefined {
-  return prs && prs.length ? prs[0] : undefined;
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 // HTML-escape for the few browser pages the node serves itself (OAuth callback,
 // GitHub App manifest). These pages interpolate values the caller can influence
@@ -9720,188 +9061,78 @@ function escapeHtml(s: string): string {
   );
 }
 
-/** Order a merged PR set for a one-badge row: open first (the actionable one),
- *  then by PR number descending (newest first) within each state group. */
-function sortPrs(prs: PrRef[]): PrRef[] {
-  const rank = (s: PrState) => (s === "open" ? 0 : s === "merged" ? 1 : 2);
-  return [...prs].sort((a, b) => rank(a.state) - rank(b.state) || (b.number ?? 0) - (a.number ?? 0));
-}
 
-/**
- * Harvest PR numbers this session references in its own transcript — the URL a
- * `gh pr create` / GitHub-MCP call returns, or that the agent restates in its
- * reply. Branch-scoped lookups only see the session's *own* worktree branch, so
- * this is what surfaces PRs a session opens on other branches (the multi-PR
- * case). Same-repo only, capped, best-effort. Trade-off: a PR the session merely
- * *mentions* (not opened) is also adopted — acceptable for coding sessions, whose
- * transcript PR URLs are overwhelmingly their own.
- */
-function harvestPrNumbers(record: SessionRecord, owner: string, repo: string): Set<number> {
-  const nums = new Set<number>();
-  try {
-    const json = JSON.stringify(record.session.getMessages());
-    const re = new RegExp(`github\\.com/${escapeRegExp(owner)}/${escapeRegExp(repo)}/pull/(\\d+)`, "gi");
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(json)) && nums.size < 30) {
-      const n = Number(m[1]);
-      if (n) nums.add(n);
-    }
-  } catch {
-    // getMessages/stringify can throw on an odd runtime state — harvesting is a
-    // best-effort augmentation, never let it break the after-turn hook.
-  }
-  return nums;
-}
+// PR detection/refresh orchestration lives in ./session/pr-detection; its whole
+// coupling surface to the daemon is this deps object. The narrow PrSession it
+// operates on is structurally satisfied by SessionRecord (and MetadataSession
+// for the metadata-only path).
+const prDetection = createPrDetection({
+  findPullRequestsForBranch,
+  getPullRequest,
+  broadcast,
+  persistSessionMetadata: (record) => persistSessionMetadata(record as SessionRecord),
+  scheduleAdvertise,
+  resolveTokenForRepo,
+  repoSessionParts: (record) => repoSessionParts(record as SessionRecord),
+  parseRepoSource,
+  nodeGithubMaxConcurrent,
+  listSessions: () => metadata.listSessions(),
+  getLiveSession: (id) => openSessions.get(id),
+  upsertSession: (patch) => metadata.upsertSession(patch),
+});
 
-type PrState = PrRef["state"];
+// Fork stand-up lives in ./session/fork-standup; it's a consumer of createSession
+// and the git/clone/worktree machinery, all injected so its base-ref orchestration
+// is unit-tested. Generic over SessionRecord so the outcome record is the real type.
+const forkStandUp = createForkStandUp<SessionRecord>({
+  createSession,
+  broadcast,
+  persistSessionMetadata,
+  scheduleAdvertise,
+  bivySessionEnvelope,
+  applyRequestedModel,
+  resolveTokenForRepo,
+  syncModelAuthFromControlPlane,
+  withRepoLock,
+  getProviderCredential: (provider) => createCredentialStore(credsDir).getCredential(provider),
+  cloneOrUpdateRepo,
+  createWorktree,
+  resolveDefaultBaseRef,
+  resolveAdoptBaseRef,
+  applyDirtyPatch,
+  gitRepoRoot,
+  materializeFork,
+  getRuntime,
+  listRuntimes,
+  reposRoot,
+  defaultWorkspace,
+});
 
-/**
- * Combine three PR signals into one fresh list, deduped by URL: (1) every PR
- * whose head is `branch`, (2) every PR referenced by number in `harvestNumbers`
- * (fetched individually for fresh state), and (3) every previously-known PR not
- * already re-surfaced by (1) or (2), re-fetched by number so a merge/close is
- * reflected even once its branch stops matching. Shared by the live-session path
- * (`refreshPullRequests`, which also harvests transcript-mentioned numbers) and
- * the metadata-only path (`refreshPullRequestsForMeta`, which doesn't have a
- * transcript to harvest — `harvestNumbers` is empty there).
- */
-async function reconcilePrsAgainstGitHub(cfg: GitHubTaskConfig, branch: string, prevPrs: PrRef[] | undefined, harvestNumbers: Set<number>): Promise<PrRef[]> {
-  const byUrl = new Map<string, PrRef>();
-  for (const pr of await findPullRequestsForBranch(cfg, branch)) byUrl.set(pr.url, pr);
+// Worktree branch publishing/renaming lives in ./session/branch-publish; it owns
+// the branchPushed/branchPushing flags and every branch mutation.
+const branchPublish = createBranchPublish({
+  broadcast,
+  scheduleAdvertise,
+  resolveTokenForRepo,
+  repoSessionParts: (record) => repoSessionParts(record as SessionRecord),
+  gitAheadCount,
+  resolveDefaultBaseRef,
+  pushBranch,
+});
 
-  const knownByNumber = new Set<number>();
-  for (const pr of byUrl.values()) if (pr.number != null) knownByNumber.add(pr.number);
-
-  for (const n of harvestNumbers) {
-    if (knownByNumber.has(n)) continue;
-    const pr = await getPullRequest(cfg, n);
-    if (pr) { byUrl.set(pr.url, pr); if (pr.number != null) knownByNumber.add(pr.number); }
-  }
-
-  // Keep the stale entry if the fetch fails (a token blip shouldn't drop a PR
-  // the user already saw).
-  for (const prev of prevPrs ?? []) {
-    if (byUrl.has(prev.url)) continue;
-    const pr = prev.number != null ? await getPullRequest(cfg, prev.number) : undefined;
-    byUrl.set(prev.url, pr ?? prev);
-  }
-
-  return sortPrs([...byUrl.values()]);
-}
-
-/**
- * Reconcile this session's PR list against GitHub. Updates `record.prs` and
- * keeps `record.prUrl` on the live *open* PR (undefined once all are
- * merged/closed, so the "already has a PR" guards allow a fresh one). Persists
- * + broadcasts only on change, so it's cheap after each turn. Also the engine
- * behind the on-demand `/github-status` command and REST endpoint — those force
- * a call here regardless of whether the session is mid-turn.
- */
-async function refreshPullRequests(record: SessionRecord): Promise<boolean> {
-  const parts = repoSessionParts(record);
-  if (!parts) return false;
-  const { wt, parsed } = parts;
-  const token = await resolveTokenForRepo(parsed.owner, parsed.repo);
-  if (!token) return false; // can't query without a token
-  const cfg: GitHubTaskConfig = { token, owner: parsed.owner, repo: parsed.repo, repoDir: wt.repoRoot, label: "bivy", claimLabel: "bivy:in-progress", pollMs: 60_000 };
-  const prs = await reconcilePrsAgainstGitHub(cfg, wt.branch, record.prs, harvestPrNumbers(record, parsed.owner, parsed.repo));
-  const openUrl = prs.find((p) => p.state === "open")?.url;
-  const changed = JSON.stringify(prs) !== JSON.stringify(record.prs ?? []) || openUrl !== record.prUrl;
-  if (!changed) return false;
-  record.prs = prs;
-  record.prUrl = openUrl;
-  if (prs.length) record.prSuggested = true; // a PR exists (or did) — don't nudge
-  persistSessionMetadata(record);
-  broadcast({ type: "session.pr_opened", sessionId: record.id, prUrl: openUrl, prs });
-  scheduleAdvertise();
-  return true;
-}
-
-/**
- * Same reconciliation as `refreshPullRequests`, but for a session that's only a
- * persisted `MetadataSession` row — not live in `openSessions`. Used by the
- * global "refresh GitHub status" scan so reconciling hundreds of finished
- * sessions doesn't mean spinning up hundreds of runtimes (expensive, and
- * unnecessary: the two GitHub lookups this needs only take owner/repo/branch/
- * token, none of which require a live session or even the worktree to still
- * exist on disk). Trade-off vs. the live path: no transcript to harvest, so a PR
- * opened on a second branch that was never independently listed won't be
- * picked up here — only previously-known PRs and the session's own branch are
- * reconciled. That's exactly what's needed to flip a stale `open` badge to
- * merged/closed.
- */
-async function refreshPullRequestsForMeta(meta: MetadataSession): Promise<boolean> {
-  if (!meta.branch) return false;
-  const parsed = parseRepoSource(meta.source);
-  if (!parsed) return false;
-  const token = await resolveTokenForRepo(parsed.owner, parsed.repo);
-  if (!token) return false;
-  const cfg: GitHubTaskConfig = { token, owner: parsed.owner, repo: parsed.repo, repoDir: meta.worktree ?? "", label: "bivy", claimLabel: "bivy:in-progress", pollMs: 60_000 };
-  const prs = await reconcilePrsAgainstGitHub(cfg, meta.branch, meta.prs, new Set());
-  const openUrl = prs.find((p) => p.state === "open")?.url;
-  const changed = JSON.stringify(prs) !== JSON.stringify(meta.prs ?? []) || openUrl !== meta.prUrl;
-  if (!changed) return false;
-  metadata.upsertSession({ id: meta.id, prs, prUrl: openUrl });
-  broadcast({ type: "session.pr_opened", sessionId: meta.id, prUrl: openUrl, prs });
-  scheduleAdvertise();
-  return true;
-}
-
-/**
- * Global "refresh GitHub status" scan: reconcile every session this node has
- * ever tracked (live or not) that carries PR state against GitHub, so stale
- * `open` badges left behind by finished/detached sessions get a chance to flip
- * to merged/closed without waiting for that session to take another turn. Live
- * sessions go through the full `refreshPullRequests` (transcript harvest
- * included); everything else through the cheaper metadata-only path. Bounded
- * concurrency keeps the GitHub call count sane across a large session list —
- * reuses the node's GitHub-queue concurrency setting as the cap.
- */
-async function refreshAllPullRequestStatuses(): Promise<{ scanned: number; changed: number }> {
-  const candidates = metadata.listSessions().filter((meta) => {
-    if (!meta.branch || !parseRepoSource(meta.source)) return false;
-    return Boolean(meta.prUrl) || Boolean(meta.prs && meta.prs.length > 0);
-  });
-  let scanned = 0;
-  let changed = 0;
-  let next = 0;
-  const concurrency = Math.max(1, Math.min(nodeGithubMaxConcurrent() || 4, candidates.length || 1));
-  async function worker() {
-    for (;;) {
-      const i = next++;
-      if (i >= candidates.length) return;
-      const meta = candidates[i];
-      scanned++;
-      try {
-        const live = openSessions.get(meta.id);
-        const didChange = live ? await refreshPullRequests(live) : await refreshPullRequestsForMeta(meta);
-        if (didChange) changed++;
-      } catch (error) {
-        console.warn(`[github] could not refresh PR status for session ${meta.id}`, error);
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: concurrency }, worker));
-  return { scanned, changed };
-}
-
-/**
- * Detect (and keep in sync) the pull requests for this session's branch — PRs
- * opened out-of-band by the agent's `gh pr create`, the GitHub API, or the web
- * UI, plus state changes (a PR merging or closing) on ones already known. Runs
- * after each turn (see the agent_end hook); a single cheap GitHub lookup. Unlike
- * the old detector it does NOT stop once a PR is known — it keeps refreshing so
- * the badge tracks the PR through merge.
- */
-async function maybeDetectPullRequest(record: SessionRecord) {
-  if (!repoSessionParts(record) || record.prOpening || record.prDetecting) return;
-  record.prDetecting = true;
-  try {
-    await refreshPullRequests(record);
-  } finally {
-    record.prDetecting = false;
-  }
-}
+// Session auto-naming lives in ./session/session-namer; its coupling surface is
+// this deps object. The worktree branch-rename it triggers is the branch-publish
+// concern, injected as renameBranch.
+const sessionNamer = createSessionNamer({
+  broadcast,
+  persistSessionMetadata: (record) => persistSessionMetadata(record as SessionRecord),
+  scheduleAdvertise,
+  renameBranch: (record, name) => branchPublish.maybeRenameWorktreeBranch(record as SessionRecord, name),
+  isPlaceholderName: isPlaceholderSessionName,
+  anthropicHeadersFromNodeCredential,
+  credsDir,
+  piDir,
+});
 
 approvals.onRequest((request: ApprovalRequest) => {
   persistApprovalRequest(request);
@@ -10238,7 +9469,7 @@ app.get("/api/diagnostics", (_req, res) => {
       enforcementLevel: runtimeInfo?.protectionLevel ?? "user-permissions",
       approvalMode,
       relayConnected: Boolean(relay?.connected),
-      turnRecoveries: turnRecoveryStats(),
+      turnRecoveries: turnWatchdog.turnRecoveryStats(),
       plugins: (() => {
         const installed = listInstalledPlugins(appDir);
         return {
@@ -11937,7 +11168,7 @@ app.post("/api/session/prompt", async (req, res, next) => {
     await record.abortRecovery;
     // Recover a hung turn before prompting so the message runs fresh, not as a
     // steer into a dead turn (see recoverStalledBeforePrompt).
-    await recoverStalledBeforePrompt(record);
+    await turnWatchdog.recoverStalledBeforePrompt(record);
     if (record.tuiTermId || record.tuiRefreshing) {
       return res.status(409).json({ error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
     }
@@ -11953,9 +11184,9 @@ app.post("/api/session/prompt", async (req, res, next) => {
     // Do not await completion; events stream over WebSocket.
     void dedupePrompt(cmid, async () => {
       broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
-      void maybeNameSession(record, promptText);
+      void sessionNamer.maybeNameSession(record, promptText);
       harnessBeginTurn(record);
-      await promptWithWatchdog(record, agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images));
+      await turnWatchdog.promptWithWatchdog(record, agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images));
     }).catch((error) => {
       clearSessionWorking(record);
       broadcast({ type: "session.error", sessionId: record.id, error: String(error?.stack ?? error) });
@@ -11990,7 +11221,7 @@ app.post("/api/session/pr/refresh", async (req, res, next) => {
   try {
     const session = await resolveOrResumeSession(req.body?.sessionId, req.body?.path);
     if (!session) return res.status(404).json({ error: "Session not found" });
-    await refreshPullRequests(session);
+    await prDetection.refreshPullRequests(session);
     res.json({ ok: true, prUrl: session.prUrl, prs: session.prs });
   } catch (error) {
     next(error);
@@ -11998,11 +11229,11 @@ app.post("/api/session/pr/refresh", async (req, res, next) => {
 });
 
 // Global scan: reconcile every session this node has tracked that carries PR
-// state. Bounded concurrency inside refreshAllPullRequestStatuses(); only
+// state. Bounded concurrency inside prDetection.refreshAllPullRequestStatuses(); only
 // changed sessions persist + broadcast.
 app.post("/api/sessions/pr/refresh", async (_req, res, next) => {
   try {
-    const result = await refreshAllPullRequestStatuses();
+    const result = await prDetection.refreshAllPullRequestStatuses();
     res.json({ ok: true, ...result });
   } catch (error) {
     next(error);
