@@ -531,12 +531,27 @@ export function Composer({
   // the just-opened sheet (or its backdrop) and dismiss it the instant it opens.
   // iOS: text selection / the callout bubble preempt the pointer stream and
   // fire pointercancel before the timer elapses, so the same gesture is also
-  // wired to touch events (harmless double-run on iOS 13+: each press resets
-  // the same timer). The button's CSS kills selection + callout, and
-  // onContextMenu suppresses the long-press context menu.
+  // wired to touch events (double-run on iOS 13+: each press resets the same
+  // timer — see startLongPress, which clears any armed timer first). The
+  // button's CSS kills selection + callout, and onContextMenu opens the
+  // schedule sheet (the desktop long-press equivalent) on right-click.
   const LONG_PRESS_MS = 500;
+  function openSchedule() {
+    const swallow = (ev: MouseEvent) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      window.removeEventListener("click", swallow, true);
+    };
+    window.addEventListener("click", swallow, true);
+    setScheduling(true);
+  }
   function startLongPress() {
     if (!accountMode || !canSend) return;
+    // A single tap fires both onPointerDown and onTouchStart, so this runs
+    // twice per press; clear any timer we already armed before starting a new
+    // one, or the first (orphaned) timer keeps running past a quick tap's
+    // release and pops the schedule sheet unbidden.
+    cancelLongPress();
     // A fresh press always starts clean: a stale flag from an earlier
     // long-press (whose release click landed on the sheet, not this button)
     // must not swallow the next real tap.
@@ -544,13 +559,7 @@ export function Composer({
     longPressTimer.current = setTimeout(() => {
       if (longPressFired.current) return;
       longPressFired.current = true;
-      const swallow = (ev: MouseEvent) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        window.removeEventListener("click", swallow, true);
-      };
-      window.addEventListener("click", swallow, true);
-      setScheduling(true);
+      openSchedule();
     }, LONG_PRESS_MS);
   }
   function cancelLongPress() {
@@ -862,7 +871,17 @@ export function Composer({
                 onTouchMove={cancelLongPress}
                 onTouchEnd={cancelLongPress}
                 onTouchCancel={cancelLongPress}
-                onContextMenu={(e) => e.preventDefault()}
+                onContextMenu={(e) => {
+                  // Right-click is the desktop equivalent of the touch
+                  // long-press: open the schedule sheet instead of the
+                  // browser context menu. cancelLongPress so a pending
+                  // hold-timer doesn't fire a second time.
+                  e.preventDefault();
+                  if (!accountMode || !canSend) return;
+                  cancelLongPress();
+                  longPressFired.current = true;
+                  openSchedule();
+                }}
                 onClick={(e) => {
                   if (longPressFired.current) {
                     // A long-press already opened the schedule sheet; the release
