@@ -132,6 +132,7 @@ For settings that also have legacy projections:
 | Approval mode | per-session/automation request → `BIVY_APPROVAL_MODE`/`config.yaml` default → node `safety.approvalFloor` → repository approval floor (the most restrictive bound wins) |
 | Default agent | per-run override → `BIVY_RUNTIME` → `config.yaml` `defaults.agent` → `pi` |
 | Auto-attach tool images | `BIVY_AUTO_ATTACH_TOOL_IMAGES` → `config.yaml` `sessions.autoAttachToolImages` → off |
+| Wedged-turn recovery | `config.yaml` `sessions.wedgedTurnMinutes` → `BIVY_TURN_ACTIVITY_STALL_MS` → 15 min. A turn that keeps streaming raw tool output but makes no structural progress (no tool completion, model text, or turn boundary) for this long is recovered. `0` disables it, leaving the 5-min silence stall and 1-hour cap. |
 
 CLI flags always win over both, for the commands that have them
 (`bivy exec --agent`, `bivy relay:setup --control-plane`, `bivy prune

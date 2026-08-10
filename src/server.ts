@@ -59,7 +59,7 @@ import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-cli
 import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
-import { configuredTurnTimeoutMs, configuredTurnStallMs, classifyStallTrigger, type StallTrigger } from "./session/turn-watchdog.js";
+import { configuredTurnTimeoutMs, configuredTurnStallMs, configuredTurnActivityStallMs, classifyStallTrigger, type StallTrigger } from "./session/turn-watchdog.js";
 import { forceAbortTurn } from "./session/abort-recovery.js";
 import { runRequiredAutomationChecks } from "./automation-checks.js";
 import { configToLegacySettings, mergeLegacyIntoNodeConfig, readNodeConfig, writeNodeConfig, type NodeConfig } from "./node-config.js";
@@ -1001,7 +1001,7 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastProgressAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; workspaceState?: SessionWorkspaceState; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastProgressAt?: number; lastStructuralProgressAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prSuggested?: boolean; prOpening?: boolean; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; workspaceState?: SessionWorkspaceState; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -7926,9 +7926,20 @@ else console.warn("[turn-watchdog] disabled by BIVY_TURN_TIMEOUT_MS=0");
 // for turnStallMs, or a dead turn subprocess) in minutes and force-recovers the
 // session so it's always resumable. Swept periodically; 0 relies on the cap alone.
 const turnStallMs = configuredTurnStallMs();
-const stallSweepMs = turnStallMs > 0 ? Math.max(15_000, Math.min(60_000, Math.floor(turnStallMs / 4))) : 0;
-if (turnStallMs > 0) {
-  console.log(`[turn-watchdog] stall detection armed: idle=${turnStallMs}ms sweep=${stallSweepMs}ms`);
+// Wedged band: recover a turn that keeps streaming raw subprocess output but
+// makes no structural progress (no tool completion / model text / turn boundary)
+// — the "npm install retrying forever" hang that the silence stall never sees.
+// Sourced from config-as-code (sessions.wedgedTurnMinutes); env is a fallback.
+const turnActivityStallMs = configuredTurnActivityStallMs(
+  canonicalNodeConfig.sessions?.wedgedTurnMinutes != null
+    ? String(canonicalNodeConfig.sessions.wedgedTurnMinutes * 60_000)
+    : undefined,
+);
+// The sweep must tick fast enough to serve whichever band is enabled.
+const stallSweepBasis = [turnStallMs, turnActivityStallMs].filter((ms) => ms > 0);
+const stallSweepMs = stallSweepBasis.length ? Math.max(15_000, Math.min(60_000, Math.floor(Math.min(...stallSweepBasis) / 4))) : 0;
+if (turnStallMs > 0 || turnActivityStallMs > 0) {
+  console.log(`[turn-watchdog] stall detection armed: idle=${turnStallMs}ms wedged=${turnActivityStallMs}ms sweep=${stallSweepMs}ms`);
   const stallSweepTimer = setInterval(() => sweepStalledTurns(), stallSweepMs);
   stallSweepTimer.unref?.();
 } else {
@@ -7963,9 +7974,23 @@ function armTurnWatchdog(record: SessionRecord): void {
   record.turnWatchdog.unref?.();
 }
 
-/** Message for a session recovered because it stopped making progress. */
-function turnStallMessage(idleMs: number): string {
-  return `The agent stopped responding (no activity for ${Math.round(idleMs / 60_000)} min) and was recovered. Send a message to continue.`;
+/** Message for a session recovered because it stopped making progress. A wedged
+ *  turn was still emitting output, so word it as "no progress" rather than the
+ *  "no activity" the silence stall reports. */
+function turnStallMessage(idleMs: number, trigger: StallTrigger = "stalled"): string {
+  const mins = Math.round(idleMs / 60_000);
+  if (trigger === "wedged") return `A tool call ran for ${mins} min without making progress and was recovered. Send a message to continue.`;
+  return `The agent stopped responding (no activity for ${mins} min) and was recovered. Send a message to continue.`;
+}
+
+/** Idle used for a stall's diagnostic/message. A `wedged` turn is measured from
+ *  the last STRUCTURAL progress (raw output kept flowing), every other trigger
+ *  from the last progress of any kind. */
+function stallIdleMs(record: SessionRecord, trigger: StallTrigger, now: number): number {
+  const anchor = trigger === "wedged"
+    ? record.lastStructuralProgressAt ?? record.workingStartedAt ?? now
+    : record.lastProgressAt ?? record.workingStartedAt ?? now;
+  return now - anchor;
 }
 
 /**
@@ -8049,14 +8074,22 @@ function probeTurnPidAlive(record: SessionRecord): boolean | undefined {
  *  waiting on the human (pending approval/question), paused, or locked to its
  *  TUI is deliberately never counted as stalled — it's not hung. */
 function stallTriggerFor(record: SessionRecord, now = Date.now()): StallTrigger | null {
-  if (turnStallMs <= 0) return null;
+  if (turnStallMs <= 0 && turnActivityStallMs <= 0) return null;
   if (!sessionBusy(record)) return null;
   if (record.turnTimedOut) return null; // recovery already running
   if (record.paused) return null;
   if (record.tuiTermId || record.tuiRefreshing) return null; // driven from the terminal
   if (sessionHasPendingApproval(record)) return null; // waiting on the user, not hung
   const lastProgressAt = record.lastProgressAt ?? record.workingStartedAt ?? now;
-  return classifyStallTrigger({ now, lastProgressAt, stallMs: turnStallMs, pidAlive: probeTurnPidAlive(record) });
+  const lastStructuralProgressAt = record.lastStructuralProgressAt ?? record.workingStartedAt ?? now;
+  return classifyStallTrigger({
+    now,
+    lastProgressAt,
+    stallMs: turnStallMs,
+    pidAlive: probeTurnPidAlive(record),
+    lastStructuralProgressAt,
+    activityStallMs: turnActivityStallMs,
+  });
 }
 
 /** Whether a working session's current turn looks stalled. */
@@ -8068,13 +8101,13 @@ function turnLooksStalled(record: SessionRecord, now = Date.now()): boolean {
  *  what makes a hang self-heal without the user hitting Stop or waiting out the
  *  hour-long cap. */
 function sweepStalledTurns(): void {
-  if (turnStallMs <= 0) return;
+  if (turnStallMs <= 0 && turnActivityStallMs <= 0) return;
   const now = Date.now();
   for (const record of new Set(openSessions.values())) {
     const trigger = stallTriggerFor(record, now);
     if (!trigger) continue;
-    const idleMs = now - (record.lastProgressAt ?? record.workingStartedAt ?? now);
-    recoverStuckTurn(record, turnStallMessage(idleMs), { trigger, idleMs });
+    const idleMs = stallIdleMs(record, trigger, now);
+    recoverStuckTurn(record, turnStallMessage(idleMs, trigger), { trigger, idleMs });
   }
 }
 
@@ -8086,10 +8119,11 @@ function sweepStalledTurns(): void {
  * un-resumable" symptom. Recovering first means the prompt runs as a fresh turn.
  */
 async function recoverStalledBeforePrompt(record: SessionRecord): Promise<void> {
-  const trigger = stallTriggerFor(record);
+  const now = Date.now();
+  const trigger = stallTriggerFor(record, now);
   if (!trigger) return;
-  const idleMs = Date.now() - (record.lastProgressAt ?? record.workingStartedAt ?? Date.now());
-  recoverStuckTurn(record, turnStallMessage(idleMs), { trigger, idleMs });
+  const idleMs = stallIdleMs(record, trigger, now);
+  recoverStuckTurn(record, turnStallMessage(idleMs, trigger), { trigger, idleMs });
   await record.abortRecovery?.catch(() => {});
 }
 
@@ -8116,16 +8150,22 @@ async function promptWithWatchdog(record: SessionRecord, prompt: string, options
   }
 }
 
-function markSessionWorking(record: SessionRecord, activity: unknown) {
+function markSessionWorking(record: SessionRecord, activity: unknown, opts?: { structural?: boolean }) {
   touchSession(record);
   const wasWorking = record.isWorking;
   record.isWorking = true;
   record.lastActivity = activity;
-  record.workingStartedAt ||= Date.now();
-  // Every marked-working runtime event is turn PROGRESS — the anchor the stall
-  // watchdog measures silence from. workingStartedAt anchors the wall-clock cap;
+  const now = Date.now();
+  record.workingStartedAt ||= now;
+  // Every marked-working runtime event is turn PROGRESS — the anchor the silence
+  // stall watchdog measures from. workingStartedAt anchors the wall-clock cap;
   // this anchors the idle/stall check (see sweepStalledTurns).
-  record.lastProgressAt = Date.now();
+  record.lastProgressAt = now;
+  // STRUCTURAL progress (a tool start/end, streamed model text, a turn boundary)
+  // separately anchors the wedged band. Raw subprocess output (tool_execution_
+  // update) bumps lastProgressAt above but NOT this, so a chatty-but-hung tool
+  // still trips the wedged watchdog. Non-event callers default to structural.
+  if (opts?.structural !== false) record.lastStructuralProgressAt = now;
   // A new attempt resolves the prior turn's failure condition at its source.
   record.lastFailureAt = undefined;
   metadata.touchSession(record.id, "working");
@@ -8426,7 +8466,13 @@ function attachSessionListeners(record: SessionRecord) {
       "tool_execution_end",
       "tool_result",
     ].includes(event.type)) {
-      markSessionWorking(record, event);
+      // tool_execution_update is raw subprocess output (streamed stdout/stderr):
+      // it proves the child is alive but not that the turn is advancing, so it
+      // counts as activity but NOT structural progress. Everything else here —
+      // including message_update (the model streaming reply text) — is genuine
+      // structural progress. This is what lets the wedged watchdog catch a tool
+      // that streams output forever without ever completing.
+      markSessionWorking(record, event, { structural: event.type !== "tool_execution_update" });
     }
     // A fresh turn re-arms the once-per-turn auth-required signal, so a credential
     // that was fixed (or newly broke) is re-evaluated on the next prompt.

@@ -40,6 +40,7 @@ sessions:
   worktreeSync: false
   resume: auto
   autoAttachToolImages: false
+  wedgedTurnMinutes: 15
 
 automation:
   checks: [test, lint, typecheck]

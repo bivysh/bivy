@@ -90,6 +90,28 @@ test("legacy config migrates once and typed set remains validated", () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("sessions.wedgedTurnMinutes is a validated typed knob", () => {
+  const ok = parseNodeConfig(`
+version: 1
+sessions:
+  wedgedTurnMinutes: 15
+`);
+  assert.equal(ok.ok, true, ok.errors.join("\n"));
+  assert.equal(ok.config?.sessions?.wedgedTurnMinutes, 15);
+
+  // 0 disables the band; the upper bound is the wall-clock turn cap (60 min).
+  assert.equal(setConfigValue(ok.config!, "sessions.wedgedTurnMinutes", 0).sessions?.wedgedTurnMinutes, 0);
+  assert.throws(() => setConfigValue(ok.config!, "sessions.wedgedTurnMinutes", 90), /wedgedTurnMinutes/);
+
+  const bad = parseNodeConfig(`
+version: 1
+sessions:
+  wedgedTurnMinutes: 90
+`);
+  assert.equal(bad.ok, false);
+  assert.match(bad.errors.join("\n"), /sessions\.wedgedTurnMinutes/);
+});
+
 test("project policy validates safety floors, checks, and a queue ruleset", () => {
   const result = parseProjectPolicy(`
 version: 1
