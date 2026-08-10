@@ -11,7 +11,16 @@ test("long-press Send: touch-aware hold that suppresses the release click", asyn
   const source = await readFile(COMPOSER, "utf8");
   // The schedule sheet is opened from a hold, so the release must never submit.
   expect(source).toContain("window.addEventListener(\"click\", swallow, true)");
-  expect(source).toContain("onContextMenu={(e) => e.preventDefault()}");
+  // Right-click is the desktop equivalent. Assert the handler's behavior rather
+  // than requiring the old one-line implementation: it now also cancels the
+  // armed hold timer and opens the sheet directly.
+  const contextMenuStart = source.indexOf("onContextMenu={(e) => {");
+  const contextMenuEnd = source.indexOf("onClick={(e) => {", contextMenuStart);
+  expect(contextMenuStart).toBeGreaterThan(-1);
+  const contextMenu = source.slice(contextMenuStart, contextMenuEnd);
+  expect(contextMenu).toContain("e.preventDefault()");
+  expect(contextMenu).toContain("cancelLongPress()");
+  expect(contextMenu).toContain("openSchedule()");
   // iOS long-presses preempt the pointer stream with text-selection/callout, so
   // the hold must also be armed from touch events, not only pointer events.
   expect(source).toContain("onPointerDown={(e) => {");
