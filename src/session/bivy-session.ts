@@ -3,6 +3,7 @@
 import type { RuntimeCapabilities } from "../runtime/types.js";
 import type { SandboxTier } from "../harness/sandbox.js";
 import type { WorkspaceContext } from "./workspace-context.js";
+import type { SessionState } from "./session-state.js";
 
 export type BivySessionSource = "manual" | "github_issue" | "api" | `repo:${string}` | string;
 
@@ -27,6 +28,9 @@ export interface BivySessionRecord {
   titleLocal?: string;
   source: BivySessionSource;
   status: BivySessionStatus;
+  /** Explicit transport/process/agent/workspace state. `status` remains as the
+   * backwards-compatible display projection. */
+  state: SessionState;
   createdAt: string;
   updatedAt: string;
   lastActivityAt: string;

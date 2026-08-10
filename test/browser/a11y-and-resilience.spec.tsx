@@ -5,8 +5,13 @@
 // a test can run without booting the whole React app + a live node.
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 
-const AXE = new URL("../../node_modules/axe-core/axe.min.js", import.meta.url);
+// Resolve through Node instead of assuming this worktree owns node_modules.
+// Bivy's coding sessions use git worktrees while dependencies may be hoisted to
+// the parent checkout; ESM imports already support that layout, and this fixture
+// should too.
+const AXE = createRequire(import.meta.url).resolve("axe-core/axe.min.js");
 
 test("axe: a representative dialog fragment has no serious/critical a11y violations", async ({ page }) => {
   await page.setContent(`

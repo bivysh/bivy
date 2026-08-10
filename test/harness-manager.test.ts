@@ -44,6 +44,7 @@ async function main() {
     const hm = new HarnessManager();
     assert.equal(await hm.attach("s1", dir), false);
     assert.equal(hm.isTracking("s1"), false);
+    assert.equal(await hm.isDirty("s1"), undefined);
     // All lifecycle calls are safe no-ops when untracked.
     await hm.beginTurn("s1", "t1");
     assert.equal(await hm.endTurn("s1", "done"), undefined);
@@ -55,10 +56,12 @@ async function main() {
     const dir = makeRepo();
     const hm = new HarnessManager();
     assert.equal(await hm.attach("s1", dir), true);
+    assert.equal(await hm.isDirty("s1"), false);
 
     await hm.beginTurn("s1", "before turn 1");
     fs.writeFileSync(path.join(dir, "a.txt"), "hello world\n");
     fs.writeFileSync(path.join(dir, "b.txt"), "created\n");
+    assert.equal(await hm.isDirty("s1"), true);
     const result = await hm.endTurn("s1", "after turn 1");
 
     assert.ok(result, "endTurn should return changes for a tracked session");
@@ -98,6 +101,7 @@ async function main() {
     await hm.rewind("s1", base.id);
     assert.equal(fs.readFileSync(path.join(dir, "a.txt"), "utf8"), "hello\n");
     assert.equal(fs.existsSync(path.join(dir, "junk.txt")), false);
+    assert.equal(await hm.isDirty("s1"), false);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
