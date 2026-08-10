@@ -10,7 +10,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export type ToolGlyph = "terminal" | "pencil" | "create" | "search" | "list" | "globe" | "eye";
+export type ToolGlyph = "terminal" | "pencil" | "create" | "search" | "list" | "globe" | "eye" | "agent";
 
 /**
  * Normalized, agent-independent description of what a tool call does. Computed at
@@ -31,7 +31,8 @@ type ToolCallKindDetail =
   | { kind: "edit"; path: string; oldText?: string; newText?: string }
   | { kind: "search"; query: string; path?: string }
   | { kind: "fetch"; url: string }
-  | { kind: "plan"; text?: string };
+  | { kind: "plan"; text?: string }
+  | { kind: "delegation"; label?: string; description?: string };
 
 export type ToolCallDetail = ToolCallKindDetail & {
   meta?: {
@@ -52,6 +53,7 @@ const DETAIL_VERB: Record<ToolCallDetail["kind"], string> = {
   search: "Searched",
   fetch: "Fetched",
   plan: "Planned",
+  delegation: "Delegated",
 };
 
 export interface DiffHunk {
@@ -123,6 +125,7 @@ function glyphFor(verb: string, hasCommand: boolean): ToolGlyph {
   if (verb === "Searched") return "search";
   if (verb === "Listed") return "list";
   if (verb === "Fetched") return "globe";
+  if (verb === "Delegated") return "agent";
   return "eye";
 }
 
@@ -325,6 +328,10 @@ export function formatTool(name: string, input: unknown, detail?: ToolCallDetail
     } else if (detail.kind === "plan") {
       result.title = "Plan";
       if (detail.text) result.query = clip(detail.text, 120);
+    } else if (detail.kind === "delegation") {
+      result.title = detail.label ? `Delegated → ${detail.label}` : "Delegated";
+      if (detail.label) result.target = detail.label;
+      if (detail.description) result.query = clip(detail.description, 120);
     }
   }
 
@@ -342,9 +349,11 @@ export function toolGroupSummary(tools: Array<{ name: string; input: unknown; de
   let ran = 0;
   let read = 0;
   let output = 0;
+  let delegated = 0;
   for (const t of tools) {
     const f = formatTool(t.name, t.input, t.detail);
     if (f.verb === "Agent output") output++;
+    else if (f.verb === "Delegated") delegated++;
     else if (f.command) ran++;
     else if (f.verb === "Edited" || f.verb === "Created" || f.diffs.length) edited++;
     else read++;
@@ -354,6 +363,7 @@ export function toolGroupSummary(tools: Array<{ name: string; input: unknown; de
   if (read) parts.push(`Read ${plural(read, "file", "files")}`);
   if (ran) parts.push(`ran ${plural(ran, "command", "commands")}`);
   if (edited) parts.push(`edited ${plural(edited, "file", "files")}`);
+  if (delegated) parts.push(`delegated ${plural(delegated, "task", "tasks")}`);
   if (output) parts.push(output === 1 ? "agent output" : `${output} agent output streams`);
   if (!parts.length) return tools.length === 1 ? "1 tool call" : `${tools.length} tool calls`;
   // Capitalize the first fragment; join with commas.

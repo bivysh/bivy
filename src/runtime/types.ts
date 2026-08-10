@@ -77,7 +77,15 @@ type ToolCallKindDetail =
   | { kind: "edit"; path: string; oldText?: string; newText?: string }
   | { kind: "search"; query: string; path?: string }
   | { kind: "fetch"; url: string }
-  | { kind: "plan"; text?: string };
+  | { kind: "plan"; text?: string }
+  // The agent handed work to a sub-agent/delegate (Claude's `Task`,
+  // `dispatch_agent`, `spawn`, an MCP subagent call, …). `label` is the
+  // agent/role it delegated to when the call names one (e.g. a
+  // `subagent_type`); `description` is the sub-task text. Deliberately NOT a
+  // claim of ownership over the child — Bivy only reports the delegation the
+  // parent agent surfaced; it does not control the sub-agent. See
+  // docs/session-reliability-plan.md (Phase 4 adds parent/child linkage).
+  | { kind: "delegation"; label?: string; description?: string };
 
 export type ToolCallDetail = ToolCallKindDetail & {
   meta: ToolCallProvenance;
