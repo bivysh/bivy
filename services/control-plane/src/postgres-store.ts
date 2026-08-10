@@ -604,6 +604,12 @@ export class PostgresStore implements MeshStore {
       -- Scheduled/manual runs that are plain chat messages rather than automation
       -- jobs (the node skips the boilerplate/push/checks).
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS message BOOLEAN NOT NULL DEFAULT false;
+      -- Source-controlled identity + hard attempt ceiling for automation-as-code.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS config_key TEXT;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS config_order INTEGER;
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS max_attempts INTEGER;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_definitions_config_key
+        ON automation_definitions(account_id, config_key) WHERE config_key IS NOT NULL;
       CREATE TABLE IF NOT EXISTS trigger_events (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -625,6 +631,7 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS output JSONB;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS approval_mode TEXT;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sandbox TEXT;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS max_attempts INTEGER;
       -- Untrusted webhook-payload context for a webhook-triggered automation run,
       -- appended to the E2E-decrypted operator template on the node as data.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS event_context TEXT;
@@ -2212,8 +2219,8 @@ export class PostgresStore implements MeshStore {
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
        approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo,
-       labels, repos, template_id, on_events, target_kind, target_session_id, message)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING *`,
+       labels, repos, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
@@ -2225,7 +2232,10 @@ export class PostgresStore implements MeshStore {
         input.on ? JSON.stringify(input.on) : null,
         input.target?.kind === "existing_session" ? input.target.kind : null,
         input.target?.kind === "existing_session" ? input.target.sessionId : null,
-        input.message ?? false],
+        input.message ?? false,
+        input.configKey ?? null,
+        input.configOrder ?? null,
+        input.maxAttempts ?? null],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -2259,7 +2269,8 @@ export class PostgresStore implements MeshStore {
        model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
        enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
        repo=$16, labels=$17, repos=$18, template_id=$19, on_events=$20,
-       target_kind=$21, target_session_id=$22, message=$23, updated_at=now()
+       target_kind=$21, target_session_id=$22, message=$23, config_key=$24,
+       config_order=$25, max_attempts=$26, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
@@ -2272,7 +2283,10 @@ export class PostgresStore implements MeshStore {
         next.on ? JSON.stringify(next.on) : null,
         next.target?.kind === "existing_session" ? next.target.kind : null,
         next.target?.kind === "existing_session" ? next.target.sessionId : null,
-        next.message ?? false],
+        next.message ?? false,
+        next.configKey ?? null,
+        next.configOrder ?? null,
+        next.maxAttempts ?? null],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -2420,8 +2434,8 @@ export class PostgresStore implements MeshStore {
       url: input.url,
     };
     const { rows } = await this.query(
-      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, message, ephemeral, approval_mode, sandbox, events, event_context)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27::jsonb, $28)
+      `INSERT INTO work_items (id, account_id, label, source, status, title, body, repo, issue_number, url, external_id, dedupe_key, collapse_key, default_routed, runtime_id, model, installation_id, app_id, definition_id, trigger_id, trigger_kind, target_kind, target_session_id, message, ephemeral, approval_mode, sandbox, max_attempts, events, event_context)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28::jsonb, $29)
        ON CONFLICT DO NOTHING
        RETURNING *`,
       [
@@ -2451,6 +2465,7 @@ export class PostgresStore implements MeshStore {
         input.ephemeral ?? definition?.ephemeral ?? null,
         input.approvalMode ?? definition?.approvalMode ?? null,
         input.sandbox ?? definition?.sandbox ?? null,
+        input.maxAttempts ?? definition?.maxAttempts ?? null,
         JSON.stringify([triggeredEvent]),
         input.eventContext ?? null,
       ],
@@ -2819,6 +2834,7 @@ function mapWorkItem(row: any): WorkItem {
     ephemeral: row.ephemeral ?? undefined,
     approvalMode: row.approval_mode ?? undefined,
     sandbox: row.sandbox ?? undefined,
+    maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
     definitionId: row.definition_id ?? undefined,
     triggerId: row.trigger_id ?? undefined,
     triggerKind: row.trigger_kind ?? undefined,
@@ -2860,6 +2876,8 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     id: row.id,
     accountId: row.account_id,
     name: row.name,
+    configKey: row.config_key ?? undefined,
+    configOrder: row.config_order == null ? undefined : Number(row.config_order),
     templateCiphertext: row.template_ciphertext ?? undefined,
     runtimeId: row.runtime_id ?? undefined,
     model: row.model ?? undefined,
@@ -2867,6 +2885,7 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     ephemeral: row.ephemeral ?? undefined,
     approvalMode: row.approval_mode ?? undefined,
     sandbox: row.sandbox ?? undefined,
+    maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
     enabled: Boolean(row.enabled),
     trigger: row.trigger ?? undefined,
     webhookSecret: row.webhook_secret ?? undefined,

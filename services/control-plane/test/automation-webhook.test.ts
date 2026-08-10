@@ -74,6 +74,40 @@ async function main() {
   const login = await json(port, "POST", "/auth/dev-login", { email: "automation@example.com" });
   const token = login.body.token;
 
+  // --- Automations as code: a node can reconcile only definitions encrypted
+  //     for itself; stable configKey updates rather than duplicates. ---
+  const enrollment = await json(port, "POST", "/nodes/enroll", { nodeId: "node-as-code", name: "config-runner" }, token);
+  const nodeToken = enrollment.body.enrollmentToken;
+  expect(Boolean(nodeToken), "an enrolled node receives a token for automation reconciliation");
+  const managedInput = {
+    configKey: "managed-ci",
+    configOrder: 0,
+    name: "Managed CI",
+    enabled: true,
+    trigger: "manual",
+    templateCiphertext: "bivy-room-v1:node-as-code:opaque",
+    nodeLabel: "bivy/config-runner",
+    approvalMode: "risky",
+    sandbox: "workspace-write",
+    maxAttempts: 2,
+  };
+  const managed = await json(port, "PUT", "/node/automation-config/managed-ci", managedInput, nodeToken);
+  expect(managed.status === 201 && managed.body.configKey === "managed-ci", "node apply creates a source-controlled automation");
+  const managedUpdate = await json(port, "PUT", "/node/automation-config/managed-ci", { ...managedInput, name: "Managed CI updated" }, nodeToken);
+  expect(managedUpdate.status === 200 && managedUpdate.body.id === managed.body.id, "re-applying a config key updates instead of duplicating");
+  const managedList = await json(port, "GET", "/node/automation-config", undefined, nodeToken);
+  expect(managedList.body.automations.filter((d: any) => d.configKey === "managed-ci").length === 1, "managed definitions list by stable config key");
+  const pwaEdit = await json(port, "PUT", `/account/automations/${managed.body.id}`, { name: "UI overwrite" }, token);
+  expect(pwaEdit.status === 409, "the account/PWA API cannot overwrite a file-managed automation");
+  const pwaDelete = await json(port, "DELETE", `/account/automations/${managed.body.id}`, undefined, token);
+  expect(pwaDelete.status === 409, "the account/PWA API cannot delete a file-managed automation");
+  const wrongNode = await json(port, "PUT", "/node/automation-config/wrong-node", { ...managedInput, configKey: "wrong-node", templateCiphertext: "bivy-room-v1:somebody-else:opaque" }, nodeToken);
+  expect(wrongNode.status === 400, "a node cannot apply instructions encrypted for another node");
+  const managedRun = await json(port, "POST", `/account/automations/${managed.body.id}/run`, undefined, token);
+  expect(managedRun.status === 201, "a managed automation can be dispatched normally");
+  const managedWork = await json(port, "GET", "/account/work-items", undefined, token);
+  expect(managedWork.body.find((w: any) => w.id === managedRun.body.id)?.maxAttempts === 2, "managed run inherits its hard attempt ceiling");
+
   // --- Webhook-triggered automation *definition* (runs the operator's own
   //     pre-configured routing/agent/model/sandbox + E2E template) ---
   const auto = await json(port, "POST", "/account/automations", {

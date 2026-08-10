@@ -24,9 +24,10 @@ control). Escape hatches can change or disappear without notice.
 | `ANTHROPIC_API_KEY` | Anthropic model key, if you are not using OAuth | unset |
 | `BIVY_HOST` | Bind address for the node's port | `127.0.0.1` |
 
-`bivy setup` sets the workspace and port for you. The sandbox tier, approval
-mode and default agent are also settable from the web app under Settings, which
-writes `settings.json` instead of environment variables.
+`bivy setup` sets the workspace and port for you. The CLI and web Settings
+screen write the canonical typed `<data-dir>/config.yaml`; see
+[config-as-code.md](config-as-code.md). Environment variables remain useful for
+deployment overrides and compatibility.
 
 ## Config files on disk
 
@@ -56,8 +57,9 @@ process, so the daemon, agents and helper scripts all agree.
 
 | Path | Contents | Written by |
 | --- | --- | --- |
-| `cli.json` | Workspace, port, `service` flag, and an `env` block of persisted environment variables. Mode `0600` | `bivy setup`, `bivy service install/uninstall`, `bivy github:connect`, `bivy github:app-connect`, and the node when you connect/disconnect a GitHub App from the web app |
-| `settings.json` | Agent-neutral node settings: `defaultAgent`, `defaultModel`, `defaultSandbox`, `approvalMode`, `githubMaxConcurrent`, `githubIssuePrompt`, `sessionSync`, `worktreeSync`, `syncStandbyNodeId`, `sessionResumeMode`, `autoAttachToolImages` | The node, from the web app's Settings screen |
+| `config.yaml` | **Canonical user-authored node configuration**: workspace/port, defaults, concurrency, session behavior, checks, and advanced environment references. Mode `0600` | `bivy setup`, `bivy config`, and the web Settings screen |
+| `cli.json` | Generated compatibility projection: workspace, port, service state, and persisted environment. Do not hand-edit once `config.yaml` exists | Bivy CLI/config projection and integration connect flows |
+| `settings.json` | Generated compatibility projection of node defaults for older binaries. Do not hand-edit once `config.yaml` exists | Node/config projection |
 | `relay.json` | Relay URL, control-plane URL, client base URL, node enrollment token. Mode `0600` | `bivy relay:setup` |
 | `nodes.json` | Direct-node registry (`name` → `{url, token}`) for `bivy run --node` | `bivy nodes add/remove` |
 | `shims.json` | Installed agent shims | `bivy shim install/uninstall` |
@@ -76,7 +78,13 @@ process, so the daemon, agents and helper scripts all agree.
 | `git-cred/` | Git credential helper materialised on disk | The node |
 | `node.log`, `update.log` | Background start / update logs | The CLI |
 
-### `cli.json`
+### `config.yaml`
+
+The supported file format, CLI editor, migration behavior, repository
+`.bivy/policy.yaml`, and examples are documented in
+[config-as-code.md](config-as-code.md).
+
+### `cli.json` compatibility projection
 
 ```json
 {
@@ -90,16 +98,17 @@ process, so the daemon, agents and helper scripts all agree.
 }
 ```
 
-The `env` block is a general-purpose place to persist **any** variable from the
-[Node](#node-your-machine) section below. Two things consume it:
+The `env` block is retained as a generated compatibility projection. Put
+advanced overrides in `config.yaml`'s typed fields or `environment` block; Bivy
+projects them here for older binaries. Two things consume the projection:
 
 - **The CLI**, when starting the daemon or generating a service unit: it
   resolves `secret://`, `env://` and `op://` references to real values first,
   so a service unit never contains a plaintext token.
 - **The daemon itself**, at boot. It reads `cli.json` and copies each string
   value into `process.env` — but **only for keys that are not already set**. A
-  config change written to `cli.json` therefore survives a restart even when
-  the generated service unit's baked-in environment is stale.
+  projected config change therefore survives a restart even when the generated
+  service unit's baked-in environment is stale.
 
 The value `""` deletes a key when the node writes `cli.json`.
 
@@ -108,19 +117,20 @@ The value `""` deletes a key when the node writes `cli.json`.
 For a variable's raw value:
 
 1. Real process environment (your shell, or the generated systemd/launchd unit).
-2. `cli.json`'s `env` block, for keys not already set.
+2. `config.yaml`'s typed field or `environment` block.
+3. `cli.json`'s generated `env` compatibility projection, for keys not already set.
 
 `BIVY_DATA_DIR` and `BIVY_ASSET_ROOT` are read before the `cli.json` merge, so
 they cannot be set from `cli.json`.
 
-For the three settings that also exist in `settings.json`:
+For settings that also have legacy projections:
 
 | Setting | Precedence |
 | --- | --- |
-| Sandbox tier | per-session override → `BIVY_SANDBOX` → `settings.json` `defaultSandbox` → `workspace-write` |
-| Approval mode | `BIVY_APPROVAL_MODE` → `settings.json` `approvalMode` → `autonomous` |
-| Default agent | `BIVY_RUNTIME` (process env, then `cli.json`) → `settings.json` `defaultAgent` → `pi` |
-| Auto-attach tool images | `BIVY_AUTO_ATTACH_TOOL_IMAGES` → `settings.json` `autoAttachToolImages` → off |
+| Sandbox tier | per-session/automation request → `BIVY_SANDBOX`/`config.yaml` default → node `safety.maxSandbox` ceiling → repository safety ceiling (the most restrictive bound wins) |
+| Approval mode | per-session/automation request → `BIVY_APPROVAL_MODE`/`config.yaml` default → node `safety.approvalFloor` → repository approval floor (the most restrictive bound wins) |
+| Default agent | per-run override → `BIVY_RUNTIME` → `config.yaml` `defaults.agent` → `pi` |
+| Auto-attach tool images | `BIVY_AUTO_ATTACH_TOOL_IMAGES` → `config.yaml` `sessions.autoAttachToolImages` → off |
 
 CLI flags always win over both, for the commands that have them
 (`bivy exec --agent`, `bivy relay:setup --control-plane`, `bivy prune

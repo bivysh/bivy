@@ -97,6 +97,26 @@ await check("park routes to needs-attention, not fail", async () => {
   assert.ok(!p.includes("/complete"), "should not complete");
 });
 
+await check("per-automation attempt ceiling parks before a broader retry policy can continue", async () => {
+  const { calls, evidence, restore } = stubFetch();
+  let attempts = 0;
+  const runItem = async () => {
+    attempts += 1;
+    throw new Error("socket hang up");
+  };
+  const policy = scriptedPolicy([
+    { action: "retry", delayMs: 0, condition: "transport_error", summary: "retry" },
+  ]);
+  const poller = new ControlPlaneTaskPoller(cfg, runItem, undefined, { policy, ...noSleep });
+  await (poller as unknown as { runOne(i: WorkItem): Promise<void> }).runOne({ ...baseItem, maxAttempts: 1 });
+  restore();
+
+  assert.equal(attempts, 1, "the hard ceiling must prevent a second attempt");
+  assert.ok(paths(calls).includes("/needs-attention"), "the run should park for review");
+  assert.ok(!paths(calls).includes("/fail"), "reaching the ceiling is actionable, not a silent failure");
+  assert.match(JSON.stringify(evidence), /Attempt limit reached \(1\)/);
+});
+
 await check("give_up fails the run (historical path)", async () => {
   const { calls, restore } = stubFetch();
   const runItem = async () => {

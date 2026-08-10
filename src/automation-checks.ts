@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { loadProjectPolicy } from "./project-policy.js";
 
 export interface AutomationCheckResult {
   name: string;
@@ -18,7 +19,9 @@ const DEFAULT_SCRIPT_NAMES = ["test", "lint", "typecheck"];
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_CHECK_TIMEOUT_MS = 30 * 60 * 1000;
 
-function configuredScriptNames(env: NodeJS.ProcessEnv): string[] {
+function configuredScriptNames(cwd: string, env: NodeJS.ProcessEnv): string[] {
+  const project = loadProjectPolicy(cwd)?.checks?.scripts;
+  if (project?.length) return project;
   const raw = env.BIVY_AUTOMATION_CHECKS?.trim();
   if (!raw) return DEFAULT_SCRIPT_NAMES;
   try {
@@ -31,7 +34,9 @@ function configuredScriptNames(env: NodeJS.ProcessEnv): string[] {
   return [...new Set(raw.split(",").map((s) => s.trim()).filter((s) => /^[\w:.-]+$/.test(s)))].slice(0, 10);
 }
 
-function checkTimeoutMs(env: NodeJS.ProcessEnv): number {
+function checkTimeoutMs(cwd: string, env: NodeJS.ProcessEnv): number {
+  const projectMinutes = loadProjectPolicy(cwd)?.checks?.timeoutMinutes;
+  if (projectMinutes) return projectMinutes * 60_000;
   const parsed = Number(env.BIVY_AUTOMATION_CHECK_TIMEOUT_MS);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_CHECK_TIMEOUT_MS;
   return Math.min(MAX_CHECK_TIMEOUT_MS, Math.max(1_000, Math.floor(parsed)));
@@ -57,9 +62,9 @@ export function runRequiredAutomationChecks(
     return [];
   }
   const manager = packageManager(cwd);
-  const timeout = checkTimeoutMs(env);
+  const timeout = checkTimeoutMs(cwd, env);
   const results: AutomationCheckResult[] = [];
-  for (const name of configuredScriptNames(env)) {
+  for (const name of configuredScriptNames(cwd, env)) {
     if (typeof pkg.scripts?.[name] !== "string") continue;
     const args = manager.args(name);
     const commandHash = `sha256:${createHash("sha256").update(JSON.stringify([manager.command, ...args])).digest("hex")}`;

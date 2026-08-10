@@ -813,9 +813,11 @@ export function AutomationsView({
                         <div className="automation-row-title">
                           <strong>{item.name}</strong>
                           <span className={`autom-status ${chip.tone}`}>{chip.label}</span>
+                          {item.configKey && <span className="autom-status off" title={`Managed from ${item.configKey}`}>Managed by file</span>}
                         </div>
                         <div className="settings-hint">
                           {scheduleSummary(item)}
+                          {item.configKey ? ` · .bivy/automations.yaml#${item.configKey}` : ""}
                           {item.enabled && item.nextRunAt ? ` · next ${new Date(item.nextRunAt).toLocaleString()}` : ""}
                         </div>
                         {item.trigger === "webhook" && item.webhookUrl && (
@@ -850,8 +852,8 @@ export function AutomationsView({
                         {item.trigger === "webhook" && (
                           <button type="button" className="btn sm" onClick={() => void rotate(item)}>Rotate secret</button>
                         )}
-                        <button type="button" className="btn sm" onClick={() => void edit(item)}>Edit</button>
-                        <div className="row-menu" ref={menuId === item.id ? menuRef : undefined}>
+                        {!item.configKey && <button type="button" className="btn sm" onClick={() => void edit(item)}>Edit</button>}
+                        {(!item.configKey || isSourceTrigger(item.trigger)) && <div className="row-menu" ref={menuId === item.id ? menuRef : undefined}>
                           <button
                             type="button"
                             className="row-menu-btn"
@@ -863,9 +865,9 @@ export function AutomationsView({
                           </button>
                           {menuId === item.id && (
                             <div className="row-menu-pop" role="menu">
-                              <button type="button" className="row-menu-item" role="menuitem" onClick={() => void toggle(item)}>
+                              {!item.configKey && <button type="button" className="row-menu-item" role="menuitem" onClick={() => void toggle(item)}>
                                 {item.enabled ? "Pause" : "Resume"}
-                              </button>
+                              </button>}
                               {isSourceTrigger(item.trigger) && (
                                 <button
                                   type="button"
@@ -876,12 +878,12 @@ export function AutomationsView({
                                   Source setup
                                 </button>
                               )}
-                              <button type="button" className="row-menu-item danger" role="menuitem" onClick={() => void remove(item)}>
+                              {!item.configKey && <button type="button" className="row-menu-item danger" role="menuitem" onClick={() => void remove(item)}>
                                 Delete
-                              </button>
+                              </button>}
                             </div>
                           )}
-                        </div>
+                        </div>}
                       </div>
                     </div>
                   );

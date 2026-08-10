@@ -45,6 +45,8 @@ export interface WorkItem {
   model?: string; // model override chosen via the queue "Run…" action
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  /** Hard ceiling from the automation definition; retry rules cannot exceed it. */
+  maxAttempts?: number;
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)
   // Case B: the control plane sets this to "existing_session" + a sessionId when an
@@ -172,8 +174,9 @@ export async function reportEvidence(cfg: ControlPlaneTaskConfig, id: string, pa
 /** Optional policy hooks — when omitted the poller keeps its historical behavior
  *  (any thrown error fails the run immediately). */
 export interface ControlPlaneTaskPollerOptions {
-  /** Decides retry/reroute/park/give_up when an attempt throws. */
-  policy?: RunPolicy;
+  /** Decides retry/reroute/park/give_up when an attempt throws. A resolver
+   *  allows repository-owned policy to be selected per work item. */
+  policy?: RunPolicy | ((item: WorkItem) => RunPolicy | undefined);
   /** Injectable sleep for backoff waits (deterministic in tests). */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -183,7 +186,7 @@ const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeou
 export class ControlPlaneTaskPoller {
   private timer?: NodeJS.Timeout;
   private inFlight = new Set<string>();
-  private readonly policy?: RunPolicy;
+  private readonly policy?: RunPolicy | ((item: WorkItem) => RunPolicy | undefined);
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(
@@ -308,12 +311,24 @@ export class ControlPlaneTaskPoller {
         await completeWork(this.cfg, item.id);
         return;
       } catch (error) {
-        const decision: RunDecision = this.policy?.decide({
+        const policy = typeof this.policy === "function" ? this.policy(current) : this.policy;
+        const decision: RunDecision = policy?.decide({
           routing: { runtimeId: current.runtimeId, model: current.model },
           error,
           attempt,
           rerouteCount,
         }) ?? { action: "give_up", condition: "unknown" };
+
+        // Per-automation hard ceiling wins over a broader node ruleset. Park
+        // rather than silently fail so a human can inspect or rerun it.
+        const maxAttempts = Math.max(1, Math.min(10, Number(current.maxAttempts) || 10));
+        if ((decision.action === "retry" || decision.action === "reroute") && attempt >= maxAttempts) {
+          const summary = `Attempt limit reached (${maxAttempts}); automation parked for review.`;
+          console.warn(`[control-plane-tasks] item ${item.id} needs attention: ${summary}`);
+          await report({ events: [{ at: new Date().toISOString(), kind: "needs_attention", summary, attempt }] });
+          await needsAttentionWork(this.cfg, item.id);
+          return;
+        }
 
         if (decision.action === "retry" || decision.action === "reroute") {
           attempt += 1;

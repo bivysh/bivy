@@ -46,22 +46,25 @@ npm run setup     # same wizard, via the bundled bivy CLI
 
 ## 2. What `bivy setup` asks
 
-The wizard is short. It picks defaults for everything it can and only asks about
-remote access. Bivy requires relay/control-plane enrollment because making agent
-sessions remotely visible and steerable is what it adds to a local CLI. Chosen
-for you, no prompt:
+The wizard is short and picks infrastructure defaults wherever it can. Bivy
+requires relay/control-plane enrollment because making agent sessions remotely
+visible and steerable is what it adds to a local CLI. Chosen for you, with no
+prompt:
 
 - **Workspace**: `~/bivy-workspace`. Changeable later in Settings.
 - **Local port**: `4317`.
-- **Default agent**: Pi. Changeable per session (`bivy run <agent>`) or in Settings.
 
-Asked, once, only if remote access is not configured yet:
+The wizard asks:
 
-1. **Remote access** — `hosted` (default; the hosted app shows your first 25 distinct sessions free, then requires Pro; execution and local session history on your machine are not deleted or capped) or `self-hosted`.
+1. **Default agent** — Pi, Claude Code, Codex, or another supported runtime.
+   Change it later per session (`bivy run <agent>`) or in Settings.
+2. **Remote access** — `hosted` (default; the hosted app shows your first 25 distinct sessions free, then requires Pro; execution and local session history on your machine are not deleted or capped) or `self-hosted`. This is skipped when remote access is already configured.
    Choosing self-hosted then asks for your **control plane URL** and your **relay
    `ws(s)://` URL**.
-2. **Remote login** — `GitHub` (default) or an `email sign-in link`. Choosing
+3. **Remote login** — `GitHub` (default) or an `email sign-in link`. Choosing
    email then asks for your **account email**.
+4. **Model login** — if the selected agent is not authenticated yet, setup
+   offers to open its login flow now. You can decline and authenticate later.
 
 For remote access, setup opens your browser (or prints the URL on a headless box)
 so you can authorize, waits for you to finish, enrolls this node, and writes
@@ -94,11 +97,12 @@ Keys stay on the node. Never paste one into a chat or a support thread.
 ## 4. Run your first agent
 
 ```bash
-bivy
+bivy run pi
 ```
 
-Bare `bivy` launches the default agent as a managed, relay-visible session in
-your terminal. Type a prompt, get a reply. Other useful forms:
+`bivy run <agent>` launches that agent as a managed, relay-visible session in
+your terminal. Type a prompt, get a reply. Bare `bivy` shows the command
+overview. Other useful forms:
 
 ```bash
 bivy run claude              # a specific agent's native CLI/TUI

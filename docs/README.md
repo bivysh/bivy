@@ -15,6 +15,7 @@ run your first agent session.
 | Doc | Who it's for |
 | --- | --- |
 | [agent-shim.md](agent-shim.md) | Users running an agent Bivy doesn't ship with, and anyone adding a new one. |
+| [automations-as-code.md](automations-as-code.md) | Developers defining, validating, simulating, and applying automations from YAML. |
 | [agents/](agents/README.md) | Per-agent setup: install command, how to authenticate it, model picker, resume support, and known gaps — one short page per agent in the picker. |
 | [troubleshooting.md](troubleshooting.md) | Anyone whose node won't start, won't connect, or won't behave. |
 
@@ -28,7 +29,8 @@ run your first agent session.
 
 | Doc | Who it's for |
 | --- | --- |
-| [configuration.md](configuration.md) | Users tuning node settings, environment variables, and defaults. |
+| [config-as-code.md](config-as-code.md) | Developers managing typed node configuration and repository policy in YAML. |
+| [configuration.md](configuration.md) | Complete environment-variable and internal state reference. |
 | [cli-reference.md](cli-reference.md) | Anyone looking up a `bivy` command, flag, or subcommand. |
 | [runtime-support-matrix.md](runtime-support-matrix.md) | Users deciding which agent to run and what works with it today. |
 | [agent-execution-modes.md](agent-execution-modes.md) | Design and implementation plan for choosing protocols, pipes, or PTYs per agent. |

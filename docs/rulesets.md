@@ -109,6 +109,24 @@ edit takes effect without a restart. An active ruleset only steers a context it
 and an active queue-only ruleset never steers a session. With no active ruleset,
 each context falls back to `DEFAULT_RULESET` below.
 
+### Repository-owned policy
+
+A repository may define the queue ruleset in `.bivy/policy.yaml`. This is the
+preferred surface when policy should be reviewed with the code it governs:
+
+```bash
+bivy config init --project
+bivy config validate --project
+```
+
+The repository ruleset wins over the node-global active ruleset for unattended
+runs in that repository. The same file can impose a sandbox ceiling, approval
+floor, and required package-script checks. See
+[config-as-code.md](config-as-code.md#repository-policy).
+
+The app's Settings → Rulesets registry remains the node-wide fallback for repos
+without project policy.
+
 ### The built-in default
 
 `DEFAULT_RULESET` retries infra hiccups (transient transport, node-offline,

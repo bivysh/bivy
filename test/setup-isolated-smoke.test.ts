@@ -7,6 +7,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
+import { readNodeConfig } from "../src/node-config.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-setup-isolated-"));
@@ -112,6 +113,11 @@ try {
   const settings = JSON.parse(fs.readFileSync(path.join(dataDir, "settings.json"), "utf8"));
   assert.equal(settings.defaultAgent, "pi", "setup choice replaces an older authoritative node default");
   assert.equal(settings.sessionSync, true, "setup preserves unrelated node settings");
+  const canonical = readNodeConfig(dataDir);
+  assert.equal(canonical?.defaults?.agent, "pi", "setup writes the canonical typed default agent");
+  assert.equal(canonical?.node?.workspace, workspace, "setup writes the canonical workspace");
+  assert.equal(canonical?.node?.port, nodePort, "setup writes the canonical port");
+  assert.equal(canonical?.sessions?.sync, true, "setup migration preserves unrelated canonical settings");
 
   const bare = spawn(process.execPath, ["bin/bivy.mjs"], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
   let bareOutput = "";

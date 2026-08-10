@@ -48,9 +48,18 @@ test("`bivy --help` exits 0 and lists core commands", () => {
   const r = runCli(["--help"]);
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
   const out = r.stdout + r.stderr;
-  for (const cmd of ["bivy run", "bivy setup", "bivy sessions", "bivy doctor", "bivy version"]) {
+  for (const cmd of ["bivy run", "bivy setup", "bivy sessions", "bivy automation", "bivy config", "bivy doctor", "bivy version"]) {
     assert.ok(out.includes(cmd), `help should mention "${cmd}"`);
   }
+});
+
+test("bare `bivy` shows the command overview without starting setup or an agent", () => {
+  const r = runCli([]);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /bivy — Bivy node CLI/);
+  assert.match(out, /bivy run claude/);
+  assert.doesNotMatch(out, /Which agent do you want to try first|Installing dependencies/);
 });
 
 test("redirected help output contains no ANSI control sequences", () => {
@@ -63,6 +72,20 @@ test("NO_COLOR wins even when FORCE_COLOR is set", () => {
   const r = runCli(["--help"], { NO_COLOR: "1", FORCE_COLOR: "1" });
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
   assert.ok(!(r.stdout + r.stderr).includes("\u001b["), "NO_COLOR output should not contain ANSI escapes");
+});
+
+test("`bivy config --help` exposes typed config and precedence inspection", () => {
+  const r = runCli(["config", "--help"]);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  for (const command of ["init", "validate", "show", "set", "explain"]) assert.ok(out.includes(command));
+});
+
+test("`bivy automation --help` exposes the local validate/test/apply workflow", () => {
+  const r = runCli(["automation", "--help"]);
+  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  for (const command of ["init", "validate", "plan", "test", "apply"]) assert.ok(out.includes(command));
 });
 
 test("`bivy setup --help` describes remote enrollment", () => {

@@ -768,12 +768,16 @@ export type AutomationSchedule =
 export interface AccountAutomation {
   id: string;
   name: string;
+  /** Stable key for definitions managed from `.bivy/automations.yaml`. */
+  configKey?: string;
+  configOrder?: number;
   templateCiphertext?: string;
   runtimeId?: string;
   model?: string;
   nodeLabel?: string;
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  maxAttempts?: number;
   enabled: boolean;
   /** How this automation fires. Absent on legacy rows means "schedule".
    *  `github_ci` is legacy; prefer `github` + `on` rules. */
