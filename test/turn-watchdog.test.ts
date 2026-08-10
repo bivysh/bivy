@@ -6,6 +6,9 @@ import {
   configuredTurnStallMs,
   DEFAULT_TURN_STALL_MS,
   MIN_TURN_STALL_MS,
+  configuredTurnActivityStallMs,
+  DEFAULT_TURN_ACTIVITY_STALL_MS,
+  MIN_TURN_ACTIVITY_STALL_MS,
   PID_DEAD_GRACE_MS,
   isTurnStalled,
   classifyStallTrigger,
@@ -106,6 +109,87 @@ assert.equal(
   isTurnStalled({ now: 1_000_000, lastProgressAt: 1_000_000 - stallMs, stallMs }),
   classifyStallTrigger({ now: 1_000_000, lastProgressAt: 1_000_000 - stallMs, stallMs }) !== null,
   "isTurnStalled agrees with classifyStallTrigger",
+);
+
+// ---- wedged (activity-stall) config -----------------------------------------
+assert.equal(configuredTurnActivityStallMs(undefined), DEFAULT_TURN_ACTIVITY_STALL_MS, "missing wedged config uses the default");
+assert.equal(configuredTurnActivityStallMs(""), DEFAULT_TURN_ACTIVITY_STALL_MS, "blank wedged config uses the default");
+assert.equal(configuredTurnActivityStallMs("0"), 0, "explicit zero opts out of the wedged band");
+assert.equal(configuredTurnActivityStallMs("1000"), MIN_TURN_ACTIVITY_STALL_MS, "tiny wedged values clamp to the floor");
+assert.equal(configuredTurnActivityStallMs("900000"), 900_000, "ordinary wedged values (15 min) pass through");
+assert.equal(configuredTurnActivityStallMs("nope"), DEFAULT_TURN_ACTIVITY_STALL_MS, "malformed wedged config fails safe");
+assert.equal(configuredTurnActivityStallMs("-5"), DEFAULT_TURN_ACTIVITY_STALL_MS, "negative wedged config fails safe");
+
+// ---- wedged decision --------------------------------------------------------
+// A turn streaming raw output (fresh lastProgressAt) but making no STRUCTURAL
+// progress for the activity window is wedged — the "npm install retrying
+// forever" hang the silence stall never catches.
+const activityStallMs = 15 * 60_000;
+assert.equal(
+  classifyStallTrigger({
+    now: 1_000_000,
+    lastProgressAt: 1_000_000 - 1_000, // output 1s ago → silence stall never fires
+    stallMs,
+    lastStructuralProgressAt: 1_000_000 - activityStallMs,
+    activityStallMs,
+  }),
+  "wedged",
+  "chatty output but no structural progress past the activity window is wedged",
+);
+assert.equal(
+  classifyStallTrigger({
+    now: 1_000_000,
+    lastProgressAt: 1_000_000 - 1_000,
+    stallMs,
+    lastStructuralProgressAt: 1_000_000 - 60_000, // structural progress 1 min ago
+    activityStallMs,
+  }),
+  null,
+  "recent structural progress is healthy even if it's under the window",
+);
+assert.equal(
+  classifyStallTrigger({
+    now: 1_000_000,
+    lastProgressAt: 1_000_000 - stallMs, // truly silent too
+    stallMs,
+    lastStructuralProgressAt: 1_000_000 - activityStallMs,
+    activityStallMs,
+  }),
+  "stalled",
+  "total silence is reported as the faster stall, not wedged",
+);
+assert.equal(
+  classifyStallTrigger({
+    now: 1_000_000,
+    lastProgressAt: 1_000_000 - 1_000,
+    stallMs,
+    lastStructuralProgressAt: 1_000_000 - activityStallMs,
+    activityStallMs: 0,
+  }),
+  null,
+  "activityStallMs<=0 disables the wedged band",
+);
+assert.equal(
+  classifyStallTrigger({
+    now: 1_000_000,
+    lastProgressAt: 1_000_000 - 1_000,
+    stallMs,
+    activityStallMs,
+  }),
+  null,
+  "no structural anchor supplied → wedged band is inert (back-compat)",
+);
+// The wedged band works even when the silence stall is disabled.
+assert.equal(
+  classifyStallTrigger({
+    now: 1_000_000,
+    lastProgressAt: 1_000_000 - 1_000,
+    stallMs: 0,
+    lastStructuralProgressAt: 1_000_000 - activityStallMs,
+    activityStallMs,
+  }),
+  "wedged",
+  "wedged still fires with the silence stall turned off",
 );
 
 console.log("turn-watchdog: all tests passed");

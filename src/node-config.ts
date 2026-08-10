@@ -35,6 +35,12 @@ export interface NodeConfig {
     standbyNodeId?: string;
     resume?: "auto" | "manual";
     autoAttachToolImages?: boolean;
+    /** Minutes a turn may keep streaming raw tool output without any structural
+     * progress (a tool completing, model text, a turn boundary) before the
+     * watchdog treats it as wedged and recovers it. Bounds a chatty-but-hung tool
+     * (e.g. an npm install retrying forever) that the silence stall never sees.
+     * Default 15; 0 relies on the silence stall + wall-clock cap alone. */
+    wedgedTurnMinutes?: number;
   };
   github?: { issuePrompt?: string };
   automation?: {
@@ -106,7 +112,7 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
   const node = section(root, "node", ["workspace", "port", "maxConcurrentAutomations"], errors);
   const defaults = section(root, "defaults", ["agent", "model", "sandbox", "approval"], errors);
   const safety = section(root, "safety", ["maxSandbox", "approvalFloor"], errors);
-  const sessions = section(root, "sessions", ["sync", "worktreeSync", "standbyNodeId", "resume", "autoAttachToolImages"], errors);
+  const sessions = section(root, "sessions", ["sync", "worktreeSync", "standbyNodeId", "resume", "autoAttachToolImages", "wedgedTurnMinutes"], errors);
   const github = section(root, "github", ["issuePrompt"], errors);
   const automation = section(root, "automation", ["checks", "checkTimeoutMinutes"], errors);
   const agentsRaw = section(root, "agents", Object.keys(record(root.agents) ?? {}), errors);
@@ -140,6 +146,9 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
   const resume = sessions.resume as "auto" | "manual" | undefined;
   if (resume !== undefined && resume !== "auto" && resume !== "manual") errors.push("sessions.resume must be auto or manual");
   const autoAttachToolImages = optionalBoolean(sessions.autoAttachToolImages, "sessions.autoAttachToolImages", errors);
+  // Upper bound is the wall-clock turn cap (60 min): a wedged window at/above it
+  // would never fire before the cap. 0 disables the band.
+  const wedgedTurnMinutes = optionalInteger(sessions.wedgedTurnMinutes, "sessions.wedgedTurnMinutes", errors, 0, 60);
   const issuePrompt = optionalString(github.issuePrompt, "github.issuePrompt", errors, 16_000);
   let checks: string[] | undefined;
   if (automation.checks !== undefined) {
@@ -202,7 +211,7 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
     ...(Object.keys(node).length ? { node: { workspace, port, maxConcurrentAutomations } } : {}),
     ...(Object.keys(defaults).length ? { defaults: { agent, model, sandbox, approval } } : {}),
     ...(Object.keys(safety).length ? { safety: { maxSandbox, approvalFloor } } : {}),
-    ...(Object.keys(sessions).length ? { sessions: { sync, worktreeSync, standbyNodeId, resume, autoAttachToolImages } } : {}),
+    ...(Object.keys(sessions).length ? { sessions: { sync, worktreeSync, standbyNodeId, resume, autoAttachToolImages, wedgedTurnMinutes } } : {}),
     ...(Object.keys(github).length ? { github: { issuePrompt } } : {}),
     ...(Object.keys(automation).length ? { automation: { checks, checkTimeoutMinutes } } : {}),
     ...(Object.keys(agents).length ? { agents } : {}),
@@ -332,7 +341,7 @@ export function setConfigValue(config: NodeConfig, dotted: string, value: unknow
     "node.workspace", "node.port", "node.maxConcurrentAutomations",
     "defaults.agent", "defaults.model", "defaults.sandbox", "defaults.approval",
     "safety.maxSandbox", "safety.approvalFloor",
-    "sessions.sync", "sessions.worktreeSync", "sessions.standbyNodeId", "sessions.resume", "sessions.autoAttachToolImages",
+    "sessions.sync", "sessions.worktreeSync", "sessions.standbyNodeId", "sessions.resume", "sessions.autoAttachToolImages", "sessions.wedgedTurnMinutes",
     "github.issuePrompt", "automation.checks", "automation.checkTimeoutMinutes",
   ]);
   if (!allowed.has(dotted) && !/^agents\.[a-z][a-z0-9-]{1,47}$/.test(dotted) && !/^environment\.[A-Z][A-Z0-9_]+$/.test(dotted)) throw new Error(`Unknown configuration key: ${dotted}`);

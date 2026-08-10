@@ -54,6 +54,41 @@ export function configuredTurnStallMs(value = process.env.BIVY_TURN_STALL_MS): n
 }
 
 /**
+ * Activity/wedged timeout — the third watchdog band, between the 5-minute silence
+ * stall and the 1-hour wall-clock cap.
+ *
+ * DEFAULT_TURN_STALL_MS measures TOTAL silence, so it never fires while a turn is
+ * emitting *any* event. But a tool subprocess can be wedged yet chatty — an
+ * `npm install` retrying against an unreachable registry, a build looping on a
+ * progress bar — streaming `tool_execution_update` output forever without ever
+ * completing a tool, advancing the model's text, or crossing a turn boundary.
+ * Every one of those output chunks resets the silence anchor, so the 5-minute
+ * stall check is defeated and only the hour cap eventually recovers the session.
+ *
+ * This bound instead measures silence of *structural* progress (a tool
+ * start/end, streamed model text, a turn boundary) while ignoring raw subprocess
+ * output. Fifteen minutes is comfortably above a legitimately long single tool
+ * call that streams output before finishing, yet far below the hour cap, so a
+ * chatty-but-wedged turn recovers in minutes. Configured via
+ * `sessions.wedgedTurnMinutes` (config.yaml); the env var is a fallback.
+ */
+export const DEFAULT_TURN_ACTIVITY_STALL_MS = 15 * 60 * 1000;
+/** Floor so a misconfigured tiny value can't kill healthy long tool calls that
+ *  legitimately stream output for a while before completing. */
+export const MIN_TURN_ACTIVITY_STALL_MS = 60 * 1000;
+
+/** Parse the wedged/activity-stall window (ms). Explicit 0 opts out (rely on the
+ * silence stall + wall-clock cap); malformed/negative values fall back to the
+ * default. Fed from `sessions.wedgedTurnMinutes` in server.ts, env as fallback. */
+export function configuredTurnActivityStallMs(value = process.env.BIVY_TURN_ACTIVITY_STALL_MS): number {
+  if (value === undefined || value.trim() === "") return DEFAULT_TURN_ACTIVITY_STALL_MS;
+  const parsed = Number(value);
+  if (parsed === 0) return 0;
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_TURN_ACTIVITY_STALL_MS;
+  return Math.max(MIN_TURN_ACTIVITY_STALL_MS, Math.floor(parsed));
+}
+
+/**
  * Decide whether a working turn should be force-recovered as stalled. Pure, so
  * it unit-tests without real time or a live session.
  *
@@ -71,6 +106,8 @@ export function isTurnStalled(opts: {
    *  (e.g. a remote agent-service session on another host). */
   pidAlive?: boolean;
   pidGraceMs?: number;
+  lastStructuralProgressAt?: number;
+  activityStallMs?: number;
 }): boolean {
   return classifyStallTrigger(opts) !== null;
 }
@@ -79,6 +116,9 @@ export function isTurnStalled(opts: {
  * Why a turn was force-recovered — a diagnostic label, not a control input.
  *  - `pid_dead`   — the subprocess exited but never emitted `agent_end`.
  *  - `stalled`    — the turn went silent past the idle/stall window.
+ *  - `wedged`     — the turn kept emitting raw subprocess output but made no
+ *                   structural progress (no tool completion, model text, or turn
+ *                   boundary) past the activity window — a chatty-but-hung tool.
  *  - `wall_clock` — the turn hit the absolute wall-clock cap (decided at the
  *                   timer callsite, not here — this classifier only sees the
  *                   idle/pid signals).
@@ -86,16 +126,17 @@ export function isTurnStalled(opts: {
  * docs/session-reliability-plan.md, Phase 1) instead of losing the reason to a
  * log line.
  */
-export type StallTrigger = "pid_dead" | "stalled" | "wall_clock";
+export type StallTrigger = "pid_dead" | "stalled" | "wedged" | "wall_clock";
 
 /**
  * The finer sibling of isTurnStalled: returns *which* condition makes a working
  * turn count as stalled, or null when it still looks healthy. Pure, so it
- * unit-tests without real time or a live session. A provably-dead subprocess
- * (`pidAlive === false`) past the grace wins over the idle timer; otherwise a
- * turn silent for `stallMs` is `stalled`. `stallMs <= 0` disables the idle check
- * (the wall-clock cap still applies elsewhere) but a dead subprocess is still
- * reported.
+ * unit-tests without real time or a live session. Precedence: a provably-dead
+ * subprocess (`pidAlive === false`) past the grace wins; then total silence for
+ * `stallMs` is `stalled`; then structural silence (raw output still flowing, but
+ * no tool/model/turn progress) for `activityStallMs` is `wedged`. Each window is
+ * disabled by a value `<= 0` (the wall-clock cap still applies elsewhere), but a
+ * dead subprocess is always reported.
  */
 export function classifyStallTrigger(opts: {
   now: number;
@@ -103,9 +144,17 @@ export function classifyStallTrigger(opts: {
   stallMs: number;
   pidAlive?: boolean;
   pidGraceMs?: number;
+  /** Timestamp of the last *structural* progress (tool start/end, model text,
+   *  turn boundary) — unlike lastProgressAt this is NOT bumped by raw subprocess
+   *  output. Omit to disable the wedged band. */
+  lastStructuralProgressAt?: number;
+  activityStallMs?: number;
 }): StallTrigger | null {
   const idle = opts.now - opts.lastProgressAt;
   if (opts.pidAlive === false) return idle >= (opts.pidGraceMs ?? PID_DEAD_GRACE_MS) ? "pid_dead" : null;
-  if (opts.stallMs <= 0) return null;
-  return idle >= opts.stallMs ? "stalled" : null;
+  if (opts.stallMs > 0 && idle >= opts.stallMs) return "stalled";
+  if (opts.activityStallMs && opts.activityStallMs > 0 && opts.lastStructuralProgressAt !== undefined) {
+    if (opts.now - opts.lastStructuralProgressAt >= opts.activityStallMs) return "wedged";
+  }
+  return null;
 }
