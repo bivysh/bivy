@@ -936,9 +936,16 @@ export class ProtocolRuntime implements AgentRuntime {
 
   async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
     const session = new ProtocolSession(this.options, options.workspace, this.capabilities, options.toolInterceptor);
-    await session.start();
-    this.sessions.push(session);
-    return { session };
+    try {
+      await session.start();
+      this.sessions.push(session);
+      return { session };
+    } catch (error) {
+      // A failed hello/handshake still owns a spawned child. Tear it down so a
+      // conformance timeout or broken adapter cannot leak a long-lived process.
+      session.dispose();
+      throw error;
+    }
   }
 
   async openSession(options: OpenSessionOptions & { sessionFile: string }): Promise<OpenSessionResult> {
@@ -946,13 +953,17 @@ export class ProtocolRuntime implements AgentRuntime {
     // resumed session keeps its original id instead of taking `sessionFile` (the
     // agent's own ref) as its id — see OpenSessionOptions.canonicalId.
     const session = new ProtocolSession(this.options, options.workspace, this.capabilities, options.toolInterceptor, options.sessionFile, options.canonicalId);
-    await session.start();
-    if (!this.options.resumable && !this.capabilities.resume) {
+    try {
+      await session.start();
+      if (!this.options.resumable && !this.capabilities.resume) {
+        throw new Error(`${this.displayName} does not support resume.`);
+      }
+      this.sessions.push(session);
+      return { session };
+    } catch (error) {
       session.dispose();
-      throw new Error(`${this.displayName} does not support resume.`);
+      throw error;
     }
-    this.sessions.push(session);
-    return { session };
   }
 
   // Render a resumed session's prior turns without a live child (e.g. the daemon

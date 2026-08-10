@@ -3,14 +3,16 @@
 /** Node-local store for declarative Bivy plugins. */
 import fs from "node:fs";
 import path from "node:path";
+import { currentBivyVersion } from "../app-version.js";
 import { defaultDataDir } from "../data-dir.js";
 import {
+  checkPluginCompatibility,
   DEFAULT_PLUGIN_MANIFEST_NAMES,
   parsePluginManifest,
   validatePluginManifest,
   type PluginAgentContribution,
   type PluginManifest,
-} from "./manifest.js";
+} from "../plugin-sdk/index.js";
 
 export const PLUGIN_MANIFEST_FILE = "manifest.json";
 export const MAX_PLUGIN_MANIFEST_BYTES = 1024 * 1024;
@@ -68,7 +70,7 @@ export function readPluginManifest(input: string): { file: string; manifest: Plu
   return { file, manifest: result.manifest };
 }
 
-export function listInstalledPlugins(dataDir = defaultDataDir()): InstalledPlugin[] {
+export function listInstalledPlugins(dataDir = defaultDataDir(), bivyVersion = currentBivyVersion()): InstalledPlugin[] {
   const root = pluginStoreDir(dataDir);
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(root, { withFileTypes: true }); }
@@ -89,6 +91,10 @@ export function listInstalledPlugins(dataDir = defaultDataDir()): InstalledPlugi
         if (result.manifest.metadata.id !== entry.name) {
           return { id: entry.name, path: dir, errors: [`metadata.id ${result.manifest.metadata.id} does not match installed directory ${entry.name}`] };
         }
+        const compatibility = checkPluginCompatibility(result.manifest, bivyVersion);
+        if (!compatibility.compatible) {
+          return { id: entry.name, path: dir, manifest: result.manifest, errors: [compatibility.message] };
+        }
         return { id: entry.name, path: dir, manifest: result.manifest, errors: [] };
       } catch (error) {
         return { id: entry.name, path: dir, errors: [error instanceof Error ? error.message : String(error)] };
@@ -105,7 +111,7 @@ export function installedAgentContributions(dataDir = defaultDataDir()): Install
   const errors: string[] = [];
   const owners = new Map<string, string>();
   for (const plugin of listInstalledPlugins(dataDir)) {
-    if (!plugin.manifest) {
+    if (!plugin.manifest || plugin.errors.length) {
       for (const error of plugin.errors) errors.push(`${plugin.id}: ${error}`);
       continue;
     }
@@ -127,8 +133,10 @@ export function installedAgentContributions(dataDir = defaultDataDir()): Install
   return { agents, errors };
 }
 
-export function installPlugin(input: string, opts: { dataDir?: string; force?: boolean } = {}): { manifest: PluginManifest; path: string; replaced: boolean } {
+export function installPlugin(input: string, opts: { dataDir?: string; force?: boolean; bivyVersion?: string } = {}): { manifest: PluginManifest; path: string; replaced: boolean } {
   const { manifest } = readPluginManifest(input);
+  const compatibility = checkPluginCompatibility(manifest, opts.bivyVersion ?? currentBivyVersion());
+  if (!compatibility.compatible) throw new Error(compatibility.message);
   const root = pluginStoreDir(opts.dataDir);
   const target = path.join(root, manifest.metadata.id);
   const existed = fs.existsSync(target);

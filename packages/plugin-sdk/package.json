@@ -1,0 +1,46 @@
+{
+  "name": "@bivy/plugin-sdk",
+  "version": "0.10.1",
+  "description": "Types, validation, JSON Schema, and diagnostics for declarative Bivy plugins.",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bivysh/bivy.git",
+    "directory": "packages/plugin-sdk"
+  },
+  "files": [
+    "dist",
+    "schema",
+    "README.md"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schema.json": "./schema/bivy.plugin.schema.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ../../scripts/write-plugin-schema.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "semver": "^7.7.2",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/semver": "^7.7.1",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
