@@ -23,6 +23,19 @@ assert.deepEqual(shape(mapToolCall("grep", { pattern: "TODO", path: "src" })), {
 assert.equal(mapToolCall("unknown", { value: 1 }), undefined);
 assert.equal((boundedToolPayload({ text: "x".repeat(5000) }) as { truncated?: boolean }).truncated, true);
 
+// Delegation / sub-agent dispatch normalizes into a first-class kind (Claude's
+// `Task`, `dispatch_agent`, a bare `agent`), carrying the delegated role/label
+// and the sub-task description when the call names them.
+assert.deepEqual(
+  shape(mapToolCall("Task", { subagent_type: "Explore", description: "find the auth flow", prompt: "…long…" })),
+  { kind: "delegation", label: "Explore", description: "find the auth flow" },
+);
+assert.deepEqual(shape(mapToolCall("dispatch_agent", { prompt: "audit the diff" })), { kind: "delegation", description: "audit the diff" });
+assert.deepEqual(shape(mapToolCall("agent", {})), { kind: "delegation" });
+// A tool that merely has "task" in a longer, unrelated name must not be misread
+// as a delegation (canon only collapses separators, it doesn't substring-match).
+assert.equal(mapToolCall("multitasker", { value: 1 }), undefined);
+
 const fixtures = JSON.parse(fs.readFileSync(new URL("./fixtures/tool-normalization-v1.json", import.meta.url), "utf8")) as Array<any>;
 for (const fixture of fixtures) {
   const detail = mapToolCall(fixture.name, fixture.input, { provider: fixture.provider, protocol: fixture.protocol });

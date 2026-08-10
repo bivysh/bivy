@@ -32,6 +32,7 @@ run your first agent session.
 | [cli-reference.md](cli-reference.md) | Anyone looking up a `bivy` command, flag, or subcommand. |
 | [runtime-support-matrix.md](runtime-support-matrix.md) | Users deciding which agent to run and what works with it today. |
 | [agent-execution-modes.md](agent-execution-modes.md) | Design and implementation plan for choosing protocols, pipes, or PTYs per agent. |
+| [session-reliability-plan.md](session-reliability-plan.md) | Standing plan for making live sessions solid: event delivery, status, turn-end, surfacing. |
 
 ## Security
 

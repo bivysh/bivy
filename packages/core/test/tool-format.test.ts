@@ -109,6 +109,22 @@ describe("formatTool", () => {
     expect(f.verb).toBe("Agent output");
     expect(f.command).toBeUndefined();
   });
+
+  it("renders a delegation detail with the delegated role and its own glyph", () => {
+    const f = formatTool("Task", { subagent_type: "Explore" }, { kind: "delegation", label: "Explore", description: "find the auth flow" });
+    expect(f.verb).toBe("Delegated");
+    expect(f.glyph).toBe("agent");
+    expect(f.title).toBe("Delegated → Explore");
+    expect(f.target).toBe("Explore");
+    expect(f.query).toBe("find the auth flow");
+  });
+
+  it("renders a delegation with no named role as a plain Delegated card", () => {
+    const f = formatTool("dispatch_agent", {}, { kind: "delegation", description: "audit the diff" });
+    expect(f.verb).toBe("Delegated");
+    expect(f.title).toBe("Delegated");
+    expect(f.query).toBe("audit the diff");
+  });
 });
 
 describe("toolGroupSummary", () => {
@@ -120,5 +136,14 @@ describe("toolGroupSummary", () => {
       { name: "Edit", input: { path: "c", old_string: "x", new_string: "y" } },
     ]);
     expect(s).toBe("Read 2 files, ran a command, edited a file");
+  });
+
+  it("counts delegated tasks as their own phrase", () => {
+    const s = toolGroupSummary([
+      { name: "Read", input: { path: "a" } },
+      { name: "Task", input: {}, detail: { kind: "delegation", label: "Explore" } },
+      { name: "Task", input: {}, detail: { kind: "delegation", label: "Plan" } },
+    ]);
+    expect(s).toBe("Read a file, delegated 2 tasks");
   });
 });

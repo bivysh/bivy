@@ -85,6 +85,15 @@ const EDIT = new Set([
 const SEARCH = new Set(["search", "grep", "glob", "ripgrep", "rg", "find", "findfiles", "codebasesearch", "filesearch"]);
 const FETCH = new Set(["fetch", "webfetch", "httpfetch", "geturl", "browse", "curl", "openurl"]);
 const PLAN = new Set(["plan", "updateplan", "setplan", "todo", "todowrite", "exitplanmode", "planmode"]);
+// Sub-agent / delegation dispatch. Names lean specific (Claude's `Task`,
+// `dispatch_agent`, `spawn_agent`, an explicit `delegate`) so an ordinary tool
+// isn't misread as a delegation; a bare `agent`/`subagent` is included because
+// those are only ever a hand-off. Kept conservative — an unrecognized name
+// still falls through to the opaque default, never a false "Delegated".
+const DELEGATE = new Set([
+  "task", "agent", "subagent", "runagent", "runsubagent", "spawnagent",
+  "dispatchagent", "delegate", "delegatetask", "agenttask", "startagent",
+]);
 
 const PATH_KEYS = ["path", "file_path", "filePath", "filename", "fileName", "file", "target_file", "targetFile"];
 
@@ -141,6 +150,12 @@ export function mapToolCall(toolName: string, input: unknown, context: ToolCallM
 
   if (PLAN.has(key)) {
     return decorate({ kind: "plan", ...(str(o, "plan", "text", "content", "message") ? { text: str(o, "plan", "text", "content", "message") } : {}) }, toolName, input, context);
+  }
+
+  if (DELEGATE.has(key)) {
+    const label = str(o, "subagent_type", "subagentType", "agent", "agentType", "role", "name");
+    const description = str(o, "description", "task", "prompt", "instructions", "goal", "message");
+    return decorate({ kind: "delegation", ...(label ? { label } : {}), ...(description ? { description } : {}) }, toolName, input, context);
   }
 
   return undefined;
