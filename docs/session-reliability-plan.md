@@ -94,16 +94,27 @@ session-scoped events beyond `session.event` (`session.notice`/`error`), and
 lifting `fidelity`/`source` onto a fully generalized envelope. The node-receive
 `ts` is in place and can back-fill the transcript time-anchoring fallback next.
 
-### Phase 3 — Explicit session state machine
+### Phase 3 — Explicit session state machine ✅
 
-Replace read-time `working|idle|failed` derivation with four explicit axes —
-`transport` (clients reachable), `process` (alive/exited/none), `agent`
-(idle/working/awaiting-input), `workspace` (clean/dirty/checkpointing) — and
-derive the display status from them, sending all four to the client. The web UI
-already renders these axes separately (node dot vs session dot vs working row);
-today the node collapses the information before it arrives. Land the derivation as
-a pure, unit-tested module first, wire it into the payload additively, then cut the
-display status over to it.
+The node and client now carry four explicit axes instead of reconstructing one
+`working|idle|failed` bit at each read site:
+
+- `src/session/session-state.ts` is the pure, unit-tested derivation for
+  `transport` (`reachable|unreachable`), `process` (`alive|exited|none`), `agent`
+  (`idle|working|awaiting-input`), and `workspace`
+  (`clean|dirty|checkpointing`). It also owns the backwards-compatible display
+  projection and, critically, makes a known-dead child `failed` rather than
+  allowing stale streaming state to call it `working`.
+- History, session lists, Bivy session envelopes, direct open/new responses, live
+  `session.event`s, and axis-only `session.state` transitions all send the state
+  additively. Old clients still receive `isStreaming`/`status`.
+- The workspace axis follows the universal harness through pre/post-turn
+  checkpointing and rewind, then probes git for the resulting clean/dirty state.
+  Process state uses a real PID liveness probe when the runtime exposes one;
+  in-process SDK runtimes honestly report `none`.
+- `@bivy/core` validates the wire shape, retains it per session, and uses its
+  display projection ahead of legacy status heuristics. Older nodes and closed
+  (`saved`) account-index rows keep their existing fallback behavior.
 
 ### Phase 4 — Authoritative turn-end & remote exit/disconnect split
 
