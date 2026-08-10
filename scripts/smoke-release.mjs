@@ -20,15 +20,29 @@ const packs = path.join(tmp, "packs");
 const consumer = path.join(tmp, "consumer");
 const globalPrefix = path.join(tmp, "global");
 
+// Every step here is a blocking spawnSync, so a wedged child (an npm install
+// that stalls on the registry in a sandboxed/offline environment) would hang the
+// whole smoke test indefinitely — the exact "packaged-install check never
+// returns" freeze. Give each command a hard timeout with a SIGKILL escalation so
+// a hang fails loudly in minutes instead of blocking forever.
+const DEFAULT_STEP_TIMEOUT_MS = 10 * 60 * 1000;
+
 function run(command, args, options = {}) {
+  const { capture, timeout, ...spawnOptions } = options;
   const result = spawnSync(command, args, {
     cwd: root,
     encoding: "utf8",
-    stdio: options.capture ? "pipe" : "inherit",
-    ...options,
+    stdio: capture ? "pipe" : "inherit",
+    timeout: timeout ?? DEFAULT_STEP_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    ...spawnOptions,
   });
+  if (result.error?.code === "ETIMEDOUT" || result.signal === "SIGKILL") {
+    const detail = capture ? `\n${result.stdout ?? ""}\n${result.stderr ?? ""}` : "";
+    throw new Error(`${command} ${args.join(" ")} timed out after ${timeout ?? DEFAULT_STEP_TIMEOUT_MS}ms${detail}`);
+  }
   if (result.status !== 0) {
-    const detail = options.capture ? `\n${result.stdout ?? ""}\n${result.stderr ?? ""}` : "";
+    const detail = capture ? `\n${result.stdout ?? ""}\n${result.stderr ?? ""}` : "";
     throw new Error(`${command} ${args.join(" ")} failed (${result.status})${detail}`);
   }
   return result.stdout ?? "";
@@ -62,14 +76,14 @@ try {
   // install.sh uses npm's global layout. A project-local install can hoist an
   // embedded dependency and conceal missing files in its transitive packages,
   // which is how the broken thin Pi bundle escaped the original smoke test.
-  run("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--no-audit", "--no-fund"]);
+  run("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--no-audit", "--no-fund", "--prefer-offline"]);
   const globalBivy = path.join(globalPrefix, "bin", "bivy");
   const globalVersion = run(globalBivy, ["--version"], { capture: true }).trim();
   if (globalVersion !== staged.version) throw new Error(`global CLI version ${globalVersion} != package ${staged.version}`);
   const globalPiManifest = path.join(globalPrefix, "lib", "node_modules", "@bivy", "bivy", "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
   if (!fs.existsSync(globalPiManifest)) throw new Error("global install did not resolve Pi as an ordinary dependency");
 
-  run("npm", ["install", tarball, "--no-fund"], { cwd: consumer });
+  run("npm", ["install", tarball, "--no-fund", "--prefer-offline"], { cwd: consumer });
 
   const bivy = path.join(consumer, "node_modules", ".bin", "bivy");
   const version = run(bivy, ["--version"], { cwd: consumer, capture: true }).trim();
