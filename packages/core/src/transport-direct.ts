@@ -256,6 +256,7 @@ export class DirectTransport implements Transport {
             agentName: p.agentName,
             name: p.name,
             messages: p.messages || [],
+            sessionState: p.sessionState ?? p.bivySession?.state,
             branch: p.branch,
             prUrl: p.prUrl,
           });
@@ -274,6 +275,7 @@ export class DirectTransport implements Transport {
             agentName: p.agentName,
             name: p.name,
             messages: [],
+            sessionState: p.sessionState ?? p.bivySession?.state,
             branch: p.branch,
             prUrl: p.prUrl,
           });
