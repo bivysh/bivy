@@ -119,6 +119,7 @@ import { thinkingTextFromContent } from "./session/transcript-merge.js";
 import { normalizeMessages } from "./session/transcript-normal.js";
 import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog, mergeBases } from "./session/event-log.js";
+import { SessionEventSequencer } from "./session/event-sequencer.js";
 import { revertFile } from "./session/revert-file.js";
 import { buildDiagnosticsReport, activationRecord } from "./diagnostics.js";
 import { AttachmentStore, isValidAttachmentHash, type AttachmentRef } from "./session/attachment-store.js";
@@ -1274,7 +1275,7 @@ function recordAttachment(
   // attachment where it was emitted (see event-log outbound projection).
   const afterMessageCount = record.session.getMessages().length;
   eventLog.appendOutboundAttachment(record.id, { afterMessageCount, id: entryId, ref, caption });
-  broadcast({ type: "session.event", sessionId: record.id, event: { type: "attachment", id: entryId, ref, caption } });
+  broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "attachment", id: entryId, ref, caption } }));
   return { ref };
 }
 
@@ -1708,13 +1709,48 @@ function broadcastCoalesced(payload: unknown) {
   relay?.sendEvent(payload);
 }
 
+// Per-session live-stream sequencing + replay buffer (docs/session-reliability-
+// plan.md, Phase 2). Every fanned-out `session.event` is stamped with a monotonic
+// per-session `seq` and retained in a bounded ring, so a client that misses
+// frames on a node→relay uplink blip can detect the gap (contiguous seq) and ask
+// to replay the tail instead of silently losing stream output. `sessionStreamEpoch`
+// changes when the daemon restarts, so a client re-baselines its cursor against a
+// fresh stream rather than treating the reset seq counter as a flood of dups.
+const sessionEventSequencer = new SessionEventSequencer();
+const sessionStreamEpoch = randomUUID();
+
+/**
+ * Stamp a `session.event` fan-out payload with its per-session seq (+ a node-
+ * receive `ts` and the stream `epoch`) and retain it for replay, then return it
+ * for the actual send. Stamping happens HERE — at the fan-out boundary, after the
+ * coalescer has collapsed a burst of `message_update`s — so seq order === the
+ * order clients receive, and superseded intermediate updates never consume a seq
+ * (which would look like a permanent gap). A non-session.event payload passes
+ * through untouched. Mutates and returns `payload`.
+ */
+function stampSessionEvent(payload: unknown): unknown {
+  const p = payload as { type?: unknown; sessionId?: unknown; seq?: number; ts?: number; epoch?: string };
+  const sessionId = typeof p?.sessionId === "string" ? p.sessionId : undefined;
+  if (!sessionId || p?.type !== "session.event") return payload;
+  const seq = sessionEventSequencer.next(sessionId);
+  p.seq = seq;
+  p.ts = Date.now();
+  p.epoch = sessionStreamEpoch;
+  let bytes = 0;
+  try { bytes = JSON.stringify(payload).length; } catch { bytes = 0; }
+  sessionEventSequencer.record(sessionId, seq, payload, bytes);
+  return payload;
+}
+
 // Collapse the burst of assistant `message_update`s (one per agent stdout line,
 // each carrying the FULL text so far) into ~1 fan-out per tick. See
 // session-event-coalescer.ts for the rationale (kills the O(n^2) re-serialize).
+// The coalescer's emit stamps the surviving (latest) update, so only ~one seq is
+// spent per tick — the ring holds turn-scale events, not every stdout line.
 const SESSION_UPDATE_COALESCE_MS = 16;
 const sessionEvents = new SessionEventCoalescer({
   coalesceMs: SESSION_UPDATE_COALESCE_MS,
-  emit: broadcastCoalesced,
+  emit: (payload) => broadcastCoalesced(stampSessionEvent(payload)),
 });
 
 // Tell every client whether a session is currently driven by its interactive
@@ -2765,7 +2801,7 @@ function resolveInlineImages(record: SessionRecord): void {
         });
         eventLog.appendInlineImage(record.id, { url, ref });
         eventLog.flush(record.id);
-        broadcast({ type: "session.event", sessionId: record.id, event: { type: "inlineImage", url, ref } });
+        broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "inlineImage", url, ref } }));
       } catch (error) {
         console.warn(`[inline-image] ${url}:`, error instanceof Error ? error.message : String(error));
         inlineImageFailedAt.set(url, Date.now());
@@ -2915,6 +2951,12 @@ function buildHistoryEvent(opts: {
     count: delta.count,
     historyHash: delta.historyHash,
     messages: delta.messages,
+    // Live-stream cursor: the client baselines its SeqReassembler to `headSeq`
+    // (it has applied everything through here) and resets it whenever `streamEpoch`
+    // changes (a daemon restart), so post-history live events reassemble in order
+    // and a replay can fill any gap (docs/session-reliability-plan.md, Phase 2).
+    headSeq: opts.sessionId ? sessionEventSequencer.head(opts.sessionId) : 0,
+    streamEpoch: sessionStreamEpoch,
     warning: record?.warning,
     costUsd: record?.costUsd,
     usage: record?.usage,
@@ -2929,6 +2971,25 @@ function buildHistoryEvent(opts: {
     // `data-remote-src` placeholder straight to its attachment hash instead of
     // waiting on a fresh (redundant) fetch.
     inlineImageRefs: opts.sessionId ? eventLog.readInlineImages(opts.sessionId) : [],
+  };
+}
+
+/**
+ * Answer a client's `session.replay` request: the buffered `session.event`s it
+ * missed after `afterSeq`, or a `reset` telling it to full-resync from history
+ * when the ring has already evicted past that point (see
+ * src/session/event-sequencer.ts). Carries the stream `epoch` so a client can
+ * tell a same-stream replay from one across a daemon restart.
+ */
+function buildReplayEvent(sessionId: string, afterSeq: number) {
+  const outcome = sessionEventSequencer.replay(sessionId, Number.isFinite(afterSeq) ? afterSeq : 0);
+  return {
+    type: "session.replay" as const,
+    sessionId,
+    epoch: sessionStreamEpoch,
+    mode: outcome.mode,
+    head: outcome.head,
+    events: outcome.mode === "replay" ? outcome.events : [],
   };
 }
 
@@ -3009,6 +3070,16 @@ const RELAY_COMMANDS: Record<string, Command> = {
     const record = resolveSession(msg.sessionId);
     const requestId = String(msg.requestId ?? "");
     if (record && requestId) answerSessionQuestion(record, requestId, msg);
+  },
+  // Live-stream gap recovery: replay the session.events a client missed after the
+  // last seq it holds, or tell it to full-resync (mode:"reset") when the ring has
+  // evicted past that point. Answers only the caller (ctx.reply); other clients
+  // have their own cursors (docs/session-reliability-plan.md, Phase 2).
+  "session.replay"(msg, ctx) {
+    const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "";
+    if (!sessionId) return;
+    const afterSeq = Number((msg as { afterSeq?: unknown }).afterSeq ?? 0);
+    ctx.reply(buildReplayEvent(sessionId, afterSeq));
   },
   async "session.checkpoints"(msg, ctx) {
     const record = resolveSession(msg.sessionId);
@@ -7386,6 +7457,9 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   // then drop the session's coalescing timer/state.
   sessionEvents.flush(record.id);
   sessionEvents.clear(record.id);
+  // A real close reaps the stream — drop its replay ring. (A detach keeps the
+  // ring so seq continuity survives re-attach; see detachSessionRecord.)
+  sessionEventSequencer.drop(record.id);
   record.session.dispose();
   harness.detach(record.id);
   // Tear down this session's own egress proxy, if it started one (read-only /
@@ -7437,6 +7511,7 @@ async function deleteSessionFile(opts: { id?: string; path?: string; fallbackAct
     // Cancel any pending throttled write and forget the cached arrays so a late
     // flush can't recreate the file we're about to delete.
     eventLog.drop(deletedSessionId);
+    sessionEventSequencer.drop(deletedSessionId);
     // Remove all sidecars so deleting a session doesn't leave orphaned
     // intermediate-message / tool-activity / transcript JSON accumulating under .bivy.
     for (const sidecar of [transcriptPath(deletedSessionId), eventLogPath(deletedSessionId)]) {
@@ -8314,7 +8389,7 @@ function attachSessionListeners(record: SessionRecord) {
       // the coalescer's own timer guarantee it is still delivered promptly.
       sessionEvents.push(record.id, sessionEventPayload);
     } else {
-      broadcast(sessionEventPayload);
+      broadcast(stampSessionEvent(sessionEventPayload));
     }
   });
 }
@@ -10775,6 +10850,17 @@ app.get("/api/session", (_req, res) => {
       ? { id: active.id, workspace: active.workspace, sessionFile: active.sessionFile, name: active.session.getName(), isStreaming: sessionBusy(active), lastActivity: active.lastActivity, workingStartedAt: active.workingStartedAt, source: active.source, branch: active.worktree?.branch, prUrl: active.prUrl }
       : null,
   );
+});
+
+// Live-stream gap recovery for the direct transport (the relay transport uses
+// the `session.replay` RELAY_COMMAND). Returns the buffered session.events after
+// `afterSeq`, or mode:"reset" when the ring has evicted past it. Never builds a
+// runtime — a pure read of the in-memory replay ring.
+app.get("/api/session/replay", (req, res) => {
+  const sid = String(req.query.sessionId ?? "").trim();
+  if (!sid) return res.status(400).json({ error: "sessionId required" });
+  const afterSeq = Number(req.query.afterSeq ?? 0);
+  res.json(buildReplayEvent(sid, afterSeq));
 });
 
 app.get("/api/session/history", async (req, res) => {
