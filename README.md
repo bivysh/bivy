@@ -168,7 +168,9 @@ the rest are explicitly Beta in the picker and support matrix:
 
 Any other command works via `bivy run -- ./your-agent --flags`. ACP-capable
 agents can be promoted to Bivy's governed protocol path for per-tool approvals
-and native resume.
+and native resume. To add a reusable process or ACP agent to both the CLI and web
+picker without changing Bivy, install a declarative
+[plugin manifest](docs/plugins.md).
 
 [`docs/runtime-support-matrix.md`](docs/runtime-support-matrix.md) lists exactly
 what each agent supports — resume, model selection, approvals, sandboxing.
@@ -183,6 +185,7 @@ bivy sessions         # list live and saved sessions
 bivy resume           # resume the most recent session
 bivy open             # open the web app (requires relay setup)
 bivy automation init  # create .bivy/automations.yaml
+bivy plugin list      # installed declarative agent plugins
 bivy status           # config summary and node reachability
 bivy doctor           # health check
 bivy logs -f          # tail node logs

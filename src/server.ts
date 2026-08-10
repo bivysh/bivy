@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 import { WebSocketServer, WebSocket } from "ws";
-import { listRuntimes, catalogRuntimes, cliInstallSpec, invalidateCliProbeCache, isCliAgentId, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { listRuntimes, catalogRuntimes, cliInstallSpec, invalidateCliProbeCache, isCliAgentId, pluginAgentConflictDiagnostics, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
@@ -113,6 +113,7 @@ import {
 import { buildLinearTaskPrompt, getLinearIssue, linearBranchName } from "./linear-tasks.js";
 import { PairingStore } from "./device-registry.js";
 import { IntegrationManager, type SessionIdRef } from "./integrations/index.js";
+import { listInstalledPlugins } from "./plugins/store.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
 import { MetadataStore, type MetadataSession, type PrRef } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
@@ -10192,6 +10193,15 @@ app.get("/api/diagnostics", (_req, res) => {
       approvalMode,
       relayConnected: Boolean(relay?.connected),
       turnRecoveries: turnRecoveryStats(),
+      plugins: (() => {
+        const installed = listInstalledPlugins(appDir);
+        return {
+          installed: installed.length,
+          valid: installed.filter((plugin) => Boolean(plugin.manifest)).length,
+          agentContributions: installed.reduce((count, plugin) => count + (plugin.manifest?.contributes.agents.length ?? 0), 0),
+          errors: pluginAgentConflictDiagnostics().length,
+        };
+      })(),
     },
     env: process.env as Record<string, string | undefined>,
     // The node knows it is online and which runtime is selectable; the client's

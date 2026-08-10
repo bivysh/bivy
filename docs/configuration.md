@@ -63,6 +63,7 @@ process, so the daemon, agents and helper scripts all agree.
 | `relay.json` | Relay URL, control-plane URL, client base URL, node enrollment token. Mode `0600` | `bivy relay:setup` |
 | `nodes.json` | Direct-node registry (`name` → `{url, token}`) for `bivy run --node` | `bivy nodes add/remove` |
 | `shims.json` | Installed agent shims | `bivy shim install/uninstall` |
+| `plugins/<id>/manifest.json` | Canonical declarative plugin manifests; no executable code or secrets | `bivy plugin install/remove` |
 | `secrets.json` / `secrets.key` | AES-256-GCM encrypted secret vault and its key. Both `0600` | `bivy secrets`, `bivy voice`, GitHub connect flows |
 | `bootstrap.json` | Per-process bootstrap secret the CLI uses to mint a device token | The node at startup |
 | `node.json` | Stable node identity (id, name) | The node |
@@ -203,7 +204,8 @@ The Bivy-owned OS jail (bubblewrap / `sandbox-exec`) was removed for v1.0.
 
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
-| `BIVY_RUNTIME` | agent id | `pi` | Supported | Default agent. Valid ids: `pi`, `claude-code-sdk`, `codex`, `codex-approvals`, `opencode`, `aider`, `hermes`, `goose`, `gemini`, `qwen`, `cline`, `crush`, `openclaw`, `generic-cli`, `bivy-agent-protocol`. Lowercased |
+| `BIVY_RUNTIME` | agent id | `pi` | Supported | Default agent. Built-in and installed plugin-agent ids are accepted. Lowercased |
+| `BIVY_PLUGIN_DIR` | path | `<data-dir>/plugins` | Supported (advanced) | Override the node-local declarative plugin store; primarily for managed deployments and testing |
 | `BIVY_CLAUDE_MODEL` | model id | unset | Supported | Default model for the Claude Code SDK runtime |
 | `BIVY_CLAUDE_SESSIONS_DIR` | path | unset | Supported | Extra directory to search for Claude Code transcripts |
 | `BIVY_PI_CLI` | path | the bundled `@earendil-works/pi-coding-agent` CLI | Escape hatch (packaging) | Path to the Pi CLI entry point |

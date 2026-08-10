@@ -147,6 +147,7 @@ const bivyLoginEntry = path.join(repoRoot, packaged ? "dist/bivy-login.js" : "sr
 const credentialIngestEntry = path.join(repoRoot, packaged ? "dist/credential-ingest-cli.js" : "src/credential-ingest-cli.ts");
 const automationEntry = path.join(repoRoot, packaged ? "dist/automation-cli.js" : "src/automation-cli.ts");
 const configEntry = path.join(repoRoot, packaged ? "dist/config-cli.js" : "src/config-cli.ts");
+const pluginEntry = path.join(repoRoot, packaged ? "dist/plugin-cli.js" : "src/plugin-cli.ts");
 const relaySetupEntry = path.join(repoRoot, packaged ? "dist/relay-setup.js" : "src/relay-setup.ts");
 // Dependency-free hosted-endpoint helper. Shipped to dist/ in the release
 // artifact (src/ is not packaged), so resolve it the same packaged-aware way as
@@ -681,6 +682,48 @@ function loadAgentManifest() {
   }
 }
 
+function loadPluginAgentManifest() {
+  const root = process.env.BIVY_PLUGIN_DIR
+    ? path.resolve(process.env.BIVY_PLUGIN_DIR)
+    : path.join(appDir, "plugins");
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); }
+  catch { return []; }
+  const seen = new Set();
+  const reserved = new Set([
+    "pi", "claude", "claude-code", "claude-code-sdk", "generic-cli", "codex-approvals",
+    "openclaw", "bivy-agent-protocol", "acp", ...loadAgentManifest().map((agent) => agent.id),
+  ]);
+  return entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .flatMap((entry) => {
+      try {
+        const manifest = JSON.parse(fs.readFileSync(path.join(root, entry.name, "manifest.json"), "utf8"));
+        if (manifest?.apiVersion !== "bivy.sh/v1alpha1" || manifest?.kind !== "Plugin" || manifest?.metadata?.id !== entry.name || !Array.isArray(manifest?.contributes?.agents)) return [];
+        return manifest.contributes.agents.flatMap((agent) => {
+          const id = typeof agent?.id === "string" ? agent.id.trim().toLowerCase() : "";
+          const adapter = agent?.adapter;
+          const command = typeof adapter?.command === "string" ? adapter.command.trim() : "";
+          if (!/^[a-z][a-z0-9-]{1,47}$/.test(id) || reserved.has(id) || seen.has(id) || !command || !["process", "acp"].includes(adapter?.kind)) return [];
+          seen.add(id);
+          return [[id, {
+            label: typeof agent.name === "string" && agent.name.trim() ? agent.name.trim() : id,
+            type: "command",
+            command,
+            args: [],
+            plugin: entry.name,
+            headlessFlags: adapter.kind === "process" && Array.isArray(adapter.args)
+              ? adapter.args.filter((arg) => typeof arg === "string")
+              : [],
+          }]];
+        });
+      } catch {
+        return [];
+      }
+    });
+}
+
 function loadCustomAgentManifest() {
   const raw = process.env.BIVY_CUSTOM_AGENTS || loadConfig().env?.BIVY_CUSTOM_AGENTS;
   if (!raw) return [];
@@ -710,7 +753,9 @@ function loadCustomAgentManifest() {
 // newly-added agent still gets one-shot detection with no edit here.
 function manifestHeadlessFlags(id) {
   const entry = loadAgentManifest().find((a) => a.id === id);
-  return entry && entry.headlessFlags?.length ? entry.headlessFlags : undefined;
+  if (entry?.headlessFlags?.length) return entry.headlessFlags;
+  const plugin = loadPluginAgentManifest().find(([pluginId]) => pluginId === id)?.[1];
+  return plugin?.headlessFlags?.length ? plugin.headlessFlags : undefined;
 }
 
 const BUILTIN_TERMINAL_AGENTS = new Map([
@@ -729,6 +774,7 @@ const BUILTIN_TERMINAL_AGENTS = new Map([
       ...(a.install?.kind === "npm" ? { npmPackage: a.install.pkg } : {}),
     },
   ]),
+  ...loadPluginAgentManifest(),
   ...loadCustomAgentManifest(),
 ]);
 
@@ -1389,7 +1435,7 @@ function cmdAgents(args = []) {
     }
     const command = meta.command || id;
     const resolved = whichOnPath(command);
-    return { id, label: meta.label, type: meta.type, command, installed: Boolean(resolved), path: resolved || null };
+    return { id, label: meta.label, type: meta.type, command, installed: Boolean(resolved), path: resolved || null, ...(meta.plugin ? { plugin: meta.plugin } : {}) };
   });
 
   if (asJson) {
@@ -1403,7 +1449,8 @@ function cmdAgents(args = []) {
       ? c.green("● built-in")
       : row.installed ? c.green("● installed") : c.dim("○ not installed");
     const where = row.path ? c.dim(`  ${row.path}`) : "";
-    console.log(`  ${c.cyan(row.id.padEnd(12))} ${String(row.label).padEnd(16)} ${status}${where}`);
+    const source = row.plugin ? c.dim(`  plugin:${row.plugin}`) : "";
+    console.log(`  ${c.cyan(row.id.padEnd(12))} ${String(row.label).padEnd(16)} ${status}${source}${where}`);
   }
   console.log("");
 }
@@ -1653,7 +1700,7 @@ function cmdCompletions(args = []) {
   const commands = [
     "run", "sessions", "ls", "resume", "promote", "rename", "nodes", "agents", "agents:install", "shim", "takeover", "token", "exec",
     "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "logs", "login",
-    "update", "update:log", "automation", "config", "open", "service", "secrets", "voice", "link", "relay:setup",
+    "update", "update:log", "automation", "config", "plugin", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
   const agents = [...BUILTIN_TERMINAL_AGENTS.keys()];
@@ -4351,6 +4398,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy exec")} "<prompt>"  One-shot headless run: prints the answer to stdout (pipe-friendly)
   ${c.cyan("bivy automation")}  init | validate | plan | test | apply (automations as code)
   ${c.cyan("bivy config")}      init | validate | show | get | set | explain (typed node config)
+  ${c.cyan("bivy plugin")}      validate | install | list | remove (declarative extensions)
   ${c.cyan("bivy")}              Show this help
   ${c.cyan("bivy setup")}      First-run wizard: agent, model login, remote sign-in, background service
   ${c.cyan("bivy start")}      Run the daemon in the foreground
@@ -4469,6 +4517,15 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "config": {
       if (!(await ensureDeps())) process.exit(1);
       process.exit(await run(nodeBin, [...nodeScriptArgs(configEntry), ...args], { cwd: process.cwd(), env: process.env }));
+      break;
+    }
+    case "plugin":
+    case "plugins": {
+      if (!(await ensureDeps())) process.exit(1);
+      const pluginEnv = { ...process.env };
+      const configuredAgents = loadConfig().env?.BIVY_CUSTOM_AGENTS;
+      if (configuredAgents && pluginEnv.BIVY_CUSTOM_AGENTS === undefined) pluginEnv.BIVY_CUSTOM_AGENTS = String(configuredAgents);
+      process.exit(await run(nodeBin, [...nodeScriptArgs(pluginEntry), ...args], { cwd: process.cwd(), env: pluginEnv }));
       break;
     }
     case "stop":

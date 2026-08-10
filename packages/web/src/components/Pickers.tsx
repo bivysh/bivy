@@ -66,6 +66,11 @@ function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string })
         >
           {tierLabel(tier)}{runtime.testedVersion ? ` · ${runtime.testedVersion}` : ""}
         </span>
+        {runtime.source?.kind === "plugin" && (
+          <span className="runtime-cap ok" title={`Contributed by ${runtime.source.pluginId}@${runtime.source.pluginVersion}`}>
+            Plugin · {runtime.source.pluginId}
+          </span>
+        )}
         <span
           className={`runtime-protection ${protectionLevel}`}
           title={runtime.protectionDetail || "This machine did not report a protection description."}

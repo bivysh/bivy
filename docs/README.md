@@ -14,7 +14,8 @@ run your first agent session.
 
 | Doc | Who it's for |
 | --- | --- |
-| [agent-shim.md](agent-shim.md) | Users running an agent Bivy doesn't ship with, and anyone adding a new one. |
+| [agent-shim.md](agent-shim.md) | Users wrapping an agent's native terminal session with Bivy. |
+| [plugins.md](plugins.md) | Developers adding an external process or ACP agent through a declarative plugin manifest. |
 | [automations-as-code.md](automations-as-code.md) | Developers defining, validating, simulating, and applying automations from YAML. |
 | [agents/](agents/README.md) | Per-agent setup: install command, how to authenticate it, model picker, resume support, and known gaps — one short page per agent in the picker. |
 | [troubleshooting.md](troubleshooting.md) | Anyone whose node won't start, won't connect, or won't behave. |
