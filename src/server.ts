@@ -31,6 +31,7 @@ import { createSessionNamer, fallbackSessionName } from "./session/session-namer
 import { createBranchPublish } from "./session/branch-publish.js";
 import { createForkStandUp } from "./session/fork-standup.js";
 import { createTranscriptPersistence } from "./session/transcript-persistence.js";
+import { createRunTerminals } from "./session/run-terminal.js";
 import { isNativeOAuthProvider, loginModelOAuth, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
 import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
 import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } from "./runtime/codex-sessions.js";
@@ -1852,399 +1853,6 @@ function broadcastTuiState(sessionId: string, active: boolean) {
 // a hardening step before remote GA — see docs/DEVELOPMENT_PLAN.md B4.)
 const relayTerminals = new Set<string>();
 
-// Run-terminals: native agent sessions started by `bivy run` (and reattachable by
-// `bivy resume` / the app). Unlike socket-owned terminals, these live in the
-// daemon independent of the client that started them — closing your laptop
-// terminal leaves the session running so you can reattach from a phone or
-// another terminal. Their output is broadcast to every client (tagged by termId,
-// each client filters) so the launching terminal and the phone share one live
-// TUI.
-const runTerminals = new Set<string>();
-
-async function runTerminalList() {
-  const runs = terminals
-    .list((meta) => meta.kind === "run")
-    .filter((t) => runTerminals.has(t.id));
-
-  // Native agents write their useful title only after the first prompt. Reconcile
-  // auto-named terminals with the agent durable session; explicit --name wins.
-  let saved: Awaited<ReturnType<typeof listAllSessions>> = [];
-  if (runs.some((t) => t.meta.autoName)) {
-    try { saved = await listAllSessions(); } catch { /* best-effort listing */ }
-  }
-  const out = [];
-  for (const t of runs) {
-    let sessionRef = t.meta.sessionId;
-    // Discover the on-disk session for agents that assign their id lazily (Pi,
-    // Codex). Runs whenever there's no pinned id — not just for auto-named
-    // terminals — so the takeover-readiness flag below is accurate even for a
-    // run launched with an explicit --name.
-    if (!sessionRef) {
-      try { sessionRef = await SESSION_DISCOVERY_BY_AGENT[t.meta.agent ?? ""]?.(t.workspace, t.createdAt); }
-      catch { /* agent may still be starting */ }
-    }
-    const native = sessionRef ? saved.find((s) => s.id === sessionRef || s.path === sessionRef) : undefined;
-    const nativeName = native?.name?.trim();
-    if (t.meta.autoName && nativeName && !isEmptyUntitledTitle(nativeName)) t.meta.name = nativeName;
-    const { autoName: _autoName, ...publicMeta } = t.meta;
-    // "Continue as chat" can only adopt a session that exists: a pinned id, or a
-    // session discovered on disk. Surface that so the client can disable the
-    // affordance (with guidance) until the agent has actually started its
-    // session, instead of letting the user tap it and hit a 409.
-    out.push({ termId: t.id, workspace: t.workspace, createdAt: t.createdAt, lastActivityAt: t.lastActivityAt, pid: terminals.pid(t.id), ...publicMeta, takeoverReady: Boolean(sessionRef) });
-  }
-  return out;
-}
-
-function broadcastRunTerminalList(): void {
-  void runTerminalList().then((listed) => broadcast({ type: "terminal.list", terminals: listed })).catch(() => {});
-}
-
-// Throttle `terminal.activity` pings so a chatty agent can't flood every client
-// with a frame per PTY chunk. One ping per this interval per run-terminal is
-// enough for the cockpit to show an "active" indicator; clients decay to idle
-// locally when the pings stop. Keyed by termId, cleared when the PTY exits.
-const ACTIVITY_PING_INTERVAL = 2000;
-const lastActivityPing = new Map<string, number>();
-
-// A `bivy run` agent that produces output and then stays quiet this long has
-// very likely parked at a prompt waiting for you. On that working→quiet edge we
-// fire one push hint (reusing the account's existing web-push path) so you get
-// buzzed when an agent needs you after stepping away, plus a `terminal.idle`
-// broadcast. Re-arms on new output — one notification per quiet period. Kept
-// well above the UI's active window (which flips the drawer to "waiting" fast)
-// so it doesn't buzz on every conversational turn. Tunable for tests.
-const IDLE_NOTIFY_INTERVAL = Number(process.env.BIVY_RUN_IDLE_NOTIFY_MS) || 30_000;
-const runIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-// (Re)arm the quiet-agent timer for a run-terminal; fires once when it stays
-// silent for IDLE_NOTIFY_INTERVAL, unless new output re-arms it first.
-function armRunIdleNotify(id: string, displayName: string | undefined) {
-  const existing = runIdleTimers.get(id);
-  if (existing) clearTimeout(existing);
-  runIdleTimers.set(id, setTimeout(() => {
-    runIdleTimers.delete(id);
-    if (!runTerminals.has(id)) return;
-    broadcast({ type: "terminal.idle", termId: id, at: Date.now() });
-    broadcastRunTerminalList();
-    const who = displayName || "An agent";
-    // No sessionId: a run-terminal's pinned session is still owned by its live
-    // native TUI, so deep-linking it into a governed chat would resume it as a
-    // second writer (the hazard `takeoverRunTerminal` avoids by killing the PTY
-    // first). The hint stays informative but opens the app root.
-    void sendNotificationHint({
-      kind: "agent_waiting",
-      title: `${who} is waiting`,
-      body: `${who} has been quiet for a bit — it may be waiting for your input.`,
-    });
-  }, IDLE_NOTIFY_INTERVAL));
-}
-
-function clearRunIdleNotify(id: string) {
-  const t = runIdleTimers.get(id);
-  if (t) { clearTimeout(t); runIdleTimers.delete(id); }
-}
-
-// Bell → push ("call me back"). A program ringing the terminal bell while you're
-// away from the mobile/PWA shell is exactly the moment to buzz you — a long build
-// that ends in `\a`, a job that wants confirmation. But an interactive shell also
-// bells constantly for benign reasons (a readline error, an ambiguous
-// tab-completion) *while you're actively typing*, so an unconditional push would
-// be pure noise. We fire only when BOTH hold: (1) you haven't typed into that
-// terminal for BELL_QUIET_INPUT_MS — you've stepped away, this isn't a keystroke
-// echo; and (2) we haven't already buzzed for this terminal within
-// BELL_NOTIFY_COOLDOWN_MS — a bell-storm collapses to one call. Reuses the
-// account's existing web-push path (sendNotificationHint), so on a purely local
-// node with no control plane it's a harmless no-op.
-const BELL_QUIET_INPUT_MS = Number(process.env.BIVY_TERM_BELL_QUIET_MS) || 8_000;
-const BELL_NOTIFY_COOLDOWN_MS = Number(process.env.BIVY_TERM_BELL_COOLDOWN_MS) || 45_000;
-const lastBellNotify = new Map<string, number>();
-
-// Decide whether a bell from terminal `id` should raise a call-me-back push, and
-// if so fire it. Gated by recent-input and cooldown (see the consts above).
-function maybeNotifyBell(id: string) {
-  const now = Date.now();
-  const lastInput = terminals.lastInput(id);
-  if (lastInput != null && now - lastInput < BELL_QUIET_INPUT_MS) return; // actively typing
-  const lastNotify = lastBellNotify.get(id) ?? 0;
-  if (now - lastNotify < BELL_NOTIFY_COOLDOWN_MS) return; // already buzzed recently
-  lastBellNotify.set(id, now);
-  const meta = terminals.meta(id);
-  const who = meta?.name?.trim() || meta?.label?.trim() || "A terminal";
-  // No sessionId — see armRunIdleNotify: a live run-terminal's pinned session
-  // must not be resumed as a chat behind its native TUI's back.
-  void sendNotificationHint({
-    kind: "terminal_bell",
-    title: "Terminal bell",
-    body: `${who} rang the terminal bell — it may be waiting for you.`,
-  });
-}
-
-function clearBellNotify(id: string) {
-  lastBellNotify.delete(id);
-}
-
-// Local WS sockets currently viewing each run-terminal (attached via
-// terminal.open.run / terminal.attach). Run-terminal OUTPUT is unicast to just
-// these sockets instead of every client, so a device only watching chat doesn't
-// receive a chatty agent's raw bytes. Discovery/state events (created / closed /
-// activity / idle / exit) still broadcast to everyone — they drive the drawer
-// list for all clients. The relay path is intentionally unchanged: remote
-// clients still receive termId-tagged output frames and filter locally, because
-// the relay can't address an individual device (true per-remote-client unicast
-// is a later relay-protocol change).
-const runViewers = new Map<string, Set<WebSocket>>();
-
-function addRunViewer(termId: string, socket: WebSocket) {
-  let set = runViewers.get(termId);
-  if (!set) { set = new Set(); runViewers.set(termId, set); }
-  set.add(socket);
-}
-
-// Remove a socket from every run-terminal's viewer set (on disconnect). Cheap:
-// there are only a handful of run-terminals.
-function dropRunViewer(socket: WebSocket) {
-  for (const [id, set] of runViewers) {
-    set.delete(socket);
-    if (set.size === 0) runViewers.delete(id);
-  }
-}
-
-// Deliver a run-terminal's output to the local sockets attached to it, plus the
-// relay (still a room broadcast). Only OUTPUT is scoped this way; everything
-// else about run-terminals still uses broadcast().
-function emitRunOutput(termId: string, data: string) {
-  const viewers = runViewers.get(termId);
-  if (viewers && viewers.size) {
-    const payload = JSON.stringify({ type: "terminal.output", termId, data });
-    for (const s of viewers) { if (s.readyState === WebSocket.OPEN) s.send(payload); }
-  }
-  relay?.sendEvent({ type: "terminal.output", termId, data });
-}
-
-// Find a live run-terminal already attached to a given external multiplexer
-// target (e.g. "tmux:work"), so a second attach to that target (from the app)
-// reuses the one PTY instead of spawning another `tmux attach`.
-function runTerminalForMux(target: string): string | undefined {
-  if (!target) return undefined;
-  for (const id of runTerminals) {
-    if (terminals.meta(id)?.mux === target) return id;
-  }
-  return undefined;
-}
-
-interface RunTerminalSpec {
-  command: string;
-  args: string[];
-  agent?: string;
-  label?: string;
-  name?: string;
-  model?: string;
-  mux?: string;
-  workspace?: string;
-  cols?: number;
-  rows?: number;
-  /** Stable id of the client launching/attaching, for per-client PTY sizing. */
-  clientId?: string;
-  /** Session id pinned at launch (e.g. `claude --session-id <uuid>`), if any. */
-  sessionId?: string;
-}
-
-// A readable default session name when the user didn't pass `bivy run --name`.
-// Combines the agent (or command basename) with the workspace's basename so
-// several live sessions of the same agent in different repos stay distinct in
-// `bivy sessions` and the app's "Running agents" drawer.
-function defaultRunName(agent: string | undefined, command: string, workspace: string): string {
-  const base = agent || command.split(/\s+/)[0]?.split(/[\\/]/).pop() || "session";
-  let trimmedWorkspace = workspace;
-  while (trimmedWorkspace.endsWith("/") || trimmedWorkspace.endsWith("\\")) trimmedWorkspace = trimmedWorkspace.slice(0, -1);
-  const dir = trimmedWorkspace.split(/[\\/]/).pop();
-  return dir ? `${base} · ${dir}` : base;
-}
-
-// Open (or reuse) a persistent run-terminal — the daemon-owned PTY behind `bivy
-// run` (and `bivy resume`). Output is broadcast to every client so the launching
-// terminal and any phone/other-terminal share one live session, and the id is
-// NOT added to any socket's owned-set, so it outlives the socket that started it.
-async function openRunTerminal(spec: RunTerminalSpec, emit: (event: unknown) => void): Promise<string | undefined> {
-  const label = spec.label ?? spec.agent;
-  // Reuse a live attach terminal for the same multiplexer target — bind the
-  // caller to it and replay scrollback, exactly like terminal.attach.
-  if (spec.mux) {
-    const existing = runTerminalForMux(spec.mux);
-    if (existing) {
-      if (spec.clientId && (spec.cols !== undefined || spec.rows !== undefined)) terminals.setClientSize(existing, spec.clientId, spec.cols || 80, spec.rows || 24);
-      emit({ type: "terminal.attached", termId: existing, data: terminals.snapshot(existing) ?? "" });
-      return existing;
-    }
-  }
-  // Cap concurrent run terminals. Unlike sessions these are daemon-owned and may
-  // hold live work a user detached from, so we never auto-kill one — reject the
-  // new open with a clear message instead. (The mux-reuse path above already
-  // returned for an existing target, so this only gates genuinely-new PTYs.)
-  if (Number.isFinite(maxRunTerminals) && maxRunTerminals > 0 && runTerminals.size >= maxRunTerminals) {
-    emit({ type: "terminal.error", error: `Too many run terminals open (${runTerminals.size}/${maxRunTerminals}). Close one (e.g. 'bivy kill') or raise BIVY_MAX_RUN_TERMINALS.` });
-    return undefined;
-  }
-  const workspace = spec.workspace || active?.session.cwd || active?.worktree?.path || active?.workspace || defaultWorkspace;
-  // Agent-owned integrations keep their native login untouched. Only an
-  // integration that explicitly declares Bivy/mixed auth receives projections
-  // from Bivy's vault. A mux attach always reuses its existing environment.
-  const integrationId = spec.agent ? canonicalAgentId(spec.agent) : undefined;
-  const authOwner = listRuntimes(spec.agent).find((agent) => agent.id === integrationId)?.authOwner ?? "agent";
-  const credentialEnv = spec.mux || authOwner === "agent" ? {} : await provisionAgentRun(credsDir, piDir, spec.agent, workspace).catch((error) => {
-    console.warn(`[provision] credential projection for "${spec.agent}" failed:`, (error as Error).message);
-    return {};
-  });
-  const commandLine = [spec.command, ...spec.args].join(" ");
-  // A mux attach terminal is already named by its target; only synthesize a
-  // default name for plain `bivy run` sessions.
-  const explicitName = spec.name?.trim();
-  const name = explicitName || (spec.mux ? undefined : defaultRunName(spec.agent, commandLine, workspace));
-  // Only genuine `bivy run` agents get quiet-agent push hints; an adopted
-  // tmux/zellij/screen attach isn't "your agent waiting".
-  const notifiable = !spec.mux;
-  // Captured before open so the onExit discovery path (agents that assign their
-  // session id lazily) can correlate by start time.
-  const createdAt = Date.now();
-  try {
-    const id = terminals.open({
-      workspace,
-      command: spec.command,
-      args: spec.args,
-      env: credentialEnv,
-      cols: spec.cols,
-      rows: spec.rows,
-      clientId: spec.clientId,
-      meta: { kind: "run", agent: spec.agent, model: spec.model, label, name, autoName: !explicitName && !spec.mux, command: commandLine, mux: spec.mux, sessionId: spec.sessionId },
-      onData: (data) => {
-        // Raw bytes go only to the sockets attached to this run-terminal (+ the
-        // relay), not every connected client.
-        emitRunOutput(id, data);
-        // Edge-throttled liveness ping so the cockpit can show active vs idle
-        // without a frame per chunk.
-        const at = Date.now();
-        if (at - (lastActivityPing.get(id) ?? 0) >= ACTIVITY_PING_INTERVAL) {
-          lastActivityPing.set(id, at);
-          broadcast({ type: "terminal.activity", termId: id, at });
-        }
-        // Fresh output means the agent is working again — (re)start the quiet
-        // countdown so a push only fires once it actually goes silent.
-        if (notifiable) armRunIdleNotify(id, name);
-      },
-      onExit: (code) => {
-        runTerminals.delete(id);
-        runViewers.delete(id);
-        lastActivityPing.delete(id);
-        clearRunIdleNotify(id);
-        broadcast({ type: "terminal.exit", termId: id, code });
-        broadcast({ type: "terminal.closed", termId: id });
-        // Mark the durable row idle and, for agents that assign their id lazily
-        // (no launch-time pin), discover the on-disk session now so it still
-        // appears in the sidebar after the PTY is gone.
-        if (!spec.mux && spec.agent) {
-          const agentId = spec.agent;
-          void (async () => {
-            let sessionRef = spec.sessionId;
-            if (!sessionRef) {
-              try {
-                sessionRef = await SESSION_DISCOVERY_BY_AGENT[agentId]?.(workspace, createdAt);
-              } catch {
-                /* agent may never have written a session */
-              }
-            }
-            if (sessionRef) {
-              const runtimeId = TAKEOVER_RUNTIME_BY_AGENT[agentId] ?? agentId;
-              try {
-                metadata.upsertSession({
-                  id: sessionRef,
-                  runtimeId,
-                  agentName: agentId,
-                  workspace,
-                  name: name || undefined,
-                  source: "cli",
-                  status: "saved",
-                });
-              } catch {
-                /* best-effort */
-              }
-            }
-          })();
-        }
-        // Unify keys, reverse direction: a login done inside the agent's own CLI
-        // (e.g. `codex login`) is folded back into Bivy's vault, then synced.
-        if (!spec.mux) {
-          void ingestAgentCredentials(spec.agent, credsDir, piDir)
-            .then(async (imported) => {
-              if (imported > 0) {
-                broadcast({ type: "providers.list", providers: await listProvidersUnified() });
-                await pushModelAuthToControlPlane();
-              }
-            })
-            .catch(() => {});
-        }
-      },
-    });
-    runTerminals.add(id);
-    // Persist a durable metadata row when the run has a known session id (pinned
-    // at launch, e.g. `claude --session-id` / `grok --session-id`). Without this,
-    // a `bivy run` session vanishes from the sidebar the moment the PTY exits —
-    // only live run-terminals were listed. The metadata backfill in
-    // listAllSessions then keeps it resumable after close.
-    if (spec.sessionId && spec.agent && !spec.mux) {
-      const runtimeId = TAKEOVER_RUNTIME_BY_AGENT[spec.agent] ?? spec.agent;
-      try {
-        metadata.upsertSession({
-          id: spec.sessionId,
-          runtimeId,
-          agentName: spec.agent,
-          workspace,
-          name: name || undefined,
-          source: "cli",
-          status: "working",
-        });
-      } catch {
-        /* best-effort: a metadata write must never block the run launch */
-      }
-    }
-    emit({ type: "terminal.opened", termId: id, workspace, mode: "run", agent: spec.agent, label, name });
-    broadcast({ type: "terminal.created", terminal: { termId: id, workspace, createdAt, lastActivityAt: createdAt, kind: "run", agent: spec.agent, model: spec.model, label, name, command: commandLine, mux: spec.mux, sessionId: spec.sessionId, pid: terminals.pid(id) } });
-    // Surface the durable row so the sidebar keeps the session after the PTY
-    // exits (listAllSessions backfills from metadata). Best-effort broadcast.
-    if (spec.sessionId && !spec.mux) {
-      void listAllSessions()
-        .then((sessions) => broadcast({ type: "sessions.list", sessions: sessions.map((s) => ({ ...s, sessionId: s.id })) }))
-        .catch(() => {});
-    }
-    return id;
-  } catch (error) {
-    emit({ type: "terminal.error", workspace, error: error instanceof Error ? error.message : String(error) });
-    return undefined;
-  }
-}
-
-// Agents whose pinned run-terminal session can be reopened as a governed chat.
-// Keyed by agent id → the runtime that resumes it. Extended as more agents gain
-// a resumable, tool-intercepting runtime (see docs/agent-runtimes.md).
-const TAKEOVER_RUNTIME_BY_AGENT: Record<string, string> = {
-  claude: "claude-code-sdk",
-  pi: "pi",
-  // Reopen a taken-over Codex terminal as the governed + resumable app-server
-  // shim: it resumes the discovered rollout id via thread/resume (validated — an
-  // exec-created session resumes through the app-server with full context), so
-  // the adopted chat gets per-tool approvals, not just the exec jail.
-  codex: "codex-approvals",
-  // Official Grok CLI: resume by UUID via `grok --resume <id> -p …` (process
-  // runtime) after the interactive TUI is stopped.
-  grok: "grok",
-};
-
-// The CLI command to continue an adopted session back in a terminal.
-const RESUME_CLI_BY_AGENT: Record<string, (id: string) => string> = {
-  claude: (id) => `claude --resume ${id}`,
-  codex: (id) => `codex resume ${id}`,
-  grok: (id) => `grok --resume ${id}`,
-};
 
 // Same commands, keyed by runtime id instead of the short takeover agent alias
 // above — for native session discovery (issue #156), where a session with a
@@ -2258,332 +1866,6 @@ const NATIVE_RESUME_CLI_BY_RUNTIME: Record<string, (id: string) => string> = {
   grok: (id) => `grok --resume ${id}`,
 };
 
-// When no resumable session id can be found, why — and what to do about it.
-// These agents assign their id lazily (Codex/Pi write a session only once a turn
-// starts), so an idle run-terminal simply has nothing to adopt yet.
-const TAKEOVER_EMPTY_HINT_BY_AGENT: Record<string, string> = {
-  codex:
-    "Codex writes its session only after the first message. Send one message in the terminal, then continue as chat.",
-  pi: "Pi assigns its session once the conversation starts. Send one message in the terminal, then continue as chat.",
-  grok: "Grok writes its session once the conversation starts. Send one message in the terminal, then continue as chat.",
-};
-
-// For agents with no launch-time session-id pin, locate the on-disk session a run
-// produced (by cwd + start time) so a takeover can still resume the right one.
-const SESSION_DISCOVERY_BY_AGENT: Record<string, (cwd: string, since: number) => string | undefined | Promise<string | undefined>> = {
-  codex: (cwd, since) => discoverCodexSessionForCwd(cwd, since)?.id,
-  // Pi assigns its session id inside the native TUI, after the PTY is launched,
-  // so there is no launch-time flag to pin. Its durable index does carry cwd +
-  // creation time; correlate those with the run-terminal and resume by path.
-  pi: async (cwd, since) => {
-    const match = discoverPiSessionForCwd(await runtimeHost.listSessions(getRuntime("pi")), cwd, since);
-    return match?.path || match?.id;
-  },
-  // Grok can be pinned at launch (`--session-id`) but also assigns ids lazily
-  // when the pin flag is absent; correlate by cwd + start time against
-  // ~/.grok/sessions.
-  grok: (cwd, since) => discoverGrokSessionForCwd(cwd, since)?.id,
-};
-
-// "Continue as chat": stop the native TUI running in a pinned run-terminal and
-// reopen its session as a governed, structured chat on the owning runtime. The
-// pinned session id is the resume target; closing the terminal SIGTERMs the PTY
-// (the kill target), so there is never a second live writer on the session.
-async function takeoverRunTerminal(
-  opts: { termId?: string; sessionId?: string },
-): Promise<{ ok: true; sessionId: string; runtimeId: string; resumeCommand?: string } | { ok: false; status: number; error: string }> {
-  const runs = terminals.list((m) => m.kind === "run").filter((t) => runTerminals.has(t.id));
-  const entry = opts.termId
-    ? runs.find((t) => t.id === opts.termId)
-    : opts.sessionId
-      ? runs.find((t) => t.meta.sessionId === opts.sessionId)
-      : undefined;
-  if (!entry) return { ok: false, status: 404, error: "No matching live run-terminal." };
-  const agent = entry.meta.agent ?? "";
-  const runtimeId = TAKEOVER_RUNTIME_BY_AGENT[agent];
-  if (!runtimeId) {
-    return { ok: false, status: 409, error: `"Continue as chat" isn't supported for "${agent || "this agent"}" yet.` };
-  }
-  // The session to resume: pinned at launch (Claude), else discovered from the
-  // agent's durable session index by cwd + terminal start time (Codex/Pi).
-  const discovered = entry.meta.sessionId
-    ? undefined
-    : await SESSION_DISCOVERY_BY_AGENT[agent]?.(entry.workspace, entry.createdAt);
-  const pinned = entry.meta.sessionId ?? discovered;
-  if (!pinned) {
-    const hint = TAKEOVER_EMPTY_HINT_BY_AGENT[agent]
-      ?? `Start it via the shim (or \`bivy run\`), or continue it in a terminal.`;
-    return { ok: false, status: 409, error: `Couldn't find a ${agent || "session"} session to continue yet. ${hint}` };
-  }
-  const workspace = entry.workspace;
-  // 1. Stop the native TUI (the PTY this run-terminal owns is the kill target).
-  terminals.close(entry.id);
-  runTerminals.delete(entry.id);
-  runViewers.delete(entry.id);
-  broadcast({ type: "terminal.closed", termId: entry.id });
-  // 2. Reopen the session as a chat on its runtime (governed for claude/pi/codex).
-  const record = await createSession(workspace, pinned, { runtimeId, makeActive: true, source: "takeover" });
-  const resumeCommand = RESUME_CLI_BY_AGENT[agent]?.(pinned);
-  return { ok: true, sessionId: record.id, runtimeId, resumeCommand };
-}
-
-/**
- * Route a `terminal.*` client message to the terminal manager. Transport-agnostic:
- * `emit` delivers events back to the requesting client (a local socket, or all
- * relay clients tagged by termId), and `owned` tracks ids for cleanup on
- * disconnect. `viewRun`, present only for a local socket, registers that socket
- * as a viewer of a run-terminal so its output is unicast (and so it is NOT
- * reaped when the socket closes — run-terminals are daemon-owned and must
- * outlive an attaching client). Returns true if the message was a terminal
- * message.
- */
-function handleTerminalMessage(
-  msg: { kind?: string; termId?: unknown; data?: unknown; cols?: unknown; rows?: unknown; workspace?: unknown; sessionId?: unknown; agent?: unknown; label?: unknown; name?: unknown; model?: unknown; command?: unknown; args?: unknown; mux?: unknown; standalone?: unknown },
-  emit: (event: unknown) => void,
-  owned: Set<string>,
-  // Stable id for the transport (socket/relay) this message arrived on. A shared
-  // PTY is sized to the min over all attached clients, keyed by this id, so a
-  // second client attaching at a different window size can't reflow the first
-  // client's TUI. See TerminalManager.setClientSize.
-  clientId: string,
-  viewRun?: (termId: string) => void,
-): boolean {
-  switch (msg.kind) {
-    case "terminal.list":
-      void runTerminalList().then((listed) => emit({ type: "terminal.list", terminals: listed }));
-      return true;
-    case "terminal.takeover": {
-      // "Continue as chat": stop the pinned run-terminal's native TUI and reopen
-      // its session as a governed chat. Async; the ack rides back to this client,
-      // and the createSession inside broadcasts session.created to switch the UI.
-      const takeoverTermId = typeof msg.termId === "string" && msg.termId ? msg.termId : undefined;
-      const takeoverSessionId = typeof msg.sessionId === "string" && msg.sessionId ? msg.sessionId : undefined;
-      void takeoverRunTerminal({ termId: takeoverTermId, sessionId: takeoverSessionId })
-        .then((r) =>
-          r.ok
-            ? emit({ type: "terminal.takeover.result", ok: true, termId: takeoverTermId, sessionId: r.sessionId, runtimeId: r.runtimeId, resumeCommand: r.resumeCommand })
-            : emit({ type: "terminal.takeover.result", ok: false, termId: takeoverTermId, error: r.error }),
-        )
-        .catch((error) => emit({ type: "terminal.takeover.result", ok: false, termId: takeoverTermId, error: error instanceof Error ? error.message : String(error) }));
-      return true;
-    }
-    case "terminal.multiplexers":
-      // Named under the terminal.* namespace so it rides the same client→node
-      // routing as other terminal messages (the node only dispatches terminal.*).
-      void listMultiplexerSessions().then((sessions) => emit({ type: "multiplexer.list", sessions })).catch(() => emit({ type: "multiplexer.list", sessions: [] }));
-      return true;
-    case "terminal.open.run": {
-      // Launch a native agent (real CLI/TUI) in a persistent PTY the daemon owns.
-      // The command is resolved by the caller (the `bivy run` CLI, which already
-      // knows how to find each agent's binary); the node just spawns it in the
-      // workspace.
-      const command = typeof msg.command === "string" ? msg.command.trim() : "";
-      if (!command) { emit({ type: "terminal.error", error: "terminal.open.run requires a command." }); return true; }
-      void openRunTerminal({
-        command,
-        args: Array.isArray(msg.args) ? msg.args.map(String) : [],
-        agent: typeof msg.agent === "string" ? msg.agent : undefined,
-        label: typeof msg.label === "string" ? msg.label : undefined,
-        name: typeof msg.name === "string" ? msg.name : undefined,
-        model: typeof msg.model === "string" ? msg.model : undefined,
-        mux: typeof msg.mux === "string" && msg.mux ? msg.mux : undefined,
-        workspace: typeof msg.workspace === "string" && msg.workspace ? msg.workspace : undefined,
-        cols: Number(msg.cols) || undefined,
-        rows: Number(msg.rows) || undefined,
-        clientId,
-        sessionId: typeof msg.sessionId === "string" && msg.sessionId ? msg.sessionId : undefined,
-      }, emit).then((runId) => { if (runId) viewRun?.(runId); });
-      return true;
-    }
-    case "terminal.open.mux": {
-      // Attach to an existing tmux/zellij/screen session (Stage 2 of `bivy
-      // attach`). The node resolves the attach command so clients don't need to
-      // know each multiplexer's syntax, tags it with the target for dedupe, and
-      // reuses a live attach terminal for the same target when one exists.
-      const kind = String(msg.agent || "") as MultiplexerKind;
-      const name = typeof msg.label === "string" ? msg.label : "";
-      if (!["tmux", "zellij", "screen"].includes(kind) || !name) { emit({ type: "terminal.error", error: "terminal.open.mux requires a multiplexer and session name." }); return true; }
-      const spec = attachCommand(kind, name);
-      void openRunTerminal({
-        command: spec.command,
-        args: spec.args,
-        agent: kind,
-        label: `${kind}:${name}`,
-        mux: `${kind}:${name}`,
-        cols: Number(msg.cols) || undefined,
-        rows: Number(msg.rows) || undefined,
-        clientId,
-      }, emit).then((muxId) => { if (muxId) viewRun?.(muxId); });
-      return true;
-    }
-    case "terminal.open": {
-      // The standalone (session-less) terminal — opened from the app's sidebar
-      // terminal button, not attached to any chat — always roots at the node's
-      // default workspace folder, never a session's cwd. It must not fall back
-      // to `active` (the node-global active *chat* session) the way an ordinary
-      // terminal does, or it would silently become session-scoped again. See
-      // #460.
-      const standalone = Boolean(msg.standalone);
-      const record = standalone ? undefined : resolveSession(msg.sessionId);
-      const workspace = record
-        ? (record.session.cwd || record.worktree?.path || record.workspace)
-        : standalone
-          ? defaultWorkspace
-          : (typeof msg.workspace === "string" && msg.workspace ? msg.workspace : (active?.session.cwd || active?.worktree?.path || active?.workspace || defaultWorkspace));
-      try {
-        const id = terminals.open({
-          workspace,
-          cols: Number(msg.cols) || undefined,
-          rows: Number(msg.rows) || undefined,
-          clientId,
-          onData: (data) => emit({ type: "terminal.output", termId: id, data }),
-          onBell: () => maybeNotifyBell(id),
-          onExit: (code) => {
-            owned.delete(id);
-            clearBellNotify(id);
-            emit({ type: "terminal.exit", termId: id, code });
-          },
-        });
-        owned.add(id);
-        emit({ type: "terminal.opened", termId: id, workspace, sessionId: record?.id });
-      } catch (error) {
-        emit({ type: "terminal.error", workspace, sessionId: record?.id, error: error instanceof Error ? error.message : String(error) });
-      }
-      return true;
-    }
-    case "terminal.open.tui": {
-      // Hand this session off to the runtime's interactive TUI in a PTY, resuming
-      // the same conversation. While the TUI owns the session, chat prompts for it
-      // are refused (single writer) until the TUI exits.
-      void (async () => {
-        const record = resolveSession(msg.sessionId);
-        if (!record) { emit({ type: "terminal.error", error: "Session not found for TUI." }); return; }
-        // Idempotent "go to terminal": a TUI is already live for this session
-        // (opened here, on another device, or before a reload). Re-attach the
-        // caller to that same PTY — replaying its scrollback — instead of
-        // spawning a second CLI that would fight over the one session file and
-        // orphan the first. A stale id (PTY already gone) falls through to a
-        // fresh launch below.
-        if (record.tuiTermId) {
-          const snapshot = terminals.snapshot(record.tuiTermId);
-          if (snapshot != null) {
-            owned.add(record.tuiTermId);
-            if (typeof msg.cols !== "undefined" || typeof msg.rows !== "undefined") {
-              terminals.setClientSize(record.tuiTermId, clientId, Number(msg.cols) || 80, Number(msg.rows) || 24);
-            }
-            emit({ type: "terminal.attached", termId: record.tuiTermId, data: snapshot });
-            return;
-          }
-        }
-        if (sessionBusy(record)) { emit({ type: "terminal.error", sessionId: record.id, error: "Finish or stop the current turn before opening the TUI." }); return; }
-        let spec;
-        try { spec = record.session.interactiveTuiCommand ? await record.session.interactiveTuiCommand() : null; }
-        catch (error) { emit({ type: "terminal.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) }); return; }
-        if (!spec) { emit({ type: "terminal.error", sessionId: record.id, error: "This runtime has no interactive TUI available on this node." }); return; }
-        const workspace = record.session.cwd || record.worktree?.path || record.workspace;
-        try {
-          const id = terminals.open({
-            workspace,
-            command: spec.command,
-            args: spec.args,
-            env: spec.env,
-            cols: Number(msg.cols) || undefined,
-            rows: Number(msg.rows) || undefined,
-            clientId,
-            onData: (data) => emit({ type: "terminal.output", termId: id, data }),
-            onExit: (code) => {
-              owned.delete(id);
-              if (record.tuiTermId === id) {
-                record.tuiTermId = undefined;
-                void sessionTerminals.forget(record.id).catch(() => {});
-                record.tuiRefreshing = true;
-                broadcastTuiState(record.id, false);
-                void refreshRecordAfterTui(record);
-              }
-              emit({ type: "terminal.exit", termId: id, code });
-            },
-          });
-          owned.add(id);
-          record.tuiTermId = id;
-          void sessionTerminals.record(record.id, { termId: id }).catch(() => {});
-          emit({ type: "terminal.opened", termId: id, workspace, sessionId: record.id, mode: "tui" });
-          broadcastTuiState(record.id, true);
-        } catch (error) {
-          emit({ type: "terminal.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) });
-        }
-      })();
-      return true;
-    }
-    case "terminal.close.tui": {
-      // "Take over in chat": stop the interactive TUI that owns this session and
-      // hand it back to governed chat. Closing the PTY runs the same onExit path
-      // as the user quitting the CLI — it clears tuiTermId, flips tuiRefreshing,
-      // rebuilds the in-process session from disk (refreshRecordAfterTui), and
-      // broadcasts `terminal.tui {active:false}` — so the composer unlocks with
-      // whatever the TUI wrote. Resolve the PTY server-side from the session so a
-      // client that never held the termId (another device, post-reload) can do it.
-      const record = resolveSession(msg.sessionId);
-      const termId = record?.tuiTermId;
-      if (termId) {
-        terminals.close(termId);
-        owned.delete(termId);
-        clearBellNotify(termId);
-      } else if (record) {
-        // No live TUI to close — make sure the client isn't left locked on a
-        // stale flag by re-asserting the unlocked state for this session.
-        broadcastTuiState(record.id, false);
-      }
-      return true;
-    }
-    case "terminal.attach": {
-      // Reconnect path: a client that already holds a termId (survived a reload
-      // or a dropped socket) re-binds to the still-live shell and gets the
-      // retained scrollback replayed so it doesn't resume on a blank screen.
-      if (typeof msg.termId === "string") {
-        const snapshot = terminals.snapshot(msg.termId);
-        if (snapshot != null) {
-          // A run-terminal is daemon-owned: register the local socket as a viewer
-          // (for unicast output) but DON'T add it to `owned`, or detaching this
-          // client would reap a session meant to outlive it. A plain shell/TUI
-          // terminal stays socket-owned as before. The relay path (viewRun
-          // undefined) keeps its existing behavior.
-          if (viewRun && runTerminals.has(msg.termId)) viewRun(msg.termId);
-          else owned.add(msg.termId);
-          if (typeof msg.cols !== "undefined" || typeof msg.rows !== "undefined") {
-            terminals.setClientSize(msg.termId, clientId, Number(msg.cols) || 80, Number(msg.rows) || 24);
-          }
-          emit({ type: "terminal.attached", termId: msg.termId, data: snapshot });
-        } else {
-          // The shell is gone (exited or reaped). Tell the client so it can drop
-          // the stale id and open a fresh terminal instead of hanging.
-          emit({ type: "terminal.gone", termId: msg.termId });
-        }
-      }
-      return true;
-    }
-    case "terminal.input":
-      if (typeof msg.termId === "string" && typeof msg.data === "string") terminals.write(msg.termId, msg.data);
-      return true;
-    case "terminal.resize":
-      if (typeof msg.termId === "string") terminals.setClientSize(msg.termId, clientId, Number(msg.cols) || 80, Number(msg.rows) || 24);
-      return true;
-    case "terminal.detach":
-      // A client stopped viewing this terminal but kept its transport open (e.g.
-      // navigated away from a shared run-terminal). Forget its size so the PTY
-      // grows back to the min of whoever is still attached.
-      if (typeof msg.termId === "string") terminals.dropClientSize(msg.termId, clientId);
-      return true;
-    case "terminal.close":
-      if (typeof msg.termId === "string") {
-        terminals.close(msg.termId);
-        owned.delete(msg.termId);
-        clearBellNotify(msg.termId);
-      }
-      return true;
-    default:
-      return false;
-  }
-}
 
 // Pull an incremental-history cursor (count + opaque token) off a client
 // command, if present. Clients send these to backfill only what they don't
@@ -3914,7 +3196,7 @@ async function handleRelayMessage(msg: ClientMessage) {
       // layer, so every relay-tunneled client shares one size slot. That still
       // keeps them distinct from each local socket, so a PTY shared between a
       // local terminal and a relay-attached app is sized to their min.
-      handleTerminalMessage(msg, (event) => relay?.sendEvent(event), relayTerminals, RELAY_CLIENT_ID);
+      runTerms.handleTerminalMessage(msg, (event) => relay?.sendEvent(event), relayTerminals, RELAY_CLIENT_ID);
       return;
     }
     console.warn("[relay] unknown client message kind:", msg.kind);
@@ -4472,7 +3754,7 @@ async function pushProviderSummaryToControlPlane() {
 async function reprojectPiAuthForLiveRuns() {
   const hasLivePi = terminals
     .list((m) => m.kind === "run" && m.agent === "pi")
-    .some((t) => runTerminals.has(t.id));
+    .some((t) => runTerms.hasRunTerminal(t.id));
   if (!hasLivePi) return;
   try {
     const vault = createCredentialVault(credsDir, piDir);
@@ -8745,6 +8027,38 @@ const transcripts = createTranscriptPersistence({
   streamEpoch: sessionStreamEpoch,
 });
 
+// Run-terminal / PTY subsystem lives in ./session/run-terminal. The TerminalManager
+// singleton and the deep TUI-refresh callback stay server-owned and are injected;
+// the module owns the run registry, viewer sets, idle/bell timers and agent tables.
+const runTerms = createRunTerminals({
+  terminals,
+  broadcast,
+  sendRelayEvent: (event) => relay?.sendEvent(event),
+  sendNotificationHint: (hint) => void sendNotificationHint(hint),
+  createSession: (workspace, sessionFile, opts) => createSession(workspace, sessionFile, opts),
+  resolveSession: (id) => resolveSession(id),
+  sessionBusy: (record) => sessionBusy(record as SessionRecord),
+  sessionTerminalsRecord: (sessionId, val) => sessionTerminals.record(sessionId, val),
+  sessionTerminalsForget: (sessionId) => sessionTerminals.forget(sessionId),
+  upsertSessionMetadata: (patch) => metadata.upsertSession(patch as Parameters<typeof metadata.upsertSession>[0]),
+  listAllSessions,
+  listProvidersUnified,
+  pushModelAuthToControlPlane: () => pushModelAuthToControlPlane(),
+  listPiSessions: () => runtimeHost.listSessions(getRuntime("pi")),
+  resolveAuthOwner: (agent) => {
+    const integrationId = agent ? canonicalAgentId(agent) : undefined;
+    return listRuntimes(agent).find((a) => a.id === integrationId)?.authOwner ?? "agent";
+  },
+  broadcastTuiState,
+  refreshRecordAfterTui: (record) => refreshRecordAfterTui(record as SessionRecord),
+  isEmptyUntitledTitle,
+  getActiveSession: () => active,
+  defaultWorkspace,
+  credsDir,
+  piDir,
+  maxRunTerminals,
+});
+
 const prDetection = createPrDetection({
   findPullRequestsForBranch,
   getPullRequest,
@@ -9873,7 +9187,7 @@ app.post("/api/commands/run", async (req, res, next) => {
 // Live run-terminals (native agent sessions started by `bivy run`), for
 // `bivy sessions` and the app's attach surface.
 app.get("/api/terminals", async (_req, res, next) => {
-  try { res.json({ terminals: await runTerminalList() }); }
+  try { res.json({ terminals: await runTerms.runTerminalList() }); }
   catch (error) { next(error); }
 });
 
@@ -9895,7 +9209,7 @@ app.post("/api/terminals/takeover", async (req, res, next) => {
     const termId = String(req.body?.termId || "").trim() || undefined;
     const sessionId = String(req.body?.sessionId || "").trim() || undefined;
     if (!termId && !sessionId) return res.status(400).json({ error: "termId or sessionId is required" });
-    const result = await takeoverRunTerminal({ termId, sessionId });
+    const result = await runTerms.takeoverRunTerminal({ termId, sessionId });
     if (!result.ok) return res.status(result.status).json({ error: result.error });
     res.json({ ok: true, sessionId: result.sessionId, runtimeId: result.runtimeId, resumeCommand: result.resumeCommand });
   } catch (error) {
@@ -11180,14 +10494,14 @@ wss.on("connection", (socket, req) => {
       return;
     }
     if (typeof msg?.kind === "string" && msg.kind.startsWith("terminal.")) {
-      handleTerminalMessage(msg, (event) => {
+      runTerms.handleTerminalMessage(msg, (event) => {
         if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
-      }, ownedTerminals, clientTerminalId, (termId) => addRunViewer(termId, socket));
+      }, ownedTerminals, clientTerminalId, (termId) => runTerms.addRunViewer(termId, socket));
     }
   });
   socket.on("close", () => {
     clients.delete(socket);
-    dropRunViewer(socket);
+    runTerms.dropRunViewer(socket);
     // Release this socket's size on every terminal it sized (owned or just
     // viewed) so shared PTYs grow back to the min of whoever's left attached.
     terminals.dropClient(clientTerminalId);
