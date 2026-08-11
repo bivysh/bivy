@@ -223,6 +223,11 @@ export function mergeDocuments(
   let changed = false;
 
   for (const incoming of Object.values(normalizeRecordMap(incomingCredentials))) {
+    // NEVER accept a `cmd://` reference from a merge/sync snapshot: it runs a
+    // command, so a malicious enrolled peer could otherwise inject one that
+    // executes on this node (cross-node code execution). Command references are
+    // only ever created locally (setReference writes directly, not via merge).
+    if (incoming.source.kind === "reference" && incoming.source.backend === "command") continue;
     const key = credKey(incoming.provider, incoming.label);
     if (tombstoneWinsRecord(incoming, deletedAt[key] ?? 0)) continue;
     const localRecord = credentials[key];

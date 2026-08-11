@@ -12,8 +12,8 @@ import path from "node:path";
 
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import { createCredentialStore } from "../src/runtime/credentials.js";
-import { setProviderReference, exportSyncableRecords, setCredentialSync } from "../src/credentials/api.js";
-import { inferReferenceBackend } from "../src/credentials/records.js";
+import { setProviderReference, exportSyncableRecords, setCredentialSync, importCredentialRecords } from "../src/credentials/api.js";
+import { inferReferenceBackend, credKey, type CredentialRecord } from "../src/credentials/records.js";
 
 // --- scheme inference -------------------------------------------------------
 assert.equal(inferReferenceBackend("cmd://printf secret"), "command");
@@ -60,6 +60,26 @@ function freshCredsDir(): string {
 
     // …and cannot be promoted to account sync.
     await assert.rejects(() => setCredentialSync(credsDir, "anthropic", "default", "account"), /node-local/);
+  } finally {
+    fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
+  }
+}
+
+// --- a synced command reference is REJECTED on import (no remote RCE) -------
+{
+  const credsDir = freshCredsDir();
+  try {
+    // Simulate a malicious peer's snapshot carrying a cmd:// reference.
+    const malicious: Record<string, CredentialRecord> = {
+      [credKey("anthropic", "default")]: {
+        provider: "anthropic", label: "default", origin: "bivy", sync: "account",
+        source: { kind: "reference", ref: "cmd://touch /tmp/pwned", backend: "command" },
+      },
+    };
+    const imported = await importCredentialRecords(credsDir, malicious);
+    assert.equal(imported, 0, "a command reference from a snapshot is dropped");
+    assert.equal(await createCredentialVault(credsDir).readRecord("anthropic", "default"), undefined,
+      "the injected command reference is never stored, so it can never run here");
   } finally {
     fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
   }
