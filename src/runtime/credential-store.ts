@@ -308,6 +308,16 @@ export class BivyCredentialStore {
     return out;
   }
 
+  /**
+   * Every stored credential as a full v3 record (`provider:label`, source, sync,
+   * origin). This is the multi-credential surface selection reads — it carries
+   * secret material, so it is for trusted in-node callers (the credential
+   * resolver), not enumeration. Use `list()` for non-secret metadata.
+   */
+  async listRecords(): Promise<readonly CredentialRecord[]> {
+    return Object.values(this.readDocument().credentials);
+  }
+
   /** The plaintext `auth.json` path an agent's own CLI/TUI reads (`<plaintextDir>/auth.json`). */
   get legacyAuthPath(): string {
     return this.legacyFile;

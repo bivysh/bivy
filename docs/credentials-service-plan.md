@@ -289,8 +289,14 @@ Each phase ships independently and leaves the app working.
    storage is enabled but not yet exposed (that surface is phase 5). Guarded by
    `test/credential-store-v3.test.ts` (existing v2 vault → v3 migration, write-upgrades-encoding,
    tombstone + import convergence).
-3. **`resolveCredential` + presets wired in.** Route `getCredential`/env projection through
-   selection; add `credentials.config.json` (schema-validated). Behavior identical at one cred each.
+3. **`resolveCredential` + presets wired in.** ✅ *(shipped)* `presets.ts` (pure, hand-rolled
+   validation — no schema lib, so it stays dependency-free; malformed config → implicit default,
+   never a throw) loads `<dataDir>/credentials.config.json`. The store gained an additive
+   `listRecords()`; `NodeCredentialResolver.getCredential` now picks via `resolveCredential(id,
+   records, presets)` instead of the raw provider read, so env injection honors the active preset.
+   Behavior-identical at one credential per provider (resolves to the default record); ambiguity
+   returns nothing rather than guessing. Guarded by `test/credentials-presets.test.ts` (parse/load
+   + selection composition); the resolver/store edits are CI-validated (unrunnable locally).
 4. **Reference source + `resolveSecret` bridge.** Add the `reference` kind end-to-end; deprecate
    the `cli.json` model-key side channel.
 5. **Multi-credential API + UI + ingest labels.** `api.ts` gains add/label/remove/list; PWA Models
