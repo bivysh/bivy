@@ -3,6 +3,7 @@
 import { defineAgentIntegration, type AgentIntegrationOrigin } from "../definition.js";
 import type { AgentInfo, AgentInstallCommand, AgentSessionOptions } from "../types.js";
 import { withExactCapabilitySurface, type AgentRuntime, type RuntimeCapabilities } from "../../runtime/types.js";
+import { createCredentialStore } from "../../runtime/credentials.js";
 import {
   ClaudeCodeRuntime,
   claudeRuntimeFromEnv,
@@ -67,6 +68,11 @@ export function claudeCodeIntegration(origin: AgentIntegrationOrigin) {
       if (!options.executablePath) throw new Error("Claude Code command not found on PATH: claude");
       return new ClaudeCodeRuntime({
         ...options,
+        // Forward the node's shared credential vault so the Anthropic credential
+        // the user already signed in with (API key or Claude Pro/Max OAuth) is
+        // injected into the SDK subprocess — without this resolveCredentialEnv()
+        // returns {} and the turn fails preflight with "no Anthropic credential".
+        credentials: createCredentialStore(sessionOptions.credsDir),
         sandbox: sessionOptions.sandbox,
         attachToChat: sessionOptions.attachToChat,
       });
