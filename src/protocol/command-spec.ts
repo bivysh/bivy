@@ -51,6 +51,8 @@ export type ValidationResult<T> = ValidationOk<T> | ValidationErr;
 export function validateInput<S extends TSchema>(schema: S | undefined, msg: unknown): ValidationResult<Static<S>> {
   if (!schema) return { ok: true, value: msg as Static<S> };
   if (Check(schema, msg)) return { ok: true, value: msg as Static<S> };
-  const errors = [...Errors(schema, msg)].slice(0, 20).map((e) => `${e.path || "/"}: ${e.message}`);
+  // typebox v1's validation-error type doesn't surface `path` on its public
+  // type, so read it via a narrow cast — matching src/policy/ruleset.ts.
+  const errors = [...Errors(schema, msg)].slice(0, 20).map((e) => `${(e as { path?: string }).path || "/"}: ${e.message}`);
   return { ok: false, errors: errors.length ? errors : ["invalid input"] };
 }
