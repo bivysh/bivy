@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCredentialStore, buildAgentCredentialEnv } from "../src/runtime/credentials.js";
-import { exportProviderAuth, importProviderAuth } from "../src/runtime/pi-auth.js";
+import { exportProviderAuth, importProviderAuth } from "../src/credentials/api.js";
 
 // A shared node sign-in should reach *any* selected agent, not just the Pi agent
 // that owns auth.json. buildAgentCredentialEnv is the seam that maps the vault's

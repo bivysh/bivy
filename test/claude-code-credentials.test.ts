@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { claudeCodeIntegration } from "../src/agents/claude-code/integration.js";
 import { invalidateClaudeCliProbe } from "../src/agents/claude-code/runtime.js";
-import { setProviderApiKey } from "../src/runtime/pi-auth.js";
+import { setProviderApiKey } from "../src/credentials/api.js";
 
 // Regression (#433/#435): the unified agent integration's create() must forward
 // the node's shared credential vault into the Claude Code runtime. When it

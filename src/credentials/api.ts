@@ -1,22 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// Model-provider auth surface for the daemon (the "Models & providers" screen).
+// The daemon credential API — Bivy's OWN model-provider auth surface (the
+// "Models & providers" screen). This is the one entry every mutation flows
+// through, so the CLI and PWA can't drift.
 //
-// Storage is Bivy's own (credential-store.ts): set / remove / export / import all
-// operate directly on the encrypted vault with no Pi involvement. The one thing
-// that legitimately comes from Pi is the model-provider *catalog* — the list of
-// providers and their display names / OAuth capability — which the isolated
-// pi-oauth bridge supplies (Bivy has no model catalog of its own).
+// Deliberately Pi-FREE: every function here operates on Bivy's own encrypted
+// vault (credential-store.ts) with zero Pi involvement, so the service compiles
+// and tests without Pi. The one thing that legitimately comes from Pi — the
+// model-provider *catalog* (Bivy has none of its own) — is INJECTED:
+// `joinProviderCatalog` takes the catalog as a parameter, and the thin
+// `runtime/provider-catalog.ts` bridge supplies Pi's. See
+// docs/credentials-service-plan.md §3.1.
 
-import { createCredentialVault, type StoredCredential } from "./credential-store.js";
-import { listPiProviders } from "./pi-oauth.js";
+import { createCredentialVault, type StoredCredential } from "../runtime/credential-store.js";
 import {
   inferReferenceBackend,
   normalizeLabel,
   defaultSyncFor,
   DEFAULT_LABEL,
   type CredentialRecord,
-} from "../credentials/records.js";
+} from "./records.js";
 
 /** A model provider and whether the node currently holds a credential for it. */
 export interface ProviderAuthInfo {
@@ -35,12 +38,30 @@ export interface ProviderAuthInfo {
 }
 
 /**
- * Enumerate model providers with their current auth status. The catalog + status
- * come from Pi's provider list (joined with our injected store); the stored
- * credential `kind` comes from Bivy's vault.
+ * A model provider from the catalog — the shape Bivy needs, injected so this
+ * module never imports Pi. Structurally matches `pi-oauth`'s `PiProviderInfo`,
+ * so the bridge can pass Pi's catalog straight through; a Bivy-owned catalog
+ * later would satisfy the same shape.
  */
-export async function listProviders(credsDir: string, piDir: string): Promise<ProviderAuthInfo[]> {
-  const [catalog, stored] = await Promise.all([listPiProviders(credsDir, piDir), createCredentialVault(credsDir).list()]);
+export interface ProviderCatalogEntry {
+  id: string;
+  name: string;
+  oauth: boolean;
+  configured: boolean;
+  source?: string;
+}
+
+/**
+ * Join a provider catalog with the vault's stored auth status → the "Models &
+ * providers" rows. Pure w.r.t. Pi: the catalog is passed in (see
+ * `runtime/provider-catalog.ts`, which supplies Pi's). The stored credential
+ * `kind`/`expiresAt` come from Bivy's own vault.
+ */
+export async function joinProviderCatalog(
+  credsDir: string,
+  catalog: readonly ProviderCatalogEntry[],
+): Promise<ProviderAuthInfo[]> {
+  const stored = await createCredentialVault(credsDir).list();
   const infoById = new Map(stored.map((info) => [info.providerId, info]));
   return catalog.map((provider) => ({
     id: provider.id,
