@@ -14,7 +14,7 @@
 //
 // See docs/credentials-service-plan.md.
 
-import type { StoredCredential } from "../runtime/credential-store.js";
+import type { StoredCredential } from "./types.js";
 
 /** Whether a credential is allowed to leave the node it was created on. */
 export type SyncPolicy = "account" | "node";

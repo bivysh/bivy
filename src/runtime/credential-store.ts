@@ -29,39 +29,13 @@ import {
   type CredentialVaultDocumentV3,
 } from "../credentials/document.js";
 import { credKey, parseCredKey, normalizeLabel, inferReferenceBackend, DEFAULT_LABEL, type CredentialRecord } from "../credentials/records.js";
+import { type ApiKeyCredential, type OAuthCredential, type StoredCredential } from "../credentials/types.js";
 
-/** Stored api-key credential. `env` holds provider-scoped config (base URLs, ids). */
-export interface ApiKeyCredential {
-  type: "api_key";
-  key?: string;
-  env?: Record<string, string>;
-  /** Store-owned mutation time used to order cross-node updates and revocations. */
-  updatedAt?: number;
-  [key: string]: unknown;
-}
-
-/** Stored OAuth credential. `expires` is epoch ms. */
-export interface OAuthCredential {
-  type: "oauth";
-  access: string;
-  refresh: string;
-  expires: number;
-  /**
-   * Wall-clock epoch ms this token set was minted/refreshed on the node that
-   * obtained it (see model-oauth `tokensFrom`). Used as the monotonic tiebreak in
-   * `preferIncomingCredential` so cross-node merge follows mint order rather than
-   * the access-token `expires` alone — which a fast/slow clock can inflate,
-   * pinning the account onto a stale token. Optional: credentials minted before
-   * this field existed fall back to the `expires` comparison.
-   */
-  refreshedAt?: number;
-  /** Store-owned mutation time used to order cross-node updates and revocations. */
-  updatedAt?: number;
-  [key: string]: unknown;
-}
-
-/** One type-tagged credential per provider — Bivy's canonical shape. */
-export type StoredCredential = ApiKeyCredential | OAuthCredential;
+// The canonical credential shapes now live in the pure domain layer
+// (../credentials/types.ts) so the domain no longer points up here for them.
+// Re-exported so credential-store.js stays a stable surface for existing
+// importers. See docs/internal/platform-modularization-plan.md (two-layer pilot).
+export type { ApiKeyCredential, OAuthCredential, StoredCredential };
 
 export type CredentialTombstones = Record<string, number>;
 
