@@ -184,11 +184,20 @@ is the correct consumer-side bridge, not part of the service.
    steps 3–4). Pure files verified via `node --experimental-strip-types
    --check`. NOT locally verifiable: `tsc --noEmit` (no tsc in this worktree)
    and `credential-store.ts` runtime behavior → CI + live sign-in smoke.
-2. **Ports (additive).** Add `credentials/ports.ts` + adapter shims in the
-   consumers. No behavior change.
+2. **Ports — declare contracts (additive). — DONE 2026-08-11.** Added the pure
+   leaf `credentials/ports.ts`: `Sealer` (mirrors `e2e.ts` seal/open),
+   `SecretResolver` (wraps `secrets.ts` resolveSecret, data dir bound on the
+   consumer side), `OAuthRefresher` (wraps `oauth/model-oauth.ts`
+   refreshModelOAuth, creds dir bound consumer-side). Exported from `index.ts`.
+   The provider catalog is already inverted (`joinProviderCatalog` +
+   `runtime/provider-catalog.ts`), so it is not re-declared. Concrete adapters
+   are deliberately NOT created yet — nothing consumes them until the engines
+   move, so they are wired in step 3 at the construction site (avoids dead
+   speculative shims). Verified via strip-parse; no behavior change.
 3. **Move the vault** `runtime/credential-store.ts` → `credentials/store.ts`,
-   swapping its `../secrets`/`../e2e`/oauth reaches for injected ports. **This is
-   the auth-fragile step** — `credential-store.ts` cannot be type-stripped
+   swapping its `../secrets`/`../e2e`/oauth reaches for injected ports, and wire
+   the concrete port adapters at the construction site. **This is the
+   auth-fragile step** — `credential-store.ts` cannot be type-stripped
    locally and auth breaks silently; it MUST land CI-green and be smoke-tested
    against a live sign-in before merge (see project memory on commit 902b4ea).
 4. **Move the resolver** `runtime/credentials.ts` → `credentials/resolver.ts`.

@@ -68,6 +68,10 @@ export {
   BivyCredentialStore,
 } from "../runtime/credential-store.js";
 export type { StoredCredential, ApiKeyCredential, OAuthCredential } from "./types.js";
+
+// --- Injected capability ports (crypto, secret refs, OAuth refresh) ---------
+// Contracts the vault/resolver depend on once they move into this layer.
+export type { Sealer, SecretResolver, OAuthRefresher } from "./ports.js";
 export type {
   StoredCredentialInfo,
   CredentialTombstones,
