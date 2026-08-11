@@ -672,7 +672,12 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
  */
 export function catalogRuntimes(credsDir: string, piDir: string, sessionsDir: string): AgentRuntime[] {
   const runtimes: AgentRuntime[] = [codexAppServerRuntime()];
-  if (piCommandAvailable()) runtimes.unshift(new PiRuntime({ credsDir, piDir: piAgentDir(), sessionsDir, credentialOwner: "agent" }));
+  // Credentials come from Bivy's shared vault (credsDir), not Pi's plaintext
+  // auth.json: the daemon signs in once and every agent reuses it. The agent dir
+  // (piAgentDir) still supplies the operator's models cache / config / packages.
+  // credentialOwner "agent" here would make Pi read piAgentDir/auth.json — a file
+  // the vault never populates — so the picker shows every provider "Not connected".
+  if (piCommandAvailable()) runtimes.unshift(new PiRuntime({ credsDir, piDir: piAgentDir(), sessionsDir, credentialOwner: "bivy" }));
   const claudeOptions = claudeRuntimeFromEnv();
   if (claudeSdkInstalled() && claudeOptions.executablePath) runtimes.push(new ClaudeCodeRuntime(claudeOptions));
   return runtimes;
