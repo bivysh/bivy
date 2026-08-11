@@ -13,9 +13,7 @@
 // docs/credentials-service-plan.md §3.1.
 
 import type { StoredCredential } from "./types.js";
-// createCredentialVault (the vault engine) still lives in runtime/ — moves into
-// this layer in step 3 of the two-layer pilot; until then it stays an upward dep.
-import { createCredentialVault } from "../runtime/credential-store.js";
+import { createCredentialVault } from "./store.js";
 import {
   inferReferenceBackend,
   normalizeLabel,

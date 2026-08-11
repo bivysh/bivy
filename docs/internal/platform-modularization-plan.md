@@ -78,6 +78,54 @@ command/event-over-HTTP+SSE shape. Extract bounded controllers out of
 lifecycle — behind the registry. Business logic leaves route/switch/controller
 handlers; those only validate, authorize, dispatch.
 
+**Grounding (read 2026-08-11): this EXTENDS an existing seam, not greenfield.**
+`server.ts:2059` already has a unified dispatch (the referenced
+`docs/dramatic-simplification-plan.md` is gone, but the code is live): a
+`Command = (msg, ctx) => void | Promise<void>` type, a `CommandCtx { reply,
+broadcast }`, and a `RELAY_COMMANDS` registry that `handleRelayMessage` consults
+first, falling through to an inline switch for unmigrated kinds. **22 commands
+are already migrated**, cleanly grouped by domain prefix — `session.*` (pause,
+resume, question.answer, replay, rename, close), `node.*` (update, rename,
+settings.get), `rulesets.*` (list, save, remove), `models.*`, `runtimes.*`,
+`integrations.*`, `workspaces.*`, `github.app.*`, `provider.oauth.*`, plus
+singletons (ping, abort, approval, attachment.fetch). **Those prefixes are the
+bounded controllers.**
+
+Phase 2 work, as slices (each its own PR against `main`):
+1. **Controller extraction (the carve).** Move a prefix-group's handlers +
+   the helpers they close over (e.g. `rulesets.*` with `persistRulesetSave` /
+   `broadcastRulesets` / `rulesetInfos`) into a `src/controllers/<name>.ts`
+   module that receives a typed context (`{ reply, broadcast, store, sessions,
+   … }`) and registers into `RELAY_COMMANDS`. `server.ts` shrinks to
+   composition. Start with a SMALL self-contained group as the proof —
+   candidates: `rulesets` (3 handlers) or `node` (3). Same low-risk discipline
+   as the credentials pilot (move + inject deps + keep the registry as the
+   seam). A `controllers → server.ts` boundary rule guards it.
+2. **Finish the migration.** Move remaining inline-switch kinds into the
+   registry so there is one dispatch path.
+3. **Version + validate the contract.** Add an explicit envelope version and
+   runtime validation at the transport boundary (typebox is already a dep —
+   see `integrations/registry.ts`). Derive REST/WS/relay routing from the
+   registry. This is the durable public-API commitment (compat policy needed
+   before third-party SDK consumers).
+
+**Decision (2026-08-11): carve first, formalize later.** Extract controllers
+behind the existing registry now (mechanical, low-risk, mirrors the credentials
+pilot); add the versioned envelope + typebox validation as a later slice. The
+contract is still internal (no external SDK consumers), so deferring is
+low-cost and reversible.
+
+**First-carve coupling note (read 2026-08-11):** `rulesets` is the smallest
+candidate, but not fully isolated — its store ops already live in
+`runtime/ruleset-store.ts`, yet `activeQueueRuleset()` feeds `queueRunPolicy`,
+consumed by the work queue (not just commands). So the first controller PR must
+either (a) move the whole ruleset concern (commands + `activeQueueRuleset` +
+`queueRunPolicy` wiring) into `controllers/rulesets.ts` with `{ rulesetsDir,
+broadcast }` injected, or (b) pick an even more isolated group (`node.*`:
+update/rename/settings). **None of server.ts is type-strippable**, so the carve
+is fully CI-verified — it warrants its own focused PR, not a tail-end change.
+Next action: the first controller carve as a dedicated PR against `main`.
+
 ### Phase 3 — Extract `@bivy/remote`
 
 Relay transport + control-plane sync + remote session location, behind the ports
@@ -194,18 +242,47 @@ is the correct consumer-side bridge, not part of the service.
    are deliberately NOT created yet — nothing consumes them until the engines
    move, so they are wired in step 3 at the construction site (avoids dead
    speculative shims). Verified via strip-parse; no behavior change.
-3. **Move the vault** `runtime/credential-store.ts` → `credentials/store.ts`,
-   swapping its `../secrets`/`../e2e`/oauth reaches for injected ports, and wire
-   the concrete port adapters at the construction site. **This is the
-   auth-fragile step** — `credential-store.ts` cannot be type-stripped
-   locally and auth breaks silently; it MUST land CI-green and be smoke-tested
-   against a live sign-in before merge (see project memory on commit 902b4ea).
-4. **Move the resolver** `runtime/credentials.ts` → `credentials/resolver.ts`.
-5. **Flip the fitness check to `--enforce`** for the credentials boundary; wire
-   into CI.
+3. **Move the vault — DONE 2026-08-11 (branch `bivy/credentials-two-layer-engine-move`).**
+   `git mv runtime/credential-store.ts → credentials/store.ts`; fixed its
+   in-layer import paths; wired the `Sealer` port through the constructor
+   (`sealer: Sealer = nodeSealer`, default = the `e2e` adapter) so **no caller
+   changes** — `createCredentialVault` gained an optional `sealer` param. Left a
+   re-export **compat shim** at `runtime/credential-store.ts` so server.ts,
+   bivy-login.ts, and ~18 test files keep working; added `CredentialRecord` to
+   the shim (the original leaked it via type-erasure only). Re-pointed
+   `credentials/{api,index}.ts` to `./store.js`. **Decision:** `e2e.ts` is a
+   repo crypto leaf, NOT on the forbidden list — Layer B may use it directly;
+   the `Sealer` port abstracts it for a future browser build (phase 7). Removed
+   the over-strict `../e2e` rule from the checker. Boundary: **5 → 2** (only the
+   resolver + the sanctioned Pi bridge remain). Checkable files strip-parse;
+   `store.ts` itself (parameter properties) + auth behavior → **CI + live
+   sign-in smoke before merge** (see project memory on commit 902b4ea).
+4. **Move the resolver — DONE 2026-08-11 (branch `bivy/credentials-two-layer-engine-move`).**
+   `git mv runtime/credentials.ts → credentials/resolver.ts`; inverted the two
+   upward deps via ports — `resolveSecret` → `SecretResolver`,
+   `refreshModelOAuth` → `OAuthRefresher` — so `resolver.ts` imports nothing
+   upward. `NodeCredentialResolver`/`createCredentialStore` now take the two
+   ports; a **shim** at `runtime/credentials.ts` binds the node adapters
+   (`resolveSecret(ref, appDir)`, `refreshModelOAuth(credsDir, …)`) and keeps
+   the historical `createCredentialStore(credsDir)` signature, so all ~10
+   callers (server.ts, runtime/index.ts, agents, provisioning, tests) are
+   unchanged. Also moved `ProviderCredential` + `AgentCredentialStore` into
+   `credentials/types.ts`, re-exported from `runtime/types.ts` (process.ts,
+   protocol.ts, claude-code/runtime.ts unchanged).
+5. **Flip the fitness check to `--enforce` — DONE 2026-08-11.** Credentials
+   boundary is **0 violations, enforced**. Added an `allow` exception for the
+   one sanctioned bridge (`runtime/provider-catalog.js`). Still TODO: wire
+   `npm run check:boundaries` into CI (needs the deferred `package.json` edit).
 
-Do steps 1–2 and 3–4 as **separate PRs** (types+ports first, engine moves
-second) so the fragile move is small and revertable.
+**Phase 1 status:** structurally COMPLETE (steps 1–5). Layer A = pure domain
+(`types/records/document/presets/ports`); Layer B = node service
+(`store/resolver/api`) behind injected ports. Shipped as **#460** (steps 1–2,
+green) and **#461** (steps 3–5, stacked). ⚠️ **Merge gate on #461:** live
+sign-in + `env://` reference smoke on a running daemon (auth-fragile OAuth
+path, unverifiable headless).
+
+Steps 1–2 and 3–5 shipped as **separate PRs** (types+ports first, engine moves
+second) so the fragile moves stay small and revertable.
 
 ## Verification
 
