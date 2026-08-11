@@ -901,6 +901,7 @@ type LocalModelDraft = {
   baseUrl: string;
   api: string;
   apiKey: string;
+  hasSavedApiKey: boolean;
   models: string;
   editing: boolean;
 };
@@ -911,6 +912,7 @@ const EMPTY_DRAFT: LocalModelDraft = {
   baseUrl: "",
   api: "openai-completions",
   apiKey: "",
+  hasSavedApiKey: false,
   models: "",
   editing: false,
 };
@@ -945,6 +947,7 @@ function draftFromProvider(p: LocalModelProvider): LocalModelDraft {
     baseUrl: p.baseUrl,
     api: p.api || "openai-completions",
     apiKey: "",
+    hasSavedApiKey: p.hasKey,
     models: p.models.map((m) => (m.name && m.name !== m.id ? `${m.id} | ${m.name}` : m.id)).join("\n"),
     editing: true,
   };
@@ -959,6 +962,7 @@ function draftFromPreset(p: LocalModelPreset): LocalModelDraft {
     // Local servers accept any token, so we don't prefill a dummy key — only a
     // real key the user types is stored (in the encrypted vault).
     apiKey: "",
+    hasSavedApiKey: false,
     models: "",
     editing: false,
   };
@@ -1066,7 +1070,14 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         )}
 
         <label className="field-label">API key {draft.editing ? "(leave blank to keep)" : isAzure ? "(Azure API key)" : "(optional)"}</label>
-        <input className="picker-search" type="password" value={draft.apiKey} placeholder={isAzure ? "Azure OpenAI key" : "local"} onChange={(e) => set({ apiKey: e.target.value })} />
+        <input
+          className="picker-search"
+          type="password"
+          value={draft.apiKey}
+          placeholder={draft.hasSavedApiKey ? "•••••••• (saved — leave blank to keep)" : isAzure ? "Azure OpenAI key" : "local"}
+          onChange={(e) => set({ apiKey: e.target.value })}
+        />
+        {draft.hasSavedApiKey && !draft.apiKey && <p className="muted small">An API key is saved. Leave this blank to keep it, or enter a new key to replace it.</p>}
 
         <label className="field-label">Models — one per line (<code>id</code> or <code>id | Name</code>)</label>
         <textarea

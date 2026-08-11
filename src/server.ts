@@ -5399,9 +5399,19 @@ function nativeLoginCommand() {
 }
 
 async function refreshSessionAfterAuth() {
-  void createSession(active?.workspace ?? defaultWorkspace).catch((error) => {
-    broadcast({ type: "session.error", sessionId: active?.id, error: String(error?.stack ?? error) });
-  });
+  // Model runtimes load the projected models.json when the session is created.
+  // Drop the per-runtime scratch sessions before rebuilding the active session;
+  // otherwise a models.list immediately after adding a custom endpoint can be
+  // answered by a runtime that still has the old catalog cached.
+  for (const record of modelQueryScratch.values()) {
+    closeSessionRecord(record);
+  }
+  modelQueryScratch.clear();
+  try {
+    await createSession(active?.workspace ?? defaultWorkspace);
+  } catch (error) {
+    broadcast({ type: "session.error", sessionId: active?.id, error: String(error instanceof Error ? error.stack ?? error.message : error) });
+  }
 }
 
 /**
