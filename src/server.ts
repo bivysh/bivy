@@ -30,6 +30,7 @@ import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
 import { createSessionNamer, fallbackSessionName } from "./session/session-namer.js";
 import { createBranchPublish } from "./session/branch-publish.js";
 import { createForkStandUp } from "./session/fork-standup.js";
+import { createTranscriptPersistence } from "./session/transcript-persistence.js";
 import { isNativeOAuthProvider, loginModelOAuth, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
 import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
 import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } from "./runtime/codex-sessions.js";
@@ -2621,50 +2622,6 @@ function historyCursorFrom(msg: ClientMessage): HistoryCursor {
   };
 }
 
-type IntermediateMessage = RuntimeMessage & {
-  bivyKind: "intermediate";
-  afterMessageCount: number;
-  createdAt: number;
-};
-
-type ToolActivityMessage = RuntimeMessage & {
-  bivyKind: "tool";
-  afterMessageCount: number;
-  createdAt: number;
-};
-
-const liveIntermediateBySession = new Map<string, IntermediateMessage>();
-// Last thinking text PERSISTED for the active intermediate entry, keyed by
-// session — so a capped-out (unchanging) reasoning stream stops re-appending.
-const lastPersistedIntermediateText = new Map<string, string>();
-
-// Display-only intermediate reasoning is persisted as a length-capped HEAD so a
-// runaway or looping agent can't grow the append-only event log without bound.
-// The log coalesces same-id deltas per flush window but still appends one full
-// snapshot per window; re-persisting an ever-growing blob is therefore O(n²) on
-// disk (one stuck opencode turn wrote a 119 MB log from a 228 KB thought). The
-// live stream the user watches comes from broadcast events, not this store, so
-// capping only bounds what history keeps. HEAD (not tail) is deliberate: once the
-// cap is hit the persisted text stops changing, so persistIntermediateFromEvent
-// stops appending entirely instead of writing a fresh capped line every window.
-const MAX_PERSISTED_THINKING_CHARS = 16_000;
-// The marker is intentionally CONSTANT (no growing dropped-char count): once the
-// text is capped, capThinkingForPersistence returns a stable string, so the
-// skip-when-unchanged check in persistIntermediateFromEvent stops appending for
-// the rest of the stream — the hard bound on log growth.
-function capThinkingForPersistence(text: string): string {
-  if (text.length <= MAX_PERSISTED_THINKING_CHARS) return text;
-  return `${text.slice(0, MAX_PERSISTED_THINKING_CHARS)}\n\n[Bivy truncated a very long reasoning stream to bound session-history size.]`;
-}
-
-// Append the intermediate entry to the append-only log — the sole store (slice 2).
-// De-duplication (same-text/same-anchor merge, id-replace) that the old intermediate
-// sidecar did up front is now applied by `foldIntermediate` on replay, so appending
-// the raw entry is equivalent.
-function upsertIntermediateMessage(sessionId: string, entry: IntermediateMessage) {
-  eventLog.append(sessionId, entry);
-}
-
 function transcriptPath(sessionId: string): string {
   return path.join(transcriptsDir, `${encodeURIComponent(sessionId)}.json`);
 }
@@ -2840,273 +2797,6 @@ function retireTranscriptsDir(): void {
 }
 retireTranscriptsDir();
 
-/**
- * Record the runtime's live base transcript (user prompts + assistant text) into
- * the event log so a reopened session can rebuild the conversation even for runtimes
- * with no build-free `readMessages` and no external rollout. Skips the write when the
- * runtime has nothing yet, so a transient empty read can never clobber a good base
- * with `[]`. The log stores it as a bounded delta (see EventLog.appendBaseSnapshot).
- *
- * The snapshot must never SHRINK the log. A protocol runtime that resumes via a
- * blank reconnect (e.g. opencode through the ACP shim: session/load returns no
- * message history) starts empty and only reports the turns that ran after the
- * resume — a transcript SHORTER than what the log already holds, despite being
- * the same ongoing conversation. `appendBaseSnapshot` reads a shorter snapshot
- * as a compaction and REPLACES the logged base, silently dropping every prior
- * turn. Rebase the runtime's snapshot onto the logged history instead (the same
- * union `EventLog.deriveHistory` applies on read): the merged view is exactly
- * the prefix-extend case the log already handles, so the log grows monotonically.
- * A genuine runtime compaction isn't a supported feature, so never treating a
- * snapshot as a shrink is safe.
- */
-function persistTranscriptSnapshot(record: SessionRecord): void {
-  const base = record.session.getMessages();
-  if (!base.length) return;
-  const logged = eventLog.readBase(record.id);
-  eventLog.appendBaseSnapshot(record.id, logged.length ? mergeBases(logged, base) : base);
-}
-
-// In-flight dedupe so two sessions (or two turns) referencing the same remote
-// image URL only ever trigger one outbound fetch. Process-lifetime only — a
-// restart just means the first re-encounter fetches again, which is fine.
-const inlineImageFetchInFlight = new Map<string, Promise<void>>();
-// A URL that failed (bad host, timeout, not-an-image, …) is not retried for a
-// cooldown window, so a persistently broken URL in a long-lived session can't
-// turn every subsequent message_end into a wasted fetch attempt.
-const inlineImageFailedAt = new Map<string, number>();
-const INLINE_IMAGE_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
-
-/**
- * Scan a session's just-finalized assistant messages for remote markdown images
- * (`![alt](https://…)`) and, for any URL not already resolved or in flight,
- * fetch it (SSRF-guarded, size-capped — see inline-image-fetch.ts), store the
- * bytes in the content-addressed AttachmentStore, persist the durable url→ref
- * mapping, and broadcast it live so an already-open chat hydrates the image
- * without waiting for a reload. Fire-and-forget: called from the session event
- * listener, which must not block on a network fetch.
- */
-function resolveInlineImages(record: SessionRecord): void {
-  const messages = record.session.getMessages();
-  const urls = new Set<string>();
-  for (const m of messages) {
-    if (m.role !== "assistant") continue;
-    for (const url of extractInlineImageUrls(assistantTextForImageScan(m.content))) urls.add(url);
-  }
-  if (!urls.size) return;
-  const alreadyResolved = new Set(eventLog.readInlineImages(record.id).map(([url]) => url));
-  for (const url of urls) {
-    if (alreadyResolved.has(url) || inlineImageFetchInFlight.has(url)) continue;
-    const failedAt = inlineImageFailedAt.get(url);
-    if (failedAt !== undefined && Date.now() - failedAt < INLINE_IMAGE_RETRY_COOLDOWN_MS) continue;
-    const task = (async () => {
-      try {
-        const result = await fetchInlineImage(url);
-        if (isFetchImageError(result)) {
-          console.warn(`[inline-image] ${url}: ${result.error}`);
-          inlineImageFailedAt.set(url, Date.now());
-          return;
-        }
-        const ref = attachmentStore.put(result.bytes, {
-          name: inlineImageDisplayName(url, result.mimeType),
-          mimeType: result.mimeType,
-          kind: "image",
-        });
-        eventLog.appendInlineImage(record.id, { url, ref });
-        eventLog.flush(record.id);
-        broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "inlineImage", url, ref } }));
-      } catch (error) {
-        console.warn(`[inline-image] ${url}:`, error instanceof Error ? error.message : String(error));
-        inlineImageFailedAt.set(url, Date.now());
-      } finally {
-        inlineImageFetchInFlight.delete(url);
-      }
-    })();
-    inlineImageFetchInFlight.set(url, task);
-  }
-}
-
-// Append the tool-activity entry to the log. The id-merge and last-500 cap the old
-// store applied are now applied by `foldTool` on replay.
-function upsertToolActivityMessage(sessionId: string, entry: ToolActivityMessage) {
-  eventLog.append(sessionId, entry);
-}
-
-function toolEventId(event: Record<string, unknown>): string {
-  const toolCall = event.toolCall as Record<string, unknown> | undefined;
-  const input = (event.input || event.toolInput || event.args || toolCall?.input || {}) as Record<string, unknown>;
-  const explicit = event.toolUseId || event.tool_use_id || event.toolCallId || event.callId || event.id || toolCall?.id;
-  if (explicit) return String(explicit);
-  return `${String(event.toolName || event.name || toolCall?.name || "tool")}:${String(input.path || input.file || input.filePath || input.command || input.cmd || input.query || "")}`;
-}
-
-function persistToolActivityFromEvent(record: SessionRecord, runtimeEvent: RuntimeEvent) {
-  const event = runtimeEvent as Record<string, unknown>;
-  const type = String(event.type || "");
-  if (!["tool_call", "tool_execution_start", "tool_execution_update", "tool_execution_end", "tool_result", "function_call", "function_result"].includes(type)) return;
-  const callId = toolEventId(event);
-  const toolCall = event.toolCall as Record<string, unknown> | undefined;
-  const input = (event.input || event.toolInput || event.args || toolCall?.input || {}) as Record<string, unknown>;
-  const name = String(event.toolName || event.name || toolCall?.name || "tool");
-  const now = Date.now();
-  const base = { role: "assistant" as const, bivyKind: "tool" as const, afterMessageCount: record.session.getMessages().length, createdAt: now };
-  if (type === "tool_result" || type === "tool_execution_end" || type === "function_result") {
-    upsertToolActivityMessage(record.id, {
-      ...base,
-      id: `bivy-tool-result-${callId}`,
-      content: [{ type: "tool_result", toolUseId: callId, tool_use_id: callId, content: event.message ?? event.result ?? event.output ?? input.output ?? "", isError: Boolean(event.error || event.errorMessage), ...(event.detail ? { detail: event.detail } : {}) }],
-    });
-  } else {
-    upsertToolActivityMessage(record.id, {
-      ...base,
-      id: `bivy-tool-call-${callId}`,
-      content: [{ type: "tool_use", id: callId, name, input, ...(event.detail ? { detail: event.detail } : {}) }],
-    });
-  }
-}
-
-function thinkingTextFromEvent(event: Record<string, unknown>): string {
-  const message = event.message as { content?: unknown } | undefined;
-  const delta = event.assistantMessageEvent as { type?: unknown; delta?: unknown; content?: unknown } | undefined;
-  const fromMessage = thinkingTextFromContent(message?.content);
-  if (fromMessage) return fromMessage;
-  if (delta?.type === "thinking_delta" && typeof delta.delta === "string") return delta.delta;
-  if (delta?.type === "thinking_end" && typeof delta.content === "string") return delta.content;
-  return "";
-}
-
-function hasAssistantText(event: Record<string, unknown>): boolean {
-  const message = event.message as { content?: unknown } | undefined;
-  const content = message?.content;
-  if (typeof content === "string") return content.trim().length > 0;
-  return Array.isArray(content) && content.some((part) => part && typeof part === "object" && String((part as Record<string, unknown>).type || "").toLowerCase() === "text" && typeof (part as Record<string, unknown>).text === "string" && String((part as Record<string, unknown>).text).trim());
-}
-
-function persistIntermediateFromEvent(record: SessionRecord, event: Record<string, unknown>, final = false) {
-  const text = thinkingTextFromEvent(event).trim();
-  if (!text) return;
-  const existing = liveIntermediateBySession.get(record.id);
-  const entry: IntermediateMessage = existing ?? {
-    id: `bivy-intermediate-${Date.now()}-${randomBytes(3).toString("hex")}`,
-    role: "assistant",
-    content: [{ type: "thinking", thinking: text }],
-    bivyKind: "intermediate",
-    afterMessageCount: record.session.getMessages().length,
-    createdAt: Date.now(),
-  };
-  const delta = event.assistantMessageEvent as { type?: unknown; delta?: unknown } | undefined;
-  const previousText = thinkingTextFromContent(entry.content);
-  const nextText = existing && delta?.type === "thinking_delta" && typeof delta.delta === "string" && !thinkingTextFromContent((event.message as { content?: unknown } | undefined)?.content)
-    ? `${previousText}${delta.delta}`
-    : text;
-  entry.content = [{ type: "thinking", thinking: nextText }];
-  // Persist a length-capped clone (see capThinkingForPersistence). Skip the append
-  // when the capped text is unchanged from what we last wrote — so a capped-out or
-  // otherwise-unchanged stream stops growing the log — but always write the final
-  // snapshot so history keeps the finished reasoning.
-  const capped = capThinkingForPersistence(nextText);
-  if (final || lastPersistedIntermediateText.get(record.id) !== capped) {
-    upsertIntermediateMessage(record.id, { ...entry, content: [{ type: "thinking", thinking: capped }] });
-  }
-  if (final) {
-    liveIntermediateBySession.delete(record.id);
-    lastPersistedIntermediateText.delete(record.id);
-  } else {
-    liveIntermediateBySession.set(record.id, entry);
-    lastPersistedIntermediateText.set(record.id, capped);
-  }
-}
-
-function conversationMessages(record: SessionRecord): RuntimeMessage[] {
-  // Prefer the runtime's own transcript; when it's empty (a reopened session on a
-  // runtime that can't rebuild it — every non-Codex CLI agent, or a Codex rollout
-  // that failed to parse), deriveHistory falls back to the base persisted in the log
-  // so the prompts/replies come back instead of just the tool cards. Overlay detail
-  // is anchored by time, not absolute index, so a compacted (shorter) base no longer
-  // clumps recent tool cards after the final message (see transcript-merge.ts).
-  return eventLog.deriveHistory(record.id, record.session.getMessages());
-}
-
-// Build a session.history event, sending either the full transcript or just the
-// tail the client is missing (see history-sync.ts).
-function buildHistoryEvent(opts: {
-  sessionId: string | null;
-  workspace: string;
-  source?: string;
-  runtimeId: string;
-  isStreaming: boolean;
-  messages: unknown[];
-  cursor?: HistoryCursor;
-  // Metadata fallbacks for the fast, build-free open path (no open record yet):
-  // the persisted name/branch/prUrl so the title and github pill fill in with
-  // the transcript instead of waiting on the runtime resume.
-  name?: string;
-  branch?: string;
-  prUrl?: string;
-  prs?: PrRef[];
-}) {
-  const delta = historyDelta(opts.messages, opts.cursor);
-  const record = opts.sessionId ? openSessions.get(opts.sessionId) : undefined;
-  const bSess = record ? bivySessionEnvelope(record) : undefined;
-  return {
-    type: "session.history" as const,
-    sessionId: opts.sessionId,
-    sessionFile: record?.sessionFile,
-    workspace: opts.workspace,
-    source: opts.source,
-    branch: record?.worktree?.branch ?? opts.branch,
-    runtimeId: opts.runtimeId,
-    agentName: getRuntime(opts.runtimeId).displayName,
-    name: record?.session.getName() ?? opts.name,
-    isStreaming: opts.isStreaming,
-    // Explicit Phase-3 axes. Additive: older clients continue using isStreaming;
-    // newer clients use this canonical projection for status and diagnostics.
-    sessionState: record ? sessionState(record) : undefined,
-    mode: delta.mode,
-    baseCount: delta.baseCount,
-    count: delta.count,
-    historyHash: delta.historyHash,
-    messages: delta.messages,
-    // Live-stream cursor: the client baselines its SeqReassembler to `headSeq`
-    // (it has applied everything through here) and resets it whenever `streamEpoch`
-    // changes (a daemon restart), so post-history live events reassemble in order
-    // and a replay can fill any gap (docs/session-reliability-plan.md, Phase 2).
-    headSeq: opts.sessionId ? sessionEventSequencer.head(opts.sessionId) : 0,
-    streamEpoch: sessionStreamEpoch,
-    warning: record?.warning,
-    costUsd: record?.costUsd,
-    usage: record?.usage,
-    prUrl: record?.prUrl ?? opts.prUrl,
-    prs: record?.prs ?? opts.prs,
-    bivySession: bSess,
-    // Durable attachment references (text→refs), so a client that never sent the
-    // attachment (a reload, or a different device) rehydrates thumbnails by hash.
-    attachmentRefs: opts.sessionId ? eventLog.readAttachments(opts.sessionId) : [],
-    // Durable url→ref map for remote markdown images the node has already
-    // fetched (see resolveInlineImages) — lets a reload resolve a
-    // `data-remote-src` placeholder straight to its attachment hash instead of
-    // waiting on a fresh (redundant) fetch.
-    inlineImageRefs: opts.sessionId ? eventLog.readInlineImages(opts.sessionId) : [],
-  };
-}
-
-/**
- * Answer a client's `session.replay` request: the buffered `session.event`s it
- * missed after `afterSeq`, or a `reset` telling it to full-resync from history
- * when the ring has already evicted past that point (see
- * src/session/event-sequencer.ts). Carries the stream `epoch` so a client can
- * tell a same-stream replay from one across a daemon restart.
- */
-function buildReplayEvent(sessionId: string, afterSeq: number) {
-  const outcome = sessionEventSequencer.replay(sessionId, Number.isFinite(afterSeq) ? afterSeq : 0);
-  return {
-    type: "session.replay" as const,
-    sessionId,
-    epoch: sessionStreamEpoch,
-    mode: outcome.mode,
-    head: outcome.head,
-    events: outcome.mode === "replay" ? outcome.events : [],
-  };
-}
 
 // Handle a message arriving from a remote client via the relay. Mirrors the
 // local HTTP API surface so remote control matches local control.
@@ -3194,7 +2884,7 @@ const RELAY_COMMANDS: Record<string, Command> = {
     const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "";
     if (!sessionId) return;
     const afterSeq = Number((msg as { afterSeq?: unknown }).afterSeq ?? 0);
-    ctx.reply(buildReplayEvent(sessionId, afterSeq));
+    ctx.reply(transcripts.buildReplayEvent(sessionId, afterSeq));
   },
   async "session.checkpoints"(msg, ctx) {
     const record = resolveSession(msg.sessionId);
@@ -3440,13 +3130,13 @@ const RELAY_COMMANDS: Record<string, Command> = {
       if (requestedSessionId) return;
     }
     const agent = record?.runtimeId ?? defaultRuntimeId;
-    relay?.sendEvent(buildHistoryEvent({
+    relay?.sendEvent(transcripts.buildHistoryEvent({
       sessionId: record?.id ?? null,
       workspace: record?.workspace ?? defaultWorkspace,
       source: record?.source,
       runtimeId: agent,
       isStreaming: record ? sessionBusy(record) : false,
-      messages: record ? conversationMessages(record) : [],
+      messages: record ? transcripts.conversationMessages(record) : [],
       cursor: historyCursorFrom(msg),
     }));
     // Reconnect recovery (onReconnected re-requests history): re-emit any
@@ -3541,13 +3231,13 @@ const RELAY_COMMANDS: Record<string, Command> = {
       relay?.sendEvent({ type: "session.error", sessionId: sid || undefined, error: "Session not found" });
       return;
     }
-    relay?.sendEvent(buildHistoryEvent({
+    relay?.sendEvent(transcripts.buildHistoryEvent({
       sessionId: record.id,
       workspace: record.workspace,
       source: record.source,
       runtimeId: record.runtimeId,
       isStreaming: sessionBusy(record),
-      messages: conversationMessages(record),
+      messages: transcripts.conversationMessages(record),
       cursor: historyCursorFrom(msg),
     }));
     // A client opening this session after the TUI was already live (a deep link
@@ -4217,13 +3907,13 @@ const RELAY_COMMANDS: Record<string, Command> = {
       return;
     }
     relay?.sendEvent({
-      ...buildHistoryEvent({
+      ...transcripts.buildHistoryEvent({
         sessionId: record.id,
         workspace: record.workspace,
         source: record.source,
         runtimeId: record.runtimeId,
         isStreaming: sessionBusy(record),
-        messages: conversationMessages(record),
+        messages: transcripts.conversationMessages(record),
       }),
       requestId,
     });
@@ -5038,7 +4728,7 @@ async function advertiseSessions() {
   const byId = new Map(summaries.map((s) => [s.id, s]));
   const metadataById = new Map(metadata.listSessions().map((s) => [s.id, s]));
   for (const record of records) {
-    if (!byId.has(record.id)) byId.set(record.id, { id: record.id, path: record.sessionFile, name: record.session.getName(), modified: new Date().toISOString(), messageCount: conversationMessages(record).length, agent: record.runtimeId, agentName: getRuntime(record.runtimeId).displayName });
+    if (!byId.has(record.id)) byId.set(record.id, { id: record.id, path: record.sessionFile, name: record.session.getName(), modified: new Date().toISOString(), messageCount: transcripts.conversationMessages(record).length, agent: record.runtimeId, agentName: getRuntime(record.runtimeId).displayName });
   }
   const sessions = await Promise.all([...byId.values()].map(async (s) => {
     const record = openSessions.get(s.id);
@@ -6758,13 +6448,13 @@ function forkRecordFor(rec: SessionRecord): ForkRecord {
 /** Build the `session.fork.done` event both fork paths emit from a stood-up session. */
 function forkDoneEvent(requestId: string | undefined, record: SessionRecord, plan: ForkPlan, missing: ForkPrereq[]) {
   return {
-    ...buildHistoryEvent({
+    ...transcripts.buildHistoryEvent({
       sessionId: record.id,
       workspace: record.workspace,
       source: record.source,
       runtimeId: record.runtimeId,
       isStreaming: sessionBusy(record),
-      messages: conversationMessages(record),
+      messages: transcripts.conversationMessages(record),
     }),
     type: "session.fork.done" as const,
     requestId,
@@ -6983,7 +6673,7 @@ function isEmptyUntitledSummary(s: Pick<SessionSummary, "name" | "firstMessage" 
 }
 
 function isEmptyUntitledRecord(record: SessionRecord): boolean {
-  return isEmptyUntitledTitle(record.session.getName()) && conversationMessages(record).length === 0;
+  return isEmptyUntitledTitle(record.session.getName()) && transcripts.conversationMessages(record).length === 0;
 }
 
 function rememberSession(record: SessionRecord) {
@@ -8080,17 +7770,17 @@ function attachSessionListeners(record: SessionRecord) {
     // that was fixed (or newly broke) is re-evaluated on the next prompt.
     if (event.type === "turn_start") record.authRequiredSignaled = false;
     if (event.type === "message_update" && (event as Record<string, unknown>).message && ((event as Record<string, { role?: unknown }>).message?.role === "assistant")) {
-      persistIntermediateFromEvent(record, event as Record<string, unknown>, false);
+      transcripts.persistIntermediateFromEvent(record, event as Record<string, unknown>, false);
     }
     if (event.type === "message_end" && (event as Record<string, unknown>).message && ((event as Record<string, { role?: unknown }>).message?.role === "assistant")) {
-      persistIntermediateFromEvent(record, event as Record<string, unknown>, true);
+      transcripts.persistIntermediateFromEvent(record, event as Record<string, unknown>, true);
     }
-    persistToolActivityFromEvent(record, event);
+    transcripts.persistToolActivityFromEvent(record, event);
     // Snapshot the base transcript (prompts + replies) alongside the tool/thinking
     // sidecars. turn_start captures the just-added user prompt (so a crash mid-turn
     // still keeps it); message_end/turn_end capture the assistant reply.
     if (event.type === "turn_start" || event.type === "message_end" || event.type === "turn_end") {
-      persistTranscriptSnapshot(record);
+      transcripts.persistTranscriptSnapshot(record);
     }
     // A finalized assistant message may reference a remote image via markdown
     // (`![alt](https://…)`) — fetch and store it now so the chat can render it
@@ -8099,7 +7789,7 @@ function attachSessionListeners(record: SessionRecord) {
     // turn_end is a safety net for one that only surfaces the final text there.
     // Fire-and-forget and internally deduped, so checking on both costs nothing.
     if (event.type === "message_end" || event.type === "turn_end") {
-      resolveInlineImages(record);
+      transcripts.resolveInlineImages(record);
     }
     // Durably persist the throttled sidecars at the turn boundary so a crash
     // loses at most the in-flight turn's UI detail, not the whole turn.
@@ -8131,10 +7821,9 @@ function attachSessionListeners(record: SessionRecord) {
       // broadcast (not the focus-gated session.event wrap) so every client updates.
       broadcast({ type: "session.capabilities", sessionId: record.id, runtimeId: record.runtimeId, capabilities: capabilitiesWithCommands(record.runtimeId, record.session) });
     }
-    if (event.type === "tool_call" || event.type === "tool_execution_start") { liveIntermediateBySession.delete(record.id); lastPersistedIntermediateText.delete(record.id); }
+    if (event.type === "tool_call" || event.type === "tool_execution_start") { transcripts.clearLiveIntermediate(record.id); }
     if (event.type === "agent_end") {
-      liveIntermediateBySession.delete(record.id);
-      lastPersistedIntermediateText.delete(record.id);
+      transcripts.clearLiveIntermediate(record.id);
       clearSessionWorking(record);
       void refreshSessionUsage(record);
       // Snapshot the worktree and broadcast the structured diff this turn made —
@@ -8276,13 +7965,13 @@ async function refreshRecordAfterTui(record: SessionRecord) {
     persistSessionMetadata(record);
     record.tuiRefreshing = false;
     if (warning) broadcast({ type: "session.warning", sessionId: record.id, warning });
-    broadcast(buildHistoryEvent({
+    broadcast(transcripts.buildHistoryEvent({
       sessionId: record.id,
       workspace: record.workspace,
       source: record.source,
       runtimeId: record.runtimeId,
       isStreaming: sessionBusy(record),
-      messages: conversationMessages(record),
+      messages: transcripts.conversationMessages(record),
     }));
     scheduleAdvertise();
   } catch (error) {
@@ -8332,7 +8021,7 @@ function restoredWorktreeFromMetadata(meta?: MetadataSession): Worktree | undefi
  * only `sessionId`); the session file is taken from `path` when present, else
  * from the durable metadata store.
  */
-function fastHistoryEvent(msg: ClientMessage): ReturnType<typeof buildHistoryEvent> | null {
+function fastHistoryEvent(msg: ClientMessage): ReturnType<typeof transcripts.buildHistoryEvent> | null {
   try {
     const sessionId = typeof msg.sessionId === "string" ? msg.sessionId.trim() : "";
     if (!sessionId) return null;
@@ -8343,13 +8032,13 @@ function fastHistoryEvent(msg: ClientMessage): ReturnType<typeof buildHistoryEve
     // same event session.open sends post-resolve, just at the earliest tick.
     const openRecord = openSessions.get(sessionId);
     if (openRecord) {
-      return buildHistoryEvent({
+      return transcripts.buildHistoryEvent({
         sessionId: openRecord.id,
         workspace: openRecord.workspace,
         source: openRecord.source,
         runtimeId: openRecord.runtimeId,
         isStreaming: sessionBusy(openRecord),
-        messages: conversationMessages(openRecord),
+        messages: transcripts.conversationMessages(openRecord),
         cursor: historyCursorFrom(msg),
       });
     }
@@ -8370,7 +8059,7 @@ function fastHistoryEvent(msg: ClientMessage): ReturnType<typeof buildHistoryEve
     // "full" snapshot would needlessly blank a client's cached view, so fall back
     // to the normal open path when neither source has anything.
     if (!base || base.length === 0) return null;
-    return buildHistoryEvent({
+    return transcripts.buildHistoryEvent({
       sessionId,
       workspace: meta?.worktree ?? meta?.workspace ?? defaultWorkspace,
       source: meta?.source,
@@ -8511,13 +8200,13 @@ async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
     oldSession.dispose();
     attachSessionListeners(record);
     persistSessionMetadata(record, "idle");
-    broadcast(buildHistoryEvent({
+    broadcast(transcripts.buildHistoryEvent({
       sessionId: record.id,
       workspace: record.workspace,
       source: record.source,
       runtimeId: record.runtimeId,
       isStreaming: false,
-      messages: conversationMessages(record),
+      messages: transcripts.conversationMessages(record),
     }));
     if (warning) broadcast({ type: "session.warning", sessionId: record.id, warning });
     console.warn(`[session-abort] reopened stuck runtime for ${record.id}`);
@@ -9079,6 +8768,23 @@ const prDetection = createPrDetection({
   listSessions: () => metadata.listSessions(),
   getLiveSession: (id) => openSessions.get(id),
   upsertSession: (patch) => metadata.upsertSession(patch),
+});
+
+// Transcript / event-log persistence glue lives in ./session/transcript-persistence.
+// The EventLog / AttachmentStore singletons stay server-owned (GC, delete,
+// replication use them) and are injected; the module owns only the coalescing state.
+const transcripts = createTranscriptPersistence({
+  eventLog,
+  attachmentStore,
+  broadcast,
+  stampSessionEvent,
+  getOpenSession: (id) => openSessions.get(id),
+  bivySessionEnvelope: (record) => bivySessionEnvelope(record as SessionRecord),
+  sessionState: (record) => sessionState(record as SessionRecord),
+  runtimeDisplayName: (runtimeId) => getRuntime(runtimeId).displayName,
+  sequencerHead: (sessionId) => sessionEventSequencer.head(sessionId),
+  sequencerReplay: (sessionId, afterSeq) => sessionEventSequencer.replay(sessionId, afterSeq),
+  streamEpoch: sessionStreamEpoch,
 });
 
 // Fork stand-up lives in ./session/fork-standup; it's a consumer of createSession
@@ -10325,7 +10031,7 @@ app.post("/api/sessions/open", async (req, res, next) => {
       runtimeId: session.runtimeId,
       agentName: getRuntime(session.runtimeId).displayName,
       name: session.session.getName(),
-      messages: conversationMessages(session),
+      messages: transcripts.conversationMessages(session),
       isStreaming: sessionBusy(session),
       sessionState: sessionState(session),
       lastActivity: session.lastActivity,
@@ -10369,7 +10075,7 @@ app.get("/api/session/replay", (req, res) => {
   const sid = String(req.query.sessionId ?? "").trim();
   if (!sid) return res.status(400).json({ error: "sessionId required" });
   const afterSeq = Number(req.query.afterSeq ?? 0);
-  res.json(buildReplayEvent(sid, afterSeq));
+  res.json(transcripts.buildReplayEvent(sid, afterSeq));
 });
 
 app.get("/api/session/history", async (req, res) => {
@@ -10381,13 +10087,13 @@ app.get("/api/session/history", async (req, res) => {
       if (summary?.path) record = await createSession(defaultWorkspace, summary.path, { runtimeId: summary.agent, makeActive: false });
     }
     if (!record) return res.status(404).json({ error: "Session not found" });
-    res.json(buildHistoryEvent({
+    res.json(transcripts.buildHistoryEvent({
       sessionId: record.id,
       workspace: record.workspace,
       source: record.source,
       runtimeId: record.runtimeId,
       isStreaming: sessionBusy(record),
-      messages: conversationMessages(record),
+      messages: transcripts.conversationMessages(record),
       cursor: { have: typeof req.query.have === "string" ? Number(req.query.have) : undefined, haveToken: typeof req.query.haveToken === "string" ? req.query.haveToken : undefined },
     }));
     // Direct/local clients receive cards on their WS, not in this response body;
