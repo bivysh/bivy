@@ -57,17 +57,22 @@ function isCredentialRecord(value: unknown): value is CredentialRecord {
 
 /** Wrap a bare v2 `StoredCredential` as a v3 record under `provider:default`. */
 export function recordFromStored(provider: string, cred: StoredCredential): CredentialRecord {
+  // The store-owned `updatedAt` becomes authoritative on the RECORD; strip it out
+  // of the stored cred so content-comparison during merge isn't tripped by a stale
+  // embedded stamp. `refreshedAt` (OAuth) is credential content, not store metadata —
+  // it stays on the cred.
+  const { updatedAt: embeddedUpdatedAt, ...cleanCred } = cred as StoredCredential & { updatedAt?: unknown };
   const record: CredentialRecord = {
     provider: normalizeProvider(provider),
     label: DEFAULT_LABEL,
-    source: { kind: "stored", cred },
+    source: { kind: "stored", cred: cleanCred as StoredCredential },
     // Migrated Bivy-vault credentials default to the opt-out account-sync tier;
     // origin is unknown at migration time, so attribute them to Bivy (they lived
     // in Bivy's vault). origin never branches behavior — it only picks this default.
     sync: "account",
     origin: "bivy",
   };
-  const updatedAt = Number((cred as { updatedAt?: unknown }).updatedAt);
+  const updatedAt = Number(embeddedUpdatedAt);
   if (Number.isFinite(updatedAt) && updatedAt > 0) record.updatedAt = updatedAt;
   return record;
 }

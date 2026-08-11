@@ -278,15 +278,17 @@ Each phase ships independently and leaves the app working.
 1. **Foundation.** ✅ *(shipped)* `src/credentials/` with the pure `records.ts` (record model,
    natural key, `resolveCredential`, reserved-label + preset helpers) + `index.ts` facade + `README`.
    Purely additive, non-breaking; unit-tested.
-2. **Vault `v3` engine.** ✅ *(engine shipped; store wiring pending CI)* `document.ts` — the v3
-   schema `Record<"provider:label", CredentialRecord>`, `v1/v2 → v3` migration (`migrateToV3`,
-   legacy/v2 creds become `provider:default`, tombstones re-keyed), and the re-keyed
-   non-destructive merge (`mergeDocuments`, `preferIncomingRecord`, `tombstoneWinsRecord`) — the
-   v2 rules re-keyed to records, fully unit-tested standalone. **Remaining (must land with CI
-   green):** point `credential-store.ts`'s `readDocument`/`writeDocument`/`importAll` at this
-   engine so the vault persists v3, keeping `read`/`list`/`export` returning today's shapes via
-   the `provider:default` record. Split out because the vault's fs/crypto glue is auth-critical
-   and unrunnable without `tsx`; the engine it will call is verified first.
+2. **Vault `v3` schema.** ✅ *(shipped)* `document.ts` — the v3 schema
+   `Record<"provider:label", CredentialRecord>`, `v1/v2 → v3` migration (`migrateToV3`, legacy/v2
+   creds become `provider:default`, tombstones re-keyed), and the re-keyed non-destructive merge
+   (`mergeDocuments`, `preferIncomingRecord`, `tombstoneWinsRecord`) — the v2 rules re-keyed to
+   records, unit-tested standalone. `credential-store.ts` now persists v3 and migrates any prior
+   encoding on read, while its public surface (`read`/`list`/`modify`/`delete`/`export`/`import`/
+   `materialize`) keeps exchanging today's provider-keyed `StoredCredential` shapes via the
+   `provider:default` record — so no caller, wire format, or sign-in behavior changes. Multi-label
+   storage is enabled but not yet exposed (that surface is phase 5). Guarded by
+   `test/credential-store-v3.test.ts` (existing v2 vault → v3 migration, write-upgrades-encoding,
+   tombstone + import convergence).
 3. **`resolveCredential` + presets wired in.** Route `getCredential`/env projection through
    selection; add `credentials.config.json` (schema-validated). Behavior identical at one cred each.
 4. **Reference source + `resolveSecret` bridge.** Add the `reference` kind end-to-end; deprecate
