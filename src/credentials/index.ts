@@ -48,8 +48,16 @@ export {
 } from "./document.js";
 export type { CredentialVaultDocumentV3, MergeResult } from "./document.js";
 
-// --- Selection presets (config-as-code) -------------------------------------
-export { parsePresets, loadPresets, defaultPresetsPath, PRESETS_FILENAME } from "./presets.js";
+// --- Selection presets + ingest policy (config-as-code) ---------------------
+export {
+  parsePresets,
+  loadPresets,
+  defaultPresetsPath,
+  PRESETS_FILENAME,
+  parseIngestPolicy,
+  loadIngestPolicy,
+} from "./presets.js";
+export type { IngestPolicy } from "./presets.js";
 
 // --- The vault (source of truth) — re-exported from its current home --------
 export {

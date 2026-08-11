@@ -73,3 +73,34 @@ export function loadPresets(filePath: string): CredentialPresets {
     return {};
   }
 }
+
+/**
+ * What Bivy does with a login it captures from an agent's own CLI/TUI
+ * (`credentials.config.json` → `ingest.policy`):
+ *  - `merge` (default): fold it into the provider's `default` credential — the
+ *    historical behavior; a native login updates the synced Bivy credential.
+ *  - `separate`: keep it as a distinct, node-local credential under a reserved
+ *    agent-derived label, selectable via a preset — so work/personal logins on
+ *    the same provider stay apart and a native login never overwrites a Bivy key.
+ */
+export type IngestPolicy = "merge" | "separate";
+
+/** Read `ingest.policy` from a parsed config; anything unrecognized → `merge`. */
+export function parseIngestPolicy(raw: unknown): IngestPolicy {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const ingest = (raw as { ingest?: unknown }).ingest;
+    if (ingest && typeof ingest === "object" && !Array.isArray(ingest)) {
+      if ((ingest as { policy?: unknown }).policy === "separate") return "separate";
+    }
+  }
+  return "merge";
+}
+
+/** Load the ingest policy from the config file; missing/malformed → `merge`. */
+export function loadIngestPolicy(filePath: string): IngestPolicy {
+  try {
+    return parseIngestPolicy(JSON.parse(fs.readFileSync(filePath, "utf8")));
+  } catch {
+    return "merge";
+  }
+}

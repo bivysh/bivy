@@ -225,14 +225,20 @@ becomes record-shaped. **What Bivy can pick up:**
 happens **when Bivy next runs or watches that agent**, not the instant you log in elsewhere. Merge
 is rotation-safe, so re-ingesting the same login is harmless.
 
-**The rule that makes ingest safe under multi-credential:** an ingested login lands under a
-**reserved, agent-derived label** — e.g. `anthropic:claude-code`, or the OAuth `account_id` when
-present — **never `default`**. Otherwise a Claude native login (provider `anthropic`) would
-merge-clobber a Bivy-managed `anthropic:default` via freshest-wins. Reserved labels make ingest
-**additive**: the native login appears as a *separate selectable credential* beside your Bivy keys,
-directly serving the multi-account goal. Ingested records default to `origin:"agent-native"`,
-`sync:"node"` (they don't leave the machine unless you promote them). Bivy reads *from* an
-`authOwner:"agent"` store; it never fights it.
+**The user chooses what ingest does** (`credentials.config.json` → `ingest.policy`) — one
+setting, values not modes:
+
+- **`merge` (default):** the native login folds into the provider's `default` credential,
+  rotation-safe — the historical behavior, so nothing changes for an existing user until they
+  opt in. A native login updates the provider's (account-synced) Bivy credential.
+- **`separate`:** the native login lands under a **reserved, agent-derived label** —
+  e.g. `openai-codex:codex-<account_id>`, never `default` — as a *distinct, node-local
+  credential* (`origin:"agent-native"`, `sync:"node"`). It never clobbers a Bivy key and is
+  selectable via a preset; this is what keeps work/personal logins on one provider apart.
+
+With `separate`, a provider can hold both a Bivy `default` and one or more agent-native logins;
+selection prefers the `default` unless a preset picks the native one (so the zero-config path is
+intact). Bivy reads *from* an `authOwner:"agent"` store; it never fights it.
 
 ---
 
@@ -313,11 +319,12 @@ Each phase ships independently and leaves the app working.
    gained `listCredentialRecords` (non-secret summaries) + `setProviderApiKeyLabeled` /
    `setProviderReferenceLabeled` / `removeProviderCredential` (labeled, sync/origin-preserving).
    Additive — the single-credential path is the `label:"default"` case, unchanged. Guarded by
-   `test/credential-store-records.test.ts`. **Still pending:** the PWA Models screen (labels +
-   preset picker), agent-native ingest under reserved labels (a behavior change — a native login
-   becomes a separate selectable credential rather than overwriting `provider:default`; needs a
-   decision + careful test rewrite), and the `pi-auth.ts` → `api.ts` rename with the catalog
-   injected.
+   `test/credential-store-records.test.ts`. *(5b shipped: configurable agent-native ingest.)*
+   `ingest.policy` in `credentials.config.json` lets the user choose `merge` (default — fold a
+   native login into the provider's synced `default`, the historical behavior) or `separate` (keep
+   it as a distinct, node-local, reserved-label credential that never clobbers a Bivy key). Guarded
+   by `test/credential-ingest-policy.test.ts`. **Still pending:** the PWA Models screen (labels +
+   preset picker), and the `pi-auth.ts` → `api.ts` rename with the catalog injected.
 6. **`sync` field + opt-out filter + record-addressed OAuth refresh.** Lift transport behind
    `sync.ts`; filter by policy; refresh the specific record (dedicated two-oauth-per-provider test).
 7. **(Later) Package promotion** — a `package.json`, because the boundary was drawn in phase 1.
