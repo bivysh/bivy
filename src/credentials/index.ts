@@ -22,6 +22,7 @@ export {
   parseCredKey,
   agentNativeLabel,
   defaultSyncFor,
+  inferReferenceBackend,
   resolveCredential,
   missingPresetLabels,
 } from "./records.js";
@@ -84,6 +85,7 @@ export {
   importProviderAuth,
   setProviderApiKey,
   setProviderCredential,
+  setProviderReference,
   removeProvider,
 } from "../runtime/pi-auth.js";
 export type { ProviderAuthInfo } from "../runtime/pi-auth.js";
