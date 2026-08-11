@@ -135,6 +135,32 @@ the rule is architectural, Pi-freeness falls out of it. Next: migrate the
 command handlers + REST routes to register through the controller, then repeat
 for the other prefix groups; version/validate the envelope later.
 
+**Carve batch #2 (branch `bivy/platform-phase2-controllers`, PR against main):**
+- **`workspaces` — DONE 2026-08-11.** Saved-workspace list helpers →
+  `src/controllers/workspaces.ts` behind `createWorkspaceController({
+  readSettings, writeSettings, metadata })`; destructured back; session-time
+  project policy (`assertProjectModel`/`projectSafety`) stays in server.ts.
+- **`models` — SCOPED, deferred to its own careful commit.** Cluster =
+  `agentEnvForEndpoint` (models-only, move in), `currentProviderKeys`
+  (models-only, move in), `writePiModelsProjection`, `localModelSummaries`,
+  `migrateLegacyPiModelsIntoRegistry`, `initLocalModelRegistry`,
+  `localModelSpecFromInput`, `broadcastLocalModels`, `persistLocalModelSave`,
+  `persistLocalModelRemove`. Controller imports store fns from
+  `runtime/local-model-store.js` + credential fns from `credentials/api.js`
+  directly; injects 7 deps (`localModelsDir`, `piDir`,
+  `piModelsProjectionPath`, `credsDir`, `broadcast`, `refreshSessionAfterAuth`,
+  `pushModelAuthToControlPlane` — the last two are hoisted async fns).
+  **HAZARD:** unlike rulesets/workspaces this cluster runs at boot (`void
+  initLocalModelRegistry()`), so converting the hoisted `function`s to
+  destructured `const`s has a boot-ordering constraint (instantiate after the
+  const dir-deps; keep the boot call after). Not locally verifiable → do it as a
+  dedicated commit with `tsc` available, not a blind batch.
+
+**Deferred — NOT mechanical carves (engine work, dedicated PRs):** `runtimes.*`
+(`getRuntime`/`ensureRuntimeAvailable` are the core runtime engine woven through
+session creation) and `session.*` (the session lifecycle). `integrations.*`
+needs no carve — already a proper `IntegrationManager` class.
+
 ### Phase 3 — Extract `@bivy/remote`
 
 Relay transport + control-plane sync + remote session location, behind the ports
