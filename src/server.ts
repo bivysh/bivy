@@ -40,7 +40,7 @@ import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionSource, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState, type SessionWorkspaceState } from "./session/session-state.js";
-import { exportProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, setProviderCredential } from "./credentials/api.js";
+import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, setProviderCredential } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import {
   loadLocalModels,
@@ -3508,7 +3508,9 @@ async function pushModelAuthToControlPlane(rotateKey = false) {
   // versa.
   await pushProviderSummaryToControlPlane();
   try {
-    const providers = await exportProviderAuth(credsDir);
+    // Only push credentials on the account-sync tier; a `sync: "node"` credential
+    // stays local (per-credential opt-out). Tombstones still converge for all.
+    const providers = await exportSyncableProviderAuth(credsDir);
     const deletedAt = await exportProviderAuthTombstones(credsDir);
     const localModels = exportLocalModels(localModelsDir);
     const previousKey = readLocalModelAuthVaultKey();

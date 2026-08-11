@@ -14,6 +14,7 @@ import http from "node:http";
 import { randomBytes } from "node:crypto";
 import { createPkce } from "../../integrations/oauth.js";
 import { createCredentialVault, type OAuthCredential } from "../credential-store.js";
+import { DEFAULT_LABEL } from "../../credentials/records.js";
 import { getModelOAuthProvider, type ModelOAuthProvider } from "./model-oauth-providers.js";
 
 // --- Bivy-owned login interaction (same shape Pi used, now ours) -------------
@@ -377,10 +378,16 @@ async function refreshTokens(provider: ModelOAuthProvider, current: OAuthCredent
  * token — the single-flight guarantee. Returns undefined if the provider has no
  * stored OAuth credential or isn't natively supported.
  */
-export async function refreshModelOAuth(credsDir: string, providerId: string): Promise<string | undefined> {
+export async function refreshModelOAuth(
+  credsDir: string,
+  providerId: string,
+  label: string = DEFAULT_LABEL,
+): Promise<string | undefined> {
   const provider = getModelOAuthProvider(providerId);
   if (!provider) return undefined;
-  const result = await createCredentialVault(credsDir).modify(providerId, async (current) => {
+  // Record-addressed: refresh the SELECTED account's record, so a second account
+  // on the same provider (a different label) is never touched by this rotation.
+  const result = await createCredentialVault(credsDir).modifyRecord(providerId, label, async (current) => {
     if (!current || current.type !== "oauth") return current;
     // Someone else already refreshed while we waited for the lock — use theirs.
     if (Number(current.expires) > Date.now()) return current;

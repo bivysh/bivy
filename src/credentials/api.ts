@@ -74,9 +74,18 @@ export async function joinProviderCatalog(
   }));
 }
 
-/** Export configured model-provider credentials, keyed by provider id. */
+/** Export configured model-provider credentials, keyed by provider id (all local). */
 export async function exportProviderAuth(credsDir: string): Promise<Record<string, StoredCredential>> {
   return createCredentialVault(credsDir).exportAll();
+}
+
+/**
+ * Export only the credentials eligible for cross-node sync (`sync: "account"`) —
+ * the snapshot pushed to peers. A credential the user opted to `sync: "node"`
+ * stays local. Use this for the sync push; use `exportProviderAuth` for local reads.
+ */
+export async function exportSyncableProviderAuth(credsDir: string): Promise<Record<string, StoredCredential>> {
+  return createCredentialVault(credsDir).exportSyncable();
 }
 
 /** Export provider revocations for cross-node convergence. */
