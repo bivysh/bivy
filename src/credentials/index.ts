@@ -67,10 +67,8 @@ export {
   tombstoneWins,
   BivyCredentialStore,
 } from "../runtime/credential-store.js";
+export type { StoredCredential, ApiKeyCredential, OAuthCredential } from "./types.js";
 export type {
-  StoredCredential,
-  ApiKeyCredential,
-  OAuthCredential,
   StoredCredentialInfo,
   CredentialTombstones,
 } from "../runtime/credential-store.js";
