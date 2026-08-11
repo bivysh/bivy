@@ -34,7 +34,10 @@ const RULES = [
   {
     name: "credentials-is-a-leaf",
     dir: "src/credentials",
-    forbid: ["../runtime/", "../agents/", "../session/", "../server", "../secrets", "../e2e", "/pi-oauth", "native-pi"],
+    // e2e.ts (AES-256-GCM crypto leaf) is intentionally NOT forbidden: the node
+    // service layer (store.ts) may use it, and the Sealer port abstracts it for a
+    // future browser build. secrets.ts / oauth / Pi / runtime stay inverted.
+    forbid: ["../runtime/", "../agents/", "../session/", "../server", "../secrets", "/pi-oauth", "native-pi"],
     // Pilot boundary (Phase 1). Flip to true once the two-layer split lands.
     enforce: false,
     note: "credentials must be a pure domain + injected-port service; upward deps become ports (see pilot spec).",

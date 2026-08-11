@@ -194,12 +194,21 @@ is the correct consumer-side bridge, not part of the service.
    are deliberately NOT created yet — nothing consumes them until the engines
    move, so they are wired in step 3 at the construction site (avoids dead
    speculative shims). Verified via strip-parse; no behavior change.
-3. **Move the vault** `runtime/credential-store.ts` → `credentials/store.ts`,
-   swapping its `../secrets`/`../e2e`/oauth reaches for injected ports, and wire
-   the concrete port adapters at the construction site. **This is the
-   auth-fragile step** — `credential-store.ts` cannot be type-stripped
-   locally and auth breaks silently; it MUST land CI-green and be smoke-tested
-   against a live sign-in before merge (see project memory on commit 902b4ea).
+3. **Move the vault — DONE 2026-08-11 (branch `bivy/credentials-two-layer-engine-move`).**
+   `git mv runtime/credential-store.ts → credentials/store.ts`; fixed its
+   in-layer import paths; wired the `Sealer` port through the constructor
+   (`sealer: Sealer = nodeSealer`, default = the `e2e` adapter) so **no caller
+   changes** — `createCredentialVault` gained an optional `sealer` param. Left a
+   re-export **compat shim** at `runtime/credential-store.ts` so server.ts,
+   bivy-login.ts, and ~18 test files keep working; added `CredentialRecord` to
+   the shim (the original leaked it via type-erasure only). Re-pointed
+   `credentials/{api,index}.ts` to `./store.js`. **Decision:** `e2e.ts` is a
+   repo crypto leaf, NOT on the forbidden list — Layer B may use it directly;
+   the `Sealer` port abstracts it for a future browser build (phase 7). Removed
+   the over-strict `../e2e` rule from the checker. Boundary: **5 → 2** (only the
+   resolver + the sanctioned Pi bridge remain). Checkable files strip-parse;
+   `store.ts` itself (parameter properties) + auth behavior → **CI + live
+   sign-in smoke before merge** (see project memory on commit 902b4ea).
 4. **Move the resolver** `runtime/credentials.ts` → `credentials/resolver.ts`.
 5. **Flip the fitness check to `--enforce`** for the credentials boundary; wire
    into CI.
