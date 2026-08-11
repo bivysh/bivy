@@ -23,9 +23,12 @@ import {
 } from "./records.js";
 import {
   loadPresets,
+  loadIngestPolicy,
   defaultPresetsPath,
   setActivePreset as setActivePresetFile,
   setPresetMapping as setPresetMappingFile,
+  setIngestPolicy as setIngestPolicyFile,
+  type IngestPolicy,
 } from "./presets.js";
 
 /** A model provider and whether the node currently holds a credential for it. */
@@ -303,6 +306,16 @@ export function setActiveCredentialPreset(credsDir: string, active: string | und
 /** Point a provider at a label within a preset (empty label clears the mapping). */
 export function setCredentialPresetMapping(credsDir: string, preset: string, provider: string, label: string | undefined): void {
   setPresetMappingFile(defaultPresetsPath(credsDir), preset, provider, label);
+}
+
+/** The agent-native ingest policy (`merge`/`separate`). */
+export function getCredentialIngestPolicy(credsDir: string): IngestPolicy {
+  return loadIngestPolicy(defaultPresetsPath(credsDir));
+}
+
+/** Set the agent-native ingest policy. */
+export function setCredentialIngestPolicy(credsDir: string, policy: IngestPolicy): void {
+  setIngestPolicyFile(defaultPresetsPath(credsDir), policy);
 }
 
 /** Set a labeled credential's sync tier — the per-credential opt-out toggle. */

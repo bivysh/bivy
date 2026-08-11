@@ -209,6 +209,16 @@ async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (!command || ["help", "-h", "--help"].includes(command)) usage();
   if (command === "path") { console.log(args.includes("--project") ? path.resolve(PROJECT_POLICY_PATH) : file); return; }
+  if (command === "edit") {
+    const target = args.includes("--project") ? path.resolve(PROJECT_POLICY_PATH) : file;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    if (!fs.existsSync(target)) fs.writeFileSync(target, "");
+    const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === "win32" ? "notepad" : "nano");
+    const { spawnSync } = await import("node:child_process");
+    const res = spawnSync(editor, [target], { stdio: "inherit" });
+    if (res.status !== 0) throw new Error(`${editor} exited with ${res.status ?? res.error?.message ?? "error"}`);
+    return;
+  }
   if (command === "init" && args.includes("--project")) {
     const target = path.resolve(PROJECT_POLICY_PATH);
     if (fs.existsSync(target)) throw new Error(`${target} already exists`);

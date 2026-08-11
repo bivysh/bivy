@@ -13,6 +13,8 @@ import {
   getCredentialPresets,
   setActiveCredentialPreset,
   setCredentialPresetMapping,
+  getCredentialIngestPolicy,
+  setCredentialIngestPolicy,
 } from "../src/credentials/api.js";
 import { defaultPresetsPath } from "../src/credentials/presets.js";
 
@@ -70,6 +72,22 @@ function freshApp(): { credsDir: string; cfgPath: string } {
     assert.deepEqual(getCredentialPresets(credsDir), {}, "no config → empty presets");
     setActiveCredentialPreset(credsDir, "solo");
     assert.equal(getCredentialPresets(credsDir).active, "solo", "config created on first write");
+  } finally {
+    fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
+  }
+}
+
+// --- ingest policy get/set round-trips, preserving presets ------------------
+{
+  const { credsDir } = freshApp();
+  try {
+    assert.equal(getCredentialIngestPolicy(credsDir), "merge", "default is merge");
+    setCredentialPresetMapping(credsDir, "team", "anthropic", "work");
+    setCredentialIngestPolicy(credsDir, "separate");
+    assert.equal(getCredentialIngestPolicy(credsDir), "separate");
+    assert.equal(getCredentialPresets(credsDir).presets?.team.anthropic, "work", "setting ingest preserves presets");
+    setCredentialIngestPolicy(credsDir, "merge");
+    assert.equal(getCredentialIngestPolicy(credsDir), "merge");
   } finally {
     fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
   }
