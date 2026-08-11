@@ -140,7 +140,19 @@ for the other prefix groups; version/validate the envelope later.
   `src/controllers/workspaces.ts` behind `createWorkspaceController({
   readSettings, writeSettings, metadata })`; destructured back; session-time
   project policy (`assertProjectModel`/`projectSafety`) stays in server.ts.
-- **`models` — SCOPED, deferred to its own careful commit.** Cluster =
+- **`models` — DONE 2026-08-11 (branch `bivy/platform-phase2-models-controller`).**
+  Carved into `src/controllers/models.ts` behind `createModelController({
+  localModelsDir, piDir, piModelsProjectionPath, credsDir, broadcast,
+  refreshSessionAfterAuth, pushModelAuthToControlPlane })`. Moved
+  `agentEnvForEndpoint`, `currentProviderKeys`, `DUMMY_LOCAL_KEYS`,
+  `StoredKeyMap` in (all cluster-only); `initLocalModelRegistry` runs at boot via
+  `modelController.initLocalModelRegistry()`. The boot-ordering hazard cleared on
+  inspection — all injected dirs are defined by L299, before the cluster at
+  L307. Dropped 8 now-cluster-only imports from server.ts (kept
+  `exportProviderAuth`/`removeProvider`/`importLocalModels`/`exportLocalModels`,
+  used elsewhere). Verified: 0 dangling/unused symbol refs in server.ts,
+  controller strip-parses, boundaries clean. (Original scoped plan below.)
+- **`models` — original scoping note.** Cluster =
   `agentEnvForEndpoint` (models-only, move in), `currentProviderKeys`
   (models-only, move in), `writePiModelsProjection`, `localModelSummaries`,
   `migrateLegacyPiModelsIntoRegistry`, `initLocalModelRegistry`,

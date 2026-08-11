@@ -16,6 +16,7 @@ import { SessionRerouteController, type ResumePlan } from "./policy/session-rero
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
 import { createWorkspaceController } from "./controllers/workspaces.js";
+import { createModelController } from "./controllers/models.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
@@ -42,19 +43,9 @@ import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionSource, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState, type SessionWorkspaceState } from "./session/session-state.js";
-import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, setProviderCredential, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
+import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
-import {
-  loadLocalModels,
-  upsertLocalProvider,
-  removeLocalProviderEntry,
-  listLocalProviderSummaries,
-  exportLocalModels,
-  importLocalModels,
-  toPiModelsConfig,
-  normalizeProviderId,
-  type LocalModelsConfig,
-} from "./runtime/local-model-store.js";
+import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
 import { QuestionManager, validQuestions, isAskUserQuestionTool, formatQuestionResult } from "./question.js";
@@ -298,141 +289,23 @@ const settingsPath = path.join(appDir, "settings.json");
 const localModelsDir = appDir;
 const piModelsProjectionPath = path.join(piDir, "models.json");
 
-// Keys the projection treats as "no real key" — local servers accept anything,
-// so these never enter the encrypted vault as a real key.
-const DUMMY_LOCAL_KEYS = new Set(["local", "ollama", "lm-studio", "vllm", "sglang", "none", ""]);
-
-/** The env var a generic (non-Pi) agent reads to reach this endpoint's base URL,
- *  chosen by API family. Injected only for the active provider (see credentials.ts). */
-function agentEnvForEndpoint(api: string, baseUrl: string): Record<string, string> {
-  const url = String(baseUrl ?? "").trim();
-  if (!url) return {};
-  const a = String(api ?? "").toLowerCase();
-  if (a.startsWith("azure")) return { AZURE_OPENAI_BASE_URL: url };
-  if (a.startsWith("anthropic")) return { ANTHROPIC_BASE_URL: url };
-  return { OPENAI_BASE_URL: url };
-}
-
-type StoredKeyMap = Record<string, { type?: string; key?: string }>;
-
-/** Snapshot of vault credentials, keyed by provider id (best-effort). */
-async function currentProviderKeys(): Promise<StoredKeyMap> {
-  try {
-    return (await exportProviderAuth(credsDir)) as StoredKeyMap;
-  } catch {
-    return {};
-  }
-}
-
-/** Regenerate Pi's models.json from Bivy's registry, stitching in vault keys.
- *  The registry holds no secrets — the API key is resolved from the encrypted
- *  vault here, so it only ever lands in this local 0600 derived file. */
-async function writePiModelsProjection(cfg?: LocalModelsConfig): Promise<void> {
-  const registry = cfg ?? loadLocalModels(localModelsDir);
-  const keys = await currentProviderKeys();
-  const resolveKey = (id: string) => {
-    const c = keys[id];
-    return c && c.type === "api_key" ? c.key : undefined;
-  };
-  try {
-    fs.mkdirSync(piDir, { recursive: true });
-    fs.writeFileSync(piModelsProjectionPath, `${JSON.stringify(toPiModelsConfig(registry, resolveKey), null, 2)}\n`, { mode: 0o600 });
-    try { fs.chmodSync(piModelsProjectionPath, 0o600); } catch {}
-  } catch (error) {
-    console.warn("[local-models] could not write Pi projection:", (error as Error).message);
-  }
-}
-
-/** Redacted summaries for the UI, with `hasKey` derived from the vault. */
-async function localModelSummaries() {
-  const keys = await currentProviderKeys();
-  return listLocalProviderSummaries(localModelsDir, (id) => {
-    const c = keys[id];
-    return !!c && c.type === "api_key" && !!c.key;
-  });
-}
-
-/** One-time migration: adopt any pre-existing pi/models.json into Bivy's store,
- *  moving inline API keys into the encrypted vault. */
-async function migrateLegacyPiModelsIntoRegistry(): Promise<void> {
-  try {
-    if (fs.existsSync(path.join(localModelsDir, "local-models.json"))) return; // already own it
-    if (!fs.existsSync(piModelsProjectionPath)) return;
-    const legacy = JSON.parse(fs.readFileSync(piModelsProjectionPath, "utf8"));
-    const providers = legacy?.providers;
-    if (!providers || typeof providers !== "object" || !Object.keys(providers).length) return;
-    for (const [id, spec] of Object.entries<any>(providers)) {
-      const nid = normalizeProviderId(id);
-      const key = spec?.apiKey;
-      const realKey = key && !DUMMY_LOCAL_KEYS.has(String(key).toLowerCase()) ? String(key) : undefined;
-      await setProviderCredential(credsDir, nid, {
-        key: realKey,
-        env: agentEnvForEndpoint(String(spec?.api ?? ""), String(spec?.baseUrl ?? "")),
-      }).catch(() => {});
-    }
-    importLocalModels(localModelsDir, providers); // normalizeProvider drops apiKey
-    console.log("[local-models] migrated legacy pi/models.json into Bivy registry (keys → vault)");
-  } catch (error) {
-    console.warn("[local-models] legacy migration skipped:", (error as Error).message);
-  }
-}
-
-// Adopt any legacy Pi-owned config (keys → vault), then ensure the projection
-// reflects the Bivy registry from the very first boot.
-async function initLocalModelRegistry(): Promise<void> {
-  await migrateLegacyPiModelsIntoRegistry();
-  await writePiModelsProjection();
-}
-void initLocalModelRegistry();
-
-/** Normalize save input into a provider id, non-secret spec, and separate key. */
-function localModelSpecFromInput(input: any): { providerId: string; spec: any; apiKey?: string } {
-  const { providerId, baseUrl, api, apiKey, models, compat, name } = input || {};
-  if (!baseUrl) throw new Error("baseUrl is required");
-  const spec: any = { baseUrl: String(baseUrl).trim(), api: api || "openai-completions" };
-  if (name) spec.name = String(name);
-  if (compat && typeof compat === "object") spec.compat = compat;
-  spec.models = Array.isArray(models) ? models : [];
-  const key = apiKey === undefined || apiKey === null ? undefined : String(apiKey);
-  return { providerId: providerId || "ollama", spec, apiKey: key };
-}
-
-/** Re-emit the local-model list to every connected client (relay + direct). */
-async function broadcastLocalModels(): Promise<void> {
-  broadcast({ type: "models.custom.list", providers: await localModelSummaries() });
-  broadcast({ type: "models.custom.updated" });
-}
-
-/** Save a provider: non-secret config → registry, secret key → encrypted vault,
- *  then re-project Pi + refresh + sync + notify clients. */
-async function persistLocalModelSave(input: any): Promise<{ id: string }> {
-  const { providerId, spec, apiKey } = localModelSpecFromInput(input);
-  const { id } = upsertLocalProvider(localModelsDir, providerId, spec);
-  // Store the endpoint's base URL alongside the (encrypted) key so non-Pi agents
-  // can reach it when it's the active provider. Only a real key is kept — blank
-  // on edit preserves the existing key; local dummies ("ollama"/…) are dropped
-  // so they don't read as a configured key (projection falls back to "local").
-  const trimmedKey = apiKey?.trim();
-  const realKey = trimmedKey && !DUMMY_LOCAL_KEYS.has(trimmedKey.toLowerCase()) ? trimmedKey : undefined;
-  await setProviderCredential(credsDir, id, { key: realKey, env: agentEnvForEndpoint(spec.api, spec.baseUrl) });
-  await writePiModelsProjection();
-  await refreshSessionAfterAuth();
-  void pushModelAuthToControlPlane().catch(() => {});
-  await broadcastLocalModels();
-  return { id };
-}
-
-/** Remove a provider: drop its registry config AND forget its stored key. */
-async function persistLocalModelRemove(id: string): Promise<void> {
-  const pid = normalizeProviderId(String(id ?? ""));
-  if (!pid) throw new Error("provider id required");
-  removeLocalProviderEntry(localModelsDir, pid);
-  await removeProvider(credsDir, pid).catch(() => {}); // forget the vault key too
-  await writePiModelsProjection();
-  await refreshSessionAfterAuth();
-  void pushModelAuthToControlPlane().catch(() => {});
-  await broadcastLocalModels();
-}
+// The local-model provider domain lives in its own controller (platform
+// modularization Phase 2). server.ts wires it with the node dirs, broadcast,
+// and the session-refresh / control-plane-sync hooks (both hoisted async fns),
+// then destructures the operations it calls elsewhere. All injected dirs are
+// defined above; initLocalModelRegistry runs once at boot, exactly as before.
+const modelController = createModelController({
+  localModelsDir,
+  piDir,
+  piModelsProjectionPath,
+  credsDir,
+  broadcast,
+  refreshSessionAfterAuth,
+  pushModelAuthToControlPlane,
+});
+const { writePiModelsProjection, localModelSummaries, broadcastLocalModels, persistLocalModelSave, persistLocalModelRemove } =
+  modelController;
+void modelController.initLocalModelRegistry();
 
 // --- Rulesets (run-orchestration policy; docs/rulesets.md). --------------------
 // Bivy owns the ruleset registry (ruleset-store.ts); it is node-local, not
