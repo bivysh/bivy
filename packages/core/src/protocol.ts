@@ -58,6 +58,13 @@ export interface Command extends CommandBase {
     | "provider.oauth.reset"
     | "provider.oauth.start"
     | "provider.oauth.code"
+    // Multi-credential (labeled) management. `credentials.list` replies with
+    // `credentials.records` ({ records: CredentialRecordSummary[] }). set/remove/
+    // sync.set mutate one `provider:label` slot and ack via requestId.
+    | "credentials.list"
+    | "credential.set"
+    | "credential.remove"
+    | "credential.sync.set"
     | "models.custom.list"
     | "models.custom.presets"
     | "models.custom.save"
@@ -102,6 +109,24 @@ export interface ServerEvent {
   requestId?: string;
   sessionId?: string;
   [k: string]: unknown;
+}
+
+/**
+ * One labeled credential as the Models screen sees it (non-secret). Mirrors the
+ * node's `CredentialRecordSummary`; carried in the `credentials.records` event.
+ */
+export interface CredentialRecordSummary {
+  provider: string;
+  label: string;
+  kind: "api_key" | "oauth" | "reference";
+  /** Whether it syncs across the account's nodes, or stays on this one. */
+  sync: "account" | "node";
+  /** Where it came from — a Bivy login, or captured from an agent's own CLI. */
+  origin: "bivy" | "agent-native";
+  /** Epoch ms the OAuth access token expires, when `kind === "oauth"`. */
+  expiresAt?: number;
+  /** The non-secret pointer, when `kind === "reference"`. */
+  ref?: string;
 }
 
 /**
