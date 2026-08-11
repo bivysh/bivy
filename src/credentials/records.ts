@@ -98,6 +98,19 @@ export function defaultSyncFor(origin: CredentialOrigin): SyncPolicy {
 }
 
 /**
+ * The reference backend a pointer targets, inferred from its scheme:
+ * `op://…` → 1Password, `env://NAME` → an environment variable. Anything else
+ * (a bare value, a `secret://` local-vault ref, junk) returns undefined — a
+ * reference credential must point at an external, per-node-resolvable secret.
+ */
+export function inferReferenceBackend(ref: string): "1password" | "env" | undefined {
+  const value = String(ref ?? "").trim();
+  if (value.startsWith("op://")) return "1password";
+  if (value.startsWith("env://")) return "env";
+  return undefined;
+}
+
+/**
  * Selection config, as stored in `credentials.config.json`. `presets` maps a
  * preset name to a `provider → label` choice; `active` names the current preset.
  * Both are optional — an absent config means "use the implicit default".

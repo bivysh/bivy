@@ -11,8 +11,11 @@
 // This keeps Bivy's hot credential path decoupled from Pi: Pi is just another
 // agent that reads the same store.
 
+import path from "node:path";
+
 import { createCredentialVault } from "./credential-store.js";
 import { refreshModelOAuth } from "./oauth/model-oauth.js";
+import { resolveSecret } from "../secrets.js";
 import { resolveCredential, type CredentialPresets } from "../credentials/records.js";
 import { loadPresets, defaultPresetsPath } from "../credentials/presets.js";
 import type { AgentCredentialStore, ProviderCredential } from "./types.js";
@@ -26,9 +29,14 @@ export class NodeCredentialResolver implements AgentCredentialStore {
   private readonly presetsPath: string;
   private presetsCache?: CredentialPresets;
 
+  private readonly appDir: string;
+
   constructor(private readonly credsDir: string) {
     this.store = createCredentialVault(credsDir);
     this.presetsPath = defaultPresetsPath(credsDir);
+    // The data dir that holds the local secret vault, for resolving `secret://`
+    // references (`op://`/`env://` need no dir). credsDir is `<appDir>/credentials`.
+    this.appDir = path.dirname(credsDir);
   }
 
   /** The node's selection presets, read once per resolver (see presets.ts). */
@@ -44,12 +52,22 @@ export class NodeCredentialResolver implements AgentCredentialStore {
     // Selection is data-driven: pick the record for this provider per the active
     // preset (records.ts). With one credential per provider this resolves to that
     // credential; ambiguity (multiple accounts, no preset) returns nothing rather
-    // than guessing. Reference records are resolved in a later phase.
+    // than guessing.
     const records = await this.store.listRecords().catch(() => []);
     const selection = resolveCredential(id, records, this.presets());
     if (!selection) return undefined;
     const source = selection.record.source;
-    if (source.kind !== "stored") return undefined;
+
+    // A reference credential is a pointer (op:// / env://) resolved per-node at
+    // read time via the secret vault — the secret never lived in our store. It is
+    // api-key-shaped. A node that can't resolve it (no `op` session, missing env)
+    // reports no credential here rather than falling back to another account.
+    if (source.kind === "reference") {
+      const token = (await resolveSecret(source.ref, this.appDir).catch(() => undefined))?.trim();
+      if (!token) return undefined;
+      return { provider: id, kind: "api_key", token };
+    }
+
     const cred = source.cred;
 
     if (cred.type === "api_key") {

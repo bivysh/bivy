@@ -297,8 +297,17 @@ Each phase ships independently and leaves the app working.
    Behavior-identical at one credential per provider (resolves to the default record); ambiguity
    returns nothing rather than guessing. Guarded by `test/credentials-presets.test.ts` (parse/load
    + selection composition); the resolver/store edits are CI-validated (unrunnable locally).
-4. **Reference source + `resolveSecret` bridge.** Add the `reference` kind end-to-end; deprecate
-   the `cli.json` model-key side channel.
+4. **Reference source + `resolveSecret` bridge.** ✅ *(shipped)* The `reference` kind is now
+   end-to-end. `inferReferenceBackend` (pure) derives the backend from a pointer's scheme
+   (`op://` → 1Password, `env://` → env); the store gained `setReference()` (persists only the
+   pointer); `setProviderReference()` is the daemon API; the resolver resolves a selected
+   reference via the existing `resolveSecret()` at read time and returns an api-key credential —
+   the secret never enters the vault. This supersedes wiring a model key through `cli.json` (a
+   reference is labeled, selectable, and shown in the Models UI). Guarded by
+   `test/credentials-reference.test.ts` (env:// end-to-end; op:// needs the `op` CLI).
+   *Caveat:* references are **node-local** until phase 6 — the provider-keyed sync wire and Pi's
+   plaintext `auth.json` can't carry a pointer, so `exportAll`/`materializePlaintext` skip
+   reference records; record-shaped sync (phase 6) is what makes the pointer travel.
 5. **Multi-credential API + UI + ingest labels.** `api.ts` gains add/label/remove/list; PWA Models
    screen gets labels + preset picker; ingest lands under reserved labels; catalog injected.
 6. **`sync` field + opt-out filter + record-addressed OAuth refresh.** Lift transport behind

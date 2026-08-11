@@ -57,6 +57,21 @@ For process environment injection, put a secret reference in `.bivy/cli.json`:
 
 The `bivy` CLI resolves `secret://`, `op://`, and `env://` values before starting the daemon or runtime processes.
 
+### Model-provider reference credentials (preferred over `cli.json` for model keys)
+
+For a **model provider** key held in a password manager, prefer a *reference credential* over
+the `cli.json` env mapping above. A reference stores only the pointer (`op://…` or `env://NAME`),
+which Bivy resolves per-node at read time — the secret stays in the manager and never enters the
+vault — and, unlike a raw `cli.json` env var, the reference is a first-class credential: labeled,
+selectable via presets, and (once the Models UI surface lands) shown alongside your other
+credentials. The interactive `bivy login` / Models-screen flow for adding one arrives with the
+multi-credential UI; the resolver and storage are in place now.
+
+The pointer is resolved with the same `op`/`env` machinery as `secrets`. A node that can't resolve
+it (no `op` session, missing env var) simply reports no credential there — it never falls back to
+another account. Reference credentials are node-local for now (the pointer does not yet sync across
+nodes); use a synced Bivy-managed key if you need cross-node model auth.
+
 ## Rotation and revocation
 
 - Rotate GitHub tokens in GitHub, then update `github.repo-token`.

@@ -10,6 +10,7 @@
 
 import { createCredentialVault, type StoredCredential } from "./credential-store.js";
 import { listPiProviders } from "./pi-oauth.js";
+import { inferReferenceBackend } from "../credentials/records.js";
 
 /** A model provider and whether the node currently holds a credential for it. */
 export interface ProviderAuthInfo {
@@ -103,6 +104,24 @@ export async function setProviderCredential(
     if (env && Object.keys(env).length) cred.env = env;
     return cred;
   });
+}
+
+/**
+ * Store a reference credential for a model provider: a pointer (`op://…` /
+ * `env://NAME`) that Bivy resolves per-node at read time, so the secret stays in
+ * the password manager / environment and never enters the vault. The backend is
+ * inferred from the pointer's scheme. This is the recommended way to use a
+ * password-manager-held model key — it supersedes wiring `ANTHROPIC_API_KEY:
+ * op://…` through `cli.json`, because a reference is labeled, selectable, and
+ * visible in the Models UI like any other credential.
+ */
+export async function setProviderReference(credsDir: string, provider: string, ref: string): Promise<void> {
+  const id = provider.trim().toLowerCase();
+  if (!id) throw new Error("Provider is required");
+  const pointer = String(ref ?? "").trim();
+  const backend = inferReferenceBackend(pointer);
+  if (!backend) throw new Error("Reference must be an op:// or env:// pointer");
+  await createCredentialVault(credsDir).setReference(id, pointer, backend);
 }
 
 /** Forget a provider's stored credential (API key or OAuth token). */

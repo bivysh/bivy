@@ -28,7 +28,7 @@ import {
   emptyDocument,
   type CredentialVaultDocumentV3,
 } from "../credentials/document.js";
-import { credKey, parseCredKey, DEFAULT_LABEL, type CredentialRecord } from "../credentials/records.js";
+import { credKey, parseCredKey, normalizeLabel, DEFAULT_LABEL, type CredentialRecord } from "../credentials/records.js";
 
 /** Stored api-key credential. `env` holds provider-scoped config (base URLs, ids). */
 export interface ApiKeyCredential {
@@ -278,6 +278,48 @@ export class BivyCredentialStore {
     const apiKey = String(key ?? "").trim();
     if (!apiKey) throw new Error("API key cannot be empty");
     await this.modify(provider, async () => ({ type: "api_key", key: apiKey }));
+  }
+
+  /**
+   * Store a reference credential — a pointer (`op://…` / `env://NAME`) resolved
+   * per-node at read time (see the resolver), never the secret itself. The
+   * pointer is safe to sync across nodes; the secret stays in the manager. A
+   * reference is api-key-shaped, so it cannot model a rotating OAuth token set.
+   * Writes at `provider:label` (defaulting to the provider's default slot).
+   */
+  async setReference(
+    provider: string,
+    ref: string,
+    backend: "1password" | "env",
+    label: string = DEFAULT_LABEL,
+  ): Promise<void> {
+    const id = providerId(provider);
+    if (!id) throw new Error("Provider is required");
+    const pointer = String(ref ?? "").trim();
+    if (!pointer) throw new Error("Reference cannot be empty");
+    const key = credKey(id, label);
+    await this.enqueue(id, async () => {
+      await this.acquireLock();
+      try {
+        const document = this.readDocument();
+        const existing = document.credentials[key];
+        const record: CredentialRecord = {
+          provider: id,
+          label: normalizeLabel(label),
+          source: { kind: "reference", ref: pointer, backend },
+          // Preserve an existing record's sync/origin; a new reference is a
+          // Bivy-first, opt-out-sync credential (only the pointer ever syncs).
+          sync: existing?.sync ?? "account",
+          origin: existing?.origin ?? "bivy",
+          updatedAt: Date.now(),
+        };
+        document.credentials[key] = record;
+        delete document.deletedAt[key];
+        this.writeDocument(document);
+      } finally {
+        await this.releaseLock();
+      }
+    });
   }
 
   /**
