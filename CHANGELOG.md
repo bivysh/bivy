@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plugin developer tooling now includes the `@bivy/plugin-sdk` workspace package,
   a generated JSON Schema, `requires.bivy` semver compatibility enforcement,
   executable diagnostics, real ACP handshake conformance, and a runnable example.
+- Packaged and node-configured agent integrations now share one ordered registry
+  for provenance, aliases, visibility, discovery, connection, conflicts, and
+  allowlisted upstream installation. Maintained profiles and Pi/Claude/Codex bridges
+  live under `src/agents/` and connect to the operator's installed agent commands.
+- `bivy agent add|list|remove` connects a user-owned ACP or headless process agent
+  through the same strict manifest/store contract as installed plugin packages.
 - Automations is now the **sole place** to connect, add, reconnect, or
   disconnect GitHub Apps, Linear, and Slack — full multi-app GitHub lifecycle
   (create, connect an existing app, install, reconnect a key on this machine,

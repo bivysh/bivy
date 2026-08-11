@@ -44,7 +44,7 @@ BIVY_VERSION=0.1.0 bash install.sh
 # Install into a user-owned prefix instead of npm's global one (no sudo).
 BIVY_NPM_PREFIX=~/.local bash install.sh
 
-# Preinstall every bundled agent runtime rather than just your default.
+# Preinstall every known upstream agent rather than just your default.
 BIVY_INSTALL_ALL_AGENTS=1 bash install.sh
 
 # Don't touch ~/.bashrc or ~/.zshrc; just print the PATH line to add yourself.

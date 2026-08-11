@@ -94,7 +94,7 @@ test("`bivy setup --help` describes remote enrollment", () => {
   assert.match(r.stdout + r.stderr, /remote access \+ sign-in/i);
 });
 
-test("`bivy --help` lists every built-in 'bivy run' agent, not a stale subset", () => {
+test("`bivy --help` lists every known 'bivy run' integration, not a stale subset", () => {
   // Regression test for #113: this line used to be a hand-maintained string
   // that fell out of sync with BUILTIN_TERMINAL_AGENTS as agents were added.
   const r = runCli(["--help"]);
@@ -144,7 +144,7 @@ test("`bivy agents:install --help` exits 0 and does not install anything", () =>
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
   const out = r.stdout + r.stderr;
   assert.match(out, /Usage: bivy agents:install/);
-  assert.doesNotMatch(out, /Ensuring bundled agent runtimes/, "--help must not install agent runtimes");
+  assert.doesNotMatch(out, /Ensuring known agent integrations/, "--help must not install agent integrations");
 });
 
 test("`bivy run --help` (no agent) shows bivy's own help, not an agent's", () => {

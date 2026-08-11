@@ -38,7 +38,7 @@ runtime.
 [charmbracelet/crush#1982](https://github.com/charmbracelet/crush/issues/1982)
 and [#1015](https://github.com/charmbracelet/crush/issues/1015). Every prompt
 runs as a fresh process. This will switch to a real resume once Crush ships
-one, via a data-only change (`resume.template` in `CLI_AGENT_SPECS`), or you
+one, via a data-only change (`resume.template` in `AGENT_PROFILES`), or you
 can wire a pre-release flag yourself now with `BIVY_CRUSH_RESUME_TEMPLATE`.
 
 ## Known gaps

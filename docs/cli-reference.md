@@ -142,13 +142,29 @@ bivy run -- npm run my-agent
 
 ### `bivy agents [--json]`
 
-Lists the built-in agent ids, their display names, whether the CLI is installed,
-and its resolved path. `--json` prints a machine-readable object.
+Lists known agent integrations, whether each upstream CLI is installed, and its
+resolved path. `--json` prints a machine-readable object.
 
 ```bash
 bivy agents
 bivy agents --json
 ```
+
+### `bivy agent <add|list|remove>`
+
+Connect an existing user-owned agent using the ordinary declarative package
+contract:
+
+```bash
+bivy agent add company-agent --command company-agent --transport acp --args '["serve","--acp"]'
+bivy agent add script-agent --command script-agent --transport process --prompt-mode stdin
+bivy agent list --json
+bivy agent remove company-agent
+```
+
+`add` never imports agent code into the daemon. ACP and custom protocol logic run
+out of process; process adapters receive only the capabilities they explicitly
+declare and validate. Restart Bivy after add/remove.
 
 ### `bivy plugin <init|validate|doctor|test|install|list|remove>`
 
@@ -176,9 +192,11 @@ runs an installer. See [plugins.md](plugins.md).
 
 Alias: `bivy runtimes:install`.
 
-Installs the bundled agent runtimes: the Claude Agent SDK (into the Bivy
-install), and — as user-global npm/pip installs under `~/.local` — Claude Code,
-Codex, OpenCode, Aider, Hermes and Gemini CLI. Failures are non-fatal.
+Installs known upstream agent CLIs under the user's `~/.local` prefix: Pi,
+Claude Code, Codex, OpenCode, Aider, Hermes, and Gemini CLI. It also ensures any
+Bivy-side protocol bridge dependency is present. The agents remain upstream-owned
+commands with their own authentication, configuration, and sessions. Failures
+are non-fatal.
 
 Skipped entirely when `BIVY_SKIP_AGENT_PREINSTALL=1`.
 
@@ -500,8 +518,8 @@ carry the Bivy shim marker, then reconciles the managed `PATH` block.
 With no subcommand, prints the installed shims and whether each one currently
 wins on `PATH`.
 
-`pi` cannot be shimmed — it is Bivy's own built-in runtime, not a standalone
-binary.
+Pi is treated like every other upstream agent: `bivy shim install pi` wraps the
+operator-installed `pi` command and preserves non-TTY/headless passthrough.
 
 ```bash
 bivy shim install claude
@@ -735,7 +753,7 @@ bivy logs --lines 500
 
 ### `bivy update [--force|--no-wait] [--staging|--stable|--channel <name>]`
 
-Updates Bivy, reinstalls dependencies, installs bundled agents, and restarts the
+Updates Bivy, reinstalls dependencies, installs known upstream agents, and restarts the
 service. Waits for busy sessions first unless `--force`/`--no-wait`.
 
 **Release channel.** Update follows the channel recorded at install time — the

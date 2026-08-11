@@ -124,7 +124,7 @@ type AgentExecutionSpec = {
 };
 ```
 
-In practice this should extend the existing data-driven `CLI_AGENT_SPECS` and
+In practice this should extend the existing data-driven `AGENT_PROFILES` and
 `ProcessRuntimeOptions`, rather than introduce a second agent registry. The
 existing fields for `parser`, `promptMode`, resume templates, model flags,
 ACP promotion, and capability probing already cover much of this contract.
@@ -286,7 +286,7 @@ RSS and CPU for most sessions. We should measure before promising a percentage.
 | Users expect every remote session to have a terminal | Label pipe sessions as chat; keep `bivy run` for terminal access. |
 | Protocol handshake fails after process launch | Timeout, terminate the child process group, then use configured fallback. |
 | Different modes expose different governance | Surface capabilities; never advertise per-tool approval for plain pipes. |
-| More catalog complexity | Extend existing `CLI_AGENT_SPECS`; do not create per-mode registries. |
+| More catalog complexity | Extend existing `AGENT_PROFILES`; do not create per-mode registries. |
 | PTY savings are smaller than expected | Add subtree metrics and output-rate measurements before/after rollout. |
 
 ## Testing and rollout

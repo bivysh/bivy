@@ -1,80 +1,59 @@
 # Claude Code
 
-Anthropic's Claude Agent SDK, driven as a Bivy runtime: streaming turns, model
-picker, and tool approvals via the SDK's `canUseTool` permission callback.
+Bivy connects to the operator-installed Claude Code agent through Anthropic's
+SDK protocol bridge. The bridge is isolated under `src/agents/claude-code/` and
+sets `pathToClaudeCodeExecutable` explicitly, so the SDK cannot silently use its
+bundled fallback agent.
 
-- **Runtime id:** `claude-code-sdk` · **Tier:** Supported · **In picker:** Yes
+- **Runtime id:** `claude-code-sdk` (aliases `claude`, `claude-code`)
+- **Tier:** Supported · **In picker:** Yes
 
 ## Install
 
-The SDK is an optional dependency of Bivy, not the agent picker's default:
-
 ```bash
-npm install @anthropic-ai/claude-agent-sdk
+npm install -g @anthropic-ai/claude-code
+# or
+bivy agents:install
 ```
 
-Until it's installed, this runtime shows as "planned" in the catalog.
-Separately, if you also want the native `claude` CLI's own terminal UI
-available for hand-off (see below), install and put that CLI on `PATH`
-yourself — Bivy only detects whether it's there, it doesn't install it.
+The Bivy distribution carries the SDK as protocol glue, but availability depends
+on the real `claude` command being present. Set `BIVY_CLAUDE_COMMAND` to an
+explicit command/path on managed nodes.
 
-## Authentication
+## Authentication and configuration
 
-**Auth owner: mixed.** Bivy's shared vault covers the SDK path; the standalone
-`claude` CLI, if you use it, owns its own login.
+**Auth owner: Claude Code.** Sign in and configure the native agent normally:
 
-- **Bivy vault (recommended):** sign in to Anthropic once and Bivy injects it
-  into the SDK subprocess — an OAuth (Claude Pro/Max) credential as
-  `CLAUDE_CODE_OAUTH_TOKEN`, or an API key as `ANTHROPIC_API_KEY`.
+```bash
+claude
+/login
+```
 
-  ```bash
-  bivy login anthropic
-  ```
-
-- **Native CLI login:** if you run `claude` directly (e.g. for the interactive
-  TUI hand-off), it can also sign in itself:
-
-  ```bash
-  claude    # then /login inside the CLI if it doesn't prompt automatically
-  ```
-
-If neither is configured, the first turn fails fast with an actionable message
-instead of an opaque 401.
+The integration deliberately does not inject Bivy's Anthropic credential over
+Claude Code's own login. It reuses the CLI's existing configuration, projects,
+plugins, hooks, MCP configuration, sessions, and subscription/API credentials.
 
 ## Models
 
-Comes from the live SDK query (`supportedModels()`) once a session is running.
-Before that, the picker shows the known Claude Pro/Max lineup: Opus 4.8, Sonnet
-5, Haiku 4.5. Set a session default with:
+Models come from the live SDK connection (`supportedModels()`) once a session is
+running. Before that, the picker shows a bounded fallback list. Set an optional
+session default with:
 
-```
+```bash
 BIVY_CLAUDE_MODEL=claude-opus-4-8
 ```
 
-## Resume
+## Resume and governance
 
-Yes, and it also forks: sessions are addressed by Claude's own session id, and
-the same on-disk transcript (`~/.claude/projects/<cwd>/<id>.jsonl`) is shared
-with the standalone `claude` CLI, so `claude --resume <id>` reopens the exact
-conversation started in Bivy. Fork/export to another node reconstructs that
-transcript under a fresh id.
-
-One caveat: resumed history is replayed by the agent on its next turn rather
-than preloaded — the transcript shows immediately, but the model doesn't "see"
-it again until you send a message.
-
-## Known gaps
-
-- The interactive TUI hand-off only appears when the standalone `claude`
-  binary is separately on `PATH` — the npm SDK package alone doesn't provide
-  it.
-- Package installs (`capabilities.packages`) are not supported through this
-  runtime.
+Sessions use Claude Code's native session ids and `~/.claude/projects` store, so
+`claude --resume <id>` opens the same conversation. Structured tool requests pass
+through Bivy's policy/approval callback, while the selected access tier maps to
+Claude Code's native permission mode. The bridge also preserves streaming,
+usage, model selection, native session discovery/adoption, and attach-to-chat.
 
 ## Run it
 
-Pick Claude Code in the agent picker, or:
-
 ```bash
 bivy run claude
+bivy shim install claude   # optional transparent terminal interception
 ```

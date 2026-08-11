@@ -70,6 +70,6 @@ The `bivy` CLI resolves `secret://`, `op://`, and `env://` values before startin
 
 ## Known limitations
 
-- Model-provider credentials are still primarily Pi-owned in `.bivy/pi/auth.json`; Bivy can inject `op://`/`env://` values through process env, but Pi's own auth file has not been replaced by the Bivy vault.
+- The default Pi and Claude Code integrations intentionally use each upstream agent's own credential/configuration store (`~/.pi/agent`, `~/.claude`). Bivy's encrypted vault remains available to integrations that explicitly opt into shared model credentials; it is not injected over an agent-owned login by default.
 - The encrypted local vault protects against accidental plaintext sprawl, not against a fully compromised user account: the local wrapping key lives on the same machine.
 - OS keychain backends are not yet implemented. Prefer 1Password references when you need synced/managed secrets.

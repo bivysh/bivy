@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { makeRuntime, listRuntimes, invalidateCliProbeCache, RUNTIME_CATALOG } from "../src/runtime/index.js";
+import { makeRuntime, listRegisteredAgents, listRuntimes, invalidateCliProbeCache } from "../src/runtime/index.js";
 import type { RuntimeEvent } from "../src/runtime/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -39,7 +39,7 @@ async function check(name: string, fn: () => Promise<void>) {
 
 // The `acp` runtime is a hidden catalog entry (opt-in via env), not in the picker.
 await check("acp: catalog entry exists but stays out of the picker until configured", () => {
-  assert.ok(RUNTIME_CATALOG.some((r) => r.id === "acp"), "acp must be in the catalog");
+  assert.ok(listRegisteredAgents().some((r) => r.id === "acp"), "acp must be in the registry");
   assert.ok(!listRuntimes().some((r) => r.id === "acp"), "acp must be hidden from the picker (opt-in)");
 });
 

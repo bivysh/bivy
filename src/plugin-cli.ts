@@ -5,11 +5,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { currentBivyVersion } from "./app-version.js";
 import { defaultDataDir } from "./data-dir.js";
 import { checkPluginCompatibility, doctorPluginManifest, recommendedBivyRange, type PluginManifest } from "./plugin-sdk/index.js";
-import { installPlugin, installedAgentContributions, listInstalledPlugins, pluginStoreDir, readPluginManifest, removePlugin } from "./plugins/store.js";
+import { installPlugin, listInstalledPlugins, pluginStoreDir, readPluginManifest, removePlugin } from "./plugins/store.js";
 
 function usage(exitCode = 0): never {
   console.log(`Usage: bivy plugin <command> [options]
@@ -56,32 +55,6 @@ function positionalArgs(args: string[]): string[] {
     if (!arg.startsWith("-")) out.push(arg);
   }
   return out;
-}
-
-function agentConflictDiagnostics(dataDir: string): string[] {
-  const installed = installedAgentContributions(dataDir);
-  const errors = [...installed.errors];
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const reserved = new Set<string>([
-    "pi", "claude", "claude-code", "claude-code-sdk", "generic-cli", "codex-approvals",
-    "openclaw", "bivy-agent-protocol", "acp", "openhands", "swe-agent",
-    "openai-agents-sdk", "langgraph", "google-adk", "autogen", "crew-ai",
-  ]);
-  try {
-    const builtins = JSON.parse(fs.readFileSync(path.join(root, "bin", "agent-manifest.json"), "utf8"));
-    for (const agent of builtins?.agents ?? []) if (typeof agent?.id === "string") reserved.add(agent.id);
-  } catch { /* diagnosed by `bivy agents`; retain native ids */ }
-  const configured = new Set<string>();
-  try {
-    const custom = JSON.parse(process.env.BIVY_CUSTOM_AGENTS ?? "[]");
-    for (const agent of Array.isArray(custom) ? custom : []) if (typeof agent?.id === "string") configured.add(agent.id.toLowerCase());
-  } catch { /* diagnosed by config validation */ }
-  for (const contribution of installed.agents) {
-    const id = contribution.agent.id;
-    if (reserved.has(id)) errors.push(`${contribution.pluginId}: agent id ${id} conflicts with a built-in runtime`);
-    else if (configured.has(id)) errors.push(`${contribution.pluginId}: agent id ${id} conflicts with node configuration`);
-  }
-  return errors;
 }
 
 function fail(error: unknown, json: boolean): never {
@@ -269,7 +242,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 
     if (command === "list" || command === "ls") {
       const plugins = listInstalledPlugins(dataDir);
-      const conflicts = agentConflictDiagnostics(dataDir);
+      const runtimeModule = await import("./runtime/index.js");
+      const conflicts = runtimeModule.pluginAgentConflictDiagnostics(dataDir);
       const body = {
         ok: conflicts.length === 0 && plugins.every((plugin) => plugin.errors.length === 0),
         directory: pluginStoreDir(dataDir),

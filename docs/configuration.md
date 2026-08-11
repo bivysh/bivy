@@ -219,7 +219,7 @@ These apply to the CLI-driven agents: `codex`, `opencode`, `aider`, `hermes`,
 
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
-| `BIVY_<ID>_ARGS` | JSON string array | the built-in spec's args | Supported | Corrects a CLI's flags for a version Bivy hasn't pinned. Malformed JSON is ignored |
+| `BIVY_<ID>_ARGS` | JSON string array | the integration profile's args | Supported | Corrects a CLI's flags for a version Bivy hasn't pinned. Malformed JSON is ignored |
 | `BIVY_<ID>_RESUME_TEMPLATE` | JSON string array | the spec's template, if any | Supported | Resume args. `{id}`, `{tier}` and a whole-token `{sandbox}` are substituted |
 | `BIVY_<ID>_MODELS` | JSON array of `{id,name?,provider?}` (or bare strings) | the spec's curated list | Supported | Selectable models |
 | `BIVY_<ID>_THINKING` | JSON `{levels[],template[],insertAt?,default?}` | the spec's setting | Supported (advanced) | Reasoning-effort flags. Requires both `levels` and `template` or it is ignored |
@@ -228,10 +228,14 @@ These apply to the CLI-driven agents: `codex`, `opencode`, `aider`, `hermes`,
 
 `BIVY_CUSTOM_AGENTS` registers reusable agents in both the web picker and
 `bivy run`. Its value is a JSON array. Each entry requires a unique lowercase
-`id` and an `extends` value naming a built-in CLI agent; it may override
+`id` and an `extends` value naming a maintained agent profile; it may override
 `label`, `command`, `args`, `jsonArgs`, `parserId`, `promptMode`, and `hidden`.
 Custom agents inherit the base agent's execution behavior and always appear as
-experimental/unverified. Invalid entries are ignored without affecting built-ins.
+experimental/unverified. Invalid entries are ignored without affecting packaged integrations.
+
+For a new agent that does not inherit an existing profile, prefer `bivy agent
+add`: it generates the ordinary declarative integration manifest and supports
+any ACP or headless process agent without an `extends` relationship.
 
 ```sh
 export BIVY_CUSTOM_AGENTS='[{"id":"company-codex","label":"Company Codex","extends":"codex","command":"company-codex","args":["exec"]}]'
@@ -412,13 +416,14 @@ Off by default and inert — the in-process path is unchanged when it is off.
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
 | `BIVY_NPM_GLOBAL_PREFIX` | path | `~/.local` | Supported | Prefix for user-scoped global agent installs. `<prefix>/bin` is prepended to `PATH` for every agent and terminal child |
-| `BIVY_SKIP_AGENT_PREINSTALL` | `1` | unset | Supported | Skip installing bundled agents during setup/update. Useful in CI or offline |
+| `BIVY_SKIP_AGENT_PREINSTALL` | `1` | unset | Supported | Skip installing known upstream agents during setup/update. Useful in CI or offline |
 | `BIVY_UPDATE_WAIT_TIMEOUT_MS` | integer ms | `1800000` (30 min) | Supported | How long `bivy update`/`bivy restart` waits for busy sessions. `0` skips waiting |
 | `BIVY_SHIM_DISABLE` | `1`, or an agent name | unset | Supported | Bypass an installed agent shim for one invocation: `BIVY_SHIM_DISABLE=1 claude` |
 | `BIVY_DEBUG` | any non-empty | unset | Supported | Print stack traces from the CLI |
 | `BIVY_AGENT_<NAME>_COMMAND` / `BIVY_AGENT_<NAME>_ARGS` | command / JSON array | unset | Supported | Teaches `bivy run <name>` about an agent the CLI does not know. `<NAME>` is the agent id uppercased with non-alphanumerics replaced by `_`. A malformed `_ARGS` value is a hard error |
 | `BIVY_TSX` | path | the bundled `tsx` CLI | Escape hatch (packaging) | **Setting it to the empty string is meaningful** — packaged builds do that to drop `tsx` entirely |
-| `BIVY_NATIVE_PI` | path | `<asset-root>/src/native-pi.ts` | Escape hatch (packaging) | |
+| `BIVY_PI_COMMAND` | command/path | `pi` | Supported | Operator-installed Pi executable used for native TUI hand-off |
+| `BIVY_CLAUDE_COMMAND` | command/path | `claude` | Supported | Operator-installed Claude Code executable used by the SDK bridge |
 | `BIVY_PTY_RUNNER` | path | `<asset-root>/src/pty-runner.py`, else `dist/pty-runner.py` | Escape hatch (packaging) | |
 | `PYTHON` | command | `python3` | Supported | Interpreter for the PTY runner |
 | `BIVY_UPDATE_DETACHED` | `1` | unset | Internal | Re-exec marker set by `bivy update` when it detaches from a Bivy terminal |
@@ -550,7 +555,7 @@ Maintainer tooling. You do not need any of these to run Bivy.
 | `BIVY_HOME` | path | `$HOME/.bivy/app` | Supported — install destination |
 | `BIVY_VERSION` | npm version or dist-tag | `latest` | Supported — install a specific version, e.g. `0.1.0` |
 | `BIVY_NPM_PREFIX` | path | npm's global prefix | Supported — install into a user-owned prefix instead of needing sudo |
-| `BIVY_INSTALL_ALL_AGENTS` | `1` | unset | Supported — preinstall every bundled agent instead of just the one setup picks |
+| `BIVY_INSTALL_ALL_AGENTS` | `1` | unset | Supported — preinstall every known upstream agent instead of just the one setup picks |
 
 What `install.sh` does: installs prerequisites (including Node 22 via
 NodeSource on apt systems), downloads the tarball and manifest, verifies the

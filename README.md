@@ -62,7 +62,7 @@ Environment variables passed to the one-line installer change what it does:
 | Track the dev channel (new build on every merge to `main`) | `BIVY_CHANNEL=staging` |
 | Pin an exact version | `BIVY_VERSION=0.1.0` |
 | Install without sudo, into a user-owned prefix | `BIVY_NPM_PREFIX=~/.local` |
-| Preinstall every bundled agent runtime | `BIVY_INSTALL_ALL_AGENTS=1` |
+| Preinstall every known upstream agent | `BIVY_INSTALL_ALL_AGENTS=1` |
 
 For example: `BIVY_CHANNEL=staging curl -fsSL https://bivy.sh/install.sh | bash`.
 
@@ -146,8 +146,8 @@ the rest are explicitly Beta in the picker and support matrix:
 
 | Agent | Command | Notes |
 |---|---|---|
-| Pi | `bivy run pi` | Default; bundled |
-| Claude Code | `bivy run claude` | Bundled SDK |
+| Pi | `bivy run pi` | Uses the operator-installed `pi` command and Pi auth/config |
+| Claude Code | `bivy run claude` | Uses the operator-installed `claude` command through an SDK bridge |
 | Codex | `bivy run codex` | Installs `@openai/codex` |
 | OpenCode | `bivy run opencode` | Installs `opencode-ai` |
 | Gemini CLI | `bivy run gemini` | Installs `@google/gemini-cli` |
@@ -169,9 +169,10 @@ the rest are explicitly Beta in the picker and support matrix:
 Any other command works via `bivy run -- ./your-agent --flags`. ACP-capable
 agents can be promoted to Bivy's governed protocol path for per-tool approvals
 and native resume. To add a reusable process or ACP agent to both the CLI and web
-picker without changing Bivy, scaffold and install a declarative
-[plugin manifest](docs/plugins.md) with `bivy plugin init`; the plugin SDK,
-JSON Schema, diagnostics, and ACP conformance test support external authors.
+picker without changing Bivy, run `bivy agent add`, or scaffold and install a
+declarative [plugin manifest](docs/plugins.md) with `bivy plugin init`. Both use
+the same schema/store; the plugin SDK, diagnostics, and ACP conformance fixtures
+support distributable or custom protocol bridges.
 
 [`docs/runtime-support-matrix.md`](docs/runtime-support-matrix.md) lists exactly
 what each agent supports — resume, model selection, approvals, sandboxing.
@@ -186,7 +187,8 @@ bivy sessions         # list live and saved sessions
 bivy resume           # resume the most recent session
 bivy open             # open the web app (requires relay setup)
 bivy automation init  # create .bivy/automations.yaml
-bivy plugin list      # installed declarative agent plugins
+bivy agent add        # connect an existing ACP or process agent
+bivy plugin list      # installed declarative integration packages
 bivy status           # config summary and node reachability
 bivy doctor           # health check
 bivy logs -f          # tail node logs

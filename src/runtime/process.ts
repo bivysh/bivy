@@ -226,7 +226,7 @@ function splitArgs(value: string | undefined): string[] {
  * Generic resume primitive for the escape-hatch CLI runtime: `BIVY_AGENT_RESUME_
  * TEMPLATE` (a JSON arg array with an `{id}` placeholder for the agent's own
  * session ref) opts a hand-configured agent into the same data-driven resume path
- * the built-in CLI agents get from `CLI_AGENT_SPECS[id].resume` (see
+ * maintained process profiles get from `AGENT_PROFILES[id].resume` (see
  * src/runtime/index.ts) — purely as operator config, no code. Absent = a fresh
  * process per prompt, same as any other unconfigured CLI agent.
  */
