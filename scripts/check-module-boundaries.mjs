@@ -56,6 +56,13 @@ const RULES = [
     enforce: true,
     note: "controllers are imported BY server.ts; the dependency direction is server -> controller only (Phase 2).",
   },
+  {
+    name: "protocol-is-a-pure-contract",
+    dir: "src/protocol",
+    forbid: ["../server", "../runtime/", "../agents/", "../session/", "../credentials/", "../controllers/"],
+    enforce: true,
+    note: "the protocol layer is the wire contract — it may use typebox but imports no implementation; every transport/consumer depends on IT.",
+  },
 ];
 
 // Match the `from "spec"` clause of any import/export (including multi-line
