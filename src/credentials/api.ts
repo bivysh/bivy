@@ -19,7 +19,14 @@ import {
   defaultSyncFor,
   DEFAULT_LABEL,
   type CredentialRecord,
+  type CredentialPresets,
 } from "./records.js";
+import {
+  loadPresets,
+  defaultPresetsPath,
+  setActivePreset as setActivePresetFile,
+  setPresetMapping as setPresetMappingFile,
+} from "./presets.js";
 
 /** A model provider and whether the node currently holds a credential for it. */
 export interface ProviderAuthInfo {
@@ -246,6 +253,23 @@ export async function removeProviderCredential(credsDir: string, provider: strin
   const id = provider.trim().toLowerCase();
   if (!id) throw new Error("Provider is required");
   await createCredentialVault(credsDir).deleteRecord(id, label);
+}
+
+// --- selection presets (config-as-code, edited from the Models UI) ----------
+
+/** The node's current selection presets (`active` + named provider→label maps). */
+export function getCredentialPresets(credsDir: string): CredentialPresets {
+  return loadPresets(defaultPresetsPath(credsDir));
+}
+
+/** Set (or clear) which preset selection resolves against by default. */
+export function setActiveCredentialPreset(credsDir: string, active: string | undefined): void {
+  setActivePresetFile(defaultPresetsPath(credsDir), active);
+}
+
+/** Point a provider at a label within a preset (empty label clears the mapping). */
+export function setCredentialPresetMapping(credsDir: string, preset: string, provider: string, label: string | undefined): void {
+  setPresetMappingFile(defaultPresetsPath(credsDir), preset, provider, label);
 }
 
 /** Set a labeled credential's sync tier — the per-credential opt-out toggle. */

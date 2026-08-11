@@ -65,6 +65,11 @@ export interface Command extends CommandBase {
     | "credential.set"
     | "credential.remove"
     | "credential.sync.set"
+    // Selection presets (which labeled credential a project uses).
+    // `credentials.presets.get` replies with `credentials.presets`.
+    | "credentials.presets.get"
+    | "credentials.presets.setActive"
+    | "credentials.presets.setMapping"
     | "models.custom.list"
     | "models.custom.presets"
     | "models.custom.save"
@@ -127,6 +132,16 @@ export interface CredentialRecordSummary {
   expiresAt?: number;
   /** The non-secret pointer, when `kind === "reference"`. */
   ref?: string;
+}
+
+/**
+ * Selection presets as the Models screen sees them. `active` is the preset
+ * selection resolves against; `presets` maps a preset name to `provider → label`.
+ * Carried in the `credentials.presets` event.
+ */
+export interface CredentialPresetsView {
+  active?: string;
+  presets?: Record<string, Record<string, string>>;
 }
 
 /**

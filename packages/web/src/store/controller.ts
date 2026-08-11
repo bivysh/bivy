@@ -2136,6 +2136,18 @@ export class AppController {
   setCredentialSync(provider: string, label: string, sync: "account" | "node"): void {
     this.send({ kind: "credential.sync.set", provider, label, sync });
   }
+  /** Ask for the selection presets; the node replies with `credentials.presets`. */
+  getCredentialPresets(): void {
+    this.send({ kind: "credentials.presets.get" });
+  }
+  /** Choose which preset selection resolves against (empty clears it). */
+  setActivePreset(active: string): void {
+    this.send({ kind: "credentials.presets.setActive", active });
+  }
+  /** Point a provider at a label within a preset (empty label clears the mapping). */
+  setPresetMapping(preset: string, provider: string, label: string): void {
+    this.send({ kind: "credentials.presets.setMapping", preset, provider, label });
+  }
 
   // --- Settings: local / custom model endpoints ---------------------------
 

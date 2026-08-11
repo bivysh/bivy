@@ -331,9 +331,11 @@ Each phase ships independently and leaves the app working.
    / `credential.remove` / `credential.sync.set`) wire the labeled API through server handlers →
    controller → store → the "Keys & OAuth" screen's `ProviderCredentials` UI: add/remove labeled
    accounts (API key or `op://`/`env://` reference) and toggle each credential's cross-node sync
-   (the opt-out). **Still pending (5c part 2):** the preset picker (choose which labeled credential
-   a project uses) — until then, a non-default credential is selected by editing
-   `credentials.config.json`.
+   (the opt-out). *(5c part 2 shipped: the preset picker.)* `credentials.presets.*` commands + a
+   `PresetBar` (choose/create the active preset) and a per-provider "in preset X, use <label>"
+   selector write `credentials.config.json` from the UI (preserving `ingest`), so selecting which
+   labeled key a project uses no longer needs hand-editing the file. Guarded by
+   `test/credential-presets-write.test.ts`.
 6. **Opt-out sync filter + record-addressed OAuth refresh.** *(part 1 shipped.)* The sync push now
    sends only account-tier credentials — `exportSyncable()` filters `sync:"node"`, so a credential
    the user opts node-local stays local (local reads still use `exportAll`). OAuth refresh is
