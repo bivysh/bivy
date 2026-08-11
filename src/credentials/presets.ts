@@ -104,3 +104,55 @@ export function loadIngestPolicy(filePath: string): IngestPolicy {
     return "merge";
   }
 }
+
+// --- writes (the Models UI / CLI edits the same config file) ----------------
+
+/** Read the raw config object, preserving unknown keys (e.g. `ingest`). */
+function readRawConfig(filePath: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Atomically write the config (0600), creating the directory if needed. */
+function writeRawConfig(filePath: string, config: Record<string, unknown>): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tmp, filePath);
+}
+
+/** Set (or clear, with an empty name) the active preset. Preserves other keys. */
+export function setActivePreset(filePath: string, active: string | undefined): void {
+  const config = readRawConfig(filePath);
+  const name = String(active ?? "").trim();
+  if (name) config.active = name;
+  else delete config.active;
+  writeRawConfig(filePath, config);
+}
+
+/**
+ * Within `preset`, map `provider` to `label` (an empty label clears it). Creates
+ * the preset if new; drops it when its last mapping is cleared. Preserves other keys.
+ */
+export function setPresetMapping(filePath: string, preset: string, provider: string, label: string | undefined): void {
+  const name = String(preset ?? "").trim();
+  const id = normalizeProvider(provider);
+  if (!name || !id) return;
+  const config = readRawConfig(filePath);
+  const rawPresets = config.presets;
+  const presets: Record<string, Record<string, string>> =
+    rawPresets && typeof rawPresets === "object" && !Array.isArray(rawPresets)
+      ? (rawPresets as Record<string, Record<string, string>>)
+      : {};
+  const mapping = { ...(presets[name] && typeof presets[name] === "object" ? presets[name] : {}) };
+  if (label && String(label).trim()) mapping[id] = normalizeLabel(label);
+  else delete mapping[id];
+  if (Object.keys(mapping).length) presets[name] = mapping;
+  else delete presets[name];
+  config.presets = presets;
+  writeRawConfig(filePath, config);
+}

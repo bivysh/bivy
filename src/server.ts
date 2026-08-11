@@ -40,7 +40,7 @@ import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionSource, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState, type SessionWorkspaceState } from "./session/session-state.js";
-import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, setProviderCredential, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync } from "./credentials/api.js";
+import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, setProviderCredential, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import {
   loadLocalModels,
@@ -2791,6 +2791,27 @@ const RELAY_COMMANDS: Record<string, Command> = {
       await setCredentialSync(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""), sync);
       await pushModelAuthToControlPlane();
       relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+    } catch (error) {
+      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async "credentials.presets.get"() {
+    relay?.sendEvent({ type: "credentials.presets", presets: getCredentialPresets(credsDir) });
+  },
+  async "credentials.presets.setActive"(msg) {
+    try {
+      setActiveCredentialPreset(credsDir, String(msg.active ?? ""));
+      await refreshSessionAfterAuth();
+      relay?.sendEvent({ type: "credentials.presets", presets: getCredentialPresets(credsDir) });
+    } catch (error) {
+      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async "credentials.presets.setMapping"(msg) {
+    try {
+      setCredentialPresetMapping(credsDir, String(msg.preset ?? ""), String(msg.provider ?? ""), String(msg.label ?? ""));
+      await refreshSessionAfterAuth();
+      relay?.sendEvent({ type: "credentials.presets", presets: getCredentialPresets(credsDir) });
     } catch (error) {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }

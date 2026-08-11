@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, CredentialRecordSummary, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, CredentialPresetsView, CredentialRecordSummary, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
@@ -549,14 +549,18 @@ function nodeProviderSummary(n: AccountNode): { text: string; expired: boolean }
 // keys, plus password-manager references. The single "API key" field above is the
 // provider's `default` credential; this manages the extra labeled ones and each
 // one's cross-node sync (the per-credential opt-out).
-function ProviderCredentials({ providerId, records }: { providerId: string; records: CredentialRecordSummary[] }) {
+function ProviderCredentials({ providerId, records, presets }: { providerId: string; records: CredentialRecordSummary[]; presets: CredentialPresetsView | null }) {
   const [label, setLabel] = useState("");
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const mine = records.filter((r) => r.provider === providerId);
   // The "default" credential is managed by the API-key/OAuth controls above; this
   // section is for the additional labeled accounts.
-  const extra = records.filter((r) => r.provider === providerId && r.label !== "default");
+  const extra = mine.filter((r) => r.label !== "default");
+  const activePreset = presets?.active ?? "";
+  const mappedLabel = activePreset ? presets?.presets?.[activePreset]?.[providerId] ?? "" : "";
+  const extraLabels = extra.map((r) => r.label);
 
   const add = async () => {
     const l = label.trim();
@@ -611,6 +615,59 @@ function ProviderCredentials({ providerId, records }: { providerId: string; reco
         </button>
       </div>
       {err && <div className="banner error inline">{err}</div>}
+      {activePreset && extraLabels.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <label className="field-label">In preset “{activePreset}”, use</label>
+          <select
+            className="picker-search"
+            value={mappedLabel}
+            onChange={(e) => controller.setPresetMapping(activePreset, providerId, e.target.value)}
+          >
+            <option value="">Default key</option>
+            {extraLabels.map((l) => (
+              <option key={l} value={l}>{l}</option>
+            ))}
+          </select>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The active-preset chooser at the top of Keys & OAuth. A preset picks which
+// labeled key each provider uses; per-provider mappings are set in each
+// provider's detail view (ProviderCredentials).
+function PresetBar({ presets }: { presets: CredentialPresetsView | null }) {
+  const [newName, setNewName] = useState("");
+  const names = Object.keys(presets?.presets ?? {});
+  const active = presets?.active ?? "";
+  // Nothing to choose from yet and no active preset → keep the screen simple.
+  if (names.length === 0 && !active) {
+    return (
+      <div className="preset-bar" style={{ marginBottom: 12 }}>
+        <label className="field-label">Preset (optional)</label>
+        <p className="muted small">Create a preset (e.g. “work”) to point providers at specific keys per project. Each provider’s default key is used until you do.</p>
+        <div className="row-actions" style={{ gap: 8 }}>
+          <input className="picker-search" placeholder="New preset name" value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <button className="btn" disabled={!newName.trim()} onClick={() => { controller.setActivePreset(newName.trim()); setNewName(""); }}>Create</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="preset-bar" style={{ marginBottom: 12 }}>
+      <label className="field-label">Active preset</label>
+      <p className="muted small">Sessions resolve credentials against the active preset; a provider with no mapping uses its default key.</p>
+      <select className="picker-search" value={active} onChange={(e) => controller.setActivePreset(e.target.value)}>
+        <option value="">Default (each provider’s default key)</option>
+        {names.map((n) => (
+          <option key={n} value={n}>{n}</option>
+        ))}
+      </select>
+      <div className="row-actions" style={{ gap: 8, marginTop: 8 }}>
+        <input className="picker-search" placeholder="New preset name" value={newName} onChange={(e) => setNewName(e.target.value)} />
+        <button className="btn" disabled={!newName.trim()} onClick={() => { controller.setActivePreset(newName.trim()); setNewName(""); }}>Create &amp; activate</button>
+      </div>
     </div>
   );
 }
@@ -640,6 +697,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
   useEffect(() => {
     controller.listProviders();
     controller.listCredentialRecords();
+    controller.getCredentialPresets();
     // Pull the node list (with each node's plaintext OAuth summary) so the
     // switcher can describe every node's login state up front.
     if (hosted) void controller.refreshNodes();
@@ -650,6 +708,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
   useEffect(() => {
     setManagingId(null);
     controller.listCredentialRecords();
+    controller.getCredentialPresets();
   }, [currentNodeId]);
 
   const pickNode = (id: string) => {
@@ -767,7 +826,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
             )}
           </>
         )}
-        <ProviderCredentials providerId={managing.id} records={state.credentialRecords} />
+        <ProviderCredentials providerId={managing.id} records={state.credentialRecords} presets={state.credentialPresets} />
       </div>
     );
   }
@@ -810,6 +869,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
           <label className="field-label">Keys &amp; OAuth on {nodeLabel(nodes, currentNodeId)}</label>
         </>
       )}
+      {!switchingTo && <PresetBar presets={state.credentialPresets} />}
       {switchingTo ? (
         <p className="muted">Connecting to {nodeLabel(nodes, switchingTo)}…</p>
       ) : (

@@ -14,7 +14,7 @@
 // reproduced here yet — see packages/web/STATUS.md. They are refinements over
 // this correct baseline, not prerequisites for it.
 
-import type { AttachmentRef, ConnectionStatus, CredentialRecordSummary, PromptAttachment, ServerEvent } from "./protocol.js";
+import type { AttachmentRef, ConnectionStatus, CredentialPresetsView, CredentialRecordSummary, PromptAttachment, ServerEvent } from "./protocol.js";
 import type { AccountNode, EphemeralNodeConfig } from "./account.js";
 import type { InboxAdvert } from "./inbox.js";
 import { type SlashCommand } from "./slash.js";
@@ -719,6 +719,8 @@ export interface AppState {
   providerAuth: ProviderAuth | null;
   /** Labeled credentials per provider (Settings → Keys & OAuth), from `credentials.records`. */
   credentialRecords: CredentialRecordSummary[];
+  /** Selection presets (which labeled credential a project uses), from `credentials.presets`. */
+  credentialPresets: CredentialPresetsView | null;
   /** User-provided / local model endpoints (Settings → Local models). */
   localModels: LocalModelProvider[];
   /** Quick-add presets for common local inference servers. */
@@ -891,6 +893,7 @@ export function initialState(): AppState {
     providers: [],
     providerAuth: null,
     credentialRecords: [],
+    credentialPresets: null,
     localModels: [],
     localModelPresets: [],
     rulesets: [],
@@ -2815,6 +2818,11 @@ export class SessionStore {
       case "credentials.records": {
         const e = event as any;
         this.set({ credentialRecords: Array.isArray(e.records) ? (e.records as CredentialRecordSummary[]) : [] });
+        return;
+      }
+      case "credentials.presets": {
+        const e = event as any;
+        this.set({ credentialPresets: (e.presets ?? {}) as CredentialPresetsView });
         return;
       }
       case "models.custom.list": {
