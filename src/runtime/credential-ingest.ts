@@ -14,6 +14,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createCredentialVault, type StoredCredential } from "./credential-store.js";
+import { agentNativeLabel, type CredentialRecord } from "../credentials/records.js";
+import { loadIngestPolicy, defaultPresetsPath } from "../credentials/presets.js";
 import { resolveCodexHome } from "./codex-auth.js";
 import { grokAuthEntryKey, resolveGrokHome, GROK_OIDC_ISSUER } from "./grok-auth.js";
 import { claudeCredentialFiles } from "./anthropic-preflight.js";
@@ -29,6 +31,35 @@ function jwtExpiryMs(token: string): number | undefined {
   } catch {
     return undefined;
   }
+}
+
+type MappedCredential = { providerId: string; credential: StoredCredential };
+
+/**
+ * Fold one mapped agent-native login into the vault per the node's ingest policy
+ * (`credentials.config.json` → `ingest.policy`; default `merge`):
+ *  - `merge`: merge into the provider's `default` slot (historical behavior) — a
+ *    native login updates the provider's synced Bivy credential, rotation-safe.
+ *  - `separate`: land as a distinct, node-local credential under a reserved
+ *    agent-derived label (with the account id when the login carries one), so it
+ *    never overwrites a Bivy key and is selectable via a preset.
+ */
+async function foldIngested(credsDir: string, agent: string, mapped: MappedCredential): Promise<number> {
+  const store = createCredentialVault(credsDir);
+  const policy = loadIngestPolicy(defaultPresetsPath(credsDir));
+  if (policy !== "separate") {
+    return store.importAll({ [mapped.providerId]: mapped.credential });
+  }
+  const rawAccount = (mapped.credential as Record<string, unknown>).accountId;
+  const accountId = typeof rawAccount === "string" ? rawAccount : undefined;
+  const record: CredentialRecord = {
+    provider: mapped.providerId,
+    label: agentNativeLabel(agent, accountId),
+    source: { kind: "stored", cred: mapped.credential },
+    origin: "agent-native",
+    sync: "node",
+  };
+  return store.importRecords([record]);
 }
 
 /** Map Codex's `~/.codex/auth.json` into a Bivy credential (provider id → credential). */
@@ -62,7 +93,7 @@ export async function ingestCodexCredentials(credsDir: string): Promise<number> 
   }
   const mapped = codexAuthToCredential(raw);
   if (!mapped) return 0;
-  return createCredentialVault(credsDir).importAll({ [mapped.providerId]: mapped.credential });
+  return foldIngested(credsDir, "codex", mapped);
 }
 
 /** Map the Claude CLI's `.credentials.json` (`claudeAiOauth`) into a Bivy credential. */
@@ -87,7 +118,7 @@ export async function ingestClaudeCredentials(credsDir: string): Promise<number>
       continue; // not this path (or macOS Keychain — no file to read)
     }
     const mapped = claudeAuthToCredential(raw);
-    if (mapped) return createCredentialVault(credsDir).importAll({ [mapped.providerId]: mapped.credential });
+    if (mapped) return foldIngested(credsDir, "claude", mapped);
   }
   return 0;
 }
@@ -131,7 +162,7 @@ export async function ingestGrokCredentials(credsDir: string): Promise<number> {
   }
   const mapped = grokAuthToCredential(raw);
   if (!mapped) return 0;
-  return createCredentialVault(credsDir).importAll({ [mapped.providerId]: mapped.credential });
+  return foldIngested(credsDir, "grok", mapped);
 }
 
 /**
