@@ -15,6 +15,7 @@ import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
+import { createWorkspaceController } from "./controllers/workspaces.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
@@ -1467,75 +1468,21 @@ function writeSettings(settings: Record<string, unknown>) {
   canonicalNodeConfig = next;
 }
 
-function resolveWorkspacePath(value: unknown): string {
-  const raw = String(value ?? "").trim();
-  if (!raw) throw new Error("Workspace path is required");
-  const expanded = raw.startsWith("~")
-    ? path.join(process.env.HOME ?? "", raw.slice(1))
-    : raw;
-  return path.resolve(expanded);
-}
-
-function validateWorkspace(value: unknown): string {
-  const resolved = resolveWorkspacePath(value);
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(resolved);
-  } catch {
-    throw new Error(`Workspace does not exist: ${resolved}`);
-  }
-  if (!stat.isDirectory()) throw new Error(`Workspace is not a directory: ${resolved}`);
-  return resolved;
-}
-
-function loadSavedWorkspaces(): string[] {
-  const settings = readSettings();
-  const list = [...metadata.listWorkspaces(), ...(Array.isArray(settings.workspaces) ? settings.workspaces : [])];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const item of list) {
-    const value = String(item ?? "").trim();
-    if (!value || seen.has(value)) continue;
-    seen.add(value);
-    out.push(value);
-  }
-  return out;
-}
-
-function saveWorkspaces(list: string[]) {
-  const settings = readSettings();
-  settings.workspaces = list;
-  writeSettings(settings);
-  for (const workspace of list) metadata.rememberWorkspace(workspace);
-}
-
-/** Record a workspace as most-recently-used. Best-effort; never throws. */
-function rememberWorkspace(workspace: string) {
-  try {
-    const resolved = path.resolve(workspace);
-    const list = loadSavedWorkspaces().filter((item) => item !== resolved);
-    list.unshift(resolved);
-    saveWorkspaces(list);
-  } catch {
-    // ignore persistence errors
-  }
-}
-
-function addSavedWorkspace(value: unknown): string[] {
-  const resolved = validateWorkspace(value);
-  const list = loadSavedWorkspaces().filter((item) => item !== resolved);
-  list.unshift(resolved);
-  saveWorkspaces(list);
-  return loadSavedWorkspaces();
-}
-
-function removeSavedWorkspace(value: unknown): string[] {
-  const resolved = resolveWorkspacePath(value);
-  const list = loadSavedWorkspaces().filter((item) => item !== resolved);
-  metadata.removeWorkspace(resolved);
-  saveWorkspaces(list);
-  return loadSavedWorkspaces();
-}
+// The saved-workspace list domain lives in its own controller (platform
+// modularization Phase 2). server.ts wires it with the settings accessors and
+// metadata store, then keeps the bare helper names so the workspaces.list
+// handler and the REST /api/workspaces routes are unchanged. readSettings /
+// writeSettings are hoisted function declarations and metadata is defined above,
+// so instantiating here is safe.
+const {
+  resolveWorkspacePath,
+  validateWorkspace,
+  loadSavedWorkspaces,
+  saveWorkspaces,
+  rememberWorkspace,
+  addSavedWorkspace,
+  removeSavedWorkspace,
+} = createWorkspaceController({ readSettings, writeSettings, metadata });
 
 function saveApprovalMode(mode: ApprovalMode) {
   const settings = readSettings();
