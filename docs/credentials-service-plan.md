@@ -326,8 +326,14 @@ Each phase ships independently and leaves the app working.
    by `test/credential-ingest-policy.test.ts`. *(5d shipped: rename + catalog injection.)*
    `runtime/pi-auth.ts` moved to `src/credentials/api.ts` and is now **Pi-free** — the provider
    catalog is injected (`joinProviderCatalog(credsDir, catalog)`); the thin
-   `runtime/provider-catalog.ts` bridge supplies Pi's `listProviders`. **Still pending:** the PWA
-   Models screen (labels + preset picker).
+   `runtime/provider-catalog.ts` bridge supplies Pi's `listProviders`. *(5c part 1 shipped: the
+   Models-screen credential management.)* New protocol commands (`credentials.list` / `credential.set`
+   / `credential.remove` / `credential.sync.set`) wire the labeled API through server handlers →
+   controller → store → the "Keys & OAuth" screen's `ProviderCredentials` UI: add/remove labeled
+   accounts (API key or `op://`/`env://` reference) and toggle each credential's cross-node sync
+   (the opt-out). **Still pending (5c part 2):** the preset picker (choose which labeled credential
+   a project uses) — until then, a non-default credential is selected by editing
+   `credentials.config.json`.
 6. **Opt-out sync filter + record-addressed OAuth refresh.** *(part 1 shipped.)* The sync push now
    sends only account-tier credentials — `exportSyncable()` filters `sync:"node"`, so a credential
    the user opts node-local stays local (local reads still use `exportAll`). OAuth refresh is

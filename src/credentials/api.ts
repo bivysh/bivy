@@ -247,3 +247,18 @@ export async function removeProviderCredential(credsDir: string, provider: strin
   if (!id) throw new Error("Provider is required");
   await createCredentialVault(credsDir).deleteRecord(id, label);
 }
+
+/** Set a labeled credential's sync tier — the per-credential opt-out toggle. */
+export async function setCredentialSync(
+  credsDir: string,
+  provider: string,
+  label: string,
+  sync: "account" | "node",
+): Promise<void> {
+  const id = provider.trim().toLowerCase();
+  if (!id) throw new Error("Provider is required");
+  const store = createCredentialVault(credsDir);
+  const existing = await store.readRecord(id, label);
+  if (!existing) throw new Error(`No credential for ${id}:${normalizeLabel(label)}`);
+  await store.putRecord({ ...existing, sync });
+}

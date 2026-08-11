@@ -14,7 +14,7 @@
 // reproduced here yet — see packages/web/STATUS.md. They are refinements over
 // this correct baseline, not prerequisites for it.
 
-import type { AttachmentRef, ConnectionStatus, PromptAttachment, ServerEvent } from "./protocol.js";
+import type { AttachmentRef, ConnectionStatus, CredentialRecordSummary, PromptAttachment, ServerEvent } from "./protocol.js";
 import type { AccountNode, EphemeralNodeConfig } from "./account.js";
 import type { InboxAdvert } from "./inbox.js";
 import { type SlashCommand } from "./slash.js";
@@ -717,6 +717,8 @@ export interface AppState {
   nodeSettings: NodeSettings | null;
   providers: ProviderInfo[];
   providerAuth: ProviderAuth | null;
+  /** Labeled credentials per provider (Settings → Keys & OAuth), from `credentials.records`. */
+  credentialRecords: CredentialRecordSummary[];
   /** User-provided / local model endpoints (Settings → Local models). */
   localModels: LocalModelProvider[];
   /** Quick-add presets for common local inference servers. */
@@ -888,6 +890,7 @@ export function initialState(): AppState {
     nodeSettings: null,
     providers: [],
     providerAuth: null,
+    credentialRecords: [],
     localModels: [],
     localModelPresets: [],
     rulesets: [],
@@ -2807,6 +2810,11 @@ export class SessionStore {
       }
       case "provider.auth": {
         this.set({ providerAuth: event as unknown as ProviderAuth });
+        return;
+      }
+      case "credentials.records": {
+        const e = event as any;
+        this.set({ credentialRecords: Array.isArray(e.records) ? (e.records as CredentialRecordSummary[]) : [] });
         return;
       }
       case "models.custom.list": {

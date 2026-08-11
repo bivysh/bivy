@@ -2119,6 +2119,24 @@ export class AppController {
     this.send({ kind: "provider.oauth.code", id, code });
   }
 
+  // --- Settings: multiple credentials per provider (labeled) --------------
+  /** Ask for every labeled credential; the node replies with `credentials.records`. */
+  listCredentialRecords(): void {
+    this.send({ kind: "credentials.list" });
+  }
+  /** Add/replace a labeled credential — an API key, or an op://…/env://… reference. */
+  setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> {
+    return this.awaitAck({ kind: "credential.set", provider, label, ...value }).then(() => undefined);
+  }
+  /** Forget one labeled credential (`provider:label`). */
+  removeCredential(provider: string, label: string): void {
+    this.send({ kind: "credential.remove", provider, label });
+  }
+  /** Toggle whether a credential syncs across your nodes or stays on this one. */
+  setCredentialSync(provider: string, label: string, sync: "account" | "node"): void {
+    this.send({ kind: "credential.sync.set", provider, label, sync });
+  }
+
   // --- Settings: local / custom model endpoints ---------------------------
 
   listLocalModels(): void {

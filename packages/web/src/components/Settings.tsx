@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, CredentialRecordSummary, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
@@ -545,6 +545,76 @@ function nodeProviderSummary(n: AccountNode): { text: string; expired: boolean }
   return { text: parts.join(" · "), expired: expired.length > 0 };
 }
 
+// Multiple labeled credentials for one provider — work / personal / per-project
+// keys, plus password-manager references. The single "API key" field above is the
+// provider's `default` credential; this manages the extra labeled ones and each
+// one's cross-node sync (the per-credential opt-out).
+function ProviderCredentials({ providerId, records }: { providerId: string; records: CredentialRecordSummary[] }) {
+  const [label, setLabel] = useState("");
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  // The "default" credential is managed by the API-key/OAuth controls above; this
+  // section is for the additional labeled accounts.
+  const extra = records.filter((r) => r.provider === providerId && r.label !== "default");
+
+  const add = async () => {
+    const l = label.trim();
+    const v = value.trim();
+    if (!l || !v) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const isRef = v.startsWith("op://") || v.startsWith("env://");
+      await controller.setCredential(providerId, l, isRef ? { ref: v } : { key: v });
+      setLabel("");
+      setValue("");
+      controller.listCredentialRecords();
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="cred-section" style={{ marginTop: 20, borderTop: "1px solid var(--border, #333)", paddingTop: 16 }}>
+      <label className="field-label">Additional accounts</label>
+      <p className="muted small">Add work / personal or per-project keys. Paste an API key, or an <code>op://…</code> / <code>env://NAME</code> reference (resolved on this node; the secret never leaves your manager).</p>
+      {extra.length > 0 && (
+        <div className="picker-list">
+          {extra.map((r) => (
+            <div key={r.label} className="cred-row" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
+              <span style={{ fontWeight: 600 }}>{r.label}</span>
+              <span className="chip">{r.kind === "reference" ? "reference" : r.kind === "oauth" ? "OAuth" : "API key"}</span>
+              {r.origin === "agent-native" && <span className="chip">from agent</span>}
+              <span style={{ flex: 1 }} />
+              <button
+                className="link-btn"
+                title={r.sync === "account" ? "Syncs to your other nodes — tap to keep on this node only" : "Stays on this node — tap to sync across your nodes"}
+                onClick={() => controller.setCredentialSync(providerId, r.label, r.sync === "account" ? "node" : "account")}
+              >
+                {r.sync === "account" ? "Syncing" : "This node only"}
+              </button>
+              <button className="link-btn danger" onClick={() => { controller.removeCredential(providerId, r.label); setTimeout(() => controller.listCredentialRecords(), 400); }}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <input className="picker-search" placeholder="Label (e.g. work)" value={label} onChange={(e) => setLabel(e.target.value)} />
+      <input className="picker-search" type="password" placeholder="API key, or op://… / env://NAME" value={value} onChange={(e) => setValue(e.target.value)} />
+      <div className="row-actions">
+        <button className="btn" disabled={!label.trim() || !value.trim() || busy} onClick={add}>
+          {busy ? "Adding…" : "Add account"}
+        </button>
+      </div>
+      {err && <div className="banner error inline">{err}</div>}
+    </div>
+  );
+}
+
 function ProvidersPanel({ state }: { state: AppState }) {
   // Holds just the id, not a snapshot of the ProviderInfo object: `managing`
   // below is re-derived from live `state.providers` every render instead, so
@@ -569,6 +639,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
   useEffect(() => {
     controller.listProviders();
+    controller.listCredentialRecords();
     // Pull the node list (with each node's plaintext OAuth summary) so the
     // switcher can describe every node's login state up front.
     if (hosted) void controller.refreshNodes();
@@ -578,6 +649,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
   // the list rather than leaving a stale provider's detail on screen.
   useEffect(() => {
     setManagingId(null);
+    controller.listCredentialRecords();
   }, [currentNodeId]);
 
   const pickNode = (id: string) => {
@@ -695,6 +767,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
             )}
           </>
         )}
+        <ProviderCredentials providerId={managing.id} records={state.credentialRecords} />
       </div>
     );
   }

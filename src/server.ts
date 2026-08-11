@@ -40,7 +40,7 @@ import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionSource, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState, type SessionWorkspaceState } from "./session/session-state.js";
-import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, setProviderCredential } from "./credentials/api.js";
+import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, setProviderCredential, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import {
   loadLocalModels,
@@ -2748,6 +2748,49 @@ const RELAY_COMMANDS: Record<string, Command> = {
       await pushModelAuthToControlPlane();
       await refreshSessionAfterAuth();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
+    } catch (error) {
+      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  // --- Multiple credentials per provider (labeled). ----------------------
+  async "credentials.list"() {
+    relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+  },
+  async "credential.set"(msg, ctx) {
+    try {
+      const provider = String(msg.provider ?? "").trim().toLowerCase();
+      const label = String(msg.label ?? "");
+      const ref = typeof msg.ref === "string" ? msg.ref.trim() : "";
+      if (ref) await setProviderReferenceLabeled(credsDir, provider, label, ref);
+      else await setProviderApiKeyLabeled(credsDir, provider, label, String(msg.key ?? ""));
+      await pushModelAuthToControlPlane();
+      await refreshSessionAfterAuth();
+      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+      broadcast({ type: "providers.list", providers: await listProvidersUnified() });
+      ctx.reply({ type: "credential.set.ok", requestId: msg.requestId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      relay?.sendEvent({ type: "session.error", error: message });
+      ctx.reply({ type: "credential.set.error", requestId: msg.requestId, error: message });
+    }
+  },
+  async "credential.remove"(msg) {
+    try {
+      await removeProviderCredential(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""));
+      await pushModelAuthToControlPlane();
+      await refreshSessionAfterAuth();
+      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+      broadcast({ type: "providers.list", providers: await listProvidersUnified() });
+    } catch (error) {
+      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async "credential.sync.set"(msg) {
+    try {
+      const sync = msg.sync === "node" ? "node" : "account";
+      await setCredentialSync(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""), sync);
+      await pushModelAuthToControlPlane();
+      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
     } catch (error) {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
