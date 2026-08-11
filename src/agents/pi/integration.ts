@@ -81,7 +81,10 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
     },
     create: (options) => {
       if (!piCommandAvailable()) throw new Error(`Pi command not found on PATH: ${piCommand()}`);
-      return new PiRuntime({ ...options, piDir: piAgentDir(), credentialOwner: "agent" });
+      // Vault-backed credentials (see catalogRuntimes): the daemon-hosted Pi
+      // session reads the shared vault the user signed in to, not Pi's own
+      // plaintext auth.json. The agent dir still supplies config/models/packages.
+      return new PiRuntime({ ...options, piDir: piAgentDir(), credentialOwner: "bivy" });
     },
     install: (prefix) => ({
       command: "npm",
