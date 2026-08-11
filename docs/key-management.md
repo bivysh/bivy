@@ -1,5 +1,9 @@
 # Bivy key management
 
+> For a task-oriented guide to model-provider credentials — multiple accounts per
+> provider, password-manager references, per-credential sync, and presets — see
+> [credentials-guide.md](credentials-guide.md).
+
 Bivy's credential boundary is that provider credentials stay on the node or in a vault you control. Bivy Cloud does not receive model API keys, GitHub repo tokens, OAuth refresh tokens, interactive session prompts, transcripts, or workspace files. Slack and generic webhook instructions have a separate, documented inbound-automation boundary; see [security-model.md](security-model.md#what-the-control-plane-sees).
 
 ## Current secret locations
