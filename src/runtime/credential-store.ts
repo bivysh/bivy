@@ -360,6 +360,82 @@ export class BivyCredentialStore {
     return Object.values(this.readDocument().credentials);
   }
 
+  /** Read one credential record by its `provider:label` identity. */
+  async readRecord(provider: string, label: string = DEFAULT_LABEL): Promise<CredentialRecord | undefined> {
+    const id = providerId(provider);
+    if (!id) return undefined;
+    return this.readDocument().credentials[credKey(id, label)];
+  }
+
+  /**
+   * Authoritatively upsert a record at its `provider:label` — the record-addressed
+   * write behind the multi-credential API (add/label a specific account). Stamps
+   * the store-owned `updatedAt` and clears any tombstone for that slot. Use
+   * `importRecords()` (merge) for ingest/sync, where a fresher local login must win.
+   */
+  async putRecord(record: CredentialRecord): Promise<void> {
+    const id = providerId(record.provider);
+    if (!id) throw new Error("Provider is required");
+    const label = normalizeLabel(record.label);
+    const key = credKey(id, label);
+    await this.enqueue(id, async () => {
+      await this.acquireLock();
+      try {
+        const document = this.readDocument();
+        document.credentials[key] = { ...record, provider: id, label, updatedAt: Date.now() };
+        delete document.deletedAt[key];
+        this.writeDocument(document);
+      } finally {
+        await this.releaseLock();
+      }
+    });
+  }
+
+  /** Forget one record by `provider:label`, leaving a tombstone for convergence. */
+  async deleteRecord(provider: string, label: string = DEFAULT_LABEL): Promise<void> {
+    const id = providerId(provider);
+    if (!id) return;
+    const key = credKey(id, label);
+    await this.enqueue(id, async () => {
+      await this.acquireLock();
+      try {
+        const document = this.readDocument();
+        const had = key in document.credentials;
+        delete document.credentials[key];
+        const deletedAt = Date.now();
+        if (!had && (document.deletedAt[key] ?? 0) >= deletedAt) return;
+        document.deletedAt[key] = deletedAt;
+        this.writeDocument(document);
+      } finally {
+        await this.releaseLock();
+      }
+    });
+  }
+
+  /**
+   * Merge record snapshots into the vault, record-addressed and non-destructive
+   * (freshest-OAuth-wins, rotation-safe, tombstone-newer-wins — see document.ts).
+   * This is the record-level counterpart to `importAll`, for agent-native ingest
+   * under reserved labels and (later) record-shaped cross-node sync. Returns the
+   * number of newly-added records.
+   */
+  async importRecords(
+    records: readonly CredentialRecord[],
+    deletedAt: Record<string, number> = {},
+  ): Promise<number> {
+    await this.acquireLock();
+    try {
+      const document = this.readDocument();
+      const incoming: Record<string, CredentialRecord> = {};
+      for (const record of records) incoming[credKey(record.provider, record.label)] = record;
+      const result = mergeDocuments(document, incoming, deletedAt);
+      if (result.changed) this.writeDocument(result.document);
+      return result.imported;
+    } finally {
+      await this.releaseLock();
+    }
+  }
+
   /** The plaintext `auth.json` path an agent's own CLI/TUI reads (`<plaintextDir>/auth.json`). */
   get legacyAuthPath(): string {
     return this.legacyFile;

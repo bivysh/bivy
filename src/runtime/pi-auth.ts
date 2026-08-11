@@ -10,7 +10,13 @@
 
 import { createCredentialVault, type StoredCredential } from "./credential-store.js";
 import { listPiProviders } from "./pi-oauth.js";
-import { inferReferenceBackend } from "../credentials/records.js";
+import {
+  inferReferenceBackend,
+  normalizeLabel,
+  defaultSyncFor,
+  DEFAULT_LABEL,
+  type CredentialRecord,
+} from "../credentials/records.js";
 
 /** A model provider and whether the node currently holds a credential for it. */
 export interface ProviderAuthInfo {
@@ -129,4 +135,85 @@ export async function removeProvider(credsDir: string, provider: string): Promis
   const id = provider.trim().toLowerCase();
   if (!id) throw new Error("Provider is required");
   await createCredentialVault(credsDir).delete(id);
+}
+
+// --- multi-credential API (labeled) -----------------------------------------
+// The record-addressed surface behind the Models UI: a provider can hold several
+// labeled credentials (work / personal / a per-project key). The single-credential
+// functions above are the label="default" special case of these.
+
+/** Non-secret summary of one credential record — what the Models UI enumerates. */
+export interface CredentialRecordSummary {
+  provider: string;
+  label: string;
+  kind: "api_key" | "oauth" | "reference";
+  sync: "account" | "node";
+  origin: "bivy" | "agent-native";
+  /** Epoch ms the OAuth access token expires, when `kind === "oauth"`. */
+  expiresAt?: number;
+  /** The non-secret pointer, when `kind === "reference"`. */
+  ref?: string;
+}
+
+/** Every stored credential as a non-secret summary (never exposes key material). */
+export async function listCredentialRecords(credsDir: string): Promise<CredentialRecordSummary[]> {
+  const records = await createCredentialVault(credsDir).listRecords();
+  return records.map((record): CredentialRecordSummary => {
+    const source = record.source;
+    if (source.kind === "reference") {
+      return { provider: record.provider, label: record.label, kind: "reference", sync: record.sync, origin: record.origin, ref: source.ref };
+    }
+    const cred = source.cred;
+    const summary: CredentialRecordSummary = { provider: record.provider, label: record.label, kind: cred.type, sync: record.sync, origin: record.origin };
+    if (cred.type === "oauth") summary.expiresAt = cred.expires;
+    return summary;
+  });
+}
+
+/**
+ * Preserve an existing record's sync/origin when re-setting it (editing the key of
+ * a credential the user opted node-local must not silently re-enable sync), else
+ * default to a Bivy-first, opt-out-sync credential.
+ */
+async function labeledMeta(credsDir: string, provider: string, label: string): Promise<Pick<CredentialRecord, "sync" | "origin">> {
+  const existing = await createCredentialVault(credsDir).readRecord(provider, label);
+  return { sync: existing?.sync ?? defaultSyncFor("bivy"), origin: existing?.origin ?? "bivy" };
+}
+
+/** Store an API key under a specific label (multi-account). */
+export async function setProviderApiKeyLabeled(credsDir: string, provider: string, label: string, key: string): Promise<void> {
+  const id = provider.trim().toLowerCase();
+  if (!id) throw new Error("Provider is required");
+  const apiKey = String(key ?? "").trim();
+  if (!apiKey) throw new Error("API key cannot be empty");
+  const meta = await labeledMeta(credsDir, id, label);
+  await createCredentialVault(credsDir).putRecord({
+    provider: id,
+    label: normalizeLabel(label),
+    source: { kind: "stored", cred: { type: "api_key", key: apiKey } },
+    ...meta,
+  });
+}
+
+/** Store a reference (op:// / env://) under a specific label (multi-account). */
+export async function setProviderReferenceLabeled(credsDir: string, provider: string, label: string, ref: string): Promise<void> {
+  const id = provider.trim().toLowerCase();
+  if (!id) throw new Error("Provider is required");
+  const pointer = String(ref ?? "").trim();
+  const backend = inferReferenceBackend(pointer);
+  if (!backend) throw new Error("Reference must be an op:// or env:// pointer");
+  const meta = await labeledMeta(credsDir, id, label);
+  await createCredentialVault(credsDir).putRecord({
+    provider: id,
+    label: normalizeLabel(label),
+    source: { kind: "reference", ref: pointer, backend },
+    ...meta,
+  });
+}
+
+/** Forget a single labeled credential (`provider:label`). */
+export async function removeProviderCredential(credsDir: string, provider: string, label: string = DEFAULT_LABEL): Promise<void> {
+  const id = provider.trim().toLowerCase();
+  if (!id) throw new Error("Provider is required");
+  await createCredentialVault(credsDir).deleteRecord(id, label);
 }
