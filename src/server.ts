@@ -5231,19 +5231,30 @@ function nativeLoginCommand() {
 }
 
 async function refreshSessionAfterAuth() {
-  // Model runtimes load the projected models.json when the session is created.
-  // Drop the per-runtime scratch sessions before rebuilding the active session;
-  // otherwise a models.list immediately after adding a custom endpoint can be
-  // answered by a runtime that still has the old catalog cached.
-  for (const record of modelQueryScratch.values()) {
-    closeSessionRecord(record);
-  }
+  // Model runtimes load the projected models.json into memory. Scratch sessions
+  // are disposable, so evict them and let the next picker read build a fresh
+  // one. Live sessions are not disposable: replacing `active` with a brand-new
+  // session left the client's original session (the one models.list names by
+  // id) on its stale catalog, so custom providers never appeared there. Reload
+  // capable runtimes in place instead.
+  const scratchRecords = new Set(modelQueryScratch.values());
+  for (const record of scratchRecords) closeSessionRecord(record);
   modelQueryScratch.clear();
-  try {
-    await createSession(active?.workspace ?? defaultWorkspace);
-  } catch (error) {
-    broadcast({ type: "session.error", sessionId: active?.id, error: String(error instanceof Error ? error.stack ?? error.message : error) });
-  }
+
+  const sessions = new Map<string, SessionRecord>();
+  for (const record of openSessions.values()) sessions.set(record.id, record);
+  await Promise.all([...sessions.values()].map(async (record) => {
+    if (typeof record.session.refreshModels !== "function") return;
+    try {
+      await record.session.refreshModels();
+    } catch (error) {
+      broadcast({
+        type: "session.error",
+        sessionId: record.id,
+        error: `Could not refresh models: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }));
 }
 
 /**

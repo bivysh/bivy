@@ -65,7 +65,35 @@ assert.ok(
   "an unrelated provider must remain unconfigured",
 );
 
+// A custom endpoint can be added while this exact session remains open. Pi's
+// ModelRuntime loaded models.json at session creation, so the daemon must ask it
+// to reload in place; replacing some unrelated active/scratch session does not
+// update the sessionId the picker is querying.
+await store.modify("hetzner-inference", async () => ({ type: "api_key", key: "test-key" }));
+fs.writeFileSync(path.join(piDir, "models.json"), JSON.stringify({
+  providers: {
+    "hetzner-inference": {
+      name: "Hetzner inference",
+      baseUrl: "https://inference.hetzner.com/api/v1",
+      api: "openai-completions",
+      apiKey: "test-key",
+      models: [{ id: "test-model", name: "Test model" }],
+    },
+  },
+}));
+assert.equal(
+  (await session.getAllModels!()).some((m) => m.provider === "hetzner-inference"),
+  false,
+  "the already-open session starts with its pre-save catalog",
+);
+assert.equal(typeof session.refreshModels, "function", "PiSession must support in-place model catalog refresh");
+await session.refreshModels!();
+assert.ok(
+  (await session.getModels()).some((m) => m.provider === "hetzner-inference" && m.id === "test-model"),
+  "refreshModels must expose a newly-saved custom model on the already-open session",
+);
+
 session.dispose();
 fs.rmSync(piDir, { recursive: true, force: true });
 
-console.log("pi getAllModels OK (all-models catalog flags configured vs. not, and updates on mid-session sign-in)");
+console.log("pi getAllModels OK (catalog auth and custom models refresh in an open session)");

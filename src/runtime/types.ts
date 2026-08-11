@@ -338,6 +338,14 @@ export interface RuntimeSession {
    */
   getAllModels?(): ModelInfo[] | Promise<ModelInfo[]>;
 
+  /**
+   * Reload the runtime's model-provider configuration after an endpoint or
+   * credential change. Optional because most external agents own a fixed model
+   * catalog; Pi implements it so an already-open session sees a rewritten
+   * models.json without being replaced by a new session.
+   */
+  refreshModels?(): void | Promise<void>;
+
   // ---- Thinking / reasoning levels (optional capability for models that support it)
   getThinkingLevel?(): string | undefined;
   setThinkingLevel?(level: string): void;

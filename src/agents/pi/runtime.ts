@@ -331,6 +331,12 @@ class PiSession implements RuntimeSession {
     return runtime.getModels().map((model) => toModelInfo(model, runtime.hasConfiguredAuth(model.provider)));
   }
 
+  /** Reload the projected models.json in-place so a live session immediately
+   * sees custom endpoints added after that session was created. */
+  async refreshModels(): Promise<void> {
+    await this.session.modelRuntime.refresh({ allowNetwork: true });
+  }
+
   getCurrentModel(): ModelInfo | undefined {
     const model = this.session.model;
     return model ? toModelInfo(model) : undefined;
