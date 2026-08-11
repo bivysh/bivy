@@ -342,9 +342,13 @@ Each phase ships independently and leaves the app working.
    record-addressed: `modifyRecord(provider, label, …)` (with `modify` as the `default` case), and
    `refreshModelOAuth(credsDir, provider, label)` threaded from the resolver's selected record, so
    refreshing one account never rotates another's single-use refresh token. Guarded by
-   `test/credential-sync-policy.test.ts`. **Still pending (part 2):** a record-shaped sync wire
-   (bump `ModelAuthEnvelope`) so non-default labels and reference *pointers* can travel — until
-   then, only default-slot account-tier credentials sync (references/`separate` stay node-local).
+   `test/credential-sync-policy.test.ts`. *(part 2 shipped: the record-shaped sync wire.)*
+   `ModelAuthEnvelope` is now `v3` — it carries a `records` map (`provider:label` →
+   `CredentialRecord`, account-tier only, incl. non-default labels and reference *pointers*) plus
+   record-keyed tombstones, **alongside** the v2 `providers` fields so an older peer keeps syncing;
+   a v3 peer imports `records` (which subsume the defaults). References travel as a pointer only —
+   the secret resolves per-node. Guarded by `test/credential-record-sync.test.ts`. **The plan is
+   complete**; phase 7 (package promotion) remains as optional future work.
 7. **(Later) Package promotion** — a `package.json`, because the boundary was drawn in phase 1.
 
 ---

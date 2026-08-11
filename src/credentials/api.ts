@@ -95,6 +95,39 @@ export async function exportSyncableProviderAuth(credsDir: string): Promise<Reco
   return createCredentialVault(credsDir).exportSyncable();
 }
 
+/**
+ * The record-shaped sync snapshot: every account-tier record keyed by
+ * `provider:label`, including non-default labels and reference pointers. The v3
+ * sync wire (`exportSyncableProviderAuth` is the v2 provider-keyed projection).
+ */
+export async function exportSyncableRecords(credsDir: string): Promise<Record<string, CredentialRecord>> {
+  return createCredentialVault(credsDir).exportSyncableRecords();
+}
+
+/** Record-keyed tombstones for record-shaped cross-node convergence. */
+export async function exportRecordTombstones(credsDir: string): Promise<Record<string, number>> {
+  return createCredentialVault(credsDir).exportRecordTombstones();
+}
+
+/**
+ * Merge a record-shaped snapshot from a peer into the vault, non-destructively.
+ * The wire is untyped JSON; `importRecords` (via mergeDocuments) validates each
+ * record and drops anything malformed, so this is safe to call with raw input.
+ */
+export async function importCredentialRecords(
+  credsDir: string,
+  records: Record<string, unknown>,
+  deletedAt: Record<string, unknown> = {},
+): Promise<number> {
+  const list = Object.values(records ?? {}).filter((r): r is CredentialRecord => !!r && typeof r === "object") as CredentialRecord[];
+  const tombstones: Record<string, number> = {};
+  for (const [key, value] of Object.entries(deletedAt ?? {})) {
+    const stamp = Number(value);
+    if (key && Number.isFinite(stamp) && stamp > 0) tombstones[key] = stamp;
+  }
+  return createCredentialVault(credsDir).importRecords(list, tombstones);
+}
+
 /** Export provider revocations for cross-node convergence. */
 export async function exportProviderAuthTombstones(credsDir: string): Promise<Record<string, number>> {
   return createCredentialVault(credsDir).exportTombstones();

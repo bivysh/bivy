@@ -40,7 +40,7 @@ import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionSource, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState, type SessionWorkspaceState } from "./session/session-state.js";
-import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, setProviderCredential, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping } from "./credentials/api.js";
+import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, setProviderCredential, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import {
   loadLocalModels,
@@ -3376,15 +3376,23 @@ function ensureLocalModelAuthVaultKey(): string {
 // internal credential shape, so nodes on different agent/pi versions can't
 // silently exchange an incompatible structure. `decrypt` tolerates a bare map
 // for forward-safety.
-const MODEL_AUTH_ENVELOPE_VERSION = 2;
-// The envelope carries both provider credentials AND Bivy's local-model
-// registry. It is sealed node-side; the control plane only ever stores
-// ciphertext, so adding `localModels` needs no control-plane schema change.
+const MODEL_AUTH_ENVELOPE_VERSION = 3;
+// The envelope carries provider credentials AND Bivy's local-model registry. It
+// is sealed node-side; the control plane only stores ciphertext, so schema
+// changes need no control-plane change.
+//
+// v3 adds `records`/`recordsDeletedAt`: the `provider:label` record-shaped
+// snapshot that lets NON-DEFAULT labels and reference *pointers* travel between
+// nodes. The v2 `providers`/`deletedAt` fields (provider-keyed, default slot) are
+// still written alongside so an older peer keeps syncing; a v3 peer prefers
+// `records` and ignores `providers`.
 type ModelAuthEnvelope = {
   v: number;
   providers: Record<string, unknown>;
   deletedAt?: Record<string, number>;
   localModels?: Record<string, unknown>;
+  records?: Record<string, unknown>;
+  recordsDeletedAt?: Record<string, number>;
 };
 
 function encryptModelAuthProviders(
@@ -3392,29 +3400,35 @@ function encryptModelAuthProviders(
   deletedAt: Record<string, number>,
   localModels: Record<string, unknown>,
   vaultKeyB64: string,
+  records: Record<string, unknown> = {},
+  recordsDeletedAt: Record<string, number> = {},
 ): string {
-  const envelope: ModelAuthEnvelope = { v: MODEL_AUTH_ENVELOPE_VERSION, providers, deletedAt, localModels };
+  const envelope: ModelAuthEnvelope = { v: MODEL_AUTH_ENVELOPE_VERSION, providers, deletedAt, localModels, records, recordsDeletedAt };
   return seal(Buffer.from(vaultKeyB64, "base64"), JSON.stringify(envelope));
 }
 
 function decryptModelAuthEnvelope(
   ciphertext: string,
   vaultKeyB64: string,
-): { providers: Record<string, unknown>; deletedAt: Record<string, unknown>; localModels: Record<string, unknown> } {
-  const empty = { providers: {}, deletedAt: {}, localModels: {} };
+): { v: number; providers: Record<string, unknown>; deletedAt: Record<string, unknown>; localModels: Record<string, unknown>; records: Record<string, unknown>; recordsDeletedAt: Record<string, unknown> } {
+  const empty = { v: 0, providers: {}, deletedAt: {}, localModels: {}, records: {}, recordsDeletedAt: {} };
   const parsed = JSON.parse(open(Buffer.from(vaultKeyB64, "base64"), ciphertext)) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
   // Versioned Bivy envelope.
   const envelope = parsed as Partial<ModelAuthEnvelope>;
   if (typeof envelope.v === "number" && envelope.providers && typeof envelope.providers === "object") {
+    const obj = (value: unknown): Record<string, unknown> => (value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {});
     return {
-      providers: envelope.providers as Record<string, unknown>,
-      deletedAt: envelope.deletedAt && typeof envelope.deletedAt === "object" ? envelope.deletedAt : {},
-      localModels: (envelope.localModels && typeof envelope.localModels === "object" ? envelope.localModels : {}) as Record<string, unknown>,
+      v: envelope.v,
+      providers: obj(envelope.providers),
+      deletedAt: obj(envelope.deletedAt),
+      localModels: obj(envelope.localModels),
+      records: obj(envelope.records),
+      recordsDeletedAt: obj(envelope.recordsDeletedAt),
     };
   }
   // Back-compat: a bare `{ [id]: Credential }` map (pre-envelope / other sender).
-  return { providers: parsed as Record<string, unknown>, deletedAt: {}, localModels: {} };
+  return { ...empty, providers: parsed as Record<string, unknown> };
 }
 
 async function modelAuthFetch(pathname: string, init: RequestInit = {}) {
@@ -3518,8 +3532,16 @@ async function syncModelAuthFromControlPlane() {
         console.warn("[auth-sync] cached vault key is stale; requested the rotated key:", (error as Error).message);
         return;
       }
-      const { providers, deletedAt, localModels } = decrypted;
-      await importProviderAuth(credsDir, providers, deletedAt);
+      const { v, providers, deletedAt, localModels, records, recordsDeletedAt } = decrypted;
+      // Prefer the record-shaped snapshot (v3+): it carries non-default labels and
+      // reference pointers, and its records subsume the provider-keyed defaults —
+      // so importing records alone (plus its record-keyed tombstones) is complete.
+      // Fall back to the provider-keyed fields for a v2 peer.
+      if (v >= 3) {
+        await importCredentialRecords(credsDir, records, recordsDeletedAt as Record<string, unknown>);
+      } else {
+        await importProviderAuth(credsDir, providers, deletedAt);
+      }
       importLocalModels(localModelsDir, localModels);
       // A synced key or config change can both alter the projection, so always
       // regenerate it (and refresh the panel) after importing the vault.
@@ -3577,10 +3599,14 @@ async function pushModelAuthToControlPlane(rotateKey = false) {
     const providers = await exportSyncableProviderAuth(credsDir);
     const deletedAt = await exportProviderAuthTombstones(credsDir);
     const localModels = exportLocalModels(localModelsDir);
+    // v3 record-shaped snapshot (non-default labels + reference pointers). Written
+    // ALONGSIDE the provider-keyed fields so an older peer keeps syncing defaults.
+    const records = await exportSyncableRecords(credsDir);
+    const recordsDeletedAt = await exportRecordTombstones(credsDir);
     const previousKey = readLocalModelAuthVaultKey();
     const vaultKeyB64 = rotateKey ? randomBytes(32).toString("base64") : ensureLocalModelAuthVaultKey();
     if (rotateKey) writeLocalModelAuthVaultKey(vaultKeyB64);
-    const ciphertext = encryptModelAuthProviders(providers, deletedAt, localModels, vaultKeyB64);
+    const ciphertext = encryptModelAuthProviders(providers, deletedAt, localModels, vaultKeyB64, records, recordsDeletedAt);
     if (!rotateKey && ciphertext === lastPushedModelAuthCiphertext) return;
     const push = await modelAuthFetch("/node/model-auth-vault", { method: "PUT", body: JSON.stringify({ ciphertext, rotated: rotateKey }) });
     if (!push?.ok) {
