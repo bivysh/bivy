@@ -20,9 +20,21 @@ import {
   credKey,
   normalizeProvider,
   normalizeLabel,
+  inferReferenceBackend,
   DEFAULT_LABEL,
   type CredentialRecord,
 } from "./records.js";
+
+/**
+ * Is this record a command reference? Keys on the `ref` PREFIX (the authoritative
+ * signal — the resolver dispatches on it), not the stored `backend` field, which a
+ * hostile peer could spoof (`backend:"1password"` + `ref:"cmd://…"`). Command
+ * references must never enter the vault via a merge/sync — only local creation.
+ */
+function isCommandReference(record: CredentialRecord): boolean {
+  const src = record.source;
+  return src.kind === "reference" && (src.backend === "command" || inferReferenceBackend(src.ref) === "command");
+}
 
 /** The on-disk document. `credentials`/`deletedAt` are keyed by `provider:label`. */
 export interface CredentialVaultDocumentV3 {
@@ -223,6 +235,12 @@ export function mergeDocuments(
   let changed = false;
 
   for (const incoming of Object.values(normalizeRecordMap(incomingCredentials))) {
+    // NEVER accept a `cmd://` reference from a merge/sync snapshot: it runs a
+    // command, so a malicious enrolled peer could otherwise inject one that
+    // executes on this node (cross-node code execution). Keyed on the ref prefix
+    // (see isCommandReference), so a spoofed `backend` field can't slip one past.
+    // Command references only ever enter the vault via local creation.
+    if (isCommandReference(incoming)) continue;
     const key = credKey(incoming.provider, incoming.label);
     if (tombstoneWinsRecord(incoming, deletedAt[key] ?? 0)) continue;
     const localRecord = credentials[key];

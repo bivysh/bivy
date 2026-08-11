@@ -32,7 +32,7 @@ export type CredentialOrigin = "bivy" | "agent-native";
  */
 export type CredentialSource =
   | { kind: "stored"; cred: StoredCredential }
-  | { kind: "reference"; ref: string; backend: "1password" | "env" };
+  | { kind: "reference"; ref: string; backend: "1password" | "env" | "command" };
 
 /** One addressable credential. Its identity is `provider:label` (see `credKey`). */
 export interface CredentialRecord {
@@ -99,14 +99,17 @@ export function defaultSyncFor(origin: CredentialOrigin): SyncPolicy {
 
 /**
  * The reference backend a pointer targets, inferred from its scheme:
- * `op://…` → 1Password, `env://NAME` → an environment variable. Anything else
- * (a bare value, a `secret://` local-vault ref, junk) returns undefined — a
- * reference credential must point at an external, per-node-resolvable secret.
+ * `op://…` → 1Password, `env://NAME` → an environment variable, `cmd://…` → run a
+ * command and use its stdout (the generic escape hatch for any password-manager
+ * CLI — Bitwarden, LastPass, Proton Pass, pass, …). Anything else (a bare value,
+ * a `secret://` local-vault ref, junk) returns undefined — a reference credential
+ * must point at an external, per-node-resolvable secret.
  */
-export function inferReferenceBackend(ref: string): "1password" | "env" | undefined {
+export function inferReferenceBackend(ref: string): "1password" | "env" | "command" | undefined {
   const value = String(ref ?? "").trim();
   if (value.startsWith("op://")) return "1password";
   if (value.startsWith("env://")) return "env";
+  if (value.startsWith("cmd://")) return "command";
   return undefined;
 }
 

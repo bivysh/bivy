@@ -196,7 +196,7 @@ export async function setProviderReference(credsDir: string, provider: string, r
   if (!id) throw new Error("Provider is required");
   const pointer = String(ref ?? "").trim();
   const backend = inferReferenceBackend(pointer);
-  if (!backend) throw new Error("Reference must be an op:// or env:// pointer");
+  if (!backend) throw new Error("Reference must be an op://, env://, or cmd:// pointer");
   await createCredentialVault(credsDir).setReference(id, pointer, backend);
 }
 
@@ -271,7 +271,7 @@ export async function setProviderReferenceLabeled(credsDir: string, provider: st
   if (!id) throw new Error("Provider is required");
   const pointer = String(ref ?? "").trim();
   const backend = inferReferenceBackend(pointer);
-  if (!backend) throw new Error("Reference must be an op:// or env:// pointer");
+  if (!backend) throw new Error("Reference must be an op://, env://, or cmd:// pointer");
   const meta = await labeledMeta(credsDir, id, label);
   await createCredentialVault(credsDir).putRecord({
     provider: id,
@@ -317,5 +317,10 @@ export async function setCredentialSync(
   const store = createCredentialVault(credsDir);
   const existing = await store.readRecord(id, label);
   if (!existing) throw new Error(`No credential for ${id}:${normalizeLabel(label)}`);
+  // A cmd:// reference runs a command; syncing it would run that command on every
+  // node. Keep it node-local (exportSyncableRecords also refuses to emit it).
+  if (existing.source.kind === "reference" && existing.source.backend === "command" && sync === "account") {
+    throw new Error("A cmd:// reference is node-local (it runs a command on this machine) and cannot be synced.");
+  }
   await store.putRecord({ ...existing, sync });
 }

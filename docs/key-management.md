@@ -64,17 +64,26 @@ The `bivy` CLI resolves `secret://`, `op://`, and `env://` values before startin
 ### Model-provider reference credentials (preferred over `cli.json` for model keys)
 
 For a **model provider** key held in a password manager, prefer a *reference credential* over
-the `cli.json` env mapping above. A reference stores only the pointer (`op://…` or `env://NAME`),
-which Bivy resolves per-node at read time — the secret stays in the manager and never enters the
-vault — and, unlike a raw `cli.json` env var, the reference is a first-class credential: labeled,
-selectable via presets, and (once the Models UI surface lands) shown alongside your other
-credentials. The interactive `bivy login` / Models-screen flow for adding one arrives with the
-multi-credential UI; the resolver and storage are in place now.
+the `cli.json` env mapping above. A reference stores only the pointer, which Bivy resolves per-node
+at read time — the secret stays in the manager and never enters the vault — and it's a first-class
+credential: labeled, selectable via presets, and shown in the Models screen. Add one from the PWA
+(Keys & OAuth → Additional accounts) or the CLI. Three pointer schemes:
 
-The pointer is resolved with the same `op`/`env` machinery as `secrets`. A node that can't resolve
-it (no `op` session, missing env var) simply reports no credential there — it never falls back to
-another account. Reference credentials are node-local for now (the pointer does not yet sync across
-nodes); use a synced Bivy-managed key if you need cross-node model auth.
+| Scheme | Resolves via | Notes |
+| --- | --- | --- |
+| `op://Vault/Item/field` | 1Password `op` CLI | syncs across your nodes (each resolves locally) |
+| `env://NAME` | an environment variable | syncs; each node reads its own `NAME` |
+| `cmd://<command>` | runs the command, uses its stdout | **any** password-manager CLI (Bitwarden, LastPass, Proton Pass, `pass`, gopass, …); **node-local, never synced** |
+
+Examples: `cmd://bw get password anthropic`, `cmd://rbw get anthropic`, `cmd://pass show ai/anthropic`.
+
+A node that can't resolve a reference (no `op` session, missing env var, a failing command) simply
+reports no credential there — it never falls back to another account.
+
+**`cmd://` runs an arbitrary command**, so it is deliberately kept **node-local and is never
+synced** — a command that ran on every node would be cross-node code execution, and a manager CLI
+is machine-specific anyway. Use `op://`/`env://` (or a synced Bivy-managed key) when you need the
+credential on more than one node.
 
 ## Rotation and revocation
 
