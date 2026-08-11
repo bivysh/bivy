@@ -468,6 +468,27 @@ export class BivyCredentialStore {
     }
   }
 
+  /**
+   * The record-shaped cross-node snapshot: every account-tier (`sync: "account"`)
+   * record, keyed by `provider:label` — INCLUDING non-default labels and reference
+   * records. A reference carries only its pointer (never a secret), so syncing it
+   * lets each node resolve the same manager entry locally. This is the v3 sync
+   * wire; `exportSyncable()` is the v2 provider-keyed projection kept for old peers.
+   */
+  async exportSyncableRecords(): Promise<Record<string, CredentialRecord>> {
+    const out: Record<string, CredentialRecord> = {};
+    for (const record of Object.values(this.readDocument().credentials)) {
+      if (record.sync !== "account") continue;
+      out[credKey(record.provider, record.label)] = record;
+    }
+    return out;
+  }
+
+  /** Record-keyed tombstones (all deletions) for record-shaped convergence. */
+  async exportRecordTombstones(): Promise<CredentialTombstones> {
+    return { ...this.readDocument().deletedAt };
+  }
+
   /** The plaintext `auth.json` path an agent's own CLI/TUI reads (`<plaintextDir>/auth.json`). */
   get legacyAuthPath(): string {
     return this.legacyFile;
