@@ -272,11 +272,12 @@ bivy takeover 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
 
 ## Configuration as code
 
-### `bivy config <init|validate|show|get|set|unset|explain|path>`
+### `bivy config <init|validate|show|get|set|unset|explain|path|edit>`
 
 Manages the typed `<data-dir>/config.yaml`. `init` migrates existing `cli.json`
 and `settings.json`; those files then remain generated compatibility
-projections. The web Settings screen edits the same canonical YAML.
+projections. The web Settings screen edits the same canonical YAML. `edit` opens
+the file in `$EDITOR` (`$VISUAL`/`$EDITOR`, else `nano`).
 
 ```bash
 bivy config init
@@ -285,6 +286,7 @@ bivy config show
 bivy config get defaults.agent
 bivy config set defaults.agent codex
 bivy config explain defaults.sandbox
+bivy config edit
 bivy config init --project
 bivy config validate --project
 ```
@@ -292,6 +294,33 @@ bivy config validate --project
 The project form creates/validates `.bivy/policy.yaml`: repository-owned sandbox
 and approval bounds, deterministic checks, and retry/fallback rules. See
 [config-as-code.md](config-as-code.md).
+
+### `bivy credentials <list|add|remove|sync|preset|ingest|config>`
+
+CLI parity with the web **Keys & OAuth** screen: manage multiple labeled
+credentials per provider, per-credential sync, selection presets, and the
+agent-native ingest policy. Operates directly on the node's vault +
+`credentials.config.json` (no running daemon required). `bivy login` still adds a
+provider's default OAuth/API-key login. See
+[key-management.md](key-management.md).
+
+```bash
+bivy credentials list                                   # never prints secrets
+bivy credentials add anthropic work                     # prompts for the key
+bivy credentials add anthropic personal op://Vault/Anthropic/key   # or a reference
+bivy credentials remove anthropic personal
+bivy credentials sync anthropic work node               # keep on this node only
+
+bivy credentials preset set project:acme anthropic work # for a preset, pick the key
+bivy credentials preset use project:acme                # activate a preset
+bivy credentials preset list
+
+bivy credentials ingest separate                        # merge | separate
+bivy credentials config path|show|edit                  # the config file
+```
+
+`add` takes an API key or a reference (`op://…` / `env://NAME` / `cmd://<command>`);
+the secret is stored in the encrypted vault (or, for a reference, only the pointer).
 
 ## Automations as code
 

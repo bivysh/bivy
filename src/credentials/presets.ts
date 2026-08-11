@@ -125,6 +125,17 @@ function writeRawConfig(filePath: string, config: Record<string, unknown>): void
   fs.renameSync(tmp, filePath);
 }
 
+/** Set the agent-native ingest policy (`merge`/`separate`). Preserves other keys. */
+export function setIngestPolicy(filePath: string, policy: IngestPolicy): void {
+  const config = readRawConfig(filePath);
+  const ingest = (config.ingest && typeof config.ingest === "object" && !Array.isArray(config.ingest)
+    ? (config.ingest as Record<string, unknown>)
+    : {});
+  ingest.policy = policy === "separate" ? "separate" : "merge";
+  config.ingest = ingest;
+  writeRawConfig(filePath, config);
+}
+
 /** Set (or clear, with an empty name) the active preset. Preserves other keys. */
 export function setActivePreset(filePath: string, active: string | undefined): void {
   const config = readRawConfig(filePath);

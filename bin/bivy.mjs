@@ -145,6 +145,7 @@ const serverEntry = path.join(repoRoot, packaged ? "dist/server.js" : "src/serve
 const bivyLoginEntry = path.join(repoRoot, packaged ? "dist/bivy-login.js" : "src/bivy-login.ts");
 const automationEntry = path.join(repoRoot, packaged ? "dist/automation-cli.js" : "src/automation-cli.ts");
 const configEntry = path.join(repoRoot, packaged ? "dist/config-cli.js" : "src/config-cli.ts");
+const credentialsEntry = path.join(repoRoot, packaged ? "dist/credentials-cli.js" : "src/credentials-cli.ts");
 const pluginEntry = path.join(repoRoot, packaged ? "dist/plugin-cli.js" : "src/plugin-cli.ts");
 const agentEntry = path.join(repoRoot, packaged ? "dist/agent-cli.js" : "src/agent-cli.ts");
 const relaySetupEntry = path.join(repoRoot, packaged ? "dist/relay-setup.js" : "src/relay-setup.ts");
@@ -4496,6 +4497,14 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "config": {
       if (!(await ensureDeps())) process.exit(1);
       process.exit(await run(nodeBin, [...nodeScriptArgs(configEntry), ...args], { cwd: process.cwd(), env: process.env }));
+      break;
+    }
+    case "credentials":
+    case "creds": {
+      if (!(await ensureDeps())) process.exit(1);
+      // Forward a subcommand-position --help to the CLI's first-arg help (like secrets).
+      const forwardArgs = (args.includes("-h") || args.includes("--help")) ? ["--help"] : args;
+      process.exit(await run(nodeBin, [...nodeScriptArgs(credentialsEntry), ...forwardArgs], { cwd: repoRoot, env: process.env }));
       break;
     }
     case "plugin":
