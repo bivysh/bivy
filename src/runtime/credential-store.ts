@@ -28,7 +28,7 @@ import {
   emptyDocument,
   type CredentialVaultDocumentV3,
 } from "../credentials/document.js";
-import { credKey, parseCredKey, normalizeLabel, DEFAULT_LABEL, type CredentialRecord } from "../credentials/records.js";
+import { credKey, parseCredKey, normalizeLabel, inferReferenceBackend, DEFAULT_LABEL, type CredentialRecord } from "../credentials/records.js";
 
 /** Stored api-key credential. `env` holds provider-scoped config (base URLs, ids). */
 export interface ApiKeyCredential {
@@ -485,9 +485,10 @@ export class BivyCredentialStore {
     for (const record of Object.values(this.readDocument().credentials)) {
       if (record.sync !== "account") continue;
       // A cmd:// reference is never synced — a command that runs on a peer is
-      // cross-node code execution. Belt-and-suspenders with the node-local sync
-      // default in setReference().
-      if (record.source.kind === "reference" && record.source.backend === "command") continue;
+      // cross-node code execution. Keyed on the ref prefix (the resolver
+      // dispatches on it), not just the spoofable `backend` field.
+      if (record.source.kind === "reference"
+        && (record.source.backend === "command" || inferReferenceBackend(record.source.ref) === "command")) continue;
       out[credKey(record.provider, record.label)] = record;
     }
     return out;

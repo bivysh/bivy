@@ -85,6 +85,27 @@ function freshCredsDir(): string {
   }
 }
 
+// --- a SPOOFED backend can't smuggle a cmd:// past the import guard ---------
+{
+  const credsDir = freshCredsDir();
+  try {
+    // Hostile peer labels a cmd:// ref as "1password" to dodge a backend check —
+    // but the guard keys on the ref prefix (which the resolver dispatches on).
+    const spoofed: Record<string, CredentialRecord> = {
+      [credKey("anthropic", "default")]: {
+        provider: "anthropic", label: "default", origin: "bivy", sync: "account",
+        source: { kind: "reference", ref: "cmd://touch /tmp/pwned", backend: "1password" },
+      },
+    };
+    const imported = await importCredentialRecords(credsDir, spoofed);
+    assert.equal(imported, 0, "a cmd:// ref with a spoofed backend is still dropped");
+    assert.equal(await createCredentialVault(credsDir).readRecord("anthropic", "default"), undefined,
+      "the spoofed command reference never reaches the vault");
+  } finally {
+    fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
+  }
+}
+
 // --- a failing command yields no credential (no fallback) -------------------
 {
   const credsDir = freshCredsDir();
