@@ -74,13 +74,15 @@ export type { StoredCredential, ApiKeyCredential, OAuthCredential } from "./type
 export type { Sealer, SecretResolver, OAuthRefresher } from "./ports.js";
 export type { StoredCredentialInfo, CredentialTombstones } from "./store.js";
 
-// --- The node resolver + agent env representation ---------------------------
+// --- The node resolver + agent env representation — now in-layer ------------
+// createCredentialStore here is the port-injected form; the node convenience
+// wrapper (binds secret/OAuth adapters) lives in runtime/credentials.ts.
 export {
   createCredentialStore,
   buildAgentCredentialEnv,
   apiKeyEnvVar,
   NodeCredentialResolver,
-} from "../runtime/credentials.js";
+} from "./resolver.js";
 
 // --- The daemon credential API (ours — Pi-free) -----------------------------
 export {

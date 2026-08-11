@@ -38,8 +38,12 @@ const RULES = [
     // service layer (store.ts) may use it, and the Sealer port abstracts it for a
     // future browser build. secrets.ts / oauth / Pi / runtime stay inverted.
     forbid: ["../runtime/", "../agents/", "../session/", "../server", "../secrets", "/pi-oauth", "native-pi"],
-    // Pilot boundary (Phase 1). Flip to true once the two-layer split lands.
-    enforce: false,
+    // The Pi provider-catalog listing is the one sanctioned consumer-side bridge
+    // (runtime/provider-catalog.ts wires Pi's list into the Pi-free api.ts). The
+    // facade re-exports it; allow that single specifier.
+    allow: ["../runtime/provider-catalog.js"],
+    // Pilot boundary (Phase 1) — two-layer split landed, boundary enforced.
+    enforce: true,
     note: "credentials must be a pure domain + injected-port service; upward deps become ports (see pilot spec).",
   },
 ];
@@ -82,6 +86,7 @@ for (const rule of RULES) {
     const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
     const lines = source.split("\n");
     for (const spec of specifiersOf(source)) {
+      if (rule.allow?.some((a) => spec === a || spec.includes(a))) continue;
       const hit = rule.forbid.find((f) => spec.includes(f));
       if (!hit) continue;
       // Best-effort line number for the specifier.

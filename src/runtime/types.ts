@@ -812,34 +812,9 @@ export interface CatalogProvider {
   models: ModelInfo[];
 }
 
-/**
- * A model-provider credential the node already holds, exposed runtime-agnostically.
- * This is the seam that lets any agent reuse a login the user did once (resolved
- * from Bivy's own credential store) instead of authenticating separately per agent.
- */
-export interface ProviderCredential {
-  /** Provider id the credential is for, e.g. "anthropic", "openai". */
-  provider: string;
-  /** Whether the token is a plain API key or an OAuth bearer (auto-refreshed). */
-  kind: "api_key" | "oauth";
-  /** A ready-to-use API key or OAuth access token for the provider. */
-  token: string;
-  /** Extra provider-scoped env (e.g. a custom base URL) to pass through. */
-  env?: Record<string, string>;
-}
-
-/**
- * Node-level credential resolver shared across agents. Backed by Bivy's own
- * credential store (credential-store.ts); an adapter resolves a provider's
- * credential and maps it to whatever an agent's SDK expects (env var, header, …)
- * so one login serves every runtime.
- *
- * Named `AgentCredentialStore` to disambiguate from pi-ai's own `CredentialStore`
- * (the storage interface Bivy's store implements for injection into Pi).
- */
-export interface AgentCredentialStore {
-  /** Resolve a usable credential for a provider, or undefined if none is configured. */
-  getCredential(provider: string): Promise<ProviderCredential | undefined>;
-  /** Provider ids the vault currently holds a credential for (for bulk env injection). */
-  listConfigured?(): Promise<string[]>;
-}
+// The credential-resolution contracts (ProviderCredential, AgentCredentialStore)
+// now live in the pure credentials domain so the resolver (credentials/resolver.ts)
+// no longer points up here for them. Re-exported so runtime consumers
+// (process.ts, protocol.ts, agents/claude-code/runtime.ts) are unchanged.
+// See docs/internal/platform-modularization-plan.md (two-layer pilot).
+export type { ProviderCredential, AgentCredentialStore } from "../credentials/types.js";

@@ -209,12 +209,32 @@ is the correct consumer-side bridge, not part of the service.
    resolver + the sanctioned Pi bridge remain). Checkable files strip-parse;
    `store.ts` itself (parameter properties) + auth behavior → **CI + live
    sign-in smoke before merge** (see project memory on commit 902b4ea).
-4. **Move the resolver** `runtime/credentials.ts` → `credentials/resolver.ts`.
-5. **Flip the fitness check to `--enforce`** for the credentials boundary; wire
-   into CI.
+4. **Move the resolver — DONE 2026-08-11 (branch `bivy/credentials-two-layer-engine-move`).**
+   `git mv runtime/credentials.ts → credentials/resolver.ts`; inverted the two
+   upward deps via ports — `resolveSecret` → `SecretResolver`,
+   `refreshModelOAuth` → `OAuthRefresher` — so `resolver.ts` imports nothing
+   upward. `NodeCredentialResolver`/`createCredentialStore` now take the two
+   ports; a **shim** at `runtime/credentials.ts` binds the node adapters
+   (`resolveSecret(ref, appDir)`, `refreshModelOAuth(credsDir, …)`) and keeps
+   the historical `createCredentialStore(credsDir)` signature, so all ~10
+   callers (server.ts, runtime/index.ts, agents, provisioning, tests) are
+   unchanged. Also moved `ProviderCredential` + `AgentCredentialStore` into
+   `credentials/types.ts`, re-exported from `runtime/types.ts` (process.ts,
+   protocol.ts, claude-code/runtime.ts unchanged).
+5. **Flip the fitness check to `--enforce` — DONE 2026-08-11.** Credentials
+   boundary is **0 violations, enforced**. Added an `allow` exception for the
+   one sanctioned bridge (`runtime/provider-catalog.js`). Still TODO: wire
+   `npm run check:boundaries` into CI (needs the deferred `package.json` edit).
 
-Do steps 1–2 and 3–4 as **separate PRs** (types+ports first, engine moves
-second) so the fragile move is small and revertable.
+**Phase 1 status:** structurally COMPLETE (steps 1–5). Layer A = pure domain
+(`types/records/document/presets/ports`); Layer B = node service
+(`store/resolver/api`) behind injected ports. Shipped as **#460** (steps 1–2,
+green) and **#461** (steps 3–5, stacked). ⚠️ **Merge gate on #461:** live
+sign-in + `env://` reference smoke on a running daemon (auth-fragile OAuth
+path, unverifiable headless).
+
+Steps 1–2 and 3–5 shipped as **separate PRs** (types+ports first, engine moves
+second) so the fragile moves stay small and revertable.
 
 ## Verification
 
