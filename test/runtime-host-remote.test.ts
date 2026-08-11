@@ -10,7 +10,10 @@ function makeHost() {
   return new RuntimeHost({ credsDir: "/tmp/bivy-test-pi", piDir: "/tmp/bivy-test-pi", sessionsDir: "/tmp/bivy-test-pi/sessions" });
 }
 
-function withEnv(env: Record<string, string | undefined>, fn: () => void) {
+function withEnv(overrides: Record<string, string | undefined>, fn: () => void) {
+  // In-process cases exercise routing, not upstream discovery. Pin the operator
+  // command to a known executable so the test is independent of the CI image.
+  const env = { BIVY_CLAUDE_COMMAND: process.execPath, ...overrides };
   const saved: Record<string, string | undefined> = {};
   for (const k of Object.keys(env)) {
     saved[k] = process.env[k];
