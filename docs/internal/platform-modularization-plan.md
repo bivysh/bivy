@@ -78,6 +78,54 @@ command/event-over-HTTP+SSE shape. Extract bounded controllers out of
 lifecycle — behind the registry. Business logic leaves route/switch/controller
 handlers; those only validate, authorize, dispatch.
 
+**Grounding (read 2026-08-11): this EXTENDS an existing seam, not greenfield.**
+`server.ts:2059` already has a unified dispatch (the referenced
+`docs/dramatic-simplification-plan.md` is gone, but the code is live): a
+`Command = (msg, ctx) => void | Promise<void>` type, a `CommandCtx { reply,
+broadcast }`, and a `RELAY_COMMANDS` registry that `handleRelayMessage` consults
+first, falling through to an inline switch for unmigrated kinds. **22 commands
+are already migrated**, cleanly grouped by domain prefix — `session.*` (pause,
+resume, question.answer, replay, rename, close), `node.*` (update, rename,
+settings.get), `rulesets.*` (list, save, remove), `models.*`, `runtimes.*`,
+`integrations.*`, `workspaces.*`, `github.app.*`, `provider.oauth.*`, plus
+singletons (ping, abort, approval, attachment.fetch). **Those prefixes are the
+bounded controllers.**
+
+Phase 2 work, as slices (each its own PR against `main`):
+1. **Controller extraction (the carve).** Move a prefix-group's handlers +
+   the helpers they close over (e.g. `rulesets.*` with `persistRulesetSave` /
+   `broadcastRulesets` / `rulesetInfos`) into a `src/controllers/<name>.ts`
+   module that receives a typed context (`{ reply, broadcast, store, sessions,
+   … }`) and registers into `RELAY_COMMANDS`. `server.ts` shrinks to
+   composition. Start with a SMALL self-contained group as the proof —
+   candidates: `rulesets` (3 handlers) or `node` (3). Same low-risk discipline
+   as the credentials pilot (move + inject deps + keep the registry as the
+   seam). A `controllers → server.ts` boundary rule guards it.
+2. **Finish the migration.** Move remaining inline-switch kinds into the
+   registry so there is one dispatch path.
+3. **Version + validate the contract.** Add an explicit envelope version and
+   runtime validation at the transport boundary (typebox is already a dep —
+   see `integrations/registry.ts`). Derive REST/WS/relay routing from the
+   registry. This is the durable public-API commitment (compat policy needed
+   before third-party SDK consumers).
+
+**Decision (2026-08-11): carve first, formalize later.** Extract controllers
+behind the existing registry now (mechanical, low-risk, mirrors the credentials
+pilot); add the versioned envelope + typebox validation as a later slice. The
+contract is still internal (no external SDK consumers), so deferring is
+low-cost and reversible.
+
+**First-carve coupling note (read 2026-08-11):** `rulesets` is the smallest
+candidate, but not fully isolated — its store ops already live in
+`runtime/ruleset-store.ts`, yet `activeQueueRuleset()` feeds `queueRunPolicy`,
+consumed by the work queue (not just commands). So the first controller PR must
+either (a) move the whole ruleset concern (commands + `activeQueueRuleset` +
+`queueRunPolicy` wiring) into `controllers/rulesets.ts` with `{ rulesetsDir,
+broadcast }` injected, or (b) pick an even more isolated group (`node.*`:
+update/rename/settings). **None of server.ts is type-strippable**, so the carve
+is fully CI-verified — it warrants its own focused PR, not a tail-end change.
+Next action: the first controller carve as a dedicated PR against `main`.
+
 ### Phase 3 — Extract `@bivy/remote`
 
 Relay transport + control-plane sync + remote session location, behind the ports
