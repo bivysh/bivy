@@ -12,7 +12,7 @@ import path from "node:path";
 import { seal, open } from "../src/e2e.js";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import { createCredentialStore } from "../src/runtime/credentials.js";
-import { setProviderReference } from "../src/runtime/pi-auth.js";
+import { setProviderReference } from "../src/credentials/api.js";
 import { inferReferenceBackend } from "../src/credentials/records.js";
 
 // --- inferReferenceBackend --------------------------------------------------

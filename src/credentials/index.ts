@@ -83,11 +83,8 @@ export {
   NodeCredentialResolver,
 } from "../runtime/credentials.js";
 
-// --- The daemon credential API (ours — currently named pi-auth.ts) ----------
-// Phase 5 renames the file to `src/credentials/api.ts`; the facade keeps the
-// import path stable so call sites don't churn when it moves.
+// --- The daemon credential API (ours — Pi-free) -----------------------------
 export {
-  listProviders,
   exportProviderAuth,
   exportProviderAuthTombstones,
   importProviderAuth,
@@ -99,5 +96,9 @@ export {
   setProviderApiKeyLabeled,
   setProviderReferenceLabeled,
   removeProviderCredential,
-} from "../runtime/pi-auth.js";
-export type { ProviderAuthInfo, CredentialRecordSummary } from "../runtime/pi-auth.js";
+  joinProviderCatalog,
+} from "./api.js";
+export type { ProviderAuthInfo, CredentialRecordSummary, ProviderCatalogEntry } from "./api.js";
+
+// --- The Pi-catalog bridge (the one Pi-coupled provider listing) ------------
+export { listProviders } from "../runtime/provider-catalog.js";

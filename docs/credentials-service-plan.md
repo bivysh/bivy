@@ -323,8 +323,11 @@ Each phase ships independently and leaves the app working.
    `ingest.policy` in `credentials.config.json` lets the user choose `merge` (default — fold a
    native login into the provider's synced `default`, the historical behavior) or `separate` (keep
    it as a distinct, node-local, reserved-label credential that never clobbers a Bivy key). Guarded
-   by `test/credential-ingest-policy.test.ts`. **Still pending:** the PWA Models screen (labels +
-   preset picker), and the `pi-auth.ts` → `api.ts` rename with the catalog injected.
+   by `test/credential-ingest-policy.test.ts`. *(5d shipped: rename + catalog injection.)*
+   `runtime/pi-auth.ts` moved to `src/credentials/api.ts` and is now **Pi-free** — the provider
+   catalog is injected (`joinProviderCatalog(credsDir, catalog)`); the thin
+   `runtime/provider-catalog.ts` bridge supplies Pi's `listProviders`. **Still pending:** the PWA
+   Models screen (labels + preset picker).
 6. **`sync` field + opt-out filter + record-addressed OAuth refresh.** Lift transport behind
    `sync.ts`; filter by policy; refresh the specific record (dedicated two-oauth-per-provider test).
 7. **(Later) Package promotion** — a `package.json`, because the boundary was drawn in phase 1.

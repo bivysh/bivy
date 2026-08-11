@@ -40,7 +40,8 @@ import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionSource, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState, type SessionWorkspaceState } from "./session/session-state.js";
-import { exportProviderAuth, exportProviderAuthTombstones, importProviderAuth, listProviders, removeProvider, setProviderApiKey, setProviderCredential } from "./runtime/pi-auth.js";
+import { exportProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, setProviderCredential } from "./credentials/api.js";
+import { listProviders } from "./runtime/provider-catalog.js";
 import {
   loadLocalModels,
   upsertLocalProvider,

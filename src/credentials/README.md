@@ -46,15 +46,21 @@ lifted into its own package by adding a `package.json`).
   `tombstoneWinsRecord`) — the v2 convergence rules re-keyed to records. This is
   what `credential-store.ts` will delegate to so the vault persists v3; it is
   verified standalone because the vault's fs/crypto glue is auth-critical.
-- **`index.ts`** — the public facade. Ships the new model and re-exports the
-  existing credential surface so new code can already import from here.
+- **`presets.ts`** — selection presets + ingest policy (`credentials.config.json`):
+  pure `parsePresets` / `resolveCredential` inputs, and `parseIngestPolicy`
+  (`merge` | `separate`) for agent-native logins.
+- **`api.ts`** — the daemon credential API (formerly `runtime/pi-auth.ts`), Bivy's
+  own auth surface: `set*` / `remove*` / `export*` / `import*` and the labeled
+  multi-credential functions, plus `joinProviderCatalog(credsDir, catalog)`.
+  **Pi-free** — the provider catalog is injected; `runtime/provider-catalog.ts`
+  supplies Pi's.
+- **`index.ts`** — the public facade over all of the above.
 
 ## Roadmap
 
 See [`docs/credentials-service-plan.md`](../../docs/credentials-service-plan.md).
-Later phases move the vault, resolver, ingest/provisioning, and daemon API under
-this directory (renaming the misnamed `runtime/pi-auth.ts` → `api.ts`), add the
-`v3` multi-credential schema + migration, wire selection into the live path, add
-the reference source, and lift sync policy behind `sync.ts`. Each phase is
-additive and independently shippable; the zero-config single-credential
-experience must stay unchanged throughout.
+The remaining work: the PWA Models screen, per-credential opt-out sync + a
+record-shaped sync wire (so `separate`/reference credentials can travel), and
+finally moving the vault (`runtime/credential-store.ts`) and resolver physically
+under this directory so a `package.json` lifts the service out whole. Each phase
+is additive; the zero-config single-credential experience stays unchanged.

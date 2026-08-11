@@ -17,7 +17,7 @@ import {
   setProviderApiKeyLabeled,
   setProviderReferenceLabeled,
   removeProviderCredential,
-} from "../src/runtime/pi-auth.js";
+} from "../src/credentials/api.js";
 
 function freshCredsDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-cred-rec-"));
