@@ -40,6 +40,12 @@ lifted into its own package by adding a `package.json`).
   - `agentNativeLabel()` — the reserved label an ingested agent-native login
     lands under, so it can never clobber a Bivy-managed `provider:default` key.
   - `missingPresetLabels()` — dangling-preset detection for `doctor` / PWA warnings.
+- **`document.ts`** — the v3 vault document engine (also pure): the
+  `provider:label`-keyed schema, `v1/v2 → v3` migration (`migrateToV3`), and the
+  non-destructive merge (`mergeDocuments`, `preferIncomingRecord`,
+  `tombstoneWinsRecord`) — the v2 convergence rules re-keyed to records. This is
+  what `credential-store.ts` will delegate to so the vault persists v3; it is
+  verified standalone because the vault's fs/crypto glue is auth-critical.
 - **`index.ts`** — the public facade. Ships the new model and re-exports the
   existing credential surface so new code can already import from here.
 

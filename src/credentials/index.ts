@@ -36,6 +36,17 @@ export type {
   DanglingPreset,
 } from "./records.js";
 
+// --- The v3 document engine: schema, migration, merge (new, pure) -----------
+export {
+  emptyDocument,
+  recordFromStored,
+  preferIncomingRecord,
+  tombstoneWinsRecord,
+  migrateToV3,
+  mergeDocuments,
+} from "./document.js";
+export type { CredentialVaultDocumentV3, MergeResult } from "./document.js";
+
 // --- The vault (source of truth) — re-exported from its current home --------
 export {
   createCredentialVault,
