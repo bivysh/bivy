@@ -308,8 +308,16 @@ Each phase ships independently and leaves the app working.
    *Caveat:* references are **node-local** until phase 6 — the provider-keyed sync wire and Pi's
    plaintext `auth.json` can't carry a pointer, so `exportAll`/`materializePlaintext` skip
    reference records; record-shaped sync (phase 6) is what makes the pointer travel.
-5. **Multi-credential API + UI + ingest labels.** `api.ts` gains add/label/remove/list; PWA Models
-   screen gets labels + preset picker; ingest lands under reserved labels; catalog injected.
+5. **Multi-credential API + UI + ingest labels.** *(5a shipped: the labeled API.)* The store gained
+   record-addressed CRUD (`readRecord`/`putRecord`/`deleteRecord`/`importRecords`); the daemon API
+   gained `listCredentialRecords` (non-secret summaries) + `setProviderApiKeyLabeled` /
+   `setProviderReferenceLabeled` / `removeProviderCredential` (labeled, sync/origin-preserving).
+   Additive — the single-credential path is the `label:"default"` case, unchanged. Guarded by
+   `test/credential-store-records.test.ts`. **Still pending:** the PWA Models screen (labels +
+   preset picker), agent-native ingest under reserved labels (a behavior change — a native login
+   becomes a separate selectable credential rather than overwriting `provider:default`; needs a
+   decision + careful test rewrite), and the `pi-auth.ts` → `api.ts` rename with the catalog
+   injected.
 6. **`sync` field + opt-out filter + record-addressed OAuth refresh.** Lift transport behind
    `sync.ts`; filter by policy; refresh the specific record (dedicated two-oauth-per-provider test).
 7. **(Later) Package promotion** — a `package.json`, because the boundary was drawn in phase 1.

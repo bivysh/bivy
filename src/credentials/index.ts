@@ -87,5 +87,9 @@ export {
   setProviderCredential,
   setProviderReference,
   removeProvider,
+  listCredentialRecords,
+  setProviderApiKeyLabeled,
+  setProviderReferenceLabeled,
+  removeProviderCredential,
 } from "../runtime/pi-auth.js";
-export type { ProviderAuthInfo } from "../runtime/pi-auth.js";
+export type { ProviderAuthInfo, CredentialRecordSummary } from "../runtime/pi-auth.js";
