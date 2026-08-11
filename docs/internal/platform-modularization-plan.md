@@ -124,7 +124,16 @@ either (a) move the whole ruleset concern (commands + `activeQueueRuleset` +
 broadcast }` injected, or (b) pick an even more isolated group (`node.*`:
 update/rename/settings). **None of server.ts is type-strippable**, so the carve
 is fully CI-verified — it warrants its own focused PR, not a tail-end change.
-Next action: the first controller carve as a dedicated PR against `main`.
+**First controller carve — DONE 2026-08-11 (branch `bivy/platform-phase2-rulesets-controller`).**
+`rulesets` lifted into `src/controllers/rulesets.ts` behind
+`createRulesetController({ rulesetsDir, broadcast })`; `server.ts` destructures
+the five helpers back, so the RELAY_COMMANDS handlers, the REST `/api/rulesets`
+routes, and the queue run-policy are unchanged. Added a
+`controllers → server.ts` boundary rule (enforced). Also de-Pi'd the credentials
+rule (dropped the redundant `/pi-oauth`, kept only the src-root `native-pi`) —
+the rule is architectural, Pi-freeness falls out of it. Next: migrate the
+command handlers + REST routes to register through the controller, then repeat
+for the other prefix groups; version/validate the envelope later.
 
 ### Phase 3 — Extract `@bivy/remote`
 
