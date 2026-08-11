@@ -106,8 +106,24 @@ Phase 2 work, as slices (each its own PR against `main`):
 3. **Version + validate the contract.** Add an explicit envelope version and
    runtime validation at the transport boundary (typebox is already a dep —
    see `integrations/registry.ts`). Derive REST/WS/relay routing from the
-   registry. This is the durable public-API commitment (compat policy needed
-   before third-party SDK consumers).
+   registry. This is the durable public-API commitment.
+   - **Compatibility policy — DECIDED 2026-08-11: serve a compatible subset.** A
+     newer node serves an older client the operations it understands (`since <=
+     negotiated version`) and withholds newer ones, rather than rejecting the
+     connection. Legacy (unversioned) peers negotiate to v0 = today's surface.
+   - **Slice 1 — DONE 2026-08-11 (branch `bivy/platform-phase2-protocol-versioning`).**
+     New pure `src/protocol/` layer: `version.ts` (`PROTOCOL_VERSION`,
+     `isServedTo`, `negotiateVersion`, `compatibleSubset` — the policy as tested
+     code) + `command-spec.ts` (schema-capable `CommandSpec` + `validateInput`,
+     typebox `Check`/`Errors`, no-schema = passthrough so migration is additive).
+     Enforced `protocol` boundary rule (no impl imports). Tests:
+     `test/protocol-version.test.ts` (pure, 4/4 green locally) +
+     `test/protocol-validate.test.ts` (typebox → CI). **Zero server.ts changes.**
+   - **Slice 2 (next):** wire `CommandSpec`/`validateInput` into the dispatch
+     registry (validate-if-schema at the boundary; add schemas to commands
+     incrementally) + a per-connection version handshake applying
+     `compatibleSubset`. This touches server.ts → CI-gated.
+   - **Slice 3 (later):** generate JSON Schema / client types from the registry.
 
 **Decision (2026-08-11): carve first, formalize later.** Extract controllers
 behind the existing registry now (mechanical, low-risk, mirrors the credentials
