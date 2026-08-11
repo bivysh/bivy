@@ -13,6 +13,8 @@
 
 import { createCredentialVault } from "./credential-store.js";
 import { refreshModelOAuth } from "./oauth/model-oauth.js";
+import { resolveCredential, type CredentialPresets } from "../credentials/records.js";
+import { loadPresets, defaultPresetsPath } from "../credentials/presets.js";
 import type { AgentCredentialStore, ProviderCredential } from "./types.js";
 
 /** Refresh an OAuth token this many ms before it expires (clock-skew guard). */
@@ -21,17 +23,34 @@ const OAUTH_REFRESH_SKEW_MS = 60_000;
 /** Resolver over Bivy's credential store, with OAuth refresh-on-read via the bridge. */
 export class NodeCredentialResolver implements AgentCredentialStore {
   private readonly store: ReturnType<typeof createCredentialVault>;
+  private readonly presetsPath: string;
+  private presetsCache?: CredentialPresets;
 
   constructor(private readonly credsDir: string) {
     this.store = createCredentialVault(credsDir);
+    this.presetsPath = defaultPresetsPath(credsDir);
+  }
+
+  /** The node's selection presets, read once per resolver (see presets.ts). */
+  private presets(): CredentialPresets {
+    if (!this.presetsCache) this.presetsCache = loadPresets(this.presetsPath);
+    return this.presetsCache;
   }
 
   async getCredential(provider: string): Promise<ProviderCredential | undefined> {
     const id = provider.trim().toLowerCase();
     if (!id) return undefined;
 
-    const cred = await this.store.read(id).catch(() => undefined);
-    if (!cred) return undefined;
+    // Selection is data-driven: pick the record for this provider per the active
+    // preset (records.ts). With one credential per provider this resolves to that
+    // credential; ambiguity (multiple accounts, no preset) returns nothing rather
+    // than guessing. Reference records are resolved in a later phase.
+    const records = await this.store.listRecords().catch(() => []);
+    const selection = resolveCredential(id, records, this.presets());
+    if (!selection) return undefined;
+    const source = selection.record.source;
+    if (source.kind !== "stored") return undefined;
+    const cred = source.cred;
 
     if (cred.type === "api_key") {
       const token = typeof cred.key === "string" ? cred.key : "";
@@ -56,7 +75,8 @@ export class NodeCredentialResolver implements AgentCredentialStore {
   /** Providers with a stored credential — the vault's contents (not ambient env). */
   async listConfigured(): Promise<string[]> {
     const infos = await this.store.list().catch(() => []);
-    return infos.map((info) => info.providerId);
+    // A provider may hold several labeled records; expose each provider once.
+    return [...new Set(infos.map((info) => info.providerId))];
   }
 }
 

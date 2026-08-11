@@ -21,6 +21,14 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { seal, open } from "../e2e.js";
+import {
+  migrateToV3,
+  mergeDocuments,
+  recordFromStored,
+  emptyDocument,
+  type CredentialVaultDocumentV3,
+} from "../credentials/document.js";
+import { credKey, parseCredKey, DEFAULT_LABEL, type CredentialRecord } from "../credentials/records.js";
 
 /** Stored api-key credential. `env` holds provider-scoped config (base URLs, ids). */
 export interface ApiKeyCredential {
@@ -57,11 +65,11 @@ export type StoredCredential = ApiKeyCredential | OAuthCredential;
 
 export type CredentialTombstones = Record<string, number>;
 
-interface CredentialVaultDocument {
-  v: 2;
-  providers: Record<string, StoredCredential>;
-  deletedAt: CredentialTombstones;
-}
+// The on-disk document is now v3 (a `provider:label`-keyed record map). The store
+// migrates any prior encoding on read and persists v3, while its public surface
+// keeps exchanging today's provider-keyed `StoredCredential` shapes via the
+// `provider:default` record (multi-label storage is enabled but not yet exposed).
+type CredentialVaultDocument = CredentialVaultDocumentV3;
 
 /** Non-secret metadata for enumeration (never exposes key/token material). */
 export interface StoredCredentialInfo {
@@ -88,16 +96,20 @@ function providerId(id: string): string {
   return String(id ?? "").trim().toLowerCase();
 }
 
-function sameCredentialContent(a: StoredCredential | undefined, b: StoredCredential): boolean {
-  if (!a) return false;
-  const { updatedAt: _a, ...left } = a;
-  const { updatedAt: _b, ...right } = b;
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 function withoutStoreMetadata(credential: StoredCredential): StoredCredential {
   const { updatedAt: _updatedAt, ...projected } = credential;
   return projected as StoredCredential;
+}
+
+/** The `StoredCredential` inside a record, when it holds one (not a reference). */
+function storedOf(record: CredentialRecord | undefined): StoredCredential | undefined {
+  if (!record || record.source.kind !== "stored") return undefined;
+  return record.source.cred;
+}
+
+/** The natural key for a provider's default credential — the v2-compatible slot. */
+function defaultKey(provider: string): string {
+  return credKey(providerId(provider), DEFAULT_LABEL);
 }
 
 /**
@@ -179,16 +191,23 @@ export class BivyCredentialStore {
   async read(provider: string): Promise<StoredCredential | undefined> {
     const id = providerId(provider);
     if (!id) return undefined;
-    const credential = this.readDocument().providers[id];
-    return credential ? withoutStoreMetadata(credential) : undefined;
+    const cred = storedOf(this.readDocument().credentials[defaultKey(id)]);
+    return cred ? withoutStoreMetadata(cred) : undefined;
   }
 
   async list(): Promise<readonly StoredCredentialInfo[]> {
-    return Object.entries(this.readDocument().providers).map(([id, cred]) => ({
-      providerId: id,
-      type: cred.type,
-      ...(cred.type === "oauth" ? { expiresAt: (cred as OAuthCredential).expires } : {}),
-    }));
+    const infos: StoredCredentialInfo[] = [];
+    for (const record of Object.values(this.readDocument().credentials)) {
+      const cred = storedOf(record);
+      // A reference record holds no token here; it is api-key-shaped when resolved.
+      const type: StoredCredential["type"] = cred ? cred.type : "api_key";
+      infos.push({
+        providerId: record.provider,
+        type,
+        ...(cred && cred.type === "oauth" ? { expiresAt: (cred as OAuthCredential).expires } : {}),
+      });
+    }
+    return infos;
   }
 
   /**
@@ -203,19 +222,29 @@ export class BivyCredentialStore {
   ): Promise<StoredCredential | undefined> {
     const id = providerId(provider);
     if (!id) throw new Error("Provider is required");
+    const key = defaultKey(id);
     return this.enqueue(id, async () => {
       await this.acquireLock();
       try {
         const document = this.readDocument();
-        const vault = document.providers;
-        const next = await fn(vault[id]);
-        if (next === undefined) return vault[id];
+        const existing = document.credentials[key];
+        const current = storedOf(existing);
+        const next = await fn(current);
+        if (next === undefined) return current;
         if (!isStoredCredential(next)) throw new Error(`Invalid credential for "${id}"`);
-        const stamped = { ...next, updatedAt: Date.now() } as StoredCredential;
-        vault[id] = stamped;
-        delete document.deletedAt[id];
+        const now = Date.now();
+        // Store the credential clean; the store-owned stamp lives on the record.
+        // Preserve the record's sync/origin/label when it already exists.
+        const clean = withoutStoreMetadata(next);
+        const record: CredentialRecord = existing
+          ? { ...existing, source: { kind: "stored", cred: clean }, updatedAt: now }
+          : { ...recordFromStored(id, clean), updatedAt: now };
+        document.credentials[key] = record;
+        delete document.deletedAt[key];
         this.writeDocument(document);
-        return stamped;
+        // Preserve the historical return contract: the stored credential with its
+        // fresh store-owned stamp.
+        return { ...clean, updatedAt: now } as StoredCredential;
       } finally {
         await this.releaseLock();
       }
@@ -225,15 +254,16 @@ export class BivyCredentialStore {
   async delete(provider: string): Promise<void> {
     const id = providerId(provider);
     if (!id) return;
+    const key = defaultKey(id);
     await this.enqueue(id, async () => {
       await this.acquireLock();
       try {
         const document = this.readDocument();
-        const hadCredential = id in document.providers;
-        delete document.providers[id];
+        const hadCredential = key in document.credentials;
+        delete document.credentials[key];
         const deletedAt = Date.now();
-        if (!hadCredential && (document.deletedAt[id] ?? 0) >= deletedAt) return;
-        document.deletedAt[id] = deletedAt;
+        if (!hadCredential && (document.deletedAt[key] ?? 0) >= deletedAt) return;
+        document.deletedAt[key] = deletedAt;
         this.writeDocument(document);
       } finally {
         await this.releaseLock();
@@ -250,14 +280,42 @@ export class BivyCredentialStore {
     await this.modify(provider, async () => ({ type: "api_key", key: apiKey }));
   }
 
-  /** Every stored credential, keyed by provider id — the cross-node snapshot. */
+  /**
+   * Every stored credential, keyed by provider id — the cross-node snapshot.
+   * The wire stays provider-keyed (v2 shape), so only `provider:default` records
+   * are projected; the store-owned `updatedAt` is re-attached to the credential so
+   * a peer's merge can order it. (Non-default labels are not yet synced — phase 6.)
+   */
   async exportAll(): Promise<Record<string, StoredCredential>> {
-    return this.readDocument().providers;
+    const out: Record<string, StoredCredential> = {};
+    for (const record of Object.values(this.readDocument().credentials)) {
+      if (record.label !== DEFAULT_LABEL) continue;
+      const cred = storedOf(record);
+      if (!cred) continue;
+      out[record.provider] = record.updatedAt ? { ...cred, updatedAt: record.updatedAt } : cred;
+    }
+    return out;
   }
 
-  /** Provider deletions retained for cross-node convergence. */
+  /** Provider deletions retained for cross-node convergence (provider-keyed wire). */
   async exportTombstones(): Promise<CredentialTombstones> {
-    return this.readDocument().deletedAt;
+    const out: CredentialTombstones = {};
+    for (const [key, stamp] of Object.entries(this.readDocument().deletedAt)) {
+      const parsed = parseCredKey(key);
+      if (!parsed) out[key] = stamp;
+      else if (parsed.label === DEFAULT_LABEL) out[parsed.provider] = stamp;
+    }
+    return out;
+  }
+
+  /**
+   * Every stored credential as a full v3 record (`provider:label`, source, sync,
+   * origin). This is the multi-credential surface selection reads — it carries
+   * secret material, so it is for trusted in-node callers (the credential
+   * resolver), not enumeration. Use `list()` for non-secret metadata.
+   */
+  async listRecords(): Promise<readonly CredentialRecord[]> {
+    return Object.values(this.readDocument().credentials);
   }
 
   /** The plaintext `auth.json` path an agent's own CLI/TUI reads (`<plaintextDir>/auth.json`). */
@@ -274,9 +332,12 @@ export class BivyCredentialStore {
    * `ingestPlaintext()` to fold TUI-time logins back into the vault.
    */
   materializePlaintext(): string {
-    const vault = Object.fromEntries(
-      Object.entries(this.readDocument().providers).map(([id, credential]) => [id, withoutStoreMetadata(credential)]),
-    );
+    const vault: Record<string, StoredCredential> = {};
+    for (const record of Object.values(this.readDocument().credentials)) {
+      if (record.label !== DEFAULT_LABEL) continue;
+      const cred = storedOf(record);
+      if (cred) vault[record.provider] = withoutStoreMetadata(cred);
+    }
     const next = `${JSON.stringify(vault, null, 2)}\n`;
     // Write only when the projection actually changes. This keeps the file's
     // mtime stable so a live re-materialize (on a vault change while a native Pi
@@ -314,49 +375,15 @@ export class BivyCredentialStore {
     await this.acquireLock();
     try {
       const document = this.readDocument();
-      const vault = document.providers;
-      let imported = 0;
-      let changed = false;
-      for (const [rawId, incoming] of Object.entries(snapshot ?? {})) {
-        const id = providerId(rawId);
-        if (!id || !isStoredCredential(incoming)) continue;
-        if (tombstoneWins(incoming, document.deletedAt[id] ?? 0)) continue;
-        const local = vault[id];
-        // Store-owned timestamps are intentionally not part of credential
-        // content. An older sender may re-state the same key without updatedAt;
-        // preserve the local stamp and avoid a pointless re-encrypt/watch loop.
-        if (sameCredentialContent(local, incoming)) continue;
-        // Freshest-wins, rotation-safe (see preferIncomingCredential): a lagging
-        // or refresh-less snapshot must not overwrite a fresher local login.
-        if (!preferIncomingCredential(local, incoming)) continue;
-        if (!(id in vault)) imported += 1;
-        // Only mark dirty on a real content change, so a snapshot that merely
-        // re-states what we already hold doesn't rewrite (and re-encrypt) the
-        // vault — which would needlessly bump auth.enc's mtime and re-fire the
-        // vault watcher (materialize → ingest → import loop protection).
-        if (JSON.stringify(local) !== JSON.stringify(incoming)) {
-          vault[id] = incoming;
-          const incomingUpdatedAt = Number(incoming.updatedAt);
-          if (!Number.isFinite(document.deletedAt[id]) || incomingUpdatedAt > document.deletedAt[id]) {
-            delete document.deletedAt[id];
-          }
-          changed = true;
-        }
-      }
-      for (const [rawId, rawDeletedAt] of Object.entries(deletedAt ?? {})) {
-        const id = providerId(rawId);
-        const deletionTime = Number(rawDeletedAt);
-        if (!id || !Number.isFinite(deletionTime) || deletionTime <= 0) continue;
-        if ((document.deletedAt[id] ?? 0) >= deletionTime) continue;
-        // A later re-login makes an older tombstone obsolete; do not retain and
-        // re-export it alongside the live credential.
-        if (vault[id] && !tombstoneWins(vault[id], deletionTime)) continue;
-        document.deletedAt[id] = deletionTime;
-        if (tombstoneWins(vault[id], deletionTime)) delete vault[id];
-        changed = true;
-      }
-      if (changed) this.writeDocument(document);
-      return imported;
+      // The snapshot/tombstones arrive in the provider-keyed v2 wire shape (sync
+      // envelope, ingest, plaintext auth.json). Migrate them to records under
+      // `provider:default`, then apply the shared record-addressed convergence
+      // engine (merge-never-destroy, freshest-OAuth-wins, rotation-safe,
+      // tombstone-newer-wins — see document.ts).
+      const incoming = migrateToV3({ v: 2, providers: snapshot, deletedAt });
+      const result = mergeDocuments(document, incoming.credentials, incoming.deletedAt);
+      if (result.changed) this.writeDocument(result.document);
+      return result.imported;
     } finally {
       await this.releaseLock();
     }
@@ -389,7 +416,7 @@ export class BivyCredentialStore {
     try {
       raw = fs.readFileSync(this.blobFile, "utf8");
     } catch {
-      return { v: 2, providers: {}, deletedAt: {} };
+      return emptyDocument();
     }
     let parsed: unknown;
     try {
@@ -397,21 +424,12 @@ export class BivyCredentialStore {
     } catch {
       // A truncated/corrupt/undecryptable vault is treated as empty rather than
       // taking the node down: every caller already handles "no credential".
-      return { v: 2, providers: {}, deletedAt: {} };
+      return emptyDocument();
     }
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && (parsed as any).v === 2) {
-      const raw = parsed as { providers?: unknown; deletedAt?: unknown };
-      const tombstones: CredentialTombstones = {};
-      if (raw.deletedAt && typeof raw.deletedAt === "object" && !Array.isArray(raw.deletedAt)) {
-        for (const [id, value] of Object.entries(raw.deletedAt as Record<string, unknown>)) {
-          const normalized = providerId(id);
-          const stamp = Number(value);
-          if (normalized && Number.isFinite(stamp) && stamp > 0) tombstones[normalized] = stamp;
-        }
-      }
-      return { v: 2, providers: normalizeMap(raw.providers), deletedAt: tombstones };
-    }
-    return { v: 2, providers: normalizeMap(parsed), deletedAt: {} };
+    // migrateToV3 accepts a v3 document, a v2 `{ providers, deletedAt }` document,
+    // or a bare v1 provider→StoredCredential map, and always yields a normalized v3
+    // document — so an existing vault upgrades transparently on first read.
+    return migrateToV3(parsed);
   }
 
   private writeDocument(document: CredentialVaultDocument): void {
@@ -439,10 +457,10 @@ export class BivyCredentialStore {
     } catch {
       return; // no legacy file / unreadable — nothing to import
     }
-    const map = normalizeMap(legacy);
-    if (Object.keys(map).length === 0) return;
+    const document = migrateToV3(legacy);
+    if (Object.keys(document.credentials).length === 0) return;
     try {
-      this.writeDocument({ v: 2, providers: map, deletedAt: {} });
+      this.writeDocument(document);
     } catch {
       // If we can't write the encrypted vault, fall back to reading legacy on
       // the next call rather than crashing.
