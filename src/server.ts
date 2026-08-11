@@ -17,6 +17,8 @@ import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
 import { createWorkspaceController } from "./controllers/workspaces.js";
 import { createModelController } from "./controllers/models.js";
+import { Type, type TSchema } from "typebox";
+import { validateInput } from "./protocol/command-spec.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
@@ -1869,6 +1871,14 @@ interface CommandCtx {
 }
 type Command = (msg: ClientMessage, ctx: CommandCtx) => void | Promise<void>;
 
+// A registry entry is either a bare handler (legacy form) or a spec that adds an
+// optional typebox input schema — validated at the dispatch boundary before the
+// handler runs — plus the protocol version it was introduced at (for the
+// compatible-subset policy). The two forms coexist so commands adopt validation
+// one at a time; a bare handler behaves exactly as before. See src/protocol/.
+type CommandSpecEntry = { since?: number; schema?: TSchema; handler: Command };
+type RegisteredCommand = Command | CommandSpecEntry;
+
 // Idempotency for `session.new` keyed by requestId: a client's post-reconnect
 // retry adopts the session the first request created instead of spawning a
 // duplicate. See ./session/session-new-dedupe for the full rationale.
@@ -1887,9 +1897,17 @@ const promptDedupe = createSessionNewDedupe<void>();
 const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<void>) =>
   promptDedupe.run(clientMessageId, run);
 
-const RELAY_COMMANDS: Record<string, Command> = {
-  ping(msg, ctx) {
-    ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
+const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
+  // First command to adopt boundary validation (the spec form). `requestId` is
+  // the only declared field; typebox permits additional properties by default,
+  // so real pings always pass — this exercises the schema path end-to-end
+  // without changing behavior. Other commands adopt schemas one at a time.
+  ping: {
+    since: 0,
+    schema: Type.Object({ requestId: Type.Optional(Type.String()) }),
+    handler(msg: ClientMessage, ctx: CommandCtx) {
+      ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
+    },
   },
   // Kick off `bivy update` on this node from the app's version-mismatch banner
   // (see runBivyUpdate). The node restarts itself when the update lands, so the
@@ -3050,9 +3068,22 @@ const RELAY_CLIENT_ID = "relay";
 
 async function handleRelayMessage(msg: ClientMessage) {
   try {
-    const command = RELAY_COMMANDS[msg.kind];
-    if (command) {
-      await command(msg, relayCtx);
+    const entry = RELAY_COMMANDS[msg.kind];
+    if (entry) {
+      const handler = typeof entry === "function" ? entry : entry.handler;
+      const schema = typeof entry === "function" ? undefined : entry.schema;
+      if (schema) {
+        const check = validateInput(schema, msg);
+        if (!check.ok) {
+          relayCtx.reply({
+            type: `${msg.kind}.error`,
+            requestId: typeof msg.requestId === "string" ? msg.requestId : undefined,
+            error: `Invalid ${msg.kind}: ${check.errors.join("; ")}`,
+          });
+          return;
+        }
+      }
+      await handler(msg, relayCtx);
       return;
     }
     // Fallthrough for kinds not in RELAY_COMMANDS: terminal.* frames go to the

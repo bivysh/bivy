@@ -119,10 +119,18 @@ Phase 2 work, as slices (each its own PR against `main`):
      Enforced `protocol` boundary rule (no impl imports). Tests:
      `test/protocol-version.test.ts` (pure, 4/4 green locally) +
      `test/protocol-validate.test.ts` (typebox → CI). **Zero server.ts changes.**
-   - **Slice 2 (next):** wire `CommandSpec`/`validateInput` into the dispatch
-     registry (validate-if-schema at the boundary; add schemas to commands
-     incrementally) + a per-connection version handshake applying
-     `compatibleSubset`. This touches server.ts → CI-gated.
+   - **Slice 2a — DONE 2026-08-11 (branch `bivy/platform-phase2-dispatch-validation`).**
+     Dispatch validation plumbing. `RELAY_COMMANDS` entries may now be a bare
+     handler (unchanged) OR a `{ since?, schema?, handler }` spec;
+     `handleRelayMessage` validates via `validateInput` when a schema is present
+     and replies `<kind>.error` on failure, else dispatches as before.
+     Behaviorally a no-op until commands adopt schemas, so it's safe. `ping` is
+     the first command converted to the spec form (all-optional schema → always
+     passes; proves the path end-to-end). server.ts change → CI typecheck
+     (typebox unresolvable locally).
+   - **Slice 2b (next):** a per-connection version handshake applying
+     `compatibleSubset`, then convert real commands to schemas one at a time
+     (each a small change; behavior-changing ones want a live smoke).
    - **Slice 3 (later):** generate JSON Schema / client types from the registry.
 
 **Decision (2026-08-11): carve first, formalize later.** Extract controllers
