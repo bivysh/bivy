@@ -328,8 +328,15 @@ Each phase ships independently and leaves the app working.
    catalog is injected (`joinProviderCatalog(credsDir, catalog)`); the thin
    `runtime/provider-catalog.ts` bridge supplies Pi's `listProviders`. **Still pending:** the PWA
    Models screen (labels + preset picker).
-6. **`sync` field + opt-out filter + record-addressed OAuth refresh.** Lift transport behind
-   `sync.ts`; filter by policy; refresh the specific record (dedicated two-oauth-per-provider test).
+6. **Opt-out sync filter + record-addressed OAuth refresh.** *(part 1 shipped.)* The sync push now
+   sends only account-tier credentials — `exportSyncable()` filters `sync:"node"`, so a credential
+   the user opts node-local stays local (local reads still use `exportAll`). OAuth refresh is
+   record-addressed: `modifyRecord(provider, label, …)` (with `modify` as the `default` case), and
+   `refreshModelOAuth(credsDir, provider, label)` threaded from the resolver's selected record, so
+   refreshing one account never rotates another's single-use refresh token. Guarded by
+   `test/credential-sync-policy.test.ts`. **Still pending (part 2):** a record-shaped sync wire
+   (bump `ModelAuthEnvelope`) so non-default labels and reference *pointers* can travel — until
+   then, only default-slot account-tier credentials sync (references/`separate` stay node-local).
 7. **(Later) Package promotion** — a `package.json`, because the boundary was drawn in phase 1.
 
 ---

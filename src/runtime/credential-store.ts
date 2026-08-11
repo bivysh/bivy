@@ -220,9 +220,25 @@ export class BivyCredentialStore {
     provider: string,
     fn: (current: StoredCredential | undefined) => Promise<StoredCredential | undefined>,
   ): Promise<StoredCredential | undefined> {
+    return this.modifyRecord(provider, DEFAULT_LABEL, fn);
+  }
+
+  /**
+   * Record-addressed read-modify-write over a specific `provider:label` slot —
+   * `modify()` is the `label="default"` case. This is what makes OAuth refresh
+   * safe with multiple accounts per provider: a refresh rotates the *selected*
+   * record under its own lock, so refreshing `anthropic:work` can't clobber
+   * `anthropic:personal` (rotated refresh tokens are single-use). `fn` operates on
+   * the record's stored credential; the record's label/sync/origin are preserved.
+   */
+  async modifyRecord(
+    provider: string,
+    label: string,
+    fn: (current: StoredCredential | undefined) => Promise<StoredCredential | undefined>,
+  ): Promise<StoredCredential | undefined> {
     const id = providerId(provider);
     if (!id) throw new Error("Provider is required");
-    const key = defaultKey(id);
+    const key = credKey(id, label);
     return this.enqueue(id, async () => {
       await this.acquireLock();
       try {
@@ -234,11 +250,11 @@ export class BivyCredentialStore {
         if (!isStoredCredential(next)) throw new Error(`Invalid credential for "${id}"`);
         const now = Date.now();
         // Store the credential clean; the store-owned stamp lives on the record.
-        // Preserve the record's sync/origin/label when it already exists.
+        // Preserve the record's label/sync/origin when it already exists.
         const clean = withoutStoreMetadata(next);
         const record: CredentialRecord = existing
           ? { ...existing, source: { kind: "stored", cred: clean }, updatedAt: now }
-          : { ...recordFromStored(id, clean), updatedAt: now };
+          : { ...recordFromStored(id, clean), label: normalizeLabel(label), updatedAt: now };
         document.credentials[key] = record;
         delete document.deletedAt[key];
         this.writeDocument(document);
@@ -329,9 +345,25 @@ export class BivyCredentialStore {
    * a peer's merge can order it. (Non-default labels are not yet synced — phase 6.)
    */
   async exportAll(): Promise<Record<string, StoredCredential>> {
+    return this.projectDefaults(() => true);
+  }
+
+  /**
+   * The cross-node sync snapshot: only `provider:default` credentials the user
+   * has left on the account-sync tier (`sync: "account"`). A credential opted to
+   * `sync: "node"` is kept local — this is the per-credential opt-out. Reference
+   * records carry no syncable secret and are skipped either way. (Local reads that
+   * must see every credential — e.g. `provider.auth.get` — use `exportAll`.)
+   */
+  async exportSyncable(): Promise<Record<string, StoredCredential>> {
+    return this.projectDefaults((record) => record.sync === "account");
+  }
+
+  /** Shared projection of default-slot stored credentials to the provider-keyed wire. */
+  private projectDefaults(include: (record: CredentialRecord) => boolean): Record<string, StoredCredential> {
     const out: Record<string, StoredCredential> = {};
     for (const record of Object.values(this.readDocument().credentials)) {
-      if (record.label !== DEFAULT_LABEL) continue;
+      if (record.label !== DEFAULT_LABEL || !include(record)) continue;
       const cred = storedOf(record);
       if (!cred) continue;
       out[record.provider] = record.updatedAt ? { ...cred, updatedAt: record.updatedAt } : cred;

@@ -82,7 +82,9 @@ export class NodeCredentialResolver implements AgentCredentialStore {
     let token = typeof cred.access === "string" ? cred.access : "";
     const expires = Number(cred.expires) || 0;
     if (!token || expires <= Date.now() + OAUTH_REFRESH_SKEW_MS) {
-      const refreshed = await refreshModelOAuth(this.credsDir, id).catch(() => undefined);
+      // Refresh the SELECTED record (its label), not just the provider default —
+      // so a second account on the same provider is left untouched.
+      const refreshed = await refreshModelOAuth(this.credsDir, id, selection.record.label).catch(() => undefined);
       if (refreshed) token = refreshed;
     }
     if (!token) return undefined;
