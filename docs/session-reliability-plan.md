@@ -10,7 +10,7 @@ and web layers — is that **the agent abstraction is already the right one and 
 mature**. Bivy has a real `AgentRuntime` / `RuntimeSession` interface
 (`src/runtime/types.ts`), a declarative `RuntimeCapabilities` contract with an
 explicit fail-closed *honesty invariant* (`withExactCapabilitySurface`), a
-data-driven agent registry (`CLI_AGENT_SPECS`), `ToolCallProvenance` that carries
+data-driven agent registry (`AGENT_PROFILES`), `ToolCallProvenance` that carries
 the raw native tool call alongside a normalized projection, and a web UI that
 already branches on **capabilities, not agent names**. So this plan is *not* an
 abstraction rewrite. It is a set of targeted fixes at four delivery/state seams

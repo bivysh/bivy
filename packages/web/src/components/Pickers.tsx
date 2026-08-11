@@ -66,10 +66,16 @@ function RuntimeMeta({ runtime, text }: { runtime: RuntimeInfo; text?: string })
         >
           {tierLabel(tier)}{runtime.testedVersion ? ` · ${runtime.testedVersion}` : ""}
         </span>
-        {runtime.source?.kind === "plugin" && (
-          <span className="runtime-cap ok" title={`Contributed by ${runtime.source.pluginId}@${runtime.source.pluginVersion}`}>
-            Plugin · {runtime.source.pluginId}
+        {runtime.source?.kind === "package" && (
+          <span
+            className={`runtime-cap ${runtime.source.verified ? "ok" : "limited"}`}
+            title={`${runtime.source.publisher ? `${runtime.source.publisher} · ` : ""}${runtime.source.packageId}@${runtime.source.packageVersion}`}
+          >
+            {runtime.source.verified ? "Verified" : "Package"} · {runtime.source.packageId}
           </span>
+        )}
+        {runtime.source?.kind === "config" && (
+          <span className="runtime-cap limited" title="Configured explicitly on this node">Local integration</span>
         )}
         <span
           className={`runtime-protection ${protectionLevel}`}

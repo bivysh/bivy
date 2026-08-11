@@ -1,52 +1,50 @@
 # Pi
 
-Bivy's native coding agent runtime (`@earendil-works/pi-coding-agent`). The
-default agent and the deepest integration: tool approvals, model picker,
-package installs, and resume all go through Bivy's own runtime code, not a
-spawned CLI.
+Bivy connects to the operator-installed [Pi](https://pi.dev) agent. The richer
+integration bridge lives under `src/agents/pi/`; it adapts Pi's supported SDK/RPC
+surface to Bivy's session contract but does not provide a separate Bivy-owned Pi.
+Native terminal launches and hand-offs execute the same `pi` command on `PATH`.
 
 - **Runtime id:** `pi` · **Tier:** Supported · **In picker:** Yes
 
 ## Install
 
-Nothing to install — Pi ships as a dependency of Bivy itself. There is no
-separate CLI to fetch.
-
-## Authentication
-
-**Auth owner: Bivy.** Pi reads Bivy's own encrypted credential vault
-(`.bivy/credentials/`, `credential-store.ts`) directly — no separate Pi login
-file. Sign in once and every runtime that shares the vault (including Aider's
-matching provider, and Claude Code's Anthropic credential) can reuse it.
-
 ```bash
-bivy login              # menu: subscription (OAuth) or API key, then provider
-bivy login anthropic    # or any other provider id, skipping the menu
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+# or
+bivy agents:install
 ```
 
-Credentials stay on the node (see [key-management.md](../key-management.md)).
+Use `BIVY_PI_COMMAND=/absolute/path/to/pi` on a managed node when the command is
+not discoverable through its service `PATH`.
 
-## Models
+## Authentication and configuration
 
-The full model catalog Pi knows about, filtered to providers you've signed in
-to. Pick a model from the in-app picker, or set a default in Settings
-(`defaultModel`).
+**Auth owner: Pi.** The packaged integration reads Pi's existing agent directory
+(`PI_CODING_AGENT_DIR`, default `~/.pi/agent`) and therefore uses the same
+`auth.json`, `models.json`, settings, extensions, skills, prompts, and provider
+configuration as an ordinary Pi terminal session.
 
-## Resume
+Sign in using the upstream agent:
 
-Yes. `bivy sessions` / `bivy resume` list and reopen a saved Pi session with
-full history; the app's session list does the same.
+```bash
+pi
+/login
+```
 
-## Known gaps
+Bivy's separate provider vault remains available to integrations that explicitly
+choose it, but the default Pi integration does not replace the user's Pi login.
 
-None specific to Pi — it's the reference integration every other runtime is
-measured against in [runtime-support-matrix.md](../runtime-support-matrix.md).
-`fork` (exporting a session to a different runtime) is not yet supported.
+## Capabilities
+
+The richer bridge preserves structured streaming, tool governance, model and
+thinking selection, packages, queued steer/follow-up input, usage reporting,
+and durable Pi transcripts. A chat-to-terminal hand-off runs the installed Pi
+CLI against the same session file.
 
 ## Run it
 
-Pick Pi in the agent picker, or:
-
 ```bash
 bivy run pi
+bivy shim install pi   # optional transparent terminal interception
 ```

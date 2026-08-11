@@ -546,11 +546,11 @@ export interface RuntimeCapabilities {
    * queued-follow-ups UI) knows whether an explicit "Steer current turn"
    * action is safe to offer at all. Absent/empty means the client should never
    * attempt a mid-turn prompt for this runtime — hold everything in its own
-   * queue and only ever send into an idle session. Advertised statically here
-   * for a built-in runtime (Pi, Claude Code); a protocol/RPC shim can instead
-   * declare it in its `hello` (see capabilitiesFromHello in
+   * queue and only ever send into an idle session. Advertised statically by an
+   * integration profile (for example Pi or Claude Code); a protocol/RPC bridge
+   * can instead declare it in its `hello` (see capabilitiesFromHello in
    * src/runtime/protocol.ts), which defaults to none when omitted — an
-   * arbitrary shim must opt in before the client will ever try to interrupt it.
+   * arbitrary integration must opt in before the client will ever interrupt it.
    */
   streamingBehaviors?: StreamingBehavior[];
   /** Exact actions supported by this configured execution path. Missing means

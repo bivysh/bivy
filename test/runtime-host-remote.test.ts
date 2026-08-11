@@ -41,7 +41,7 @@ test("flag on (all) + addr → get() returns a RemoteRuntime with registry capab
     const rt = host.get("claude-code-sdk", "pi");
     assert.ok(rt instanceof RemoteRuntime, "remote path when the flag is on");
     assert.equal(rt.id, "claude-code-sdk");
-    assert.equal(rt.displayName, "Claude Code SDK");
+    assert.equal(rt.displayName, "Claude Code");
     // Capabilities come from the registry (CLAUDE_CAPABILITIES), not a connection.
     assert.equal(rt.capabilities.toolInterception, true);
     assert.equal(rt.capabilities.resume, true);

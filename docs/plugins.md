@@ -31,19 +31,47 @@ trusted skills.
 
 ## One agent registry
 
-Built-in, node-configured, and plugin-contributed agents enter the same ordered
-registry. Every registration owns the same lifecycle hooks: identity and aliases,
-source metadata, visibility, catalog description, runtime factory, and optional
-allowlisted installer. The registry is the only path used by discovery,
-selection, creation, conflict handling, and installation.
+Every agent enters the same ordered integration registry, whether its profile is
+maintained in the Bivy distribution, configured on the node, or installed as a
+plugin package. Every integration owns the same lifecycle hooks: identity and
+aliases, provenance, visibility, discovery, catalog description, connection,
+and an optional allowlisted upstream installer.
 
-Built-ins are registered first, node configuration second, and installed plugins
-third. Earlier registrations win conflicts, so external code cannot replace a
-trusted built-in or machine-owned definition. This is explicit provenance and
-precedence—not a separate execution path: after registration, all agents are
-listed and created through the same APIs. Native Pi/Claude factories remain
-in-process Bivy implementations, while public plugin factories remain strictly
-out of process.
+Bivy integrations do not replace or reimplement the upstream agent. They locate
+the agent the operator already installed and connect through ACP, an agent-native
+protocol, a structured process, or an out-of-process bridge. Pi and Claude Code
+follow this rule too: their richer bridges live under `src/agents/`, but launch
+and hand sessions to the operator's `pi` and `claude` commands.
+
+Package/configuration order resolves collisions deterministically, with both the
+retained and rejected origins reported. Verification is explicit package
+provenance and never permission to weaken Bivy's policy floor.
+
+Most maintained integrations are data in `src/agents/profiles.ts`; they do not
+need one folder per agent. A folder is reserved for a real bridge or supporting
+fixtures, as with `src/agents/pi/`, `src/agents/claude-code/`, and the Codex app-server
+integration under `src/agents/codex/`. Probing may
+verify command availability, version/help evidence, and protocol handshakes, or
+downgrade a declared capability. It never invents launch flags, resume syntax,
+sandbox semantics, or privileged behavior from help text.
+
+## Bring your own agent
+
+An ACP agent needs only a command and, when applicable, its ACP arguments:
+
+```bash
+bivy agent add company-agent \
+  --command company-agent \
+  --transport acp \
+  --args '["serve","--acp"]'
+```
+
+A headless process agent can be added with `--transport process` and
+`--prompt-mode stdin|argv`. This command creates and installs the same strict
+manifest used by `bivy plugin install`; it is convenience, not a second
+configuration model. Use an out-of-process ACP/Bivy-protocol bridge when an
+agent needs custom translation. Bivy never imports arbitrary integration code
+into the daemon.
 
 ## Quick start: ACP agent
 
@@ -84,7 +112,7 @@ bivy restart
 
 The agent appears as **Experimental / Unverified** in Bivy's agent picker. ACP
 provides streaming, resume, and per-tool approval requests through the same
-`ProtocolRuntime` used by built-in ACP agents.
+`ProtocolRuntime` used by other ACP integrations.
 
 The command must already be installed on the node's `PATH`. Plugin installation
 never downloads software or runs an install script.
@@ -228,8 +256,8 @@ Set `BIVY_PLUGIN_DIR` to override the store location for testing or managed
 deployments.
 
 `bivy plugin list` reports malformed installed manifests and duplicate agent ids.
-An invalid or incompatible plugin is omitted from the runtime catalog and does
-not prevent built-in agents from starting. Installation fails when the current
+An invalid or incompatible plugin is omitted from the agent catalog and does
+not prevent other integration packages from starting. Installation fails when the current
 Bivy version does not satisfy a declared `requires.bivy` range. Manifests that
 omit the range remain compatible for Phase 1 backwards compatibility, while
 `doctor` reports the missing pin as a warning.

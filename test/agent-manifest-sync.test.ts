@@ -3,7 +3,7 @@
 //
 // bin/agent-manifest.json is the serialized bridge that lets the plain-JS terminal
 // CLI (bin/bivy.mjs) share the SAME agent list as the TypeScript runtime's
-// CLI_AGENT_SPECS, without importing TS. This test asserts the committed JSON is in
+// AGENT_PROFILES, without importing TS. This test asserts the committed JSON is in
 // sync with the specs, so editing a spec without running `npm run gen:agent-manifest`
 // fails CI instead of silently drifting the two surfaces apart.
 import assert from "node:assert/strict";
@@ -22,7 +22,7 @@ const expected = JSON.stringify({ agents: cliAgentManifest() }, null, 2) + "\n";
 assert.equal(
   onDisk,
   expected,
-  "bin/agent-manifest.json is stale — regenerate it with `npm run gen:agent-manifest` after changing CLI_AGENT_SPECS.",
+  "bin/agent-manifest.json is stale — regenerate it with `npm run gen:agent-manifest` after changing AGENT_PROFILES.",
 );
 
 // The manifest must carry every CLI agent, with the fields bin/bivy.mjs relies on.

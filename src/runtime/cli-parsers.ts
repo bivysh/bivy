@@ -631,7 +631,7 @@ export const CLI_PARSERS: Record<string, CliParserFactory> = {
   "goose-stream-json": gooseStreamJsonParser,
   "gemini-json": geminiJsonParser,
   // Tolerant, format-agnostic parsers for CLIs whose JSON vocabularies we haven't
-  // pinned exactly yet (opt-in per agent via a spec parserId; see CLI_AGENT_SPECS).
+  // pinned exactly yet (opt-in per agent via a spec parserId; see AGENT_PROFILES).
   "generic-stream-json": genericStreamJsonParser,
   "generic-json": genericJsonParser,
 };

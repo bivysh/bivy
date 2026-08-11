@@ -19,7 +19,7 @@
 // snapshot, so those three rows are all a replay fork needs.
 //
 // IMPORTANT — best-effort, verified against opencode 1.18.13 (the version
-// pin in CLI_AGENT_SPECS): the schema is version-variable, so the writer checks
+// pin in AGENT_PROFILES): the schema is version-variable, so the writer checks
 // for the `session`/`message`/`part` tables and throws (never corrupts) when a
 // node's OpenCode layout doesn't match. The fork engine calls this only as its
 // "replayed" tier and falls back to a seeded continuation prompt if it throws;

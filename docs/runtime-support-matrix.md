@@ -12,8 +12,8 @@ per-agent pages under [docs/agents/](agents/README.md).
 
 | Runtime | id | Tier | In picker | Start web/mobile | Start CLI | Resume | Model picker | Approvals | Native discovery | Auth owner | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| [Pi](agents/pi.md) | `pi` | Supported | Yes | Yes | Yes | Yes | Yes | Yes | No | Bivy/Pi provider auth | Best native Bivy integration. |
-| [Claude Code SDK](agents/claude-code.md) | `claude-code-sdk` | Supported | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** | Claude/Pi/Bivy depending on mode | Structured SDK path; native Claude CLI login may be needed for TUI handoff. |
+| [Pi](agents/pi.md) | `pi` | Supported | Yes | Yes | Yes | Yes | Yes | Yes | No | Pi | Uses the operator-installed `pi` command and Pi-owned auth/config through the richer bridge under `src/agents/pi`. |
+| [Claude Code](agents/claude-code.md) | `claude-code-sdk` | Supported | Yes | Yes | Yes | Yes | Yes | Yes | **Yes** | Claude Code | SDK protocol bridge explicitly targets the operator-installed `claude` command and reuses its native auth/config/sessions. |
 | [Codex (approvals)](agents/codex.md) | `codex-approvals` | Supported | Yes | Yes | Partial | Yes | Yes | Yes | **Yes** | Codex CLI/OpenAI | App-server shim: per-tool Approve/Deny, model + reasoning-effort selection, thread resume, usage reporting, native discovery. The single "Codex" surfaced in the picker. Release-tested against Codex CLI 0.145.0. |
 | [OpenCode](agents/opencode.md) | `opencode` | Supported | Yes | Yes | Yes | Yes | Yes (ACP) | **Per-tool (Approve/Deny)** | No | OpenCode CLI | Driven through its native `opencode acp` server by default → the governed `ProtocolRuntime`: per-tool approvals, `session/load` resume, and a model list read from the live session. Falls back to the `opencode run` pipe (effect-level governance, `--model`, `-s <id>` resume) when the installed binary has no `acp` subcommand. Release-tested against OpenCode 1.18.13. |
 | [Gemini CLI](agents/gemini-cli.md) | `gemini` | Beta | Yes | Yes | Yes | Yes | Yes (`-m`) | Native sandbox (`--approval-mode`) | No | Gemini CLI | `gemini-json` final-object parser; native auth; resumes via `-r <id>` (tier-aware `--approval-mode`). |
@@ -35,7 +35,7 @@ per-agent pages under [docs/agents/](agents/README.md).
 | [Codex (exec)](agents/codex.md) | `codex` | *Supported* | No | Yes | Yes | Yes | No | Effect-level sandbox | No | Codex CLI/OpenAI | Fast no-approval path; superseded in the picker by `codex-approvals`. Runnable via `BIVY_RUNTIME=codex`. Native discovery/adoption lives on `codex-approvals` instead, so an adopted session is governed from the moment it's imported. |
 | Hermes | `hermes` | *Experimental* | No | Yes | Yes | No | No | Boundary only | No | Hermes CLI | Generic process adapter, no structured parser, no documented resume flag. |
 | OpenClaw | `openclaw` | *Experimental* | No | Yes | Yes | No | No | Boundary only | No | OpenClaw CLI | Phase-1 CLI adapter only; resume needs the future Gateway RPC bridge. |
-| Generic CLI | `generic-cli` | *Experimental* | No | Env-configured | Env-configured | Depends | No | Boundary only | No | External CLI | Universal escape hatch; support is best-effort; resumable when `BIVY_AGENT_RESUME_TEMPLATE` is set (same generic primitive as the built-in CLI agents). |
+| Generic CLI | `generic-cli` | *Experimental* | No | Env-configured | Env-configured | Depends | No | Boundary only | No | External CLI | Universal escape hatch; support is best-effort; resumable when `BIVY_AGENT_RESUME_TEMPLATE` is set (same generic primitive as maintained process profiles). |
 | Bivy Agent Protocol | `bivy-agent-protocol` | *Experimental* | No | Env-configured | Env-configured | Depends on agent | Depends on agent | Depends on agent | No | Protocol agent | Best path for third-party agents to become fully supported; resumable when the shim advertises `resume: true`. |
 | ACP Agent | `acp` | *Experimental* | No | Env-configured | Env-configured | Yes | No | **Per-tool (Approve/Deny)** | No | ACP agent | Any [Agent Client Protocol](https://agentclientprotocol.com) agent (e.g. `gemini --experimental-acp`) driven through `bin/acp-shim.mjs` → the same governed `ProtocolRuntime` as Codex. Configure with `BIVY_ACP_COMMAND` / `BIVY_ACP_ARGS`. See [agents/acp.md](agents/acp.md). |
 
@@ -51,8 +51,8 @@ selection is wired for the agents with a clean model flag today (Gemini/Qwen
 is wired.
 
 **Resume** is the same generic, data-driven primitive everywhere it's `Yes`
-above: a `resume.template` arg array in `CLI_AGENT_SPECS`
-(`src/runtime/index.ts`) or a `BIVY_<ID>_RESUME_TEMPLATE` override — no
+above: a `resume.template` arg array in `AGENT_PROFILES`
+(`src/agents/profiles.ts`) or a `BIVY_<ID>_RESUME_TEMPLATE` override — no
 per-agent runtime code, matching the ProtocolRuntime resume primitive
 (`session.create.resume`) added for Codex/Bivy-agent-protocol. It's `No` only
 where the underlying CLI genuinely has no native "continue session `<id>`" form
@@ -67,7 +67,7 @@ can instead be driven through `bin/acp-shim.mjs` → the governed `ProtocolRunti
 selection** (`session/set_model`, with the list read from the live session so it
 matches the providers that node has actually authenticated) with zero per-agent
 code. The picker agents that ship a native ACP server declare it as data (an
-`acp` field in `CLI_AGENT_SPECS`): **Gemini** (`--experimental-acp`), **Qwen
+`acp` field in `AGENT_PROFILES`): **Gemini** (`--experimental-acp`), **Qwen
 Code** (`--experimental-acp` / newer `--acp`), **OpenCode** (`acp`), **Goose**
 (`acp`), **Kilo Code** (`acp`), **Cursor** (`acp`), **Cline** (`--acp`), and
 **GitHub Copilot** (`--acp`).

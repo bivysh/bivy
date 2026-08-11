@@ -10,9 +10,10 @@ preserving its core product contract: agents run on infrastructure the user
 controls, sensitive session content stays on the node, and every integration
 reports its real capabilities and protection level.
 
-The platform is built incrementally. Built-ins must eventually register through
-the same contracts as external contributions, but no big-bang runtime or server
-rewrite is required.
+Bivy ships integrations, not agents. Every integration must connect to the
+upstream agent the operator already installs, authenticates, configures, and uses.
+Maintained profiles and bridges use the same contracts as external contributions;
+there is no privileged built-in-agent category.
 
 ## Product model
 
@@ -21,7 +22,8 @@ Use these terms consistently:
 - **Plugin** — an installable, versioned distribution unit.
 - **Contribution** — a capability supplied by a plugin.
 - **Connection** — configured credentials/account state for a contribution.
-- **Agent adapter** — the technical way Bivy drives an agent.
+- **Agent integration** — discovery and connection metadata for an upstream agent.
+- **Agent adapter** — the technical transport Bivy uses to connect to that agent.
 - **Tool** — a governed callable operation with an input schema and risk metadata.
 - **Skill** — versioned procedural context (for example `SKILL.md`), never an
   executable capability or permission grant.
@@ -49,7 +51,8 @@ Initial contribution categories:
 5. Plugin permissions and execution location are explicit.
 6. Node plugins never weaken node or repository safety floors.
 7. The hosted control plane does not load arbitrary community code.
-8. Built-ins migrate onto public registries gradually as each domain is touched.
+8. Bivy-maintained integrations use the same package/registry contract and launch
+   the operator's upstream executable rather than a private replacement implementation.
 9. Every public contract ships with fixtures and a conformance test.
 10. A marketplace comes after version locking, provenance, permissions, and
     compatibility diagnostics.
@@ -73,10 +76,10 @@ repository or loading code into the daemon.
   install/remove operations.
 - [x] Add `bivy plugin validate|install|list|remove` and JSON output where useful.
 - [x] Merge installed agent contributions into the existing runtime catalog.
-- [x] Mark external agents Experimental and Unverified; never inherit a built-in
-  certification.
-- [x] Surface manifest/source diagnostics without preventing built-ins from
-  starting when one installed plugin is invalid.
+- [x] Mark external agents Experimental and Unverified; never inherit another
+  package's certification.
+- [x] Surface manifest/source diagnostics without preventing other integrations
+  from starting when one installed plugin is invalid.
 - [x] Add parser/store/runtime/CLI tests.
 - [x] Document authoring, installation, trust, and current limitations.
 
@@ -95,7 +98,7 @@ repository or loading code into the daemon.
   the existing governed protocol path.
 - A process agent can declare headless args, structured output, resume, and model
   metadata without a Bivy source edit.
-- Invalid or conflicting plugins fail visibly and do not alter built-ins.
+- Invalid or conflicting plugins fail visibly and do not alter retained integrations.
 - The release artifact contains the implementation and documentation references.
 
 ## Phase 2 — plugin SDK and universal tools
@@ -103,9 +106,13 @@ repository or loading code into the daemon.
 **Goal:** make the contracts pleasant to build against and make a connected tool
 available consistently across agent adapters.
 
-- [x] Route built-in, node-configured, and plugin-contributed agents through one
-  registration lifecycle for aliases, provenance, visibility, catalog, runtime
-  creation, conflicts, and allowlisted installation.
+- [x] Route packaged and node-configured agent integrations through one lifecycle
+  for aliases, provenance, visibility, discovery, connection, conflicts, and
+  allowlisted upstream installation.
+- [x] Add `bivy agent add|list|remove` as a convenience layer over the same strict
+  manifest/store contract for user-owned ACP and process agents.
+- [x] Extract maintained process profiles and richer Pi/Claude/Codex bridges
+  under `src/agents/`; the registry and daemon contain no built-in-agent branch.
 - [x] Add a publishable `@bivy/plugin-sdk` workspace package with canonical
   manifest types, validation helpers, executable diagnostics, and JSON Schema.
 - [ ] Publish the SDK and add protocol clients/fixtures to its public contract.

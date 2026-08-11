@@ -21,7 +21,9 @@ try {
   assert.deepEqual(custom.source, { kind: "config" });
   assert.equal(listRuntimes().some((runtime) => runtime.id === "missing-base"), false);
   assert.equal(listRuntimes().some((runtime) => runtime.id === "prototype-base"), false);
-  assert.deepEqual(listRuntimes().find((runtime) => runtime.id === "pi")?.source, { kind: "builtin" });
+  const piSource = listRuntimes().find((runtime) => runtime.id === "pi")?.source;
+  assert.equal(piSource?.kind, "package");
+  assert.equal(piSource?.kind === "package" ? piSource.packageId : "", "bivy-agent-integrations");
   assert.equal(listRuntimes().some((runtime) => runtime.id === "claude"), false);
 
   const runtime = makeRuntime({ runtime: "my-codex", credsDir: "/tmp/bivy-custom-agent-test" });

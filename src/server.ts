@@ -512,17 +512,14 @@ const maxOpenSessions = Number(process.env.BIVY_MAX_OPEN_SESSIONS ?? 100);
 const maxRunTerminals = Number(process.env.BIVY_MAX_RUN_TERMINALS ?? 50);
 const worktreeRetentionMs = Number(process.env.BIVY_WORKTREE_RETENTION_MS ?? 7 * 24 * 60 * 60 * 1000);
 const worktreeCleanupSweepMs = Math.max(60 * 60 * 1000, Math.min(worktreeRetentionMs || 24 * 60 * 60 * 1000, 24 * 60 * 60 * 1000));
-// Native ("/login", "/model", …) PTY commands run the agent wrapper. From source
-// that means `tsx native-pi.ts`; a packaged app sets BIVY_TSX="" and points
-// BIVY_NATIVE_PI at the precompiled native-pi.js, so no tsx/.ts is needed.
-const tsxCli = process.env.BIVY_TSX ?? path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
-const nativePiScript = process.env.BIVY_NATIVE_PI ?? path.join(assetRoot, "src", "native-pi.ts");
+// Native Pi commands run the operator-installed agent. Bivy does not substitute
+// a private TUI; BIVY_PI_COMMAND is an explicit path override for managed nodes.
+const piCommand = process.env.BIVY_PI_COMMAND?.trim() || "pi";
 const ptyRunnerScript = process.env.BIVY_PTY_RUNNER ?? (
   fs.existsSync(path.join(assetRoot, "src", "pty-runner.py"))
     ? path.join(assetRoot, "src", "pty-runner.py")
     : path.join(assetRoot, "dist", "pty-runner.py")
 );
-const agentPrefix = tsxCli ? [tsxCli, nativePiScript] : [nativePiScript];
 const pythonCommand = process.env.PYTHON ?? "python3";
 
 type MeshCommand = {
@@ -1750,12 +1747,12 @@ const commands: MeshCommand[] = [
   { name: "/help", description: "Show quick chat help.", kind: "server", run: () => ({
     text: "Use /commands to open the command list. Press Cmd/Ctrl+Enter to send a prompt. Attach files/images with the + button or by dragging them into the message box.",
   }) },
-  { name: "/login", description: "Connect a model provider in Terminal.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/login"], requiresTty: true } },
-  { name: "/model", description: "Open the searchable model selector.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "/model"], requiresTty: true } },
-  { name: "/terminal", description: "Start the terminal agent in this workspace and stream its output.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix], requiresTty: true } },
-  { name: "/config", description: "Show agent configuration.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "config"], requiresTty: true } },
-  { name: "/list", description: "List installed agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "list"], requiresTty: true } },
-  { name: "/update", description: "Update agent packages.", kind: "native", spawn: { command: process.execPath, args: [...agentPrefix, "update"], requiresTty: true } },
+  { name: "/login", description: "Connect a model provider in Terminal.", kind: "native", spawn: { command: piCommand, args: ["/login"], requiresTty: true } },
+  { name: "/model", description: "Open the searchable model selector.", kind: "native", spawn: { command: piCommand, args: ["/model"], requiresTty: true } },
+  { name: "/terminal", description: "Start the terminal agent in this workspace and stream its output.", kind: "native", spawn: { command: piCommand, args: [], requiresTty: true } },
+  { name: "/config", description: "Show agent configuration.", kind: "native", spawn: { command: piCommand, args: ["config"], requiresTty: true } },
+  { name: "/list", description: "List installed agent packages.", kind: "native", spawn: { command: piCommand, args: ["list"], requiresTty: true } },
+  { name: "/update", description: "Update agent packages.", kind: "native", spawn: { command: piCommand, args: ["update"], requiresTty: true } },
 ];
 
 // A local client whose send buffer has grown past this is behind on reads (slow
@@ -2089,10 +2086,12 @@ async function openRunTerminal(spec: RunTerminalSpec, emit: (event: unknown) => 
     return undefined;
   }
   const workspace = spec.workspace || active?.session.cwd || active?.worktree?.path || active?.workspace || defaultWorkspace;
-  // Unify keys: project Bivy's logins onto this native agent (env vars, and a
-  // native store for Pi/Codex). A mux attach reuses an existing session and gets
-  // no injection. Best-effort — a provisioning failure must not block the launch.
-  const credentialEnv = spec.mux ? {} : await provisionAgentRun(credsDir, piDir, spec.agent, workspace).catch((error) => {
+  // Agent-owned integrations keep their native login untouched. Only an
+  // integration that explicitly declares Bivy/mixed auth receives projections
+  // from Bivy's vault. A mux attach always reuses its existing environment.
+  const integrationId = spec.agent ? canonicalAgentId(spec.agent) : undefined;
+  const authOwner = listRuntimes(spec.agent).find((agent) => agent.id === integrationId)?.authOwner ?? "agent";
+  const credentialEnv = spec.mux || authOwner === "agent" ? {} : await provisionAgentRun(credsDir, piDir, spec.agent, workspace).catch((error) => {
     console.warn(`[provision] credential projection for "${spec.agent}" failed:`, (error as Error).message);
     return {};
   });
@@ -2112,11 +2111,7 @@ async function openRunTerminal(spec: RunTerminalSpec, emit: (event: unknown) => 
       workspace,
       command: spec.command,
       args: spec.args,
-      // native-pi.ts normally reads the daemon's default BIVY_WORKSPACE. A
-      // run-terminal may override that with --workspace/--clone; pass the
-      // resolved PTY workspace through so Pi records the same cwd we later use
-      // to correlate its session for takeover.
-      env: { ...credentialEnv, ...(spec.agent === "pi" ? { BIVY_WORKSPACE: workspace } : {}) },
+      env: credentialEnv,
       cols: spec.cols,
       rows: spec.rows,
       clientId: spec.clientId,
@@ -9884,7 +9879,7 @@ async function localModelPresets(): Promise<any[]> {
       if (Array.isArray(remote?.presets)) presets.push(...remote.presets);
     }
   } catch {
-    /* offline is fine — built-ins still work */
+    /* offline is fine — local integrations still work */
   }
   return presets;
 }

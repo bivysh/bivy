@@ -44,7 +44,7 @@ as a data-only change.
 
 ACP is the **preferred way to wrap an agent that speaks it** — a one-shot stdout
 pipe can never gate a tool before it runs, so ACP is a strict capability upgrade.
-An agent declares it as data with an `acp` field in `CLI_AGENT_SPECS`, and is then
+An agent declares it as data with an `acp` field in `AGENT_PROFILES`, and is then
 driven through the ACP path (instead of the pipe) when it's preferred:
 
 ```bash

@@ -60,7 +60,7 @@ function resolveAppDir() {
   return path.join(os.homedir(), ".bivy");
 }
 const appDir = resolveAppDir();
-// Propagate the resolved data dir to every child process (daemon, native-pi,
+// Propagate the resolved data dir to every Bivy child process (daemon, helpers,
 // exec, …) via the environment so none of them independently fall back to
 // <repoRoot>/.bivy. The daemon reads BIVY_DATA_DIR (see src/server.ts).
 process.env.BIVY_DATA_DIR = appDir;
@@ -142,12 +142,11 @@ function resolveUpdateChannel(args) {
 }
 const packaged = fs.existsSync(path.join(repoRoot, "dist", "server.js"));
 const serverEntry = path.join(repoRoot, packaged ? "dist/server.js" : "src/server.ts");
-const nativePiEntry = path.join(repoRoot, packaged ? "dist/native-pi.js" : "src/native-pi.ts");
 const bivyLoginEntry = path.join(repoRoot, packaged ? "dist/bivy-login.js" : "src/bivy-login.ts");
-const credentialIngestEntry = path.join(repoRoot, packaged ? "dist/credential-ingest-cli.js" : "src/credential-ingest-cli.ts");
 const automationEntry = path.join(repoRoot, packaged ? "dist/automation-cli.js" : "src/automation-cli.ts");
 const configEntry = path.join(repoRoot, packaged ? "dist/config-cli.js" : "src/config-cli.ts");
 const pluginEntry = path.join(repoRoot, packaged ? "dist/plugin-cli.js" : "src/plugin-cli.ts");
+const agentEntry = path.join(repoRoot, packaged ? "dist/agent-cli.js" : "src/agent-cli.ts");
 const relaySetupEntry = path.join(repoRoot, packaged ? "dist/relay-setup.js" : "src/relay-setup.ts");
 // Dependency-free hosted-endpoint helper. Shipped to dist/ in the release
 // artifact (src/ is not packaged), so resolve it the same packaged-aware way as
@@ -432,7 +431,7 @@ function hasModelConfig(config) {
 }
 
 const SETUP_AGENT_CHOICES = [
-  { key: "p", label: "Pi (default, sign in to ChatGPT/Claude/Copilot or paste a model key)", runtimeId: "pi", needsBivyModel: true },
+  { key: "p", label: "Pi (default; uses your existing login and configuration)", runtimeId: "pi", command: "pi", needsBivyModel: false, loginHint: "Sign in through Pi (/login)" },
   { key: "c", label: "Claude Code", runtimeId: "claude-code-sdk", command: "claude", authProbe: ["auth", "status"], needsBivyModel: false, loginHint: "Sign in through Claude Code" },
   { key: "x", label: "Codex", runtimeId: "codex", command: "codex", authProbe: ["login", "status"], needsBivyModel: false, loginHint: "Sign in through Codex" },
   { key: "o", label: "OpenCode", runtimeId: "opencode", command: "opencode", needsBivyModel: false },
@@ -463,18 +462,11 @@ function nativeAgentAuthDetected(choice) {
   // Conservative file fallbacks for older CLI versions without a status command.
   if (choice.command === "codex") return fs.existsSync(path.join(os.homedir(), ".codex", "auth.json"));
   if (choice.command === "claude") return fs.existsSync(path.join(os.homedir(), ".claude", ".credentials.json"));
+  if (choice.command === "pi") {
+    const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+    return fs.existsSync(path.join(agentDir, "auth.json"));
+  }
   return false;
-}
-
-async function ingestSetupAgentLogin(choice) {
-  if (!choice || !["claude-code-sdk", "codex"].includes(choice.runtimeId)) return false;
-  const code = await run(nodeBin, [
-    ...nodeScriptArgs(credentialIngestEntry),
-    choice.runtimeId,
-    path.join(appDir, "credentials"),
-    path.join(appDir, "pi"),
-  ], { cwd: repoRoot, env: process.env, stdio: "ignore" });
-  return code === 0;
 }
 
 function url(config) {
@@ -626,7 +618,8 @@ async function ensurePythonCommand(command, packageName, label) {
 
 // Single source of truth for what `bivy agents:install` installs, so its help
 // text (see printHelp) can never drift from what it actually does (#113).
-const BUNDLED_AGENTS = [
+const KNOWN_AGENT_INSTALLS = [
+  { command: "pi", npmPackage: "@earendil-works/pi-coding-agent", label: "Pi" },
   { command: "claude", npmPackage: "@anthropic-ai/claude-code", label: "Claude Code" },
   { command: "codex", npmPackage: "@openai/codex", label: "Codex" },
   { command: "opencode", npmPackage: "opencode-ai/opencode", label: "OpenCode" },
@@ -635,11 +628,11 @@ const BUNDLED_AGENTS = [
   { command: "gemini", npmPackage: "@google/gemini-cli", label: "Gemini CLI" },
 ];
 
-async function ensureBundledAgents() {
+async function ensureKnownAgents() {
   if (process.env.BIVY_SKIP_AGENT_PREINSTALL === "1") return true;
-  console.log(c.dim("Ensuring bundled agent runtimes are installed…"));
+  console.log(c.dim("Ensuring known agent integrations are installed…"));
   const results = [await ensureNodePackage("@anthropic-ai/claude-agent-sdk")];
-  for (const agent of BUNDLED_AGENTS) {
+  for (const agent of KNOWN_AGENT_INSTALLS) {
     results.push(
       agent.pythonPackage
         ? await ensurePythonCommand(agent.command, agent.pythonPackage, agent.label)
@@ -652,7 +645,8 @@ async function ensureBundledAgents() {
 }
 
 async function ensureSetupAgent(choice) {
-  if (!choice || choice.runtimeId === "pi") return true;
+  if (!choice) return true;
+  if (choice.runtimeId === "pi") return ensureNpmCommand("pi", "@earendil-works/pi-coding-agent", "Pi");
   if (choice.runtimeId === "claude-code-sdk") {
     const sdk = await ensureNodePackage("@anthropic-ai/claude-agent-sdk");
     const cli = await ensureNpmCommand("claude", "@anthropic-ai/claude-code", "Claude Code");
@@ -669,9 +663,9 @@ async function ensureSetupAgent(choice) {
 }
 
 // The CLI-agent rows come from bin/agent-manifest.json — generated from
-// CLI_AGENT_SPECS (`npm run gen:agent-manifest`), so the terminal `bivy run`
-// agents never drift from the web picker's. A sync test guards the JSON. The two
-// native rows (Pi, Claude Code) aren't CLI specs and stay defined here.
+// AGENT_PROFILES (`npm run gen:agent-manifest`), so the terminal `bivy run`
+// agents never drift from the web picker's. A sync test guards the JSON. Agent
+// integrations that need a bridge still point at the operator's installed CLI.
 function loadAgentManifest() {
   try {
     const raw = fs.readFileSync(path.join(__dirname, "agent-manifest.json"), "utf8");
@@ -758,8 +752,8 @@ function manifestHeadlessFlags(id) {
   return plugin?.headlessFlags?.length ? plugin.headlessFlags : undefined;
 }
 
-const BUILTIN_TERMINAL_AGENTS = new Map([
-  ["pi", { label: "Pi", type: "native-pi" }],
+const AGENT_INTEGRATIONS = new Map([
+  ["pi", { label: "Pi", type: "command", command: "pi", npmPackage: "@earendil-works/pi-coding-agent" }],
   ["claude", { label: "Claude Code", type: "command", command: "claude", npmPackage: "@anthropic-ai/claude-code" }],
   ["openclaw", { label: "OpenClaw", type: "command", command: process.env.BIVY_OPENCLAW_COMMAND || "openclaw" }],
   ...loadAgentManifest().map((a) => [
@@ -817,7 +811,7 @@ function customTerminalAgent(agentId) {
 
 function terminalAgent(agentId) {
   const id = (agentId || resolveDefaultAgent()).toLowerCase();
-  return { id, agent: BUILTIN_TERMINAL_AGENTS.get(id) ?? customTerminalAgent(id) };
+  return { id, agent: AGENT_INTEGRATIONS.get(id) ?? customTerminalAgent(id) };
 }
 
 async function waitForNode(config, timeoutMs = 8000) {
@@ -880,10 +874,7 @@ async function resolveRunSpec(agentId, extraArgs) {
   }
   const { id, agent } = terminalAgent(agentId);
   if (!agent) {
-    return { error: `Unknown agent: ${agentId}. Built-ins: ${[...BUILTIN_TERMINAL_AGENTS.keys()].join(", ")}. Or: bivy run -- <command>.` };
-  }
-  if (agent.type === "native-pi") {
-    return { spec: { agent: id, label: agent.label, command: nodeBin, args: [...nodeScriptArgs(nativePiEntry), ...extraArgs] } };
+    return { error: `Unknown agent: ${agentId}. Known integrations: ${[...AGENT_INTEGRATIONS.keys()].join(", ")}. Or: bivy run -- <command>.` };
   }
   const command = await ensureTerminalCommand(agent);
   if (!command) {
@@ -1420,19 +1411,15 @@ async function cmdNodes(args = []) {
   console.log("");
 }
 
-// `bivy agents` — list the agents Bivy can launch (its built-in terminal agents),
-// showing which are installed on PATH. `bivy run <agent>` starts one; the bundled
-// ones are installed with `bivy agents:install`. `--json` for machine-readable output.
+// `bivy agents` — list integrations and the upstream agents found on PATH.
+// `bivy run <agent>` starts the user's native agent; `--json` is machine-readable.
 function cmdAgents(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy agents [--json]\n\nList the agents Bivy can launch ('bivy run <agent>') and which are installed on PATH. 'bivy agents:install' installs the bundled ones.");
+    console.log("Usage: bivy agents [--json]\n\nList the agents Bivy can launch ('bivy run <agent>') and which are installed on PATH. 'bivy agents:install' installs the known upstream agents.");
     return;
   }
   const asJson = args.includes("--json");
-  const rows = [...BUILTIN_TERMINAL_AGENTS.entries()].map(([id, meta]) => {
-    if (meta.type === "native-pi") {
-      return { id, label: meta.label, type: meta.type, command: null, installed: true, path: null };
-    }
+  const rows = [...AGENT_INTEGRATIONS.entries()].map(([id, meta]) => {
     const command = meta.command || id;
     const resolved = whichOnPath(command);
     return { id, label: meta.label, type: meta.type, command, installed: Boolean(resolved), path: resolved || null, ...(meta.plugin ? { plugin: meta.plugin } : {}) };
@@ -1443,11 +1430,9 @@ function cmdAgents(args = []) {
     return;
   }
 
-  console.log(c.bold("\n  Agents") + c.dim("  (bivy run <agent> — 'bivy agents:install' adds the bundled ones)\n"));
+  console.log(c.bold("\n  Agents") + c.dim("  (bivy run <agent> — 'bivy agents:install' adds the known upstream agents)\n"));
   for (const row of rows) {
-    const status = row.type === "native-pi"
-      ? c.green("● built-in")
-      : row.installed ? c.green("● installed") : c.dim("○ not installed");
+    const status = row.installed ? c.green("● installed") : c.dim("○ not installed");
     const where = row.path ? c.dim(`  ${row.path}`) : "";
     const source = row.plugin ? c.dim(`  plugin:${row.plugin}`) : "";
     console.log(`  ${c.cyan(row.id.padEnd(12))} ${String(row.label).padEnd(16)} ${status}${source}${where}`);
@@ -1502,13 +1487,8 @@ async function cmdShim(args = []) {
       process.exit(1);
       return;
     }
-    const builtin = BUILTIN_TERMINAL_AGENTS.get(agent);
-    if (builtin && builtin.type === "native-pi") {
-      console.error(c.red(`"${agent}" is Bivy's own native runtime, not a standalone binary — nothing to shim. Just run 'bivy -a ${agent}'.`));
-      process.exit(1);
-      return;
-    }
-    const agentCmd = builtin?.command || agent;
+    const integration = AGENT_INTEGRATIONS.get(agent);
+    const agentCmd = integration?.command || agent;
     const shimDir = path.resolve(argValue(rest, "dir") || defaultShimDir());
     const force = rest.includes("--force");
     const headlessOverride = argValue(rest, "headless");
@@ -1694,16 +1674,16 @@ async function cmdExec(args = []) {
 }
 
 // `bivy completions <bash|zsh|fish>` — print a shell completion script to eval or
-// install. Covers the top-level commands and the built-in agent ids.
+// install. Covers the top-level commands and known integration ids.
 function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
-    "run", "sessions", "ls", "resume", "promote", "rename", "nodes", "agents", "agents:install", "shim", "takeover", "token", "exec",
+    "run", "sessions", "ls", "resume", "promote", "rename", "nodes", "agent", "agents", "agents:install", "shim", "takeover", "token", "exec",
     "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "logs", "login",
     "update", "update:log", "automation", "config", "plugin", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
-  const agents = [...BUILTIN_TERMINAL_AGENTS.keys()];
+  const agents = [...AGENT_INTEGRATIONS.keys()];
 
   if (shell === "bash") {
     console.log(`# bivy bash completion — add to ~/.bashrc:  eval "$(bivy completions bash)"
@@ -1806,11 +1786,6 @@ async function cmdRun(args = []) {
     // path a phone uses). The command must resolve on the REMOTE node's PATH, so
     // send the agent's bare command rather than this machine's absolute path.
     if (target.source === "relay") {
-      if (agentId !== "--" && terminalAgent(agentId).agent?.type === "native-pi") {
-        console.error(c.red("Pi runs only on the local node. For --node, pick an installed agent (e.g. claude, codex)."));
-        process.exit(1);
-        return;
-      }
       const remoteCommand = agentId === "--" ? resolved.spec.command : (terminalAgent(agentId).agent?.command || resolved.spec.command);
       const spec = { ...resolved.spec, command: remoteCommand, name, model, workspace: undefined };
       console.log(c.dim(`Starting on ${c.cyan(target.name)} over the relay…`));
@@ -3473,8 +3448,8 @@ async function cmdSetup(args = []) {
   // `bivy github:app-create` / `github:app-connect`. One app covers every repo,
   // and the node mints its own tokens, so there's no per-repo token to set up here.
 
-  // Model access is part of activation, not a post-success footnote. Pi/Aider use
-  // Bivy's provider login; offer it inline so setup cannot imply the first task
+  // Model access is part of activation, not a post-success footnote. Integrations
+  // marked needsBivyModel use Bivy's provider login; offer it inline so setup cannot imply the first task
   // is ready while the required credential is still absent. Agent-native auth is
   // explained in the readiness checklist below because those CLIs own the flow.
   let agentAuthReady = setupAgent?.needsBivyModel ? hasModelConfig(config) : nativeAgentAuthDetected(setupAgent);
@@ -3492,17 +3467,15 @@ async function cmdSetup(args = []) {
     }
   } else if (setupAgent && !setupAgent.needsBivyModel) {
     if (agentAuthReady) {
-      const imported = await ingestSetupAgentLogin(setupAgent);
-      console.log(c.green(`\n  ✓ Existing ${setupAgent.label} login detected — Bivy will reuse it in the terminal and PWA${imported ? " and stored it in the encrypted vault" : ""}.`));
+      console.log(c.green(`\n  ✓ Existing ${setupAgent.label} login detected — Bivy will connect without replacing the agent's credential store.`));
     } else if (setupAgent.command) {
-      console.log(`\n${setupAgent.label} owns its login. After sign-in, Bivy stores compatible credential fields in its encrypted vault so the terminal, PWA, and your other Bivy nodes can reuse them.`);
+      console.log(`\n${setupAgent.label} owns its login and configuration. Bivy connects to that existing agent state rather than copying it into a separate default credential store.`);
       const signInNow = await askYesNo(`Open ${setupAgent.label} now to sign in? (Exit it when sign-in is complete.)`, true);
       if (signInNow) {
         rl.pause();
         const loginCode = await run(setupAgent.command, [], { cwd: config.workspace, env: startEnv(config) });
         rl.resume();
         agentAuthReady = loginCode === 0 || nativeAgentAuthDetected(setupAgent);
-        if (agentAuthReady) await ingestSetupAgentLogin(setupAgent);
       }
     }
   }
@@ -3857,11 +3830,11 @@ async function cmdDoctor(args = []) {
       ? c.green("relay connected") + (relayApp ? c.dim(`  ${relayApp}`) : "")
       : c.yellow("configured, not connected") + (relayErr ? c.dim(`  (${relayErr})`) : "");
   console.log(`  ${relayConfigured ? (relayConnected ? ok : warn) : c.dim("○")} remote ${relayLine}`);
-  // Derived from BUILTIN_TERMINAL_AGENTS (the same list 'bivy agents'/'bivy run'
+  // Derived from AGENT_INTEGRATIONS (the same list 'bivy agents'/'bivy run'
   // use) rather than a hand-maintained list, so it can't drift out of sync (#113).
-  const agentCommands = [...BUILTIN_TERMINAL_AGENTS.values()].filter((a) => a.type === "command").map((a) => a.command);
+  const agentCommands = [...AGENT_INTEGRATIONS.values()].filter((a) => a.type === "command").map((a) => a.command);
   const agents = agentCommands.filter((a) => commandExists(a));
-  console.log(`  ${mark(agents.length > 0, true)} agents on PATH: ${agents.length ? c.cyan(agents.join(", ")) : c.dim("none (built-in Pi still works; 'bivy agents:install')")}`);
+  console.log(`  ${mark(agents.length > 0, true)} agents on PATH: ${agents.length ? c.cyan(agents.join(", ")) : c.dim("none ('bivy agents:install' can install known upstream agents)")}`);
   if (status?.eventLog) {
     const healthy = status.eventLog.ok !== false;
     const mib = Number(status.eventLog.bytes || 0) / (1024 * 1024);
@@ -4024,7 +3997,7 @@ async function runUpdate(args = []) {
       console.log(c.yellow(`npm reported an issue (exit ${code}). Try: sudo npm i -g @bivy/bivy@${channel}`));
       process.exit(code);
     }
-    await ensureBundledAgents();
+    await ensureKnownAgents();
     const config = loadConfig();
     await waitForIdleSessions(config, { skip: skipWait });
     if (config.service && (await restartServiceReconciled(config))) {
@@ -4060,7 +4033,7 @@ async function runUpdate(args = []) {
   const pull = await run("git", ["pull", "--ff-only", "origin", branch || "main"], { cwd: repoRoot });
   if (pull !== 0) console.log(c.yellow("git pull reported an issue; continuing."));
   await run("npm", [fs.existsSync(path.join(repoRoot, "package-lock.json")) ? "ci" : "install", "--no-audit", "--no-fund"], { cwd: repoRoot });
-  await ensureBundledAgents();
+  await ensureKnownAgents();
   const config = loadConfig();
   await waitForIdleSessions(config, { skip: skipWait });
   if (config.service && (await restartServiceReconciled(config))) {
@@ -4377,7 +4350,7 @@ function printHelp() {
 ${c.bold("bivy")} — Bivy node CLI
 
   ${c.cyan("bivy run claude")}   Run a native agent (real CLI/TUI) as a relay-visible session
-  ${c.cyan("bivy run <agent>")}  ${[...BUILTIN_TERMINAL_AGENTS.keys()].join(" | ")} | -- <command>
+  ${c.cyan("bivy run <agent>")}  ${[...AGENT_INTEGRATIONS.keys()].join(" | ")} | -- <command>
   ${c.cyan("bivy run <agent> --name <label>")}  Name the session (shown in 'bivy sessions' and the app)
   ${c.cyan("bivy run <agent> --model <model>")}  Run with a specific model (passed to the agent, shown in the cockpit)
   ${c.cyan("bivy run <agent> --node <name>")}  Start the session on another registered node
@@ -4410,7 +4383,8 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy login")}      Sign into a model provider (Pi /login)
   ${c.cyan("bivy update")}     Update Bivy + install deps + restart service (waits for active sessions to finish a turn; --force to skip)
   ${c.cyan("bivy update:log")} Show output of the last (or in-progress) update
-  ${c.cyan("bivy agents:install")}  Install bundled agents (${BUNDLED_AGENTS.map((a) => a.label).join(", ")})
+  ${c.cyan("bivy agent add")}        Connect an existing user-owned agent
+  ${c.cyan("bivy agents:install")}  Install known upstream agents (${KNOWN_AGENT_INSTALLS.map((a) => a.label).join(", ")})
   ${c.cyan("bivy open")}       Open the remote web/PWA app
   ${c.cyan("bivy service")}    install | uninstall | status
   ${c.cyan("bivy uninstall")}    Remove Bivy and all its data (--keep-sessions, --keep-worktrees, --dry-run)
@@ -4452,7 +4426,7 @@ async function main() {
         console.log(`Usage: bivy run <agent> [--name <label>] [--model <model>] [--node <name>] [--clone [remote]] [--workspace <dir>] | -- <command>
 
 Run a native agent (real CLI/TUI) as a relay-visible session.
-Agents: ${[...BUILTIN_TERMINAL_AGENTS.keys()].join(", ")}, or -- <command> for anything else.
+Agents: ${[...AGENT_INTEGRATIONS.keys()].join(", ")}, or -- <command> for anything else.
 An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
         break;
       }
@@ -4475,6 +4449,11 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "nodes":
       await cmdNodes(args);
       break;
+    case "agent": {
+      if (!(await ensureDeps())) process.exit(1);
+      process.exit(await run(nodeBin, [...nodeScriptArgs(agentEntry), ...args], { cwd: process.cwd(), env: process.env }));
+      break;
+    }
     case "agents":
       cmdAgents(args);
       break;
@@ -4579,11 +4558,11 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "agents:install":
     case "runtimes:install":
       if (args.includes("-h") || args.includes("--help")) {
-        console.log(`Usage: bivy agents:install\n\nInstall bundled agent runtimes (${BUNDLED_AGENTS.map((a) => a.label).join(", ")}).`);
+        console.log(`Usage: bivy agents:install\n\nInstall known agent integrations (${KNOWN_AGENT_INSTALLS.map((a) => a.label).join(", ")}).`);
         break;
       }
       if (!(await ensureDeps())) process.exit(1);
-      await ensureBundledAgents();
+      await ensureKnownAgents();
       break;
     case "open": {
       if (args.includes("-h") || args.includes("--help")) {

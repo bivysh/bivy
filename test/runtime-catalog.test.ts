@@ -51,7 +51,8 @@ assert.ok(!listed.includes("hermes") && !listed.includes("openclaw"), "hermes/op
 
 // Every listed agent must carry a support tier and a description the UI renders.
 for (const runtime of listRuntimes()) {
-  assert.deepEqual(runtime.source, { kind: "builtin" }, `${runtime.id} must carry explicit built-in registry provenance`);
+  assert.equal(runtime.source?.kind, "package", `${runtime.id} must carry explicit integration-package provenance`);
+  assert.equal(runtime.source?.kind === "package" ? runtime.source.packageId : "", "bivy-agent-integrations");
   assert.ok(runtime.supportTier, `${runtime.id} must declare a supportTier`);
   assert.ok(runtime.description && runtime.description.length > 0, `${runtime.id} must have a description`);
   assert.ok(runtime.capabilities, `${runtime.id} must declare capabilities`);
@@ -87,8 +88,8 @@ for (const id of CLI_ADAPTERS) {
 
 // resume is on only for the CLI agents with a genuine native "continue session
 // <id>" flag (opencode -s, gemini/qwen -r|--resume, goose --resume --session-id,
-// cline --id) — wired as a spec.resume template (see CLI_AGENT_SPECS in
-// src/runtime/index.ts). Aider and Crush have no such upstream flag, so they stay
+// cline --id) — wired as a spec.resume template (see AGENT_PROFILES in
+// src/agents/profiles.ts). Aider and Crush have no such upstream flag, so they stay
 // off until one exists (see the per-agent comments there).
 const RESUME_CAPABLE = ["opencode", "gemini", "qwen", "goose", "cline", "cursor", "amp", "kilocode", "rovodev", "grok"];
 const RESUME_INCAPABLE = ["aider", "crush", "copilot", "auggie", "droid", "continue"];
@@ -149,7 +150,7 @@ assert.equal(
 // so if the catalog constant drifts from the live runtime instance the client
 // never learns steering is available and force-queues every mid-turn message.
 // Guards against the two catalog constants (CLAUDE_CAPABILITIES / PI_CAPABILITIES
-// in src/runtime/index.ts) silently dropping what the runtimes actually advertise.
+// in src/agents/profiles.ts) silently dropping what the runtimes actually advertise.
 const claudeCaps = listRuntimes().find((r) => r.id === "claude-code-sdk")!.capabilities as Record<string, unknown>;
 assert.deepEqual(claudeCaps.streamingBehaviors, ["steer"], "claude-code-sdk must advertise steer in the catalog");
 const piCaps = listRuntimes().find((r) => r.id === "pi")!.capabilities as Record<string, unknown>;
@@ -165,6 +166,8 @@ const byId = Object.fromEntries(listRegisteredAgents().map((r) => [r.id, r]));
 assert.equal(byId.qwen.displayName, "Qwen Code");
 assert.equal(byId.cline.displayName, "Cline");
 assert.equal(byId.crush.displayName, "Crush");
+assert.equal(byId.pi.authOwner, "agent", "Pi must retain its upstream credential store");
+assert.equal(byId["claude-code-sdk"].authOwner, "agent", "Claude Code must retain its upstream credential store");
 assert.equal(byId.cursor.displayName, "Cursor");
 assert.equal(byId.copilot.displayName, "GitHub Copilot");
 assert.equal(byId.grok.displayName, "Grok");

@@ -1,6 +1,6 @@
-// Issue #389: migrate the built-in CLI agents onto the generic resume primitive
+// Issue #389: migrate maintained CLI profiles onto the generic resume primitive
 // (the same data-driven `resume.template` mechanism Codex already used — see
-// CLI_AGENT_SPECS in src/runtime/index.ts). This exercises the FULL dispatch
+// AGENT_PROFILES in src/agents/profiles.ts). This exercises the FULL dispatch
 // (makeRuntime → ProcessRuntime.resumeArgs) with stub binaries standing in for
 // real CLIs, so it runs in CI with no gemini/goose installed — plus the
 // escape-hatch `generic-cli` runtime's BIVY_AGENT_RESUME_TEMPLATE env var.
