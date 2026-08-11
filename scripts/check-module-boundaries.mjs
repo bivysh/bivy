@@ -34,10 +34,13 @@ const RULES = [
   {
     name: "credentials-is-a-leaf",
     dir: "src/credentials",
-    // e2e.ts (AES-256-GCM crypto leaf) is intentionally NOT forbidden: the node
-    // service layer (store.ts) may use it, and the Sealer port abstracts it for a
-    // future browser build. secrets.ts / oauth / Pi / runtime stay inverted.
-    forbid: ["../runtime/", "../agents/", "../session/", "../server", "../secrets", "/pi-oauth", "native-pi"],
+    // The rule is architectural: no runtime/, agents/, session/, server, or
+    // secrets. Pi-freeness falls out of that — Pi lives under runtime/ (pi-oauth)
+    // and agents/pi/, both already covered — EXCEPT native-pi.ts, the one Pi
+    // module at src root, so it is the only Pi path named explicitly. e2e.ts
+    // (AES-256-GCM crypto leaf) is intentionally NOT forbidden: Layer B (store.ts)
+    // may use it; the Sealer port abstracts it for a future browser build.
+    forbid: ["../runtime/", "../agents/", "../session/", "../server", "../secrets", "../native-pi"],
     // The Pi provider-catalog listing is the one sanctioned consumer-side bridge
     // (runtime/provider-catalog.ts wires Pi's list into the Pi-free api.ts). The
     // facade re-exports it; allow that single specifier.
@@ -45,6 +48,13 @@ const RULES = [
     // Pilot boundary (Phase 1) — two-layer split landed, boundary enforced.
     enforce: true,
     note: "credentials must be a pure domain + injected-port service; upward deps become ports (see pilot spec).",
+  },
+  {
+    name: "controllers-dont-import-server",
+    dir: "src/controllers",
+    forbid: ["../server", "./server"],
+    enforce: true,
+    note: "controllers are imported BY server.ts; the dependency direction is server -> controller only (Phase 2).",
   },
 ];
 

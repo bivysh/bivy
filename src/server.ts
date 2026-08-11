@@ -13,7 +13,8 @@ import { listRuntimes, catalogRuntimes, agentInstallSpec, canonicalAgentId, inva
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
-import { listRulesetInfos, upsertRuleset, removeRuleset, activeRulesetFor } from "./runtime/ruleset-store.js";
+import { activeRulesetFor } from "./runtime/ruleset-store.js";
+import { createRulesetController } from "./controllers/rulesets.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
@@ -439,34 +440,14 @@ async function persistLocalModelRemove(id: string): Promise<void> {
 // below), falling back to the built-in DEFAULT_RULESET when none is active.
 const rulesetsDir = appDir;
 
-function rulesetInfos() {
-  return listRulesetInfos(rulesetsDir);
-}
-
-/** Re-emit the ruleset list to every connected client (relay + direct). */
-function broadcastRulesets(): void {
-  broadcast({ type: "rulesets.list", rulesets: rulesetInfos() });
-}
-
-/** Save (validate + store) a ruleset; `active` optionally (de)selects it as the
- *  queue's active ruleset. Returns the stored name. */
-function persistRulesetSave(input: unknown, active?: boolean): { name: string } {
-  const result = upsertRuleset(rulesetsDir, input, active);
-  broadcastRulesets();
-  return result;
-}
-
-function persistRulesetRemove(name: string): void {
-  removeRuleset(rulesetsDir, name);
-  broadcastRulesets();
-}
-
-/** The ruleset the work queue should run under right now: the user's active
- *  ruleset if it applies to the queue, else undefined (→ DEFAULT_RULESET). Read
- *  lazily on each decision so edits in the UI take effect without a restart. */
-function activeQueueRuleset(): Ruleset | undefined {
-  return activeRulesetFor(rulesetsDir, "queue");
-}
+// The ruleset operation domain lives in its own controller (platform
+// modularization Phase 2). server.ts wires it with the node's rulesets dir and
+// broadcast, then keeps the bare helper names so the RELAY_COMMANDS handlers,
+// the REST /api/rulesets routes, and the queue run-policy below are unchanged.
+// `broadcast` is a hoisted function declaration, so passing it here (before its
+// definition) is safe; it is only invoked at request time.
+const { rulesetInfos, broadcastRulesets, persistRulesetSave, persistRulesetRemove, activeQueueRuleset } =
+  createRulesetController({ rulesetsDir, broadcast });
 
 // The queue effector's policy. Thin wrapper so a freshly-saved active ruleset is
 // picked up on the next failed attempt — createRunPolicy is stateless/cheap and
