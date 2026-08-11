@@ -59,29 +59,30 @@ export {
 } from "./presets.js";
 export type { IngestPolicy } from "./presets.js";
 
-// --- The vault (source of truth) — re-exported from its current home --------
+// --- The vault (source of truth) — now in-layer -----------------------------
 export {
   createCredentialVault,
   migrateVaultDir,
   preferIncomingCredential,
   tombstoneWins,
   BivyCredentialStore,
-} from "../runtime/credential-store.js";
-export type {
-  StoredCredential,
-  ApiKeyCredential,
-  OAuthCredential,
-  StoredCredentialInfo,
-  CredentialTombstones,
-} from "../runtime/credential-store.js";
+} from "./store.js";
+export type { StoredCredential, ApiKeyCredential, OAuthCredential } from "./types.js";
 
-// --- The node resolver + agent env representation ---------------------------
+// --- Injected capability ports (crypto, secret refs, OAuth refresh) ---------
+// Contracts the vault/resolver depend on once they move into this layer.
+export type { Sealer, SecretResolver, OAuthRefresher } from "./ports.js";
+export type { StoredCredentialInfo, CredentialTombstones } from "./store.js";
+
+// --- The node resolver + agent env representation — now in-layer ------------
+// createCredentialStore here is the port-injected form; the node convenience
+// wrapper (binds secret/OAuth adapters) lives in runtime/credentials.ts.
 export {
   createCredentialStore,
   buildAgentCredentialEnv,
   apiKeyEnvVar,
   NodeCredentialResolver,
-} from "../runtime/credentials.js";
+} from "./resolver.js";
 
 // --- The daemon credential API (ours — Pi-free) -----------------------------
 export {

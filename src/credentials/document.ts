@@ -15,7 +15,7 @@
 //
 // See docs/credentials-service-plan.md §3.2 / §8.
 
-import type { StoredCredential, OAuthCredential } from "../runtime/credential-store.js";
+import type { StoredCredential, OAuthCredential } from "./types.js";
 import {
   credKey,
   normalizeProvider,

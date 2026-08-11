@@ -12,7 +12,8 @@
 // `runtime/provider-catalog.ts` bridge supplies Pi's. See
 // docs/credentials-service-plan.md §3.1.
 
-import { createCredentialVault, type StoredCredential } from "../runtime/credential-store.js";
+import type { StoredCredential } from "./types.js";
+import { createCredentialVault } from "./store.js";
 import {
   inferReferenceBackend,
   normalizeLabel,

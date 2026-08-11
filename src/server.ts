@@ -13,7 +13,12 @@ import { listRuntimes, catalogRuntimes, agentInstallSpec, canonicalAgentId, inva
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
-import { listRulesetInfos, upsertRuleset, removeRuleset, activeRulesetFor } from "./runtime/ruleset-store.js";
+import { activeRulesetFor } from "./runtime/ruleset-store.js";
+import { createRulesetController } from "./controllers/rulesets.js";
+import { createWorkspaceController } from "./controllers/workspaces.js";
+import { createModelController } from "./controllers/models.js";
+import { Type, type TSchema } from "typebox";
+import { validateInput } from "./protocol/command-spec.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
@@ -40,19 +45,9 @@ import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionSource, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState, type SessionWorkspaceState } from "./session/session-state.js";
-import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, setProviderCredential, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
+import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
-import {
-  loadLocalModels,
-  upsertLocalProvider,
-  removeLocalProviderEntry,
-  listLocalProviderSummaries,
-  exportLocalModels,
-  importLocalModels,
-  toPiModelsConfig,
-  normalizeProviderId,
-  type LocalModelsConfig,
-} from "./runtime/local-model-store.js";
+import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
 import { QuestionManager, validQuestions, isAskUserQuestionTool, formatQuestionResult } from "./question.js";
@@ -296,141 +291,23 @@ const settingsPath = path.join(appDir, "settings.json");
 const localModelsDir = appDir;
 const piModelsProjectionPath = path.join(piDir, "models.json");
 
-// Keys the projection treats as "no real key" — local servers accept anything,
-// so these never enter the encrypted vault as a real key.
-const DUMMY_LOCAL_KEYS = new Set(["local", "ollama", "lm-studio", "vllm", "sglang", "none", ""]);
-
-/** The env var a generic (non-Pi) agent reads to reach this endpoint's base URL,
- *  chosen by API family. Injected only for the active provider (see credentials.ts). */
-function agentEnvForEndpoint(api: string, baseUrl: string): Record<string, string> {
-  const url = String(baseUrl ?? "").trim();
-  if (!url) return {};
-  const a = String(api ?? "").toLowerCase();
-  if (a.startsWith("azure")) return { AZURE_OPENAI_BASE_URL: url };
-  if (a.startsWith("anthropic")) return { ANTHROPIC_BASE_URL: url };
-  return { OPENAI_BASE_URL: url };
-}
-
-type StoredKeyMap = Record<string, { type?: string; key?: string }>;
-
-/** Snapshot of vault credentials, keyed by provider id (best-effort). */
-async function currentProviderKeys(): Promise<StoredKeyMap> {
-  try {
-    return (await exportProviderAuth(credsDir)) as StoredKeyMap;
-  } catch {
-    return {};
-  }
-}
-
-/** Regenerate Pi's models.json from Bivy's registry, stitching in vault keys.
- *  The registry holds no secrets — the API key is resolved from the encrypted
- *  vault here, so it only ever lands in this local 0600 derived file. */
-async function writePiModelsProjection(cfg?: LocalModelsConfig): Promise<void> {
-  const registry = cfg ?? loadLocalModels(localModelsDir);
-  const keys = await currentProviderKeys();
-  const resolveKey = (id: string) => {
-    const c = keys[id];
-    return c && c.type === "api_key" ? c.key : undefined;
-  };
-  try {
-    fs.mkdirSync(piDir, { recursive: true });
-    fs.writeFileSync(piModelsProjectionPath, `${JSON.stringify(toPiModelsConfig(registry, resolveKey), null, 2)}\n`, { mode: 0o600 });
-    try { fs.chmodSync(piModelsProjectionPath, 0o600); } catch {}
-  } catch (error) {
-    console.warn("[local-models] could not write Pi projection:", (error as Error).message);
-  }
-}
-
-/** Redacted summaries for the UI, with `hasKey` derived from the vault. */
-async function localModelSummaries() {
-  const keys = await currentProviderKeys();
-  return listLocalProviderSummaries(localModelsDir, (id) => {
-    const c = keys[id];
-    return !!c && c.type === "api_key" && !!c.key;
-  });
-}
-
-/** One-time migration: adopt any pre-existing pi/models.json into Bivy's store,
- *  moving inline API keys into the encrypted vault. */
-async function migrateLegacyPiModelsIntoRegistry(): Promise<void> {
-  try {
-    if (fs.existsSync(path.join(localModelsDir, "local-models.json"))) return; // already own it
-    if (!fs.existsSync(piModelsProjectionPath)) return;
-    const legacy = JSON.parse(fs.readFileSync(piModelsProjectionPath, "utf8"));
-    const providers = legacy?.providers;
-    if (!providers || typeof providers !== "object" || !Object.keys(providers).length) return;
-    for (const [id, spec] of Object.entries<any>(providers)) {
-      const nid = normalizeProviderId(id);
-      const key = spec?.apiKey;
-      const realKey = key && !DUMMY_LOCAL_KEYS.has(String(key).toLowerCase()) ? String(key) : undefined;
-      await setProviderCredential(credsDir, nid, {
-        key: realKey,
-        env: agentEnvForEndpoint(String(spec?.api ?? ""), String(spec?.baseUrl ?? "")),
-      }).catch(() => {});
-    }
-    importLocalModels(localModelsDir, providers); // normalizeProvider drops apiKey
-    console.log("[local-models] migrated legacy pi/models.json into Bivy registry (keys → vault)");
-  } catch (error) {
-    console.warn("[local-models] legacy migration skipped:", (error as Error).message);
-  }
-}
-
-// Adopt any legacy Pi-owned config (keys → vault), then ensure the projection
-// reflects the Bivy registry from the very first boot.
-async function initLocalModelRegistry(): Promise<void> {
-  await migrateLegacyPiModelsIntoRegistry();
-  await writePiModelsProjection();
-}
-void initLocalModelRegistry();
-
-/** Normalize save input into a provider id, non-secret spec, and separate key. */
-function localModelSpecFromInput(input: any): { providerId: string; spec: any; apiKey?: string } {
-  const { providerId, baseUrl, api, apiKey, models, compat, name } = input || {};
-  if (!baseUrl) throw new Error("baseUrl is required");
-  const spec: any = { baseUrl: String(baseUrl).trim(), api: api || "openai-completions" };
-  if (name) spec.name = String(name);
-  if (compat && typeof compat === "object") spec.compat = compat;
-  spec.models = Array.isArray(models) ? models : [];
-  const key = apiKey === undefined || apiKey === null ? undefined : String(apiKey);
-  return { providerId: providerId || "ollama", spec, apiKey: key };
-}
-
-/** Re-emit the local-model list to every connected client (relay + direct). */
-async function broadcastLocalModels(): Promise<void> {
-  broadcast({ type: "models.custom.list", providers: await localModelSummaries() });
-  broadcast({ type: "models.custom.updated" });
-}
-
-/** Save a provider: non-secret config → registry, secret key → encrypted vault,
- *  then re-project Pi + refresh + sync + notify clients. */
-async function persistLocalModelSave(input: any): Promise<{ id: string }> {
-  const { providerId, spec, apiKey } = localModelSpecFromInput(input);
-  const { id } = upsertLocalProvider(localModelsDir, providerId, spec);
-  // Store the endpoint's base URL alongside the (encrypted) key so non-Pi agents
-  // can reach it when it's the active provider. Only a real key is kept — blank
-  // on edit preserves the existing key; local dummies ("ollama"/…) are dropped
-  // so they don't read as a configured key (projection falls back to "local").
-  const trimmedKey = apiKey?.trim();
-  const realKey = trimmedKey && !DUMMY_LOCAL_KEYS.has(trimmedKey.toLowerCase()) ? trimmedKey : undefined;
-  await setProviderCredential(credsDir, id, { key: realKey, env: agentEnvForEndpoint(spec.api, spec.baseUrl) });
-  await writePiModelsProjection();
-  await refreshSessionAfterAuth();
-  void pushModelAuthToControlPlane().catch(() => {});
-  await broadcastLocalModels();
-  return { id };
-}
-
-/** Remove a provider: drop its registry config AND forget its stored key. */
-async function persistLocalModelRemove(id: string): Promise<void> {
-  const pid = normalizeProviderId(String(id ?? ""));
-  if (!pid) throw new Error("provider id required");
-  removeLocalProviderEntry(localModelsDir, pid);
-  await removeProvider(credsDir, pid).catch(() => {}); // forget the vault key too
-  await writePiModelsProjection();
-  await refreshSessionAfterAuth();
-  void pushModelAuthToControlPlane().catch(() => {});
-  await broadcastLocalModels();
-}
+// The local-model provider domain lives in its own controller (platform
+// modularization Phase 2). server.ts wires it with the node dirs, broadcast,
+// and the session-refresh / control-plane-sync hooks (both hoisted async fns),
+// then destructures the operations it calls elsewhere. All injected dirs are
+// defined above; initLocalModelRegistry runs once at boot, exactly as before.
+const modelController = createModelController({
+  localModelsDir,
+  piDir,
+  piModelsProjectionPath,
+  credsDir,
+  broadcast,
+  refreshSessionAfterAuth,
+  pushModelAuthToControlPlane,
+});
+const { writePiModelsProjection, localModelSummaries, broadcastLocalModels, persistLocalModelSave, persistLocalModelRemove } =
+  modelController;
+void modelController.initLocalModelRegistry();
 
 // --- Rulesets (run-orchestration policy; docs/rulesets.md). --------------------
 // Bivy owns the ruleset registry (ruleset-store.ts); it is node-local, not
@@ -439,34 +316,14 @@ async function persistLocalModelRemove(id: string): Promise<void> {
 // below), falling back to the built-in DEFAULT_RULESET when none is active.
 const rulesetsDir = appDir;
 
-function rulesetInfos() {
-  return listRulesetInfos(rulesetsDir);
-}
-
-/** Re-emit the ruleset list to every connected client (relay + direct). */
-function broadcastRulesets(): void {
-  broadcast({ type: "rulesets.list", rulesets: rulesetInfos() });
-}
-
-/** Save (validate + store) a ruleset; `active` optionally (de)selects it as the
- *  queue's active ruleset. Returns the stored name. */
-function persistRulesetSave(input: unknown, active?: boolean): { name: string } {
-  const result = upsertRuleset(rulesetsDir, input, active);
-  broadcastRulesets();
-  return result;
-}
-
-function persistRulesetRemove(name: string): void {
-  removeRuleset(rulesetsDir, name);
-  broadcastRulesets();
-}
-
-/** The ruleset the work queue should run under right now: the user's active
- *  ruleset if it applies to the queue, else undefined (→ DEFAULT_RULESET). Read
- *  lazily on each decision so edits in the UI take effect without a restart. */
-function activeQueueRuleset(): Ruleset | undefined {
-  return activeRulesetFor(rulesetsDir, "queue");
-}
+// The ruleset operation domain lives in its own controller (platform
+// modularization Phase 2). server.ts wires it with the node's rulesets dir and
+// broadcast, then keeps the bare helper names so the RELAY_COMMANDS handlers,
+// the REST /api/rulesets routes, and the queue run-policy below are unchanged.
+// `broadcast` is a hoisted function declaration, so passing it here (before its
+// definition) is safe; it is only invoked at request time.
+const { rulesetInfos, broadcastRulesets, persistRulesetSave, persistRulesetRemove, activeQueueRuleset } =
+  createRulesetController({ rulesetsDir, broadcast });
 
 // The queue effector's policy. Thin wrapper so a freshly-saved active ruleset is
 // picked up on the next failed attempt — createRunPolicy is stateless/cheap and
@@ -1486,75 +1343,21 @@ function writeSettings(settings: Record<string, unknown>) {
   canonicalNodeConfig = next;
 }
 
-function resolveWorkspacePath(value: unknown): string {
-  const raw = String(value ?? "").trim();
-  if (!raw) throw new Error("Workspace path is required");
-  const expanded = raw.startsWith("~")
-    ? path.join(process.env.HOME ?? "", raw.slice(1))
-    : raw;
-  return path.resolve(expanded);
-}
-
-function validateWorkspace(value: unknown): string {
-  const resolved = resolveWorkspacePath(value);
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(resolved);
-  } catch {
-    throw new Error(`Workspace does not exist: ${resolved}`);
-  }
-  if (!stat.isDirectory()) throw new Error(`Workspace is not a directory: ${resolved}`);
-  return resolved;
-}
-
-function loadSavedWorkspaces(): string[] {
-  const settings = readSettings();
-  const list = [...metadata.listWorkspaces(), ...(Array.isArray(settings.workspaces) ? settings.workspaces : [])];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const item of list) {
-    const value = String(item ?? "").trim();
-    if (!value || seen.has(value)) continue;
-    seen.add(value);
-    out.push(value);
-  }
-  return out;
-}
-
-function saveWorkspaces(list: string[]) {
-  const settings = readSettings();
-  settings.workspaces = list;
-  writeSettings(settings);
-  for (const workspace of list) metadata.rememberWorkspace(workspace);
-}
-
-/** Record a workspace as most-recently-used. Best-effort; never throws. */
-function rememberWorkspace(workspace: string) {
-  try {
-    const resolved = path.resolve(workspace);
-    const list = loadSavedWorkspaces().filter((item) => item !== resolved);
-    list.unshift(resolved);
-    saveWorkspaces(list);
-  } catch {
-    // ignore persistence errors
-  }
-}
-
-function addSavedWorkspace(value: unknown): string[] {
-  const resolved = validateWorkspace(value);
-  const list = loadSavedWorkspaces().filter((item) => item !== resolved);
-  list.unshift(resolved);
-  saveWorkspaces(list);
-  return loadSavedWorkspaces();
-}
-
-function removeSavedWorkspace(value: unknown): string[] {
-  const resolved = resolveWorkspacePath(value);
-  const list = loadSavedWorkspaces().filter((item) => item !== resolved);
-  metadata.removeWorkspace(resolved);
-  saveWorkspaces(list);
-  return loadSavedWorkspaces();
-}
+// The saved-workspace list domain lives in its own controller (platform
+// modularization Phase 2). server.ts wires it with the settings accessors and
+// metadata store, then keeps the bare helper names so the workspaces.list
+// handler and the REST /api/workspaces routes are unchanged. readSettings /
+// writeSettings are hoisted function declarations and metadata is defined above,
+// so instantiating here is safe.
+const {
+  resolveWorkspacePath,
+  validateWorkspace,
+  loadSavedWorkspaces,
+  saveWorkspaces,
+  rememberWorkspace,
+  addSavedWorkspace,
+  removeSavedWorkspace,
+} = createWorkspaceController({ readSettings, writeSettings, metadata });
 
 function saveApprovalMode(mode: ApprovalMode) {
   const settings = readSettings();
@@ -2068,6 +1871,14 @@ interface CommandCtx {
 }
 type Command = (msg: ClientMessage, ctx: CommandCtx) => void | Promise<void>;
 
+// A registry entry is either a bare handler (legacy form) or a spec that adds an
+// optional typebox input schema — validated at the dispatch boundary before the
+// handler runs — plus the protocol version it was introduced at (for the
+// compatible-subset policy). The two forms coexist so commands adopt validation
+// one at a time; a bare handler behaves exactly as before. See src/protocol/.
+type CommandSpecEntry = { since?: number; schema?: TSchema; handler: Command };
+type RegisteredCommand = Command | CommandSpecEntry;
+
 // Idempotency for `session.new` keyed by requestId: a client's post-reconnect
 // retry adopts the session the first request created instead of spawning a
 // duplicate. See ./session/session-new-dedupe for the full rationale.
@@ -2086,9 +1897,17 @@ const promptDedupe = createSessionNewDedupe<void>();
 const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<void>) =>
   promptDedupe.run(clientMessageId, run);
 
-const RELAY_COMMANDS: Record<string, Command> = {
-  ping(msg, ctx) {
-    ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
+const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
+  // First command to adopt boundary validation (the spec form). `requestId` is
+  // the only declared field; typebox permits additional properties by default,
+  // so real pings always pass — this exercises the schema path end-to-end
+  // without changing behavior. Other commands adopt schemas one at a time.
+  ping: {
+    since: 0,
+    schema: Type.Object({ requestId: Type.Optional(Type.String()) }),
+    handler(msg: ClientMessage, ctx: CommandCtx) {
+      ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });
+    },
   },
   // Kick off `bivy update` on this node from the app's version-mismatch banner
   // (see runBivyUpdate). The node restarts itself when the update lands, so the
@@ -3249,9 +3068,22 @@ const RELAY_CLIENT_ID = "relay";
 
 async function handleRelayMessage(msg: ClientMessage) {
   try {
-    const command = RELAY_COMMANDS[msg.kind];
-    if (command) {
-      await command(msg, relayCtx);
+    const entry = RELAY_COMMANDS[msg.kind];
+    if (entry) {
+      const handler = typeof entry === "function" ? entry : entry.handler;
+      const schema = typeof entry === "function" ? undefined : entry.schema;
+      if (schema) {
+        const check = validateInput(schema, msg);
+        if (!check.ok) {
+          relayCtx.reply({
+            type: `${msg.kind}.error`,
+            requestId: typeof msg.requestId === "string" ? msg.requestId : undefined,
+            error: `Invalid ${msg.kind}: ${check.errors.join("; ")}`,
+          });
+          return;
+        }
+      }
+      await handler(msg, relayCtx);
       return;
     }
     // Fallthrough for kinds not in RELAY_COMMANDS: terminal.* frames go to the
