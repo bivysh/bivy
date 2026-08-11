@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 
-export type SecretBackend = "local" | "env" | "1password";
+export type SecretBackend = "local" | "env" | "1password" | "command";
 
 export type SecretRecord = {
   id: string;
@@ -128,11 +128,16 @@ export class SecretVault {
     if (value.startsWith("secret://")) return this.resolve(value.slice("secret://".length));
     if (value.startsWith("env://")) return process.env[value.slice("env://".length)] || undefined;
     if (value.startsWith("op://")) return readOnePassword(value);
+    // A `cmd://` reference runs a command and uses its stdout as the secret — the
+    // escape hatch for any password manager with a CLI (Bitwarden, LastPass,
+    // Proton Pass, pass, …). Runs on THIS node only (command refs never sync).
+    if (value.startsWith("cmd://")) return runCommand(value.slice("cmd://".length));
 
     const record = this.getRecord(value);
     if (!record) return undefined;
     if (record.backend === "env") return record.ref ? process.env[record.ref.replace(/^env:\/\//, "")] || undefined : undefined;
     if (record.backend === "1password") return record.ref ? readOnePassword(record.ref) : undefined;
+    if (record.backend === "command") return record.ref ? runCommand(record.ref.replace(/^cmd:\/\//, "")) : undefined;
     if (record.backend === "local") return this.decryptRecord(record);
     return undefined;
   }
@@ -143,7 +148,8 @@ export class SecretVault {
     let backend: SecretBackend;
     if (trimmed.startsWith("op://")) backend = "1password";
     else if (trimmed.startsWith("env://")) backend = "env";
-    else throw new Error("Secret references must start with op:// or env://");
+    else if (trimmed.startsWith("cmd://")) backend = "command";
+    else throw new Error("Secret references must start with op://, env://, or cmd://");
     const prev = this.data.records[normalized];
     const at = nowIso();
     this.data.records[normalized] = {
@@ -261,6 +267,24 @@ async function readOnePassword(ref: string): Promise<string | undefined> {
     return stdout.trim() || undefined;
   } catch (error) {
     throw new Error(`Could not read ${ref} with 1Password CLI. Run 'op signin' and check the reference.`);
+  }
+}
+
+/**
+ * Run a `cmd://` reference's command via the shell and use its trimmed stdout as
+ * the secret. The generic escape hatch for any password-manager CLI. Runs on this
+ * node only — command references are never synced (a synced command would be
+ * cross-node code execution), so this executes a command the local operator wrote.
+ */
+async function runCommand(command: string): Promise<string | undefined> {
+  const cmd = String(command || "").trim();
+  if (!cmd) return undefined;
+  const [file, args] = process.platform === "win32" ? ["cmd", ["/c", cmd]] as const : ["sh", ["-c", cmd]] as const;
+  try {
+    const { stdout } = await exec(file, args, { env: process.env, timeout: 15_000, maxBuffer: 1024 * 1024 });
+    return stdout.trim() || undefined;
+  } catch (error) {
+    throw new Error(`cmd:// reference failed: \`${cmd}\` (${(error as Error).message})`);
   }
 }
 

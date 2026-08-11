@@ -569,7 +569,7 @@ function ProviderCredentials({ providerId, records, presets }: { providerId: str
     setBusy(true);
     setErr(null);
     try {
-      const isRef = v.startsWith("op://") || v.startsWith("env://");
+      const isRef = v.startsWith("op://") || v.startsWith("env://") || v.startsWith("cmd://");
       await controller.setCredential(providerId, l, isRef ? { ref: v } : { key: v });
       setLabel("");
       setValue("");
@@ -584,7 +584,7 @@ function ProviderCredentials({ providerId, records, presets }: { providerId: str
   return (
     <div className="cred-section" style={{ marginTop: 20, borderTop: "1px solid var(--border, #333)", paddingTop: 16 }}>
       <label className="field-label">Additional accounts</label>
-      <p className="muted small">Add work / personal or per-project keys. Paste an API key, or an <code>op://…</code> / <code>env://NAME</code> reference (resolved on this node; the secret never leaves your manager).</p>
+      <p className="muted small">Add work / personal or per-project keys. Paste an API key, or a reference — <code>op://…</code>, <code>env://NAME</code>, or <code>cmd://&lt;command&gt;</code> (any password-manager CLI). References resolve on this node; the secret never leaves your manager. <code>cmd://</code> refs stay on this node.</p>
       {extra.length > 0 && (
         <div className="picker-list">
           {extra.map((r) => (
@@ -608,7 +608,7 @@ function ProviderCredentials({ providerId, records, presets }: { providerId: str
         </div>
       )}
       <input className="picker-search" placeholder="Label (e.g. work)" value={label} onChange={(e) => setLabel(e.target.value)} />
-      <input className="picker-search" type="password" placeholder="API key, or op://… / env://NAME" value={value} onChange={(e) => setValue(e.target.value)} />
+      <input className="picker-search" type="password" placeholder="API key, or op:// / env://NAME / cmd://…" value={value} onChange={(e) => setValue(e.target.value)} />
       <div className="row-actions">
         <button className="btn" disabled={!label.trim() || !value.trim() || busy} onClick={add}>
           {busy ? "Adding…" : "Add account"}

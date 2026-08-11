@@ -297,16 +297,20 @@ export class BivyCredentialStore {
   }
 
   /**
-   * Store a reference credential — a pointer (`op://…` / `env://NAME`) resolved
-   * per-node at read time (see the resolver), never the secret itself. The
-   * pointer is safe to sync across nodes; the secret stays in the manager. A
+   * Store a reference credential — a pointer (`op://…` / `env://NAME` / `cmd://…`)
+   * resolved per-node at read time (see the resolver), never the secret itself.
+   * The pointer is safe to sync across nodes; the secret stays in the manager. A
    * reference is api-key-shaped, so it cannot model a rotating OAuth token set.
+   *
+   * `cmd://` references are forced NODE-LOCAL: they run a command, so syncing one
+   * would be cross-node code execution (and the command is machine-specific
+   * anyway). `exportSyncableRecords` additionally never emits them.
    * Writes at `provider:label` (defaulting to the provider's default slot).
    */
   async setReference(
     provider: string,
     ref: string,
-    backend: "1password" | "env",
+    backend: "1password" | "env" | "command",
     label: string = DEFAULT_LABEL,
   ): Promise<void> {
     const id = providerId(provider);
@@ -323,9 +327,10 @@ export class BivyCredentialStore {
           provider: id,
           label: normalizeLabel(label),
           source: { kind: "reference", ref: pointer, backend },
-          // Preserve an existing record's sync/origin; a new reference is a
-          // Bivy-first, opt-out-sync credential (only the pointer ever syncs).
-          sync: existing?.sync ?? "account",
+          // A cmd:// reference is always node-local (never sync a command).
+          // Otherwise preserve an existing record's sync/origin; a new reference
+          // is a Bivy-first, opt-out-sync credential (only the pointer ever syncs).
+          sync: backend === "command" ? "node" : existing?.sync ?? "account",
           origin: existing?.origin ?? "bivy",
           updatedAt: Date.now(),
         };
@@ -479,6 +484,10 @@ export class BivyCredentialStore {
     const out: Record<string, CredentialRecord> = {};
     for (const record of Object.values(this.readDocument().credentials)) {
       if (record.sync !== "account") continue;
+      // A cmd:// reference is never synced — a command that runs on a peer is
+      // cross-node code execution. Belt-and-suspenders with the node-local sync
+      // default in setReference().
+      if (record.source.kind === "reference" && record.source.backend === "command") continue;
       out[credKey(record.provider, record.label)] = record;
     }
     return out;

@@ -71,7 +71,7 @@ function freshCredsDir(): string {
 {
   const credsDir = freshCredsDir();
   try {
-    await assert.rejects(() => setProviderReference(credsDir, "anthropic", "sk-plain-key"), /op:\/\/ or env:\/\//);
+    await assert.rejects(() => setProviderReference(credsDir, "anthropic", "sk-plain-key"), /op:\/\/, env:\/\/, or cmd:\/\//);
   } finally {
     fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
   }
