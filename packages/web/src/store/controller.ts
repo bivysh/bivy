@@ -126,6 +126,7 @@ import {
   unb64url,
   seal,
   createAutomation,
+  runAutomationNow,
   deleteAutomation,
   fetchAutomations,
   updateAutomation,
@@ -3261,6 +3262,43 @@ export class AppController {
       }
     } catch {
       // Best-effort: keep the in-memory queue path as the only delivery.
+    }
+  }
+
+  /** Turn the current Session into unattended work without dropping its
+   * conversation/native-resume context. The instruction is E2E-sealed for the
+   * owning Machine; the control plane stores ciphertext and creates a Run that
+   * targets this exact Session. The node resumes/waits for that Session or
+   * fails explicitly—it never silently cold-starts a replacement. */
+  async delegateSession(sessionId: string, instruction: string): Promise<{ runId?: string; error?: string }> {
+    const text = instruction.trim();
+    if (!text) return { error: "Describe what the agent should finish in the background." };
+    if (!this.accountMode()) return { error: "Sign in to delegate this Session." };
+    const nodeId = this.resolveSessionNodeId(sessionId);
+    if (!nodeId) return { error: "This Session has no owning Machine." };
+    const roomKeyB64 = this.local.keys()[nodeId];
+    if (!roomKeyB64) return { error: "This Machine isn't paired on this device—open it first so the instruction can be encrypted." };
+    let automationId: string | undefined;
+    try {
+      const roomKey = await importRoomKey(unb64url(roomKeyB64));
+      const encrypted = await seal(roomKey, text);
+      const created = await createAutomation(this.local, {
+        name: "Delegated Session work",
+        templateCiphertext: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
+        trigger: "manual",
+        nodeLabel: this.resolveNodeLabel(nodeId),
+        targetKind: "existing_session",
+        targetSessionId: sessionId,
+        message: false,
+        enabled: true,
+      });
+      automationId = created.id;
+      const run = await runAutomationNow(this.local, created.id);
+      return { runId: run.id };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : "Could not delegate this Session." };
+    } finally {
+      if (automationId) void deleteAutomation(this.local, automationId).catch(() => {});
     }
   }
 
