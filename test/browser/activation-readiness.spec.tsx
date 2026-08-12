@@ -22,14 +22,11 @@ test("the readiness strip renders nothing once activated and never claims premat
   expect(view).toContain("activation.checks.map((check)");
 });
 
-test("each readiness failure routes to a real remediation surface (no inert buttons)", async () => {
+test("setup readiness never interrupts the normal session surface", async () => {
   const app = await read("../../packages/web/src/App.tsx");
-  // The strip only shows before a real agent answer, in hosted mode with a Machine.
-  expect(app).toContain("!activation.activated && !readinessDismissed");
-  // Every remediation kind is wired to an existing surface.
-  for (const kind of ["connect_machine", "install_agent", "authenticate_credential", "grant_repository", "run_starter_task"]) {
-    expect(app).toContain(`${kind}:`);
-  }
+  expect(app).not.toContain("<ReadinessChecklist");
+  expect(app).not.toContain("activationFromState(state)");
+  expect(app).not.toContain('authenticate_credential: () => openSettings("models")');
 });
 
 test("the readiness UI uses only canonical customer vocabulary", async () => {
