@@ -78,8 +78,8 @@ agent *vendor* will build neutrally across *all* agents:
 
 Ephemeral runners are the execution layer behind “agents that don't clock out,”
 not a separate hosted-compute product. A trigger or schedule creates a governed
-run; Bivy provisions the runner in the user's Fly, Hetzner, AWS, E2B, or Sprites
-account; the normal agent-agnostic policy and audit boundary executes the work;
+run; Bivy provisions the runner in the user's Fly, Hetzner, or AWS account; the
+normal agent-agnostic policy and audit boundary executes the work;
 and the runner is destroyed or suspended when it settles. The user supplies the
 provider credential and pays the provider directly. Bivy neither resells compute
 nor adds a compute margin.
@@ -104,6 +104,15 @@ quickly, never leak past its TTL, persist a reconstructable session before destr
 and make its cost and teardown status visible. Suspend-to-zero providers preserve
 the runtime exactly; destroy-lane providers preserve an encrypted transcript and
 git checkpoint and reconstruct the runtime on a fresh runner.
+
+Fly Sprites and E2B are optional, experimental managed-compute adapters. They are
+valuable fast-start and suspend/resume lanes, but they overlap Bivy's agent-cloud
+market and do not prove the sovereignty-economics claim in the same way as raw
+infrastructure in the user's account. Bivy therefore never makes session
+durability depend on their proprietary snapshots: the governed run, audit trail,
+and portable encrypted checkpoint remain Bivy-owned and can move to another
+provider. Providers supply replaceable compute; Bivy owns orchestration,
+governance, evidence, and session continuity.
 
 ## How it works — three simple parts
 
