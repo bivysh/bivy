@@ -1681,7 +1681,7 @@ function cmdCompletions(args = []) {
   const commands = [
     "run", "sessions", "ls", "resume", "promote", "rename", "nodes", "agent", "agents", "agents:install", "shim", "takeover", "token", "exec",
     "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "logs", "login",
-    "update", "update:log", "automation", "config", "plugin", "open", "service", "secrets", "voice", "link", "relay:setup",
+    "update", "update:log", "audit", "automation", "config", "plugin", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
   const agents = [...AGENT_INTEGRATIONS.keys()];
@@ -4088,6 +4088,38 @@ async function runUpdate(args = []) {
   console.log(c.dim(`=== bivy update finished ${new Date().toISOString()} ===`));
 }
 
+// Show the node's governance audit trail (moat #1): the append-only record of
+// tool-call decisions (and, as it grows, network/approval events) the node made,
+// attributed per session + agent. Reads the JSONL directly — the daemon need not
+// be running. Decisions + metadata only; never tool payloads.
+function cmdAudit(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy audit [--session <id>] [--kind <kind>] [--limit <n>] [--json]\n\nShow the node's governance audit trail (tool-call decisions, …).");
+    return;
+  }
+  const file = path.join(appDir, "audit", "audit.jsonl");
+  let raw;
+  try { raw = fs.readFileSync(file, "utf8"); }
+  catch { console.log("No audit events recorded yet."); return; }
+  const flag = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
+  const session = flag("--session");
+  const kind = flag("--kind");
+  const limit = Number(flag("--limit")) || 0;
+  let events = raw.split("\n").map((l) => l.trim()).filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  if (session) events = events.filter((e) => e.session === session);
+  if (kind) events = events.filter((e) => e.kind === kind);
+  if (limit > 0) events = events.slice(-limit);
+  if (args.includes("--json")) { console.log(JSON.stringify(events, null, 2)); return; }
+  if (!events.length) { console.log("No matching audit events."); return; }
+  for (const e of events) {
+    const when = new Date(e.ts).toISOString();
+    const cols = [when, e.kind, e.agent || "-", e.session ? String(e.session).slice(0, 8) : "-", e.tool || e.host || "", e.decision || ""].filter((p) => p !== "");
+    console.log(cols.join("  "));
+    if (e.reason) console.log(`    reason: ${e.reason}`);
+  }
+}
+
 // Print the update log (default: the tail; `-f`/`--follow` streams new output).
 // After a `bivy update` detaches and this terminal reconnects, this is how you
 // confirm the background update succeeded.
@@ -4606,6 +4638,9 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "update:log":
       cmdUpdateLog(args);
+      break;
+    case "audit":
+      cmdAudit(args);
       break;
     case "agents:install":
     case "runtimes:install":

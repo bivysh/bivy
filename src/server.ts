@@ -15,6 +15,7 @@ import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
+import { createAuditLog } from "./audit/index.js";
 import { createWorkspaceController } from "./controllers/workspaces.js";
 import { createModelController } from "./controllers/models.js";
 import { Type, type TSchema } from "typebox";
@@ -427,6 +428,12 @@ function publishBootstrapSecret() {
 }
 
 const approvals = new ApprovalManager();
+
+// Node audit trail (moat #1): one append-only, redaction-aware record of the
+// governance events Bivy already intercepts — tool-call decisions today,
+// network/approval events next — attributed per session + agent, queryable via
+// `bivy audit`. Distinct from the per-session transcript (session/event-log.ts).
+const auditLog = createAuditLog(path.join(appDir, "audit"));
 
 // Bivy owns the AskUserQuestion → question-card feature at the guardian layer,
 // runtime-agnostically (see src/question.ts). The manager holds every pending
@@ -5493,12 +5500,33 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
 // boundary (policy + approvals + questions), so if any of it throws — a bug in
 // rule evaluation, a rejected approval promise, an aborted signal — the tool
 // must be BLOCKED, never allowed to fall through to the SDK's default outcome.
+// Record the guardian's decision for every governed tool call — the core of the
+// node audit trail. AskUserQuestion is a Bivy interaction (handled), not a
+// governed side effect, so it is skipped. Records the tool NAME + allow/deny
+// decision only — never the tool payload (redaction contract; see src/audit).
+function recordToolCallAudit(params: { sessionId: string; toolName: string }, outcome: unknown): void {
+  const o = outcome as { handled?: boolean; block?: boolean; reason?: unknown } | undefined;
+  if (o?.handled) return;
+  const agent = openSessions.get(params.sessionId)?.runtimeId;
+  auditLog.record({
+    kind: "tool.call",
+    session: params.sessionId,
+    ...(agent ? { agent } : {}),
+    tool: params.toolName,
+    decision: o?.block ? "blocked" : "allowed",
+    ...(o?.block && typeof o.reason === "string" ? { reason: o.reason } : {}),
+  });
+}
+
 const guardianInterceptor: ToolInterceptor = async (params) => {
   try {
-    return await guardianInterceptorImpl(params);
+    const outcome = await guardianInterceptorImpl(params);
+    recordToolCallAudit(params, outcome);
+    return outcome;
   } catch (error) {
     broadcast({ type: "tool.blocked", sessionId: params.sessionId, toolName: params.toolName, reason: "internal approval error" });
     if (process.env.BIVY_DEBUG) console.error("guardianInterceptor error:", error);
+    recordToolCallAudit(params, { block: true, reason: "internal approval error" });
     return { block: true, reason: "internal approval error" };
   }
 };

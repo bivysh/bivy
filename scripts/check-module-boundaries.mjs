@@ -70,6 +70,13 @@ const RULES = [
     enforce: true,
     note: "the remote module is imported BY the kernel via ./remote/index.js; it never imports server.ts (the composition root). Direction: server -> remote only (Phase 3).",
   },
+  {
+    name: "audit-is-a-leaf",
+    dir: "src/audit",
+    forbid: ["../server", "../runtime/", "../agents/", "../session/", "../credentials/", "../controllers/", "../harness/"],
+    enforce: true,
+    note: "the audit trail is a pure fs leaf; the daemon hands it decisions to record. It imports no kernel implementation (moat #1).",
+  },
 ];
 
 // Match the `from "spec"` clause of any import/export (including multi-line
