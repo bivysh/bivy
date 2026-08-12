@@ -70,6 +70,24 @@ source/dedupe key: re-enqueuing the same key returns the existing run rather tha
 creating a second one. Hosted free-tier usage is likewise recorded once per run
 key, so reconnects and reclaims never inflate the run count.
 
+**Idempotent external effects.** A retry or reclaim of the same issue run must
+not duplicate what a reader sees on GitHub:
+
+- **Branches** for GitHub-issue and Linear runs are deterministic
+  (`bivy/issue-<n>`, `bivy/linear-<slug>`), and a push of `branch:branch` is
+  naturally idempotent, so re-running produces the same branch, not a second one.
+- **Issue comments** — the pickup note and each outcome note (PR ready / no
+  changes / pushed-without-PR) carry a hidden marker and are posted **at most
+  once per `(issue, key)`**. The pickup comment is keyed per issue; outcome
+  comments are keyed by their artifact (PR URL, branch) so a genuinely new
+  artifact still comments while a reclaim on a fresh process does not repeat one.
+- **Pull requests** are opened by the agent, then adopted by branch; a run whose
+  issue branch already produced a merged PR is skipped rather than re-run.
+
+Known limitation: Slack/schedule/generic-webhook repo runs still use a random
+branch name per run, so their branch/PR effects are not yet idempotent across a
+reclaim on a fresh process. That path is tracked separately.
+
 ## Run evidence and outcome reports
 
 Every run also carries a small, structured **evidence** record — the piece a

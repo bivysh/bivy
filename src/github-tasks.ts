@@ -346,6 +346,36 @@ export async function commentIssue(cfg: GitHubTaskConfig, issueNumber: number, b
   await gh(cfg, "POST", `/issues/${issueNumber}/comments`, { body });
 }
 
+/** A hidden HTML-comment marker (invisible in rendered Markdown) that makes a
+ *  Bivy issue comment idempotent across process restarts and lease reclaims: the
+ *  same logical comment carries the same marker, so a duplicate delivery or a
+ *  reclaim on a fresh node can detect that it was already posted. */
+export function bivyCommentMarker(key: string): string {
+  return `<!-- bivy:comment:${key} -->`;
+}
+
+/** Whether the issue already carries a Bivy comment with the given key. Scans a
+ *  single bounded page (newest issues have few comments); an API failure returns
+ *  false so we prefer re-posting the signal over silently dropping it. */
+export async function issueHasCommentMarker(cfg: GitHubTaskConfig, issueNumber: number, key: string): Promise<boolean> {
+  const marker = bivyCommentMarker(key);
+  const res = await gh(cfg, "GET", `/issues/${issueNumber}/comments?per_page=100`);
+  if (!res.ok) return false;
+  const raw = (await res.json().catch(() => [])) as Array<{ body?: unknown }>;
+  return Array.isArray(raw) && raw.some((c) => typeof c?.body === "string" && c.body.includes(marker));
+}
+
+/** Post an issue comment at most once per `(issue, key)`. Returns true when it
+ *  posted, false when an identically-keyed comment already existed. This is the
+ *  external-effect idempotency guard: a retry or reclaim of the same Run does not
+ *  duplicate a pickup or outcome comment. The marker is appended to the body so
+ *  the check above can see it. */
+export async function commentIssueOnce(cfg: GitHubTaskConfig, issueNumber: number, body: string, key: string): Promise<boolean> {
+  if (await issueHasCommentMarker(cfg, issueNumber, key)) return false;
+  await commentIssue(cfg, issueNumber, `${body}\n\n${bivyCommentMarker(key)}`);
+  return true;
+}
+
 /**
  * The comment posted on an issue the moment Bivy picks it up — the "visibly
  * signal pickup" half of the on-issue lifecycle (the other half is the label
@@ -378,7 +408,9 @@ export async function announcePickup(cfg: GitHubTaskConfig, issueNumber: number,
   if (cfg.label && cfg.label !== cfg.claimLabel) {
     await removeLabel(cfg, issueNumber, cfg.label).catch((error) => warn(`remove routing label "${cfg.label}"`, error));
   }
-  await commentIssue(cfg, issueNumber, pickupMessage(nodeName)).catch((error) => warn("post pickup comment", error));
+  // Idempotent across reclaims: a Machine that reclaims this issue after another
+  // lost its lease must not post a second pickup comment.
+  await commentIssueOnce(cfg, issueNumber, pickupMessage(nodeName), "pickup").catch((error) => warn("post pickup comment", error));
 }
 
 export async function defaultBranch(cfg: GitHubTaskConfig): Promise<string> {
