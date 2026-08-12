@@ -987,6 +987,10 @@ async function harnessEndTurn(record: SessionRecord): Promise<void> {
       after: result.after.id,
       changes: result.changes,
     });
+    // Governance audit: record WHICH files this turn changed (path + line
+    // counts only — never the diff text). Agent-agnostic: derived from the
+    // checkpoint diff, not from any runtime's tool arguments.
+    recordFileChanges(record.id, result.changes);
   } catch {
     // Harness is best-effort; ignore and restore the last known state.
     record.workspaceState = previous;
@@ -5587,6 +5591,53 @@ function recordApprovalDecisionAudit(request: ApprovalRequest, approved: boolean
   });
 }
 
+// --- Audit hooks (moat #1, slice 3): file changes and cost. Both are recorded
+// from agent-agnostic seams the node already computes — the per-turn checkpoint
+// diff and the usage refresh — so no per-runtime tool-argument parsing is
+// needed. Content is NEVER recorded: file.change carries the path + git numstat
+// line counts (like net.attempt carries host, not bytes), and the diff text
+// (oldText/newText) is intentionally excluded by the parameter type below.
+
+// The safe projection of a FileChange: path + status + line counts only. Typed
+// deliberately WITHOUT oldText/newText so it is impossible to record file
+// content here even by mistake (the redaction contract, enforced by the type).
+function recordFileChanges(
+  sessionId: string,
+  changes: readonly { path: string; status: string; added?: number; removed?: number }[],
+): void {
+  if (changes.length === 0) return;
+  const agent = auditAgentOf(sessionId);
+  for (const c of changes) {
+    auditLog.record({
+      kind: "file.change",
+      session: sessionId,
+      ...(agent ? { agent } : {}),
+      path: c.path,
+      op: c.status,
+      ...(typeof c.added === "number" ? { added: c.added } : {}),
+      ...(typeof c.removed === "number" ? { removed: c.removed } : {}),
+    });
+  }
+}
+
+// Cost/usage is a running total refreshed each turn; record only when it CHANGES
+// so the trail carries one cost point per turn that actually spent, not a line
+// per poll. Cleared on session teardown so the map can't grow unbounded.
+const lastRecordedCostUsd = new Map<string, number>();
+function recordCostAudit(sessionId: string, usage: { costUsd?: number; tokens?: { total?: number } }): void {
+  if (typeof usage.costUsd !== "number") return;
+  if (lastRecordedCostUsd.get(sessionId) === usage.costUsd) return;
+  lastRecordedCostUsd.set(sessionId, usage.costUsd);
+  const agent = auditAgentOf(sessionId);
+  auditLog.record({
+    kind: "cost",
+    session: sessionId,
+    ...(agent ? { agent } : {}),
+    costUsd: usage.costUsd,
+    ...(typeof usage.tokens?.total === "number" ? { tokens: usage.tokens.total } : {}),
+  });
+}
+
 const guardianInterceptor: ToolInterceptor = async (params) => {
   try {
     const outcome = await guardianInterceptorImpl(params);
@@ -6450,6 +6501,7 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   record.mcpRestore?.();
   openSessions.delete(record.id);
   if (record.sessionFile) openSessions.delete(path.resolve(record.sessionFile));
+  lastRecordedCostUsd.delete(record.id);
   if (active?.id === record.id) active = undefined;
   broadcast({ type: "session.closed", sessionId: record.id, sessionFile: record.sessionFile, reason });
   scheduleAdvertise();
@@ -6815,6 +6867,9 @@ async function refreshSessionUsage(record: SessionRecord) {
     record.usage = usage;
     if (typeof usage.costUsd === "number") record.costUsd = usage.costUsd;
     metadata.upsertSession({ id: record.id, costUsd: usage.costUsd, tokensTotal: usage.tokens?.total });
+    // Governance audit: one cost point per turn that actually spent (deduped on
+    // the running total inside recordCostAudit).
+    recordCostAudit(record.id, usage);
     broadcast({ type: "session.usage", sessionId: record.id, usage });
   } catch {
     // Usage reporting must never affect the session it's reporting on.

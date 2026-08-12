@@ -23,7 +23,7 @@ import path from "node:path";
 export interface AuditEvent {
   ts: number;
   /** Dotted event kind: "tool.call" | "net.attempt" | "approval.request"
-   *  | "approval.decision" | … */
+   *  | "approval.decision" | "file.change" | "cost" | … */
   kind: string;
   /** The session the action belongs to, when known. */
   session?: string;
@@ -42,6 +42,19 @@ export interface AuditEvent {
   requestId?: string;
   /** Whether a human approval was granted — approval.decision. */
   approved?: boolean;
+  /** Changed file path — file.change (the DESTINATION, like host for a net
+   *  attempt; the file's content/diff text is NEVER recorded). */
+  path?: string;
+  /** File-change kind — file.change ("added" | "modified" | "deleted"). */
+  op?: string;
+  /** Per-file line counts from `git diff --numstat` — file.change (counts only,
+   *  never the lines themselves). */
+  added?: number;
+  removed?: number;
+  /** Rolling cost/token totals for the session — cost (display-grade metadata,
+   *  never used for enforcement). */
+  costUsd?: number;
+  tokens?: number;
   /** Bounded, non-secret metadata for this kind (never payloads). */
   [field: string]: unknown;
 }
