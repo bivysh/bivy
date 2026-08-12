@@ -3046,6 +3046,33 @@ async function restartServiceReconciled(config) {
   return restartService();
 }
 
+// After an update triggers a restart, the service manager can report the unit
+// "started" while the node immediately crash-loops — e.g. an interrupted
+// download left a half-extracted dependency, so the process exits on a missing
+// module on every restart. Poll the local API so `bivy update` tells the truth
+// (a clear, actionable failure) instead of printing "Updated and restarted"
+// over a node that never came up. Non-destructive: it only observes.
+async function verifyNodeCameUp(config, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const status = await localApi(config, "/api/status");
+      if (status && typeof status === "object") return true;
+    } catch {
+      /* not reachable yet — keep polling until the deadline */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return false;
+}
+
+function reportNodeDidNotStart() {
+  console.log(c.red("⚠ The node did not become reachable after the update — it may be crash-looping."));
+  console.log(`  Inspect it with ${c.cyan("bivy status")} and your service log.`);
+  console.log("  A common cause is a half-downloaded dependency from an interrupted update;");
+  console.log(`  re-running ${c.cyan("bivy update")} usually re-fetches it cleanly.`);
+}
+
 // How long a restart triggered by `bivy update`/`bivy restart` will wait for
 // in-flight agent turns to finish before restarting anyway. Restarting the
 // service SIGTERMs every open session's agent process; done mid-turn that
@@ -4002,7 +4029,12 @@ async function runUpdate(args = []) {
     const config = loadConfig();
     await waitForIdleSessions(config, { skip: skipWait });
     if (config.service && (await restartServiceReconciled(config))) {
-      console.log(c.green("Updated and restarted the background service."));
+      if (await verifyNodeCameUp(config)) {
+        console.log(c.green("Updated and restarted the background service."));
+      } else {
+        reportNodeDidNotStart();
+        process.exitCode = 1;
+      }
     } else {
       console.log(c.green("Updated. Run 'bivy start' (or restart your service) to apply."));
     }
@@ -4026,6 +4058,12 @@ async function runUpdate(args = []) {
       cwd: repoRoot,
       env: { ...process.env, BIVY_HOME: repoRoot, BIVY_CHANNEL: channel },
     });
+    // install.sh restarts the service itself; verify the node actually came up
+    // rather than trusting the installer's exit code over a crash-looping node.
+    if (code === 0 && config.service && !(await verifyNodeCameUp(config))) {
+      reportNodeDidNotStart();
+      process.exit(1);
+    }
     process.exit(code);
   }
 
@@ -4038,7 +4076,12 @@ async function runUpdate(args = []) {
   const config = loadConfig();
   await waitForIdleSessions(config, { skip: skipWait });
   if (config.service && (await restartServiceReconciled(config))) {
-    console.log(c.green("Updated and restarted the background service."));
+    if (await verifyNodeCameUp(config)) {
+      console.log(c.green("Updated and restarted the background service."));
+    } else {
+      reportNodeDidNotStart();
+      process.exitCode = 1;
+    }
   } else {
     console.log(c.green("Updated. Run 'bivy start' (or restart your service) to apply."));
   }
