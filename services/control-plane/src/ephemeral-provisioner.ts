@@ -17,6 +17,7 @@
 import {
   launchEphemeralMachine,
   destroyEphemeralMachine,
+  ephemeralNodeLabel,
   validateEphemeralProviderToken,
   type ExecFn,
   type ExecRequest,
@@ -600,8 +601,28 @@ export async function maybeAutoProvision(
     // server-side rather than launching a blank machine. Best-effort — any gap
     // (no correlation / no escrowed key) falls back to a normal fresh provision.
     const restore = await planRestoreProvision(store, accountId).catch(() => null);
-    if (restore) return await provisionEphemeralRestore(store, accountId, target, env, restore, launcher);
-    return await provisionEphemeralForAccount(store, accountId, target, env, launcher);
+    const machine = restore
+      ? await provisionEphemeralRestore(store, accountId, target, env, restore, launcher)
+      : await provisionEphemeralForAccount(store, accountId, target, env, launcher);
+    // A hosted runner serves its unique `bivy/<eph suffix>` label. Move only
+    // work that was waiting on the routing target which caused this launch;
+    // explicit items for another node/config must remain untouched.
+    if (machine.nodeId) {
+      const routing = await store.getQueueRouting(accountId);
+      const sourceLabel = routing.primary.kind === "node" ? `bivy/${routing.primary.node}` : "bivy";
+      const targetLabel = `bivy/${ephemeralNodeLabel(machine.nodeId)}`;
+      const pending = (await store.listWorkItems(accountId, 100)).filter((item) => item.status === "pending" && item.label === sourceLabel);
+      for (const item of pending) {
+        const assigned = await store.assignWorkItem(accountId, item.id, {
+          label: targetLabel,
+          runtimeId: item.runtimeId,
+          model: item.model,
+          ephemeral: true,
+        });
+        if (assigned) await audit(store, accountId, { action: "work_routed", provider: target.provider, configId: target.id, nodeId: machine.nodeId, workItemId: item.id, detail: targetLabel });
+      }
+    }
+    return machine;
   } catch (e) {
     console.error(`[hosted-provision] account ${accountId}:`, (e as Error)?.message || e);
     return null;
