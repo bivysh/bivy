@@ -816,6 +816,7 @@ export interface WorkItem {
   routingReason?: string;
   checks?: RunCheck[];
   events?: RunEvidenceEvent[];
+  receiptEvidence?: RunReceiptEvidence;
   /** Plain chat message (no automation boilerplate/push/checks). */
   message?: boolean;
 }
