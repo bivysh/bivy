@@ -265,7 +265,7 @@ export function GithubQueuePanel({
         });
       if (primarySel.kind === "config") {
         const setup = configById.get(primarySel.id);
-        if (!setup) throw new Error("That ephemeral config is no longer available");
+        if (!setup) throw new Error("That isolated machine profile is no longer available");
         await runFromConfig(setup);
       } else if (primarySel.kind === "node") {
         // Fallback (prototype): if the chosen node is offline right now and a
@@ -572,7 +572,7 @@ export function GithubQueuePanel({
                       {open && (
                         <div className="queue-run">
                           <label className="queue-run-field">
-                            <span>Runner</span>
+                            <span>Machine</span>
                             <select value={assignPrimary} onChange={(e) => setAssignPrimary(e.target.value)}>
                               <option value="shared">Shared queue (any online machine)</option>
                               {persistentNodes.length > 0 && (
@@ -585,7 +585,7 @@ export function GithubQueuePanel({
                                 </optgroup>
                               )}
                               {EPHEMERAL_MACHINES_ENABLED && ephemeralConfigs.length > 0 && (
-                                <optgroup label="Ephemeral configs">
+                                <optgroup label="Isolated machine profiles">
                                   {ephemeralConfigs.map((s) => (
                                     <option key={s.id} value={`config:${s.id}`}>{s.name} · {s.provider}</option>
                                   ))}
@@ -671,7 +671,7 @@ export function GithubQueuePanel({
 
         {canQuery && reports.length > 0 && (
           <>
-            <div className="queue-head"><h4 className="settings-subhead">Outcome reports</h4></div>
+            <div className="queue-head"><h4 className="settings-subhead">Run details</h4></div>
             <div className="evidence-list">
               {reports.map((item) => {
                 const outcome = deriveRunOutcome(item);
@@ -713,7 +713,7 @@ export function GithubQueuePanel({
                       </ul>
                     )}
                     <button className="link-btn" onClick={() => void copyReport(item)}>
-                      {copiedReportId === item.id ? "Copied!" : "Copy sanitized report"}
+                      {copiedReportId === item.id ? "Copied!" : "Copy sanitized run JSON"}
                     </button>
                   </details>
                 );
