@@ -67,6 +67,12 @@ user; Bivy charges no compute markup. Provisioning exists (`ephemeral.ts` /
 OS prerequisites, Bivy, and the agent after launch, so it cannot meet the product
 contract yet. Treat this as one system, not merely a feature-flag removal:
 
+Provider boundary: AWS EC2, Hetzner Cloud, and Fly Machines are the first-class
+BYO-cloud lane. Fly Sprites and E2B are experimental managed-compute adapters:
+useful for fast start and native suspension, but neither a dependency nor the
+proof of the no-compute-markup moat. Their native snapshots are optimizations;
+Bivy's encrypted checkpoint and audit formats remain portable and authoritative.
+
 - **3.1 Durability contract.** A destroy-lane runner may terminate only after every
   non-empty open session has an acknowledged, E2E-encrypted snapshot containing
   the transcript and git checkpoint. Restore must complete before a queue poller
@@ -82,8 +88,9 @@ contract yet. Treat this as one system, not merely a feature-flag removal:
   Build versioned provider images/templates with Node, Bivy, git, and agent
   adapters preinstalled; keep a small per-account/provider pool of enrolled,
   credential-empty runners; inject only short-lived enrollment/config at claim;
-  replenish asynchronously. E2B templates and warm Sprites/Fly Machines are the
-  first realistic fast lanes. Record timestamps for request, provider accepted,
+  replenish asynchronously. Prebuilt AWS/Hetzner/Fly images and ready capacity
+  are the strategic fast lane; E2B templates and warm Sprites are optional
+  experimental accelerators. Record timestamps for request, provider accepted,
   node enrolled, credentials ready, snapshot applied, and first agent event; do
   not call the target met from provider “running” alone.
 - **3.3 Lifecycle and bill safety.** Make provider/region/size/TTL and estimated
