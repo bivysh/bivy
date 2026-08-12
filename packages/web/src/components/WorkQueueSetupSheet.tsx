@@ -3,7 +3,7 @@
 // Sole connection hub for GitHub App / Linear / Slack. Multi-app lifecycle
 // (add, reconnect key, disconnect), default machine, and who-can-trigger all
 // live here — Settings only deep-links into this sheet.
-import { useCallback, useEffect, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import {
   type AccountNode,
   type AppState,
@@ -97,8 +97,9 @@ export function WorkQueueSetupSheet({
   const [ceHostedBusy, setCeHostedBusy] = useState(false);
   const [ceHostedResult, setCeHostedResult] = useState<{ webhookUrl: string; webhookSecret: string } | null>(null);
   const [ceHostedError, setCeHostedError] = useState("");
-  const [, setCeApp] = useState<GithubAppEntry | null>(null);
+  const [ceApp, setCeApp] = useState<GithubAppEntry | null>(null);
   const [addAppOpen, setAddAppOpen] = useState(false);
+  const appEditorRef = useRef<HTMLDivElement>(null);
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [disconnectErr, setDisconnectErr] = useState<string | null>(null);
   const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">("everyone");
@@ -263,6 +264,11 @@ export function WorkQueueSetupSheet({
     setShowExisting(true);
     setAddAppOpen(true);
   }
+
+  useEffect(() => {
+    if (!addAppOpen || !showExisting) return;
+    appEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [addAppOpen, showExisting, ceApp]);
 
   function onPemFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -600,36 +606,44 @@ export function WorkQueueSetupSheet({
                       + Add another GitHub App
                     </button>
                   ) : (
-                    <div className="wq-status-card" style={{ marginTop: 4 }}>
-                      <div className="autom-field-label">Add another app</div>
-                      <p className="settings-hint">One app per personal account or organization you want Bivy to cover.</p>
-                      <label className="field-label" htmlFor="wq-org-2">Organization (optional)</label>
-                      <input
-                        id="wq-org-2"
-                        className="picker-search"
-                        value={org}
-                        placeholder="leave blank for your personal account"
-                        disabled={phase === "starting" || phase === "submitting" || phase === "completing"}
-                        onChange={(e) => setOrg(e.target.value)}
-                      />
-                      {ready ? (
-                        <form method="post" action={app!.action} onSubmit={markGithubAppPending}>
-                          <input type="hidden" name="manifest" value={JSON.stringify(app!.manifest)} />
-                          <button className="btn primary block" type="submit">Continue to GitHub →</button>
-                        </form>
+                    <div ref={appEditorRef} className="wq-status-card" style={{ marginTop: 4 }}>
+                      <div className="autom-field-label">
+                        {ceApp ? `Reconnect ${ceApp.name || ceApp.mention || "GitHub App"}` : "Add another app"}
+                      </div>
+                      {ceApp ? (
+                        <p className="settings-hint">Choose the private key for App ID {ceAppId} to connect it to this machine.</p>
                       ) : (
-                        <button
-                          type="button"
-                          className="btn primary"
-                          disabled={phase === "starting" || phase === "completing" || !canQuery}
-                          onClick={() => controller.githubAppManifestStart(org.trim() || undefined)}
-                        >
-                          {phase === "starting" ? "Preparing…" : phase === "completing" ? "Finishing…" : "Create GitHub App"}
-                        </button>
+                        <>
+                          <p className="settings-hint">One app per personal account or organization you want Bivy to cover.</p>
+                          <label className="field-label" htmlFor="wq-org-2">Organization (optional)</label>
+                          <input
+                            id="wq-org-2"
+                            className="picker-search"
+                            value={org}
+                            placeholder="leave blank for your personal account"
+                            disabled={phase === "starting" || phase === "submitting" || phase === "completing"}
+                            onChange={(e) => setOrg(e.target.value)}
+                          />
+                          {ready ? (
+                            <form method="post" action={app!.action} onSubmit={markGithubAppPending}>
+                              <input type="hidden" name="manifest" value={JSON.stringify(app!.manifest)} />
+                              <button className="btn primary block" type="submit">Continue to GitHub →</button>
+                            </form>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn primary"
+                              disabled={phase === "starting" || phase === "completing" || !canQuery}
+                              onClick={() => controller.githubAppManifestStart(org.trim() || undefined)}
+                            >
+                              {phase === "starting" ? "Preparing…" : phase === "completing" ? "Finishing…" : "Create GitHub App"}
+                            </button>
+                          )}
+                          <button type="button" className="link-btn" onClick={() => openReconnect()}>
+                            Connect an existing app instead →
+                          </button>
+                        </>
                       )}
-                      <button type="button" className="link-btn" onClick={() => openReconnect()}>
-                        Connect an existing app instead →
-                      </button>
                       {showExisting && (
                         <div className="ce-form">
                           <label className="field-label">App ID</label>
@@ -665,7 +679,7 @@ export function WorkQueueSetupSheet({
                           )}
                         </div>
                       )}
-                      <button type="button" className="link-btn" onClick={() => setAddAppOpen(false)}>Cancel</button>
+                      <button type="button" className="link-btn" onClick={() => { setAddAppOpen(false); setCeApp(null); }}>Cancel</button>
                     </div>
                   )}
 
