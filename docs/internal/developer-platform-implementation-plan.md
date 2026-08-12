@@ -160,17 +160,34 @@ and SDK clients.
 
 ## Phase 5 — governed multi-agent work
 
-**Goal:** Bivy owns agent collaboration rather than merely observing that one
-agent invoked a sub-agent.
+**SUPERSEDED by decision D-016 (2026-08-12): Bivy governs the substrate, not
+agent collaboration.** The original goal below ("Bivy owns agent collaboration…
+a Bivy-owned `delegate_task` tool") is withdrawn — it would reimplement native
+agent capability and interfere with the agent's choices, contra "integrations,
+not agents" and "govern the substrate, not the agent" (`harness/net-proxy.ts`).
 
-1. First-class handoff to another agent profile.
-2. Parallel comparison in isolated worktrees with normalized outcome comparison.
-3. A Bivy-owned `delegate_task` tool that creates a bounded child session.
-4. Parent/child lineage, depth/time/cost limits, and scoped policy.
-5. Bounded run graphs with declared artifacts between stages.
+Agents spawn sub-agents natively. Bivy's governance envelope already covers them
+**transitively**, because it enforces at the boundary: the sandbox tier the
+agent enforces natively (`harness/sandbox.ts`), the egress broker injected as
+`HTTP_PROXY` env (inherited by every subprocess the agent spawns —
+`harness/net-proxy.ts`), and the MCP proxy injected into the agent's config
+(`harness/mcp-inject.ts`). A sub-agent inherits all three with no escape path
+(verified 2026-08-12). So there is **no collaboration subsystem to build**.
 
-A general swarm or visual DAG builder remains out of scope until these primitives
-have demonstrated demand and reliability.
+Remaining, optional and non-interfering:
+- **Observability only:** distinctly attribute/surface sub-agent activity
+  (bounded today, not always labelled) and confirm per-adapter cost roll-up.
+- **User-/trigger-directed multi-run orchestration** (run a task N ways in
+  isolated worktrees and compare) stays out of scope until demanded — and even
+  then it is Bivy routing work to infra, never an agent-facing tool that touches
+  an agent's inner loop.
+
+~~Original (withdrawn):~~
+1. ~~First-class handoff to another agent profile.~~
+2. ~~Parallel comparison in isolated worktrees with normalized outcome comparison.~~
+3. ~~A Bivy-owned `delegate_task` tool that creates a bounded child session.~~
+4. ~~Parent/child lineage, depth/time/cost limits, and scoped policy.~~
+5. ~~Bounded run graphs with declared artifacts between stages.~~
 
 ## Success measures
 
