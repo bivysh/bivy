@@ -54,6 +54,7 @@ import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { AutomationsSection } from "../router.js";
 import type { GithubQueueItem } from "@bivy/core";
+import { projectRunDetail } from "../runDetail.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -282,18 +283,6 @@ function sourceAutomationChip(
     return executorReady ? { tone: "on", label: "Active" } : { tone: "warn", label: "Needs executor" };
   }
   return executorReady ? { tone: "on", label: "Active" } : { tone: "warn", label: "Needs executor" };
-}
-
-function runOutcome(status: AccountAutomationRun["status"]): { label: string; tone: "ok" | "warn" | "bad" | "info" } {
-  switch (status) {
-    case "succeeded": return { label: "Succeeded", tone: "ok" };
-    case "failed": return { label: "Failed", tone: "bad" };
-    case "needs_attention": return { label: "Needs review", tone: "warn" };
-    case "running": return { label: "Running", tone: "info" };
-    case "waiting": return { label: "Waiting", tone: "info" };
-    case "cancelled": return { label: "Cancelled", tone: "warn" };
-    default: return { label: "Queued", tone: "info" };
-  }
 }
 
 /** Infer which trigger-picker option best matches a draft (for the chip label). */
@@ -907,19 +896,21 @@ export function AutomationsView({
               ) : (
                 <div className="automation-list">
                   {definitionRuns.slice(0, 12).map((run) => {
-                    const outcome = runOutcome(run.status);
+                    const detail = projectRunDetail(run);
+                    const outcomeTone = detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "danger" ? "bad" : detail.outcome.tone === "warning" ? "warn" : "info";
                     const defName = items.find((i) => i.id === run.definitionId)?.name;
-                    const sessionId = run.output?.sessionId;
+                    const sessionId = detail.sessionId;
                     return (
                       <div className="automation-row" key={run.id}>
                         <div className="automation-row-main">
                           <div className="automation-row-title">
                             <strong>{run.title}</strong>
-                            <span className={`run-status ${outcome.tone}`}>{outcome.label}</span>
+                            <span className={`run-status ${outcomeTone}`}>{detail.outcome.label}</span>
                           </div>
                           <div className="settings-hint">
-                            {[defName, new Date(run.createdAt).toLocaleString(), run.triggerKind].filter(Boolean).join(" · ")}
+                            {[defName, new Date(run.createdAt).toLocaleString(), run.triggerKind, detail.checksSummary, detail.attempt > 1 ? `attempt ${detail.attempt}` : null].filter(Boolean).join(" · ")}
                           </div>
+                          {detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}
                         </div>
                         <div className="automation-row-actions">
                           {sessionId && (

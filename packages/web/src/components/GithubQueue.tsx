@@ -2,7 +2,6 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  deriveRunOutcome,
   githubIssueRefFromSource,
   isGithubQueueSource,
   type AccountNode,
@@ -19,6 +18,7 @@ import { classifySource } from "../sessionSource.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { writeClipboard } from "../clipboard.js";
+import { projectRunDetail } from "../runDetail.js";
 
 // Issue #153: a queue item is worth an "Outcome report" once it has left
 // "pending" and picked up at least one timeline event (the control plane
@@ -674,19 +674,19 @@ export function GithubQueuePanel({
             <div className="queue-head"><h4 className="settings-subhead">Run details</h4></div>
             <div className="evidence-list">
               {reports.map((item) => {
-                const outcome = deriveRunOutcome(item);
-                const outcomeClass = outcome.tone === "danger" ? "err" : outcome.tone === "success" ? "ok" : outcome.tone === "warning" ? "warn" : "";
+                const detail = projectRunDetail(item);
+                const outcomeClass = detail.outcome.tone === "danger" ? "err" : detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "warning" ? "warn" : "";
                 return (
                   <details className="evidence-report" key={item.id}>
                     <summary>
                       <span>{item.repo}{item.issueNumber ? ` #${item.issueNumber}` : ""} · {queueItemSourceLabel(item.source)}</span>
-                      <span className={`chip ${outcomeClass}`}>{outcome.label}</span>
+                      <span className={`chip ${outcomeClass}`}>{detail.outcome.label}</span>
                     </summary>
                     <div className="evidence-meta">
                       <span>Trigger: {item.triggerKind ?? item.source}</span>
-                      {item.attempt !== undefined && item.attempt > 1 && <span>Attempt {item.attempt}</span>}
-                      {item.runtimeId && <span>Agent: {item.runtimeId}</span>}
-                      {item.model && <span>Model: {item.model}</span>}
+                      {detail.attempt > 1 && <span>Attempt {detail.attempt}</span>}
+                      {detail.agent && <span>Agent: {detail.agent}</span>}
+                      {detail.checksSummary && <span>Checks: {detail.checksSummary}</span>}
                       {item.routingReason && <span>Routing: {item.routingReason}</span>}
                       {item.sandbox && <span>Sandbox: {item.sandbox}</span>}
                       {item.approvalMode && <span>Approval: {item.approvalMode}</span>}
@@ -695,7 +695,7 @@ export function GithubQueuePanel({
                       {item.output?.prUrl && <a href={item.output.prUrl} target="_blank" rel="noreferrer">Pull request</a>}
                       {item.output?.artifactUrl && <a href={item.output.artifactUrl} target="_blank" rel="noreferrer">Artifact</a>}
                     </div>
-                    {item.output?.failure && <p className="muted">{item.output.failure}</p>}
+                    {detail.failure && <p className="muted">{detail.failure}</p>}
                     <ol className="evidence-timeline">
                       {item.events.map((event, index) => (
                         <li key={`${event.at}-${index}`}>
