@@ -31,6 +31,7 @@ import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption
 import { createCredentialStore } from "./runtime/credentials.js";
 import { isModelAuthError, authProviderForSession } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
+import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
 import { provisionAgentRun } from "./runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
 import { createSessionNamer, fallbackSessionName } from "./session/session-namer.js";
@@ -10315,6 +10316,41 @@ app.get("/github/app/manifest/callback", async (req, res, next) => {
 
 app.get("/api/repos", async (_req, res) => {
   res.json(await listAccessibleRepos());
+});
+
+// Authoritative, read-only first-task probes. Unlike the web client's presence
+// flags, these checks run where the credential and repository access actually
+// live. Inconclusive provider/network failures remain "unknown" instead of
+// falsely blocking activation.
+app.get("/api/activation/readiness", async (_req, res) => {
+  const vault = createCredentialVault(credsDir, piDir);
+  const configured = await vault.list();
+  const anthropic = configured.some((entry) => entry.providerId === "anthropic")
+    ? await vault.read("anthropic")
+    : undefined;
+  const anthropicProbe = anthropic?.type === "api_key"
+    ? await probeAnthropicAccess(typeof anthropic.key === "string" ? anthropic.key : undefined)
+    : undefined;
+  const repos = await listAccessibleRepos();
+  const repositoryChosen = Boolean(await gitRepoRoot(defaultWorkspace));
+  res.json({
+    credential: {
+      configured: configured.length > 0,
+      providers: configured.map((entry) => entry.providerId),
+      probed: Boolean(anthropicProbe?.probed),
+      ok: configured.length > 0 && anthropicProbe?.ok !== false,
+      ...(anthropicProbe?.reason ? { reason: anthropicProbe.reason } : {}),
+    },
+    repository: {
+      chosen: repositoryChosen,
+      probed: true,
+      // GitHub login proves that repositories can be listed, not that a target
+      // repository has been selected or cloned for the first task.
+      ok: repositoryChosen,
+      authed: repos.authed,
+      ...(repos.error ? { reason: repos.error } : {}),
+    },
+  });
 });
 
 // Direct-transport (local PWA) equivalents of the github.connect.* commands.
