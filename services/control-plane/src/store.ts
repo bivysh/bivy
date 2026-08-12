@@ -260,6 +260,9 @@ export interface EphemeralNodeConfig {
   size?: string;
   /** Curated provider-native runner image/snapshot for fast boot. */
   image?: string;
+  /** Account-owned runners kept ready for immediate claim. Initially capped at
+   * one to bound idle spend while the live SLO/cost data is collected. */
+  readyCapacity?: number;
   ttlMinutes?: number;
   teardownOnAgentFinish?: boolean;
   createdAt: string;
@@ -286,8 +289,12 @@ export function normalizeEphemeralConfigs(value: unknown): EphemeralNodeConfig[]
     if (typeof v.region === "string" && v.region.trim()) cfg.region = v.region.trim();
     if (typeof v.size === "string" && v.size.trim()) cfg.size = v.size.trim();
     if (typeof v.image === "string" && v.image.trim()) cfg.image = v.image.trim();
+    if (typeof v.readyCapacity === "number" && Number.isFinite(v.readyCapacity)) cfg.readyCapacity = Math.max(0, Math.min(1, Math.floor(v.readyCapacity)));
     if (typeof v.ttlMinutes === "number" && Number.isFinite(v.ttlMinutes)) cfg.ttlMinutes = Math.max(5, Math.min(24 * 60, Math.floor(v.ttlMinutes)));
     if (v.teardownOnAgentFinish === true) cfg.teardownOnAgentFinish = true;
+    // A five-minute runner would enter the pre-claim rotation window as soon as
+    // it launched. Ready capacity needs enough useful life to accept real work.
+    if ((cfg.readyCapacity ?? 0) > 0 && (cfg.ttlMinutes ?? 60) < 15) cfg.ttlMinutes = 15;
     out.push(cfg);
   }
   return out;
@@ -413,7 +420,7 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed";
+  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed";
   provider?: string;
   configId?: string;
   nodeId?: string;
@@ -1173,6 +1180,8 @@ export interface MeshStore {
   /** Accounts that currently track at least one control-plane-provisioned
    * machine. Used by the global lifecycle reconciler; returns ids only. */
   listHostedMachineAccountIds(): Promise<string[]>;
+  /** Accounts with at least one config requesting ready capacity. */
+  listReadyCapacityAccountIds(): Promise<string[]>;
   // Append-only audit trail of hosted-credential use (capped, newest-first read).
   appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
   listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;

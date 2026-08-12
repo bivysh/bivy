@@ -11,7 +11,7 @@
 // Work Queue tab (AutomationsView) — the natural home for "where does queued
 // work run". Gated by EPHEMERAL_MACHINES_ENABLED, same as before.
 import { useEffect, useState } from "react";
-import type { AccountNode, EphemeralNodeConfig, ProviderKeyInfo, QueueRouting } from "@bivy/core";
+import { ephemeralCatalogEntry, type AccountNode, type EphemeralNodeConfig, type ProviderKeyInfo, type QueueRouting } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -24,6 +24,7 @@ type EphemeralConfigDraft = {
   region: string;
   size: string;
   ttlMinutes: number | null;
+  readyCapacity: boolean;
   teardownOnAgentFinish: boolean;
 };
 
@@ -109,6 +110,7 @@ export function QueueRoutingSection() {
         region: draft.region.trim() || null,
         size: draft.size.trim() || null,
         ttlMinutes: draft.ttlMinutes ?? null,
+        readyCapacity: readyCapacityEligible && draft.readyCapacity ? 1 : 0,
         teardownOnAgentFinish: draft.teardownOnAgentFinish,
       };
       if (draft.editing) await controller.updateEphemeralConfig(draft.editing, input);
@@ -121,6 +123,7 @@ export function QueueRoutingSection() {
       setBusy(false);
     }
   };
+  const readyCapacityEligible = draft ? ephemeralCatalogEntry(draft.provider)?.computeClass === "byo-cloud" : false;
 
   const removeConfig = async (cfg: EphemeralNodeConfig) => {
     setConfirmRemove(null);
@@ -207,6 +210,14 @@ export function QueueRoutingSection() {
             </div>
             <Toggle checked={draft.teardownOnAgentFinish} onChange={(v) => setDraft({ ...draft, teardownOnAgentFinish: v })} label="Destroy after the agent finishes" />
           </div>
+          <div className="settings-toggle-row">
+            <div className="settings-toggle-text">
+              <span className="settings-toggle-title">Keep one runner ready</span>
+              <span className="muted small">Starts an account-owned runner before work arrives for faster claims. It may incur idle provider charges and remains bounded by the TTL.</span>
+            </div>
+            <Toggle checked={draft.readyCapacity && readyCapacityEligible} disabled={!readyCapacityEligible} onChange={(v) => setDraft({ ...draft, readyCapacity: v })} label="Keep one runner ready" />
+          </div>
+          {!readyCapacityEligible && <p className="muted small">Managed-compute providers use their native fast-start or suspend path instead of Bivy ready capacity.</p>}
           <div className="row-actions">
             <button className="btn primary" disabled={busy || !draft.name.trim() || !draft.provider} onClick={saveConfig}>
               {busy ? "Saving…" : draft.editing ? "Save changes" : "Add config"}
@@ -222,13 +233,13 @@ export function QueueRoutingSection() {
               <PickerItem
                 key={c.id}
                 title={c.name}
-                meta={`${providerName(c.provider)}${c.region ? " · " + c.region : ""}${c.size ? " · " + c.size : ""}${c.ttlMinutes ? " · " + c.ttlMinutes + "m" : ""}${providerReady(c.provider) ? "" : " · no token here"}`}
+                meta={`${providerName(c.provider)}${c.region ? " · " + c.region : ""}${c.size ? " · " + c.size : ""}${c.ttlMinutes ? " · " + c.ttlMinutes + "m" : ""}${c.readyCapacity ? " · 1 ready" : ""}${providerReady(c.provider) ? "" : " · no token here"}`}
                 right={<button className="btn danger-ghost sm" onClick={(e) => { e.stopPropagation(); setConfirmRemove(c); }}>Remove</button>}
-                onClick={() => { setErr(null); setDraft({ editing: c.id, name: c.name, provider: c.provider, region: c.region ?? "", size: c.size ?? "", ttlMinutes: c.ttlMinutes ?? null, teardownOnAgentFinish: Boolean(c.teardownOnAgentFinish) }); }}
+                onClick={() => { setErr(null); setDraft({ editing: c.id, name: c.name, provider: c.provider, region: c.region ?? "", size: c.size ?? "", ttlMinutes: c.ttlMinutes ?? null, readyCapacity: Boolean(c.readyCapacity), teardownOnAgentFinish: Boolean(c.teardownOnAgentFinish) }); }}
               />
             ))}
           </div>
-          <button className="btn primary block" onClick={() => { setErr(null); setDraft({ name: "", provider: keys[0]?.id ?? "", region: "", size: "", ttlMinutes: null, teardownOnAgentFinish: false }); }}>+ Add config</button>
+          <button className="btn primary block" onClick={() => { setErr(null); setDraft({ name: "", provider: keys[0]?.id ?? "", region: "", size: "", ttlMinutes: null, readyCapacity: false, teardownOnAgentFinish: false }); }}>+ Add config</button>
         </>
       )}
       {err && <span className="chip err">{err}</span>}

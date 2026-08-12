@@ -576,7 +576,7 @@ export interface EphemeralMachine {
    *  (undefined, the pre-#532 default), a specific queue item ("queue-item"),
    *  or a general-purpose queue worker for the account's ephemeral default
    *  ("queue-default"). Display/bookkeeping only. */
-  purpose?: "queue-item" | "queue-default";
+  purpose?: "queue-item" | "queue-default" | "ready-capacity";
 }
 
 export interface EphemeralMilestones {

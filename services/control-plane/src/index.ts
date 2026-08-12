@@ -8,7 +8,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import Stripe from "stripe";
 import webpush from "web-push";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
@@ -394,6 +394,10 @@ async function reconcileHostedMachineFleet() {
     const result = await reconcileAllHostedMachines(store, provisionEnv());
     if (result.reaped || result.failed) {
       console.log(`[hosted-reconcile] accounts=${result.accounts} reaped=${result.reaped} failed=${result.failed}`);
+    }
+    const capacity = await reconcileAllReadyCapacity(store, provisionEnv());
+    if (capacity.created || capacity.failed) {
+      console.log(`[hosted-capacity] accounts=${capacity.accounts} ensured=${capacity.created} failed=${capacity.failed}`);
     }
   } catch (error) {
     console.error("[hosted-reconcile] account scan failed:", error);
@@ -2735,6 +2739,7 @@ app.post("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   if (typeof body.region === "string" && body.region.trim()) config.region = body.region.trim();
   if (typeof body.size === "string" && body.size.trim()) config.size = body.size.trim();
   if (typeof body.image === "string" && body.image.trim()) config.image = body.image.trim();
+  if (typeof body.readyCapacity === "number") config.readyCapacity = body.readyCapacity;
   if (typeof body.ttlMinutes === "number") config.ttlMinutes = body.ttlMinutes;
   if (body.teardownOnAgentFinish === true) config.teardownOnAgentFinish = true;
   const current = await store.getEphemeralConfigs(client.accountId);
@@ -2756,6 +2761,7 @@ app.put("/account/ephemeral-configs/:id", asyncHandler(async (req, res) => {
   if (typeof body.region === "string") next.region = body.region.trim() || undefined;
   if (typeof body.size === "string") next.size = body.size.trim() || undefined;
   if (typeof body.image === "string") next.image = body.image.trim() || undefined;
+  if (typeof body.readyCapacity === "number") next.readyCapacity = body.readyCapacity;
   if (typeof body.ttlMinutes === "number") next.ttlMinutes = body.ttlMinutes;
   if (typeof body.teardownOnAgentFinish === "boolean") next.teardownOnAgentFinish = body.teardownOnAgentFinish || undefined;
   const saved = await store.setEphemeralConfigs(client.accountId, current.map((c) => (c.id === id ? next : c)));
