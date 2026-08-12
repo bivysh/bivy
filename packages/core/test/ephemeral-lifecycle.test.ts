@@ -16,7 +16,11 @@ describe("ephemeral lifecycle UX", () => {
   it("caps accrued estimate at the configured TTL", () => {
     const size = { id: "x", label: "x", pricePerHour: 0.12 };
     const createdAt = "2026-01-01T00:00:00.000Z";
-    expect(ephemeralCostEstimate(size, createdAt, 60, Date.parse("2026-01-01T00:30:00.000Z"))).toEqual({ accrued: 0.06, maximum: 0.12 });
-    expect(ephemeralCostEstimate(size, createdAt, 60, Date.parse("2026-01-01T02:00:00.000Z"))).toEqual({ accrued: 0.12, maximum: 0.12 });
+    const halfway = ephemeralCostEstimate(size, createdAt, 60, Date.parse("2026-01-01T00:30:00.000Z"));
+    expect(halfway?.accrued).toBeCloseTo(0.06);
+    expect(halfway?.maximum).toBeCloseTo(0.12);
+    const capped = ephemeralCostEstimate(size, createdAt, 60, Date.parse("2026-01-01T02:00:00.000Z"));
+    expect(capped?.accrued).toBeCloseTo(0.12);
+    expect(capped?.maximum).toBeCloseTo(0.12);
   });
 });

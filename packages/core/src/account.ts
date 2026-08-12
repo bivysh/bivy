@@ -538,7 +538,6 @@ export interface EphemeralNodeConfig {
   provider: string;
   region?: string;
   size?: string;
-  size?: string;
   image?: string;
   readyCapacity?: number;
   ttlMinutes?: number;
@@ -697,6 +696,7 @@ export interface HostedMachineSummary {
   name?: string;
   provider: string;
   region?: string;
+  size?: string;
   status?: string;
   createdAt: string;
   ttlMinutes?: number;
