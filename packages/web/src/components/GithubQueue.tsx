@@ -70,11 +70,15 @@ export function GithubQueuePanel({
   queue,
   onRefresh,
   onPick,
+  onOpenRun,
   onOpenGithubSettings,
 }: {
   queue: GithubQueueItem[] | null;
   onRefresh: () => void;
   onPick: (sessionId: string, path?: string, nodeId?: string) => void;
+  /** Open the routable Run detail screen (/runs/:runId). A queue item's id is
+   *  the Run id (both are the same work_items record). */
+  onOpenRun?: (runId: string) => void;
   onOpenGithubSettings: () => void;
 }) {
   const { sessions, activeSessionId, prRefreshAllResult, runtimes } = useAppState();
@@ -741,6 +745,11 @@ export function GithubQueuePanel({
                       </ul>
                     )}
                     <div className="row-actions">
+                      {onOpenRun && (
+                        <button className="link-btn" onClick={() => onOpenRun(item.id)}>
+                          Open Run details
+                        </button>
+                      )}
                       {!isTerminalRun(item) && (
                         <button
                           className="link-btn danger"

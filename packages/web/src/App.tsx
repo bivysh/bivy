@@ -707,6 +707,7 @@ export function App() {
                   forkedFrom={activeForkedFrom}
                   filesEdited={countUniqueEditedFiles(state.changesHistory)}
                   onOpenChanges={() => setChangesSheetOpen(true)}
+                  onOpenRun={(runId) => openRun(runId)}
                   onRecover={(kind) => {
                     // C2: recover a terminal run using existing capabilities. fix/retry
                     // send a targeted prompt to this session; fork branches it off.

@@ -987,6 +987,7 @@ export function AutomationsView({
               queue={githubQueue ?? null}
               onRefresh={() => onRefreshGithubQueue?.()}
               onPick={(id) => { onOpenSession(id); onClose(); }}
+              onOpenRun={onOpenRun}
               onOpenGithubSettings={() => openSetup("github")}
             />
             {EPHEMERAL_MACHINES_ENABLED && (
