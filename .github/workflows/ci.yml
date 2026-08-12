@@ -3,6 +3,11 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Merge queue validates the exact result of applying queued PRs to the latest
+  # main. Without this event, the required ci-ok check never reports for the
+  # temporary merge group and queued PRs eventually time out.
+  merge_group:
+    types: [checks_requested]
   # Lets other workflows call this one to run the exact same gate rather than
   # re-implementing it. Used by release.yml so a production promotion runs the
   # full suite before publishing, instead of a hand-rolled subset that can drift
