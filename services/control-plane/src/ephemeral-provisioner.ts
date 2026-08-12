@@ -45,6 +45,25 @@ export interface ProvisionPlan {
   reason: string;
 }
 
+export interface HostedExecutionReadiness { ready: boolean; reason: string; configId?: string }
+
+/** Static account capability for automation UI. Unlike planAutoProvision this
+ * does not inspect pending work, active machines, rate limits, or node liveness. */
+export async function hostedExecutionReadiness(store: MeshStore, accountId: string): Promise<HostedExecutionReadiness> {
+  if (!ephemeralMachinesEnabled()) return { ready: false, reason: "deployment emergency switch is off" };
+  const hosted = await store.getHostedProvisioning(accountId);
+  if (!hosted.enabled) return { ready: false, reason: "unattended provisioning is disabled" };
+  const routing = await store.getQueueRouting(accountId);
+  const config = resolveAutoProvisionTarget(routing, await store.getEphemeralConfigs(accountId));
+  if (!config) return { ready: false, reason: "automation routing has no ephemeral config" };
+  const token = hosted.providerTokens?.[config.provider];
+  if (!token) return { ready: false, reason: `no hosted ${config.provider} credential` };
+  if (hosted.validatedProviders?.[config.provider] !== providerCredentialFingerprint(token)) {
+    return { ready: false, reason: `${config.provider} credential is not validated` };
+  }
+  return { ready: true, reason: "hosted ephemeral execution is ready", configId: config.id };
+}
+
 export const EPHEMERAL_MILESTONES = ["nodeReadyAt", "credentialsReadyAt", "snapshotReadyAt", "firstAgentEventAt"] as const;
 export type EphemeralMilestone = (typeof EPHEMERAL_MILESTONES)[number];
 

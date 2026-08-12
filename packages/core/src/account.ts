@@ -653,6 +653,7 @@ export interface HostedProvisioningStatus {
   encryptionReady: boolean;
   /** Active encryption key id (for rotation display). */
   keyId?: string;
+  execution: { ready: boolean; reason: string; configId?: string };
 }
 
 export interface HostedProvisioningPatch {
@@ -715,6 +716,7 @@ function coerceHostedStatus(d: any): HostedProvisioningStatus {
     validatedProviders: Array.isArray(d?.validatedProviders) ? d.validatedProviders : [],
     encryptionReady: Boolean(d?.encryptionReady),
     keyId: typeof d?.keyId === "string" ? d.keyId : undefined,
+    execution: { ready: Boolean(d?.execution?.ready), reason: String(d?.execution?.reason || "unavailable"), configId: typeof d?.execution?.configId === "string" ? d.execution.configId : undefined },
   };
 }
 
