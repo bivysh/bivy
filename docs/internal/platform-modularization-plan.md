@@ -192,10 +192,29 @@ for the other prefix groups; version/validate the envelope later.
   const dir-deps; keep the boot call after). Not locally verifiable → do it as a
   dedicated commit with `tsc` available, not a blind batch.
 
-**Deferred — NOT mechanical carves (engine work, dedicated PRs):** `runtimes.*`
-(`getRuntime`/`ensureRuntimeAvailable` are the core runtime engine woven through
-session creation) and `session.*` (the session lifecycle). `integrations.*`
-needs no carve — already a proper `IntegrationManager` class.
+**Engine decomposition (design hashed out with user 2026-08-11).** God-object
+decision: **Option 1 — move `SessionRecord` as shared mutable data, do NOT
+encapsulate** (50 fields / ~93 annotation sites). Sequence 1→4:
+- **Step 1 (runtime selector) — COLLAPSED (decision 1a).** `runtimeHost` (from
+  `runtime/host.ts`) is already the extracted engine; the server wrappers are
+  thin one-liners over pervasive state (`defaultRuntimeId`/`runtimeHost`, ~40
+  sites). Not worth an 8-dep controller. The `SessionEngine` will inject
+  `runtimeHost` + a `getDefaultRuntimeId()` getter directly.
+- **Step 2a — DONE 2026-08-11 (branch `bivy/platform-phase2-runtime-controller`).**
+  Moved `SessionRecord` (+ `PromptOptions`/`StreamingBehavior`/`PromptImage`)
+  out of server.ts into `src/session/record.ts`. Only server-local coupling was
+  `lastPromptOptions?: ReturnType<typeof promptOptionsFor>` → extracted a
+  concrete `PromptOptions` type. Dropped 4 now-orphaned imports from server.ts
+  (`BivySessionSource`/`PrRef`/`UsageSnapshot`/`SessionWorkspaceState`). Pure
+  type move, CI-gated, no smoke. Unblocks the engine module importing the record.
+- **Step 2b (next, NEEDS LIVE SMOKE):** a `SessionEngine` owning the live
+  registry (`openSessions` Map, server.ts:869) + `resolveSession` +
+  `pause/resume/close/abort`, deps injected (`broadcast`, `clients`,
+  `runtimeHost`, `getDefaultRuntimeId`, harness…). Map access sites re-pointed.
+- **Step 3 (turn lifecycle) / Step 4 (`createSession`, ~235 lines) — after 2b,
+  each live-smoked.**
+
+`integrations.*` needs no carve — already a proper `IntegrationManager` class.
 
 ### Phase 3 — Extract `@bivy/remote`
 
