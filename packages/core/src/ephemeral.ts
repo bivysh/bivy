@@ -2203,6 +2203,9 @@ export interface LaunchOpts {
   provider: string;
   region?: string;
   size?: string;
+  /** Optional, device-local progress sink for an interactive launch. Messages
+   *  describe safe lifecycle steps only — never tokens or bootstrap secrets. */
+  onProgress?: (message: string) => void;
   /** Optional provider-native prebuilt runner image/snapshot. Enrollment and
    * credentials are still injected at claim time, never baked into the image. */
   image?: string;
@@ -2345,6 +2348,13 @@ export async function launchEphemeralMachine(
   const fetchImpl = deps.fetchImpl ?? fetch;
   const adapter = ephemeralAdapter(opts.provider);
   if (!adapter) throw new Error(`Unknown provider: ${opts.provider}`);
+  // Progress is deliberately best-effort: presentation code must never be able
+  // to abort provisioning. Keep these messages free of credentials, enrollment
+  // tokens, user-data, and provider response bodies.
+  const progress = (message: string) => {
+    try { opts.onProgress?.(message); } catch { /* UI observer only */ }
+  };
+  progress(`Preparing ${adapter.name} launch…`);
   const token = await deps.keys.getToken(opts.provider);
   if (!token) throw new Error(`Add a ${adapter.name} token first.`);
 
@@ -2353,6 +2363,7 @@ export async function launchEphemeralMachine(
   // snapshot to restore; a normal launch mints a fresh one.
   const nodeId = opts.reuseNodeId || "eph-" + randHex(8);
   const enrollBody = JSON.stringify({ nodeId, name: opts.name || `Ephemeral ${adapter.name}` });
+  progress("Enrolling a secure Bivy node…");
   const enrollOnce = async () => {
     const res = await fetchImpl(`${cpBase(deps.store)}/nodes/enroll`, {
       method: "POST",
@@ -2374,6 +2385,7 @@ export async function launchEphemeralMachine(
     if ((await reapOrphanEphemeralNodes(deps, fetchImpl)) > 0) ({ res: enrollRes, data: enroll } = await enrollOnce());
   }
   if (!enrollRes.ok || !enroll?.enrollmentToken) throw new Error(enroll?.error || "Could not enroll the machine");
+  progress("Node enrolled. Building its secure bootstrap…");
 
   // Reuse the old session's room key on rebuild so the device (which already
   // holds it) reaches the new machine and the daemon can decrypt the snapshot
@@ -2407,13 +2419,16 @@ export async function launchEphemeralMachine(
   // substitute the default when nothing was picked. An invalid value surfaces
   // as a clear provider error rather than being silently swapped out.
   const size = opts.size || adapter.defaultSize;
+  const region = opts.region || adapter.defaultRegion;
+  progress(`Creating the machine in ${region} (${size})…`);
   const machine = await adapter.provision({
     exec: deps.exec,
     token,
     userData,
     bootstrap,
-    config: { slug: ephemeralNodeLabel(nodeId), region: opts.region || adapter.defaultRegion, size, image: opts.image, ttlMinutes: opts.ttlMinutes },
+    config: { slug: ephemeralNodeLabel(nodeId), region, size, image: opts.image, ttlMinutes: opts.ttlMinutes },
   });
+  progress("Machine created. Boot setup is installing and starting Bivy…");
   machine.size = size;
   machine.milestones = { ...(machine.milestones ?? {}), requestedAt, providerAcceptedAt: nowIso() };
   machine.nodeId = nodeId;
