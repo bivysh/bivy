@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AccountNode, AppState, CredentialPresetsView, CredentialRecordSummary, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -1766,6 +1766,7 @@ function HostedRunnerManagement() {
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [confirmDestroy, setConfirmDestroy] = useState<HostedMachineSummary | null>(null);
+  const [, setClock] = useState(0);
 
   const refresh = async () => {
     const [nextStatus, nextMachines, nextAudit] = await Promise.all([
@@ -1778,6 +1779,10 @@ function HostedRunnerManagement() {
     setAudit(nextAudit);
   };
   useEffect(() => { void refresh().catch((e) => setErr(String((e as Error)?.message || e))); }, []);
+  useEffect(() => {
+    const timer = setInterval(() => setClock((n) => n + 1), 15_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const act = async (fn: () => Promise<unknown>, success: string) => {
     if (busy) return;
@@ -1839,15 +1844,27 @@ function HostedRunnerManagement() {
 
       <label className="field-label">Hosted runners</label>
       {machines.length === 0 ? <p className="muted small">No hosted runners are currently tracked.</p> : <div className="picker-list">
-        {machines.map((m) => <PickerItem
-          key={`${m.provider}:${m.id}`}
-          title={m.name || m.nodeId || m.id}
-          meta={[m.provider, m.region, m.status, m.ttlMinutes ? `TTL ${m.ttlMinutes}m` : null, m.createdAt ? `created ${new Date(m.createdAt).toLocaleString()}` : null].filter(Boolean).join(" · ")}
-          right={<button type="button" className="picker-action danger" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
-        />)}
+        {machines.map((m) => {
+          const providerAdapter = ephemeralAdapter(m.provider);
+          const providerSize = providerAdapter?.sizes.find((size) => size.id === m.size);
+          const estimate = ephemeralCostEstimate(providerSize, m.createdAt, m.ttlMinutes);
+          const failure = audit.find((event) => event.nodeId === m.nodeId && (event.action === "reconcile_failed" || (event.action === "provision_failed" && /destroy|reap|teardown|settled/i.test(event.detail || ""))));
+          const phase = ephemeralLifecyclePhase(m, Boolean(failure));
+          const cost = estimate && providerAdapter
+            ? `est. ${formatEphemeralPrice(estimate.accrued, providerAdapter.currency)} accrued / ${formatEphemeralPrice(estimate.maximum, providerAdapter.currency)} max`
+            : "cost unavailable — check provider bill";
+          return <PickerItem
+            key={`${m.provider}:${m.id}`}
+            title={<>{m.name || m.nodeId || m.id} <span className={`chip ${failure ? "err" : phase === "ready" ? "ok" : ""}`}>{phase.replaceAll("-", " ")}</span></>}
+            meta={[m.provider, m.region, m.size, cost, m.ttlMinutes ? `TTL ${m.ttlMinutes}m` : null, failure?.detail].filter(Boolean).join(" · ")}
+            onClick={() => document.getElementById("hosted-runner-audit")?.scrollIntoView({ behavior: "smooth" })}
+            right={<button type="button" className="picker-action danger" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
+          />;
+        })}
       </div>}
 
-      <label className="field-label">Recent audit</label>
+      <label className="field-label" id="hosted-runner-audit">Recent audit evidence</label>
+      {audit.some((event) => event.action === "reconcile_failed") && <span className="chip err">A runner could not be reconciled or deleted. It remains tracked for retry; check the event below and your provider console.</span>}
       {audit.length === 0 ? <p className="muted small">No hosted-runner events yet.</p> : <div className="picker-list">
         {audit.slice(0, 10).map((e, i) => <PickerItem
           key={`${e.at}:${e.action}:${i}`}

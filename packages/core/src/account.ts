@@ -696,11 +696,13 @@ export interface HostedMachineSummary {
   name?: string;
   provider: string;
   region?: string;
+  size?: string;
   status?: string;
   createdAt: string;
   ttlMinutes?: number;
   setupId?: string;
-  purpose?: string;
+  purpose?: "queue-item" | "queue-default" | "ready-capacity";
+  claimedAt?: string;
   milestones?: Record<string, string>;
 }
 

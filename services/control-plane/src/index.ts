@@ -2868,11 +2868,13 @@ app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
     name: typeof m.name === "string" ? m.name : undefined,
     provider: typeof m.provider === "string" ? m.provider : "",
     region: typeof m.region === "string" ? m.region : undefined,
+    size: typeof m.size === "string" ? m.size : undefined,
     status: typeof m.status === "string" ? m.status : undefined,
     createdAt: typeof m.createdAt === "string" ? m.createdAt : "",
     ttlMinutes: typeof m.ttlMinutes === "number" ? m.ttlMinutes : undefined,
     setupId: typeof m.setupId === "string" ? m.setupId : undefined,
-    purpose: typeof m.purpose === "string" ? m.purpose : undefined,
+    purpose: m.purpose === "queue-item" || m.purpose === "queue-default" || m.purpose === "ready-capacity" ? m.purpose : undefined,
+    claimedAt: typeof m.claimedAt === "string" ? m.claimedAt : undefined,
     milestones: m.milestones && typeof m.milestones === "object" ? m.milestones : undefined,
   })));
 }));
