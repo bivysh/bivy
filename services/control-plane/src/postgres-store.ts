@@ -2794,12 +2794,12 @@ export class PostgresStore implements MeshStore {
     return total;
   }
 
-  async completeWorkItem(accountId: string, id: string): Promise<void> {
+  async completeWorkItem(accountId: string, id: string): Promise<AutomationRun | undefined> {
     // Older nodes only know claim → complete. Adapt that boundary onto the
     // canonical lifecycle without preserving a second legacy transition path.
     const current = await this.getAutomationRun(accountId, id);
     if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running");
-    await this.transitionAutomationRun(accountId, id, "succeeded");
+    return (await this.transitionAutomationRun(accountId, id, "succeeded")) ?? undefined;
   }
 
   async deleteWorkItem(accountId: string, id: string): Promise<boolean> {

@@ -46,6 +46,17 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
   assert.equal(called, 0);
 }
 
+// A settled machine without a provider credential remains tracked; neither the
+// settled callback nor manual teardown may turn missing auth into false absence.
+{
+  const old = { id: "srv-no-token", provider: "hetzner", nodeId: "eph-no-token", createdAt: iso(0), ttlMinutes: 60 };
+  const { store, audits } = fakeStore([old], {});
+  const found = await reapSettledHostedMachine(store, "acct", "eph-no-token", env);
+  assert.equal(found, true);
+  assert.deepEqual(await store.getHostedMachines("acct"), [old]);
+  assert.ok(audits.some((event) => event.action === "reconcile_failed"));
+}
+
 // Reconcile actively destroys a machine past its TTL grace when env + token given.
 {
   const { store } = fakeStore(

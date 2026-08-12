@@ -238,7 +238,7 @@ export function WorkQueueSetupSheet({
 
   async function disconnectApp(entry: GithubAppEntry) {
     const id = appKey(entry);
-    if (!confirm(`Disconnect ${entry.name || entry.mention || "this GitHub App"}? The key is wiped on this node; the app is not deleted on GitHub.`)) {
+    if (!confirm(`Disconnect ${entry.name || entry.mention || "this GitHub App"}? The key is wiped on this machine; the app is not deleted on GitHub.`)) {
       return;
     }
     setDisconnectErr(null);
@@ -388,7 +388,7 @@ export function WorkQueueSetupSheet({
               <div className="autom-field-label">How it fires</div>
               <ol className="wq-how-list">
                 <li>
-                  Add a <code>bivy</code> label (or <code>{'bivy/<machine>'}</code> to pin a node) on an issue —
+                  Add a <code>bivy</code> label (or a Machine-specific Bivy label) on an issue —
                   or comment <code>@{mention}</code> with what to do.
                 </li>
                 <li>An online machine—or your configured hosted ephemeral runner—claims the item, runs your checks, and opens a PR.</li>
@@ -464,7 +464,7 @@ export function WorkQueueSetupSheet({
                         disabled={!ceAppId.trim() || !cePem.trim() || phase === "completing" || ceHostedBusy}
                         onClick={() => void connectExistingApp()}
                       >
-                        {phase === "completing" || ceHostedBusy ? "Connecting…" : state.currentNodeId ? "Connect app to this machine" : "Connect app for ephemeral runs"}
+                        {phase === "completing" || ceHostedBusy ? "Connecting…" : state.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
                       </button>
                       {ceHostedError && <div className="banner error inline">{ceHostedError}</div>}
                       {ceHostedResult && (
@@ -474,7 +474,7 @@ export function WorkQueueSetupSheet({
                       )}
                     </div>
                   )}
-                  {phase === "completing" && <p className="settings-hint">Finishing on the node…</p>}
+                  {phase === "completing" && <p className="settings-hint">Finishing on the machine…</p>}
                   {phase === "done" && (
                     <div className="autom-success" role="status">
                       <strong>App ready.</strong> Install it on a repository so it can receive issues.{" "}
@@ -496,12 +496,12 @@ export function WorkQueueSetupSheet({
                             {entry.installed === false
                               ? "Needs install"
                               : entry.hosted || hostedReady
-                                ? "Ephemeral ready"
+                                ? "Isolated profile ready"
                                 : entry.servedBy?.online
                                 ? "Live"
                                 : entry.servedBy
-                                  ? "Node offline"
-                                  : "Needs node"}
+                                  ? "Machine offline"
+                                  : "Needs machine"}
                           </span>
                         </div>
                         {entry.owner && (
@@ -524,7 +524,7 @@ export function WorkQueueSetupSheet({
                           </span>
                         )}
                         {entry.hosted || hostedReady ? (
-                          <span className="settings-hint">Served on demand by your ephemeral runner.</span>
+                          <span className="settings-hint">Served on demand by your isolated machine profile.</span>
                         ) : entry.servedBy === null ? (
                           <p className="schedule-hint warn">
                             No online machine holds this app&apos;s key — queue items won&apos;t be claimed.{" "}
@@ -655,7 +655,7 @@ export function WorkQueueSetupSheet({
                             disabled={!ceAppId.trim() || !cePem.trim() || phase === "completing" || ceHostedBusy}
                             onClick={() => void connectExistingApp()}
                           >
-                            {phase === "completing" || ceHostedBusy ? "Connecting…" : state.currentNodeId ? "Connect app to this machine" : "Connect app for ephemeral runs"}
+                            {phase === "completing" || ceHostedBusy ? "Connecting…" : state.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
                           </button>
                           {ceHostedError && <div className="banner error inline">{ceHostedError}</div>}
                           {ceHostedResult && (
@@ -745,7 +745,7 @@ export function WorkQueueSetupSheet({
                     <ol className="wq-how-list" style={{ paddingLeft: 18 }}>
                       <li>Copy the signing secret Linear generates.</li>
                       <li>Paste it below{linear.enabled ? " to rotate" : " to finish"}.</li>
-                      <li>Create labels <code>bivy</code> and optionally <code>bivy/node-name</code>.</li>
+                      <li>Create labels <code>bivy</code> and optionally use the compatibility label <code>bivy/node-name</code> to choose a machine.</li>
                     </ol>
                     <label className="field-label" htmlFor="lin-secret">
                       {linear.enabled ? "Replace signing secret" : "Linear signing secret"}
@@ -782,7 +782,7 @@ export function WorkQueueSetupSheet({
                       {linBusy ? "Saving…" : linear.enabled ? "Update connection" : "Connect Linear"}
                     </button>
                     <p className="settings-hint">
-                      Each runner also needs <code>BIVY_LINEAR_API_KEY</code> and a default <code>BIVY_LINEAR_REPO=owner/repo</code>.
+                      Each trusted workstation also needs <code>BIVY_LINEAR_API_KEY</code> and a default <code>BIVY_LINEAR_REPO=owner/repo</code>.
                     </p>
                     <button
                       type="button"
@@ -835,7 +835,7 @@ export function WorkQueueSetupSheet({
                     <code className="wq-cmd">/bivy on macbook fix the failing tests</code>
                     <code className="wq-cmd">/bivy in owner/repo fix the failing tests</code>
                     <p className="settings-hint">
-                      Add <code>in owner/repo</code> for an isolated checkout + PR. Add <code>on node</code> to pick a machine.
+                      Add <code>in owner/repo</code> for an isolated checkout + PR. Add <code>on machine-name</code> to choose a machine.
                     </p>
                     <button
                       type="button"

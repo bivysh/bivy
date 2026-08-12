@@ -945,7 +945,15 @@ export interface AccountAutomationRun {
   startedAt?: string;
   completedAt?: string;
   leaseExpiresAt?: string;
-  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+  attempt?: number;
+  runtimeId?: string;
+  model?: string;
+  routingReason?: string;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  checks?: GithubQueueItem["checks"];
+  events?: GithubQueueItem["events"];
+  output?: GithubQueueItem["output"];
 }
 
 async function automationRequest<T>(

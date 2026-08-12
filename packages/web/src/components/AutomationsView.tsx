@@ -54,6 +54,7 @@ import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { AutomationsSection } from "../router.js";
 import type { GithubQueueItem } from "@bivy/core";
+import { projectRunDetail } from "../runDetail.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -238,12 +239,12 @@ function githubSourceStatus(gh: GithubAppInfo | null, hostedReady = false): { to
   }
   if (hostedReady) return { tone: "on", label: `Installed${count ? ` · ${count} repo(s)` : ""} · ephemeral ready`, detail: "Hosted ephemeral execution can claim work without a persistent node." };
   if (!served && !gh.apps.some((a) => a.servedBy)) {
-    return { tone: "warn", label: `Installed${count ? ` · ${count} repo(s)` : ""} · no node`, detail: "No machine is serving the app key yet." };
+    return { tone: "warn", label: `Installed${count ? ` · ${count} repo(s)` : ""} · no machine`, detail: "No machine is serving the app key yet." };
   }
   const online = served ? "online" : "offline";
   return {
     tone: served ? "on" : "warn",
-    label: `${count || gh.apps.length} repo(s) · node ${online}`,
+    label: `${count || gh.apps.length} repo(s) · machine ${online}`,
     detail: "Issues, @mentions, and (when enabled) Actions failures can start sessions.",
   };
 }
@@ -257,7 +258,7 @@ function linearSourceStatus(lin: LinearHook | null): { tone: "on" | "off" | "war
 function slackSourceStatus(slack: SlackHook | null): { tone: "on" | "off" | "warn"; label: string; detail: string } {
   if (!slack) return { tone: "off", label: "Not connected", detail: "Connect Slack so /bivy commands reach your machines." };
   if (slack.enabled === false) return { tone: "warn", label: "Disabled", detail: "Slack hook exists but is turned off." };
-  return { tone: "on", label: "Connected", detail: "Slash commands enqueue sessions on the work queue." };
+  return { tone: "on", label: "Connected", detail: "Slash commands create runs." };
 }
 
 /** Status chip for a source automation given live connect state. */
@@ -282,18 +283,6 @@ function sourceAutomationChip(
     return executorReady ? { tone: "on", label: "Active" } : { tone: "warn", label: "Needs executor" };
   }
   return executorReady ? { tone: "on", label: "Active" } : { tone: "warn", label: "Needs executor" };
-}
-
-function runOutcome(status: AccountAutomationRun["status"]): { label: string; tone: "ok" | "warn" | "bad" | "info" } {
-  switch (status) {
-    case "succeeded": return { label: "Succeeded", tone: "ok" };
-    case "failed": return { label: "Failed", tone: "bad" };
-    case "needs_attention": return { label: "Needs review", tone: "warn" };
-    case "running": return { label: "Running", tone: "info" };
-    case "waiting": return { label: "Waiting", tone: "info" };
-    case "cancelled": return { label: "Cancelled", tone: "warn" };
-    default: return { label: "Queued", tone: "info" };
-  }
 }
 
 /** Infer which trigger-picker option best matches a draft (for the chip label). */
@@ -390,7 +379,7 @@ interface Notice {
  *  other three moved here from Settings so Automations is the single hub. */
 const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | null }> = [
   { label: "Overview", section: null },
-  { label: "Work Queue", section: "queue" },
+  { label: "Runs", section: "queue" },
   { label: "Rulesets", section: "rulesets" },
 ];
 
@@ -907,19 +896,21 @@ export function AutomationsView({
               ) : (
                 <div className="automation-list">
                   {definitionRuns.slice(0, 12).map((run) => {
-                    const outcome = runOutcome(run.status);
+                    const detail = projectRunDetail(run);
+                    const outcomeTone = detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "danger" ? "bad" : detail.outcome.tone === "warning" ? "warn" : "info";
                     const defName = items.find((i) => i.id === run.definitionId)?.name;
-                    const sessionId = run.output?.sessionId;
+                    const sessionId = detail.sessionId;
                     return (
                       <div className="automation-row" key={run.id}>
                         <div className="automation-row-main">
                           <div className="automation-row-title">
                             <strong>{run.title}</strong>
-                            <span className={`run-status ${outcome.tone}`}>{outcome.label}</span>
+                            <span className={`run-status ${outcomeTone}`}>{detail.outcome.label}</span>
                           </div>
                           <div className="settings-hint">
-                            {[defName, new Date(run.createdAt).toLocaleString(), run.triggerKind].filter(Boolean).join(" · ")}
+                            {[defName, new Date(run.createdAt).toLocaleString(), run.triggerKind, detail.checksSummary, detail.attempt > 1 ? `attempt ${detail.attempt}` : null].filter(Boolean).join(" · ")}
                           </div>
+                          {detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}
                         </div>
                         <div className="automation-row-actions">
                           {sessionId && (
@@ -1435,7 +1426,7 @@ function SourceAutomationEditor({
                 placeholder="e.g. bivy"
               />
               <p className="settings-hint">
-                Comma-separated. Default <code>bivy</code> also matches <code>{'bivy/<node>'}</code>.
+                Comma-separated. The default also matches labels that target a specific machine.
                 @mentions ignore this filter.
               </p>
             </div>
@@ -1466,7 +1457,7 @@ function SourceAutomationEditor({
                 placeholder="e.g. bivy"
               />
               <p className="settings-hint">
-                Comma-separated. Default <code>bivy</code> also matches <code>{'bivy/<node>'}</code>.
+                Comma-separated. The default also matches labels that target a specific machine.
               </p>
             </div>
           )}
@@ -1544,7 +1535,7 @@ function SourceAutomationEditor({
             <div className="settings-field">
               <label className="field-label" htmlFor="src-agent">Agent</label>
               <select id="src-agent" className="picker-search" value={runtimeId} onChange={(e) => setRuntimeId(e.target.value)}>
-                <option value="">Node default</option>
+                <option value="">Machine default</option>
                 {state.runtimes.map((r) => (
                   <option key={r.id} value={r.id}>{r.name || r.id}</option>
                 ))}
@@ -1552,7 +1543,7 @@ function SourceAutomationEditor({
             </div>
             <div className="settings-field">
               <label className="field-label" htmlFor="src-model">Model</label>
-              <input id="src-model" className="picker-search" value={model} onChange={(e) => setModel(e.target.value)} placeholder="Node default" />
+              <input id="src-model" className="picker-search" value={model} onChange={(e) => setModel(e.target.value)} placeholder="Machine default" />
             </div>
           </details>
 
@@ -1931,7 +1922,7 @@ function AutomationEditor({
                       </select>
                       <p className="settings-hint">
                         {d.trigger === "schedule"
-                          ? "The node clones this repo before the session starts."
+                          ? "The machine clones this repo before the session starts."
                           : "Used when the webhook event does not include a repo."}
                       </p>
                       {!d.repo && d.trigger === "schedule" && (

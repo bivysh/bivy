@@ -141,11 +141,11 @@ const TITLES: Record<View, string> = {
   github: "GitHub App",
   linear: "Linear",
   slack: "Slack",
-  queue: "Work Queue",
+  queue: "Runs",
   webhooks: "Webhooks",
   rulesets: "Rulesets",
-  nodes: "Nodes",
-  ephemeral: "Ephemeral machines",
+  nodes: "Machines",
+  ephemeral: "Isolated machine profiles",
   account: "Account & billing",
   link: "Link a device",
 };
@@ -243,9 +243,9 @@ export function Settings({
     {
       label: "Machines",
       items: [
-        { id: "nodes", label: "Nodes", icon: <IconServer /> },
+        { id: "nodes", label: "Machines", icon: <IconServer /> },
         ...(EPHEMERAL_MACHINES_ENABLED
-          ? [{ id: "ephemeral" as View, label: "Ephemeral machines", icon: <IconBolt /> }]
+          ? [{ id: "ephemeral" as View, label: "Isolated machine profiles", icon: <IconBolt /> }]
           : []),
       ],
     },
@@ -404,7 +404,7 @@ function ImportPanel({ onImported }: { onImported: (sessionId: string) => void }
     <div className="settings-form">
       <p className="muted">
         Adopt a Claude Code or Codex session that was started outside Bivy. Only
-        sessions this node (or another one you pick) can see and safely take over
+        sessions this machine (or another one you pick) can see and safely take over
         are listed.
       </p>
       <ImportSessionContent onDone={onImported} />
@@ -524,7 +524,7 @@ function NotificationsPanel() {
 
 /** Human label for a node, falling back to its id. */
 function nodeLabel(nodes: AccountNode[], nodeId: string | null): string {
-  if (!nodeId) return "this node";
+  if (!nodeId) return "this machine";
   return nodes.find((n) => n.id === nodeId)?.name || nodeId;
 }
 
@@ -584,7 +584,7 @@ function ProviderCredentials({ providerId, records, presets }: { providerId: str
   return (
     <div className="cred-section" style={{ marginTop: 20, borderTop: "1px solid var(--border, #333)", paddingTop: 16 }}>
       <label className="field-label">Additional accounts</label>
-      <p className="muted small">Add work / personal or per-project keys. Paste an API key, or a reference — <code>op://…</code>, <code>env://NAME</code>, or <code>cmd://&lt;command&gt;</code> (any password-manager CLI). References resolve on this node; the secret never leaves your manager. <code>cmd://</code> refs stay on this node.</p>
+      <p className="muted small">Add work / personal or per-project keys. Paste an API key, or a reference — <code>op://…</code>, <code>env://NAME</code>, or <code>cmd://&lt;command&gt;</code> (any password-manager CLI). References resolve on this machine; the secret never leaves your manager. <code>cmd://</code> refs stay on this machine.</p>
       {extra.length > 0 && (
         <div className="picker-list">
           {extra.map((r) => (
@@ -595,10 +595,10 @@ function ProviderCredentials({ providerId, records, presets }: { providerId: str
               <span style={{ flex: 1 }} />
               <button
                 className="link-btn"
-                title={r.sync === "account" ? "Syncs to your other nodes — tap to keep on this node only" : "Stays on this node — tap to sync across your nodes"}
+                title={r.sync === "account" ? "Syncs to your other machines — tap to keep on this machine only" : "Stays on this machine — tap to sync across your machines"}
                 onClick={() => controller.setCredentialSync(providerId, r.label, r.sync === "account" ? "node" : "account")}
               >
-                {r.sync === "account" ? "Syncing" : "This node only"}
+                {r.sync === "account" ? "Syncing" : "This machine only"}
               </button>
               <button className="link-btn danger" onClick={() => { controller.removeCredential(providerId, r.label); setTimeout(() => controller.listCredentialRecords(), 400); }}>
                 Remove
@@ -740,7 +740,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
           ‹ All providers
         </button>
         <h3>{managing.name || managing.id}</h3>
-        {showNodePicker && <p className="muted small">On node {nodeLabel(nodes, currentNodeId)}.</p>}
+        {showNodePicker && <p className="muted small">On machine {nodeLabel(nodes, currentNodeId)}.</p>}
         {confirm && (
           <ConfirmDialog
             title={confirm.title}
@@ -836,10 +836,10 @@ function ProvidersPanel({ state }: { state: AppState }) {
       {showNodePicker && (
         <>
           <p className="muted settings-intro">
-            Keys &amp; OAuth are stored on each node. Pick a node to view and manage its sign-ins — you don't
+            Keys &amp; OAuth are stored on each machine. Pick a machine to view and manage its sign-ins — you don't
             need an open session on it.
           </p>
-          <label className="field-label">Node</label>
+          <label className="field-label">Machine</label>
           <div className="picker-list">
             {nodes.map((n) => {
               const summary = nodeProviderSummary(n);
@@ -1023,9 +1023,9 @@ function LocalModelsPanel({ state }: { state: AppState }) {
           Any OpenAI-compatible server — Ollama, LM Studio, vLLM, SGLang, or a self-hosted / Azure endpoint.
         </p>
         <p className="muted small">
-          This endpoint is account-wide, not just this node: it syncs (encrypted) to every node signed in to your
+          This endpoint is account-wide, not just this machine: it syncs (encrypted) to every machine signed in to your
           account, the same way provider keys do. A <code>localhost</code> base URL only resolves on the machine
-          that has it — another node can use it only if it also runs the same server at that address locally. If
+          that has it — another machine can use it only if it also runs the same server at that address locally. If
           the server is reachable over the network, point the base URL at that machine's address instead.
         </p>
 
@@ -1050,7 +1050,7 @@ function LocalModelsPanel({ state }: { state: AppState }) {
         />
         {/localhost|127\.0\.0\.1/i.test(draft.baseUrl) && (
           <p className="muted small">
-            ⚠ This points at the current node's own machine. Once synced, other nodes will only reach it if they
+            ⚠ This points at the current machine. Once synced, other machines will only reach it if they
             also run a server at <code>{draft.baseUrl.match(/localhost|127\.0\.0\.1/i)?.[0] ?? "localhost"}</code>
             {" "}themselves.
           </p>
@@ -1119,9 +1119,9 @@ function LocalModelsPanel({ state }: { state: AppState }) {
       )}
 
       <p className="muted settings-intro">
-        Endpoints here sync to every node signed in to your account, the same as provider keys — they aren't scoped
-        to just this node. A <code>localhost</code> base URL is only reachable from the machine that has it, so an
-        endpoint like Ollama's default needs that same server running on each node that should use it.
+        Endpoints here sync to every machine signed in to your account, the same as provider keys — they aren't scoped
+        to just this machine. A <code>localhost</code> base URL is only reachable from the machine that has it, so an
+        endpoint like Ollama's default needs that same server running on each machine that should use it.
       </p>
 
       <div className="picker-list">
@@ -1298,7 +1298,7 @@ function NodesPanel({ state }: { state: AppState }) {
     ? "Connected now."
     : Number.isFinite(selectedLastSeen)
       ? `Last contact ${new Date(selectedLastSeen).toLocaleString()}. The daemon may be stopped, updating, asleep, or unable to reach the control plane.`
-      : "This node has not completed a control-plane heartbeat yet. Check that the daemon is running and can reach the network.";
+      : "This machine has not completed a control-plane heartbeat yet. Check that the Bivy service is running and can reach the network.";
 
   const reload = () => {
     controller.getNodeSettings();
@@ -1377,7 +1377,7 @@ function NodesPanel({ state }: { state: AppState }) {
     <div className="settings-form">
       {hosted && (
         <section className="settings-section">
-          <label className="field-label" htmlFor="node-settings-node">Node</label>
+          <label className="field-label" htmlFor="node-settings-node">Machine</label>
           <select
             id="node-settings-node"
             className="picker-search"
@@ -1395,7 +1395,7 @@ function NodesPanel({ state }: { state: AppState }) {
               setForm(null);
             }}
           >
-            {nodes.length === 0 && <option value="">No nodes found</option>}
+            {nodes.length === 0 && <option value="">No machines found</option>}
             {nodes.map((n) => (
               <option key={n.id} value={n.id}>
                 {n.name || n.id}{n.online ? "" : " (offline)"}
@@ -1403,23 +1403,23 @@ function NodesPanel({ state }: { state: AppState }) {
             ))}
           </select>
           {selectedNode && <p className={`muted small${selectedNode.online ? "" : " warn-text"}`}>{selectedHealth}</p>}
-          <p className="muted small">Run <code>bivy update</code> on the node to update or repair its service, then refresh this list.</p>
+          <p className="muted small">Run <code>bivy update</code> on the machine to update or repair its service, then refresh this list.</p>
         </section>
       )}
 
       {!nodeOnline ? (
         <p className="muted">
           {state.status === "offline"
-            ? "This node is offline — its settings aren't reachable until it reconnects."
-            : "Connecting to this node…"}
+            ? "This machine is offline — its settings aren't reachable until it reconnects."
+            : "Connecting to this machine…"}
         </p>
       ) : !form ? (
-        <p className="muted">Loading node settings…</p>
+        <p className="muted">Loading machine settings…</p>
       ) : (
         <>
           <section className="settings-section">
             <h4 className="settings-subhead">Identity</h4>
-            <label className="field-label">Node name</label>
+            <label className="field-label">Machine name</label>
             <input
               className="picker-search"
               value={form.name}
@@ -1496,7 +1496,7 @@ function NodesPanel({ state }: { state: AppState }) {
               value={form.githubMaxConcurrent}
               onChange={(e) => setForm({ ...form, githubMaxConcurrent: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
             />
-            <p className="muted small">Max GitHub-triggered sessions this node runs at once; the rest queue until a slot frees. 0 = unlimited.</p>
+            <p className="muted small">Maximum GitHub-triggered Runs this machine handles at once; the rest wait until a slot frees. 0 = unlimited.</p>
 
             <label className="field-label">GitHub issue prompt</label>
             <textarea
@@ -1520,7 +1520,7 @@ function NodesPanel({ state }: { state: AppState }) {
             <label className="field-label">After a restart interrupts a session</label>
             <div className="seg-row">
               {([
-                { id: "auto", label: "Auto-resume", hint: "The agent automatically continues the interrupted turn when the node restarts." },
+                { id: "auto", label: "Auto-resume", hint: "The agent automatically continues the interrupted turn when the machine restarts." },
                 { id: "manual", label: "Manual", hint: "The interrupted session waits and offers a one-tap Resume when you open it." },
               ] as const).map((o) => (
                 <button
@@ -1537,7 +1537,7 @@ function NodesPanel({ state }: { state: AppState }) {
             <p className="muted small">
               {form.sessionResumeMode === "manual"
                 ? "Interrupted sessions wait for you to tap Resume — nothing runs on its own. GitHub issue automation still resumes automatically."
-                : "The agent picks up an interrupted turn on its own after the node restarts."}
+                : "The agent picks up an interrupted turn on its own after the machine restarts."}
             </p>
           </section>
 
@@ -1564,11 +1564,11 @@ function NodesPanel({ state }: { state: AppState }) {
             <h4 className="settings-subhead">Session sync</h4>
             <div className="settings-toggle-row">
               <div className="settings-toggle-text">
-                <span className="settings-toggle-title">Keep sessions synced to a standby node</span>
+                <span className="settings-toggle-title">Keep sessions synced to a standby machine</span>
                 <span className="muted small">
-                  Warm-replicate each session's transcript to another of your nodes over the encrypted
-                  relay, so a session can be picked up elsewhere if this node goes offline. Data stays
-                  node-to-node; the control plane never sees it.
+                  Warm-replicate each session's transcript to another of your machines over the encrypted
+                  relay, so a session can be picked up elsewhere if this machine goes offline. Data stays
+                  machine-to-machine; the control plane never sees it.
                 </span>
               </div>
               <Toggle
@@ -1594,13 +1594,13 @@ function NodesPanel({ state }: { state: AppState }) {
             </div>
             {form.sessionSync && (
               <>
-                <label className="field-label">Standby node</label>
+                <label className="field-label">Standby machine</label>
                 <select
                   className="picker-search"
                   value={form.syncStandbyNodeId ?? ""}
                   onChange={(e) => setForm({ ...form, syncStandbyNodeId: e.target.value || undefined })}
                 >
-                  <option value="">Choose a node to replicate to…</option>
+                  <option value="">Choose a machine to replicate to…</option>
                   {nodes
                     .filter((n) => n.id !== currentNodeId)
                     .map((n) => (
@@ -1613,9 +1613,9 @@ function NodesPanel({ state }: { state: AppState }) {
                   )}
                 </select>
                 <p className="muted small">
-                  Sessions on this node warm-replicate to the standby over the encrypted relay. If this
-                  node goes offline, open the session on the standby and choose “Continue here”.
-                  {nodes.filter((n) => n.id !== currentNodeId).length === 0 && " Add a second node to enable this."}
+                  Sessions on this machine warm-replicate to the standby over the encrypted relay. If this
+                  machine goes offline, open the session on the standby and choose “Continue here”.
+                  {nodes.filter((n) => n.id !== currentNodeId).length === 0 && " Add a second machine to enable this."}
                 </p>
               </>
             )}
@@ -1695,7 +1695,7 @@ function EphemeralPanel() {
   if (nav && catalog) {
     return (
       <div className="settings-form">
-        <button className="link-btn" onClick={() => { setNav(null); refreshSetups(); refreshKeys(); }}>‹ Ephemeral machines</button>
+        <button className="link-btn" onClick={() => { setNav(null); refreshSetups(); refreshKeys(); }}>‹ Isolated machine profiles</button>
         <h3>{catalog.name}</h3>
         <EphemeralProviderConfig
           providerId={catalog.id}
@@ -1711,13 +1711,13 @@ function EphemeralPanel() {
   return (
     <div className="settings-form">
       <p className="muted settings-intro">
-        Bring your own cloud token to spin up temporary nodes that self-destruct at their TTL. Each configured machine
-        below is a saved setup — its provider, region, server type and auto-destroy time — that the new-session node
-        picker offers to launch. The repo it works on comes from the composer, not from here. Tap one to edit it.
+        Bring your own cloud token to spin up isolated machines that self-destruct at their TTL. Each profile
+        below saves its provider, region, server type, and auto-destroy time for the new-session machine
+        picker. The repo it works on comes from the composer, not from here. Tap one to edit it.
       </p>
       {setups.length > 0 && (
         <>
-          <label className="field-label">Configured machines</label>
+          <label className="field-label">Isolated machine profiles</label>
           <div className="picker-list">
             {setups.map((setup) => {
               const p = EPHEMERAL_PROVIDERS.find((x) => x.id === setup.provider);
@@ -1734,7 +1734,7 @@ function EphemeralPanel() {
           </div>
         </>
       )}
-      <label className="field-label">{setups.length > 0 ? "Add a machine" : "Choose a provider"}</label>
+      <label className="field-label">{setups.length > 0 ? "Add a profile" : "Choose a provider"}</label>
       <div className="picker-list">
         {EPHEMERAL_PROVIDERS.map((p) => {
           const k = keys.find((x) => x.id === p.id);
@@ -1802,7 +1802,7 @@ function HostedRunnerManagement() {
   return (
     <section className="settings-section">
       {confirmDestroy && <ConfirmDialog
-        title="Destroy hosted runner?"
+        title="Destroy hosted machine?"
         message={`Destroy ${confirmDestroy.name || confirmDestroy.nodeId || confirmDestroy.id} at ${confirmDestroy.provider} now? Active work on it will stop.`}
         confirmLabel="Destroy now"
         danger
@@ -1810,10 +1810,10 @@ function HostedRunnerManagement() {
         onConfirm={() => {
           const nodeId = confirmDestroy.nodeId;
           setConfirmDestroy(null);
-          if (nodeId) void act(() => controller.destroyHostedMachine(nodeId), "Runner destroyed and removed from inventory.");
+          if (nodeId) void act(() => controller.destroyHostedMachine(nodeId), "Machine destroyed and removed from inventory.");
         }}
       />}
-      <h4 className="settings-subhead">Unattended BYO-cloud runners</h4>
+      <h4 className="settings-subhead">Unattended customer-cloud machines</h4>
       <p className="muted small">
         Lets Bivy launch governed automation while your devices are offline. Compute is billed directly by your provider;
         Bivy adds no compute markup. Provider credentials are encrypted on the control plane and every use is audited.
@@ -1822,9 +1822,9 @@ function HostedRunnerManagement() {
       <Toggle
         checked={Boolean(status?.enabled)}
         onChange={(enabled) => void act(() => controller.setHostedProvisioning({ enabled }), enabled ? "Unattended provisioning enabled." : "New unattended launches disabled.")}
-        label="Allow unattended runner launches"
+        label="Allow unattended machine launches"
       />
-      <p className="muted small">Disabling stops new launches. Existing runners remain visible below until destroyed or their TTL expires.</p>
+      <p className="muted small">Disabling stops new launches. Existing machines remain visible below until destroyed or their TTL expires.</p>
 
       <label className="field-label">Cloud provider</label>
       <select className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value)}>
@@ -1842,8 +1842,8 @@ function HostedRunnerManagement() {
         <p className="muted small">Stored: {status.providers.map((p) => `${p}${status.validatedProviders.includes(p) ? " ✓" : " (validation required)"}`).join(", ")}</p>
       )}
 
-      <label className="field-label">Hosted runners</label>
-      {machines.length === 0 ? <p className="muted small">No hosted runners are currently tracked.</p> : <div className="picker-list">
+      <label className="field-label">Hosted machines</label>
+      {machines.length === 0 ? <p className="muted small">No hosted machines are currently tracked.</p> : <div className="picker-list">
         {machines.map((m) => {
           const providerAdapter = ephemeralAdapter(m.provider);
           const providerSize = providerAdapter?.sizes.find((size) => size.id === m.size);
@@ -1857,15 +1857,15 @@ function HostedRunnerManagement() {
             key={`${m.provider}:${m.id}`}
             title={<>{m.name || m.nodeId || m.id} <span className={`chip ${failure ? "err" : phase === "ready" ? "ok" : ""}`}>{phase.replaceAll("-", " ")}</span></>}
             meta={[m.provider, m.region, m.size, cost, m.ttlMinutes ? `TTL ${m.ttlMinutes}m` : null, failure?.detail].filter(Boolean).join(" · ")}
-            onClick={() => document.getElementById("hosted-runner-audit")?.scrollIntoView({ behavior: "smooth" })}
+            onClick={() => document.getElementById("hosted-machine-audit")?.scrollIntoView({ behavior: "smooth" })}
             right={<button type="button" className="picker-action danger" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
           />;
         })}
       </div>}
 
-      <label className="field-label" id="hosted-runner-audit">Recent audit evidence</label>
-      {audit.some((event) => event.action === "reconcile_failed") && <span className="chip err">A runner could not be reconciled or deleted. It remains tracked for retry; check the event below and your provider console.</span>}
-      {audit.length === 0 ? <p className="muted small">No hosted-runner events yet.</p> : <div className="picker-list">
+      <label className="field-label" id="hosted-machine-audit">Recent audit evidence</label>
+      {audit.some((event) => event.action === "reconcile_failed") && <span className="chip err">A machine could not be reconciled or deleted. It remains tracked for retry; check the event below and your provider console.</span>}
+      {audit.length === 0 ? <p className="muted small">No hosted-machine events yet.</p> : <div className="picker-list">
         {audit.slice(0, 10).map((e, i) => <PickerItem
           key={`${e.at}:${e.action}:${i}`}
           title={e.action.replaceAll("_", " ")}
@@ -1944,7 +1944,7 @@ function EphemeralModelKeys() {
       <h4 className="settings-subhead">Model keys for new machines</h4>
       <p className="muted small">
         API keys kept on this device and pushed into a freshly-launched machine over its encrypted channel, so a
-        brand-new runner has model credentials even when it's your only node. Never sent to our servers or baked into
+        brand-new machine has model credentials even when it's your only machine. Never sent to our servers or baked into
         the machine image. API keys only — agent subscription logins can't be seeded this way.
       </p>
       {keys.length > 0 && (
@@ -2150,11 +2150,11 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
         <>
           <p className="muted">
             {setupId
-              ? "Edit this machine. It stays in the new-session launcher like an offline node even after its machine expires."
-              : "Name this machine and set its defaults. It'll stay in the new-session launcher like an offline node even after its machine expires."}
+              ? "Edit this isolated machine profile. It remains in the new-session launcher after a launched machine expires."
+              : "Name this isolated machine profile and set its defaults. It remains in the new-session launcher after a launched machine expires."}
           </p>
           <label className="field-label">Machine name</label>
-          <input className="picker-search" value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder="e.g. EU coding node" />
+          <input className="picker-search" value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder="e.g. EU isolated machine" />
 
           <label className="field-label">Region</label>
           <select className="picker-search" value={region} onChange={(e) => setRegion(e.target.value)}>
@@ -2184,7 +2184,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           })()}
 
           {suspendsWhenIdle ? (
-            <p className="muted small">Keeps its memory: suspends to ~$0 when idle and resumes with everything intact. Reopen its session from the node list to wake it — no TTL, no teardown-on-finish.</p>
+            <p className="muted small">Keeps its memory: suspends to ~$0 when idle and resumes with everything intact. Reopen its session from the machine list to wake it — no TTL, no teardown-on-finish.</p>
           ) : (
             <>
               <label className="field-label">Work until finished</label>
@@ -2198,7 +2198,7 @@ function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, on
           <p className="muted small">The repo this machine works on is whatever you pick in the new-session composer — it isn't set here.</p>
 
           <div className="row-actions">
-            <button className="btn primary" disabled={busy || !setupName.trim()} onClick={savePrefs}>{busy ? "Saving…" : setupId ? "Save machine" : "Create machine"}</button>
+            <button className="btn primary" disabled={busy || !setupName.trim()} onClick={savePrefs}>{busy ? "Saving…" : setupId ? "Save profile" : "Create profile"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
             {setupId && (
               <button className="btn danger-ghost" onClick={() => setConfirm({
@@ -2347,7 +2347,7 @@ function AccountPanel() {
           </button>
         )}
       </div>
-      <label className="field-label">Enrolled nodes</label>
+      <label className="field-label">Enrolled machines</label>
       <div className="picker-list">
         {nodes.map((n) => (
           <PickerItem
@@ -2362,7 +2362,7 @@ function AccountPanel() {
                 onClick={(e) => {
                   e.stopPropagation();
                   setConfirm({
-                    title: "Remove node?",
+                    title: "Remove machine?",
                     message: `Remove ${n.name || n.id} from your account?`,
                     action: () => controller.removeNode(n.id).then(() => controller.listNodes().then(setNodes)),
                   });
@@ -2452,7 +2452,7 @@ function LinkPanel({ onDone }: { onDone: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   return (
     <div className="settings-form">
-      <p className="muted">Paste a device-link URL or code from another Bivy client to add its node here.</p>
+      <p className="muted">Paste a device-link URL or code from another Bivy client to add its machine here.</p>
       <textarea
         className="picker-search"
         rows={4}

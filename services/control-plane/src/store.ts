@@ -1389,7 +1389,7 @@ export interface MeshStore {
   // an interval by the control plane, mirroring pruneRunStartsBefore. Returns
   // how many rows were removed in total.
   pruneExpiredAuthTokens(nowIso: string): Promise<number>;
-  completeWorkItem(accountId: string, id: string): Promise<void>;
+  completeWorkItem(accountId: string, id: string): Promise<AutomationRun | undefined>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node
   // changes so already-queued work follows the new default. Returns the updated items.
