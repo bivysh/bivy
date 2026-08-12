@@ -162,22 +162,26 @@ function relayHttpUrl(relayUrl: string): string {
   return relayUrl;
 }
 
-async function notifyRelaysWorkAvailable(accountId: string, item: { id: string; label: string }) {
+async function notifyRelaysWorkAvailable(
+  accountId: string,
+  item: { id: string; label: string },
+  options: { nodeId?: string; autoProvision?: boolean } = {},
+) {
   // Best-effort push: relay-connected nodes get an immediate hint and then fetch
-  // + atomically claim via /node/work. Fallback polling still guarantees pickup
-  // if the relay/shard is offline or the node is disconnected.
+  // + atomically claim via /node/work. A cancellation targets only the active
+  // owner; enqueue notifications intentionally remain account-wide.
   await Promise.allSettled(
     relayShardUrls.map(async (url) => {
       await fetch(`${relayHttpUrl(url).replace(/\/$/, "")}/internal/work-available`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${process.env.RELAY_SECRET ?? "dev-relay-secret"}` },
-        body: JSON.stringify({ accountId, id: item.id, label: item.label }),
+        body: JSON.stringify({ accountId, id: item.id, label: item.label, nodeId: options.nodeId }),
       });
     }),
   );
-  // Unattended provisioning: any enqueued work triggers a hosted-provisioning
-  // check (gated + deduped inside). Fire-and-forget; never blocks the notify.
-  void maybeAutoProvision(store, accountId, provisionEnv());
+  // Cancelling must never start a machine. Normal enqueue notifications retain
+  // the unattended-provisioning check.
+  if (options.autoProvision !== false) void maybeAutoProvision(store, accountId, provisionEnv());
 }
 if (relayShardUrls.length > 1) {
   console.log(`[relay] sharding across ${relayShardUrls.length} relays: ${relayShardUrls.join(", ")}`);
@@ -2719,6 +2723,30 @@ app.get("/account/automation-triggers", asyncHandler(async (req, res) => {
   res.json(await store.listTriggerEvents(client.accountId, Number(req.query.limit) || 50));
 }));
 
+// Account-scoped operator cancellation. Pending/active/parked runs transition
+// durably; repeating a cancellation is a successful no-op, while a different
+// terminal outcome cannot be rewritten.
+app.post("/account/automation-runs/:id/cancel", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const result = await store.cancelAutomationRun(client.accountId, String(req.params.id));
+  if (!result) return res.status(404).json({ error: "Automation run not found" });
+  if (result.previousStatus === "succeeded" || result.previousStatus === "failed") {
+    return res.status(409).json({ error: `Cannot cancel a ${result.previousStatus} automation run`, status: result.previousStatus });
+  }
+  if (result.transitioned) {
+    recordDurableRunLifecycleResult(result.run, "cancelled");
+    const owner = result.run.claimedByNodeId;
+    if (owner) {
+      void notifyRelaysWorkAvailable(client.accountId, { id: result.run.id, label: result.run.routing.nodeLabel }, {
+        nodeId: owner,
+        autoProvision: false,
+      });
+    }
+  }
+  res.json({ ok: true, run: result.run });
+}));
+
 app.post("/account/automation-runs", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
@@ -3510,8 +3538,18 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
 // heartbeats stop and list/claim may atomically reclaim the item after expiry.
 app.post("/node/work/:id/heartbeat", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  const item = await store.renewWorkItemLease(node.accountId, node.id, String(req.params.id));
-  if (!item) return res.status(409).json({ error: "Run lease is not owned by this node" });
+  const id = String(req.params.id);
+  const item = await store.renewWorkItemLease(node.accountId, node.id, id);
+  if (!item) {
+    // Cancellation retains claimedByNodeId only as an ownership tombstone, so
+    // the active worker gets an actionable stop reason without exposing another
+    // node's cancellation to arbitrary enrolled nodes.
+    const current = await store.getAutomationRun(node.accountId, id);
+    if (current?.status === "cancelled" && current.claimedByNodeId === node.id) {
+      return res.status(409).json({ error: "Automation run was cancelled", reason: "cancelled" });
+    }
+    return res.status(409).json({ error: "Run lease is not owned by this node" });
+  }
   res.json({ ok: true, leaseExpiresAt: item.leaseExpiresAt });
 }));
 

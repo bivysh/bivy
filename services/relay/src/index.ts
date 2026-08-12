@@ -261,14 +261,15 @@ const httpServer = createServer((req, res) => {
       const accountId = typeof body?.accountId === "string" ? body.accountId : "";
       const id = typeof body?.id === "string" ? body.id : undefined;
       const label = typeof body?.label === "string" ? body.label : undefined;
+      const nodeId = typeof body?.nodeId === "string" ? body.nodeId : undefined;
       if (!accountId) {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "accountId required" }));
         return;
       }
       let delivered = 0;
-      for (const r of rooms.values()) {
-        if (r.nodeAccountId === accountId && r.node?.readyState === WebSocket.OPEN) {
+      for (const [roomNodeId, r] of rooms) {
+        if ((!nodeId || roomNodeId === nodeId) && r.nodeAccountId === accountId && r.node?.readyState === WebSocket.OPEN) {
           send(r.node, { t: "work.available", id, label });
           delivered += 1;
         }

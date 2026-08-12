@@ -15,8 +15,9 @@ test("durable Run results record each fixed outcome exactly once", () => {
   assert.equal(recordDurableRunLifecycleResult(run, "succeeded", recorder), run);
   recordDurableRunLifecycleResult(run, "failed", recorder);
   recordDurableRunLifecycleResult(run, "needs_attention", recorder);
+  recordDurableRunLifecycleResult(run, "cancelled", recorder);
 
-  assert.deepEqual(calls, ["succeeded", "failed", "needs_attention"]);
+  assert.deepEqual(calls, ["succeeded", "failed", "needs_attention", "cancelled"]);
 });
 
 test("unsuccessful durable transitions do not record a result", () => {

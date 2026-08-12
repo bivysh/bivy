@@ -53,6 +53,7 @@ import {
   type AutomationDefinition,
   type AutomationRun,
   type AutomationRunStatus,
+  type CancelAutomationRunResult,
   type AutomationTriggerKind,
   type TriggerEvent,
   type RunEvidenceEvent,
@@ -2550,6 +2551,55 @@ export class PostgresStore implements MeshStore {
       [accountId, Math.max(1, Math.min(200, limit))],
     );
     return rows.map(mapAutomationRun);
+  }
+
+  async cancelAutomationRun(accountId: string, id: string): Promise<CancelAutomationRunResult | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // The account predicate makes unknown and cross-account ids identical. The
+      // row lock serializes cancellation with another cancellation/transition,
+      // so the status, bounded event, completion timestamp, and lease release
+      // are one durable operation.
+      const selected = await client.query(
+        `SELECT * FROM work_items WHERE account_id = $1 AND id = $2 FOR UPDATE`,
+        [accountId, id],
+      );
+      const current = selected.rows[0];
+      if (!current) {
+        await client.query("COMMIT");
+        return undefined;
+      }
+      const previousStatus = current.status as AutomationRunStatus;
+      if (previousStatus === "cancelled" || previousStatus === "succeeded" || previousStatus === "failed") {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), previousStatus, transitioned: false };
+      }
+      if (!["pending", "claimed", "running", "needs_attention"].includes(previousStatus)) {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), previousStatus, transitioned: false };
+      }
+      const events = [
+        ...(current.events ?? []),
+        { at: new Date().toISOString(), kind: "cancelled", summary: "Automation run cancelled." },
+      ].slice(-100);
+      const updated = await client.query(
+        `UPDATE work_items SET status = 'cancelled', completed_at = COALESCE(completed_at, now()),
+         lease_expires_at = NULL, events = $3::jsonb
+         WHERE account_id = $1 AND id = $2 RETURNING *`,
+        [accountId, id, JSON.stringify(events)],
+      );
+      // Keep claimed_by_node_id as a privacy-safe ownership tombstone. It lets
+      // only that node's heartbeat distinguish cancellation from a generic lost
+      // lease while the actual renewable lease above is always cleared.
+      await client.query("COMMIT");
+      return { run: mapAutomationRun(updated.rows[0]), previousStatus, transitioned: true };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined> {
