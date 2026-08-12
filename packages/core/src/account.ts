@@ -393,6 +393,8 @@ export interface GithubAppEntry {
   // the UI should prompt to (re)connect it on a node rather than say "connected".
   servedBy?: { id: string; name?: string; online: boolean; lastSeenAt?: string } | null;
   servingNodeSeenAt?: string;
+  /** App key is held by the encrypted hosted executor, not a persistent node. */
+  hosted?: boolean;
 }
 
 export interface GithubAppInfo extends GithubAppEntry {
@@ -660,6 +662,41 @@ export interface HostedProvisioningPatch {
   githubToken?: string;
   githubApp?: { appId: string; installationId: string; privateKeyPem: string } | null;
   providerTokens?: Record<string, string>;
+}
+
+export interface HostedGithubAppConnection {
+  ok: true;
+  appId: string;
+  installation: { id: string; account: string; accountType?: string };
+  webhookUrl: string;
+  webhookSecret: string;
+}
+
+/** Connect an existing GitHub App directly to hosted execution (no node). */
+export async function connectHostedGithubApp(
+  store: LocalStore,
+  input: { appId: string; privateKeyPem: string; installationId?: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<HostedGithubAppConnection> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-github-app/connect`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify(input),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `hosted GitHub App connection failed: ${res.status}`);
+  return data as HostedGithubAppConnection;
+}
+
+/** Repositories exposed by the hosted App installation, without a live node. */
+export async function fetchHostedGithubRepositories(
+  store: LocalStore,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Array<{ slug: string; description?: string; private?: boolean; defaultBranch?: string }>> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-github-repositories`, { headers: authHeaders(store) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `hosted repository request failed: ${res.status}`);
+  return Array.isArray(data?.repos) ? data.repos : [];
 }
 
 export async function validateHostedProviderCredential(
