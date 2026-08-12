@@ -60,8 +60,9 @@ import { ConfirmDialog } from "./AppDialog.js";
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
 // Trigger picker options shown under "+ Add Trigger". Schedule/webhook map onto
-// automation definition fields. GitHub/Linear are source triggers that open the
-// work-queue setup (same session runtime; connect lives next to the trigger).
+// automation definition fields. GitHub/Linear are source triggers whose event
+// filters are configured in the source editor; connection setup is only shown
+// when the selected source has not been connected yet.
 type TriggerPick =
   | { id: "daily"; label: string; hint: string; trigger: "schedule"; kind: "cron"; cron: string; nlText: string }
   | { id: "weekly"; label: string; hint: string; trigger: "schedule"; kind: "cron"; cron: string; nlText: string }
@@ -593,6 +594,36 @@ export function AutomationsView({
     setDraft(emptyDraft(defaultNodeId));
   }
 
+  function startFromSource(source: "github" | "linear") {
+    setDraft(null);
+
+    const existing = items.find((item) => item.trigger === source);
+    if (existing) {
+      setSourceEdit(existing);
+      return;
+    }
+
+    const disconnected = source === "github"
+      ? githubSourceStatus(sources.github).tone === "off"
+      : linearSourceStatus(sources.linear).tone === "off";
+    if (disconnected) {
+      openSetup(source === "github" ? "work-queue" : "linear");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    setSourceEdit({
+      id: "",
+      name: source === "github" ? "GitHub automation" : "Linear automation",
+      trigger: source,
+      enabled: true,
+      labels: ["bivy"],
+      schedule: { kind: "cron", expression: "0 9 * * *", timezone: "UTC" },
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
   async function edit(item: AccountAutomation) {
     setError("");
     setMenuId(null);
@@ -1050,10 +1081,7 @@ export function AutomationsView({
               setNotice({ tone: "ok", title: `Saved “${result.name}”` });
             }
           }}
-          onOpenWorkQueue={() => {
-            setDraft(null);
-            openSetup("work-queue");
-          }}
+          onSelectSource={startFromSource}
         />
       )}
 
@@ -1388,7 +1416,16 @@ function SourceAutomationEditor({
           patch.labels = workflows ?? [];
         }
       }
-      await updateAutomation(controller.local, item.id, patch);
+      if (item.id) {
+        await updateAutomation(controller.local, item.id, patch);
+      } else {
+        await createAutomation(controller.local, {
+          ...patch,
+          name: patch.name || item.name,
+          trigger,
+          enabled: patch.enabled ?? true,
+        });
+      }
       if (isGithub && triggerAccessDirty) {
         await controller.setGithubAppTriggerAccess(triggerAccess);
       }
@@ -1400,10 +1437,11 @@ function SourceAutomationEditor({
     }
   }
 
+  const action = item.id ? "Edit" : "Create";
   const title =
-    trigger === "github_ci" ? "Edit GitHub automation (CI)"
-      : trigger === "linear" ? "Edit Linear automation"
-        : "Edit GitHub automation";
+    trigger === "github_ci" ? `${action} GitHub automation (CI)`
+      : trigger === "linear" ? `${action} Linear automation`
+        : `${action} GitHub automation`;
 
   function toggleEvent<K extends keyof GithubEventToggles>(key: K) {
     setEvents((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -1630,13 +1668,13 @@ function AutomationEditor({
   initial,
   onCancel,
   onSaved,
-  onOpenWorkQueue,
+  onSelectSource,
 }: {
   state: AppState;
   initial: Draft;
   onCancel: () => void;
   onSaved: (result?: SaveResult) => void;
-  onOpenWorkQueue: () => void;
+  onSelectSource: (source: "github" | "linear") => void;
 }) {
   const [d, setD] = useState<Draft>(initial);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -1674,7 +1712,7 @@ function AutomationEditor({
   function applyTrigger(opt: TriggerPick) {
     if (opt.trigger === "source") {
       setPickerOpen(false);
-      onOpenWorkQueue();
+      onSelectSource(opt.source);
       return;
     }
     if (opt.trigger === "webhook") {
