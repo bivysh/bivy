@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 import { WebSocketServer, WebSocket } from "ws";
-import { listRuntimes, catalogRuntimes, agentInstallSpec, canonicalAgentId, invalidateCliProbeCache, pluginAgentConflictDiagnostics, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor, type UsageSnapshot } from "./runtime/index.js";
+import { listRuntimes, catalogRuntimes, agentInstallSpec, canonicalAgentId, invalidateCliProbeCache, pluginAgentConflictDiagnostics, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
@@ -43,8 +43,9 @@ import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } fr
 import { discoverGrokSessionForCwd } from "./runtime/grok-sessions.js";
 import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
-import type { BivySessionRecord, BivySessionSource, BivySessionStatus } from "./session/bivy-session.js";
-import { deriveSessionState, type SessionState, type SessionWorkspaceState } from "./session/session-state.js";
+import type { BivySessionRecord, BivySessionStatus } from "./session/bivy-session.js";
+import { deriveSessionState, type SessionState } from "./session/session-state.js";
+import type { SessionRecord, PromptOptions, StreamingBehavior, PromptImage } from "./session/record.js";
 import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
@@ -117,7 +118,7 @@ import { PairingStore } from "./device-registry.js";
 import { IntegrationManager, type SessionIdRef } from "./integrations/index.js";
 import { listInstalledPlugins } from "./plugins/store.js";
 import { historyDelta, type HistoryCursor } from "./history-sync.js";
-import { MetadataStore, type MetadataSession, type PrRef } from "./metadata.js";
+import { MetadataStore, type MetadataSession } from "./metadata.js";
 import { resolveResumeRef, resumeRefFor } from "./session-ref.js";
 import { buildForkBundle, materializeFork, type ForkBundle, type ForkRecord, type ForkPlan } from "./session/fork.js";
 import { captureDirtyPatch, applyDirtyPatch } from "./session/fork-dirty.js";
@@ -840,7 +841,10 @@ function startOAuthLoginSweeper(): void {
   oauthLoginSweepTimer = setInterval(() => sweepOauthLogins(), 60_000);
   oauthLoginSweepTimer.unref?.();
 }
-type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastProgressAt?: number; lastStructuralProgressAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; workspaceState?: SessionWorkspaceState; lastPrompt?: string; lastPromptOptions?: ReturnType<typeof promptOptionsFor>; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+// SessionRecord + its prompt helper types now live in ./session/record.ts (the
+// SessionEngine decomposition, step 2a) — imported at the top of this file.
+// Kept as a plain mutable data shape; server.ts still reads/writes fields in
+// place. See docs/internal/platform-modularization-plan.md.
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -980,8 +984,7 @@ async function setDefaultRuntime(id: string) {
   return rt;
 }
 
-type StreamingBehavior = "steer" | "followUp";
-type PromptImage = { type: "image"; data: string; mimeType: string };
+// StreamingBehavior + PromptImage moved to ./session/record.ts (step 2a).
 type PromptAttachment =
   | { kind: "image"; name?: unknown; size?: unknown; mimeType?: unknown; data?: unknown }
   | { kind: "file"; name?: unknown; size?: unknown; mimeType?: unknown; data?: unknown; text?: unknown; truncated?: unknown; omitted?: unknown };
@@ -990,7 +993,7 @@ function streamingBehaviorFrom(value: unknown): StreamingBehavior | undefined {
   return value === "steer" || value === "followUp" ? value : undefined;
 }
 
-function promptOptionsFor(record: SessionRecord, requested?: unknown, images?: PromptImage[]) {
+function promptOptionsFor(record: SessionRecord, requested?: unknown, images?: PromptImage[]): PromptOptions {
   const streamingBehavior = streamingBehaviorFrom(requested) ?? (record.session.isStreaming ? "steer" : undefined);
   return { ...(streamingBehavior ? { streamingBehavior } : {}), ...(images?.length ? { images } : {}) };
 }

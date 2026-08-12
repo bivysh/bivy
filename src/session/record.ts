@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 Petter André Sjulstad
+//
+// The live-session record — the in-memory shape the daemon tracks per open
+// session. Moved out of server.ts as the first step of the SessionEngine
+// decomposition (platform modularization Phase 2, step 2a; see
+// docs/internal/platform-modularization-plan.md). Kept deliberately as a plain
+// mutable data shape (Option 1) — the engine that will own the live-session Map
+// imports this type; fields are still read/written in place by server.ts today.
+import type { RuntimeSession, UsageSnapshot } from "../runtime/index.js";
+import type { SandboxTier } from "../harness/sandbox.js";
+import type { ApprovalMode } from "../guard.js";
+import type { Worktree } from "../worktree.js";
+import type { BivySessionSource } from "./bivy-session.js";
+import type { PrRef } from "../metadata.js";
+import type { SessionWorkspaceState } from "./session-state.js";
+import type { SessionRerouteController } from "../policy/session-reroute.js";
+
+/** How a follow-up prompt relates to the in-flight turn. */
+export type StreamingBehavior = "steer" | "followUp";
+
+/** An inline image attachment carried with a prompt. */
+export type PromptImage = { type: "image"; data: string; mimeType: string };
+
+/** Per-prompt options resolved for a turn (the shape `promptOptionsFor` returns). */
+export interface PromptOptions {
+  streamingBehavior?: StreamingBehavior;
+  images?: PromptImage[];
+}
+
+export type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastProgressAt?: number; lastStructuralProgressAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; workspaceState?: SessionWorkspaceState; lastPrompt?: string; lastPromptOptions?: PromptOptions; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
