@@ -537,14 +537,16 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .msg.streaming { position: relative; }
 .msg.streaming::after { content: "▍"; color: var(--accent); animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
-/* Pin the scroll container to the message width (max-width:100%, like the pre
-   rule) so a wide table scrolls horizontally inside it instead of overflowing
-   and getting clipped by .chat's overflow-x:hidden. The table itself takes its
-   natural (max-content) width — at least full width — and cells stay on one
-   line, so columns keep their shape and the wrapper scrolls when they don't fit. */
+/* Bound the table to the message width so cell text wraps within its column
+   instead of pushing the table wider than .chat (which is overflow-x:hidden and
+   would silently clip it). table-layout:fixed makes columns share the width
+   evenly rather than sizing to their longest word; overflow-wrap lets long,
+   unbroken tokens (URLs, code spans) break so they never force a scroll. The
+   wrapper keeps overflow-x:auto as a backstop for the rare table that still
+   can't fit (many narrow columns), but the common case now wraps. */
 .markdown-table-wrap { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
-.msg.assistant table { border-collapse: collapse; width: max-content; min-width: 100%; }
-.msg.assistant th, .msg.assistant td { border: 1px solid var(--line); padding: 4px 8px; white-space: nowrap; }
+.msg.assistant table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.msg.assistant th, .msg.assistant td { border: 1px solid var(--line); padding: 4px 8px; overflow-wrap: anywhere; word-break: break-word; vertical-align: top; }
 
 /* Wraps an assistant .msg so the per-message "Copy" affordance can sit below
    it without disturbing the .msg.assistant markdown rules above (which target
