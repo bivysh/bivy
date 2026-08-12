@@ -9,6 +9,10 @@ const surfaces = [
   "packages/web/src/components/GithubQueue.tsx",
   "packages/web/src/components/QueueRouting.tsx",
   "packages/web/src/components/Settings.tsx",
+  "packages/web/src/components/ConnectRunner.tsx",
+  "packages/web/src/components/Ephemeral.tsx",
+  "packages/web/src/components/NodeSwitcher.tsx",
+  "packages/web/src/components/WorkQueueSetupSheet.tsx",
 ];
 
 const source = surfaces.map((path) => readFileSync(path, "utf8")).join("\n");
@@ -29,6 +33,14 @@ test("primary PWA surfaces use the canonical product vocabulary", () => {
     ">Nodes<",
     'label: "Nodes"',
     ">Runner<",
+    "cloud runner",
+    "Use this runner",
+    "Waiting for a runner",
+    ">Ephemeral machines<",
+    "Needs node",
+    "Node offline",
+    "Finishing on the node",
+    "on node</code>",
   ];
   for (const fragment of forbidden) {
     assert.equal(source.includes(fragment), false, `legacy customer copy returned: ${fragment}`);

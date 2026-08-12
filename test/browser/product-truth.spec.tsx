@@ -69,7 +69,7 @@ test("opening the queue panel cannot trigger billable provisioning", async () =>
 
 test("interactive billable runners disclose cost and teardown before selection", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/Ephemeral.tsx", import.meta.url), "utf8");
-  expect(source).toContain('title="Use this billable runner?"');
+  expect(source).toContain('title="Use this billable machine profile?"');
   expect(source).toContain("ephemeralCostHint");
   expect(source).toContain("controller.pickDraftEphemeralRunner(pendingRunner)");
 });
