@@ -536,6 +536,10 @@ if (janitorServiceUrl && janitorProxySecret) {
 const reactAppDir = path.join(__dirname, "..", "public", "react");
 const reactIndexFile = path.join(reactAppDir, "index.html");
 const hasReactApp = fs.existsSync(reactIndexFile);
+// The app shell, read once at boot for deep-link fallbacks that serve it from
+// memory (no per-request file-system access). Deploys replace the process, so a
+// cached copy is always current.
+const reactIndexHtml = hasReactApp ? fs.readFileSync(reactIndexFile) : null;
 app.get("/", (_req, res) => {
   noStorePwaShell(res);
   if (hasReactApp) return res.sendFile(reactIndexFile);
@@ -558,14 +562,12 @@ if (hasReactApp) {
 // separate from the built bundle, which doesn't carry them.
 app.use(express.static(path.join(__dirname, "..", "public"), { index: false }));
 
-// SPA deep links: the client routes `/sessions/new`, `/sessions/:id`, and the
-// routable Run detail `/runs/:runId` (see packages/web/src/router.ts and
-// @bivy/core runRoutePath) in the browser, so a cold load or copied URL on those
-// paths must serve the app shell. Each regex requires a segment after its prefix,
-// so it can't shadow the `GET /sessions` JSON API (exact path) below, and the Run
-// JSON API lives under `/account/automation-runs/:id`, not `/runs`.
+// SPA deep links: the client routes `/sessions/new` and `/sessions/:id` in the
+// browser, so a cold load or copied URL on those paths must serve the app shell.
+// The regex requires a segment after `/sessions/`, so it can't shadow the
+// `GET /sessions` JSON API (exact path) below.
 if (hasReactApp) {
-  app.get(/^\/(?:sessions|runs)\/.+/, (_req, res) => {
+  app.get(/^\/sessions\/.+/, (_req, res) => {
     noStorePwaShell(res);
     res.sendFile(reactIndexFile);
   });
@@ -577,6 +579,15 @@ if (hasReactApp) {
   app.get(/^\/settings(?:\/.+)?$/, (_req, res) => {
     noStorePwaShell(res);
     res.sendFile(reactIndexFile);
+  });
+  // The routable Run detail screen (`/runs/:runId` — see packages/web/src/
+  // router.ts and @bivy/core runRoutePath) needs the same shell on a cold load
+  // or a Run URL copied to another device. Served from the boot-time in-memory
+  // copy so this fallback performs no per-request file-system access. The Run
+  // JSON API lives under `/account/automation-runs/:id`, so nothing is shadowed.
+  app.get(/^\/runs\/.+/, (_req, res) => {
+    noStorePwaShell(res);
+    res.type("html").send(reactIndexHtml);
   });
 }
 
