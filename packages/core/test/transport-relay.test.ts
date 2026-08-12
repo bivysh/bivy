@@ -362,3 +362,31 @@ describe("RelayTransport transient-failure quieting", () => {
     expect(errors.some((e) => /ticket request failed/i.test(e))).toBe(true);
   });
 });
+
+describe("RelayTransport solo (account-free) dial", () => {
+  it("dials /client with room+roomToken and never mints a ticket", async () => {
+    FakeWS.instances.length = 0;
+    const store = createLocalStore(mem(), mem());
+    store.cur = "node-solo";
+    store.relay = "wss://relay.self/";
+    store.setSolo("node-solo", { room: "room_deadbeef", roomToken: "z".repeat(43) });
+    let ticketFetches = 0;
+    const fetchImpl = (async (url: string) => {
+      if (String(url).includes("relay-ticket")) ticketFetches += 1;
+      return { ok: false, status: 404, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+    const transport = new RelayTransport({
+      store,
+      handlers: { onEvent: () => {}, onStatus: () => {}, onError: () => {} },
+      fetchImpl,
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      initialBackoffMs: 1,
+    });
+    await transport.connect();
+    await settle();
+    expect(ticketFetches).toBe(0);
+    const ws = FakeWS.instances.at(-1)!;
+    expect(ws.url).toBe("wss://relay.self/client?room=room_deadbeef&roomToken=" + "z".repeat(43));
+  });
+});
+

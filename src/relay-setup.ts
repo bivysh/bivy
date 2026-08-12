@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -158,7 +159,54 @@ async function githubDeviceLogin(controlPlaneUrl: string): Promise<string> {
   return pollDevice(controlPlaneUrl, start);
 }
 
+/**
+ * Generate account-free ("solo") relay credentials and write a control-plane-free
+ * relay.json: `{ url, room, roomToken }` (+ optional clientBaseUrl). No sign-in,
+ * no enrollment, no hosted service - the node authorizes onto a self-hosted relay
+ * (started with RELAY_ALLOW_ROOM_TOKENS=1) with the room id + bearer token, both
+ * of which travel to the phone only in the pairing QR (see `bivy link`). Both are
+ * high-entropy so the room id is unguessable and the token clears the relay's
+ * MIN_ROOM_TOKEN_LEN=22 floor.
+ */
+function generateSoloConfig(): { room: string; roomToken: string } {
+  return {
+    room: `room_${randomBytes(16).toString("hex")}`, // 32 hex chars, unguessable
+    roomToken: randomBytes(32).toString("base64url"), // 43 chars, >= 22 floor
+  };
+}
+
+async function runSolo() {
+  const repoRoot = path.resolve(__dirname, "..");
+  const appDir = process.env.BIVY_DATA_DIR ?? path.join(repoRoot, ".bivy");
+  const relayUrl = (arg("relay", process.env.BIVY_RELAY_URL) ?? "").replace(/\/$/, "");
+  if (!relayUrl) {
+    throw new Error("Solo setup needs a relay: pass --relay <wss url> (your self-hosted relay started with RELAY_ALLOW_ROOM_TOKENS=1).");
+  }
+  const clientBaseUrl = arg("client", process.env.BIVY_CLIENT_BASE_URL)?.replace(/\/$/, "");
+  const identity = NodeIdentity.load(appDir);
+  const { room, roomToken } = generateSoloConfig();
+  const config: { url: string; room: string; roomToken: string; clientBaseUrl?: string } = { url: relayUrl, room, roomToken };
+  if (clientBaseUrl) config.clientBaseUrl = clientBaseUrl;
+
+  const filePath = path.join(appDir, "relay.json");
+  fs.writeFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  fs.chmodSync(filePath, 0o600);
+
+  console.log(`Node:  ${identity.name} (${identity.nodeId})`);
+  console.log(`Relay: ${relayUrl}  (account-free / solo)`);
+  console.log(`\nGenerated solo relay credentials (kept only in ${filePath} and the pairing QR):`);
+  console.log(`  room:      ${room}`);
+  console.log(`  roomToken: ${roomToken}`);
+  console.log(`\n✓ Wrote ${filePath} (no control plane).`);
+  console.log('Restart the node (or POST /api/relay/reload), then run "bivy link" to pair a phone.');
+}
+
 async function main() {
+  // Account-free path: no sign-in, no enrollment, no hosted control plane.
+  if (process.argv.includes("--solo")) {
+    await runSolo();
+    return;
+  }
   const repoRoot = path.resolve(__dirname, "..");
   // Honor the same override as every other entry point (server.ts, native-pi.ts,
   // bivy-login.ts, secrets-cli.ts, …) so a global/packaged install writes

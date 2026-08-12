@@ -58,7 +58,7 @@ import { NodeIdentity } from "./identity.js";
 import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from "./auth.js";
-import { RelayConnector, loadRelayConfig, type ClientMessage } from "./remote/index.js";
+import { RelayConnector, loadRelayConfig, soloCredentials, type ClientMessage } from "./remote/index.js";
 import { readEphemeralTeardownConfig, shouldSelfTeardown, snapshotsDurableForTeardown, performSelfTeardown, type SnapshotFlushResult } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
@@ -8306,6 +8306,30 @@ app.post("/api/relay/link", async (_req, res, next) => {
   try {
     const config = loadRelayConfig(appDir);
     if (!config) return res.status(400).json({ error: "Relay not configured. Run: npm run relay:setup" });
+
+    // Account-free ("solo") link: relay.json carries a room id + bearer token and
+    // no control plane, so there is no link-grant to mint. Package the relay URL,
+    // this node's id/name/X25519 pub, a single-use pairing secret AND the room
+    // credentials the phone dials the relay with. The room/roomToken travel ONLY
+    // in this QR (out-of-band) — never to a hosted service; the relay stays blind
+    // and the room key is still obtained via the ECDH handshake over the relay.
+    const solo = soloCredentials(config);
+    if (solo) {
+      const payload = {
+        relay: config.url,
+        node: { id: identity.nodeId, name: identity.name, pub: pairingStore.nodePublicKeyB64() },
+        pairSecret: pairingStore.issuePairSecret(),
+        room: solo.room,
+        roomToken: solo.roomToken,
+      };
+      const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+      // In solo mode there is usually no hosted app origin; fall back to a bare
+      // fragment the phone's already-open PWA reads from its own location.hash.
+      const base = config.clientBaseUrl?.replace(/\/$/, "");
+      const url = base ? `${base}/#${encoded}` : `#${encoded}`;
+      return res.json({ ok: true, url });
+    }
+
     if (!config.controlPlaneUrl) return res.status(400).json({ error: "relay.json missing controlPlaneUrl" });
 
     const grantResponse = await fetch(`${config.controlPlaneUrl.replace(/\/$/, "")}/node/link-grant`, {

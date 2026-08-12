@@ -56,6 +56,21 @@ describe("consumeLinkPayload", () => {
     expect(store.pairSecrets().n1).toBe("SEC");
   });
 
+  it("captures account-free (solo) room creds and no session from a solo QR", () => {
+    const store = createLocalStore(mem(), mem());
+    const ok = consumeLinkPayload(
+      store,
+      encode({ relay: "wss://relay.self", node: { id: "n2", pub: "PUB2" }, pairSecret: "SEC2", room: "room_abc", roomToken: "a".repeat(43) }),
+    );
+    expect(ok).toBe(true);
+    expect(store.s).toBe(""); // no control-plane session in solo mode
+    expect(store.cur).toBe("n2");
+    expect(store.relay).toBe("wss://relay.self");
+    expect(store.nodePubs().n2).toBe("PUB2");
+    expect(store.pairSecrets().n2).toBe("SEC2");
+    expect(store.solo().n2).toEqual({ room: "room_abc", roomToken: "a".repeat(43) });
+  });
+
   it("makes the setup wizard's agent the first app draft choice", () => {
     const store = createLocalStore(mem(), mem());
     store.setLastChoice({ agentId: "pi" }); // stale choice from another node

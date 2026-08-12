@@ -35,6 +35,11 @@ export interface LocalStore {
   pairSecrets(): Dict;
   setPairSecret(id: string, secret: string): void;
   clearPairSecret(id: string): void;
+  /** Account-free ("solo") relay creds for a node: an unguessable room id + its
+   *  bearer token, learned from the pairing QR. Persisted (not sessionStorage):
+   *  unlike a single-use pairSecret, the token is presented on every relay dial. */
+  solo(): Record<string, { room: string; roomToken: string }>;
+  setSolo(id: string, creds: { room: string; roomToken: string }): void;
   device(): DeviceKeyRecord | null;
   setDevice(d: DeviceKeyRecord): void;
   /** Remove the legacy extractable device key (after migrating it to a
@@ -127,6 +132,15 @@ export function createLocalStore(storage: Storage, volatile?: Storage): LocalSto
         /* ignore */
       }
     },
+    solo() {
+      return jsonGet<Record<string, { room: string; roomToken: string }>>(storage, "bivy_solo", {});
+    },
+    setSolo(id, creds) {
+      if (!id || !creds?.room || !creds?.roomToken) return;
+      const all = this.solo();
+      all[id] = { room: creds.room, roomToken: creds.roomToken };
+      storage.setItem("bivy_solo", JSON.stringify(all));
+    },
     device() {
       return jsonGet<DeviceKeyRecord | null>(storage, "bivy_device", null);
     },
@@ -164,6 +178,7 @@ export function createLocalStore(storage: Storage, volatile?: Storage): LocalSto
         "bivy_keys",
         "bivy_nodepubs",
         "bivy_pairsecrets",
+        "bivy_solo",
         "bivy_device",
         "bivy_session_lists",
         "bivy_session_index",

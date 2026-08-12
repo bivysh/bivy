@@ -211,6 +211,10 @@ export class AppController {
   readonly store = new SessionStore();
   readonly local = createLocalStore(localStorage);
   readonly direct: boolean;
+  /** Account-free ("solo") mode: paired to a node over the relay via a room
+   *  token from the QR, with NO control plane. Not signed in (no `local.s`), so
+   *  every CP-coupled path stays off, yet the app shell renders and dials. */
+  readonly solo: boolean;
   private transport: Transport;
   /** A first prompt queued while a brand-new session is being created. `frame` is
    *  the exact `session.new` command we sent; it's re-fired verbatim after a
@@ -326,6 +330,9 @@ export class AppController {
     this.seedDraftDefaults();
     this.detectGithubAppReturn();
     this.direct = isDirectMode(this.local);
+    // Solo: not on the hosted CP (no session) but the QR left room-token creds
+    // for the selected node. Distinct from `direct` (loopback) and hosted.
+    this.solo = !this.direct && !this.local.s && Boolean(this.local.solo()[this.local.cur]);
     // The hosted client remembers this origin as its control plane.
     if (!this.direct && !this.local.cp) this.local.cp = location.origin;
     this.transport = this.buildTransport();
@@ -542,7 +549,7 @@ export class AppController {
 
   /** Hosted control plane, not signed in yet. */
   needsAuth(): boolean {
-    return !this.direct && !this.local.s;
+    return !this.direct && !this.solo && !this.local.s;
   }
 
   /** Signed in on the hosted control plane, but no node picked yet. */

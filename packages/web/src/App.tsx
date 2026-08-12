@@ -366,7 +366,7 @@ export function App() {
   // localStorage) so signing in swaps the sign-in screen for the app shell the
   // instant the token lands — no page reload needed. `direct` (local/loopback
   // mode) never gates on a control-plane session.
-  const needsAuth = !controller.direct && !state.signedIn;
+  const needsAuth = !controller.direct && !controller.solo && !state.signedIn;
   // Picking an ephemeral runner counts as having chosen where to run, even
   // before its machine exists — show the composer, not the onboarding screen.
   const needsNode = !controller.direct && state.signedIn && !state.currentNodeId && !state.draftEphemeralConfig;
@@ -534,7 +534,7 @@ export function App() {
             {/* Node stays below the title as a plain subtitle line — but it's
                 still the real switcher button underneath, so it's selectable
                 on a brand-new/draft session exactly as it is on a live one. */}
-            {!controller.direct && <NodeSwitcher />}
+            {!controller.direct && !controller.solo && <NodeSwitcher />}
           </div>
           <div className="topbar-actions">
             {state.activeSessionId && (

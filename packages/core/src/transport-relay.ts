@@ -140,6 +140,14 @@ export class RelayTransport implements Transport {
     );
   }
 
+  /** Account-free ("solo") relay creds for the current node, if this device was
+   *  paired via a solo QR. Present means: skip the control-plane ticket mint and
+   *  dial `/client?room=&roomToken=` directly. */
+  private soloCreds(): { room: string; roomToken: string } | null {
+    const rec = this.store.solo()[this.store.cur];
+    return rec && rec.room && rec.roomToken ? rec : null;
+  }
+
   private async mintClientTicket(): Promise<{ ticket: string; relayUrl: string | null }> {
     const res = await this.fetchImpl(`${this.cpBase()}/client/relay-ticket`, {
       method: "POST",
@@ -156,25 +164,33 @@ export class RelayTransport implements Transport {
     this.closedByUs = false;
     this.setStatus("connecting");
     this.curKey = await this.keyFor(this.store.cur);
-    let ticket: string;
-    let relayUrl: string | null;
-    try {
-      ({ ticket, relayUrl } = await this.mintClientTicket());
-    } catch (e) {
-      // Stay quiet on a transient failure — scheduleReconnect() will retry and
-      // the "Reconnecting…" banner already communicates the state. Only surface a
-      // toast once we've failed repeatedly, i.e. it's a real outage, not a blip.
-      this.connectFailures += 1;
-      if (this.connectFailures >= CONNECT_FAILURES_BEFORE_ALERT) {
-        this.handlers.onError?.((e as Error)?.message || "ticket mint failed");
+    // Account-free ("solo") admission has no control plane to mint a ticket
+    // against: authorize onto the relay with the room id + bearer token from the
+    // pairing QR. The pairing handshake (pair.hello over the relay) is unchanged.
+    const solo = this.soloCreds();
+    let ticket = "";
+    let relayUrl: string | null = null;
+    if (!solo) {
+      try {
+        ({ ticket, relayUrl } = await this.mintClientTicket());
+      } catch (e) {
+        // Stay quiet on a transient failure — scheduleReconnect() will retry and
+        // the "Reconnecting…" banner already communicates the state. Only surface a
+        // toast once we've failed repeatedly, i.e. it's a real outage, not a blip.
+        this.connectFailures += 1;
+        if (this.connectFailures >= CONNECT_FAILURES_BEFORE_ALERT) {
+          this.handlers.onError?.((e as Error)?.message || "ticket mint failed");
+        }
+        this.scheduleReconnect();
+        return;
       }
-      this.scheduleReconnect();
-      return;
     }
     this.pairSent = false;
     const targetNodeId = this.store.cur;
     const relayBase = (relayUrl || this.store.relay).replace(/\/$/, "");
-    const url = `${relayBase}/client?ticket=${encodeURIComponent(ticket)}&nodeId=${encodeURIComponent(targetNodeId)}`;
+    const url = solo
+      ? `${relayBase}/client?room=${encodeURIComponent(solo.room)}&roomToken=${encodeURIComponent(solo.roomToken)}`
+      : `${relayBase}/client?ticket=${encodeURIComponent(ticket)}&nodeId=${encodeURIComponent(targetNodeId)}`;
     const ws = new this.WS(url);
     this.ws = ws;
     const isCurrent = () => ws === this.ws && targetNodeId === this.store.cur;
