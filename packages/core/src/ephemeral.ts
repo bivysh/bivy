@@ -538,6 +538,10 @@ export interface EphemeralMachine {
   status: string; // starting | running | stopped | gone
   ip: string | null;
   createdAt: string;
+  /** Cold-start timestamps. `requestedAt` begins the user-visible budget;
+   * `providerAcceptedAt` means the create API returned, not that the agent is
+   * ready. Later milestones are server-stamped from the enrolled node. */
+  milestones?: EphemeralMilestones;
   ttlMinutes?: number;
   /** Destroy after the agent completes its turn; TTL is still the fallback. */
   teardownOnAgentFinish?: boolean;
@@ -559,6 +563,21 @@ export interface EphemeralMachine {
    *  or a general-purpose queue worker for the account's ephemeral default
    *  ("queue-default"). Display/bookkeeping only. */
   purpose?: "queue-item" | "queue-default";
+}
+
+export interface EphemeralMilestones {
+  requestedAt?: string;
+  providerAcceptedAt?: string;
+  nodeReadyAt?: string;
+  credentialsReadyAt?: string;
+  snapshotReadyAt?: string;
+  firstAgentEventAt?: string;
+}
+
+export function ephemeralColdStartMs(machine: Pick<EphemeralMachine, "milestones">): number | undefined {
+  const start = Date.parse(String(machine.milestones?.requestedAt || ""));
+  const ready = Date.parse(String(machine.milestones?.firstAgentEventAt || ""));
+  return Number.isFinite(start) && Number.isFinite(ready) && ready >= start ? ready - start : undefined;
 }
 
 export interface MachineStore {
@@ -2276,6 +2295,7 @@ export async function launchEphemeralMachine(
   opts: LaunchOpts,
   deps: { store: LocalStore; exec: ExecFn; keys: EphemeralKeyStore; machines: MachineStore; fetchImpl?: typeof fetch },
 ): Promise<EphemeralMachine> {
+  const requestedAt = nowIso();
   const fetchImpl = deps.fetchImpl ?? fetch;
   const adapter = ephemeralAdapter(opts.provider);
   if (!adapter) throw new Error(`Unknown provider: ${opts.provider}`);
@@ -2348,6 +2368,7 @@ export async function launchEphemeralMachine(
     bootstrap,
     config: { slug: ephemeralNodeLabel(nodeId), region: opts.region || adapter.defaultRegion, size, ttlMinutes: opts.ttlMinutes },
   });
+  machine.milestones = { ...(machine.milestones ?? {}), requestedAt, providerAcceptedAt: nowIso() };
   machine.nodeId = nodeId;
   // Persist the user-chosen name (from a saved setup) onto the machine record.
   // Without this the record kept the provider-generated name (e.g. Fly's

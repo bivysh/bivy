@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
-import { reapSettledHostedMachine, reconcileHostedMachines, reconcileAllHostedMachines, type DestroyFn } from "../src/ephemeral-provisioner.js";
+import { reapSettledHostedMachine, reconcileHostedMachines, reconcileAllHostedMachines, markHostedMachineMilestone, type DestroyFn } from "../src/ephemeral-provisioner.js";
 import type { MeshStore } from "../src/store.js";
 
 function fakeStore(machines: Array<Record<string, unknown>>, providerTokens: Record<string, string>) {
@@ -127,6 +127,17 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
   assert.equal(n, 0);
   assert.deepEqual(await store.getHostedMachines("acct"), [old]);
   assert.ok(audits.some((event) => event.action === "reconcile_failed"));
+}
+
+// Cold-start milestones are server-stamped and first-write-wins.
+{
+  const { store, audits } = fakeStore([{ id: "srv8", provider: "fly", nodeId: "eph-8", createdAt: iso(0), milestones: { requestedAt: "2026-08-12T00:00:00.000Z" } }], {});
+  assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "nodeReadyAt", "2026-08-12T00:00:02.000Z"), true);
+  assert.equal(await markHostedMachineMilestone(store, "acct", "eph-8", "nodeReadyAt", "2026-08-12T00:00:09.000Z"), true);
+  const machine = (await store.getHostedMachines("acct"))[0];
+  assert.deepEqual(machine.milestones, { requestedAt: "2026-08-12T00:00:00.000Z", nodeReadyAt: "2026-08-12T00:00:02.000Z" });
+  assert.ok(audits.some((event) => event.action === "machine_milestone" && event.detail === "nodeReadyAt elapsedMs=2000"));
+  assert.equal(await markHostedMachineMilestone(store, "acct", "eph-missing", "nodeReadyAt"), false);
 }
 
 console.log("ephemeral-teardown (control-plane): all tests passed");
