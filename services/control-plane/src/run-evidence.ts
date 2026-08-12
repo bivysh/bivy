@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import type { RunEvidenceEvent, RunEvidenceEventKind, RunCheck, RunEvidencePatch } from "./store.js";
+import type { RunEvidenceEvent, RunEvidenceEventKind, RunCheck, RunEvidencePatch, RunReceiptEvidence } from "./store.js";
 
 // Issue #153: turn an untrusted node report into the only shape the control
 // plane will ever persist for a run's evidence trail. Anything that looks like
@@ -97,6 +97,32 @@ export function sanitizeEvidencePatch(value: unknown): RunEvidencePatch {
       }];
     });
     if (events.length) patch.events = events;
+  }
+
+  if (input.receiptEvidence && typeof input.receiptEvidence === "object" && !Array.isArray(input.receiptEvidence)) {
+    const raw = input.receiptEvidence as Record<string, unknown>;
+    assertNoForbiddenKeys(raw);
+    const approvals = raw.approvals && typeof raw.approvals === "object" ? raw.approvals as Record<string, unknown> : {};
+    const changes = raw.fileChanges && typeof raw.fileChanges === "object" ? raw.fileChanges as Record<string, unknown> : {};
+    const health = raw.auditHealth && typeof raw.auditHealth === "object" ? raw.auditHealth as Record<string, unknown> : {};
+    assertNoForbiddenKeys(approvals);
+    assertNoForbiddenKeys(changes);
+    assertNoForbiddenKeys(health);
+    const count = (value: unknown) => typeof value === "number" ? Math.max(0, Math.min(1_000_000, Math.trunc(value))) : 0;
+    const auditState = (value: unknown): "healthy" | "missing" => value === "healthy" ? "healthy" : "missing";
+    const files = Array.isArray(changes.files) ? changes.files.slice(0, 100).flatMap((value): RunReceiptEvidence["fileChanges"]["files"] => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const file = value as Record<string, unknown>;
+      assertNoForbiddenKeys(file);
+      const path = text(file.path, 500);
+      if (!path) return [];
+      return [{ path, ...(text(file.op, 20) ? { op: text(file.op, 20) } : {}), added: count(file.added), removed: count(file.removed) }];
+    }) : [];
+    patch.receiptEvidence = {
+      approvals: { requests: count(approvals.requests), approved: count(approvals.approved), denied: count(approvals.denied) },
+      fileChanges: { files, added: count(changes.added), removed: count(changes.removed) },
+      auditHealth: { correlation: auditState(health.correlation), readableStorage: auditState(health.readableStorage), successfulWrites: auditState(health.successfulWrites) },
+    };
   }
 
   return patch;

@@ -17,6 +17,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   RunFetchError,
+  receiptV1FromRun,
+  receiptV1Json,
   runFromAutomationRun,
   type AccountAutomationRun,
   type Run,
@@ -245,6 +247,16 @@ function RunBody({
     && (isSessionResolvable ? isSessionResolvable(run.sessionId!) : false);
   const agentLine = [run.requested.runtimeId, run.requested.model].filter(Boolean).join(" · ");
   const startedAt = run.timestamps.startedAt ?? run.timestamps.claimedAt;
+  const receipt = useMemo(() => receiptV1FromRun(run, new Date().toISOString()), [run]);
+  const exportReceipt = useCallback(() => {
+    const blob = new Blob([`${receiptV1Json(receipt)}\n`], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${receipt.receiptId}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }, [receipt]);
 
   return (
     <>
@@ -326,8 +338,18 @@ function RunBody({
       <div className="run-sheet-rows run-details-receipt">
         <div className="run-sheet-row">
           <span className="k">Receipt</span>
-          <span className="v run-details-muted">Unavailable — a Receipt for this Run isn&apos;t ready yet.</span>
+          <span className="v">
+            {receipt.completeness === "complete" ? "Complete" : `Partial · ${receipt.missingEvidence.length} evidence gap${receipt.missingEvidence.length === 1 ? "" : "s"}`}
+            {" "}
+            <button type="button" className="link-btn" onClick={exportReceipt}>Export JSON</button>
+          </span>
         </div>
+        {receipt.observationLimitations.slice(0, 3).map((limitation) => (
+          <div className="run-sheet-row" key={limitation.code}>
+            <span className="k">Limitation</span>
+            <span className="v run-details-muted">{limitation.message}</span>
+          </div>
+        ))}
       </div>
 
       {actionError && <div className="run-sheet-failure" role="alert">{actionError}</div>}

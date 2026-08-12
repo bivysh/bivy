@@ -46,10 +46,11 @@ test("the Run details screen handles every explicit state and never overclaims a
   expect(detail).toContain("await refresh({ keepPrevious: true })");
   // The canonical Run projection backs the screen — not a second projection.
   expect(detail).toContain("runFromAutomationRun(record");
-  // Receipt v1 is not correlated yet: the screen shows it as unavailable and
-  // must never call this a Receipt.
+  // Receipt v1 is honest about incomplete correlation and exports only the
+  // bounded/sanitized projection.
   expect(detail).toContain(">Receipt<");
-  expect(detail).toContain("Unavailable — a Receipt for this Run isn");
+  expect(detail).toContain('receipt.completeness === "complete" ? "Complete" : `Partial');
+  expect(detail).toContain("receiptV1Json(receipt)");
 });
 
 test("Open Session appears only when the correlated Session is resolvable", async () => {
