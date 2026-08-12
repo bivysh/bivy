@@ -530,6 +530,36 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal((await store.getAutomationRun(acct.id, raced.id))?.status, "cancelled");
   });
 
+  await test("automation runs: retry is one durable Run with fenced attempts", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-retry@example.com");
+    const { node } = await store.enrollNode(acct.id, "retry-node", "Retry node");
+    const run = await store.enqueueAutomationRun(acct.id, { source: "manual", title: "Retry me", maxAttempts: 3 });
+    assert.ok(await store.claimWorkItem(acct.id, node.id, run.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "running", undefined, node.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "failed", { failure: "runtime failed", sessionId: "old-session" }, node.id));
+    const retried = await store.retryAutomationRun(acct.id, run.id);
+    assert.equal(retried?.transitioned, true);
+    assert.equal(retried?.run.id, run.id, "retry preserves the customer-visible Run id");
+    assert.equal(retried?.run.attempt, 2);
+    assert.equal(retried?.run.status, "pending");
+    assert.equal(retried?.run.claimedByNodeId, undefined);
+    assert.equal(retried?.run.output, undefined);
+    assert.equal(retried?.run.checks?.length, 0);
+    assert.equal(retried?.run.events?.at(-1)?.kind, "retry");
+
+    assert.ok(await store.claimWorkItem(acct.id, node.id, run.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "running", undefined, node.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "failed", { failure: "failed again" }, node.id));
+    assert.equal((await store.retryAutomationRun(acct.id, run.id))?.run.attempt, 3);
+    assert.ok(await store.claimWorkItem(acct.id, node.id, run.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "running", undefined, node.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, run.id, "failed", { failure: "last failure" }, node.id));
+    const exhausted = await store.retryAutomationRun(acct.id, run.id);
+    assert.equal(exhausted?.transitioned, false);
+    assert.equal(exhausted?.reason, "attempt_limit");
+    assert.equal(exhausted?.run.status, "failed");
+  });
+
   await test("automation definitions: webhook trigger fields and event context round-trip", async (store) => {
     const acct = await store.findOrCreateAccount("contract-webhook-def@example.com");
     const def = await store.createAutomationDefinition(acct.id, {

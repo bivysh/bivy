@@ -83,4 +83,20 @@ test("every Run surface links to the exact Run route, preserving the Run id", as
   expect(pill).toContain("onClick={() => { setOpen(false); onOpenRun(evidence.id); }}");
   expect(app).toContain("openRun(runId)");
   expect(app).toContain("load={(id) => fetchAutomationRun(controller.local, id)}");
+  expect(app).toContain("retryAutomationRun(controller.local, id)");
+  expect(app).toContain("refreshAutomationRuns(); refreshGithubQueue();");
+});
+
+test("Retry Run is a durable action and never an optimistic status change", async () => {
+  const [detail, account, cp] = await Promise.all([
+    read("../../packages/web/src/components/RunDetails.tsx"),
+    read("../../packages/core/src/account.ts"),
+    read("../../services/control-plane/src/index.ts"),
+  ]);
+  expect(detail).toContain('run.actions.some((a) => a.kind === "retry")');
+  expect(detail).toContain('"Retry Run"');
+  expect(detail).toContain("await onRetry(runId)");
+  expect(detail).toContain("await refresh({ keepPrevious: true })");
+  expect(account).toContain("/retry");
+  expect(cp).toContain('app.post("/account/automation-runs/:id/retry"');
 });

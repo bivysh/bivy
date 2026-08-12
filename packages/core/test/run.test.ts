@@ -114,6 +114,7 @@ describe("canonical Run projection", () => {
       expect(runFromQueueItem(base("needs_attention")).actions.some((a) => a.kind === "retry")).toBe(false); // still cancellable, not terminal
       expect(runFromQueueItem(base("cancelled")).actions.some((a) => a.kind === "retry")).toBe(false);
       expect(runFromQueueItem(base("succeeded", { output: { prUrl: "https://example.test/pr/1" } })).actions.some((a) => a.kind === "retry")).toBe(false);
+      expect(runFromQueueItem(base("failed", { attempt: 2, maxAttempts: 2, output: { failure: "runtime exited" } })).actions.some((a) => a.kind === "retry")).toBe(false);
     });
   });
 });

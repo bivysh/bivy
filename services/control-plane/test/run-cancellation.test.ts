@@ -124,9 +124,27 @@ try {
   assert.equal(conflict.status, 409);
   assert.equal(conflict.body.status, "succeeded");
 
+  assert.equal((await request(port, "POST", `/account/automation-runs/${finished.body.id}/retry`)).status, 401);
+  assert.equal((await request(port, "POST", `/account/automation-runs/${finished.body.id}/retry`, otherToken)).status, 404);
+  const retried = await request(port, "POST", `/account/automation-runs/${finished.body.id}/retry`, token);
+  assert.equal(retried.status, 200);
+  assert.equal(retried.body.run.id, finished.body.id);
+  assert.equal(retried.body.run.status, "pending");
+  assert.equal(retried.body.run.attempt, 2);
+  assert.equal(retried.body.run.events.at(-1).kind, "retry");
+
+  const successful = await request(port, "POST", "/account/automation-runs", token, { title: "Successful artifact" });
+  assert.equal((await request(port, "POST", `/node/work/${successful.body.id}/claim`, nodeToken)).status, 200);
+  assert.equal((await request(port, "POST", `/node/work/${successful.body.id}/running`, nodeToken)).status, 200);
+  assert.equal((await request(port, "POST", `/node/work/${successful.body.id}/evidence`, nodeToken, { output: { branch: "bivy/success" } })).status, 200);
+  assert.equal((await request(port, "POST", `/node/work/${successful.body.id}/complete`, nodeToken)).status, 200);
+  const noRetry = await request(port, "POST", `/account/automation-runs/${successful.body.id}/retry`, token);
+  assert.equal(noRetry.status, 409);
+  assert.equal(noRetry.body.reason, "not_retryable");
+
   const metrics = await (await fetch(`http://localhost:${port}/metrics`)).text();
   assert.match(metrics, /bivy_run_lifecycle_results_total\{outcome="cancelled"\} 1(?:\n|$)/, "only the durable cancellation transition is counted");
-  console.log("✓ authenticated run cancellation API, owner wake, heartbeat, conflicts, and metric");
+  console.log("✓ authenticated Run cancel/retry APIs, owner wake, fencing, conflicts, and metric");
 } finally {
   proc?.kill("SIGTERM");
   if (relay) await new Promise<void>((resolve) => relay!.close(() => resolve()));

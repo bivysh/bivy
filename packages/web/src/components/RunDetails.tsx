@@ -82,6 +82,7 @@ export function RunDetails({
   runId,
   load,
   onCancel,
+  onRetry,
   onClose,
   onOpenSession,
   resolveMachineName,
@@ -94,6 +95,8 @@ export function RunDetails({
   load: (id: string) => Promise<AccountAutomationRun | null>;
   /** Cancel the Run, then this screen refetches the durable record. */
   onCancel?: (id: string) => Promise<void>;
+  /** Start another durable attempt, then refetch instead of inventing state. */
+  onRetry?: (id: string) => Promise<void>;
   onClose: () => void;
   /** Navigate to the Run's correlated Session — only wired when resolvable. */
   onOpenSession?: (sessionId: string) => void;
@@ -164,6 +167,19 @@ export function RunDetails({
       setBusy(false);
     }
   }, [onCancel, runId, refresh]);
+  const retry = useCallback(async () => {
+    if (!onRetry) return;
+    setBusy(true);
+    setActionError("");
+    try {
+      await onRetry(runId);
+      await refresh({ keepPrevious: true });
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not retry this Run.");
+    } finally {
+      setBusy(false);
+    }
+  }, [onRetry, runId, refresh]);
 
   return (
     <div className="automations-view run-details" role="dialog" aria-modal="true" aria-label="Run details">
@@ -213,6 +229,7 @@ export function RunDetails({
             busy={busy}
             actionError={actionError}
             onCancel={onCancel ? cancel : undefined}
+            onRetry={onRetry ? retry : undefined}
             onRefresh={() => refresh()}
             onOpenSession={onOpenSession}
             isSessionResolvable={isSessionResolvable}
@@ -229,6 +246,7 @@ function RunBody({
   busy,
   actionError,
   onCancel,
+  onRetry,
   onRefresh,
   onOpenSession,
   isSessionResolvable,
@@ -238,11 +256,13 @@ function RunBody({
   busy: boolean;
   actionError: string;
   onCancel?: () => void;
+  onRetry?: () => void;
   onRefresh: () => void;
   onOpenSession?: (sessionId: string) => void;
   isSessionResolvable?: (sessionId: string) => boolean;
 }) {
   const canCancel = Boolean(onCancel) && run.actions.some((a) => a.kind === "cancel");
+  const canRetry = Boolean(onRetry) && run.actions.some((a) => a.kind === "retry");
   const sessionOpenable = Boolean(run.sessionId) && Boolean(onOpenSession)
     && (isSessionResolvable ? isSessionResolvable(run.sessionId!) : false);
   const agentLine = [run.requested.runtimeId, run.requested.model].filter(Boolean).join(" · ");
@@ -354,11 +374,18 @@ function RunBody({
 
       {actionError && <div className="run-sheet-failure" role="alert">{actionError}</div>}
 
-      {canCancel && (
+      {(canCancel || canRetry) && (
         <div className="run-sheet-recovery" role="group" aria-label="Run actions">
-          <button type="button" className="btn small recover-cancel" disabled={busy} onClick={onCancel}>
-            {busy ? "Cancelling…" : "Cancel Run"}
-          </button>
+          {canRetry && (
+            <button type="button" className="btn small primary recover-retry" disabled={busy} onClick={onRetry}>
+              {busy ? "Retrying…" : "Retry Run"}
+            </button>
+          )}
+          {canCancel && (
+            <button type="button" className="btn small recover-cancel" disabled={busy} onClick={onCancel}>
+              {busy ? "Cancelling…" : "Cancel Run"}
+            </button>
+          )}
         </div>
       )}
     </>
