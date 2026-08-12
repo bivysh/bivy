@@ -2843,6 +2843,45 @@ app.get("/account/hosted-audit", asyncHandler(async (req, res) => {
   res.json(await store.listHostedAudit(client.accountId, 50));
 }));
 
+// Redacted inventory for unattended runners. Provider credentials and escrowed
+// room keys live in separate stores and are never returned here; keep the
+// allowlist explicit so future internal bookkeeping fields do not leak by
+// accident. This endpoint is also the observable contract used by live smoke
+// tests to prove that teardown left no paid resource tracked.
+app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const machines = await store.getHostedMachines(client.accountId);
+  res.json(machines.map((m) => ({
+    id: typeof m.id === "string" ? m.id : "",
+    nodeId: typeof m.nodeId === "string" ? m.nodeId : undefined,
+    name: typeof m.name === "string" ? m.name : undefined,
+    provider: typeof m.provider === "string" ? m.provider : "",
+    region: typeof m.region === "string" ? m.region : undefined,
+    status: typeof m.status === "string" ? m.status : undefined,
+    createdAt: typeof m.createdAt === "string" ? m.createdAt : "",
+    ttlMinutes: typeof m.ttlMinutes === "number" ? m.ttlMinutes : undefined,
+    setupId: typeof m.setupId === "string" ? m.setupId : undefined,
+    purpose: typeof m.purpose === "string" ? m.purpose : undefined,
+    milestones: m.milestones && typeof m.milestones === "object" ? m.milestones : undefined,
+  })));
+}));
+
+// Manual cost kill switch for one tracked hosted runner. `reap` retains the
+// record when provider deletion fails; verify absence afterwards so the API
+// never reports success for a machine that may still be billing.
+app.delete("/account/hosted-machines/:nodeId", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const nodeId = String(req.params.nodeId || "").trim();
+  if (!nodeId) return res.status(400).json({ error: "nodeId is required" });
+  const existed = await reapSettledHostedMachine(store, client.accountId, nodeId, provisionEnv());
+  if (!existed) return res.status(404).json({ error: "Hosted machine not found" });
+  const retained = (await store.getHostedMachines(client.accountId)).some((m) => m.nodeId === nodeId);
+  if (retained) return res.status(502).json({ error: "Provider teardown failed; machine remains tracked for retry" });
+  res.json({ ok: true, nodeId });
+}));
+
 // Re-seal this account's hosted credentials under the current primary key
 // (key rotation): a decrypt-with-old-kid + encrypt-with-primary round-trip.
 app.post("/account/hosted-provisioning/rotate", asyncHandler(async (req, res) => {

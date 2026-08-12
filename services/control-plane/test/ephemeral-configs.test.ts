@@ -171,6 +171,14 @@ async function main() {
   expect(Array.isArray(auditRows.json) && auditRows.json.some((e: { action: string }) => e.action === "credential_updated"), "audit records credential_updated");
   expect(!/ghp_secret_value|fly_secret_value/.test(JSON.stringify(auditRows.json)), "audit never contains secrets");
 
+  // Hosted machine inventory is authenticated, empty initially, and a manual
+  // teardown of an unknown node is an explicit 404 (never a false success).
+  expect((await req(port, "GET", "/account/hosted-machines", undefined)).status === 401, "hosted machine inventory requires authentication");
+  const machines0 = await req(port, "GET", "/account/hosted-machines", undefined, token);
+  expect(machines0.status === 200 && Array.isArray(machines0.json) && machines0.json.length === 0, "fresh hosted machine inventory is empty");
+  const missingMachine = await req(port, "DELETE", "/account/hosted-machines/eph-missing", undefined, token);
+  expect(missingMachine.status === 404, `manual teardown of an unknown hosted machine is 404 (got ${missingMachine.status})`);
+
   // Mint-on-demand endpoint: node-authenticated; 404 while no GitHub App is set.
   const enrollTok = (await req(port, "POST", "/nodes/enroll", { nodeId: "eph-mint-t", name: "mint-t" }, token)).json?.enrollmentToken;
   expect(Boolean(enrollTok), "node enrolled for the mint test");
