@@ -5,6 +5,7 @@ import path from "node:path";
 import { WebSocket } from "ws";
 import { seal, sealFrame, openFrame, ReplayGuard } from "../e2e.js";
 import { frameMessages, FrameReassembler } from "../relay-chunk.js";
+import { soloCredentials, buildDialUrl } from "./solo.js";
 import type { PairingStore, RotateDelivery } from "../device-registry.js";
 
 /**
@@ -26,8 +27,16 @@ import type { PairingStore, RotateDelivery } from "../device-registry.js";
 
 export interface RelayConfig {
   url: string;
-  enrollmentToken: string;
+  // Present for the hosted (control-plane) admission path. Absent in solo mode,
+  // where `room`+`roomToken` authorize the relay connection instead.
+  enrollmentToken?: string;
   controlPlaneUrl?: string;
+  // Account-free ("solo") admission: an unguessable room id + bearer token,
+  // presented to a relay started with RELAY_ALLOW_ROOM_TOKENS=1 in place of a
+  // control-plane ticket. Both are carried out-of-band in the pairing QR. See
+  // ./solo.ts and services/relay/src/index.ts.
+  room?: string;
+  roomToken?: string;
   // Base http(s) URL where the remote web client is hosted (the page a phone
   // opens after scanning the linking QR). Defaults to the control plane.
   clientBaseUrl?: string;
@@ -48,7 +57,15 @@ function isFatalRelayError(message: string) {
 export function loadRelayConfig(appDir: string): RelayConfig | null {
   const envUrl = process.env.BIVY_RELAY_URL;
   const filePath = path.join(appDir, "relay.json");
-  let raw: { url?: string; enrollmentToken?: string; controlPlaneUrl?: string; clientBaseUrl?: string; e2eKey?: string } = {};
+  let raw: {
+    url?: string;
+    enrollmentToken?: string;
+    controlPlaneUrl?: string;
+    clientBaseUrl?: string;
+    e2eKey?: string;
+    room?: string;
+    roomToken?: string;
+  } = {};
   if (fs.existsSync(filePath)) {
     try {
       raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -58,11 +75,17 @@ export function loadRelayConfig(appDir: string): RelayConfig | null {
   }
   const url = envUrl ?? raw.url;
   const enrollmentToken = process.env.BIVY_RELAY_TOKEN ?? raw.enrollmentToken;
-  if (!url || !enrollmentToken) return null;
+  const solo = soloCredentials({
+    room: process.env.BIVY_RELAY_ROOM ?? raw.room,
+    roomToken: process.env.BIVY_RELAY_ROOM_TOKEN ?? raw.roomToken,
+  });
+  // A usable config needs a relay url plus SOME way to authorize onto it:
+  // either a hosted enrollment token or a complete solo credential.
+  if (!url || (!enrollmentToken && !solo)) return null;
   const controlPlaneUrl = process.env.BIVY_CONTROL_PLANE_URL ?? raw.controlPlaneUrl;
   const clientBaseUrl = process.env.BIVY_CLIENT_BASE_URL ?? raw.clientBaseUrl ?? controlPlaneUrl;
   const e2eKey = process.env.BIVY_ROOM_KEY ?? raw.e2eKey;
-  return { url, enrollmentToken, controlPlaneUrl, clientBaseUrl, e2eKey };
+  return { url, enrollmentToken, controlPlaneUrl, clientBaseUrl, e2eKey, room: solo?.room, roomToken: solo?.roomToken };
 }
 
 export interface RelayConnectorOptions {
@@ -322,22 +345,29 @@ export class RelayConnector {
   }
 
   private async connect() {
-    let ticket: string;
+    // Solo (account-free) mode: no control plane to mint a ticket against — the
+    // node authorizes onto the relay with its room id + bearer token directly.
+    const solo = soloCredentials({ room: this.config.room, roomToken: this.config.roomToken });
+
+    let ticket: string | undefined;
     let relayUrl: string | undefined;
-    try {
-      ({ ticket, relayUrl } = await this.mintTicket());
-    } catch (error) {
-      this.lastErrorMessage = `ticket mint failed: ${(error as Error).message}`;
-      console.warn("[relay] could not mint relay ticket:", (error as Error).message);
-      this.scheduleReconnect();
-      return;
+    if (!solo) {
+      try {
+        ({ ticket, relayUrl } = await this.mintTicket());
+      } catch (error) {
+        this.lastErrorMessage = `ticket mint failed: ${(error as Error).message}`;
+        console.warn("[relay] could not mint relay ticket:", (error as Error).message);
+        this.scheduleReconnect();
+        return;
+      }
     }
     if (this.closed) return;
 
     // Connect to the shard the control plane assigned this node (docs/scaling.md),
     // falling back to the statically configured relay for older control planes.
+    // Solo mode has no shard assignment, so it always uses the configured relay.
     const relayBase = (relayUrl ?? this.config.url).replace(/\/$/, "");
-    const target = `${relayBase}/node?ticket=${encodeURIComponent(ticket)}`;
+    const target = buildDialUrl(relayBase, "node", solo ?? { ticket: ticket! });
     const ws = new WebSocket(target);
     this.ws = ws;
 
