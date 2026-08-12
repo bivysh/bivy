@@ -214,6 +214,135 @@ test("poller: runs up to the concurrency cap in parallel, not one at a time", as
   }
 });
 
+test("poller: relay poke cancellation aborts active work without completing or failing", async () => {
+  const cfg: ControlPlaneTaskConfig = { controlPlaneUrl: "https://cp", enrollmentToken: "tok", labels: ["bivy"], pollMs: 60_000 };
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  let cancelHeartbeat = false;
+  globalThis.fetch = (async (url: string, init?: { method?: string }) => {
+    const path = new URL(url).pathname;
+    calls.push(`${init?.method ?? "GET"} ${path}`);
+    if (path.endsWith("/heartbeat") && cancelHeartbeat) {
+      return { ok: false, status: 409, json: async () => ({ reason: "cancelled" }) } as Response;
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+  }) as typeof fetch;
+
+  let started = false;
+  let aborted = false;
+  const poller = new ControlPlaneTaskPoller(cfg, async (_item, _report, signal) => {
+    started = true;
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        aborted = true;
+        reject(signal.reason);
+      }, { once: true });
+    });
+  });
+
+  try {
+    const running = (poller as unknown as { runOne(i: WorkItem): Promise<void> }).runOne({ id: "cancel-poke", label: "bivy", source: "slack", status: "pending", title: "cancel me" });
+    await waitFor(() => started);
+    cancelHeartbeat = true;
+    poller.poke("cancel-poke");
+    await running;
+  } finally {
+    poller.stop();
+    globalThis.fetch = original;
+  }
+
+  assert.equal(aborted, true, "the third-argument AbortSignal should be aborted");
+  assert.equal(poller.inFlightCount(), 0, "the cancelled Run should release its in-flight slot");
+  assert.ok(!calls.some((call) => call.endsWith("/complete")), "cancelled work must not complete");
+  assert.ok(!calls.some((call) => call.endsWith("/fail")), "an abort must not be classified as failure");
+});
+
+test("poller: lost lease aborts active work without policy retry or a terminal transition", async () => {
+  const cfg: ControlPlaneTaskConfig = { controlPlaneUrl: "https://cp", enrollmentToken: "tok", labels: ["bivy"], pollMs: 60_000 };
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  let loseLease = false;
+  globalThis.fetch = (async (url: string, init?: { method?: string }) => {
+    const path = new URL(url).pathname;
+    calls.push(`${init?.method ?? "GET"} ${path}`);
+    if (path.endsWith("/heartbeat") && loseLease) {
+      return { ok: false, status: 409, json: async () => ({ error: "not owned" }) } as Response;
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+  }) as typeof fetch;
+
+  let attempts = 0;
+  let decisions = 0;
+  const poller = new ControlPlaneTaskPoller(cfg, async (_item, _report, signal) => {
+    attempts += 1;
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  }, undefined, {
+    policy: {
+      decide: () => {
+        decisions += 1;
+        return { action: "retry", condition: "transient", summary: "retry", delayMs: 0 };
+      },
+    },
+  });
+
+  try {
+    const running = (poller as unknown as { runOne(i: WorkItem): Promise<void> }).runOne({ id: "lost-lease", label: "bivy", source: "slack", status: "pending", title: "lose me" });
+    await waitFor(() => attempts === 1);
+    loseLease = true;
+    poller.poke("lost-lease");
+    await running;
+  } finally {
+    poller.stop();
+    globalThis.fetch = original;
+  }
+
+  assert.equal(attempts, 1, "lost ownership must not start another attempt");
+  assert.equal(decisions, 0, "lease loss must bypass failure policy classification");
+  assert.ok(!calls.some((call) => call.endsWith("/complete") || call.endsWith("/fail")), "lost work has no node terminal transition");
+});
+
+test("poller: periodic heartbeat catches cancellation and aborts active work", async () => {
+  const cfg: ControlPlaneTaskConfig = { controlPlaneUrl: "https://cp", enrollmentToken: "tok", labels: ["bivy"], pollMs: 60_000 };
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: { method?: string }) => {
+    const path = new URL(url).pathname;
+    calls.push(`${init?.method ?? "GET"} ${path}`);
+    if (path.endsWith("/heartbeat")) {
+      return { ok: false, status: 409, json: async () => ({ reason: "cancelled" }) } as Response;
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+  }) as typeof fetch;
+
+  let aborted = false;
+  const poller = new ControlPlaneTaskPoller(cfg, async (_item, _report, signal) => {
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        aborted = true;
+        reject(signal.reason);
+      }, { once: true });
+    });
+  }, undefined, { leaseHeartbeatMs: 5 });
+
+  try {
+    const running = (poller as unknown as { runOne(i: WorkItem): Promise<void> }).runOne({ id: "cancel-heartbeat", label: "bivy", source: "slack", status: "pending", title: "cancel me too" });
+    // Keep a referenced test timer alive; production heartbeat timers are
+    // deliberately unref'd so they never prevent clean process shutdown.
+    await waitFor(() => aborted);
+    await running;
+  } finally {
+    poller.stop();
+    globalThis.fetch = original;
+  }
+
+  assert.equal(aborted, true);
+  assert.equal(poller.inFlightCount(), 0);
+  assert.ok(calls.some((call) => call.endsWith("/heartbeat")), "periodic lease renewal should observe cancellation");
+  assert.ok(!calls.some((call) => call.endsWith("/complete") || call.endsWith("/fail")), "cancelled work has no node terminal transition");
+});
+
 test("A4: a failed work transition is logged, not swallowed", async () => {
   const cfg: ControlPlaneTaskConfig = { controlPlaneUrl: "https://cp", enrollmentToken: "t", labels: ["bivy"], pollMs: 60_000 };
   const warnings: string[] = [];
