@@ -141,8 +141,15 @@ or PR → Receipt.
   and explain any fidelity boundary.
 - [ ] Ensure every accepted Run reaches exactly one explicit outcome from the
   product contract; preserve ambiguous completion as Needs review.
-- [ ] Complete cancellation: pending removal, active abort, evidence event,
-  lease release, external-effect safety, and teardown eligibility.
+- [x] Complete cancellation: pending removal, active abort, evidence event,
+  lease release, external-effect safety, and teardown eligibility. **Implemented
+  2026-08-12:** account-scoped cancellation now atomically terminates pending,
+  claimed, running, and attention Runs; clears renewable leases; retains only a
+  scoped owner tombstone for immediate cancellation acknowledgement; wakes and
+  aborts the active Machine runtime; suppresses later retry/fail/complete work;
+  and exposes confirmed cancellation actions backed by refreshed durable state.
+  Already-started third-party effects cannot be rolled back, so existing
+  idempotent branch/PR/comment boundaries remain required.
 - [ ] Specify retry/reclaim semantics and prove PR/push/comment effects are idempotent.
 - [ ] Give every failed outcome a working next action (fix, retry, fork, review,
   re-auth, or cancel as applicable).
