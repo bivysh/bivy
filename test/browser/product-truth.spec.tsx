@@ -47,12 +47,13 @@ test("automations is the single hub for connections, Runs and rulesets", async (
   expect(source).toContain("RulesetsPanel");
 });
 
-test("connected source triggers open their event editor instead of connection setup", async () => {
+test("GitHub trigger creation stays in one complete automation editor", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/AutomationsView.tsx", import.meta.url), "utf8");
-  expect(source).toContain("onSelectSource(opt.source)");
-  expect(source).toContain('githubSourceStatus(sources.github).tone === "off"');
-  expect(source).toContain("setSourceEdit({");
-  expect(source).toContain('item.id ? "Edit" : "Create"');
+  expect(source).toContain("onSelectSource(opt.source, d)");
+  expect(source).toContain('items.find((item) => item.trigger === source)');
+  expect(source).toContain('missing.push("a GitHub event")');
+  expect(source).toContain('templateCiphertext: `${TEMPLATE_PREFIX}:${d.nodeId}:${encrypted}`');
+  expect(source).toContain('on: buildGithubOn(d.githubEvents, labels, workflows)');
 });
 
 test("provider key save awaits an authoritative acknowledgement", async () => {
