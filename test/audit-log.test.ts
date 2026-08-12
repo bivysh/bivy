@@ -60,3 +60,32 @@ test("record never throws when the dir is unwritable (best-effort)", () => {
   const log = createAuditLog(path.join(blocker, "nope"));
   assert.doesNotThrow(() => log.record({ kind: "tool.call", session: "s", decision: "allowed" }));
 });
+
+test("net.attempt and approval events round-trip their metadata", () => {
+  const dir = tmpDir();
+  const log = createAuditLog(dir);
+  log.record({ kind: "net.attempt", session: "s1", agent: "pi", host: "api.example.com", port: 443, decision: "allowed" });
+  log.record({ kind: "net.attempt", session: "s1", host: "evil.test", port: 80, decision: "blocked", reason: "not on allowlist" });
+  log.record({ kind: "approval.request", session: "s1", agent: "pi", tool: "bash", requestId: "r1" });
+  log.record({ kind: "approval.decision", session: "s1", agent: "pi", tool: "bash", requestId: "r1", approved: true });
+
+  const net = readAuditEvents(log.file, { kind: "net.attempt" });
+  assert.equal(net.length, 2);
+  assert.equal(net[0].host, "api.example.com");
+  assert.equal(net[0].port, 443);
+  assert.equal(net[0].decision, "allowed");
+  assert.equal(net[0].agent, "pi");
+  assert.equal(net[1].decision, "blocked");
+  assert.equal(net[1].reason, "not on allowlist");
+
+  const req = readAuditEvents(log.file, { kind: "approval.request" });
+  assert.equal(req.length, 1);
+  assert.equal(req[0].tool, "bash");
+  assert.equal(req[0].requestId, "r1");
+
+  const dec = readAuditEvents(log.file, { kind: "approval.decision" });
+  assert.equal(dec.length, 1);
+  assert.equal(dec[0].approved, true);
+  assert.equal(dec[0].requestId, "r1");
+  assert.equal(dec[0].tool, "bash");
+});
