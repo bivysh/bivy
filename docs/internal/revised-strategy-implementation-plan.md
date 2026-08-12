@@ -170,18 +170,35 @@ observe, what changed, and whether checks passed from the Receipt alone.
 **Goal:** one trustworthy customer-cloud alternative to the workstation path.
 
 - [ ] Select one raw-VM provider only after measured live reliability tests.
+  **Evidence:** adapters and a credential-gated smoke exist, but no comparative
+  live results or selection are recorded.
 - [ ] Publish one versioned certified image with Bivy, Git, Claude Code/Codex,
-  readiness probes, and no embedded credentials.
+  readiness probes, and no embedded credentials. **Evidence:** the GHCR image
+  workflow is versioned; certification and provider-live readiness remain open.
 - [ ] Define authoritative Machine states and preserve unresolved records.
+  **Evidence:** hosted inventory now shows durable lifecycle phases, cost/TTL,
+  teardown failure, reconciliation, and missing-credential retention; these are
+  not yet provider-confirmed live/absent/unresolved states.
 - [ ] Before claim, validate agent/version, model credential, repository access,
-  and required protection.
+  and required protection. **Evidence:** online/routing checks and short-lived
+  hosted GitHub App credentials exist, not the complete readiness contract.
 - [ ] Expose TTL, available cost estimate, provider, image, and hosted credential
-  custody before launch.
+  custody before launch. **Evidence:** lifecycle inventory shows TTL and
+  estimated accrued/max cost, and credential controls exist; image/custody
+  disclosure is not complete across launch paths.
 - [ ] Make delete failure retain a visible unresolved Machine with emergency
-  teardown and credential-required recovery.
+  teardown and credential-required recovery. **Evidence:** records now survive
+  destroy failure and missing credentials; explicit unresolved recovery UX and
+  live retry proof remain open.
 - [ ] Run provision → ready → execute → snapshot → restore → destroy continuously
-  with live credentials and alert on unresolved resources.
+  with live credentials and alert on unresolved resources. **Evidence:** the
+  manual smoke stops at execute/destroy and has no continuous result record.
 - [ ] Publish measured cold-start/teardown percentiles and leaked-resource count.
+  **Evidence:** no sustained measurements are published.
+
+Ready capacity remains experimental and is not a Phase 5 milestone: it conflicts
+with the warm-pool non-priority until measured latency demand justifies idle
+capacity. See the [2026-08-12 audit](ephemeral-strategy-audit-2026-08-12.md).
 
 **Gate:** every Machine is confirmed live, confirmed absent, or visibly
 unresolved; zero silently forgotten or leaked resources through the sustained
