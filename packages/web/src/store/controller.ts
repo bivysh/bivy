@@ -19,6 +19,7 @@ import {
   fetchGithubApp,
   fetchGithubQueue,
   fetchAutomationRuns,
+  cancelAutomationRun as apiCancelAutomationRun,
   assignWorkItem,
   deleteWorkItem,
   clearWorkQueue,
@@ -2335,6 +2336,20 @@ export class AppController {
    *  to surface runs that need attention or failed their final attempt. */
   fetchAutomationRuns(limit = 50): ReturnType<typeof fetchAutomationRuns> {
     return fetchAutomationRuns(this.local, limit);
+  }
+  /** Request cancellation, then re-read both durable Run projections. The UI
+   *  must render these records rather than treating an accepted request as a
+   *  terminal result. */
+  async cancelAutomationRun(id: string): Promise<{
+    runs: Awaited<ReturnType<typeof fetchAutomationRuns>>;
+    queue: Awaited<ReturnType<typeof fetchGithubQueue>>;
+  }> {
+    await apiCancelAutomationRun(this.local, id);
+    const [runs, queue] = await Promise.all([
+      fetchAutomationRuns(this.local, 50),
+      fetchGithubQueue(this.local, 30),
+    ]);
+    return { runs, queue };
   }
   /** Set (empty string clears) the default node for untagged GitHub work. Without
    *  an appId it covers every connected app — it's an account-level preference. */

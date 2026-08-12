@@ -18,7 +18,7 @@ import { classifySource } from "../sessionSource.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { writeClipboard } from "../clipboard.js";
-import { projectRunDetail } from "../runDetail.js";
+import { isTerminalRun, projectRunDetail } from "../runDetail.js";
 
 // Issue #153: a queue item is worth an "Outcome report" once it has left
 // "pending" and picked up at least one timeline event (the control plane
@@ -120,6 +120,8 @@ export function GithubQueuePanel({
   const [clearing, setClearing] = useState(false);
   const [queueActionErr, setQueueActionErr] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [cancelRun, setCancelRun] = useState<EvidenceQueueItem | null>(null);
+  const [cancelBusyId, setCancelBusyId] = useState<string | null>(null);
   // Global "refresh GitHub status" scan (issue #530): reconciles every session
   // this node has tracked that carries PR state, not just the ones listed here
   // — a session that finished or was never reattached keeps whatever PR state
@@ -138,6 +140,22 @@ export function GithubQueuePanel({
     const t = setTimeout(() => controller.store.clearPrRefreshAllResult(), 8000);
     return () => clearTimeout(t);
   }, [prRefreshAllResult]);
+
+  const cancelConfirmedRun = async () => {
+    const run = cancelRun;
+    if (!run) return;
+    setCancelRun(null);
+    setQueueActionErr(null);
+    setCancelBusyId(run.id);
+    try {
+      await controller.cancelAutomationRun(run.id);
+      onRefresh();
+    } catch (e) {
+      setQueueActionErr(String((e as Error)?.message || e));
+    } finally {
+      setCancelBusyId(null);
+    }
+  };
 
   const refreshAllStatus = () => {
     setRefreshingAll(true);
@@ -672,6 +690,16 @@ export function GithubQueuePanel({
         {canQuery && reports.length > 0 && (
           <>
             <div className="queue-head"><h4 className="settings-subhead">Run details</h4></div>
+            {cancelRun && (
+              <ConfirmDialog
+                title="Cancel Run?"
+                message="Request cancellation of this Run? It will remain active until the refreshed durable record reports a terminal result."
+                confirmLabel="Cancel Run"
+                danger
+                onCancel={() => setCancelRun(null)}
+                onConfirm={() => void cancelConfirmedRun()}
+              />
+            )}
             <div className="evidence-list">
               {reports.map((item) => {
                 const detail = projectRunDetail(item);
@@ -712,9 +740,20 @@ export function GithubQueuePanel({
                         ))}
                       </ul>
                     )}
-                    <button className="link-btn" onClick={() => void copyReport(item)}>
-                      {copiedReportId === item.id ? "Copied!" : "Copy sanitized run JSON"}
-                    </button>
+                    <div className="row-actions">
+                      {!isTerminalRun(item) && (
+                        <button
+                          className="link-btn danger"
+                          disabled={cancelBusyId === item.id}
+                          onClick={() => { setQueueActionErr(null); setCancelRun(item); }}
+                        >
+                          {cancelBusyId === item.id ? "Cancelling…" : "Cancel Run"}
+                        </button>
+                      )}
+                      <button className="link-btn" onClick={() => void copyReport(item)}>
+                        {copiedReportId === item.id ? "Copied!" : "Copy sanitized Run JSON"}
+                      </button>
+                    </div>
                   </details>
                 );
               })}

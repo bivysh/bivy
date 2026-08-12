@@ -560,6 +560,12 @@ export type AutomationRunStatus =
   | "cancelled";
 /** Compatibility status accepted by clients deployed before the automation model. */
 export type WorkItemStatus = AutomationRunStatus | "done";
+
+export interface CancelAutomationRunResult {
+  run: AutomationRun;
+  previousStatus: AutomationRunStatus;
+  transitioned: boolean;
+}
 export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | "schedule";
 
 // --- Privacy-safe run evidence (issue #153) -----------------------------------
@@ -1341,6 +1347,9 @@ export interface MeshStore {
   listAutomationRuns(accountId: string, limit?: number): Promise<AutomationRun[]>;
   getAutomationRun(accountId: string, id: string): Promise<AutomationRun | undefined>;
   transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined>;
+  /** Account-scoped, transactional cancellation. Already-cancelled runs are
+   *  returned idempotently; callers inspect previousStatus for terminal conflicts. */
+  cancelAutomationRun(accountId: string, id: string): Promise<CancelAutomationRunResult | undefined>;
   // Record privacy-safe run evidence reported by the node that CLAIMED this run
   // (issue #153) — routing reason, output refs (branch/PR/checkpoint/commit/...),
   // declared-check results, and new timeline events. `checks`/`events` in the
