@@ -105,7 +105,7 @@ export function recordFunnelEvent(event: FunnelEvent, source: string, plan: stri
   console.info(`[funnel] ${JSON.stringify({ event, source: safeSource, plan: safePlan, count })}`);
 }
 
-export type RunLifecycleOutcome = "succeeded" | "failed" | "needs_attention";
+export type RunLifecycleOutcome = "succeeded" | "failed" | "needs_attention" | "cancelled";
 export type RunLifecycleRecorder = (outcome: RunLifecycleOutcome) => void;
 
 const runLifecycleResults = new client.Counter({

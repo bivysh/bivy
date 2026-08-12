@@ -1022,6 +1022,21 @@ export function fetchAutomationRuns(
   return automationRequest(store, `/account/automation-runs?limit=${encodeURIComponent(String(limit))}`, {}, fetchImpl);
 }
 
+/** Cancel a pending or active automation run. Repeating this call after a
+ * successful cancellation is idempotent; completed/failed runs are rejected. */
+export function cancelAutomationRun(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun> {
+  return automationRequest<{ ok: true; run: AccountAutomationRun }>(
+    store,
+    `/account/automation-runs/${encodeURIComponent(id)}/cancel`,
+    { method: "POST" },
+    fetchImpl,
+  ).then((result) => result.run);
+}
+
 /** Recent incoming work items for the account, newest first (queue UI). */
 export async function fetchGithubQueue(store: LocalStore, limit = 30, fetchImpl: typeof fetch = fetch): Promise<GithubQueueItem[]> {
   const res = await fetchImpl(`${cpBase(store)}/account/work-items?limit=${encodeURIComponent(String(limit))}`, {

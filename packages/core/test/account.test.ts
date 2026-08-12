@@ -18,6 +18,7 @@ import {
   assignWorkItem,
   fetchEphemeralQueueDefault,
   setEphemeralQueueDefault,
+  cancelAutomationRun,
 } from "../src/index.js";
 
 function mem(): Storage {
@@ -426,6 +427,39 @@ describe("paired devices", () => {
     }) as unknown as typeof fetch;
     await logout(store, undefined, fakeFetch);
     expect(JSON.parse(seenBody)).toEqual({});
+  });
+});
+
+describe("cancelAutomationRun", () => {
+  it("POSTs the encoded account cancellation path and returns the run", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenMethod = "";
+    let seenAuth = "";
+    const run = { id: "run/a b", status: "cancelled" };
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenMethod = String(init?.method);
+      seenAuth = String((init?.headers as Record<string, string>)?.authorization);
+      return { ok: true, json: async () => ({ ok: true, run }) } as Response;
+    }) as unknown as typeof fetch;
+
+    await expect(cancelAutomationRun(store, "run/a b", fakeFetch)).resolves.toEqual(run);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/automation-runs/run%2Fa%20b/cancel");
+    expect(seenMethod).toBe("POST");
+    expect(seenAuth).toBe("Bearer tok");
+  });
+
+  it("surfaces terminal conflicts from the control plane", async () => {
+    const store = createLocalStore(mem(), mem());
+    const fakeFetch = (async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: "Cannot cancel a succeeded automation run" }),
+    }) as Response) as unknown as typeof fetch;
+    await expect(cancelAutomationRun(store, "run-1", fakeFetch)).rejects.toThrow("Cannot cancel a succeeded automation run");
   });
 });
 

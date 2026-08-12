@@ -3141,8 +3141,8 @@ function startRelayIfConfigured() {
   terminals.dropClient(RELAY_CLIENT_ID);
   relay = new RelayConnector(config, (msg) => void handleRelayMessage(msg), {
     pairing: pairingStore,
-    onWorkAvailable: () => {
-      controlPlanePoller?.poke();
+    onWorkAvailable: (hint) => {
+      controlPlanePoller?.poke(hint.id);
       // A relay wake also means "something changed for this account" — kick a
       // (debounced) model-auth sync so a peer node answers any pending vault-key
       // request from a freshly-launched ephemeral runner without waiting for its
@@ -4098,6 +4098,9 @@ interface RunIssueOverrides {
    *  plane's run-evidence endpoint. Only set for control-plane-dispatched runs
    *  (self-hosted direct GitHub polling has no control-plane run to attach to). */
   onEvidence?: (patch: Record<string, unknown>) => void | Promise<void>;
+  /** Cancellation for a control-plane-dispatched Run. Aborts the active runtime
+   * turn; callers must still rely on the durable control-plane status. */
+  signal?: AbortSignal;
 }
 
 async function runIssueTask(cfg: GitHubTaskConfig, issue: GitHubIssue, overrides: RunIssueOverrides = {}) {
@@ -4236,11 +4239,16 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
 
   try {
     emit(record, "started", `Started work on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
-    await runSessionTurn(record, buildTaskPrompt(issue, nodeGithubIssuePrompt()));
+    await runSessionTurn(record, buildTaskPrompt(issue, nodeGithubIssuePrompt()), overrides.signal);
+    if (overrides.signal?.aborted) throw overrides.signal.reason ?? new Error("Run cancelled");
     emit(record, "agent_done", `Agent finished issue #${issue.number}; running deterministic checks.`);
     await reportIssueOutcome(cfg, issue, record, emit, { followUp: false, onEvidence: overrides.onEvidence });
   } catch (error) {
-    emit(record, "failed", `GitHub issue #${issue.number} failed: ${error instanceof Error ? error.message : String(error)}`);
+    // Cancellation has its own durable control-plane outcome. Do not append a
+    // misleading execution-failed event after the operator stopped the Run.
+    if (!overrides.signal?.aborted) {
+      emit(record, "failed", `GitHub issue #${issue.number} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     throw error;
   }
 }
@@ -4266,7 +4274,8 @@ async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, recor
     const merge = await mergeBaseIntoBranch(cfg, wt.path, base);
     if (merge.status === "conflicts") {
       emit(record, "resolving_conflicts", `Merge conflicts with ${base} in ${merge.conflicts.length} file(s); asking the agent to resolve them.`, { files: merge.conflicts });
-      await runSessionTurn(record, buildConflictPrompt(base, merge.conflicts));
+      await runSessionTurn(record, buildConflictPrompt(base, merge.conflicts), overrides.signal);
+      if (overrides.signal?.aborted) throw overrides.signal.reason ?? new Error("Run cancelled");
       const resolved = await completeMerge(wt.path, merge.conflicts);
       if (resolved) {
         emit(record, "conflicts_resolved", `Resolved merge conflicts with ${base}.`);
@@ -4279,11 +4288,14 @@ async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, recor
       }
     }
 
-    await runSessionTurn(record, buildFollowUpPrompt(issue));
+    await runSessionTurn(record, buildFollowUpPrompt(issue), overrides.signal);
+    if (overrides.signal?.aborted) throw overrides.signal.reason ?? new Error("Run cancelled");
     emit(record, "agent_done", `Agent handled the follow-up on issue #${issue.number}; running deterministic checks.`);
     await reportIssueOutcome(cfg, issue, record, emit, { followUp: true, onEvidence: overrides.onEvidence });
   } catch (error) {
-    emit(record, "failed", `GitHub issue #${issue.number} follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
+    if (!overrides.signal?.aborted) {
+      emit(record, "failed", `GitHub issue #${issue.number} follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     throw error;
   }
 }
@@ -4423,17 +4435,28 @@ function buildConflictPrompt(base: string, conflicts: string[]): string {
  * Mirrors how the issue pickup awaited a turn inline; factored out so both the
  * implementation turn and the conflict-resolution turn share it.
  */
-async function runSessionTurn(record: SessionRecord, prompt: string): Promise<void> {
+async function runSessionTurn(record: SessionRecord, prompt: string, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw signal.reason ?? new Error("Run cancelled");
+  let unsubscribe = () => {};
   const finished = new Promise<void>((resolve) => {
-    const off = record.session.subscribe((event) => {
-      if (event.type === "agent_end") {
-        off();
-        resolve();
-      }
+    unsubscribe = record.session.subscribe((event) => {
+      if (event.type === "agent_end") resolve();
     });
   });
-  await turnWatchdog.promptWithWatchdog(record, prompt);
-  await finished;
+  let rejectCancellation: (reason?: unknown) => void = () => {};
+  const cancelled = new Promise<never>((_resolve, reject) => { rejectCancellation = reject; });
+  const onAbort = () => {
+    abortSessionRecord(record);
+    rejectCancellation(signal?.reason ?? new Error("Run cancelled"));
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    await turnWatchdog.promptWithWatchdog(record, prompt);
+    await (signal ? Promise.race([finished, cancelled]) : finished);
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    unsubscribe();
+  }
 }
 
 async function anthropicHeadersFromNodeCredential(): Promise<Record<string, string> | undefined> {
@@ -4761,7 +4784,7 @@ async function continueCorrelatedSession(
   item: ControlPlaneWorkItem,
   prompt: string,
   report: (patch: EvidencePatch) => Promise<void>,
-  opts?: { resumeOnMissing?: boolean; isMessage?: boolean },
+  opts?: { resumeOnMissing?: boolean; isMessage?: boolean; signal?: AbortSignal },
 ): Promise<boolean> {
   if (item.targetKind !== "existing_session" || !item.targetSessionId) return false;
   let record = openSessions.get(item.targetSessionId);
@@ -4818,7 +4841,8 @@ async function continueCorrelatedSession(
     throw new Error(`Repository policy requires ${safety.sandbox}; refusing to continue a session opened as ${currentSandbox}`);
   }
   record.approvalMode = safety.approval;
-  await runSessionTurn(record, prompt);
+  await runSessionTurn(record, prompt, opts?.signal);
+  if (opts?.signal?.aborted) throw opts.signal.reason ?? new Error("Run cancelled");
   if (record.worktree && !opts?.isMessage && !opts?.resumeOnMissing) {
     await branchPublish.maybePushWorktreeBranch(record);
     await prDetection.maybeDetectPullRequest(record);
@@ -4855,7 +4879,8 @@ function lastUserMessageText(record: SessionRecord): string {
   return "";
 }
 
-async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>) {
+async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>, signal: AbortSignal) {
+  if (signal.aborted) throw signal.reason ?? new Error("Run cancelled");
   // Scheduled, manual, and webhook-triggered automations carry the operator's
   // instructions as an E2E template (`bivy-room-v1:<node>:<ciphertext>`) only the
   // assigned node can read. The envelope prefix is Bivy's own and never appears
@@ -4933,6 +4958,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       sandbox: normalizeSandboxTier(item.sandbox),
       approvalMode: approvalModeFrom(item.approvalMode),
       onEvidence: report,
+      signal,
     });
     return;
   }
@@ -4947,7 +4973,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     if (!parsed) throw new Error(`Linear work item has an invalid repo "${repoSlug}"`);
     // Case B: a re-dispatch the control plane correlated to an existing session
     // continues it as a normal chat instead of starting cold (mirrors GitHub).
-    if (await continueCorrelatedSession(item, buildLinearTaskPrompt(issue), report)) return;
+    if (await continueCorrelatedSession(item, buildLinearTaskPrompt(issue), report, { signal })) return;
     const githubToken = await resolveGitHubToken();
     if (!githubToken) throw new Error("no GitHub token available to clone the Linear issue repository");
     const repoDir = await cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token: githubToken, root: reposRoot });
@@ -4967,7 +4993,8 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     sessionNamer.setSessionName(record, `${issue.identifier}: ${issue.title}`);
     if (item.model) { try { await record.session.setModel("", item.model); } catch {} }
     await report({ output: { sessionId: record.id, branch }, events: [{ at: new Date().toISOString(), kind: "branch", summary: "Linear issue working branch and session created.", ref: branch, url: issue.url }] });
-    await runSessionTurn(record, buildLinearTaskPrompt(issue));
+    await runSessionTurn(record, buildLinearTaskPrompt(issue), signal);
+    if (signal.aborted) throw signal.reason ?? new Error("Run cancelled");
     await branchPublish.maybePushWorktreeBranch(record);
     await prDetection.maybeDetectPullRequest(record);
     await report({ output: { sessionId: record.id, branch, prUrl: record.prUrl }, events: record.prUrl ? [{ at: new Date().toISOString(), kind: "pull_request", summary: "Pull request opened.", ref: branch, url: record.prUrl }] : undefined });
@@ -4997,7 +5024,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // Scheduled runs targeting an existing session are STRICT: the message must
   // land in that session (resumed from disk if needed), never silently in a new
   // one — so a session that can't be resumed fails the run instead.
-  if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: item.source === "schedule", isMessage })) return;
+  if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: item.source === "schedule", isMessage, signal })) return;
   const requestedSandbox = normalizeSandboxTier(item.sandbox);
   // Prepare an explicit repository before resolving its policy. Otherwise a
   // first-ever run would inspect a not-yet-cloned path and miss the policy on
@@ -5035,7 +5062,8 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
           "When finished, commit and push your changes, then open a pull request with a clear title and description. If you cannot open it, leave the changes committed on this branch.",
         ].join("\n")
       : request;
-  await runSessionTurn(record, prompt);
+  await runSessionTurn(record, prompt, signal);
+  if (signal.aborted) throw signal.reason ?? new Error("Run cancelled");
   if (!isMessage && record.worktree) {
     await branchPublish.maybePushWorktreeBranch(record);
     await prDetection.maybeDetectPullRequest(record);

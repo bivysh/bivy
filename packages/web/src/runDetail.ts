@@ -28,6 +28,13 @@ export interface RunDetailInput {
   };
 }
 
+const TERMINAL_RUN_STATUSES = new Set<RunDetailInput["status"]>(["succeeded", "failed", "cancelled", "done"]);
+
+/** Cancellation is only meaningful while the durable Run record is nonterminal. */
+export function isTerminalRun(run: Pick<RunDetailInput, "status">): boolean {
+  return TERMINAL_RUN_STATUSES.has(run.status);
+}
+
 export interface RunDetailProjection {
   outcome: RunOutcome;
   sessionId?: string;
