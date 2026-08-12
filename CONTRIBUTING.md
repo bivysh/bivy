@@ -10,6 +10,17 @@ npm run typecheck
 npm run test:unit
 ```
 
+During development, pass filename substrings to run only the relevant suites:
+
+```bash
+npm run test:unit -- config-cli plugin-cli
+npm run test:unit -- --list config-cli
+```
+
+CI splits the complete root suite across machines with `TEST_SHARD=1/2` and
+`TEST_SHARD=2/2`. Set `TEST_CONCURRENCY=1` when debugging ordering or port
+issues locally.
+
 UI/UX work for the hosted/mobile PWA should target the React client in `packages/web/` (`@bivy/web`), which is served by the control plane. The node daemon hosts no web UI.
 
 ## CI checks
