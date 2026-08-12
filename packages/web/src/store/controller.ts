@@ -36,6 +36,9 @@ import {
   fetchHostedProvisioning,
   setHostedProvisioning as apiSetHostedProvisioning,
   fetchHostedAudit,
+  fetchHostedMachines,
+  destroyHostedMachine as apiDestroyHostedMachine,
+  validateHostedProviderCredential as apiValidateHostedProviderCredential,
   rotateHostedProvisioning as apiRotateHostedProvisioning,
   triggerHostedProvision as apiTriggerHostedProvision,
   type EphemeralNodeConfig,
@@ -44,6 +47,7 @@ import {
   type HostedProvisioningStatus,
   type HostedProvisioningPatch,
   type HostedAuditEvent,
+  type HostedMachineSummary,
   removeAccountNode,
   fetchPairedDevices,
   removePairedDevice,
@@ -2975,6 +2979,15 @@ export class AppController {
   }
   listHostedAudit(): Promise<HostedAuditEvent[]> {
     return fetchHostedAudit(this.local);
+  }
+  listHostedMachines(): Promise<HostedMachineSummary[]> {
+    return fetchHostedMachines(this.local);
+  }
+  destroyHostedMachine(nodeId: string): Promise<void> {
+    return apiDestroyHostedMachine(this.local, nodeId);
+  }
+  validateHostedProviderCredential(provider: string, token: string, region?: string): Promise<void> {
+    return apiValidateHostedProviderCredential(this.local, provider, token, region);
   }
   rotateHostedProvisioning(): Promise<HostedProvisioningStatus> {
     return apiRotateHostedProvisioning(this.local);

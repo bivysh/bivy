@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AccountMe, AccountNode, AppState, CredentialPresetsView, CredentialRecordSummary, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize } from "@bivy/core";
+import type { AccountMe, AccountNode, AppState, CredentialPresetsView, CredentialRecordSummary, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
@@ -1751,7 +1751,113 @@ function EphemeralPanel() {
       </div>
       <EphemeralTokenSync />
       <EphemeralModelKeys />
+      {!controller.direct && <HostedRunnerManagement />}
     </div>
+  );
+}
+
+function HostedRunnerManagement() {
+  const [status, setStatus] = useState<HostedProvisioningStatus | null>(null);
+  const [machines, setMachines] = useState<HostedMachineSummary[]>([]);
+  const [audit, setAudit] = useState<HostedAuditEvent[]>([]);
+  const [provider, setProvider] = useState("hetzner");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [confirmDestroy, setConfirmDestroy] = useState<HostedMachineSummary | null>(null);
+
+  const refresh = async () => {
+    const [nextStatus, nextMachines, nextAudit] = await Promise.all([
+      controller.getHostedProvisioning(),
+      controller.listHostedMachines(),
+      controller.listHostedAudit(),
+    ]);
+    setStatus(nextStatus);
+    setMachines(nextMachines);
+    setAudit(nextAudit);
+  };
+  useEffect(() => { void refresh().catch((e) => setErr(String((e as Error)?.message || e))); }, []);
+
+  const act = async (fn: () => Promise<unknown>, success: string) => {
+    if (busy) return;
+    setBusy(true); setErr(null); setMsg(null);
+    try { await fn(); await refresh(); setMsg(success); }
+    catch (e) { setErr(String((e as Error)?.message || e)); }
+    finally { setBusy(false); }
+  };
+
+  const connect = () => act(async () => {
+    const value = token.trim();
+    await controller.validateHostedProviderCredential(provider, value);
+    await controller.setHostedProvisioning({ providerTokens: { [provider]: value } });
+    setToken("");
+  }, `${EPHEMERAL_PROVIDERS.find((p) => p.id === provider)?.name || provider} credential validated and stored.`);
+
+  return (
+    <section className="settings-section">
+      {confirmDestroy && <ConfirmDialog
+        title="Destroy hosted runner?"
+        message={`Destroy ${confirmDestroy.name || confirmDestroy.nodeId || confirmDestroy.id} at ${confirmDestroy.provider} now? Active work on it will stop.`}
+        confirmLabel="Destroy now"
+        danger
+        onCancel={() => setConfirmDestroy(null)}
+        onConfirm={() => {
+          const nodeId = confirmDestroy.nodeId;
+          setConfirmDestroy(null);
+          if (nodeId) void act(() => controller.destroyHostedMachine(nodeId), "Runner destroyed and removed from inventory.");
+        }}
+      />}
+      <h4 className="settings-subhead">Unattended BYO-cloud runners</h4>
+      <p className="muted small">
+        Lets Bivy launch governed automation while your devices are offline. Compute is billed directly by your provider;
+        Bivy adds no compute markup. Provider credentials are encrypted on the control plane and every use is audited.
+      </p>
+      {status && !status.encryptionReady && <span className="chip err">Server credential encryption is not configured</span>}
+      <Toggle
+        checked={Boolean(status?.enabled)}
+        onChange={(enabled) => void act(() => controller.setHostedProvisioning({ enabled }), enabled ? "Unattended provisioning enabled." : "New unattended launches disabled.")}
+        label="Allow unattended runner launches"
+      />
+      <p className="muted small">Disabling stops new launches. Existing runners remain visible below until destroyed or their TTL expires.</p>
+
+      <label className="field-label">Cloud provider</label>
+      <select className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value)}>
+        {EPHEMERAL_PROVIDERS.map((p) => <option key={p.id} value={p.id}>
+          {p.name}{p.id === "sprites" || p.id === "e2b" ? " — experimental managed compute" : " — BYO cloud"}
+        </option>)}
+      </select>
+      {(provider === "sprites" || provider === "e2b") && <p className="muted small">
+        Experimental managed-compute backend. Bivy keeps session durability portable; provider snapshots are an optimization, never the only copy.
+      </p>}
+      <label className="field-label">Provider credential</label>
+      <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Validate before storing" />
+      <button className="btn primary" disabled={busy || !token.trim() || !status?.encryptionReady} onClick={connect}>{busy ? "Working…" : "Validate and store"}</button>
+      {status && status.providers.length > 0 && (
+        <p className="muted small">Stored: {status.providers.map((p) => `${p}${status.validatedProviders.includes(p) ? " ✓" : " (validation required)"}`).join(", ")}</p>
+      )}
+
+      <label className="field-label">Hosted runners</label>
+      {machines.length === 0 ? <p className="muted small">No hosted runners are currently tracked.</p> : <div className="picker-list">
+        {machines.map((m) => <PickerItem
+          key={`${m.provider}:${m.id}`}
+          title={m.name || m.nodeId || m.id}
+          meta={[m.provider, m.region, m.status, m.ttlMinutes ? `TTL ${m.ttlMinutes}m` : null, m.createdAt ? `created ${new Date(m.createdAt).toLocaleString()}` : null].filter(Boolean).join(" · ")}
+          right={<button type="button" className="picker-action danger" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
+        />)}
+      </div>}
+
+      <label className="field-label">Recent audit</label>
+      {audit.length === 0 ? <p className="muted small">No hosted-runner events yet.</p> : <div className="picker-list">
+        {audit.slice(0, 10).map((e, i) => <PickerItem
+          key={`${e.at}:${e.action}:${i}`}
+          title={e.action.replaceAll("_", " ")}
+          meta={[e.provider, e.nodeId, e.detail, e.at ? new Date(e.at).toLocaleString() : null].filter(Boolean).join(" · ")}
+        />)}
+      </div>}
+      {err && <span className="chip err">{err}</span>}
+      {msg && <span className="chip ok">{msg}</span>}
+    </section>
   );
 }
 
