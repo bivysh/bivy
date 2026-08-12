@@ -1166,6 +1166,10 @@ export interface MeshStore {
   setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
   getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
   setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
+  /** Cross-replica mutex around the read/decide/provider-launch sequence. The
+   * lease expires so a crashed control-plane process cannot wedge the account. */
+  acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean>;
+  releaseHostedProvisionLease(accountId: string, holder: string): Promise<void>;
   /** Accounts that currently track at least one control-plane-provisioned
    * machine. Used by the global lifecycle reconciler; returns ids only. */
   listHostedMachineAccountIds(): Promise<string[]>;

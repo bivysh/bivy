@@ -182,6 +182,11 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_machines     JSONB;
       -- Append-only audit trail of hosted-credential use (capped in app code).
       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_audit         JSONB;
+      CREATE TABLE IF NOT EXISTS hosted_provision_leases (
+        account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        holder      TEXT NOT NULL,
+        expires_at  TIMESTAMPTZ NOT NULL
+      );
       -- The paid single-user plan was renamed 'individual' -> 'pro' to match what
       -- it is sold as. The plan column is plain TEXT with no enum or CHECK, so the
       -- backfill is a straight UPDATE; it is idempotent (the second run matches no
@@ -1659,6 +1664,24 @@ export class PostgresStore implements MeshStore {
     // small account metadata rows (never session content).
     const { rows } = await this.query(`SELECT id, hosted_machines FROM accounts WHERE hosted_machines IS NOT NULL`);
     return rows.filter((row) => Array.isArray(row.hosted_machines) && row.hosted_machines.length > 0).map((row) => String(row.id));
+  }
+
+  async acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean> {
+    const expiresAt = new Date(Date.now() + Math.max(30, ttlSeconds) * 1000).toISOString();
+    const { rows } = await this.query(
+      `INSERT INTO hosted_provision_leases (account_id, holder, expires_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (account_id) DO UPDATE
+       SET holder = EXCLUDED.holder, expires_at = EXCLUDED.expires_at
+       WHERE hosted_provision_leases.expires_at < now()
+       RETURNING holder`,
+      [accountId, holder, expiresAt],
+    );
+    return rows[0]?.holder === holder;
+  }
+
+  async releaseHostedProvisionLease(accountId: string, holder: string): Promise<void> {
+    await this.query(`DELETE FROM hosted_provision_leases WHERE account_id = $1 AND holder = $2`, [accountId, holder]);
   }
 
   async appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void> {
