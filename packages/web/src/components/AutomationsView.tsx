@@ -289,6 +289,7 @@ function sourceAutomationChip(
 
 /** Infer which trigger-picker option best matches a draft (for the chip label). */
 function matchTriggerPick(d: Draft): TriggerPick | null {
+  if (d.trigger === "github" || d.trigger === "linear") return TRIGGER_OPTIONS.find((o) => o.id === d.trigger) ?? null;
   if (d.trigger === "webhook") return TRIGGER_OPTIONS.find((o) => o.id === "webhook") ?? null;
   if (d.kind === "once") return TRIGGER_OPTIONS.find((o) => o.id === "once") ?? null;
   const cron = d.cron.trim();
@@ -313,7 +314,7 @@ interface Draft {
   instructions: string;
   /** False until the user picks a trigger (or a template supplies one). */
   hasTrigger: boolean;
-  trigger: "schedule" | "webhook";
+  trigger: "schedule" | "webhook" | "github" | "linear";
   kind: "cron" | "once";
   cron: string;
   nlText: string;
@@ -321,6 +322,10 @@ interface Draft {
   onceAt: string;
   /** GitHub repo workspace (`owner/name`) when the trigger does not carry one. */
   repo: string;
+  labels: string;
+  repos: string;
+  githubEvents: GithubEventToggles;
+  workflows: string;
   nodeId: string;
   runtimeId: string;
   model: string;
@@ -341,6 +346,10 @@ function emptyDraft(nodeId: string): Draft {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     onceAt: toLocalInput(new Date(Date.now() + 60 * 60_000)),
     repo: "",
+    labels: "bivy",
+    repos: "",
+    githubEvents: { issuesLabeled: true, issueMention: true, prLabeled: false, prMention: false, workflowFailed: false },
+    workflows: "",
     nodeId,
     runtimeId: "",
     model: "",
@@ -594,40 +603,47 @@ export function AutomationsView({
     setDraft(emptyDraft(defaultNodeId));
   }
 
-  function startFromSource(source: "github" | "linear") {
-    setDraft(null);
-
+  async function continueWithSource(source: "github" | "linear", current: Draft) {
     const existing = items.find((item) => item.trigger === source);
-    if (existing) {
-      setSourceEdit(existing);
+    if (!existing) {
+      setDraft({ ...current, hasTrigger: true, trigger: source });
       return;
     }
 
-    const disconnected = source === "github"
-      ? githubSourceStatus(sources.github).tone === "off"
-      : linearSourceStatus(sources.linear).tone === "off";
-    if (disconnected) {
-      openSetup(source === "github" ? "work-queue" : "linear");
-      return;
+    let instructions = "Handle the incoming item using its event context. Investigate the request, make the smallest safe change, run the relevant checks, and report the outcome with links to any pull request or follow-up.";
+    const parts = existing.templateCiphertext?.split(":");
+    if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
+      const roomKey = controller.local.keys()[parts[1]];
+      if (roomKey) instructions = await open(await importRoomKey(unb64(roomKey)), parts.slice(2).join(":"));
     }
-
-    const now = new Date().toISOString();
-    setSourceEdit({
-      id: "",
-      name: source === "github" ? "GitHub automation" : "Linear automation",
+    const base = emptyDraft(parts?.[1] || defaultNodeId);
+    setDraft({
+      ...base,
+      id: existing.id,
+      name: current.name.trim() ? current.name : existing.name,
+      instructions: current.instructions.trim() ? current.instructions : instructions,
+      hasTrigger: true,
       trigger: source,
-      enabled: true,
-      labels: ["bivy"],
-      schedule: { kind: "cron", expression: "0 9 * * *", timezone: "UTC" },
-      createdAt: now,
-      updatedAt: now,
+      repo: existing.repo || "",
+      labels: (existing.labels ?? ["bivy"]).join(", "),
+      repos: (existing.repos ?? []).join(", "),
+      githubEvents: togglesFromAutomation(existing),
+      workflows: (existing.on?.find((rule) => rule.event === "workflow_run")?.workflows ?? []).join(", "),
+      runtimeId: existing.runtimeId || "",
+      model: existing.model || "",
+      approvalMode: existing.approvalMode ?? "autonomous",
+      sandbox: existing.sandbox || "workspace-write",
     });
   }
 
   async function edit(item: AccountAutomation) {
     setError("");
     setMenuId(null);
-    if (isSourceTrigger(item.trigger)) {
+    if (item.trigger === "github" || item.trigger === "linear") {
+      await continueWithSource(item.trigger, emptyDraft(defaultNodeId));
+      return;
+    }
+    if (item.trigger === "github_ci") {
       setSourceEdit(item);
       return;
     }
@@ -1081,7 +1097,7 @@ export function AutomationsView({
               setNotice({ tone: "ok", title: `Saved “${result.name}”` });
             }
           }}
-          onSelectSource={startFromSource}
+          onSelectSource={(source, current) => { void continueWithSource(source, current).catch((e) => setError(String(e))); }}
         />
       )}
 
@@ -1674,7 +1690,7 @@ function AutomationEditor({
   initial: Draft;
   onCancel: () => void;
   onSaved: (result?: SaveResult) => void;
-  onSelectSource: (source: "github" | "linear") => void;
+  onSelectSource: (source: "github" | "linear", current: Draft) => void;
 }) {
   const [d, setD] = useState<Draft>(initial);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -1691,6 +1707,8 @@ function AutomationEditor({
   const selectedNode = state.nodes.find((n) => n.id === d.nodeId);
   const pick = d.hasTrigger ? matchTriggerPick(d) : null;
   const canEditTrigger = !d.id;
+
+  useEffect(() => { setD(initial); }, [initial]);
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -1712,10 +1730,9 @@ function AutomationEditor({
   function applyTrigger(opt: TriggerPick) {
     if (opt.trigger === "source") {
       setPickerOpen(false);
-      onSelectSource(opt.source);
+      onSelectSource(opt.source, d);
       return;
-    }
-    if (opt.trigger === "webhook") {
+    } else if (opt.trigger === "webhook") {
       setD((prev) => ({ ...prev, hasTrigger: true, trigger: "webhook" }));
     } else if (opt.kind === "once") {
       setD((prev) => ({ ...prev, hasTrigger: true, trigger: "schedule", kind: "once" }));
@@ -1738,7 +1755,7 @@ function AutomationEditor({
     setD((prev) => ({ ...prev, hasTrigger: false }));
   }
 
-  const scheduleOk = d.trigger === "webhook"
+  const scheduleOk = d.trigger !== "schedule"
     || (d.kind === "cron" ? Boolean(d.cron.trim()) && Boolean(cronHuman) : Boolean(d.onceAt));
   const repoOk = d.trigger !== "schedule" || Boolean(d.repo.trim());
   const missing: string[] = [];
@@ -1746,6 +1763,7 @@ function AutomationEditor({
   if (!d.hasTrigger) missing.push("a trigger");
   if (d.hasTrigger && !scheduleOk) missing.push("a valid schedule");
   if (d.hasTrigger && !repoOk) missing.push("a repository");
+  if (d.hasTrigger && d.trigger === "github" && !Object.values(d.githubEvents).some(Boolean)) missing.push("a GitHub event");
   if (!d.instructions.trim()) missing.push("instructions");
   if (!d.nodeId) missing.push("a machine");
   else if (!controller.local.keys()[d.nodeId]) missing.push("a paired machine (encryption key missing)");
@@ -1761,8 +1779,14 @@ function AutomationEditor({
       const encrypted = await seal(await importRoomKey(unb64(roomKey)), d.instructions.trim());
       const nodeName = selectedNode?.name;
       const repo = d.repo.trim();
+      const labels = d.labels.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
+      const repos = d.repos.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
+      const workflows = d.workflows.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
       if (repo && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
         throw new Error("Repository must look like owner/name");
+      }
+      if (repos.some((value) => !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value))) {
+        throw new Error("Every repository allowlist entry must look like owner/name");
       }
       const input = {
         name: d.name.trim(),
@@ -1775,6 +1799,11 @@ function AutomationEditor({
         enabled: true,
         trigger: d.trigger,
         repo: repo || (d.id ? "" : undefined),
+        ...(d.trigger === "github" || d.trigger === "linear" ? {
+          labels,
+          repos,
+          ...(d.trigger === "github" ? { on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
+        } : {}),
         ...(d.trigger === "schedule"
           ? {
               schedule: d.kind === "cron"
@@ -1795,7 +1824,9 @@ function AutomationEditor({
             ? (d.kind === "cron"
                 ? (cronHuman ? `Next: ${cronHuman.charAt(0).toLowerCase() + cronHuman.slice(1)} (${d.timezone}).` : "On the schedule you set.")
                 : `Once at ${new Date(d.onceAt).toLocaleString()}.`)
-            : undefined;
+            : d.trigger === "github" ? "Matching GitHub events will start a run with these instructions."
+              : d.trigger === "linear" ? "Matching Linear issues will start a run with these instructions."
+                : undefined;
           onSaved({
             kind: "created-schedule",
             name: d.name.trim(),
@@ -1880,13 +1911,15 @@ function AutomationEditor({
                 {d.hasTrigger && pick ? (
                   <div className="autom-trigger-chip">
                     <span className="autom-trigger-chip-icon" aria-hidden="true">
-                      {pick.id === "webhook" ? <IconWebhook /> : <IconClock />}
+                      {pick.id === "webhook" ? <IconWebhook /> : pick.id === "github" || pick.id === "linear" ? <IconPr /> : <IconClock />}
                     </span>
                     <div className="autom-trigger-chip-text">
                       <strong>{pick.label}</strong>
                       <span>
                         {d.trigger === "webhook"
                           ? pick.hint
+                          : d.trigger === "github" || d.trigger === "linear"
+                            ? pick.hint
                           : d.kind === "once"
                             ? (d.onceAt ? new Date(d.onceAt).toLocaleString() : pick.hint)
                             : (cronHuman || pick.hint)}
@@ -1992,6 +2025,49 @@ function AutomationEditor({
                       ? "Fires on a signed POST to its webhook URL. Copy the URL from the automation row; rotate the secret there if needed."
                       : "You'll get the signed URL and a one-time signing secret after you save."}
                   </p>
+                )}
+                {d.hasTrigger && (d.trigger === "github" || d.trigger === "linear") && (
+                  <div className="autom-trigger-config">
+                    {d.trigger === "github" && (
+                      <div className="settings-field">
+                        <div className="autom-field-label">When any of these fire</div>
+                        {([
+                          ["issuesLabeled", "Issue labeled"],
+                          ["issueMention", "@mention on an issue or PR conversation"],
+                          ["prLabeled", "Pull request labeled"],
+                          ["prMention", "@mention on a PR review comment"],
+                          ["workflowFailed", "Workflow failed"],
+                        ] as const).map(([key, label]) => (
+                          <label className="autom-check-row" key={key}>
+                            <input
+                              type="checkbox"
+                              checked={d.githubEvents[key]}
+                              onChange={() => set("githubEvents", { ...d.githubEvents, [key]: !d.githubEvents[key] })}
+                            />
+                            <span>{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {(d.trigger === "linear" || d.githubEvents.issuesLabeled || d.githubEvents.prLabeled) && (
+                      <div className="settings-field">
+                        <label className="field-label" htmlFor="autom-source-labels">Labels</label>
+                        <input id="autom-source-labels" className="picker-search" value={d.labels} onChange={(e) => set("labels", e.target.value)} placeholder="bivy" />
+                        <p className="settings-hint">Comma-separated labels that may trigger this automation.</p>
+                      </div>
+                    )}
+                    {d.trigger === "github" && d.githubEvents.workflowFailed && (
+                      <div className="settings-field">
+                        <label className="field-label" htmlFor="autom-source-workflows">Workflow names (optional)</label>
+                        <input id="autom-source-workflows" className="picker-search" value={d.workflows} onChange={(e) => set("workflows", e.target.value)} placeholder="CI, Build" />
+                      </div>
+                    )}
+                    <div className="settings-field">
+                      <label className="field-label" htmlFor="autom-source-repos">Repository allowlist (optional)</label>
+                      <input id="autom-source-repos" className="picker-search" value={d.repos} onChange={(e) => set("repos", e.target.value)} placeholder="owner/repo, owner/other" />
+                      <p className="settings-hint">Empty means every repository where the app is installed.</p>
+                    </div>
+                  </div>
                 )}
 
                 {d.hasTrigger && (
