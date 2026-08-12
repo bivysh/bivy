@@ -52,6 +52,35 @@ test("malformed lines are skipped, and a missing file reads empty", () => {
   assert.equal(events.length, 2);
 });
 
+test("file.change records path + line counts, never content", () => {
+  const dir = tmpDir();
+  const log = createAuditLog(dir);
+  log.record({ kind: "file.change", session: "s1", agent: "pi", path: "src/app.ts", op: "modified", added: 12, removed: 3 });
+  log.record({ kind: "file.change", session: "s1", agent: "pi", path: "src/gone.ts", op: "deleted" });
+
+  const events = readAuditEvents(log.file, { kind: "file.change" });
+  assert.equal(events.length, 2);
+  assert.equal(events[0].path, "src/app.ts");
+  assert.equal(events[0].op, "modified");
+  assert.equal(events[0].added, 12);
+  assert.equal(events[0].removed, 3);
+  // Redaction: the diff text must never be present on the record.
+  assert.equal("oldText" in events[0], false);
+  assert.equal("newText" in events[0], false);
+  assert.equal(events[1].op, "deleted");
+  assert.equal(events[1].added, undefined);
+});
+
+test("cost records rolling totals and is queryable by kind", () => {
+  const dir = tmpDir();
+  const log = createAuditLog(dir);
+  log.record({ kind: "cost", session: "s1", agent: "pi", costUsd: 0.0123, tokens: 4200 });
+  const events = readAuditEvents(log.file, { kind: "cost" });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].costUsd, 0.0123);
+  assert.equal(events[0].tokens, 4200);
+});
+
 test("record never throws when the dir is unwritable (best-effort)", () => {
   // Point at a path under a file (can't mkdir), so append fails internally.
   const dir = tmpDir();
