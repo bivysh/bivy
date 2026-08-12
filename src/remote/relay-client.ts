@@ -3,9 +3,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { WebSocket } from "ws";
-import { seal, sealFrame, openFrame, ReplayGuard } from "./e2e.js";
-import { frameMessages, FrameReassembler } from "./relay-chunk.js";
-import type { PairingStore, RotateDelivery } from "./device-registry.js";
+import { seal, sealFrame, openFrame, ReplayGuard } from "../e2e.js";
+import { frameMessages, FrameReassembler } from "../relay-chunk.js";
+import type { PairingStore, RotateDelivery } from "../device-registry.js";
 
 /**
  * Relay connector (node side).
