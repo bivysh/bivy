@@ -34,6 +34,42 @@ to references such as session, branch, pull request, artifact, or a failure
 summary. Account APIs expose definitions, trigger history, and run history
 separately; the older work-item API reads from the same run records.
 
+## Outcome finality, retry, and reclaim
+
+Every accepted run reaches **exactly one** durable terminal outcome —
+`succeeded`, `failed`, or `cancelled` — and that outcome is **immutable**. The
+lifecycle state machine only allows a terminal state to be entered from a
+non-terminal one, so no later or losing Machine can rewrite a finished run. The
+client derives the finer customer outcome (`PR open`, `Checks failed`, `Needs
+review`, …) from evidence; the durable terminal state underneath it never flips.
+
+**Attempts.** `attempt` starts at 1. The first claim of a `pending` run keeps
+attempt 1. A **reclaim** of an expired lease increments it. Every attempt belongs
+to the **same customer-visible run** — a retry is not a second run.
+
+**Leases and reclaim.** The winning Machine renews a finite lease (default two
+minutes, `BIVY_WORK_LEASE_MS`) roughly every 30 seconds. If it stops renewing
+(crash, network loss, teardown), the run becomes reclaimable once the lease
+expires and another eligible node claims it as the next attempt. The Machine that
+lost the lease is **fenced**: because ownership is checked on every node call and
+terminal transitions are additionally scoped to the current claimant, a stale
+Machine's heartbeat, `running`, `complete`, `fail`, `needs-attention`, and
+evidence writes are all rejected (`409`) once it is no longer the claimant. It
+therefore cannot complete, fail, or otherwise overwrite the new attempt.
+
+**Cancellation precedence.** Cancellation is itself a terminal outcome that
+clears the renewable lease. A completion or failure racing behind a cancellation
+is a no-op — it never un-cancels the run — and, because it did not durably
+transition anything, it records **no** lifecycle-result metric. Only real,
+persisted transitions are counted, so a blocked completion cannot inflate the
+`succeeded` outcome counter.
+
+**Idempotent intake.** Duplicate trigger delivery (a redelivered webhook, a
+repeated manual dispatch) collapses to a single run via the per-account
+source/dedupe key: re-enqueuing the same key returns the existing run rather than
+creating a second one. Hosted free-tier usage is likewise recorded once per run
+key, so reconnects and reclaims never inflate the run count.
+
 ## Run evidence and outcome reports
 
 Every run also carries a small, structured **evidence** record — the piece a

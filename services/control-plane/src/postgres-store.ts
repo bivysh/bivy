@@ -69,7 +69,13 @@ import {
   SESSION_TTL_MS,
 } from "./store.js";
 
-const WORK_LEASE_MS = 2 * 60 * 1000;
+// A claimed Run's renewable lease. A live node renews every ~30s; if it crashes
+// the item becomes reclaimable once this expires. Overridable via env for tuning
+// and for deterministic reclaim tests (default two minutes).
+const WORK_LEASE_MS = ((): number => {
+  const raw = Number(process.env.BIVY_WORK_LEASE_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 2 * 60 * 1000;
+})();
 const workLeaseExpiry = (): string => new Date(Date.now() + WORK_LEASE_MS).toISOString();
 
 /**
@@ -2602,7 +2608,7 @@ export class PostgresStore implements MeshStore {
     }
   }
 
-  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined> {
+  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string): Promise<AutomationRun | undefined> {
     const from: Record<AutomationRunStatus, AutomationRunStatus[]> = {
       pending: [],
       claimed: [],
@@ -2635,6 +2641,9 @@ export class PostgresStore implements MeshStore {
     // is a two-query round trip instead of one atomic statement, but this event
     // append is a best-effort timeline entry, not the transition's atomicity
     // guard (the conditional `status = ANY(from[status])` above already is).
+    // $8 node guard: when set, the Run must still be claimed by that node, so a
+    // Machine that lost its lease to a reclaim (claimed_by_node_id now points at
+    // the new owner) no-ops here instead of overwriting the fresh attempt.
     const { rows } = await this.query(
       `UPDATE work_items SET status = $3,
        started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
@@ -2644,8 +2653,9 @@ export class PostgresStore implements MeshStore {
          WHEN $3 = 'running' THEN $7
          ELSE lease_expires_at END,
        output = COALESCE($5, output)
-       WHERE account_id = $1 AND id = $2 AND status = ANY($6) RETURNING *`,
-      [accountId, id, status, terminal, output ? JSON.stringify(output) : null, from[status], workLeaseExpiry()],
+       WHERE account_id = $1 AND id = $2 AND status = ANY($6)
+         AND ($8::text IS NULL OR claimed_by_node_id = $8) RETURNING *`,
+      [accountId, id, status, terminal, output ? JSON.stringify(output) : null, from[status], workLeaseExpiry(), expectedNodeId ?? null],
     );
     if (!rows[0]) return undefined;
     if (!event) return mapAutomationRun(rows[0]);
@@ -2844,12 +2854,15 @@ export class PostgresStore implements MeshStore {
     return total;
   }
 
-  async completeWorkItem(accountId: string, id: string): Promise<AutomationRun | undefined> {
+  async completeWorkItem(accountId: string, id: string, expectedNodeId?: string): Promise<AutomationRun | undefined> {
     // Older nodes only know claim → complete. Adapt that boundary onto the
     // canonical lifecycle without preserving a second legacy transition path.
+    // The node guard flows into both hops so a reclaimed-away Machine cannot
+    // complete the new attempt (returns undefined, and the caller reports a
+    // conflict rather than a spurious success).
     const current = await this.getAutomationRun(accountId, id);
-    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running");
-    return (await this.transitionAutomationRun(accountId, id, "succeeded")) ?? undefined;
+    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running", undefined, expectedNodeId);
+    return (await this.transitionAutomationRun(accountId, id, "succeeded", undefined, expectedNodeId)) ?? undefined;
   }
 
   async deleteWorkItem(accountId: string, id: string): Promise<boolean> {

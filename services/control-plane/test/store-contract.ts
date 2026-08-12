@@ -498,6 +498,38 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(conflict?.run.status, "succeeded");
   });
 
+  await test("automation runs: outcome finality, node-scoped completion, and immutable terminals", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-finality@example.com");
+    const { node: a } = await store.enrollNode(acct.id, "finality-a", "A");
+    const { node: b } = await store.enrollNode(acct.id, "finality-b", "B");
+
+    // A Machine that lost its lease to a reclaim cannot complete the new attempt:
+    // a node-scoped transition no-ops when the Run is claimed by someone else.
+    const run = await store.enqueueAutomationRun(acct.id, { source: "manual", triggerKind: "manual", title: "Node scoped" });
+    assert.ok(await store.claimWorkItem(acct.id, a.id, run.id));
+    assert.equal(await store.transitionAutomationRun(acct.id, run.id, "running", undefined, b.id), undefined, "a non-owner node cannot advance the Run");
+    assert.equal(await store.completeWorkItem(acct.id, run.id, b.id), undefined, "a non-owner node cannot complete the Run");
+    assert.equal((await store.getAutomationRun(acct.id, run.id))?.status, "claimed", "the losing node's writes never landed");
+    assert.equal((await store.transitionAutomationRun(acct.id, run.id, "running", undefined, a.id))?.status, "running", "the true owner still advances");
+    assert.equal((await store.completeWorkItem(acct.id, run.id, a.id))?.status, "succeeded");
+
+    // A terminal outcome is immutable: no other terminal (or any) transition rewrites it.
+    assert.equal(await store.transitionAutomationRun(acct.id, run.id, "failed"), undefined, "succeeded cannot become failed");
+    assert.equal(await store.transitionAutomationRun(acct.id, run.id, "needs_attention"), undefined, "succeeded cannot re-open");
+    const reCancel = await store.cancelAutomationRun(acct.id, run.id);
+    assert.equal(reCancel?.transitioned, false, "a finished Run cannot be cancelled");
+    assert.equal(reCancel?.run.status, "succeeded");
+
+    // Cancellation beats a stale completion racing behind it: once cancelled, even
+    // the owning node's complete is a no-op, so the outcome stays Cancelled.
+    const raced = await store.enqueueAutomationRun(acct.id, { source: "manual", triggerKind: "manual", title: "Cancel then complete" });
+    assert.ok(await store.claimWorkItem(acct.id, a.id, raced.id));
+    assert.ok(await store.transitionAutomationRun(acct.id, raced.id, "running", undefined, a.id));
+    assert.equal((await store.cancelAutomationRun(acct.id, raced.id))?.transitioned, true);
+    assert.equal(await store.completeWorkItem(acct.id, raced.id, a.id), undefined, "the owner's late completion cannot un-cancel");
+    assert.equal((await store.getAutomationRun(acct.id, raced.id))?.status, "cancelled");
+  });
+
   await test("automation definitions: webhook trigger fields and event context round-trip", async (store) => {
     const acct = await store.findOrCreateAccount("contract-webhook-def@example.com");
     const def = await store.createAutomationDefinition(acct.id, {
