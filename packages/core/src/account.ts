@@ -1022,6 +1022,44 @@ export function fetchAutomationRuns(
   return automationRequest(store, `/account/automation-runs?limit=${encodeURIComponent(String(limit))}`, {}, fetchImpl);
 }
 
+/** A failed Run fetch that still tells the caller which explicit state to show:
+ *  `unauthorized`, `not_found`, or an `error` (offline/unknown). Lets the
+ *  routable Run screen render distinct states without string-matching. */
+export class RunFetchError extends Error {
+  constructor(
+    message: string,
+    readonly reason: "unauthorized" | "not_found" | "error",
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = "RunFetchError";
+  }
+}
+
+/** Fetch one Run by id for the routable /runs/:runId screen. Returns `null` when
+ *  the Run does not exist for this account (a non-leaking 404 — an id owned by
+ *  another account is indistinguishable from an unknown one). Throws a
+ *  {@link RunFetchError} for unauthorized, offline, and other failures so the UI
+ *  can distinguish loading/offline/not-found/unauthorized explicitly. */
+export async function fetchAutomationRun(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun | null> {
+  let res: Response;
+  try {
+    res = await fetchImpl(`${cpBase(store)}/account/automation-runs/${encodeURIComponent(id)}`, {
+      headers: authHeaders(store),
+    });
+  } catch (cause) {
+    throw new RunFetchError("Could not reach the control plane", "error");
+  }
+  if (res.status === 404) return null;
+  if (res.status === 401) throw new RunFetchError("Unauthorized", "unauthorized", 401);
+  if (!res.ok) throw new RunFetchError(`automation run request failed: ${res.status}`, "error", res.status);
+  return (await res.json()) as AccountAutomationRun;
+}
+
 /** Cancel a pending or active automation run. Repeating this call after a
  * successful cancellation is idempotent; completed/failed runs are rejected. */
 export function cancelAutomationRun(

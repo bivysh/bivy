@@ -536,6 +536,10 @@ if (janitorServiceUrl && janitorProxySecret) {
 const reactAppDir = path.join(__dirname, "..", "public", "react");
 const reactIndexFile = path.join(reactAppDir, "index.html");
 const hasReactApp = fs.existsSync(reactIndexFile);
+// The app shell, read once at boot for deep-link fallbacks that serve it from
+// memory (no per-request file-system access). Deploys replace the process, so a
+// cached copy is always current.
+const reactIndexHtml = hasReactApp ? fs.readFileSync(reactIndexFile) : null;
 app.get("/", (_req, res) => {
   noStorePwaShell(res);
   if (hasReactApp) return res.sendFile(reactIndexFile);
@@ -575,6 +579,15 @@ if (hasReactApp) {
   app.get(/^\/settings(?:\/.+)?$/, (_req, res) => {
     noStorePwaShell(res);
     res.sendFile(reactIndexFile);
+  });
+  // The routable Run detail screen (`/runs/:runId` — see packages/web/src/
+  // router.ts and @bivy/core runRoutePath) needs the same shell on a cold load
+  // or a Run URL copied to another device. Served from the boot-time in-memory
+  // copy so this fallback performs no per-request file-system access. The Run
+  // JSON API lives under `/account/automation-runs/:id`, so nothing is shadowed.
+  app.get(/^\/runs\/.+/, (_req, res) => {
+    noStorePwaShell(res);
+    res.type("html").send(reactIndexHtml);
   });
 }
 
@@ -2715,6 +2728,18 @@ app.get("/account/automation-runs", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   res.json(await store.listAutomationRuns(client.accountId, Number(req.query.limit) || 50));
+}));
+
+// Single Run by id, for the routable /runs/:runId detail screen. Account-scoped:
+// an id that belongs to another account or does not exist is indistinguishable —
+// both return the same 404 so the endpoint never leaks Run existence across
+// accounts.
+app.get("/account/automation-runs/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const run = await store.getAutomationRun(client.accountId, String(req.params.id));
+  if (!run) return res.status(404).json({ error: "Automation run not found" });
+  res.json(run);
 }));
 
 app.get("/account/automation-triggers", asyncHandler(async (req, res) => {

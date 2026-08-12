@@ -114,6 +114,7 @@ export function RunPill({
   filesEdited,
   onOpenChanges,
   onRecover,
+  onOpenRun,
   anchorId,
 }: {
   source: SourceInfo;
@@ -148,6 +149,11 @@ export function RunPill({
    *  failing checks" prompt, retry → re-run the checks, fork → fork the session.
    *  Omitted where no session is in scope, hiding the buttons. */
   onRecover?: (kind: RecoveryKind) => void;
+  /** Open the routable Run detail screen (/runs/:runId) for this session's Run.
+   *  Wired only when the session has a correlated Run record (evidence.id). This
+   *  is the Session → Run half of the correlation: a retry keeps the same Run id,
+   *  so this always points at the one customer-visible Run. */
+  onOpenRun?: (runId: string) => void;
   /** DOM id (`attention-<sessionId>`) so an outcome deep-link from the Inbox or a
    *  push tap scrolls to this pill — the exact outcome — not just the session (B3). */
   anchorId?: string;
@@ -309,6 +315,16 @@ export function RunPill({
               <a className="action-sheet-item" href={evidence.output.artifactUrl} target="_blank" rel="noopener" onClick={() => setOpen(false)}>
                 View artifact
               </a>
+            )}
+            {evidence?.id && onOpenRun && (
+              <button
+                type="button"
+                className="action-sheet-item run-sheet-open-run"
+                onClick={() => { setOpen(false); onOpenRun(evidence.id); }}
+              >
+                <span aria-hidden>▸</span>
+                <span>Run details</span>
+              </button>
             )}
             {recovery.length > 0 && onRecover && (
               <div className="run-sheet-recovery" role="group" aria-label="Recover this run">
