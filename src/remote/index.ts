@@ -16,3 +16,5 @@
 // the remaining remote-only code moves in.
 export { RelayConnector, loadRelayConfig } from "./relay-client.js";
 export type { ClientMessage, RelayConfig } from "./relay-client.js";
+export { soloCredentials, buildDialUrl } from "./solo.js";
+export type { SoloCredentials } from "./solo.js";
