@@ -69,9 +69,17 @@ Known coherence gaps found in the same audit:
 - [x] Define Receipt v1 fields, redaction boundary, evidence classes, gaps, and integrity language.
 - [x] Record breadth freezes and explicit non-priorities in strategy/product contract.
 - [ ] Audit every customer-facing PWA string and flow against the canonical model; attach screenshots and a migration list.
+  **Progress:** primary Settings, Automations, queue, Machine picker, and onboarding
+  surfaces now use Runs, Machines, and isolated Machine profiles; a source-level
+  regression test protects the migrated labels. Screenshot/flow audit remains.
 - [ ] Audit CLI help, setup output, README, docs, and API response labels against the canonical model.
 - [ ] Replace primary UI terms Work Queue, Nodes, and Outcome report with Runs, Machines, and Receipt; retain legacy API/storage names only behind adapters.
+  **Progress:** legacy labels are now Runs, Machines, and Run details. The final
+  Receipt label remains intentionally blocked until Receipt v1 correlation is
+  complete; current UI must not overclaim it.
 - [ ] Add privacy-safe metrics for activation, first useful response, remote reconnect/intervention, Run acceptance/outcome, Receipt review, and failure stage.
+  **Progress:** durable `succeeded`, `failed`, and `needs_attention` Run results
+  are aggregate counters. The metrics contract documents unobservable gaps.
 - [ ] Add a CI vocabulary check for prohibited terms in new customer-facing copy with explicit diagnostics/compatibility exceptions.
 
 **Gate:** no primary customer screen requires “work item,” “routing label,” or
@@ -149,7 +157,10 @@ failure has a next action.
 **Goal:** useful individual governance, without premature audit claims.
 
 - [ ] Implement the allowlisted, bounded Receipt v1 schema independently of
-  legacy queue transport fields.
+  legacy queue transport fields. **Progress:** a core-only allowlisted projection
+  and sanitized JSON exporter now reject prohibited/oversized fields. Every
+  current projection remains partial because approval decisions, bounded
+  file/change summaries, and complete check/audit evidence are not correlated.
 - [ ] Correlate local node audit events with Run, Session, attempt, and Machine.
 - [ ] Aggregate execution identity, requested/effective protection, approvals,
   observed decisions, checks, changes, artifacts, retries, duration, and outcome.
