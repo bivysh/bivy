@@ -27,6 +27,10 @@ import type { LocalStore } from "./local-store.js";
 export interface EphemeralProviderCatalog {
   id: string;
   name: string;
+  /** Strategic/runtime boundary, shared by every onboarding surface. Managed
+   * compute is useful but is not evidence for Bivy's no-markup BYO-cloud moat. */
+  computeClass: "byo-cloud" | "managed-compute";
+  maturity: "stable" | "experimental";
   tokenLabel: string;
   blurb: string;
   steps: string[];
@@ -37,6 +41,8 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
   {
     id: "fly",
     name: "Fly.io",
+    computeClass: "byo-cloud",
+    maturity: "stable",
     tokenLabel: "Fly.io access token",
     blurb: "Bivy creates a temporary Fly Machine, runs the session, then destroys it.",
     steps: [
@@ -52,6 +58,8 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
   {
     id: "hetzner",
     name: "Hetzner Cloud",
+    computeClass: "byo-cloud",
+    maturity: "stable",
     tokenLabel: "Hetzner Cloud API token",
     blurb: "Bivy creates a temporary server, runs the session, then deletes it.",
     steps: [
@@ -67,6 +75,8 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
   {
     id: "sprites",
     name: "Fly Sprites",
+    computeClass: "managed-compute",
+    maturity: "experimental",
     tokenLabel: "Sprites API token",
     blurb: "A machine that remembers: suspends to ~$0 when idle and resumes with everything intact. Reopen the session to wake it.",
     steps: [
@@ -82,6 +92,8 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
   {
     id: "e2b",
     name: "E2B",
+    computeClass: "managed-compute",
+    maturity: "experimental",
     tokenLabel: "E2B API key",
     blurb: "A managed sandbox that ends itself: after a server-enforced timeout it pauses to ~$0 (resume with state intact) — no device needed to keep it in check.",
     steps: [
@@ -97,6 +109,8 @@ export const EPHEMERAL_PROVIDERS: EphemeralProviderCatalog[] = [
   {
     id: "aws",
     name: "AWS EC2",
+    computeClass: "byo-cloud",
+    maturity: "stable",
     tokenLabel: "Access key — paste as accessKeyId:secretAccessKey",
     blurb: "Bivy launches a temporary EC2 instance, runs the session, then terminates it.",
     steps: [
