@@ -3425,6 +3425,9 @@ async function syncModelAuthFromControlPlane() {
     }
 
     await processModelAuthKeyRequests(data.requests ?? []);
+    // Ready means there is no encrypted vault to hydrate, or this node has the
+    // key needed to consume it. Ciphertext with no key remains not-ready.
+    if (!data.vault?.ciphertext || readLocalModelAuthVaultKey()) void reportEphemeralMilestone("credentialsReadyAt");
   } catch (error) {
     console.warn("[auth-sync] model auth sync failed:", (error as Error).message);
   }
@@ -3761,6 +3764,21 @@ let advertiseAgain = false;
 // doesn't flap a healthy node's status.
 const NODE_HEARTBEAT_MS = 30_000;
 let nodeHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
+const reportedEphemeralMilestones = new Set<string>();
+
+async function reportEphemeralMilestone(milestone: "credentialsReadyAt" | "snapshotReadyAt" | "firstAgentEventAt"): Promise<void> {
+  if (!sessionAdvertiseTarget || reportedEphemeralMilestones.has(milestone)) return;
+  try {
+    const res = await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/ephemeral-milestone`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ milestone }),
+    });
+    if (res.ok) reportedEphemeralMilestones.add(milestone);
+  } catch {
+    // Best effort; later sync/events retry until acknowledged.
+  }
+}
 
 /** Re-affirm this node's online status so the registry self-heals a lost
  *  relay connect/close race (see the heartbeat wiring in the relay connector
@@ -6591,6 +6609,7 @@ async function restoreSessionFromSnapshot(sessionId: string): Promise<boolean> {
       /* best-effort listing */
     }
     console.log(`[restore] session ${sessionId}: ${applied.recordCount} records, checkpoint ${applied.checkpointCommit ?? "none"}`);
+    void reportEphemeralMilestone("snapshotReadyAt");
     return true;
   } catch (e) {
     console.error(`[restore] session ${sessionId} failed: ${(e as Error)?.message || e}`);
@@ -7025,6 +7044,7 @@ function attachSessionListeners(record: SessionRecord) {
     });
   }
   record.unsubscribe = record.session.subscribe((event) => {
+    if (event.type === "agent_start" || event.type === "turn_start") void reportEphemeralMilestone("firstAgentEventAt");
     // Keep streamed assistant text ordered ahead of everything else: any event
     // that is not itself a superseding update must flush the session's pending
     // coalesced update first, so a tool_call / message_end never overtakes the

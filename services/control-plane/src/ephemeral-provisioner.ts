@@ -17,6 +17,7 @@
 import {
   launchEphemeralMachine,
   destroyEphemeralMachine,
+  validateEphemeralProviderToken,
   type ExecFn,
   type ExecRequest,
   type LocalStore,
@@ -24,7 +25,7 @@ import {
   type EphemeralKeyStore,
   type MachineStore,
 } from "@bivy/core";
-import type { MeshStore, EphemeralNodeConfig, QueueRouting, HostedAuditEvent } from "./store.js";
+import { providerCredentialFingerprint, type MeshStore, type EphemeralNodeConfig, type QueueRouting, type HostedAuditEvent } from "./store.js";
 import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
 
@@ -41,19 +42,53 @@ export interface ProvisionPlan {
   reason: string;
 }
 
+export const EPHEMERAL_MILESTONES = ["nodeReadyAt", "credentialsReadyAt", "snapshotReadyAt", "firstAgentEventAt"] as const;
+export type EphemeralMilestone = (typeof EPHEMERAL_MILESTONES)[number];
+
+/** Server-stamp a hosted runner milestone. First write wins so reconnects and
+ * repeated agent events cannot move the SLO boundary later. */
+export async function markHostedMachineMilestone(
+  store: MeshStore,
+  accountId: string,
+  nodeId: string,
+  milestone: EphemeralMilestone,
+  at = new Date().toISOString(),
+): Promise<boolean> {
+  const machines = await store.getHostedMachines(accountId);
+  let found = false;
+  let recorded = false;
+  let requestedAt: string | undefined;
+  const next = machines.map((machine) => {
+    if (machine.nodeId !== nodeId) return machine;
+    found = true;
+    const milestones = machine.milestones && typeof machine.milestones === "object"
+      ? machine.milestones as Record<string, unknown>
+      : {};
+    if (typeof milestones[milestone] === "string") return machine;
+    recorded = true;
+    requestedAt = typeof milestones.requestedAt === "string" ? milestones.requestedAt : undefined;
+    return { ...machine, milestones: { ...milestones, [milestone]: at } };
+  });
+  if (found) await store.setHostedMachines(accountId, next);
+  if (recorded) {
+    const startMs = Date.parse(String(requestedAt || ""));
+    const atMs = Date.parse(at);
+    const elapsed = Number.isFinite(startMs) && Number.isFinite(atMs) && atMs >= startMs ? ` elapsedMs=${atMs - startMs}` : "";
+    await audit(store, accountId, { action: "machine_milestone", nodeId, detail: `${milestone}${elapsed}` });
+  }
+  return found;
+}
+
 const DEDUPE_WINDOW_MS = 60 * 60 * 1000; // don't stack hosted machines within an hour
 const MAX_PROVISIONS_PER_HOUR = Math.max(1, Number(process.env.HOSTED_PROVISION_MAX_PER_HOUR ?? 5));
 
 /**
- * Ephemeral machines are OFF by default (fail-closed) and must be explicitly
- * enabled with EPHEMERAL_MACHINES_ENABLED=1. A deploy that never sets it — every
- * production deploy by default — gets no ephemeral provisioning at all. Local/dev
- * (NODE_ENV !== "production") stays on so development isn't gated; every real
- * deploy sets NODE_ENV=production, so staging opts in with =1 while production
- * leaves it off. Mirrors the web VITE_EPHEMERAL_MACHINES_ENABLED build flag.
+ * Deployment-level emergency kill switch. Product access is gated per account
+ * by hosted.enabled + a provider credential; the deploy flag exists only to stop
+ * all NEW launches during an incident. Cleanup ignores this switch.
  */
 export function ephemeralMachinesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.NODE_ENV !== "production" || env.EPHEMERAL_MACHINES_ENABLED === "1";
+  return env.EPHEMERAL_MACHINES_ENABLED !== "0";
 }
 
 function withinMs(iso: unknown, ms: number, nowMs: number): boolean {
@@ -106,6 +141,9 @@ export async function planAutoProvision(store: MeshStore, accountId: string, now
   if (!hosted.providerTokens?.[target.provider]) {
     return { willProvision: false, targetConfigId: target.id, reason: `no hosted token for provider ${target.provider}` };
   }
+  if (hosted.validatedProviders?.[target.provider] !== providerCredentialFingerprint(hosted.providerTokens[target.provider])) {
+    return { willProvision: false, targetConfigId: target.id, reason: `provider credential for ${target.provider} has not been validated` };
+  }
   // A config primary is the designated runner (provision regardless of node
   // liveness). A node primary only falls back to its config when nothing online.
   if (routing.primary.kind === "node") {
@@ -143,6 +181,12 @@ function directExec(): ExecFn {
     }
     return { status: res.status, body: parsed };
   };
+}
+
+/** Read-only hosted onboarding check. The credential is used transiently for a
+ * provider-authenticated list/describe call and is not persisted by this helper. */
+export function validateHostedProviderToken(provider: string, token: string, region?: string): Promise<void> {
+  return validateEphemeralProviderToken(provider, token, directExec(), region);
 }
 
 function serverKeyStore(providerToken: string): EphemeralKeyStore {
@@ -453,16 +497,35 @@ export async function reconcileHostedMachines(store: MeshStore, accountId: strin
       kept.push(m);
       continue;
     }
-    reaped++;
     const nodeId = typeof m.nodeId === "string" ? m.nodeId : "";
     const provider = typeof m.provider === "string" ? m.provider : "";
     const providerToken = env && provider ? hosted?.providerTokens?.[provider] : undefined;
     if (env && providerToken) {
       try {
         await destroyOneHostedMachine(store, accountId, m as unknown as EphemeralMachine, providerToken, env, nowMs, destroy);
-      } catch {
-        if (nodeId) await store.removeNode(accountId, nodeId).catch(() => {});
+      } catch (error) {
+        // Never forget a resource whose provider deletion failed: it may still
+        // be billing, and retaining the record lets the next sweep retry.
+        kept.push(m);
+        await audit(store, accountId, {
+          action: "reconcile_failed",
+          provider: provider || undefined,
+          nodeId: nodeId || undefined,
+          detail: `provider destroy: ${String((error as Error)?.message || error).slice(0, 120)}`,
+        });
+        continue;
       }
+    } else if (env) {
+      // A hosted resource without a usable provider credential cannot be proven
+      // deleted. Keep tracking it so credential repair allows a later retry.
+      kept.push(m);
+      await audit(store, accountId, {
+        action: "reconcile_failed",
+        provider: provider || undefined,
+        nodeId: nodeId || undefined,
+        detail: "provider credential unavailable; resource retained for retry",
+      });
+      continue;
     } else if (nodeId) {
       try {
         await store.removeNode(accountId, nodeId);
@@ -470,10 +533,42 @@ export async function reconcileHostedMachines(store: MeshStore, accountId: strin
         /* best effort — Fly/EC2 self-destruct regardless */
       }
     }
+    reaped++;
     await audit(store, accountId, { action: "machine_reaped", nodeId: nodeId || undefined, detail: `ttl ${ttlMin}m elapsed${env && providerToken ? " — destroyed" : ""}` });
   }
   if (reaped) await store.setHostedMachines(accountId, kept);
   return reaped;
+}
+
+export interface ReconcileAllResult {
+  accounts: number;
+  reaped: number;
+  failed: number;
+}
+
+/** Sweep every account with tracked hosted machines. This is the TTL leak
+ * backstop when no new work arrives and a runner never sends /node/settled.
+ * Accounts are isolated: one provider/store failure cannot stop the rest. */
+export async function reconcileAllHostedMachines(
+  store: MeshStore,
+  env: ProvisionEnv,
+  nowMs = Date.now(),
+  destroy: DestroyFn = destroyEphemeralMachine,
+): Promise<ReconcileAllResult> {
+  const accountIds = await store.listHostedMachineAccountIds();
+  const result: ReconcileAllResult = { accounts: accountIds.length, reaped: 0, failed: 0 };
+  for (const accountId of accountIds) {
+    try {
+      result.reaped += await reconcileHostedMachines(store, accountId, nowMs, env, destroy);
+    } catch (error) {
+      result.failed++;
+      await audit(store, accountId, {
+        action: "reconcile_failed",
+        detail: String((error as Error)?.message || error).slice(0, 160),
+      });
+    }
+  }
+  return result;
 }
 
 /**

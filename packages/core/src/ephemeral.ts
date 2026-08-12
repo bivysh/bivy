@@ -538,6 +538,10 @@ export interface EphemeralMachine {
   status: string; // starting | running | stopped | gone
   ip: string | null;
   createdAt: string;
+  /** Cold-start timestamps. `requestedAt` begins the user-visible budget;
+   * `providerAcceptedAt` means the create API returned, not that the agent is
+   * ready. Later milestones are server-stamped from the enrolled node. */
+  milestones?: EphemeralMilestones;
   ttlMinutes?: number;
   /** Destroy after the agent completes its turn; TTL is still the fallback. */
   teardownOnAgentFinish?: boolean;
@@ -559,6 +563,21 @@ export interface EphemeralMachine {
    *  or a general-purpose queue worker for the account's ephemeral default
    *  ("queue-default"). Display/bookkeeping only. */
   purpose?: "queue-item" | "queue-default";
+}
+
+export interface EphemeralMilestones {
+  requestedAt?: string;
+  providerAcceptedAt?: string;
+  nodeReadyAt?: string;
+  credentialsReadyAt?: string;
+  snapshotReadyAt?: string;
+  firstAgentEventAt?: string;
+}
+
+export function ephemeralColdStartMs(machine: Pick<EphemeralMachine, "milestones">): number | undefined {
+  const start = Date.parse(String(machine.milestones?.requestedAt || ""));
+  const ready = Date.parse(String(machine.milestones?.firstAgentEventAt || ""));
+  return Number.isFinite(start) && Number.isFinite(ready) && ready >= start ? ready - start : undefined;
 }
 
 export interface MachineStore {
@@ -872,6 +891,10 @@ export interface ProviderAdapter {
   defaultRegion: string;
   sizes: ProviderSize[];
   defaultSize: string;
+  /** Authenticate with a read-only provider request. Used during onboarding so
+   * invalid/under-scoped credentials fail before Bivy stores or launches with
+   * them. Must never create, update, wake, stop, or delete a resource. */
+  validateToken?(args: { exec: ExecFn; token: string; region?: string }): Promise<void>;
   /** Optionally fetch the provider's live, currently-orderable sizes so the
    *  hardcoded `sizes` list can't silently go stale (e.g. a plan gets
    *  deprecated). When a region is given, results are narrowed to what that
@@ -894,6 +917,20 @@ export interface ProviderAdapter {
    *  forces the machine warm (for Sprites, starting its supervised `bivy`
    *  service). Idempotent: safe to call on an already-running machine. */
   wake?(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
+}
+
+export async function validateEphemeralProviderToken(
+  provider: string,
+  token: string,
+  exec: ExecFn,
+  region?: string,
+): Promise<void> {
+  const adapter = ephemeralAdapter(provider);
+  if (!adapter) throw new Error(`Unknown provider: ${provider}`);
+  const value = String(token || "").trim();
+  if (!value) throw new Error(`${adapter.name} token is required`);
+  if (!adapter.validateToken) throw new Error(`${adapter.name} credential validation is not available`);
+  await adapter.validateToken({ exec, token: value, region: region || adapter.defaultRegion });
 }
 
 function mapHetznerStatus(s: string): string {
@@ -1057,6 +1094,14 @@ const hetzner: ProviderAdapter = {
   // x86, 4 GB — closest drop-in for the retired cx22, and x86 avoids the
   // Arm-compat pitfalls of the cax line for Docker images and binaries.
   defaultSize: "cpx21",
+  async validateToken({ exec, token }) {
+    const res = await call(exec, {
+      method: "GET",
+      url: "https://api.hetzner.cloud/v1/servers?per_page=1",
+      headers: bearer(token),
+    });
+    if (res.status >= 300) throw new Error(providerError(res, "validate credential"));
+  },
   async listSizes({ exec, token, region }) {
     // Live catalog minus anything Hetzner has deprecated (both memoized per
     // token, so switching region doesn't re-fetch).
@@ -1200,6 +1245,14 @@ const fly: ProviderAdapter = {
     { id: "shared-4x-8gb", label: "shared · 4 vCPU · 8 GB", pricePerHour: 0.0546 },
   ],
   defaultSize: "shared-1x-2gb",
+  async validateToken({ exec, token }) {
+    const res = await call(exec, {
+      method: "GET",
+      url: "https://api.machines.dev/v1/apps",
+      headers: bearer(token),
+    });
+    if (res.status >= 300) throw new Error(providerError(res, "validate credential"));
+  },
   async provision({ exec, token, config, userData, bootstrap }) {
     const app = `bivy-${config.slug}`;
     const org = config.org || "personal";
@@ -1672,6 +1725,10 @@ const aws: ProviderAdapter = {
   defaultRegion: "us-east-1",
   sizes: AWS_SIZES,
   defaultSize: "t3.medium",
+  async validateToken({ exec, token, region }) {
+    const creds = parseAwsToken(token);
+    await awsEc2Call(exec, creds, region || aws.defaultRegion, "DescribeInstances", { MaxResults: "5" }, "validate credential");
+  },
   async listSizes({ exec, token, region }) {
     const creds = parseAwsToken(token);
     const reg = region || aws.defaultRegion;
@@ -1857,6 +1914,10 @@ const sprites: ProviderAdapter = {
   defaultRegion: "iad",
   sizes: SPRITES_SIZES,
   defaultSize: "4x8",
+  async validateToken({ exec, token }) {
+    const res = await call(exec, { method: "GET", url: `${SPRITES_HOST}/v1/sprites`, headers: bearer(token) });
+    if (res.status >= 300) throw new Error(providerError(res, "validate credential"));
+  },
   async provision({ exec, token, config, bootstrap }) {
     const name = `bivy-${config.slug}`;
     const guest = SPRITES_GUEST[config.size as string] || SPRITES_GUEST[sprites.defaultSize] || { cpus: 4, ramMb: 8192 };
@@ -2001,6 +2062,10 @@ const e2b: ProviderAdapter = {
   defaultRegion: "us",
   sizes: E2B_SIZES,
   defaultSize: "2x4",
+  async validateToken({ exec, token }) {
+    const res = await call(exec, { method: "GET", url: `${E2B_HOST}/v2/sandboxes?limit=1`, headers: e2bAuth(token) });
+    if (res.status >= 300) throw new Error(providerError(res, "validate credential"));
+  },
   async provision({ exec, token, config, bootstrap }) {
     if (!bootstrap) throw new Error("E2B bootstrap missing");
     const size = (config.size as string) || e2b.defaultSize;
@@ -2230,6 +2295,7 @@ export async function launchEphemeralMachine(
   opts: LaunchOpts,
   deps: { store: LocalStore; exec: ExecFn; keys: EphemeralKeyStore; machines: MachineStore; fetchImpl?: typeof fetch },
 ): Promise<EphemeralMachine> {
+  const requestedAt = nowIso();
   const fetchImpl = deps.fetchImpl ?? fetch;
   const adapter = ephemeralAdapter(opts.provider);
   if (!adapter) throw new Error(`Unknown provider: ${opts.provider}`);
@@ -2302,6 +2368,7 @@ export async function launchEphemeralMachine(
     bootstrap,
     config: { slug: ephemeralNodeLabel(nodeId), region: opts.region || adapter.defaultRegion, size, ttlMinutes: opts.ttlMinutes },
   });
+  machine.milestones = { ...(machine.milestones ?? {}), requestedAt, providerAcceptedAt: nowIso() };
   machine.nodeId = nodeId;
   // Persist the user-chosen name (from a saved setup) onto the machine record.
   // Without this the record kept the provider-generated name (e.g. Fly's

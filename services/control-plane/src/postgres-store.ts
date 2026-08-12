@@ -28,6 +28,7 @@ import {
   type QueueRouting,
   normalizeQueueRouting,
   type HostedProvisioning,
+  providerCredentialFingerprint,
   normalizeHostedProvisioning,
   DEFAULT_HOSTED_PROVISIONING,
   type HostedProvisioningStatus,
@@ -1561,6 +1562,7 @@ export class PostgresStore implements MeshStore {
       for (const [p, t] of Object.entries(h.providerTokens)) enc[p] = encryptSecret(accountId, t);
       out.providerTokens = enc;
     }
+    if (h.validatedProviders && Object.keys(h.validatedProviders).length) out.validatedProviders = h.validatedProviders;
     return out;
   }
 
@@ -1591,6 +1593,13 @@ export class PostgresStore implements MeshStore {
       }
       if (Object.keys(tokens).length) out.providerTokens = tokens;
     }
+    if (s.validatedProviders && typeof s.validatedProviders === "object") {
+      const validated: Record<string, string> = {};
+      for (const [provider, fingerprint] of Object.entries(s.validatedProviders)) {
+        if (typeof fingerprint === "string") validated[provider] = fingerprint;
+      }
+      if (Object.keys(validated).length) out.validatedProviders = validated;
+    }
     return out;
   }
 
@@ -1610,16 +1619,22 @@ export class PostgresStore implements MeshStore {
       credential: hasApp ? "app" : s.githubToken ? "pat" : "none",
       githubAppId: hasApp ? String(s.githubApp.appId) : undefined,
       providers: s.providerTokens && typeof s.providerTokens === "object" ? Object.keys(s.providerTokens) : [],
+      validatedProviders: s.validatedProviders && typeof s.validatedProviders === "object" ? Object.keys(s.validatedProviders) : [],
     };
   }
 
   async setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning> {
     const current = await this.getHostedProvisioning(accountId);
+    const validatedProviders = { ...(current.validatedProviders ?? {}), ...(patch.validatedProviders ?? {}) };
+    for (const [provider, token] of Object.entries(patch.providerTokens ?? {})) {
+      if (validatedProviders[provider] !== providerCredentialFingerprint(token)) delete validatedProviders[provider];
+    }
     // Merge provider tokens so adding one provider doesn't wipe the others.
     const merged = normalizeHostedProvisioning({
       ...current,
       ...patch,
       providerTokens: { ...(current.providerTokens ?? {}), ...(patch.providerTokens ?? {}) },
+      validatedProviders,
     });
     // Encrypt at rest (throws if the master key is unset — fail closed).
     await this.query(`UPDATE accounts SET hosted_provisioning = $2 WHERE id = $1`, [accountId, JSON.stringify(this.sealHosted(accountId, merged))]);
@@ -1636,6 +1651,14 @@ export class PostgresStore implements MeshStore {
     const arr = Array.isArray(machines) ? machines : [];
     await this.query(`UPDATE accounts SET hosted_machines = $2 WHERE id = $1`, [accountId, JSON.stringify(arr)]);
     return arr;
+  }
+
+  async listHostedMachineAccountIds(): Promise<string[]> {
+    // Filter in JS: pg-mem (the dev/test backend) does not implement Postgres's
+    // jsonb_typeof/jsonb_array_length functions, and this scan runs only on the
+    // small account metadata rows (never session content).
+    const { rows } = await this.query(`SELECT id, hosted_machines FROM accounts WHERE hosted_machines IS NOT NULL`);
+    return rows.filter((row) => Array.isArray(row.hosted_machines) && row.hosted_machines.length > 0).map((row) => String(row.id));
   }
 
   async appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void> {

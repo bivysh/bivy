@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
-import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
+import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
@@ -383,6 +383,24 @@ async function pruneExpiredAuthTokens() {
 }
 void pruneExpiredAuthTokens();
 setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
+
+// Cost-safety backstop: sweep every account that still tracks a hosted runner,
+// even when no new work arrives and the runner never reports /node/settled.
+// Cleanup deliberately ignores the launch feature flag: an emergency kill switch
+// must stop new spend without disabling deletion of resources already billing.
+const HOSTED_MACHINE_RECONCILE_MS = Math.max(60_000, Number(process.env.HOSTED_MACHINE_RECONCILE_MS) || 5 * 60_000);
+async function reconcileHostedMachineFleet() {
+  try {
+    const result = await reconcileAllHostedMachines(store, provisionEnv());
+    if (result.reaped || result.failed) {
+      console.log(`[hosted-reconcile] accounts=${result.accounts} reaped=${result.reaped} failed=${result.failed}`);
+    }
+  } catch (error) {
+    console.error("[hosted-reconcile] account scan failed:", error);
+  }
+}
+void reconcileHostedMachineFleet();
+setInterval(reconcileHostedMachineFleet, HOSTED_MACHINE_RECONCILE_MS).unref();
 
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -1248,7 +1266,16 @@ app.get("/node/account", requireNode, asyncHandler(async (req, res) => {
 app.post("/node/heartbeat", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   await store.setNodeOnline(node.id, true);
+  await markHostedMachineMilestone(store, node.accountId, node.id, "nodeReadyAt").catch(() => false);
   res.json({ ok: true });
+}));
+
+app.post("/node/ephemeral-milestone", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const milestone = String(req.body?.milestone ?? "");
+  if (!(EPHEMERAL_MILESTONES as readonly string[]).includes(milestone)) return res.status(400).json({ error: "unknown milestone" });
+  const tracked = await markHostedMachineMilestone(store, node.accountId, node.id, milestone as (typeof EPHEMERAL_MILESTONES)[number]);
+  res.json({ ok: true, tracked });
 }));
 
 app.post("/node/name", requireNode, asyncHandler(async (req, res) => {
@@ -2782,6 +2809,29 @@ app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_updated", detail: Object.keys(patch).join(",") || "none" });
   const status = await store.getHostedProvisioningStatus(client.accountId);
   res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
+}));
+
+// Read-only provider credential validation for hosted onboarding. This endpoint
+// deliberately does not persist the submitted token; callers validate first,
+// then opt in/store it through PUT /account/hosted-provisioning.
+app.post("/account/hosted-provisioning/validate-provider", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const provider = String(req.body?.provider ?? "").trim();
+  const token = String(req.body?.token ?? "").trim();
+  if (!provider || !token) return res.status(400).json({ error: "provider and token are required" });
+  try {
+    await validateHostedProviderToken(provider, token, typeof req.body?.region === "string" ? req.body.region : undefined);
+    const current = await store.getHostedProvisioning(client.accountId);
+    await store.setHostedProvisioning(client.accountId, {
+      validatedProviders: { ...(current.validatedProviders ?? {}), [provider]: providerCredentialFingerprint(token) },
+    });
+    res.json({ ok: true, provider });
+  } catch (error) {
+    const detail = String((error as Error)?.message || error).slice(0, 160);
+    await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_validation_failed", provider, detail });
+    res.status(400).json({ error: `${provider} credential validation failed: ${detail}` });
+  }
 }));
 
 // Audit trail of hosted-credential use (never contains secrets).
