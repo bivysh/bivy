@@ -5,6 +5,14 @@
 **Decision record:** see [`product-roadmap-decisions.md`](product-roadmap-decisions.md) (D-003)
 **Companion:** [`developer-platform-implementation-plan.md`](developer-platform-implementation-plan.md) — this plan supplies the *modularization spine* those phases assume.
 
+> **Strategic pivot (2026-08-12, D-017):** the effort is now **moat-first**, not
+> modularization-first. Most of the pure refactoring here is at a coherent stopping
+> point; active work follows [`pitch-gap-implementation-plan.md`](pitch-gap-implementation-plan.md)
+> — account-free pairing (also Phase 3's reference consumer), then the audit trail,
+> BYO-cloud automations, and credential-broker polish. Phases below stay as the
+> refactor spine those consumers lean on; the remaining slices (engine 2c/3/4,
+> remote 2–4, contract versioning 2b/3) are parked unless a concrete need revives them.
+
 ## Objective
 
 Turn Bivy from a daemon-with-seams into a **local-first kernel with removable
