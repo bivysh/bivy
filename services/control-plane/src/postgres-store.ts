@@ -3015,7 +3015,6 @@ function mapWorkItem(row: any): WorkItem {
     triggerId: row.trigger_id ?? undefined,
     triggerKind: row.trigger_kind ?? undefined,
     attempt: Number(row.attempt ?? 1),
-    maxAttempts: row.max_attempts ?? undefined,
     targetKind: row.target_kind ?? "new_session",
     targetSessionId: row.target_session_id ?? undefined,
     message: Boolean(row.message) || undefined,
@@ -3118,6 +3117,7 @@ function mapAutomationRun(row: any): AutomationRun {
     triggerKind: triggerKindForSource(row.trigger_kind ?? undefined, row.source),
     status: row.status === "done" ? "succeeded" : row.status,
     attempt: Number(row.attempt ?? 1),
+    maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
     target: row.target_kind === "existing_session"
       ? { kind: "existing_session", sessionId: row.target_session_id }
       : { kind: "new_session" },
