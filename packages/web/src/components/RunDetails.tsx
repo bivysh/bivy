@@ -290,7 +290,7 @@ function RunBody({
         <Row k="Session">
           {run.sessionId
             ? sessionOpenable
-              ? <button type="button" className="linklike" onClick={() => onOpenSession!(run.sessionId!)}>Open Session</button>
+              ? <button type="button" className="link-btn" onClick={() => onOpenSession!(run.sessionId!)}>Open Session</button>
               : <span className="run-details-muted">Correlated Session isn&apos;t available here</span>
             : <span className="run-details-muted">Not correlated</span>}
         </Row>
@@ -323,9 +323,11 @@ function RunBody({
         </div>
       )}
 
-      <div className="run-details-receipt">
-        <span className="k">Receipt</span>
-        <span className="v run-details-muted">Unavailable — a Receipt for this Run isn&apos;t ready yet.</span>
+      <div className="run-sheet-rows run-details-receipt">
+        <div className="run-sheet-row">
+          <span className="k">Receipt</span>
+          <span className="v run-details-muted">Unavailable — a Receipt for this Run isn&apos;t ready yet.</span>
+        </div>
       </div>
 
       {actionError && <div className="run-sheet-failure" role="alert">{actionError}</div>}
