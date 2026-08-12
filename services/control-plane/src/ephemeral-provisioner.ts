@@ -554,11 +554,15 @@ export async function reapSettledHostedMachine(
       await destroyOneHostedMachine(store, accountId, machine, providerToken, env, nowMs, destroy);
       await audit(store, accountId, { action: "machine_reaped", provider: machine.provider, nodeId, detail: "settled — destroyed" });
     } else {
-      // No hosted token to authenticate a destroy (unexpected for hosted): at
-      // least forget the record + unenroll so the node slot frees.
-      await store.setHostedMachines(accountId, machines.filter((m) => m.nodeId !== nodeId));
-      await store.removeNode(accountId, nodeId).catch(() => {});
-      await audit(store, accountId, { action: "machine_reaped", nodeId, detail: "settled — no token" });
+      // Missing credentials are not proof that the provider resource is gone.
+      // Keep the record visible so restoring the credential permits a retry;
+      // silently forgetting it could orphan a still-billing VM.
+      await audit(store, accountId, {
+        action: "reconcile_failed",
+        provider: machine.provider,
+        nodeId,
+        detail: "provider credential unavailable; resource retained for retry",
+      });
     }
   } catch (e) {
     await audit(store, accountId, { action: "provision_failed", nodeId, detail: `settled reap: ${String((e as Error)?.message || e).slice(0, 120)}` });

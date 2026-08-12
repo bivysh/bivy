@@ -35,7 +35,7 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
           <p className="muted settings-intro">
             {firstRun
               ? "Connect your own cloud account to run agents on temporary servers. Pick a provider, paste a token, and you're ready — your first message launches the machine."
-              : "Pick a provider and paste a token. Connecting one adds a runner you can pick in the machine menu."}
+              : "Pick a provider and paste a token. Connecting one adds an isolated machine profile you can pick in the machine menu."}
           </p>
           {EPHEMERAL_PROVIDERS.map((p) => {
             const k = keys.find((x) => x.id === p.id);
@@ -123,14 +123,14 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
           <button className="btn primary" disabled={!token.trim() || saving} onClick={connect}>
             {saving ? "Connecting…" : "Connect"}
           </button>
-          <p className="muted small">The token stays on this device — Bivy never stores it. You can fine-tune region, size, and auto-destroy later in Settings → Ephemeral machines.</p>
+          <p className="muted small">The token stays on this device — Bivy never stores it. You can fine-tune region, size, and auto-destroy later in Settings → Isolated machine profiles.</p>
         </>
       ) : (
         <>
           <p className="chip ok">✓ {catalog.name} connected</p>
-          <p className="muted small">A default runner is ready. Pick it and send your first message to launch a machine — no launch button. Adjust its region / size / TTL anytime in Settings → Ephemeral machines.</p>
+          <p className="muted small">A default isolated machine profile is ready. Pick it and send your first message to launch a machine — no launch button. Adjust its region / size / TTL anytime in Settings → Isolated machine profiles.</p>
           <div className="row-actions">
-            <button className="btn primary" disabled={busy} onClick={useRunner}>{busy ? "…" : "Use this runner"}</button>
+            <button className="btn primary" disabled={busy} onClick={useRunner}>{busy ? "…" : "Use this profile"}</button>
             <button
               className="btn danger-ghost"
               onClick={() => setConfirm({
@@ -154,9 +154,9 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
           : `It will remain billable until its ${pendingRunner.ttlMinutes ?? "provider-default"}-minute TTL or manual teardown.`;
         return (
           <ConfirmDialog
-            title="Use this billable runner?"
-            message={`${catalog.name} will launch a machine in ${region}${size ? ` (${size.label})` : ""} when you send your first message. ${cost || "The provider's live rate applies."} ${teardown}`}
-            confirmLabel="Use runner"
+            title="Use this billable machine profile?"
+            message={`${catalog.name} will launch an isolated machine in ${region}${size ? ` (${size.label})` : ""} when you send your first message. ${cost || "The provider's live rate applies."} ${teardown}`}
+            confirmLabel="Use profile"
             onCancel={() => setPendingRunner(null)}
             onConfirm={() => {
               controller.pickDraftEphemeralRunner(pendingRunner);

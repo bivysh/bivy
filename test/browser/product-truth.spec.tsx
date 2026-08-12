@@ -23,7 +23,7 @@ test("settings use task-oriented groups and search panel concepts", async () => 
   for (const group of ["Models & agents", "Machines", "App", "Account"]) {
     expect(source).toContain(`label: "${group}"`);
   }
-  // Integrations (GitHub/Linear/Slack) and automation & policy (Work Queue,
+  // Integrations (GitHub/Linear/Slack) and automation & policy (Runs,
   // Rulesets) moved to the Automations hub — Settings no longer lists
   // them, it only redirects stale /settings/:view deep links there.
   expect(source).not.toContain('label: "Integrations"');
@@ -32,9 +32,9 @@ test("settings use task-oriented groups and search panel concepts", async () => 
   expect(source).toContain("SEARCH_TERMS[item.id]");
 });
 
-test("automations is the single hub for connections, work queue and rulesets", async () => {
+test("automations is the single hub for connections, Runs and rulesets", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/AutomationsView.tsx", import.meta.url), "utf8");
-  for (const tab of ["Overview", "Work Queue", "Rulesets"]) {
+  for (const tab of ["Overview", "Runs", "Rulesets"]) {
     expect(source).toContain(`label: "${tab}"`);
   }
   // The standalone Webhooks tab was removed — a webhook is just an automation
@@ -69,7 +69,7 @@ test("opening the queue panel cannot trigger billable provisioning", async () =>
 
 test("interactive billable runners disclose cost and teardown before selection", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/Ephemeral.tsx", import.meta.url), "utf8");
-  expect(source).toContain('title="Use this billable runner?"');
+  expect(source).toContain('title="Use this billable machine profile?"');
   expect(source).toContain("ephemeralCostHint");
   expect(source).toContain("controller.pickDraftEphemeralRunner(pendingRunner)");
 });

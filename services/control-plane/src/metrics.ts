@@ -105,6 +105,34 @@ export function recordFunnelEvent(event: FunnelEvent, source: string, plan: stri
   console.info(`[funnel] ${JSON.stringify({ event, source: safeSource, plan: safePlan, count })}`);
 }
 
+export type RunLifecycleOutcome = "succeeded" | "failed" | "needs_attention";
+export type RunLifecycleRecorder = (outcome: RunLifecycleOutcome) => void;
+
+const runLifecycleResults = new client.Counter({
+  name: "bivy_run_lifecycle_results_total",
+  help: "Durably transitioned Run lifecycle results.",
+  labelNames: ["outcome"],
+  registers: [register],
+});
+
+export const recordRunLifecycleResult: RunLifecycleRecorder = (outcome) => {
+  runLifecycleResults.inc({ outcome });
+  console.info(`[funnel] ${JSON.stringify({ event: "run_lifecycle_result", outcome })}`);
+};
+
+/**
+ * Record only a transition result known by its caller to have been persisted.
+ * Injection keeps call-placement tests independent of Prometheus global state.
+ */
+export function recordDurableRunLifecycleResult<T>(
+  durableResult: T | null | undefined,
+  outcome: RunLifecycleOutcome,
+  recorder: RunLifecycleRecorder = recordRunLifecycleResult,
+): T | null | undefined {
+  if (durableResult != null) recorder(outcome);
+  return durableResult;
+}
+
 // --- Business / usage gauges ------------------------------------------------
 
 const accountsTotal = new client.Gauge({

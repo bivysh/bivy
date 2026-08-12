@@ -129,7 +129,7 @@ export function NodeSwitcher() {
           ))}
           {EPHEMERAL_MACHINES_ENABLED && ephemeralConfigs.length > 0 && (
             <>
-              <div className="node-menu-head">Ephemeral machines</div>
+              <div className="node-menu-head">Isolated machine profiles</div>
               {ephemeralConfigs.map((config) => {
                 // Each runner is a template. Picking it just targets the draft at
                 // it — the first message launches a fresh machine bound to the new
@@ -143,7 +143,7 @@ export function NodeSwitcher() {
                     className={`node-menu-item${picked ? " active" : ""}`}
                     role="menuitem"
                     disabled={inUse}
-                    title={inUse ? "In use by another session — a runner runs one machine per session" : undefined}
+                    title={inUse ? "In use by another session — each profile runs one machine per session" : undefined}
                     onClick={() => {
                       if (inUse) return;
                       setOpen(false);
@@ -154,7 +154,7 @@ export function NodeSwitcher() {
                     <span className="sr-only">{inUse ? "In use — " : picked ? "Selected — " : "Available — "}</span>
                     <span className="node-menu-name">{config.name}</span>
                     {inUse
-                      ? <span className="chip" title="This runner's machine belongs to another session">In use</span>
+                      ? <span className="chip" title="This machine belongs to another session">In use</span>
                       : <span className="chip">{config.provider}</span>}
                     {picked && <span className="node-menu-check">✓</span>}
                   </button>
