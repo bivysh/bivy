@@ -359,6 +359,12 @@ export class DirectTransport implements Transport {
         case "abort":
           await this.directApi("/api/session/abort", { method: "POST", body: JSON.stringify({ sessionId: obj.sessionId }) });
           break;
+        case "session.turn_attention.resolve":
+          await this.directApi("/api/session/turn-attention", {
+            method: "POST",
+            body: JSON.stringify({ sessionId: obj.sessionId, action: obj.action }),
+          });
+          break;
         case "session.command.invoke":
           // Protocol-mode agent command. Any output rides back over the live WS
           // (session.status / message / session.done), so no synthetic event here.

@@ -308,6 +308,16 @@ export interface UserQuestionRequest {
   createdAt?: number;
 }
 
+/** A soft watchdog warning that asks the user whether to stop a possibly stuck
+ * turn or keep waiting. One may be pending per session. */
+export interface TurnAttentionRequest {
+  sessionId: string;
+  trigger: "stalled" | "wedged";
+  idleMs: number;
+  at: number;
+  message: string;
+}
+
 /** Reasoning/thinking capability of the current model. */
 export interface ThinkingState {
   supportsThinking: boolean;
@@ -665,6 +675,8 @@ export interface AppState {
   approvals: ApprovalRequest[];
   /** Pending clarifying questions (see UserQuestionRequest) across every session. */
   questions: UserQuestionRequest[];
+  /** Soft watchdog decisions pending across sessions. */
+  turnAttentions: TurnAttentionRequest[];
   models: ModelInfo[];
   /** The runtime the current `models`/`currentModel` were resolved for (the
    *  node tags each models.list with its runtime). Null when unknown — e.g. the
@@ -865,6 +877,7 @@ export function initialState(): AppState {
     opening: false,
     approvals: [],
     questions: [],
+    turnAttentions: [],
     models: [],
     modelsRuntimeId: null,
     currentModelId: null,
@@ -1872,6 +1885,7 @@ export class SessionStore {
       opening: false,
       approvals: [],
       questions: [],
+      turnAttentions: [],
       // Per-session display state must not blend across nodes either.
       usage: null,
       changes: null,
@@ -2100,6 +2114,7 @@ export class SessionStore {
       opening: false,
       approvals: [],
       questions: [],
+      turnAttentions: [],
       // A fresh draft must not keep showing whichever agent the *previously
       // viewed* session happened to be running — currentAgentName/selectedAgentId
       // otherwise just carry over from that session's applyHistory (or a stale
@@ -2310,7 +2325,7 @@ export class SessionStore {
             updatedAt: e.updatedAt || e.modified || (known ? undefined : Date.now()),
             status: sessionStatusFromState(sessionState) ?? "idle",
             sessionState,
-            needsAction: sessionState?.agent === "awaiting-input" ? true : false,
+            needsAction: sessionState?.displayStatus === "needs_attention" ? true : false,
           });
         }
         // Fold the live runtime's refined capabilities (e.g. modelSelection from
@@ -2330,7 +2345,7 @@ export class SessionStore {
         this.updateSessionRow(sid, {
           sessionState,
           status: sessionStatusFromState(sessionState),
-          needsAction: sessionState.agent === "awaiting-input",
+          needsAction: sessionState.displayStatus === "needs_attention",
         });
         if (sid === this.state.activeSessionId) {
           this.set({ working: sessionState.agent === "working", ...(sessionState.agent !== "working" ? { workingLabel: "" } : {}) });
@@ -2631,6 +2646,29 @@ export class SessionStore {
         if (resolved?.sessionId && !this.sessionStillNeedsAction(resolved.sessionId)) {
           this.updateSessionRow(resolved.sessionId, { status: "idle", needsAction: false });
         }
+        return;
+      }
+      case "session.turn_attention": {
+        const e = event as any;
+        const sessionId = String(e.sessionId || "");
+        const trigger = e.trigger === "wedged" ? "wedged" : e.trigger === "stalled" ? "stalled" : undefined;
+        if (!sessionId || !trigger) return;
+        const request: TurnAttentionRequest = {
+          sessionId,
+          trigger,
+          idleMs: Math.max(0, Number(e.idleMs) || 0),
+          at: Number(e.at) || Date.now(),
+          message: String(e.message || "This turn may be stuck. Stop it or keep waiting?"),
+        };
+        this.set({ turnAttentions: [...this.state.turnAttentions.filter((a) => a.sessionId !== sessionId), request] });
+        this.updateSessionRow(sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
+        return;
+      }
+      case "session.turn_attention.resolved": {
+        const sessionId = String((event as any).sessionId || "");
+        if (!sessionId) return;
+        this.set({ turnAttentions: this.state.turnAttentions.filter((a) => a.sessionId !== sessionId) });
+        if (!this.sessionStillNeedsAction(sessionId)) this.updateSessionRow(sessionId, { status: "working", needsAction: false });
         return;
       }
       case "models.list": {
@@ -3408,13 +3446,13 @@ export class SessionStore {
   }
 
   /** Whether a session still has anything outstanding that should keep its
-   *  sidebar dot on "needs your response" — a pending approval OR a pending
-   *  clarifying question. Shared by approval.resolved/removed and
-   *  session.question.resolved so resolving one kind can't clear the dot out
-   *  from under the other kind still pending on the same session (see the
-   *  regression test covering exactly that ordering in store.test.ts). */
+   *  sidebar dot on "needs your response" — a pending approval, clarifying
+   *  question, or watchdog decision. Shared by resolution handlers so resolving
+   *  one kind can't clear the dot out from under another still-pending kind. */
   private sessionStillNeedsAction(sessionId: string): boolean {
-    return this.state.approvals.some((a) => a.sessionId === sessionId) || this.state.questions.some((q) => q.sessionId === sessionId);
+    return this.state.approvals.some((a) => a.sessionId === sessionId)
+      || this.state.questions.some((q) => q.sessionId === sessionId)
+      || this.state.turnAttentions.some((a) => a.sessionId === sessionId);
   }
 
   /**

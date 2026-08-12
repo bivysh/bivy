@@ -8,6 +8,7 @@ import { ChatView } from "./components/ChatView.js";
 import { Composer } from "./components/Composer.js";
 import { ApprovalStack } from "./components/ApprovalCard.js";
 import { QuestionStack } from "./components/QuestionCard.js";
+import { TurnAttentionCard } from "./components/TurnAttentionCard.js";
 import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import { SetupNotice } from "./components/SetupNotice.js";
 import { NodeSwitcher } from "./components/NodeSwitcher.js";
@@ -366,7 +367,7 @@ export function App() {
     target.scrollIntoView({ block: "center" });
     target.setAttribute("tabindex", "-1");
     target.focus({ preventScroll: true });
-  }, [state.activeSessionId, state.approvals, state.questions]);
+  }, [state.activeSessionId, state.approvals, state.questions, state.turnAttentions]);
 
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
@@ -427,6 +428,7 @@ export function App() {
   // no sessionId are treated as global and shown everywhere.
   const activeApprovals = state.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSessionId);
   const activeQuestions = state.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSessionId);
+  const activeTurnAttention = state.turnAttentions.find((a) => a.sessionId === state.activeSessionId);
   return (
     <div className="app">
       <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
@@ -676,6 +678,12 @@ export function App() {
                     onAnswer={(id, sessionId, answers) => controller.answerQuestion(id, sessionId, answers)}
                     onCancel={(id, sessionId) => controller.cancelQuestion(id, sessionId)}
                   />
+                  {activeTurnAttention && (
+                    <TurnAttentionCard
+                      attention={activeTurnAttention}
+                      onResolve={(sessionId, action) => controller.resolveTurnAttention(sessionId, action)}
+                    />
+                  )}
                 </>
               }
             />
