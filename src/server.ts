@@ -4832,21 +4832,21 @@ async function continueCorrelatedSession(
     // failed run rather than silently starting a new session. Everything else
     // keeps the established best-effort fall-through to a fresh pickup.
     if (opts?.resumeOnMissing) {
-      throw new Error(`Scheduled message could not be delivered: session ${item.targetSessionId} is not available on this node`);
+      throw new Error(`This Run could not continue session ${item.targetSessionId}: the session is not available on this Machine`);
     }
     return false;
   }
   const branch = record.worktree?.branch;
   if (opts?.resumeOnMissing) {
-    // "Send when the turn ends": a scheduled message that fires mid-turn waits
-    // for the session to go idle instead of interrupting it (bounded, so a
-    // stuck session still surfaces as a failed run rather than hanging forever).
+    // Durable work targeting an existing Session waits for its current turn to
+    // settle instead of interrupting it (bounded, so a stuck Session surfaces
+    // as a failed Run rather than hanging forever).
     await waitForSessionIdle(record);
     // Double-send guard: when the app is open and already delivered this exact
     // message as a follow-up (and deleted the pending schedule), the scheduled
     // run must not send it a second time. Matches the last user message, which
     // is all a text-only scheduled message can have produced.
-    if (lastUserMessageText(record).trim() === prompt.trim()) {
+    if (opts.isMessage && lastUserMessageText(record).trim() === prompt.trim()) {
       await report({
         output: { sessionId: record.id },
         events: [{
@@ -4870,7 +4870,7 @@ async function continueCorrelatedSession(
   record.approvalMode = safety.approval;
   await runSessionTurn(record, prompt, opts?.signal);
   if (opts?.signal?.aborted) throw opts.signal.reason ?? new Error("Run cancelled");
-  if (record.worktree && !opts?.isMessage && !opts?.resumeOnMissing) {
+  if (record.worktree && !opts?.isMessage) {
     await branchPublish.maybePushWorktreeBranch(record);
     await prDetection.maybeDetectPullRequest(record);
   }
@@ -5000,7 +5000,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     if (!parsed) throw new Error(`Linear work item has an invalid repo "${repoSlug}"`);
     // Case B: a re-dispatch the control plane correlated to an existing session
     // continues it as a normal chat instead of starting cold (mirrors GitHub).
-    if (await continueCorrelatedSession(item, buildLinearTaskPrompt(issue), report, { signal })) return;
+    if (await continueCorrelatedSession(item, buildLinearTaskPrompt(issue), report, { resumeOnMissing: item.targetKind === "existing_session", signal })) return;
     const githubToken = await resolveGitHubToken();
     if (!githubToken) throw new Error("no GitHub token available to clone the Linear issue repository");
     const repoDir = await cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token: githubToken, root: reposRoot });
@@ -5051,7 +5051,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // Scheduled runs targeting an existing session are STRICT: the message must
   // land in that session (resumed from disk if needed), never silently in a new
   // one — so a session that can't be resumed fails the run instead.
-  if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: item.source === "schedule", isMessage, signal })) return;
+  if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: item.source === "schedule" || item.targetKind === "existing_session", isMessage, signal })) return;
   const requestedSandbox = normalizeSandboxTier(item.sandbox);
   // Prepare an explicit repository before resolving its policy. Otherwise a
   // first-ever run would inspect a not-yet-cloned path and miss the policy on
