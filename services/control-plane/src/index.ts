@@ -17,7 +17,7 @@ import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
-import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent } from "./metrics.js";
+import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
 import {
@@ -3522,7 +3522,8 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  await store.completeWorkItem(node.accountId, id);
+  const run = await store.completeWorkItem(node.accountId, id);
+  recordDurableRunLifecycleResult(run, "succeeded");
   // Compatibility for older nodes that skip the explicit /running transition.
   const started = await store.recordRunStart(node.accountId, `automation:${id}`);
   if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
@@ -3551,6 +3552,7 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
   }
   const run = await store.transitionAutomationRun(node.accountId, id, "failed");
   if (!run) return res.status(404).json({ error: "Unknown run" });
+  recordDurableRunLifecycleResult(run, "failed");
   res.json({ ok: true, run });
 }));
 
@@ -3568,6 +3570,7 @@ app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req,
   }
   const run = await store.transitionAutomationRun(node.accountId, id, "needs_attention");
   if (!run) return res.status(404).json({ error: "Unknown run" });
+  recordDurableRunLifecycleResult(run, "needs_attention");
   res.json({ ok: true, run });
 }));
 
