@@ -125,7 +125,6 @@ import {
   open as openSealed,
   unb64url,
   seal,
-  unb64,
   createAutomation,
   deleteAutomation,
   fetchAutomations,
@@ -3241,7 +3240,7 @@ export class AppController {
     const roomKeyB64 = this.local.keys()[nodeId];
     if (!roomKeyB64) return;
     try {
-      const roomKey = await importRoomKey(unb64(roomKeyB64));
+      const roomKey = await importRoomKey(unb64url(roomKeyB64));
       const encrypted = await seal(roomKey, text);
       const at = new Date(Date.now() + 60_000).toISOString();
       const created = await createAutomation(this.local, {
@@ -3304,7 +3303,7 @@ export class AppController {
     const roomKeyB64 = this.local.keys()[nodeId];
     if (!roomKeyB64) return "This machine isn't paired on this device — open it first so the message can be encrypted.";
     try {
-      const roomKey = await importRoomKey(unb64(roomKeyB64));
+      const roomKey = await importRoomKey(unb64url(roomKeyB64));
       const encrypted = await seal(roomKey, trimmed);
       const created = await createAutomation(this.local, {
         name: "Scheduled message",

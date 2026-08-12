@@ -26,7 +26,7 @@ import {
   importRoomKey,
   seal,
   open,
-  unb64,
+  unb64url,
   nlToCron,
   isNlCronOk,
   type AppState,
@@ -614,7 +614,7 @@ export function AutomationsView({
     const parts = existing.templateCiphertext?.split(":");
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
       const roomKey = controller.local.keys()[parts[1]];
-      if (roomKey) instructions = await open(await importRoomKey(unb64(roomKey)), parts.slice(2).join(":"));
+      if (roomKey) instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
     }
     const base = emptyDraft(parts?.[1] || defaultNodeId);
     setDraft({
@@ -655,7 +655,7 @@ export function AutomationsView({
         setError("This device does not hold the assigned machine's encryption key, so its instructions can't be shown here.");
         return;
       }
-      instructions = await open(await importRoomKey(unb64(roomKey)), parts.slice(2).join(":"));
+      instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
     }
     const nodeId = parts?.[1] || defaultNodeId;
     const base = emptyDraft(nodeId);
@@ -1776,7 +1776,7 @@ function AutomationEditor({
     try {
       const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
       if (!d.nodeId || !roomKey) throw new Error("Connect to the assigned machine before saving encrypted instructions.");
-      const encrypted = await seal(await importRoomKey(unb64(roomKey)), d.instructions.trim());
+      const encrypted = await seal(await importRoomKey(unb64url(roomKey)), d.instructions.trim());
       const nodeName = selectedNode?.name;
       const repo = d.repo.trim();
       const labels = d.labels.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
