@@ -3177,6 +3177,10 @@ export class AppController {
     if (active) this.send({ kind: "abort", sessionId: active });
   }
 
+  resolveTurnAttention(sessionId: string, action: "stop" | "continue"): void {
+    this.send({ kind: "session.turn_attention.resolve", sessionId, action });
+  }
+
   // --- Queued follow-ups (issue #154) -------------------------------------
   //
   // A prompt sent to an already-busy session used to go straight over the

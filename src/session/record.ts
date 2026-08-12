@@ -15,9 +15,19 @@ import type { BivySessionSource } from "./bivy-session.js";
 import type { PrRef } from "../metadata.js";
 import type { SessionWorkspaceState } from "./session-state.js";
 import type { SessionRerouteController } from "../policy/session-reroute.js";
+import type { StallTrigger } from "./turn-watchdog.js";
 
 /** How a follow-up prompt relates to the in-flight turn. */
 export type StreamingBehavior = "steer" | "followUp";
+
+/** A stalled/wedged turn the watchdog flagged for the user to Stop or keep going,
+ *  instead of force-killing it. Set by flagTurnForReview; cleared when the user
+ *  resolves it, the turn resumes progress, or it ends/recovers (turn-watchdog-runtime). */
+export interface TurnAttention {
+  trigger: StallTrigger;
+  idleMs: number;
+  at: number;
+}
 
 /** An inline image attachment carried with a prompt. */
 export type PromptImage = { type: "image"; data: string; mimeType: string };
@@ -28,4 +38,4 @@ export interface PromptOptions {
   images?: PromptImage[];
 }
 
-export type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastProgressAt?: number; lastStructuralProgressAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; workspaceState?: SessionWorkspaceState; lastPrompt?: string; lastPromptOptions?: PromptOptions; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
+export type SessionRecord = { id: string; session: RuntimeSession; runtimeId: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; workspace: string; sessionFile?: string; agentServiceAddress?: string; lastActivity?: unknown; lastTouchedAt?: number; isWorking?: boolean; workingStartedAt?: number; lastProgressAt?: number; lastStructuralProgressAt?: number; lastFailureAt?: number; turnWatchdog?: NodeJS.Timeout; turnTimeoutSignal?: Promise<void>; turnTimeoutResolve?: () => void; turnTimedOut?: boolean; turnAttention?: TurnAttention; abortRecovery?: Promise<void>; authRequiredSignaled?: boolean; naming?: boolean; namedFromFirstPrompt?: boolean; namingAttempts?: number; firstNamingPrompt?: string; worktree?: Worktree; source?: BivySessionSource; forkedFrom?: string; branchPushed?: boolean; branchPushing?: boolean; prUrl?: string; prs?: PrRef[]; prDetecting?: boolean; tuiTermId?: string; tuiRefreshing?: boolean; remoteActive?: boolean; ephemeral?: boolean; unsubscribe?: () => void; paused?: boolean; warning?: string; costUsd?: number; usage?: UsageSnapshot; githubIssueUrl?: string; mcpRestore?: () => void; harnessTurnReady?: Promise<void>; workspaceState?: SessionWorkspaceState; lastPrompt?: string; lastPromptOptions?: PromptOptions; reroute?: SessionRerouteController; seenAttachmentHashes?: Set<string> };
