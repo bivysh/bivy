@@ -528,6 +528,7 @@ export interface EphemeralNodeConfig {
   provider: string;
   region?: string;
   size?: string;
+  image?: string;
   ttlMinutes?: number;
   teardownOnAgentFinish?: boolean;
   createdAt: string;
@@ -539,6 +540,7 @@ export type EphemeralConfigInput = {
   provider: string;
   region?: string | null;
   size?: string | null;
+  image?: string | null;
   ttlMinutes?: number | null;
   teardownOnAgentFinish?: boolean;
 };
@@ -564,6 +566,7 @@ function coerceConfig(v: any): EphemeralNodeConfig {
     provider: String(v?.provider ?? ""),
     region: typeof v?.region === "string" && v.region ? v.region : undefined,
     size: typeof v?.size === "string" && v.size ? v.size : undefined,
+    image: typeof v?.image === "string" && v.image ? v.image : undefined,
     ttlMinutes: typeof v?.ttlMinutes === "number" ? v.ttlMinutes : undefined,
     teardownOnAgentFinish: Boolean(v?.teardownOnAgentFinish) || undefined,
     createdAt: String(v?.createdAt ?? ""),

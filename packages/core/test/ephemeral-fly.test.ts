@@ -25,6 +25,7 @@ type FlyFile = { guest_path: string; raw_value: string };
 type FlyMachineBody = {
   region: string;
   config: {
+    image?: string;
     auto_destroy: boolean;
     restart: { policy: string };
     init: { exec?: string[]; user_data?: string };
@@ -55,7 +56,7 @@ describe("fly adapter — provision", () => {
       token: "fly-token",
       userData: "#cloud-config\nruncmd: []\n",
       bootstrap: BOOTSTRAP,
-      config: { slug: "abc123", region: "fra", size: "shared-2x-4gb", ttlMinutes: 90 },
+      config: { slug: "abc123", region: "fra", size: "shared-2x-4gb", image: "ghcr.io/bivysh/bivy-ephemeral-runner:sha-test", ttlMinutes: 90 },
     });
 
     expect(machine).toMatchObject({ id: "abc123", provider: "fly", app: "bivy-abc123", region: "fra" });
@@ -67,6 +68,7 @@ describe("fly adapter — provision", () => {
     // the daemon finishing, not a bare shell exiting on boot.
     expect(cfg.auto_destroy).toBe(true);
     expect(cfg.restart).toEqual({ policy: "no" });
+    expect(cfg.image).toBe("ghcr.io/bivysh/bivy-ephemeral-runner:sha-test");
 
     // The broken cloud-init path must be gone.
     expect(cfg.init.user_data).toBeUndefined();
@@ -92,7 +94,8 @@ describe("fly adapter — provision", () => {
     expect(startScript).toContain("export BIVY_REPO='owner/repo'");
     expect(startScript).toContain("exec bivy start");
 
-    // init.exec installs curl (absent from Fly's bare image), then Bivy, then
+    // init.exec uses preinstalled Bivy when present, falls back to installing
+    // curl+Bivy for a generic image, then
     // hands the foreground to start.sh under a TTL timeout (90 min → 5400s), the
     // backstop that replaces the VM shutdown. `pipefail` makes a failed install
     // abort loudly instead of limping on to a doomed `bivy start`.
@@ -100,6 +103,7 @@ describe("fly adapter — provision", () => {
     expect(cfg.init.exec[0]).toBe("/bin/bash");
     expect(cfg.init.exec[1]).toBe("-lc");
     expect(script).toContain("set -euo pipefail");
+    expect(script).toContain("command -v bivy");
     expect(script).toContain("apt-get install -y -qq curl ca-certificates");
     expect(script).toContain("curl -fsSL");
     expect(script).toContain("exec timeout 5400 bash /etc/bivy/start.sh");
