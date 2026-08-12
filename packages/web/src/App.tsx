@@ -813,6 +813,12 @@ export function App() {
           load={(id) => fetchAutomationRun(controller.local, id)}
           onCancel={async (id) => { await cancelAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
           onRetry={async (id) => { await retryAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
+          onReauthenticate={async (provider, machineId, reason) => {
+            const targetNode = machineId || state.currentNodeId;
+            if (!targetNode) throw new Error("The Machine for this Run is not available.");
+            await controller.connectToNode(targetNode);
+            controller.store.setNeedsModelAuth({ nodeId: targetNode, provider, reason });
+          }}
           resolveMachineName={(machineId) => state.nodes.find((n) => n.id === machineId)?.name || undefined}
           isSessionResolvable={(sessionId) => state.sessions.some((s) => s.sessionId === sessionId)}
           onOpenSession={(sessionId) => {
