@@ -30,11 +30,15 @@ function harness(config?: Partial<WatchdogDeps>, clock?: { at: number }) {
   const aborted: string[] = [];
   const failed: string[] = [];
   const broadcasts: any[] = [];
+  const notifications: string[] = [];
   const deps: WatchdogDeps = {
     turnTimeoutMs: config?.turnTimeoutMs ?? 0,
     turnStallMs: config?.turnStallMs ?? 0,
     turnActivityStallMs: config?.turnActivityStallMs ?? 0,
+    stallAction: config?.stallAction ?? "recover",
     broadcast: (p) => broadcasts.push(p),
+    broadcastSessionState: () => {},
+    notifyTurnAttention: (_record, message) => notifications.push(message),
     markSessionFailed: (id) => failed.push(id),
     abortSessionRecord: (r) => aborted.push(r.id),
     evaluateEphemeralTeardown: () => {},
@@ -43,7 +47,7 @@ function harness(config?: Partial<WatchdogDeps>, clock?: { at: number }) {
     listSessions: config?.listSessions ?? (() => []),
     now: clock ? () => clock.at : undefined,
   };
-  return { deps, aborted, failed, broadcasts, watchdog: createTurnWatchdog(deps) };
+  return { deps, aborted, failed, broadcasts, notifications, watchdog: createTurnWatchdog(deps) };
 }
 
 test("wall-clock timeout arms, fires, and force-recovers the turn", () => {
@@ -98,6 +102,51 @@ test("sweep recovers a silence-stalled turn and skips healthy/blocked ones", () 
 
   assert.deepEqual(aborted, ["stalled"], "only the genuinely stalled turn is recovered");
   assert.equal(watchdog.turnRecoveryStats()["claude-code-sdk:stalled"], 1);
+});
+
+test("notify mode flags a soft stall without killing it and lets the user continue", () => {
+  const clock = { at: 10 * 60_000 };
+  const record = fakeRecord({ busy: true, lastProgressAt: 0 });
+  const { watchdog, aborted, broadcasts, notifications } = harness(
+    { turnStallMs: 5 * 60_000, stallAction: "notify", listSessions: () => [record] },
+    clock,
+  );
+
+  watchdog.sweepStalledTurns();
+  watchdog.sweepStalledTurns();
+
+  assert.deepEqual(aborted, [], "a soft stall is not force-killed");
+  assert.equal(record.turnAttention?.trigger, "stalled");
+  assert.equal(notifications.length, 1, "the pending review gates duplicate pushes");
+  assert.equal(broadcasts.filter((b) => b.type === "session.turn_attention").length, 1);
+
+  clock.at += 100;
+  watchdog.resolveTurnAttention(record, "continue");
+  assert.equal(record.turnAttention, undefined);
+  assert.equal(record.lastProgressAt, clock.at, "continue resets the stall window");
+  assert.ok(broadcasts.some((b) => b.type === "session.turn_attention.resolved"));
+});
+
+test("stop on a pending review runs the normal force-recovery path", () => {
+  const clock = { at: 10 * 60_000 };
+  const record = fakeRecord({ busy: true, lastProgressAt: 0 });
+  const { watchdog, aborted } = harness(
+    { turnStallMs: 5 * 60_000, stallAction: "notify", listSessions: () => [record] },
+    clock,
+  );
+  watchdog.sweepStalledTurns();
+  watchdog.resolveTurnAttention(record, "stop");
+  assert.deepEqual(aborted, ["s1"]);
+  assert.equal(record.turnAttention, undefined);
+});
+
+test("wedged attention clears only on structural progress", () => {
+  const record = fakeRecord({ turnAttention: { trigger: "wedged", idleMs: 10, at: 1 } });
+  const { watchdog } = harness();
+  watchdog.clearTurnAttentionOnProgress(record, false);
+  assert.ok(record.turnAttention, "raw tool output does not dismiss a wedged warning");
+  watchdog.clearTurnAttentionOnProgress(record, true);
+  assert.equal(record.turnAttention, undefined);
 });
 
 test("sweep is a no-op when both stall bands are disabled", () => {
