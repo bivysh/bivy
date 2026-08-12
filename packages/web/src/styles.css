@@ -2817,3 +2817,30 @@ select.picker-search { appearance: auto; }
   font-weight: 500;
   letter-spacing: -0.01em;
 }
+
+/* Activation readiness strip (src/components/ReadinessChecklist.tsx) — the honest
+   "get to your first agent response" checklist shown until the agent answers. */
+.readiness {
+  margin: 10px 12px 0; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+}
+.readiness-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.readiness-title { font-weight: 600; font-size: 0.92rem; letter-spacing: -0.01em; }
+.readiness-dismiss {
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 1.1rem; line-height: 1; padding: 2px 6px; border-radius: 6px;
+}
+.readiness-dismiss:hover { background: var(--surface-2); color: var(--ink); }
+.readiness-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.readiness-check { display: flex; align-items: baseline; gap: 8px; font-size: 0.88rem; }
+.readiness-mark {
+  flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; font-size: 0.72rem; font-weight: 700; background: var(--surface-2); color: var(--muted);
+}
+.readiness-mark.mark-passed { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
+.readiness-mark.mark-failed { background: var(--danger-soft); color: var(--danger); }
+.readiness-mark.mark-checking { color: var(--accent); }
+.readiness-check.state-pending { opacity: 0.55; }
+.readiness-label { font-weight: 500; }
+.readiness-detail { color: var(--muted); font-size: 0.82rem; }
+.readiness-next { margin-top: 10px; }

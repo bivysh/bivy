@@ -206,7 +206,9 @@ export function deriveActivation(signals: ActivationSignals): Activation {
 export interface ActivationStateInput {
   /** ConnectionStatus: "online" | "offline" | "connecting" | "reconnecting" | … */
   status: string;
-  runtimes: ReadonlyArray<{ status?: unknown }>;
+  /** RuntimeInfo carries a runtime `status` behind an index signature, so accept
+   *  any record and read it defensively (an absent status means "available"). */
+  runtimes: ReadonlyArray<Record<string, unknown>>;
   providers: ReadonlyArray<{ configured?: boolean; expiresAt?: number }>;
   reposAuthed: boolean;
   transcript: ReadonlyArray<{ role: string; text: string; tool?: unknown }>;
