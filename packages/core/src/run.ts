@@ -90,6 +90,7 @@ export interface Run {
   checks: RunCheck[];
   /** Bounded evidence events (already content-free in the source records). */
   events: RunEvent[];
+  receiptEvidence?: GithubQueueItem["receiptEvidence"];
   references: RunReferences;
   /** Bounded failure summary; present only when the record carries one. */
   failureSummary?: string;
@@ -129,6 +130,7 @@ interface RunRecord {
   sandbox?: GithubQueueItem["sandbox"];
   checks?: GithubQueueItem["checks"];
   events?: GithubQueueItem["events"];
+  receiptEvidence?: GithubQueueItem["receiptEvidence"];
   output?: GithubQueueItem["output"];
   targetSessionId?: string;
 }
@@ -221,6 +223,7 @@ function projectRun(record: RunRecord, projection: RunProjectionSource, ctx?: Ru
     },
     checks: (record.checks ?? []).slice(0, MAX_CHECKS),
     events: (record.events ?? []).slice(-MAX_EVENTS),
+    ...(record.receiptEvidence ? { receiptEvidence: record.receiptEvidence } : {}),
     references,
     ...(failure ? { failureSummary: failure.slice(0, MAX_FAILURE_SUMMARY) } : {}),
     actions: actionsFor(record.status, outcome),

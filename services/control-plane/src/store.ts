@@ -611,6 +611,11 @@ export interface RunCheck {
   exitCode?: number;
   durationMs?: number;
 }
+export interface RunReceiptEvidence {
+  approvals: { requests: number; approved: number; denied: number };
+  fileChanges: { files: Array<{ path: string; op?: string; added?: number; removed?: number }>; added: number; removed: number };
+  auditHealth: { correlation: "healthy" | "missing"; readableStorage: "healthy" | "missing"; successfulWrites: "healthy" | "missing" };
+}
 /** Sanitized, allowlisted patch a node may report against its own claimed run.
  *  `checks`/`events` are treated as INCREMENTAL — appended to, never replacing,
  *  the run's existing history. */
@@ -619,6 +624,7 @@ export interface RunEvidencePatch {
   output?: Partial<NonNullable<AutomationRun["output"]>>;
   checks?: RunCheck[];
   events?: RunEvidenceEvent[];
+  receiptEvidence?: RunReceiptEvidence;
 }
 export interface AutomationDefinition {
   id: string;
@@ -735,6 +741,8 @@ export interface AutomationRun {
   checks?: RunCheck[];
   /** Ordered, capped, privacy-safe event timeline for the run-detail/outcome report. */
   events?: RunEvidenceEvent[];
+  /** Bounded governance metadata correlated from the node audit stream. */
+  receiptEvidence?: RunReceiptEvidence;
   title: string;
   body?: string;
   /** Plain chat message (no automation boilerplate/push/checks). */

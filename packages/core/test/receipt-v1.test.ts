@@ -69,6 +69,21 @@ describe("Receipt v1 projection", () => {
     expect(receipt.missingEvidence).toEqual(expect.arrayContaining(["approval_decisions", "file_change_summary", "check_details"]));
   });
 
+  it("carries correlated approval and bounded file evidence into the Receipt", () => {
+    const input = base();
+    input.governance = {
+      approvals: { requests: 2, approved: 1, denied: 1 },
+      fileChanges: { files: [{ path: "src/app.ts", op: "modified", added: 4, removed: 2 }], added: 4, removed: 2 },
+      auditHealth: { correlation: "healthy", readableStorage: "healthy", successfulWrites: "healthy" },
+    };
+    input.auditHealth = input.governance.auditHealth;
+    const receipt = projectReceiptV1(input);
+    expect(receipt.approvals).toEqual({ requests: 2, approved: 1, denied: 1 });
+    expect(receipt.changes.files[0]?.path).toBe("src/app.ts");
+    expect(receipt.missingEvidence).not.toContain("approval_decisions");
+    expect(receipt.missingEvidence).not.toContain("file_change_summary");
+  });
+
   it("does not infer a terminal outcome from process completion alone", () => {
     const receipt = projectReceiptV1(base({ output: { sessionId: "session-1" }, checks: undefined, events: [{ at: "2026-08-13T12:05:00Z", kind: "completed", summary: "process exited" }] }));
     expect(receipt.run.terminalOutcome).toBeUndefined();

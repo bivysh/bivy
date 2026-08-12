@@ -15,7 +15,8 @@ import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
-import { createAuditLog } from "./audit/index.js";
+import { createAuditLog, readAuditEvents } from "./audit/index.js";
+import { receiptEvidenceFromAudit } from "./audit/receipt-evidence.js";
 import { createWorkspaceController } from "./controllers/workspaces.js";
 import { createModelController } from "./controllers/models.js";
 import { Type, type TSchema } from "typebox";
@@ -4138,6 +4139,8 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
         : stage === "failed" || stage === "checks_failed" || stage === "no_changes" ? "completed"
           : undefined;
     if (kind) {
+      const terminal = stage === "failed" || stage === "checks_failed" || stage === "no_changes" || stage === "pr_opened";
+      const auditEvents = terminal ? readAuditEvents(auditLog.file, { session: record.id }) : [];
       const summary = stage === "pr_opened" ? "Pull request opened."
         : stage === "started" ? "Working branch and session created."
           : stage === "pushed" ? "Changes pushed; no pull request is open."
@@ -4154,6 +4157,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
           url: typeof extra.prUrl === "string" ? extra.prUrl : undefined,
           ...(stage === "checks_failed" || stage === "failed" ? { status: "failed" } : {}),
         }],
+        ...(terminal ? { receiptEvidence: receiptEvidenceFromAudit(auditEvents, fs.existsSync(auditLog.file)) } : {}),
       });
     }
   };

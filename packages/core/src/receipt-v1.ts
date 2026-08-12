@@ -61,6 +61,7 @@ export interface ReceiptV1ProjectionInput {
     readableStorage: ReceiptAuditState;
     successfulWrites: ReceiptAuditState;
   };
+  governance?: NonNullable<GithubQueueItem["receiptEvidence"]>;
 }
 
 export interface ReceiptV1 {
@@ -98,7 +99,8 @@ export interface ReceiptV1 {
     effective: { executionProfile?: string; sandboxTier?: string; approvalMode?: string; runtimeEnforcement?: string; trustModes?: string[] };
     capabilities: Array<{ capability: string; evidenceClass: ReceiptEvidenceClass; mechanism?: string }>;
   };
-  changes: { branch?: string; commit?: string; pullRequest?: string; checkpoint?: string; artifact?: string };
+  approvals: { requests: number; approved: number; denied: number };
+  changes: { branch?: string; commit?: string; pullRequest?: string; checkpoint?: string; artifact?: string; files: Array<{ path: string; op?: string; added?: number; removed?: number }>; added: number; removed: number };
   checks: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; durationMs?: number; exitCode?: number }>;
   auditHealth: { correlation: ReceiptAuditState; readableStorage: ReceiptAuditState; successfulWrites: ReceiptAuditState };
   missingEvidence: ReceiptMissingEvidence[];
@@ -197,12 +199,16 @@ export function projectReceiptV1(input: ReceiptV1ProjectionInput): ReceiptV1 {
     ...(bounded(c.mechanism, `capabilities[${i}].mechanism`, 120) ? { mechanism: c.mechanism } : {}),
   }));
   const auditHealth = input.auditHealth ?? { correlation: "unknown", readableStorage: "unknown", successfulWrites: "unknown" } as const;
+  const governance = input.governance;
   const changes = {
     ...(bounded(input.run.output?.branch, "changes.branch", MAX.ref) ? { branch: input.run.output!.branch } : {}),
     ...(bounded(input.run.output?.commit, "changes.commit", 200) ? { commit: input.run.output!.commit } : {}),
     ...(bounded(input.run.output?.prUrl, "changes.pullRequest", MAX.ref) ? { pullRequest: input.run.output!.prUrl } : {}),
     ...(bounded(input.run.output?.checkpoint, "changes.checkpoint", MAX.ref) ? { checkpoint: input.run.output!.checkpoint } : {}),
     ...(bounded(input.run.output?.artifactUrl, "changes.artifact", MAX.ref) ? { artifact: input.run.output!.artifactUrl } : {}),
+    files: (governance?.fileChanges.files ?? []).slice(0, MAX.list).map((file, i) => ({ path: required(file.path, `changes.files[${i}].path`, MAX.ref), ...(bounded(file.op, `changes.files[${i}].op`, 20) ? { op: file.op } : {}), ...(typeof file.added === "number" ? { added: file.added } : {}), ...(typeof file.removed === "number" ? { removed: file.removed } : {}) })),
+    added: governance?.fileChanges.added ?? 0,
+    removed: governance?.fileChanges.removed ?? 0,
   };
 
   const missing: ReceiptMissingEvidence[] = [];
@@ -216,9 +222,9 @@ export function projectReceiptV1(input: ReceiptV1ProjectionInput): ReceiptV1 {
   // Current Run evidence has no correlated approval-decision list or bounded
   // file/change summary. Keep every projection partial until those fields are
   // added from the node audit stream; branch/commit references are not enough.
-  addMissing(missing, "approval_decisions");
+  if (!governance) addMissing(missing, "approval_decisions");
   if (!Object.keys(changes).length) addMissing(missing, "change_evidence");
-  addMissing(missing, "file_change_summary");
+  if (!governance) addMissing(missing, "file_change_summary");
   if (checks.some(() => true)) addMissing(missing, "check_details"); // current RunCheck lacks required + timeout evidence
   if (auditHealth.correlation !== "healthy") addMissing(missing, "audit_correlation");
   if (auditHealth.readableStorage !== "healthy") addMissing(missing, "audit_storage");
@@ -260,7 +266,7 @@ export function projectReceiptV1(input: ReceiptV1ProjectionInput): ReceiptV1 {
       effective: effective ? { ...effective, ...(effective.trustModes ? { trustModes: effective.trustModes.slice(0, 20).map((v, i) => required(v, `trustModes[${i}]`, 80)) } : {}) } : {},
       capabilities,
     },
-    changes, checks, auditHealth, missingEvidence: missing,
+    approvals: governance?.approvals ?? { requests: 0, approved: 0, denied: 0 }, changes, checks, auditHealth, missingEvidence: missing,
     observationLimitations: limitationCodes.map((code) => ({ code, message: LIMITATIONS[code] })),
   };
 }
@@ -304,6 +310,7 @@ export function receiptV1FromRun(run: Run, createdAt: string): ReceiptV1 {
       events: run.events,
     },
     ...(run.machine?.name ? { execution: { machineName: run.machine.name } } : {}),
+    ...(run.receiptEvidence ? { governance: run.receiptEvidence, auditHealth: run.receiptEvidence.auditHealth } : {}),
   });
 }
 
@@ -346,10 +353,14 @@ export function receiptV1Json(receipt: ReceiptV1): string {
       },
       capabilities: receipt.protection.capabilities.slice(0, 20).map((c, i) => ({ capability: required(c.capability, `capabilities[${i}].capability`, 40), evidenceClass: c.evidenceClass, ...(bounded(c.mechanism, `capabilities[${i}].mechanism`, 120) ? { mechanism: c.mechanism } : {}) })),
     },
+    approvals: { requests: receipt.approvals.requests, approved: receipt.approvals.approved, denied: receipt.approvals.denied },
     changes: {
       ...(bounded(receipt.changes.branch, "changes.branch", MAX.ref) ? { branch: receipt.changes.branch } : {}), ...(bounded(receipt.changes.commit, "changes.commit", 200) ? { commit: receipt.changes.commit } : {}),
       ...(bounded(receipt.changes.pullRequest, "changes.pullRequest", MAX.ref) ? { pullRequest: receipt.changes.pullRequest } : {}), ...(bounded(receipt.changes.checkpoint, "changes.checkpoint", MAX.ref) ? { checkpoint: receipt.changes.checkpoint } : {}),
       ...(bounded(receipt.changes.artifact, "changes.artifact", MAX.ref) ? { artifact: receipt.changes.artifact } : {}),
+      files: receipt.changes.files.slice(0, MAX.list).map((file, i) => ({ path: required(file.path, `changes.files[${i}].path`, MAX.ref), ...(bounded(file.op, `changes.files[${i}].op`, 20) ? { op: file.op } : {}), ...(typeof file.added === "number" ? { added: file.added } : {}), ...(typeof file.removed === "number" ? { removed: file.removed } : {}) })),
+      added: receipt.changes.added,
+      removed: receipt.changes.removed,
     },
     checks: receipt.checks.slice(0, MAX.checks).map((c, i) => ({ name: required(c.name, `checks[${i}].name`, 120), ...(bounded(c.commandHash, `checks[${i}].commandHash`, 128) ? { commandHash: c.commandHash } : {}), status: c.status, ...(typeof c.durationMs === "number" ? { durationMs: c.durationMs } : {}), ...(typeof c.exitCode === "number" ? { exitCode: c.exitCode } : {}) })),
     auditHealth: { correlation: receipt.auditHealth.correlation, readableStorage: receipt.auditHealth.readableStorage, successfulWrites: receipt.auditHealth.successfulWrites },
