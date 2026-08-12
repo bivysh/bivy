@@ -17,6 +17,7 @@ import {
   isToolUseBlock,
   isToolResultBlock,
   toolName,
+  toolDetail,
   linkPayloadFromText,
   base64UrlToJson,
 } from "../src/index.js";
@@ -171,6 +172,13 @@ describe("tool activity", () => {
     expect(isToolUseBlock({ type: "tool_use" })).toBe(true);
     expect(isToolResultBlock({ type: "tool_result" })).toBe(true);
     expect(toolName({ name: "Bash" })).toBe("bash");
+  });
+  it("preserves normalized delegation detail for sub-agent activity", () => {
+    expect(toolDetail({ detail: { kind: "delegation", label: "Explore", description: "trace auth" } })).toEqual({
+      kind: "delegation",
+      label: "Explore",
+      description: "trace auth",
+    });
   });
 });
 
