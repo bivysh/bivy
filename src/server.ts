@@ -46,6 +46,7 @@ import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState } from "./session/session-state.js";
 import type { SessionRecord, PromptOptions, StreamingBehavior, PromptImage } from "./session/record.js";
+import { createSessionEngine } from "./session/engine.js";
 import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
@@ -870,7 +871,10 @@ type CreateSessionOptions = {
    *  rejects (so adoption can classify gone-vs-transient) instead of re-opening. */
   attachOnly?: boolean;
 };
-const openSessions = new Map<string, SessionRecord>();
+// The live-session registry (openSessions) + resolveSession/pause/resume now
+// live in the SessionEngine (src/session/engine.ts); it is instantiated below,
+// after `active` is declared, and its members are destructured back so every
+// call site is unchanged (Phase 2, step 2b).
 // Stage 2 (docs/agent-node-decoupling.md): sessionId -> agent-service address for
 // live REMOTE sessions the agent service keeps running across an eviction/
 // disconnect. Lets an openSessions miss re-attach to the still-live session
@@ -898,6 +902,16 @@ let cpLocationRegistry: ControlPlaneSessionLocationRegistry | undefined;
 // same registry primitive as sessionLocations.
 const sessionTerminals = new InMemoryLocationRegistry<{ termId: string }>();
 let active: SessionRecord | undefined;
+
+// SessionEngine owns the live registry + simple lifecycle. broadcast and
+// scheduleAdvertise are hoisted function declarations (defined later); getActive
+// reads the mutable `active` above. Members are destructured so the ~90 existing
+// call sites (openSessions.*, resolveSession, pause/resume) are unchanged.
+const { openSessions, resolveSession, pauseSession, resumeSession } = createSessionEngine({
+  getActive: () => active,
+  broadcast,
+  scheduleAdvertise,
+});
 
 // Universal Agent Harness — filesystem effect boundary. Owns per-session git
 // checkpoints so any agent (Pi, Claude Code, or a dumb-pipe CLI) gets per-turn
@@ -5527,27 +5541,8 @@ function recordMcpEvent(sessionId: string, event: unknown): void {
 // `sessionId` (per-client focus / background sessions); when omitted we fall back
 // to the node's last-focused `active` session for backward compatibility. This is
 // the server side of "active is per-client" (DEVELOPMENT_PLAN D1).
-function resolveSession(sessionId?: unknown): SessionRecord | undefined {
-  const id = typeof sessionId === "string" && sessionId ? sessionId : undefined;
-  // If a client explicitly names a session, never fall back to the node-global
-  // active session. Parallel web/TUI clients can otherwise send a stale or
-  // not-yet-known id and have their prompt/abort routed into another chat.
-  return id ? openSessions.get(id) : active;
-}
-
-// Pause/resume: distinct from abort/kill. The agent process keeps running, but
-// the guardian forces every subsequent tool call to ask until resumed — a soft
-// "hold on" reachable from both HTTP (direct mode) and the relay (phone/browser).
-function pauseSession(record: SessionRecord) {
-  record.paused = true;
-  broadcast({ type: "session.paused", sessionId: record.id });
-  scheduleAdvertise();
-}
-function resumeSession(record: SessionRecord) {
-  record.paused = false;
-  broadcast({ type: "session.resumed", sessionId: record.id });
-  scheduleAdvertise();
-}
+// resolveSession + pauseSession + resumeSession moved into the SessionEngine
+// (src/session/engine.ts, step 2b); destructured from createSessionEngine above.
 
 /** Deliver a client's answer to a pending `session.question` to Bivy's
  *  QuestionManager. A silent no-op if the id is stale (already answered, timed

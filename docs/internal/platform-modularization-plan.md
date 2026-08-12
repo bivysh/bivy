@@ -207,12 +207,21 @@ encapsulate** (50 fields / ~93 annotation sites). Sequence 1→4:
   concrete `PromptOptions` type. Dropped 4 now-orphaned imports from server.ts
   (`BivySessionSource`/`PrRef`/`UsageSnapshot`/`SessionWorkspaceState`). Pure
   type move, CI-gated, no smoke. Unblocks the engine module importing the record.
-- **Step 2b (next, NEEDS LIVE SMOKE):** a `SessionEngine` owning the live
-  registry (`openSessions` Map, server.ts:869) + `resolveSession` +
-  `pause/resume/close/abort`, deps injected (`broadcast`, `clients`,
-  `runtimeHost`, `getDefaultRuntimeId`, harness…). Map access sites re-pointed.
-- **Step 3 (turn lifecycle) / Step 4 (`createSession`, ~235 lines) — after 2b,
-  each live-smoked.**
+- **Step 2b (state container) — DONE 2026-08-11 (branch
+  `bivy/platform-phase2-session-engine`).** `src/session/engine.ts`
+  `createSessionEngine({ getActive, broadcast, scheduleAdvertise })` CREATES and
+  owns the `openSessions` Map + `resolveSession` + `pauseSession`/`resumeSession`;
+  server.ts destructures them back (create+destructure-back → all ~90 call sites
+  unchanged; `resolveSession` now calls `getActive()` = the mutable `active`).
+  **Behavior-identical relocation**, but touches the core registry → wants a
+  LIGHT live smoke (create a session, resolve it, pause/resume). Ordering
+  verified: instantiated after `active`; the pre-instantiation `openSessions`/
+  `resolveSession` uses are all inside runtime callbacks (question/approval), so
+  no TDZ.
+- **Step 2c (next): close/abort** — `closeSessionRecord`/`abortSessionRecord`
+  fold into the engine (more coupling: cleanup, worktree, unsubscribe).
+- **Step 3 (turn lifecycle: `harnessBeginTurn`/`harnessEndTurn`) / Step 4
+  (`createSession`, ~235 lines) — after 2c, each live-smoked.**
 
 `integrations.*` needs no carve — already a proper `IntegrationManager` class.
 
