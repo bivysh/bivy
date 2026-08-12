@@ -62,6 +62,20 @@ const enforceEntitlements = process.env.ENFORCE_ENTITLEMENTS === "1";
 // time; (3) session content stays E2E-encrypted — the relay never sees it. The
 // relay stays blind either way. Suitable for a self-hosted, single-user relay.
 const allowRoomTokens = process.env.RELAY_ALLOW_ROOM_TOKENS === "1";
+// Fail fast on a dangerous misconfiguration: a relay reaching a real (non-local)
+// control plane is an account-gated deployment, and enabling account-free room
+// tokens there would open an admission path that BYPASSES the control plane's
+// entitlement/ownership checks — anyone with a room id + token gets on. Solo
+// mode is for a self-hosted, control-plane-free relay only, so we refuse rather
+// than silently run a relay that is account-gated on one door and open on the
+// other. (A localhost control plane — i.e. no real CP — is still fine.)
+if (allowRoomTokens && !isLocalControlPlane) {
+  console.error(
+    "Refusing to start: RELAY_ALLOW_ROOM_TOKENS=1 (account-free admission) must not be combined with a non-local control plane. " +
+      "Solo mode is for a self-hosted relay with no control plane; point CONTROL_PLANE_URL at localhost or unset the room-token flag.",
+  );
+  process.exit(1);
+}
 // The minimum entropy floor we can enforce relay-side: reject a room token
 // shorter than a 128-bit secret (32 hex / ~22 base64url chars).
 const MIN_ROOM_TOKEN_LEN = 22;
