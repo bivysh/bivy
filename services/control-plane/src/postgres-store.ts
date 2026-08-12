@@ -1666,6 +1666,11 @@ export class PostgresStore implements MeshStore {
     return rows.filter((row) => Array.isArray(row.hosted_machines) && row.hosted_machines.length > 0).map((row) => String(row.id));
   }
 
+  async listReadyCapacityAccountIds(): Promise<string[]> {
+    const { rows } = await this.query(`SELECT id, ephemeral_configs FROM accounts WHERE ephemeral_configs IS NOT NULL`);
+    return rows.filter((row) => normalizeEphemeralConfigs(row.ephemeral_configs).some((config) => (config.readyCapacity ?? 0) > 0)).map((row) => String(row.id));
+  }
+
   async acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean> {
     const expiresAt = new Date(Date.now() + Math.max(30, ttlSeconds) * 1000).toISOString();
     const { rows } = await this.query(
