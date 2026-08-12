@@ -40,6 +40,10 @@ function metric(text: string, name: string, outcome: string): number {
   const line = text.split("\n").find((l) => l.startsWith(`${name}{outcome="${outcome}"}`));
   return line ? Number(line.trim().split(/\s+/).at(-1)) : 0;
 }
+function stageMetric(text: string, stage: string): number {
+  const line = text.split("\n").find((l) => l.startsWith(`bivy_run_failure_stage_total{stage="${stage}"}`));
+  return line ? Number(line.trim().split(/\s+/).at(-1)) : 0;
+}
 async function scrape(port: number): Promise<string> {
   return (await fetch(`http://localhost:${port}/metrics`)).text();
 }
@@ -125,7 +129,16 @@ try {
   assert.equal(metric(after, "bivy_run_lifecycle_results_total", "succeeded"), succeededBefore, "a blocked completion must not record a succeeded outcome");
   assert.equal(metric(after, "bivy_run_lifecycle_results_total", "cancelled"), cancelledBefore + 1, "exactly one cancellation is counted");
 
-  console.log("✓ duplicate-delivery dedupe, reclaim attempt numbering, stale-Machine blocking, and cancel/complete race integrity");
+  // 4) A durable failure records a fixed, low-cardinality failure-stage metric.
+  const stageBefore = stageMetric(await scrape(port), "agent");
+  const failing = await request(port, "POST", "/account/automation-runs", token, { title: "Will fail" });
+  const fid = failing.body.id as string;
+  assert.equal((await request(port, "POST", `/node/work/${fid}/claim`, nodeA)).status, 200);
+  assert.equal((await request(port, "POST", `/node/work/${fid}/running`, nodeA)).status, 200);
+  assert.equal((await request(port, "POST", `/node/work/${fid}/fail`, nodeA)).status, 200);
+  assert.equal(stageMetric(await scrape(port), "agent"), stageBefore + 1, "a plain agent failure records the agent stage");
+
+  console.log("✓ duplicate-delivery dedupe, reclaim attempt numbering, stale-Machine blocking, cancel/complete race integrity, and failure-stage metric");
 } finally {
   proc?.kill("SIGTERM");
 }

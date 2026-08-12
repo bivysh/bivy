@@ -88,6 +88,13 @@ Known limitation: Slack/schedule/generic-webhook repo runs still use a random
 branch name per run, so their branch/PR effects are not yet idempotent across a
 reclaim on a fresh process. That path is tracked separately.
 
+**Metrics.** Outcomes are counted with fixed, low-cardinality labels only:
+`bivy_run_lifecycle_results_total{outcome}` (succeeded / failed / needs_attention
+/ cancelled) records one result per durable transition, and
+`bivy_run_failure_stage_total{stage}` classifies where a failed or parked run
+stopped short (`checks` / `timeout` / `agent` / `needs_review`), derived from the
+run's own evidence. Neither carries a run, session, account, or user identifier.
+
 ## Run evidence and outcome reports
 
 Every run also carries a small, structured **evidence** record — the piece a

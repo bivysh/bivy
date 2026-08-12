@@ -120,6 +120,37 @@ export const recordRunLifecycleResult: RunLifecycleRecorder = (outcome) => {
   console.info(`[funnel] ${JSON.stringify({ event: "run_lifecycle_result", outcome })}`);
 };
 
+// Fixed, low-cardinality classification of WHERE an accepted Run stopped short of
+// success, so the failure funnel is legible without any per-run identifier. The
+// label set is a closed enum; nothing derived from free text or user input.
+export type RunFailureStage = "checks" | "timeout" | "agent" | "needs_review";
+const runFailureStages = new client.Counter({
+  name: "bivy_run_failure_stage_total",
+  help: "Durably failed or parked Runs by coarse failure stage.",
+  labelNames: ["stage"],
+  registers: [register],
+});
+export type RunFailureStageRecorder = (stage: RunFailureStage) => void;
+export const recordRunFailureStage: RunFailureStageRecorder = (stage) => {
+  runFailureStages.inc({ stage });
+  console.info(`[funnel] ${JSON.stringify({ event: "run_failure_stage", stage })}`);
+};
+
+/** Coarse, evidence-derived failure stage for a durably failed/parked Run.
+ *  A failed deterministic check dominates; then a timeout signature in the
+ *  bounded failure summary; otherwise the agent itself. `parked` marks a Run
+ *  routed to a human for review rather than failed outright. */
+export function classifyRunFailureStage(
+  run: { checks?: Array<{ status: string }>; output?: { failure?: string } } | null | undefined,
+  parked = false,
+): RunFailureStage {
+  if (parked) return "needs_review";
+  if (run?.checks?.some((c) => c.status === "failed")) return "checks";
+  const failure = (run?.output?.failure ?? "").toLowerCase();
+  if (/tim(?:e|ed)\s*-?\s*out|timeout/.test(failure)) return "timeout";
+  return "agent";
+}
+
 /**
  * Record only a transition result known by its caller to have been persisted.
  * Injection keeps call-placement tests independent of Prometheus global state.

@@ -17,7 +17,7 @@ import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
-import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult } from "./metrics.js";
+import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
 import {
@@ -3627,6 +3627,7 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
   // so report the conflict rather than counting a second lifecycle result.
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "failed");
+  recordRunFailureStage(classifyRunFailureStage(run));
   res.json({ ok: true, run });
 }));
 
@@ -3646,6 +3647,7 @@ app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req,
   // No-op → already terminal (a finished Run stays finished) or reclaimed away.
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "needs_attention");
+  recordRunFailureStage(classifyRunFailureStage(run, true));
   res.json({ ok: true, run });
 }));
 
