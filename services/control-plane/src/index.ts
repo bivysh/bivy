@@ -2730,6 +2730,7 @@ app.post("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   };
   if (typeof body.region === "string" && body.region.trim()) config.region = body.region.trim();
   if (typeof body.size === "string" && body.size.trim()) config.size = body.size.trim();
+  if (typeof body.image === "string" && body.image.trim()) config.image = body.image.trim();
   if (typeof body.ttlMinutes === "number") config.ttlMinutes = body.ttlMinutes;
   if (body.teardownOnAgentFinish === true) config.teardownOnAgentFinish = true;
   const current = await store.getEphemeralConfigs(client.accountId);
@@ -2750,6 +2751,7 @@ app.put("/account/ephemeral-configs/:id", asyncHandler(async (req, res) => {
   if (typeof body.provider === "string" && body.provider.trim()) next.provider = body.provider.trim();
   if (typeof body.region === "string") next.region = body.region.trim() || undefined;
   if (typeof body.size === "string") next.size = body.size.trim() || undefined;
+  if (typeof body.image === "string") next.image = body.image.trim() || undefined;
   if (typeof body.ttlMinutes === "number") next.ttlMinutes = body.ttlMinutes;
   if (typeof body.teardownOnAgentFinish === "boolean") next.teardownOnAgentFinish = body.teardownOnAgentFinish || undefined;
   const saved = await store.setEphemeralConfigs(client.accountId, current.map((c) => (c.id === id ? next : c)));

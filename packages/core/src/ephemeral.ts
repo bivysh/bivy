@@ -822,7 +822,7 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
       indentJson(startScript, "      "),
       "runcmd:",
       // 1. Install Bivy (state lands in /etc/bivy via BIVY_DATA_DIR).
-      `  - [ bash, -lc, "mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && curl -fsSL ${shq(installUrl)} | bash" ]`,
+      `  - [ bash, -lc, "mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && command -v bivy >/dev/null 2>&1 || curl -fsSL ${shq(installUrl)} | bash" ]`,
       // 2. Start the daemon. On a systemd VM a transient system unit keeps it
       //    running after cloud-init's own unit exits (a bare backgrounded process
       //    would be cleaned up with cloud-final's cgroup); the setsid fallback
@@ -1132,7 +1132,7 @@ const hetzner: ProviderAdapter = {
       body: {
         name,
         server_type: config.size || hetzner.defaultSize,
-        image: "ubuntu-24.04",
+        image: config.image || "ubuntu-24.04",
         location: config.region || "nbg1",
         user_data: userData,
         start_after_create: true,
@@ -1206,9 +1206,7 @@ function flyInit(opts: BootstrapOpts): {
     "export DEBIAN_FRONTEND=noninteractive",
     "mkdir -p /etc/bivy",
     "export BIVY_DATA_DIR=/etc/bivy",
-    "apt-get update -qq",
-    "apt-get install -y -qq curl ca-certificates",
-    `curl -fsSL ${shq(installUrl)} | bash`,
+    `command -v bivy >/dev/null 2>&1 || { apt-get update -qq; apt-get install -y -qq curl ca-certificates; curl -fsSL ${shq(installUrl)} | bash; }`,
     // Hand the foreground to the daemon under a TTL `timeout` — the backstop
     // that replaces the VM's `shutdown -h now`. When it fires (or the agent
     // finishes) the process exits and `auto_destroy` removes the machine.
@@ -1760,7 +1758,7 @@ const aws: ProviderAdapter = {
     const creds = parseAwsToken(token);
     const region = config.region || aws.defaultRegion;
     const name = `bivy-${config.slug}`;
-    const amiId = await resolveUbuntuAmi(exec, creds, region);
+    const amiId = config.image ? String(config.image) : await resolveUbuntuAmi(exec, creds, region);
     const xml = await awsEc2Call(
       exec,
       creds,
@@ -2160,6 +2158,9 @@ export interface LaunchOpts {
   provider: string;
   region?: string;
   size?: string;
+  /** Optional provider-native prebuilt runner image/snapshot. Enrollment and
+   * credentials are still injected at claim time, never baked into the image. */
+  image?: string;
   ttlMinutes?: number;
   repo?: string;
   name?: string;
@@ -2366,7 +2367,7 @@ export async function launchEphemeralMachine(
     token,
     userData,
     bootstrap,
-    config: { slug: ephemeralNodeLabel(nodeId), region: opts.region || adapter.defaultRegion, size, ttlMinutes: opts.ttlMinutes },
+    config: { slug: ephemeralNodeLabel(nodeId), region: opts.region || adapter.defaultRegion, size, image: opts.image, ttlMinutes: opts.ttlMinutes },
   });
   machine.milestones = { ...(machine.milestones ?? {}), requestedAt, providerAcceptedAt: nowIso() };
   machine.nodeId = nodeId;

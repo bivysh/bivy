@@ -1888,6 +1888,7 @@ export class AppController {
         provider: config.provider,
         region: config.region ?? undefined,
         size: config.size ?? undefined,
+        image: config.image ?? undefined,
         ttlMinutes: config.ttlMinutes ?? undefined,
         teardownOnAgentFinish: config.teardownOnAgentFinish === true,
         name: config.name,
