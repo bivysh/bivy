@@ -951,6 +951,7 @@ export interface AccountAutomationRun {
   completedAt?: string;
   leaseExpiresAt?: string;
   attempt?: number;
+  maxAttempts?: number;
   runtimeId?: string;
   model?: string;
   routingReason?: string;
@@ -1076,6 +1077,21 @@ export function cancelAutomationRun(
   return automationRequest<{ ok: true; run: AccountAutomationRun }>(
     store,
     `/account/automation-runs/${encodeURIComponent(id)}/cancel`,
+    { method: "POST" },
+    fetchImpl,
+  ).then((result) => result.run);
+}
+
+/** Start another durable attempt of the same Run. The control plane rejects
+ * successful/non-retryable Runs and exhausted attempt budgets. */
+export function retryAutomationRun(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun> {
+  return automationRequest<{ ok: true; run: AccountAutomationRun }>(
+    store,
+    `/account/automation-runs/${encodeURIComponent(id)}/retry`,
     { method: "POST" },
     fetchImpl,
   ).then((result) => result.run);

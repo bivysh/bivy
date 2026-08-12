@@ -77,6 +77,7 @@ export interface Run {
   outcome: RunOutcome;
   /** A retry is another attempt of the SAME customer-visible Run. */
   attempt: number;
+  maxAttempts?: number;
   title: string;
   source: RunSource;
   /** The Run's current underlying Session id, when correlated. */
@@ -118,6 +119,7 @@ interface RunRecord {
   externalId?: string;
   url?: string;
   attempt?: number;
+  maxAttempts?: number;
   createdAt: string;
   claimedAt?: string;
   startedAt?: string;
@@ -169,12 +171,12 @@ function durationOf(t: RunTimestamps): number | undefined {
   return Number.isFinite(ms) && ms >= 0 ? ms : undefined;
 }
 
-function actionsFor(status: RunStatus, outcome: RunOutcome): RunAction[] {
+function actionsFor(status: RunStatus, outcome: RunOutcome, attempt: number, maxAttempts?: number): RunAction[] {
   const actions: RunAction[] = [];
   if (CANCELLABLE.has(status)) actions.push({ kind: "cancel", label: "Cancel Run" });
   // Retry is another attempt of a Run that has ENDED in a failure the customer
   // can act on. A still-parked needs_attention Run is cancellable, not retryable.
-  if (FINISHED.has(status) && RETRYABLE_OUTCOMES.has(outcome.kind)) actions.push({ kind: "retry", label: "Retry Run" });
+  if (FINISHED.has(status) && RETRYABLE_OUTCOMES.has(outcome.kind) && (!maxAttempts || attempt < maxAttempts)) actions.push({ kind: "retry", label: "Retry Run" });
   return actions;
 }
 
@@ -203,6 +205,7 @@ function projectRun(record: RunRecord, projection: RunProjectionSource, ctx?: Ru
     lifecycle: lifecycleOf(record.status),
     outcome,
     attempt: Math.max(1, Math.trunc(record.attempt ?? 1)),
+    ...(record.maxAttempts ? { maxAttempts: record.maxAttempts } : {}),
     title: record.title,
     source: {
       kind: record.source || record.triggerKind || "manual",
@@ -226,7 +229,7 @@ function projectRun(record: RunRecord, projection: RunProjectionSource, ctx?: Ru
     ...(record.receiptEvidence ? { receiptEvidence: record.receiptEvidence } : {}),
     references,
     ...(failure ? { failureSummary: failure.slice(0, MAX_FAILURE_SUMMARY) } : {}),
-    actions: actionsFor(record.status, outcome),
+    actions: actionsFor(record.status, outcome, Math.max(1, Math.trunc(record.attempt ?? 1)), record.maxAttempts),
   };
 }
 

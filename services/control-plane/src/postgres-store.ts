@@ -54,6 +54,7 @@ import {
   type AutomationRun,
   type AutomationRunStatus,
   type CancelAutomationRunResult,
+  type RetryAutomationRunResult,
   type AutomationTriggerKind,
   type TriggerEvent,
   type RunEvidenceEvent,
@@ -2609,6 +2610,64 @@ export class PostgresStore implements MeshStore {
     }
   }
 
+  async retryAutomationRun(accountId: string, id: string): Promise<RetryAutomationRunResult | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const selected = await client.query(
+        `SELECT * FROM work_items WHERE account_id = $1 AND id = $2 FOR UPDATE`,
+        [accountId, id],
+      );
+      const current = selected.rows[0];
+      if (!current) { await client.query("COMMIT"); return undefined; }
+      const checks = Array.isArray(current.checks) ? current.checks : [];
+      const output = current.output ?? {};
+      const events = Array.isArray(current.events) ? current.events : [];
+      const failedCheck = checks.some((check: RunCheck) => check.status === "failed");
+      const explicitNoChanges = events.some((event: RunEvidenceEvent) => /no (file )?changes/i.test(event.summary));
+      const hasArtifact = Boolean(output.branch || output.commit || output.prUrl || output.checkpoint || output.artifactUrl);
+      const ambiguousSuccess = current.status === "succeeded" && !failedCheck && !explicitNoChanges && !hasArtifact;
+      const eligible = current.status === "failed" || failedCheck || ambiguousSuccess;
+      if (!eligible) {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), transitioned: false, reason: "not_retryable" };
+      }
+      const attempt = Math.max(1, Number(current.attempt ?? 1));
+      const maxAttempts = Number(current.max_attempts);
+      if (Number.isFinite(maxAttempts) && maxAttempts > 0 && attempt >= maxAttempts) {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), transitioned: false, reason: "attempt_limit" };
+      }
+      if (current.collapse_key) {
+        const pending = await client.query(
+          `SELECT id FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND status = 'pending' AND id <> $3 LIMIT 1`,
+          [accountId, current.collapse_key, id],
+        );
+        if (pending.rows[0]) {
+          await client.query("COMMIT");
+          return { run: mapAutomationRun(current), transitioned: false, reason: "not_retryable" };
+        }
+      }
+      const retryEvent: RunEvidenceEvent = {
+        at: new Date().toISOString(), kind: "retry", summary: "A new attempt was requested.", attempt: attempt + 1,
+      };
+      const updated = await client.query(
+        `UPDATE work_items SET status = 'pending', attempt = $3, claimed_by_node_id = NULL,
+         claimed_at = NULL, started_at = NULL, completed_at = NULL, lease_expires_at = NULL,
+         output = NULL, checks = '[]'::jsonb, receipt_evidence = NULL, events = $4::jsonb
+         WHERE account_id = $1 AND id = $2 RETURNING *`,
+        [accountId, id, attempt + 1, JSON.stringify([...events, retryEvent].slice(-100))],
+      );
+      await client.query("COMMIT");
+      return { run: mapAutomationRun(updated.rows[0]), transitioned: true };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string): Promise<AutomationRun | undefined> {
     const from: Record<AutomationRunStatus, AutomationRunStatus[]> = {
       pending: [],
@@ -3058,6 +3117,7 @@ function mapAutomationRun(row: any): AutomationRun {
     triggerKind: triggerKindForSource(row.trigger_kind ?? undefined, row.source),
     status: row.status === "done" ? "succeeded" : row.status,
     attempt: Number(row.attempt ?? 1),
+    maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
     target: row.target_kind === "existing_session"
       ? { kind: "existing_session", sessionId: row.target_session_id }
       : { kind: "new_session" },

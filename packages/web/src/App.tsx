@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { cancelAutomationRun, fetchAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { cancelAutomationRun, fetchAutomationRun, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -812,6 +812,7 @@ export function App() {
           runId={runRoute.runId}
           load={(id) => fetchAutomationRun(controller.local, id)}
           onCancel={async (id) => { await cancelAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
+          onRetry={async (id) => { await retryAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
           resolveMachineName={(machineId) => state.nodes.find((n) => n.id === machineId)?.name || undefined}
           isSessionResolvable={(sessionId) => state.sessions.some((s) => s.sessionId === sessionId)}
           onOpenSession={(sessionId) => {

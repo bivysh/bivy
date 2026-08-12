@@ -2773,6 +2773,21 @@ app.post("/account/automation-runs/:id/cancel", asyncHandler(async (req, res) =>
   res.json({ ok: true, run: result.run });
 }));
 
+app.post("/account/automation-runs/:id/retry", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const result = await store.retryAutomationRun(client.accountId, String(req.params.id));
+  if (!result) return res.status(404).json({ error: "Automation run not found" });
+  if (!result.transitioned) {
+    const message = result.reason === "attempt_limit"
+      ? "This Run has reached its attempt limit."
+      : "This Run is not retryable in its current state.";
+    return res.status(409).json({ error: message, reason: result.reason, run: result.run });
+  }
+  void notifyRelaysWorkAvailable(client.accountId, { id: result.run.id, label: result.run.routing.nodeLabel });
+  res.json({ ok: true, run: result.run });
+}));
+
 app.post("/account/automation-runs", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });

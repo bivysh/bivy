@@ -566,6 +566,11 @@ export interface CancelAutomationRunResult {
   previousStatus: AutomationRunStatus;
   transitioned: boolean;
 }
+export interface RetryAutomationRunResult {
+  run: AutomationRun;
+  transitioned: boolean;
+  reason?: "not_retryable" | "attempt_limit";
+}
 export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | "schedule";
 
 // --- Privacy-safe run evidence (issue #153) -----------------------------------
@@ -713,6 +718,7 @@ export interface AutomationRun {
   triggerKind: AutomationTriggerKind;
   status: AutomationRunStatus;
   attempt: number;
+  maxAttempts?: number;
   target: { kind: "new_session" } | { kind: "existing_session"; sessionId: string };
   routing: {
     nodeLabel: string;
@@ -1366,6 +1372,10 @@ export interface MeshStore {
   /** Account-scoped, transactional cancellation. Already-cancelled runs are
    *  returned idempotently; callers inspect previousStatus for terminal conflicts. */
   cancelAutomationRun(accountId: string, id: string): Promise<CancelAutomationRunResult | undefined>;
+  /** Start another attempt of the same customer-visible Run. Only terminal
+   * failure/ambiguous outcomes are eligible; attempt ceilings are enforced
+   * transactionally with the state reset. */
+  retryAutomationRun(accountId: string, id: string): Promise<RetryAutomationRunResult | undefined>;
   // Record privacy-safe run evidence reported by the node that CLAIMED this run
   // (issue #153) — routing reason, output refs (branch/PR/checkpoint/commit/...),
   // declared-check results, and new timeline events. `checks`/`events` in the

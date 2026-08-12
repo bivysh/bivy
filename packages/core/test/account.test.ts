@@ -19,6 +19,7 @@ import {
   fetchEphemeralQueueDefault,
   setEphemeralQueueDefault,
   cancelAutomationRun,
+  retryAutomationRun,
   fetchAutomationRun,
   RunFetchError,
 } from "../src/index.js";
@@ -462,6 +463,31 @@ describe("cancelAutomationRun", () => {
       json: async () => ({ error: "Cannot cancel a succeeded automation run" }),
     }) as Response) as unknown as typeof fetch;
     await expect(cancelAutomationRun(store, "run-1", fakeFetch)).rejects.toThrow("Cannot cancel a succeeded automation run");
+  });
+});
+
+describe("retryAutomationRun", () => {
+  it("POSTs the encoded retry path and returns the same durable Run", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenMethod = "";
+    const run = { id: "run/a b", status: "pending", attempt: 2 };
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenMethod = String(init?.method);
+      return { ok: true, json: async () => ({ ok: true, run }) } as Response;
+    }) as unknown as typeof fetch;
+    await expect(retryAutomationRun(store, "run/a b", fakeFetch)).resolves.toEqual(run);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/automation-runs/run%2Fa%20b/retry");
+    expect(seenMethod).toBe("POST");
+  });
+
+  it("surfaces attempt-limit conflicts", async () => {
+    const store = createLocalStore(mem(), mem());
+    const fakeFetch = (async () => ({ ok: false, status: 409, json: async () => ({ error: "This Run has reached its attempt limit." }) }) as Response) as unknown as typeof fetch;
+    await expect(retryAutomationRun(store, "run-1", fakeFetch)).rejects.toThrow("attempt limit");
   });
 });
 
