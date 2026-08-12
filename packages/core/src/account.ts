@@ -867,6 +867,11 @@ export interface GithubQueueItem {
     url?: string;
     status?: "passed" | "failed" | "denied" | "approved";
   }>;
+  receiptEvidence?: {
+    approvals: { requests: number; approved: number; denied: number };
+    fileChanges: { files: Array<{ path: string; op?: string; added?: number; removed?: number }>; added: number; removed: number };
+    auditHealth: { correlation: "healthy" | "missing"; readableStorage: "healthy" | "missing"; successfulWrites: "healthy" | "missing" };
+  };
 }
 
 export type AutomationSchedule =
@@ -953,6 +958,7 @@ export interface AccountAutomationRun {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   checks?: GithubQueueItem["checks"];
   events?: GithubQueueItem["events"];
+  receiptEvidence?: GithubQueueItem["receiptEvidence"];
   output?: GithubQueueItem["output"];
 }
 

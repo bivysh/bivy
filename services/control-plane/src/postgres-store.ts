@@ -658,6 +658,7 @@ export class PostgresStore implements MeshStore {
       -- empty JSON array, which then silently corrupts every array spread.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS checks JSONB NOT NULL DEFAULT '[]'::jsonb;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS events JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS receipt_evidence JSONB;
       INSERT INTO trigger_events (id, account_id, kind, created_at)
         SELECT 'legacy:' || id, account_id,
           CASE WHEN source LIKE 'github:%' THEN 'github'
@@ -2681,10 +2682,11 @@ export class PostgresStore implements MeshStore {
     const output = patch.output ? { ...(current.output ?? {}), ...patch.output } : (current.output ?? {});
     const checks = patch.checks ? [...(current.checks ?? []), ...patch.checks].slice(-50) : (current.checks ?? []);
     const events = patch.events ? [...(current.events ?? []), ...patch.events].slice(-100) : (current.events ?? []);
+    const receiptEvidence = patch.receiptEvidence ?? current.receipt_evidence ?? null;
     const { rows: updated } = await this.query(
-      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb
+      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb, receipt_evidence = $7::jsonb
        WHERE account_id = $1 AND id = $2 RETURNING *`,
-      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(events)],
+      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(events), JSON.stringify(receiptEvidence)],
     );
     return updated[0] ? mapAutomationRun(updated[0]) : undefined;
   }
@@ -2911,11 +2913,12 @@ function mapHook(row: any): InboundHook {
  *  mapAutomationRun. Defensively re-bounds on read (in addition to the bounds
  *  already enforced at write time by run-evidence.ts) so a row written by an
  *  older/looser server version can never balloon a response unbounded. */
-function mapEvidenceFields(row: any): { routingReason?: string; checks: RunCheck[]; events: RunEvidenceEvent[] } {
+function mapEvidenceFields(row: any): { routingReason?: string; checks: RunCheck[]; events: RunEvidenceEvent[]; receiptEvidence?: AutomationRun["receiptEvidence"] } {
   return {
     routingReason: row.routing_reason ?? undefined,
     checks: Array.isArray(row.checks) ? row.checks.slice(-50) : [],
     events: Array.isArray(row.events) ? row.events.slice(-100) : [],
+    receiptEvidence: row.receipt_evidence && typeof row.receipt_evidence === "object" ? row.receipt_evidence : undefined,
   };
 }
 

@@ -10,6 +10,11 @@ test("evidence accepts the bounded metadata needed for an outcome report", () =>
     output: { sessionId: "session_1", branch: "bivy/issue-153", prUrl: "https://github.com/bivysh/bivy/pull/200", checkpoint: "abc123", commit: "def456" },
     checks: [{ name: "unit tests", commandHash: "sha256:123", status: "passed", exitCode: 0 }],
     events: [{ at: "2026-07-26T00:00:00.000Z", kind: "pull_request", summary: "Pull request opened.", attempt: 1 }],
+    receiptEvidence: {
+      approvals: { requests: 2, approved: 1, denied: 1 },
+      fileChanges: { files: [{ path: "src/app.ts", op: "modified", added: 4, removed: 2 }], added: 4, removed: 2 },
+      auditHealth: { correlation: "healthy", readableStorage: "healthy", successfulWrites: "healthy" },
+    },
   });
   assert.equal(patch.routingReason, "queue label");
   assert.equal(patch.output?.branch, "bivy/issue-153");
@@ -17,6 +22,8 @@ test("evidence accepts the bounded metadata needed for an outcome report", () =>
   assert.equal(patch.output?.commit, "def456");
   assert.equal(patch.events?.[0]?.kind, "pull_request");
   assert.equal(patch.checks?.[0]?.exitCode, 0);
+  assert.equal(patch.receiptEvidence?.fileChanges.files[0]?.path, "src/app.ts");
+  assert.equal(patch.receiptEvidence?.approvals.denied, 1);
 });
 
 test("evidence rejects sensitive fields at every accepted level", () => {
@@ -26,6 +33,8 @@ test("evidence rejects sensitive fields at every accepted level", () => {
     { output: { rawCommand: "npm test" } },
     { events: [{ kind: "completed", summary: "done", toolOutput: "private" }] },
     { checks: [{ name: "test", status: "passed", rawCommand: "npm test" }] },
+    { receiptEvidence: { transcript: "private" } },
+    { receiptEvidence: { fileChanges: { files: [{ path: "src/app.ts", diff: "private patch" }] } } },
   ]) {
     assert.throws(() => sanitizeEvidencePatch(payload), /sensitive evidence field rejected/);
   }

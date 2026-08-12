@@ -2354,6 +2354,7 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     routingReason: w.routingReason,
     checks: w.checks,
     events: w.events,
+    receiptEvidence: w.receiptEvidence,
   })));
 }));
 
