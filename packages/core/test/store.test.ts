@@ -622,6 +622,29 @@ describe("SessionStore", () => {
     expect(tools[0]!.tool!.result).toBe("file.txt");
   });
 
+  it("surfaces a running delegated tool as active sub-agent work", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "tool_call",
+      toolCallId: "sub-1",
+      name: "Task",
+      input: { description: "trace auth" },
+      detail: { kind: "delegation", label: "Explore", description: "trace auth" },
+    });
+    expect(store.getState().workingLabel).toBe("Explore sub-agent is working…");
+    const tool = store.getState().transcript.find((entry) => entry.tool)?.tool;
+    expect(tool?.detail).toEqual({ kind: "delegation", label: "Explore", description: "trace auth" });
+
+    // Long-running agent tools emit elapsed-time progress with no repeated
+    // detail. The card must retain its sub-agent identity while accepting the
+    // fresh activity payload, rather than degrading back to an opaque tool.
+    store.apply({ type: "tool_execution_update", toolCallId: "sub-1", name: "Task", input: { elapsedSeconds: 42 } });
+    const updated = store.getState().transcript.find((entry) => entry.tool)?.tool;
+    expect(updated?.detail?.kind).toBe("delegation");
+    expect(updated?.input).toEqual({ elapsedSeconds: 42 });
+    expect(store.getState().workingLabel).toBe("Explore sub-agent is working…");
+  });
+
   it("coalesces unnamed agent output updates into one live card", () => {
     const store = new SessionStore();
     store.apply({ type: "tool_execution_update", toolName: "agent_output", input: { stream: "stderr", output: "first" } });

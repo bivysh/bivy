@@ -3457,6 +3457,13 @@ export class SessionStore {
   private workingLabelForTool(event: ServerEvent): string {
     const name = toolName(event as any);
     if (name === "agent_output" || name === "stderr" || name === "stdout") return "Reading agent output…";
+    const callId = toolCallId(event as any);
+    const detail = toolDetail(event as any) ?? (callId
+      ? this.state.transcript.find((entry) => entry.tool?.callId === callId)?.tool?.detail
+      : undefined);
+    if (detail?.kind === "delegation") {
+      return detail.label ? `${detail.label} sub-agent is working…` : "Sub-agent is working…";
+    }
     return `Running ${name}…`;
   }
 

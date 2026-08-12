@@ -83,13 +83,15 @@ export function toolInput(ev: AnyEvent): unknown {
   );
 }
 
-const DETAIL_KINDS = new Set(["shell", "read", "write", "edit", "search", "fetch", "plan"]);
+const DETAIL_KINDS = new Set(["shell", "read", "write", "edit", "search", "fetch", "plan", "delegation"]);
 
 /**
  * Read the node's normalized ToolCallDetail off a tool block/event, if present.
  * Returned untyped-but-validated (kind is one we know) so the caller can hand it
  * to formatTool; a missing or unrecognized shape returns undefined and the UI
- * falls back to its heuristic parse of the raw input.
+ * falls back to its heuristic parse of the raw input. Keep this allowlist in sync
+ * with ToolCallDetail: dropping a kind here makes a valid node-side detail
+ * invisible to the client (most notably a running sub-agent delegation).
  */
 export function toolDetail(ev: AnyEvent): ToolCallDetail | undefined {
   const d = ev?.detail;
