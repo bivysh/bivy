@@ -198,3 +198,39 @@ export function deriveActivation(signals: ActivationSignals): Activation {
     ...(nextAction ? { nextAction } : {}),
   };
 }
+
+/** The minimal structural slice of the client `AppState` the activation adapter
+ *  reads. Declared here (rather than importing `AppState`) so this module stays
+ *  dependency-free and unit-testable with plain objects; the real `AppState`
+ *  satisfies it structurally. */
+export interface ActivationStateInput {
+  /** ConnectionStatus: "online" | "offline" | "connecting" | "reconnecting" | … */
+  status: string;
+  runtimes: ReadonlyArray<{ status?: unknown }>;
+  providers: ReadonlyArray<{ configured?: boolean; expiresAt?: number }>;
+  reposAuthed: boolean;
+  transcript: ReadonlyArray<{ role: string; text: string; tool?: unknown }>;
+}
+
+/** Map the current client state to activation signals, then use
+ *  {@link deriveActivation}. Every mapping is conservative and honest:
+ *
+ *  - a transient connection state (connecting/reconnecting) leaves
+ *    `machineOnline` undefined (still checking) rather than failing;
+ *  - `agentAnswered` is set ONLY by a real assistant message with text in the
+ *    transcript — never by an installed agent or an online Machine. A turn that
+ *    has not answered yet stays "checking", surfacing "run the starter task" as
+ *    the next action, so the UI can never claim readiness before a real response.
+ */
+export function activationFromState(state: ActivationStateInput, now: number = Date.now()): Activation {
+  const machineOnline = state.status === "online" ? true : state.status === "offline" ? false : undefined;
+  const agentInstalled = state.runtimes.length
+    ? state.runtimes.some((r) => String(r.status ?? "available") === "available")
+    : undefined;
+  const credentialValid = state.providers.length
+    ? state.providers.some((p) => p.configured === true && (!p.expiresAt || p.expiresAt > now))
+    : undefined;
+  const repositoryReady = state.reposAuthed;
+  const agentAnswered = state.transcript.some((e) => e.role === "assistant" && Boolean(e.text) && !e.tool) ? true : undefined;
+  return deriveActivation({ machineOnline, agentInstalled, credentialValid, repositoryReady, agentAnswered });
+}

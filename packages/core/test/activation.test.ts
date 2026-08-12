@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveActivation, type ActivationSignals } from "../src/activation.js";
+import { activationFromState, deriveActivation, type ActivationSignals, type ActivationStateInput } from "../src/activation.js";
 
 const ALL_BUT_AGENT: ActivationSignals = {
   machineOnline: true,
@@ -85,5 +85,66 @@ describe("deriveActivation", () => {
     expect(stateOf(a, "credential_valid")).toBe("pending");
     expect(stateOf(a, "repository_ready")).toBe("pending");
     expect(stateOf(a, "agent_answered")).toBe("pending");
+  });
+});
+
+describe("activationFromState", () => {
+  const base: ActivationStateInput = {
+    status: "online",
+    runtimes: [{ status: "available" }],
+    providers: [{ configured: true }],
+    reposAuthed: true,
+    transcript: [],
+  };
+
+  it("does not claim readiness from an online Machine + installed agent alone", () => {
+    // Everything green upstream, but no real assistant response in the transcript.
+    const a = activationFromState(base);
+    expect(a.activated).toBe(false);
+    expect(a.stage).toBe("in_progress");
+    expect(stateOf(a, "agent_answered")).toBe("checking");
+    expect(a.nextAction?.kind).toBe("run_starter_task");
+  });
+
+  it("activates only once a real assistant message with text exists", () => {
+    const answered = activationFromState({
+      ...base,
+      transcript: [
+        { role: "user", text: "hi" },
+        { role: "assistant", text: "Here's what I did.", tool: undefined },
+      ],
+    });
+    expect(answered.activated).toBe(true);
+    expect(answered.stage).toBe("activated");
+  });
+
+  it("ignores a tool card or empty assistant bubble as 'answered'", () => {
+    const toolOnly = activationFromState({
+      ...base,
+      transcript: [
+        { role: "assistant", text: "running tests", tool: { some: "activity" } },
+        { role: "assistant", text: "" },
+      ],
+    });
+    expect(toolOnly.activated).toBe(false);
+  });
+
+  it("treats a transient connection as checking, offline as a block", () => {
+    expect(stateOf(activationFromState({ ...base, status: "reconnecting" }), "machine_online")).toBe("checking");
+    const offline = activationFromState({ ...base, status: "offline" });
+    expect(offline.blockingCheckId).toBe("machine_online");
+    expect(offline.nextAction?.kind).toBe("connect_machine");
+  });
+
+  it("treats an expired credential as invalid", () => {
+    const expired = activationFromState({ ...base, providers: [{ configured: true, expiresAt: 1000 }] }, 5000);
+    expect(expired.blockingCheckId).toBe("credential_valid");
+    const valid = activationFromState({ ...base, providers: [{ configured: true, expiresAt: 9000 }] }, 5000);
+    expect(valid.blockingCheckId).not.toBe("credential_valid");
+  });
+
+  it("blocks on an unavailable agent and unauthorized repository", () => {
+    expect(activationFromState({ ...base, runtimes: [{ status: "external" }] }).blockingCheckId).toBe("agent_installed");
+    expect(activationFromState({ ...base, reposAuthed: false }).blockingCheckId).toBe("repository_ready");
   });
 });
