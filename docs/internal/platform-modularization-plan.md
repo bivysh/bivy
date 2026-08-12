@@ -235,6 +235,29 @@ sync-transport port whose first customer is the credential-record wire currently
 stranded at `src/server.ts` ~L3379-3600). Guard: a "remote-absent daemon still
 serves every local command" test.
 
+**Finding (2026-08-12): remote is CROSS-CUTTING, not a tidy carve.** Its files
+are consumed by always-on session/runtime/cli/github code (`history-sync` ←
+session replication; `runtime/remote` ← `runtime/host`; `pairing-crypto` ←
+session sibling-client; `device-registry` ← automation-cli;
+`runtime/location-registry`/`session-location` are shared and STAY in the
+kernel). And the local-first invariant already largely holds (relay is opt-in;
+`sessionLocations` defaults to in-memory). So Phase 3 is **incremental
+decoupling behind ports**, sequenced by *risk*, not a file relocation:
+- **Slice 1 — DONE 2026-08-11 (branch `bivy/platform-phase3-remote-module`).**
+  Establish `src/remote/` + facade (`index.ts`) + enforced `remote → server`
+  boundary rule; relocate `relay-client.ts` (the `RelayConnector`, imported only
+  by server.ts) behind the facade. Behavior-identical relocation; server.ts now
+  imports remote via `./remote/index.js`. Single-node smoke (relay still
+  connects).
+- **Slice 2 (next):** invert relay **construction + the event-sink** so the
+  kernel stops hard-importing/constructing `RelayConnector` (it holds a
+  `RemoteEventSink` port; ~101 `relay?.sendEvent` sites already null-safe).
+- **Slice 3 (LAST, most fragile → 2-node live smoke):** the model-auth /
+  credential cross-node **sync-transport port** — the crypto/key-escrow/rotation
+  path; guarded by `test/credential-record-sync.test.ts` extended.
+- **Slice 4:** relocate the remaining now-decoupled remote-only files; promote
+  to `@bivy/remote` package.
+
 ### Phase 4 — CLI as a thin API client
 
 `bin/bivy.mjs` (4,725 lines) keeps its service-management UX but routes feature

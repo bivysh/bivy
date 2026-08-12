@@ -63,6 +63,13 @@ const RULES = [
     enforce: true,
     note: "the protocol layer is the wire contract — it may use typebox but imports no implementation; every transport/consumer depends on IT.",
   },
+  {
+    name: "remote-does-not-import-server",
+    dir: "src/remote",
+    forbid: ["../server", "./server"],
+    enforce: true,
+    note: "the remote module is imported BY the kernel via ./remote/index.js; it never imports server.ts (the composition root). Direction: server -> remote only (Phase 3).",
+  },
 ];
 
 // Match the `from "spec"` clause of any import/export (including multi-line
