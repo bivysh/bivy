@@ -136,3 +136,12 @@ Interactive ephemeral runners show provider, region/size, available rate estimat
 Setup is idempotent, offers model login inline where Bivy owns authentication, prints a stage checklist, and labels a running node with missing model access as incomplete rather than successful. The starter task asks for repository explanation and one low-risk improvement.
 
 **Reason:** Installation is not activation. The user should know the exact failed stage and have a safe path to a useful first response.
+
+## D-016 — Bivy governs the substrate/envelope, not agent collaboration
+
+**Date:** 2026-08-12
+**Status:** Accepted — supersedes the developer-platform plan's Phase 5 "Bivy owns agent collaboration" framing.
+
+Agents spawn sub-agents natively; Bivy does NOT inject a `delegate_task` tool or otherwise own/interfere with an agent's collaboration choices. Bivy is the layer on top: it governs the boundary — the sandbox tier the agent enforces natively (`harness/sandbox.ts`), the egress broker injected as `HTTP_PROXY`/`HTTPS_PROXY` env (`harness/net-proxy.ts`), and the MCP proxy injected into the agent's config (`harness/mcp-inject.ts`) — and observes/audits. That envelope applies **transitively** to whatever the agent spawns: a native sub-agent inherits the sandbox tier (same agent process), the egress broker (child processes inherit the proxy env — net-proxy.ts is explicit about "the tools it spawns"), and the MCP proxy (shared config), with no escape path. So "governed multi-agent" requires no Bivy-owned collaboration subsystem; the only optional follow-up is observability (distinctly attributing sub-agent activity, per-adapter cost roll-up).
+
+**Reason:** Bivy's own design principle is "govern the substrate, not the agent" (net-proxy.ts) and "integrations, not agents; no privileged built-in-agent category" (CORE.md / dev-platform plan). A Bivy `delegate_task` tool would reimplement native agent capability, force agent-specific normalization, and interfere with the agent's choices — contradicting that principle. Investigation (2026-08-12) confirmed the governance envelope already covers native sub-agents transitively, so there is no gap to close by building collaboration.
