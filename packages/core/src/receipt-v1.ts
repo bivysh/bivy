@@ -118,12 +118,12 @@ function rejectProhibited(value: unknown, seen = new Set<object>()): void {
   seen.delete(value as object);
 }
 
-function bounded(value: unknown, field: string, max = MAX.text): string | undefined {
+function bounded(value: unknown, field: string, max: number = MAX.text): string | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (typeof value !== "string" || value.length > max) throw new Error(`${field} must be a string of at most ${max} characters`);
   return value;
 }
-function required(value: unknown, field: string, max = MAX.id): string {
+function required(value: unknown, field: string, max: number = MAX.id): string {
   const result = bounded(value, field, max)?.trim();
   if (!result) throw new Error(`${field} is required`);
   return result;
