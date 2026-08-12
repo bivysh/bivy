@@ -70,6 +70,20 @@ Teardown: a **Destroy now** button runs `destroy()` via the same transport and d
 
 Caveat: the adapters are written against each provider's documented API shape and are unit-tested via an injected transport (`packages/core/test/ephemeral-aws.test.ts`, `packages/core/test/ephemeral-stores.test.ts`) plus the node SSRF proxy (`test/ephemeral-exec.test.ts`), but live end-to-end provisioning still needs a real token/account per provider to confirm.
 
+### Live provider smoke
+
+The manual `Ephemeral live smoke` workflow exercises a deployed control plane and
+a dedicated test account through public account APIs: validate the provider
+credential, enable hosted provisioning, create and route to a temporary config,
+enqueue a real automation run, wait for `firstAgentEventAt`, report the cold-start
+milestones, destroy the runner, and assert its hosted inventory is empty. Cleanup
+runs even after a timeout or SLO failure. The protected `ephemeral-live-smoke`
+GitHub environment must provide `BIVY_SMOKE_CONTROL_PLANE_URL`,
+`BIVY_SMOKE_ACCOUNT_TOKEN`, and the selected provider secret. Use an account with
+no non-smoke routing or runners: the workflow deliberately disables hosted
+provisioning and restores shared routing during cleanup. Enable the optional
+10-second assertion only for a prebuilt/ready-capacity lane advertised as fast.
+
 ## Adding a new provider
 
 The whole point of `ProviderAdapter` is that adding a provider is additive — no shared dispatch/call site (the UI, the controller, `launchEphemeralMachine`/`destroyEphemeralMachine`/`listEphemeralSizes`) needs to change. It only needs to know a provider's `id` string. Checklist, using the AWS adapter as the reference example:

@@ -2646,6 +2646,10 @@ app.post("/account/automation-runs", asyncHandler(async (req, res) => {
     runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined,
     model: typeof req.body?.model === "string" ? req.body.model : undefined,
   });
+  // Manual runs are real automation work too: wake connected nodes and, when
+  // routing targets an ephemeral config, launch the unattended runner. Without
+  // this notification these rows stayed pending until unrelated work arrived.
+  void notifyRelaysWorkAvailable(client.accountId, { id: run.id, label: run.routing.nodeLabel });
   res.status(201).json(run);
 }));
 

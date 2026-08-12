@@ -1,0 +1,70 @@
+name: Ephemeral live smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Provider credential configured in the ephemeral-live-smoke environment
+        required: true
+        type: choice
+        options: [hetzner, fly, aws, sprites, e2b]
+      region:
+        description: Provider region (blank uses adapter default)
+        required: false
+        type: string
+      size:
+        description: Provider size (blank uses adapter default)
+        required: false
+        type: string
+      image:
+        description: Prebuilt provider image/AMI (blank uses compatibility bootstrap)
+        required: false
+        type: string
+      enforce_10s:
+        description: Fail unless request-to-first-agent-event is under 10 seconds
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ephemeral-live-smoke-${{ inputs.provider }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    environment: ephemeral-live-smoke
+    timeout-minutes: 20
+    env:
+      BIVY_SMOKE_CONTROL_PLANE_URL: ${{ secrets.BIVY_SMOKE_CONTROL_PLANE_URL }}
+      BIVY_SMOKE_ACCOUNT_TOKEN: ${{ secrets.BIVY_SMOKE_ACCOUNT_TOKEN }}
+      BIVY_SMOKE_HETZNER_TOKEN: ${{ secrets.BIVY_SMOKE_HETZNER_TOKEN }}
+      BIVY_SMOKE_FLY_TOKEN: ${{ secrets.BIVY_SMOKE_FLY_TOKEN }}
+      BIVY_SMOKE_AWS_TOKEN: ${{ secrets.BIVY_SMOKE_AWS_TOKEN }}
+      BIVY_SMOKE_SPRITES_TOKEN: ${{ secrets.BIVY_SMOKE_SPRITES_TOKEN }}
+      BIVY_SMOKE_E2B_TOKEN: ${{ secrets.BIVY_SMOKE_E2B_TOKEN }}
+      BIVY_SMOKE_PROVIDER: ${{ inputs.provider }}
+      BIVY_SMOKE_REGION: ${{ inputs.region }}
+      BIVY_SMOKE_SIZE: ${{ inputs.size }}
+      BIVY_SMOKE_IMAGE: ${{ inputs.image }}
+      BIVY_SMOKE_ENFORCE_10S: ${{ inputs.enforce_10s && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select provider credential
+        shell: bash
+        run: |
+          case "$BIVY_SMOKE_PROVIDER" in
+            hetzner) token="$BIVY_SMOKE_HETZNER_TOKEN" ;;
+            fly) token="$BIVY_SMOKE_FLY_TOKEN" ;;
+            aws) token="$BIVY_SMOKE_AWS_TOKEN" ;;
+            sprites) token="$BIVY_SMOKE_SPRITES_TOKEN" ;;
+            e2b) token="$BIVY_SMOKE_E2B_TOKEN" ;;
+            *) echo "::error::unsupported provider"; exit 1 ;;
+          esac
+          if [ -z "$token" ]; then echo "::error::No secret configured for $BIVY_SMOKE_PROVIDER"; exit 1; fi
+          echo "BIVY_SMOKE_PROVIDER_TOKEN=$token" >> "$GITHUB_ENV"
+      - name: Provision, run, measure, and prove teardown
+        run: node scripts/ephemeral-live-smoke.mjs
