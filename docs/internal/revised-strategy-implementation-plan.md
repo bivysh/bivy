@@ -153,8 +153,13 @@ or PR → Receipt.
   Session is resolvable. Expo client parity follows when that client lands.
 - [ ] Make “Continue in background” / “Delegate this Session” preserve context
   and explain any fidelity boundary.
-- [ ] Ensure every accepted Run reaches exactly one explicit outcome from the
-  product contract; preserve ambiguous completion as Needs review.
+- [x] Ensure every accepted Run reaches exactly one explicit outcome from the
+  product contract; preserve ambiguous completion as Needs review. **PR #506:**
+  terminal outcomes are immutable (no terminal is a valid transition source), a
+  blocked terminal transition returns 409 and records no metric, and terminal
+  transitions are node-scoped so a Machine reclaimed mid-execution cannot rewrite
+  the new attempt. Adversarial store + server tests cover cancel/complete races,
+  stale-Machine completion, and lease loss.
 - [x] Complete cancellation: pending removal, active abort, evidence event,
   lease release, external-effect safety, and teardown eligibility. **Implemented
   2026-08-12:** account-scoped cancellation now atomically terminates pending,
@@ -164,7 +169,14 @@ or PR → Receipt.
   and exposes confirmed cancellation actions backed by refreshed durable state.
   Already-started third-party effects cannot be rolled back, so existing
   idempotent branch/PR/comment boundaries remain required.
-- [ ] Specify retry/reclaim semantics and prove PR/push/comment effects are idempotent.
+- [x] Specify retry/reclaim semantics and prove PR/push/comment effects are
+  idempotent. **PR #506:** `docs/automation-runs.md` now specifies outcome
+  finality, attempt numbering, lease-loss fencing, cancellation precedence, and
+  idempotent intake. Duplicate delivery collapses via the source key; issue/Linear
+  branches are deterministic and push is naturally idempotent; pickup and outcome
+  issue comments are made idempotent via a hidden marker (`commentIssueOnce`). A
+  fixed `bivy_run_failure_stage_total{stage}` counter joins the outcome counter.
+  Known gap documented: random-branch Slack/schedule/webhook runs.
 - [ ] Give every failed outcome a working next action (fix, retry, fork, review,
   re-auth, or cancel as applicable).
 - [ ] Add end-to-end tests for the golden workflow on both recommended agents.

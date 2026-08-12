@@ -105,7 +105,7 @@ import {
   findMergedPullRequestForBranch,
   issueBranchName,
   getPullRequest,
-  commentIssue,
+  commentIssueOnce,
   listOpenLabelledIssues,
   selectActionableIssues,
   getIssue,
@@ -4358,7 +4358,9 @@ async function reportIssueOutcome(
 
   if (record.prUrl) {
     emit(record, "pr_opened", `Pull request ready for issue #${issue.number}.`, { prUrl: record.prUrl });
-    await commentIssue(cfg, issue.number, `🤖 ${record.prUrl}`).catch(() => {});
+    // Keyed by the PR URL so a reclaim/retry that lands on the same PR does not
+    // post a second link, while a genuinely new PR still gets its own comment.
+    await commentIssueOnce(cfg, issue.number, `🤖 ${record.prUrl}`, `pr:${record.prUrl}`).catch(() => {});
     // Clean up the claim label now that the PR itself is the live "in progress"
     // signal on the issue (linked in the timeline + the comment above) — keeping
     // `bivy:in-progress` around after a PR exists is stale and, per the issue's
@@ -4373,7 +4375,9 @@ async function reportIssueOutcome(
       ? "Bivy handled the follow-up but produced no file changes."
       : "Bivy ran on this issue but produced no file changes.";
     emit(record, "no_changes", message);
-    await commentIssue(cfg, issue.number, message).catch(() => {});
+    // Keyed by the deterministic issue branch so a reclaim doesn't repeat the
+    // no-changes note for the same attempt cycle.
+    await commentIssueOnce(cfg, issue.number, message, `no-changes:${wt.branch}`).catch(() => {});
     // The run is finished with nothing in progress — drop the claim label so it
     // doesn't linger on the issue. A stale `bivy/<node>:in-progress` label was
     // also mis-routing follow-up mentions before pickRoutingLabel was hardened;
@@ -4383,10 +4387,11 @@ async function reportIssueOutcome(
   }
 
   emit(record, "pushed", `Pushed ${wt.branch} for issue #${issue.number}; no pull request yet.`);
-  await commentIssue(
+  await commentIssueOnce(
     cfg,
     issue.number,
     `🤖 Pushed \`${wt.branch}\` but didn't open a pull request. Comment \`@bivy\` again to continue, or open one from the session's chat (\`/pr\`).`,
+    `pushed:${wt.branch}`,
   ).catch(() => {});
 }
 

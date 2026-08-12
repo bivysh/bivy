@@ -1346,7 +1346,14 @@ export interface MeshStore {
   getAutomationRunBySourceKey(accountId: string, sourceKey: string): Promise<AutomationRun | undefined>;
   listAutomationRuns(accountId: string, limit?: number): Promise<AutomationRun[]>;
   getAutomationRun(accountId: string, id: string): Promise<AutomationRun | undefined>;
-  transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined>;
+  /** Transition a Run's durable lifecycle. Terminal targets are only reachable
+   *  from non-terminal states (the state machine makes an outcome immutable once
+   *  set — a stale or losing Machine cannot rewrite it). When `expectedNodeId` is
+   *  given the transition ALSO requires the Run to still be claimed by that node,
+   *  so a Machine that lost its lease to a reclaim cannot complete or fail the
+   *  new attempt in the read-then-write window. Returns undefined when the
+   *  transition was not applied (wrong source state or ownership lost). */
+  transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string): Promise<AutomationRun | undefined>;
   /** Account-scoped, transactional cancellation. Already-cancelled runs are
    *  returned idempotently; callers inspect previousStatus for terminal conflicts. */
   cancelAutomationRun(accountId: string, id: string): Promise<CancelAutomationRunResult | undefined>;
@@ -1398,7 +1405,7 @@ export interface MeshStore {
   // an interval by the control plane, mirroring pruneRunStartsBefore. Returns
   // how many rows were removed in total.
   pruneExpiredAuthTokens(nowIso: string): Promise<number>;
-  completeWorkItem(accountId: string, id: string): Promise<AutomationRun | undefined>;
+  completeWorkItem(accountId: string, id: string, expectedNodeId?: string): Promise<AutomationRun | undefined>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node
   // changes so already-queued work follows the new default. Returns the updated items.

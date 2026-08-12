@@ -17,7 +17,7 @@ import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
-import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult } from "./metrics.js";
+import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
 import {
@@ -3585,12 +3585,20 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.completeWorkItem(node.accountId, id);
+  const run = await store.completeWorkItem(node.accountId, id, node.id);
+  // A no-op means the Run already reached a terminal outcome (e.g. cancelled) or
+  // was reclaimed out from under this node in the read-then-write window. Report
+  // the conflict instead of a false success, and never emit a lifecycle metric
+  // for a completion that did not durably happen.
+  if (!run) {
+    const latest = await store.getAutomationRun(node.accountId, id);
+    return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed", reason: latest?.status ?? "unknown" });
+  }
   recordDurableRunLifecycleResult(run, "succeeded");
   // Compatibility for older nodes that skip the explicit /running transition.
   const started = await store.recordRunStart(node.accountId, `automation:${id}`);
   if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
-  res.json({ ok: true });
+  res.json({ ok: true, run });
 }));
 
 app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) => {
@@ -3600,7 +3608,8 @@ app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) =>
   if (!current || current.claimedByNodeId !== node.id || current.status !== "claimed") {
     return res.status(409).json({ error: "Run is not claimed by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "running");
+  const run = await store.transitionAutomationRun(node.accountId, id, "running", undefined, node.id);
+  if (!run) return res.status(409).json({ error: "Run is no longer claimed by this node" });
   const started = await store.recordRunStart(node.accountId, `automation:${id}`);
   if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
   res.json({ ok: true, run });
@@ -3613,9 +3622,12 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "failed");
-  if (!run) return res.status(404).json({ error: "Unknown run" });
+  const run = await store.transitionAutomationRun(node.accountId, id, "failed", undefined, node.id);
+  // No-op → already terminal or reclaimed away. A terminal outcome is immutable,
+  // so report the conflict rather than counting a second lifecycle result.
+  if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "failed");
+  recordRunFailureStage(classifyRunFailureStage(run));
   res.json({ ok: true, run });
 }));
 
@@ -3631,9 +3643,11 @@ app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req,
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "needs_attention");
-  if (!run) return res.status(404).json({ error: "Unknown run" });
+  const run = await store.transitionAutomationRun(node.accountId, id, "needs_attention", undefined, node.id);
+  // No-op → already terminal (a finished Run stays finished) or reclaimed away.
+  if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "needs_attention");
+  recordRunFailureStage(classifyRunFailureStage(run, true));
   res.json({ ok: true, run });
 }));
 

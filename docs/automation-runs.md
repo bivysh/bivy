@@ -34,6 +34,67 @@ to references such as session, branch, pull request, artifact, or a failure
 summary. Account APIs expose definitions, trigger history, and run history
 separately; the older work-item API reads from the same run records.
 
+## Outcome finality, retry, and reclaim
+
+Every accepted run reaches **exactly one** durable terminal outcome —
+`succeeded`, `failed`, or `cancelled` — and that outcome is **immutable**. The
+lifecycle state machine only allows a terminal state to be entered from a
+non-terminal one, so no later or losing Machine can rewrite a finished run. The
+client derives the finer customer outcome (`PR open`, `Checks failed`, `Needs
+review`, …) from evidence; the durable terminal state underneath it never flips.
+
+**Attempts.** `attempt` starts at 1. The first claim of a `pending` run keeps
+attempt 1. A **reclaim** of an expired lease increments it. Every attempt belongs
+to the **same customer-visible run** — a retry is not a second run.
+
+**Leases and reclaim.** The winning Machine renews a finite lease (default two
+minutes, `BIVY_WORK_LEASE_MS`) roughly every 30 seconds. If it stops renewing
+(crash, network loss, teardown), the run becomes reclaimable once the lease
+expires and another eligible node claims it as the next attempt. The Machine that
+lost the lease is **fenced**: because ownership is checked on every node call and
+terminal transitions are additionally scoped to the current claimant, a stale
+Machine's heartbeat, `running`, `complete`, `fail`, `needs-attention`, and
+evidence writes are all rejected (`409`) once it is no longer the claimant. It
+therefore cannot complete, fail, or otherwise overwrite the new attempt.
+
+**Cancellation precedence.** Cancellation is itself a terminal outcome that
+clears the renewable lease. A completion or failure racing behind a cancellation
+is a no-op — it never un-cancels the run — and, because it did not durably
+transition anything, it records **no** lifecycle-result metric. Only real,
+persisted transitions are counted, so a blocked completion cannot inflate the
+`succeeded` outcome counter.
+
+**Idempotent intake.** Duplicate trigger delivery (a redelivered webhook, a
+repeated manual dispatch) collapses to a single run via the per-account
+source/dedupe key: re-enqueuing the same key returns the existing run rather than
+creating a second one. Hosted free-tier usage is likewise recorded once per run
+key, so reconnects and reclaims never inflate the run count.
+
+**Idempotent external effects.** A retry or reclaim of the same issue run must
+not duplicate what a reader sees on GitHub:
+
+- **Branches** for GitHub-issue and Linear runs are deterministic
+  (`bivy/issue-<n>`, `bivy/linear-<slug>`), and a push of `branch:branch` is
+  naturally idempotent, so re-running produces the same branch, not a second one.
+- **Issue comments** — the pickup note and each outcome note (PR ready / no
+  changes / pushed-without-PR) carry a hidden marker and are posted **at most
+  once per `(issue, key)`**. The pickup comment is keyed per issue; outcome
+  comments are keyed by their artifact (PR URL, branch) so a genuinely new
+  artifact still comments while a reclaim on a fresh process does not repeat one.
+- **Pull requests** are opened by the agent, then adopted by branch; a run whose
+  issue branch already produced a merged PR is skipped rather than re-run.
+
+Known limitation: Slack/schedule/generic-webhook repo runs still use a random
+branch name per run, so their branch/PR effects are not yet idempotent across a
+reclaim on a fresh process. That path is tracked separately.
+
+**Metrics.** Outcomes are counted with fixed, low-cardinality labels only:
+`bivy_run_lifecycle_results_total{outcome}` (succeeded / failed / needs_attention
+/ cancelled) records one result per durable transition, and
+`bivy_run_failure_stage_total{stage}` classifies where a failed or parked run
+stopped short (`checks` / `timeout` / `agent` / `needs_review`), derived from the
+run's own evidence. Neither carries a run, session, account, or user identifier.
+
 ## Run evidence and outcome reports
 
 Every run also carries a small, structured **evidence** record — the piece a
