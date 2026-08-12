@@ -8,7 +8,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import Stripe from "stripe";
 import webpush from "web-push";
 import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
@@ -383,6 +383,24 @@ async function pruneExpiredAuthTokens() {
 }
 void pruneExpiredAuthTokens();
 setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
+
+// Cost-safety backstop: sweep every account that still tracks a hosted runner,
+// even when no new work arrives and the runner never reports /node/settled.
+// Cleanup deliberately ignores the launch feature flag: an emergency kill switch
+// must stop new spend without disabling deletion of resources already billing.
+const HOSTED_MACHINE_RECONCILE_MS = Math.max(60_000, Number(process.env.HOSTED_MACHINE_RECONCILE_MS) || 5 * 60_000);
+async function reconcileHostedMachineFleet() {
+  try {
+    const result = await reconcileAllHostedMachines(store, provisionEnv());
+    if (result.reaped || result.failed) {
+      console.log(`[hosted-reconcile] accounts=${result.accounts} reaped=${result.reaped} failed=${result.failed}`);
+    }
+  } catch (error) {
+    console.error("[hosted-reconcile] account scan failed:", error);
+  }
+}
+void reconcileHostedMachineFleet();
+setInterval(reconcileHostedMachineFleet, HOSTED_MACHINE_RECONCILE_MS).unref();
 
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
