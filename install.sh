@@ -295,14 +295,25 @@ install_from_tarball() {
   info "Installed Bivy into $LEGACY_APP_DIR"
 }
 
+# npm leaves ".<pkg>-XXXXXX" temp dirs behind when an install is interrupted;
+# a leftover collides with the next atomic rename and fails the WHOLE install
+# with ENOTEMPTY. They are always abandoned artifacts, so clear them before
+# installing. Best-effort and scoped to Bivy's own npm temp dirs.
+clear_stale_npm_temp() {
+  local scope="${1:-}/lib/node_modules/@bivy"
+  { [ -n "${1:-}" ] && [ -d "$scope" ] && find "$scope" -maxdepth 1 -name '.bivy-*' -exec rm -rf {} + 2>/dev/null; } || true
+}
+
 install_globally() {
   local args=(install -g "${NPM_PACKAGE}@${PKG_VERSION}" --no-audit --no-fund)
   if [ -n "${BIVY_NPM_PREFIX:-}" ]; then
     info "Installing ${NPM_PACKAGE}@${PKG_VERSION} into ${BIVY_NPM_PREFIX}"
+    clear_stale_npm_temp "$BIVY_NPM_PREFIX"
     npm "${args[@]}" --prefix "$BIVY_NPM_PREFIX"
     return
   fi
   info "Installing ${NPM_PACKAGE}@${PKG_VERSION} from npm"
+  clear_stale_npm_temp "$(npm prefix -g 2>/dev/null)"
   if npm "${args[@]}" 2>"$ERR_LOG"; then
     return 0
   fi
@@ -313,6 +324,7 @@ install_globally() {
     warn "No write access to npm's global prefix ($(npm prefix -g 2>/dev/null))."
     info "Installing into $HOME/.local instead — no sudo required."
     BIVY_NPM_PREFIX="$HOME/.local"
+    clear_stale_npm_temp "$BIVY_NPM_PREFIX"
     npm "${args[@]}" --prefix "$BIVY_NPM_PREFIX"
     return
   fi
@@ -336,6 +348,12 @@ install_globally() {
 ERR_LOG="$(mktemp)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -f "$ERR_LOG"; rm -rf "$TMP_DIR"' EXIT
+# Quiesce any already-running node before reinstalling. A crash-looping service
+# auto-restarts every few seconds and races the npm extraction — which is how an
+# install gets corrupted (half-written deps / leftover temp dirs) in the first
+# place. Best-effort and only when a bivy is already on PATH; a fresh install has
+# nothing to stop, and the existing-config branch below restarts it afterward.
+if command -v bivy >/dev/null 2>&1; then bivy stop >/dev/null 2>&1 || true; fi
 install_globally
 
 # A tarball fallback has already set BIN_DIR/BIVY_BIN to the install it made.
