@@ -135,8 +135,12 @@ jobs:
   root-tests:
     needs: changes
     if: inputs.force_all || needs.changes.outputs.root == 'true'
-    name: Root unit tests
+    name: Root unit tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -145,9 +149,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:core
-      # scripts/run-tests.mjs parallelizes independent suites across the runner's
-      # CPUs while serializing suites that use the same fixed port.
+        if: matrix.shard == '1/2'
+      # Each machine gets a stable shard; within it, run independent suites
+      # across the runner's CPUs while serializing suites with a shared port.
       - run: npm run test:unit
+        env:
+          TEST_SHARD: ${{ matrix.shard }}
 
   root-builds:
     needs: changes
