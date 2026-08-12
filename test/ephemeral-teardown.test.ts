@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   readEphemeralTeardownConfig,
   shouldSelfTeardown,
+  snapshotsDurableForTeardown,
   performSelfTeardown,
   __resetTeardownLatch,
   type EphemeralTeardownConfig,
@@ -27,6 +28,12 @@ assert.equal(shouldSelfTeardown(base, { ...quiet, idleForMs: 31 * 60_000 }), tru
 const finish = { ...base, onFinish: true };
 assert.equal(shouldSelfTeardown(finish, { ...quiet, idleForMs: 5_000 }), false);
 assert.equal(shouldSelfTeardown(finish, { ...quiet, idleForMs: 11_000 }), true);
+
+// A disposable node must not delete the only session copy unless every
+// non-empty snapshot was acknowledged by durable storage.
+assert.equal(snapshotsDurableForTeardown({ required: 2, persisted: 2, failed: 0 }), true);
+assert.equal(snapshotsDurableForTeardown({ required: 2, persisted: 1, failed: 1 }), false);
+assert.equal(snapshotsDurableForTeardown({ required: 0, persisted: 0, failed: 0 }), true);
 
 // Config parse: provider lowercased, flags read, absent env → disabled.
 const cfg = readEphemeralTeardownConfig({ BIVY_EPHEMERAL: "1", BIVY_EPHEMERAL_PROVIDER: "Hetzner", BIVY_EPHEMERAL_TTL_MIN: "120", BIVY_TEARDOWN_ON_FINISH: "1" } as NodeJS.ProcessEnv);

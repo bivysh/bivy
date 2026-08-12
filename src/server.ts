@@ -59,7 +59,7 @@ import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from "./auth.js";
 import { RelayConnector, loadRelayConfig, type ClientMessage } from "./remote/index.js";
-import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
+import { readEphemeralTeardownConfig, shouldSelfTeardown, snapshotsDurableForTeardown, performSelfTeardown, type SnapshotFlushResult } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
 import { configuredTurnTimeoutMs, configuredTurnStallMs, configuredTurnActivityStallMs } from "./session/turn-watchdog.js";
@@ -4749,10 +4749,8 @@ async function continueCorrelatedSession(
     record = await resolveOrResumeSession(item.targetSessionId).catch(() => undefined);
   }
   if (!record) {
-    await restoreSessionFromSnapshot(item.targetSessionId).catch((e) =>
-      console.warn(`[case-b] snapshot restore for ${item.targetSessionId} failed:`, (e as Error).message),
-    );
-    record = openSessions.get(item.targetSessionId);
+    const restored = await restoreSessionFromSnapshot(item.targetSessionId);
+    if (restored) record = await resolveOrResumeSession(item.targetSessionId).catch(() => undefined);
   }
   if (!record) {
     // Strict mode (a scheduled message to a specific session): the session must
@@ -6514,8 +6512,8 @@ async function signalSettledToControlPlane(): Promise<void> {
  *  fresh/seeded from the restored transcript ("reconstructed", not byte-identical
  *  — see docs/ephemeral-sessions.md). Best-effort: a missing/undecryptable
  *  snapshot leaves a clean fresh machine. Reuses the standby-replica machinery. */
-async function restoreSessionFromSnapshot(sessionId: string): Promise<void> {
-  if (!sessionAdvertiseTarget) return;
+async function restoreSessionFromSnapshot(sessionId: string): Promise<boolean> {
+  if (!sessionAdvertiseTarget) return false;
   const cpBaseUrl = sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "");
   try {
     const res = await fetch(`${cpBaseUrl}/node/session-snapshot/${encodeURIComponent(sessionId)}`, {
@@ -6523,10 +6521,10 @@ async function restoreSessionFromSnapshot(sessionId: string): Promise<void> {
     });
     if (!res.ok) {
       console.error(`[restore] no snapshot for ${sessionId} (${res.status})`);
-      return;
+      return false;
     }
     const data = (await res.json()) as { ciphertext?: string };
-    if (!data.ciphertext) return;
+    if (!data.ciphertext) return false;
     const applied = await applySessionSnapshot(data.ciphertext, pairingStore.roomKey(), {
       persistRecords: (id, records) => eventLog.rewrite(id, records),
       applyBundle: async (id, buf) => applyCheckpointBundle(await ensureReplicaRepo(id), id, buf),
@@ -6540,8 +6538,10 @@ async function restoreSessionFromSnapshot(sessionId: string): Promise<void> {
       /* best-effort listing */
     }
     console.log(`[restore] session ${sessionId}: ${applied.recordCount} records, checkpoint ${applied.checkpointCommit ?? "none"}`);
+    return true;
   } catch (e) {
     console.error(`[restore] session ${sessionId} failed: ${(e as Error)?.message || e}`);
+    return false;
   }
 }
 
@@ -6550,12 +6550,19 @@ async function restoreSessionFromSnapshot(sessionId: string): Promise<void> {
  *  can be rebuilt on a fresh machine later (Gap B). Sealed under the node room
  *  key — the same key that seals the session title — so a restore machine that
  *  reuses this session's room key can decrypt it; the control plane sees only
- *  ciphertext. Best-effort per session; never blocks teardown for long. */
-async function flushSessionSnapshots(): Promise<void> {
-  if (!sessionAdvertiseTarget) return;
+ *  ciphertext. Returns an explicit durability result: teardown must not proceed
+ *  when any non-empty open session failed to reach the control plane. */
+async function flushSessionSnapshots(): Promise<SnapshotFlushResult> {
+  const result: SnapshotFlushResult = { required: 0, persisted: 0, failed: 0 };
+  if (!sessionAdvertiseTarget) {
+    if (openSessions.size > 0) result.failed = new Set(openSessions.values()).size;
+    result.required = result.failed;
+    return result;
+  }
   const roomKey = pairingStore.roomKey();
   const cpBaseUrl = sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "");
   for (const record of new Set(openSessions.values())) {
+    result.required++;
     try {
       const sealed = await buildSessionSnapshot(record.id, roomKey, {
         readRecords: (id) => eventLog.entries(id),
@@ -6571,16 +6578,22 @@ async function flushSessionSnapshots(): Promise<void> {
         runtimeSessionRef: (id) => openSessions.get(id)?.sessionFile,
         worktreeSync: () => true,
       });
-      if (!sealed) continue;
-      await fetch(`${cpBaseUrl}/node/session-snapshot/${encodeURIComponent(record.id)}`, {
+      if (!sealed) {
+        result.required--;
+        continue;
+      }
+      const response = await fetch(`${cpBaseUrl}/node/session-snapshot/${encodeURIComponent(record.id)}`, {
         method: "PUT",
         headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
         body: JSON.stringify({ ciphertext: sealed }),
-      }).catch(() => {});
+      });
+      if (!response.ok) throw new Error(`snapshot upload failed (${response.status})`);
+      result.persisted++;
     } catch {
-      /* best effort per session — TTL/branch push remain the backstops */
+      result.failed++;
     }
   }
+  return result;
 }
 
 let ephemeralTearingDown = false;
@@ -6602,8 +6615,15 @@ function evaluateEphemeralTeardown(): void {
   if (!shouldSelfTeardown(ephemeralTeardownCfg, { everBusy: ephemeralEverBusy, anyWorking, anyRemoteActive, inFlightWork, idleForMs })) return;
   ephemeralTearingDown = true;
   void (async () => {
-    // Persist a rebuild snapshot BEFORE the machine goes away (Gap B), then reap.
-    await flushSessionSnapshots();
+    // Persist a rebuild snapshot BEFORE the machine goes away (Gap B). If the
+    // durable store is unavailable, keep the node alive and retry on the next
+    // sweep; destroying it here would discard the only transcript/worktree copy.
+    const snapshots = await flushSessionSnapshots();
+    if (!snapshotsDurableForTeardown(snapshots)) {
+      console.error(`[ephemeral-teardown] snapshot flush incomplete (${snapshots.persisted}/${snapshots.required}); keeping machine alive`);
+      ephemeralTearingDown = false;
+      return;
+    }
     await performSelfTeardown({
       provider: ephemeralTeardownCfg.provider,
       signalSettled: signalSettledToControlPlane,
@@ -10377,9 +10397,14 @@ const server = app.listen(port, host, async () => {
   console.log(`Agent data dir: ${piDir}`);
   console.log(`Workspace: ${defaultWorkspace}`);
   startRelayIfConfigured();
-  // Rebuild-resume (Gap B): if this machine was re-provisioned to restore a
-  // torn-down session, pull + apply its snapshot before serving. Non-blocking.
-  if (process.env.BIVY_RESTORE) void restoreSessionFromSnapshot(String(process.env.BIVY_RESTORE));
+  // Rebuild-resume (Gap B): restore before starting unattended pollers. Starting
+  // queue work concurrently could claim the follow-up before its transcript and
+  // checkpoint exist locally, producing a fresh session instead of a continuation.
+  if (process.env.BIVY_RESTORE) {
+    const sessionId = String(process.env.BIVY_RESTORE);
+    const restored = await restoreSessionFromSnapshot(sessionId);
+    if (!restored) console.error(`[restore] ${sessionId} was requested but could not be restored; queue startup will continue and surface the targeted item as unavailable`);
+  }
   startModelAuthWatcher();
   startOAuthLoginSweeper();
   startGithubAppSyncWatcher();

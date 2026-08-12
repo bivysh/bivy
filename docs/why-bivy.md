@@ -74,6 +74,37 @@ agent *vendor* will build neutrally across *all* agents:
   password manager and the secret never enters bivy at all — you decide, per
   credential, what travels.
 
+## How ephemeral runners fit
+
+Ephemeral runners are the execution layer behind “agents that don't clock out,”
+not a separate hosted-compute product. A trigger or schedule creates a governed
+run; Bivy provisions the runner in the user's Fly, Hetzner, AWS, E2B, or Sprites
+account; the normal agent-agnostic policy and audit boundary executes the work;
+and the runner is destroyed or suspended when it settles. The user supplies the
+provider credential and pays the provider directly. Bivy neither resells compute
+nor adds a compute margin.
+
+That makes ephemerals the point where all three pillars reinforce each other:
+
+- **Sovereign:** the code, process, provider keys, and cloud bill remain in the
+  user's account. Hosted orchestration may hold explicitly opted-in encrypted
+  credentials, but it is not the compute owner.
+- **Governed and provable:** unattended work gets the same sandbox, approvals,
+  credential policy, and per-node audit events as an interactive run. This matters
+  most when nobody is watching; a successful automation without durable evidence
+  is not a trustworthy automation.
+- **Reachable and unattended:** an account supplies durable fleet metadata,
+  encrypted session snapshots, and optional credential escrow so a schedule can
+  start—and a later message can resume—a session with no laptop or persistent node
+  online. Account-free pairing remains the direct-reach entry point; unattended
+  provisioning is the point where an account becomes useful rather than mandatory.
+
+The product contract is therefore stronger than “boot a VM”: a runner must start
+quickly, never leak past its TTL, persist a reconstructable session before destroy,
+and make its cost and teardown status visible. Suspend-to-zero providers preserve
+the runtime exactly; destroy-lane providers preserve an encrypted transcript and
+git checkpoint and reconstruct the runtime on a fresh runner.
+
 ## How it works — three simple parts
 
 Only the first ever touches your actual work:
