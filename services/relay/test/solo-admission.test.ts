@@ -52,6 +52,28 @@ function cleanup(code: number) {
   process.exit(code);
 }
 
+// Spawn a relay expected to REFUSE to start (non-zero exit). Resolves true if it
+// exits non-zero within the timeout, false if it comes up (or exits zero) — the
+// misconfig guard must reject the given env, not run.
+function expectRefusesToStart(env: Record<string, string>, timeoutMs = 8000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn("npx", ["tsx", "src/index.ts"], { cwd: relayDir, env: { ...process.env, ...env }, stdio: "inherit" });
+    let settled = false;
+    const done = (v: boolean) => {
+      if (!settled) {
+        settled = true;
+        resolve(v);
+      }
+    };
+    child.once("exit", (code) => done(code !== 0));
+    child.once("error", () => done(false));
+    setTimeout(() => {
+      if (!settled) child.kill("SIGTERM");
+      done(false);
+    }, timeoutMs);
+  });
+}
+
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function waitForHttp(url: string, timeoutMs = 10000) {
@@ -189,6 +211,19 @@ async function main() {
   //    different token is rejected (TOFU — first claim owns the room).
   const hijack = connect(`${solo}/node?room=${ROOM}&roomToken=${"z".repeat(43)}`);
   expect((await hijack.ready) === false, "a mismatching claim on a live room is rejected (no hijack)");
+
+  // 9. Misconfig guard: combining account-free room tokens with a NON-local
+  //    control plane would open an unauthenticated door on an account-gated
+  //    relay, so the process must refuse to start. A strong RELAY_SECRET is set
+  //    so it gets past the pre-existing dev-secret fail-fast and reaches this
+  //    guard.
+  const refused = await expectRefusesToStart({
+    PORT: String(await freePort()),
+    RELAY_ALLOW_ROOM_TOKENS: "1",
+    CONTROL_PLANE_URL: "https://control-plane.example.com",
+    RELAY_SECRET: "a-strong-non-default-secret-for-this-test",
+  });
+  expect(refused, "refuses to start when room tokens are combined with a non-local control plane");
 
   console.log("\nAll solo relay admission checks passed.");
   cleanup(0);
