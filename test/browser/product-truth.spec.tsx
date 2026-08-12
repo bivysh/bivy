@@ -47,6 +47,14 @@ test("automations is the single hub for connections, Runs and rulesets", async (
   expect(source).toContain("RulesetsPanel");
 });
 
+test("connected source triggers open their event editor instead of connection setup", async () => {
+  const source = await readFile(new URL("../../packages/web/src/components/AutomationsView.tsx", import.meta.url), "utf8");
+  expect(source).toContain("onSelectSource(opt.source)");
+  expect(source).toContain('githubSourceStatus(sources.github).tone === "off"');
+  expect(source).toContain("setSourceEdit({");
+  expect(source).toContain('item.id ? "Edit" : "Create"');
+});
+
 test("provider key save awaits an authoritative acknowledgement", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/ProviderConnect.tsx", import.meta.url), "utf8");
   expect(source).toContain("await controller.saveApiKey");

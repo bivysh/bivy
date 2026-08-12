@@ -84,6 +84,7 @@ export interface ForkStandUpDeps<R extends ForkStandUpSession> {
   createWorktree(args: { repoDir: string; id: string; branch?: string; base?: string }): Promise<Worktree>;
   resolveDefaultBaseRef(repoDir: string): Promise<string>;
   resolveAdoptBaseRef(repoDir: string, branch: string): Promise<string>;
+  resolveForkBaseRef(repoDir: string, branch: string | undefined, sourceWorktree?: string): Promise<string>;
   applyDirtyPatch(cwd: string, patch: ForkBundle["dirtyPatch"]): { warning?: string };
   gitRepoRoot(cwd: string): Promise<string | undefined>;
   materializeFork(args: MaterializeForkOptions): Promise<ForkPlan>;
@@ -160,10 +161,11 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
       // pickups don't race on `git worktree add` or clobber each other's trees.
       const wt = await deps.withRepoLock(repoDir, async () => {
         if (opts.worktree === "fresh") {
-          // Same-node fork: cut a NEW branch from the source's LOCAL branch (which
-          // holds its latest, possibly-unpushed commits) or the repo default.
+          // Same-node fork: preserve the live source tip when possible, but do
+          // not fail when its checkout or branch ref has already been pruned.
           const forkBranch = `${srcBranch ?? "fork"}-fork-${randomBytes(4).toString("hex")}`;
-          return deps.createWorktree({ repoDir, id: forkBranch, branch: forkBranch, base: srcBranch ?? await deps.resolveDefaultBaseRef(repoDir) });
+          const base = await deps.resolveForkBaseRef(repoDir, srcBranch, bundle.record.worktree);
+          return deps.createWorktree({ repoDir, id: forkBranch, branch: forkBranch, base });
         }
         // Cross-node adopt: the source branch has no LOCAL ref here. Base the
         // adopted branch on the pushed `origin/<branch>` so committed work travels

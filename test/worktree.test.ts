@@ -50,7 +50,12 @@ async function main() {
     assert.ok(fs.existsSync(path.join(readopt.path, "README.md")), "re-adopted worktree has repo contents");
     await removeWorktree(readopt.repoRoot, readopt.path);
 
-    console.log("worktree: ok (slug, create, list, exclude, remove, re-adopt)");
+    const fallback = await createWorktree({ repoDir: dir, id: "issue-99", branch: "bivy/issue-99", base: "bivy/does-not-exist" });
+    assert.equal(fallback.branch, "bivy/issue-99");
+    assert.ok(fs.existsSync(path.join(fallback.path, "README.md")), "invalid-base fallback has repo contents");
+    await removeWorktree(fallback.repoRoot, fallback.path);
+
+    console.log("worktree: ok (slug, create, list, exclude, remove, re-adopt, invalid-base fallback)");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

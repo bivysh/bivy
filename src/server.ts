@@ -84,7 +84,7 @@ import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
 import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
-import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
+import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, resolveForkBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
   GitHubTaskPoller,
@@ -6504,6 +6504,12 @@ function evictSessionRecord(record: SessionRecord, reason: string) {
 function detachSessionRecord(record: SessionRecord, reason: string) {
   persistSessionMetadata(record, "idle");
   eventLog.flush(record.id);
+  // Evict the in-memory overlay/maps for the detached session (the child stays
+  // alive on the service, and a re-attach lazily reloads the log from disk).
+  // Keeps a churn of detach/re-attach from leaking like close did.
+  eventLog.drop(record.id);
+  mcpInventoryBySession.delete(record.id);
+  eventLogIssues.delete(record.id);
   questionManager.cancelForSession(record.id);
   approvals.cancelForSession(record.id);
   record.unsubscribe?.();
@@ -6528,6 +6534,12 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   void sessionTerminals.forget(record.id).catch(() => {});
   persistSessionMetadata(record, "idle");
   eventLog.flush(record.id);
+  // Evict the flushed session's in-memory overlay so a long-lived daemon doesn't
+  // retain every session it ever opened. drop() only clears the in-memory maps
+  // and cancels the pending timer — the on-disk JSONL stays, and a reopen lazily
+  // reloads it via load(). Without this the EventLog.disk cache grew monotonically
+  // (only deleteSessionFile dropped it), the standout non-recovering leak.
+  eventLog.drop(record.id);
   // Cancel any question still awaiting an answer so its card closes and the
   // guardian promise (and the tool call behind it) settles rather than hanging
   // until timeout. Belt-and-suspenders alongside the tool-call abort signal.
@@ -6553,6 +6565,10 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   openSessions.delete(record.id);
   if (record.sessionFile) openSessions.delete(path.resolve(record.sessionFile));
   lastRecordedCostUsd.delete(record.id);
+  // Per-session maps that were only ever populated, never pruned — evict on close
+  // so they don't accumulate for the daemon's lifetime.
+  mcpInventoryBySession.delete(record.id);
+  eventLogIssues.delete(record.id);
   if (active?.id === record.id) active = undefined;
   broadcast({ type: "session.closed", sessionId: record.id, sessionFile: record.sessionFile, reason });
   scheduleAdvertise();
@@ -8283,6 +8299,7 @@ const forkStandUp = createForkStandUp<SessionRecord>({
   createWorktree,
   resolveDefaultBaseRef,
   resolveAdoptBaseRef,
+  resolveForkBaseRef,
   applyDirtyPatch,
   gitRepoRoot,
   materializeFork,
