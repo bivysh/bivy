@@ -57,7 +57,7 @@ import { NodeIdentity } from "./identity.js";
 import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from "./auth.js";
-import { RelayConnector, loadRelayConfig, type ClientMessage } from "./relay-client.js";
+import { RelayConnector, loadRelayConfig, type ClientMessage } from "./remote/index.js";
 import { readEphemeralTeardownConfig, shouldSelfTeardown, performSelfTeardown } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";

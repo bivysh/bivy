@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import net from "node:net";
 import { sealFrame, openFrame } from "../src/e2e.js";
-import { RelayConnector, type RelayConfig } from "../src/relay-client.js";
+import { RelayConnector, type RelayConfig } from "../src/remote/index.js";
 import { PairingStore } from "../src/device-registry.js";
 import { generatePairingKeypair, pairingProof, deriveWrapKey, unwrapRoomKey } from "../src/pairing-crypto.js";
 
