@@ -58,6 +58,34 @@ assert.ok(cpAddress && typeof cpAddress === "object");
 const controlPlaneUrl = `http://127.0.0.1:${cpAddress.port}`;
 const remoteApp = "https://app.example.test";
 
+// Begin exactly like a fresh installation and interrupt at the first choice.
+// Setup must persist its safe workspace/port checkpoint before prompting so a
+// second invocation resumes instead of starting over or losing those choices.
+const interruptedEnv = {
+  ...process.env,
+  HOME: home,
+  BIVY_DATA_DIR: dataDir,
+  BIVY_HOST: "127.0.0.1",
+  BIVY_SETUP_SKIP_SERVICE: "1",
+  BIVY_SKIP_AGENT_PREINSTALL: "1",
+  NO_COLOR: "1",
+  PORT: String(nodePort),
+};
+const interrupted = spawn(process.execPath, ["bin/bivy.mjs", "setup"], { cwd: root, env: interruptedEnv, stdio: ["pipe", "pipe", "pipe"] });
+let interruptedOutput = "";
+interrupted.stdout.on("data", (chunk) => { interruptedOutput += chunk.toString(); });
+interrupted.stderr.on("data", (chunk) => { interruptedOutput += chunk.toString(); });
+const promptDeadline = Date.now() + 15_000;
+while (!interruptedOutput.includes("Which agent do you want to try first?") && Date.now() < promptDeadline) {
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+assert.match(interruptedOutput, /Which agent do you want to try first\?/, `fresh setup never reached its resumable checkpoint:\n${interruptedOutput}`);
+interrupted.kill("SIGTERM");
+await new Promise<void>((resolve) => interrupted.once("exit", () => resolve()));
+const checkpoint = JSON.parse(fs.readFileSync(path.join(dataDir, "cli.json"), "utf8"));
+assert.equal(checkpoint.workspace, path.join(home, "bivy-workspace"), "fresh setup checkpoints its safe default workspace before the first prompt");
+assert.equal(checkpoint.port, nodePort, "fresh setup checkpoints the selected port before its first prompt");
+
 fs.writeFileSync(path.join(dataDir, "cli.json"), `${JSON.stringify({ workspace, port: nodePort, env: { BIVY_RUNTIME: "pi" }, service: false }, null, 2)}\n`);
 // Simulate a prior Settings choice. Re-running setup and choosing Pi must update
 // this authoritative daemon setting, not only cli.json's BIVY_RUNTIME.
@@ -127,7 +155,7 @@ try {
   assert.equal(bareCode, 0, bareOutput);
   assert.match(bareOutput, /bivy — Bivy node CLI/);
   assert.match(bareOutput, /bivy run claude/);
-  console.log("setup-isolated-smoke: agent-first setup reaches the remote app without touching the host service");
+  console.log("setup-isolated-smoke: interrupted fresh setup resumes and reaches the remote app without touching the host service");
 } finally {
   daemon.kill("SIGTERM");
   await new Promise<void>((resolve) => daemon.once("exit", () => resolve()));
