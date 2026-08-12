@@ -632,6 +632,7 @@ export interface HostedProvisioningStatus {
   credential: "app" | "pat" | "none";
   githubAppId?: string;
   providers: string[];
+  validatedProviders: string[];
   /** Whether the server has an encryption key configured; secrets can't be saved without it. */
   encryptionReady: boolean;
   /** Active encryption key id (for rotation display). */
@@ -643,6 +644,22 @@ export interface HostedProvisioningPatch {
   githubToken?: string;
   githubApp?: { appId: string; installationId: string; privateKeyPem: string } | null;
   providerTokens?: Record<string, string>;
+}
+
+export async function validateHostedProviderCredential(
+  store: LocalStore,
+  provider: string,
+  token: string,
+  region?: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning/validate-provider`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify({ provider, token, region }),
+  });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `provider credential validation failed: ${res.status}`);
 }
 
 export interface HostedAuditEvent {
@@ -663,6 +680,7 @@ function coerceHostedStatus(d: any): HostedProvisioningStatus {
     credential: d?.credential === "app" || d?.credential === "pat" ? d.credential : "none",
     githubAppId: typeof d?.githubAppId === "string" ? d.githubAppId : undefined,
     providers: Array.isArray(d?.providers) ? d.providers : [],
+    validatedProviders: Array.isArray(d?.validatedProviders) ? d.validatedProviders : [],
     encryptionReady: Boolean(d?.encryptionReady),
     keyId: typeof d?.keyId === "string" ? d.keyId : undefined,
   };

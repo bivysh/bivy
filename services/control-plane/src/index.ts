@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
-import { type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
+import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, validateHostedProviderToken, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
@@ -2800,6 +2800,29 @@ app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_updated", detail: Object.keys(patch).join(",") || "none" });
   const status = await store.getHostedProvisioningStatus(client.accountId);
   res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
+}));
+
+// Read-only provider credential validation for hosted onboarding. This endpoint
+// deliberately does not persist the submitted token; callers validate first,
+// then opt in/store it through PUT /account/hosted-provisioning.
+app.post("/account/hosted-provisioning/validate-provider", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const provider = String(req.body?.provider ?? "").trim();
+  const token = String(req.body?.token ?? "").trim();
+  if (!provider || !token) return res.status(400).json({ error: "provider and token are required" });
+  try {
+    await validateHostedProviderToken(provider, token, typeof req.body?.region === "string" ? req.body.region : undefined);
+    const current = await store.getHostedProvisioning(client.accountId);
+    await store.setHostedProvisioning(client.accountId, {
+      validatedProviders: { ...(current.validatedProviders ?? {}), [provider]: providerCredentialFingerprint(token) },
+    });
+    res.json({ ok: true, provider });
+  } catch (error) {
+    const detail = String((error as Error)?.message || error).slice(0, 160);
+    await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_validation_failed", provider, detail });
+    res.status(400).json({ error: `${provider} credential validation failed: ${detail}` });
+  }
 }));
 
 // Audit trail of hosted-credential use (never contains secrets).

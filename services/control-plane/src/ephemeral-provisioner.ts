@@ -17,6 +17,7 @@
 import {
   launchEphemeralMachine,
   destroyEphemeralMachine,
+  validateEphemeralProviderToken,
   type ExecFn,
   type ExecRequest,
   type LocalStore,
@@ -24,7 +25,7 @@ import {
   type EphemeralKeyStore,
   type MachineStore,
 } from "@bivy/core";
-import type { MeshStore, EphemeralNodeConfig, QueueRouting, HostedAuditEvent } from "./store.js";
+import { providerCredentialFingerprint, type MeshStore, type EphemeralNodeConfig, type QueueRouting, type HostedAuditEvent } from "./store.js";
 import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
 
@@ -45,15 +46,12 @@ const DEDUPE_WINDOW_MS = 60 * 60 * 1000; // don't stack hosted machines within a
 const MAX_PROVISIONS_PER_HOUR = Math.max(1, Number(process.env.HOSTED_PROVISION_MAX_PER_HOUR ?? 5));
 
 /**
- * Ephemeral machines are OFF by default (fail-closed) and must be explicitly
- * enabled with EPHEMERAL_MACHINES_ENABLED=1. A deploy that never sets it — every
- * production deploy by default — gets no ephemeral provisioning at all. Local/dev
- * (NODE_ENV !== "production") stays on so development isn't gated; every real
- * deploy sets NODE_ENV=production, so staging opts in with =1 while production
- * leaves it off. Mirrors the web VITE_EPHEMERAL_MACHINES_ENABLED build flag.
+ * Deployment-level emergency kill switch. Product access is gated per account
+ * by hosted.enabled + a provider credential; the deploy flag exists only to stop
+ * all NEW launches during an incident. Cleanup ignores this switch.
  */
 export function ephemeralMachinesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.NODE_ENV !== "production" || env.EPHEMERAL_MACHINES_ENABLED === "1";
+  return env.EPHEMERAL_MACHINES_ENABLED !== "0";
 }
 
 function withinMs(iso: unknown, ms: number, nowMs: number): boolean {
@@ -106,6 +104,9 @@ export async function planAutoProvision(store: MeshStore, accountId: string, now
   if (!hosted.providerTokens?.[target.provider]) {
     return { willProvision: false, targetConfigId: target.id, reason: `no hosted token for provider ${target.provider}` };
   }
+  if (hosted.validatedProviders?.[target.provider] !== providerCredentialFingerprint(hosted.providerTokens[target.provider])) {
+    return { willProvision: false, targetConfigId: target.id, reason: `provider credential for ${target.provider} has not been validated` };
+  }
   // A config primary is the designated runner (provision regardless of node
   // liveness). A node primary only falls back to its config when nothing online.
   if (routing.primary.kind === "node") {
@@ -143,6 +144,12 @@ function directExec(): ExecFn {
     }
     return { status: res.status, body: parsed };
   };
+}
+
+/** Read-only hosted onboarding check. The credential is used transiently for a
+ * provider-authenticated list/describe call and is not persisted by this helper. */
+export function validateHostedProviderToken(provider: string, token: string, region?: string): Promise<void> {
+  return validateEphemeralProviderToken(provider, token, directExec(), region);
 }
 
 function serverKeyStore(providerToken: string): EphemeralKeyStore {

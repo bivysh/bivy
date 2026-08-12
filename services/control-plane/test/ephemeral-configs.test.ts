@@ -160,10 +160,10 @@ async function main() {
   const hpGet = await req(port, "GET", "/account/hosted-provisioning", undefined, token);
   expect(!/ghp_secret_value|fly_secret_value/.test(JSON.stringify(hpGet.json)), "GET never leaks token values");
 
-  // The credential round-trips through AES-256-GCM (proves encrypt+decrypt): the
-  // plan can now use the provider token to say "ready".
+  // Stored is not the same as validated: unattended launch remains blocked until
+  // the read-only provider check binds this exact token fingerprint.
   const plan2 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
-  expect(plan2.json?.plan?.willProvision === true && plan2.json?.plan?.targetConfigId === id, "plan: config primary ready → will provision (decrypts token)");
+  expect(plan2.json?.plan?.willProvision === false && /has not been validated/.test(plan2.json?.plan?.reason), "plan: stored but unvalidated provider token → no provision");
 
   // Audit trail records credential updates and never contains a secret.
   const auditRows = await req(port, "GET", "/account/hosted-audit", undefined, token);
@@ -191,10 +191,10 @@ async function main() {
   const plan3 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
   expect(plan3.json?.plan?.willProvision === false && /does not point at an ephemeral config/.test(plan3.json?.plan?.reason), "plan: shared routing → no provision");
 
-  // Node primary + fallback config, no node online → provisions the fallback.
+  // Node primary + fallback still requires the provider credential validation.
   await req(port, "PUT", "/account/queue-routing", { primary: { kind: "node", node: "laptop" }, fallback: { kind: "config", configId: id } }, token);
   const plan4 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
-  expect(plan4.json?.plan?.willProvision === true && plan4.json?.plan?.targetConfigId === id, "plan: node offline → provision fallback config");
+  expect(plan4.json?.plan?.willProvision === false && /has not been validated/.test(plan4.json?.plan?.reason), "plan: node offline + unvalidated fallback token → no provision");
 
   // Fail closed: a control plane WITHOUT an encryption key refuses to store secrets.
   const port2 = await startControlPlane({ ENFORCE_ENTITLEMENTS: "0" });
