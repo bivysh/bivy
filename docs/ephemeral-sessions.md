@@ -99,6 +99,14 @@ bill-safety backstop. A standby with less than five minutes remaining is deleted
 at the provider before replacement and is never claimed; failed deletion remains
 tracked and blocks replacement rather than risking double billing.
 
+The hosted-runner settings inventory derives a lifecycle phase from durable
+milestones (`provisioning`, `hydrating`, `ready`, `claimed`, or `working`) and
+promotes any provider teardown/reconcile failure to `teardown failed`. Each row
+shows an approximate accrued/max compute cost when the catalog knows the selected
+size's hourly rate, plus TTL and a jump to its audit evidence. These are estimates,
+not invoices; the user's provider bill remains authoritative for discounts,
+storage, egress, taxes, and live price changes.
+
 ## Adding a new provider
 
 The whole point of `ProviderAdapter` is that adding a provider is additive — no shared dispatch/call site (the UI, the controller, `launchEphemeralMachine`/`destroyEphemeralMachine`/`listEphemeralSizes`) needs to change. It only needs to know a provider's `id` string. Checklist, using the AWS adapter as the reference example:

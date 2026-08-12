@@ -549,6 +549,7 @@ export interface EphemeralMachine {
   provider: string;
   name: string;
   region: string;
+  size?: string;
   status: string; // starting | running | stopped | gone
   ip: string | null;
   createdAt: string;
@@ -893,6 +894,36 @@ export function ephemeralCostHint(
   if (!ttlMinutes || ttlMinutes <= 0) return perHour;
   const hours = clampTtlMinutes(ttlMinutes) / 60;
   return `${perHour} · up to ${formatEphemeralPrice(rate * hours, currency)} before it self-destructs`;
+}
+
+export type EphemeralLifecyclePhase = "provisioning" | "node-ready" | "hydrating" | "ready" | "claimed" | "working" | "teardown-failed";
+
+/** User-facing lifecycle derived only from durable, server-stamped facts. */
+export function ephemeralLifecyclePhase(
+  machine: Pick<EphemeralMachine, "milestones" | "purpose"> & { claimedAt?: string },
+  teardownFailed = false,
+): EphemeralLifecyclePhase {
+  if (teardownFailed) return "teardown-failed";
+  if (machine.milestones?.firstAgentEventAt) return "working";
+  if (machine.claimedAt || machine.purpose === "queue-default" || machine.purpose === "queue-item") return "claimed";
+  if (machine.purpose === "ready-capacity" && machine.milestones?.credentialsReadyAt) return "ready";
+  if (machine.milestones?.nodeReadyAt && !machine.milestones?.credentialsReadyAt) return "hydrating";
+  if (machine.milestones?.nodeReadyAt) return "node-ready";
+  return "provisioning";
+}
+
+export function ephemeralCostEstimate(
+  size: ProviderSize | undefined,
+  createdAt: string,
+  ttlMinutes?: number,
+  nowMs = Date.now(),
+): { accrued: number; maximum: number } | null {
+  const rate = size?.pricePerHour;
+  const start = Date.parse(createdAt);
+  if (!rate || rate <= 0 || !Number.isFinite(start)) return null;
+  const ttl = clampTtlMinutes(ttlMinutes);
+  const elapsedHours = Math.max(0, Math.min(nowMs - start, ttl * 60_000)) / 3_600_000;
+  return { accrued: rate * elapsedHours, maximum: rate * ttl / 60 };
 }
 
 export interface ProviderAdapter {
@@ -2383,6 +2414,7 @@ export async function launchEphemeralMachine(
     bootstrap,
     config: { slug: ephemeralNodeLabel(nodeId), region: opts.region || adapter.defaultRegion, size, image: opts.image, ttlMinutes: opts.ttlMinutes },
   });
+  machine.size = size;
   machine.milestones = { ...(machine.milestones ?? {}), requestedAt, providerAcceptedAt: nowIso() };
   machine.nodeId = nodeId;
   // Persist the user-chosen name (from a saved setup) onto the machine record.

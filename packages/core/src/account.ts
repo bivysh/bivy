@@ -538,6 +538,7 @@ export interface EphemeralNodeConfig {
   provider: string;
   region?: string;
   size?: string;
+  size?: string;
   image?: string;
   readyCapacity?: number;
   ttlMinutes?: number;
@@ -700,7 +701,8 @@ export interface HostedMachineSummary {
   createdAt: string;
   ttlMinutes?: number;
   setupId?: string;
-  purpose?: string;
+  purpose?: "queue-item" | "queue-default" | "ready-capacity";
+  claimedAt?: string;
   milestones?: Record<string, string>;
 }
 
