@@ -33,6 +33,10 @@ export interface SessionStateEvidence {
   awaitingInput: boolean;
   workspace: SessionWorkspaceState;
   lastTurnFailed?: boolean;
+  /** The turn watchdog flagged this working turn as stalled/wedged and is waiting
+   *  for the user to Stop or keep going, rather than force-killing it. Surfaces as
+   *  needs_attention so the client shows the decision card. */
+  turnNeedsAttention?: boolean;
 }
 
 /**
@@ -56,6 +60,9 @@ export function deriveSessionState(evidence: SessionStateEvidence): SessionState
   let displayStatus: SessionDisplayStatus;
   if (agent === "awaiting-input") displayStatus = "needs_attention";
   else if (process === "exited") displayStatus = "failed";
+  // A working turn the watchdog flagged for review is actionable even though the
+  // agent is still technically "working" — surface it so the user sees the card.
+  else if (agent === "working" && evidence.turnNeedsAttention) displayStatus = "needs_attention";
   else if (agent === "working") displayStatus = "working";
   else if (evidence.lastTurnFailed) displayStatus = "failed";
   else displayStatus = "idle";

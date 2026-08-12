@@ -84,7 +84,7 @@ import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
 import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
-import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
+import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, resolveForkBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
   GitHubTaskPoller,
@@ -493,6 +493,15 @@ function replayPendingInteractions(sessionId: string) {
     if (a.sessionId === sessionId && a.status === "pending") {
       broadcast({ type: "approval.created", approval: a });
     }
+  }
+  const record = resolveSession(sessionId);
+  if (record?.turnAttention) {
+    const { trigger, idleMs, at } = record.turnAttention;
+    const mins = Math.max(1, Math.round(idleMs / 60_000));
+    const message = trigger === "wedged"
+      ? `A tool call has run for ${mins} min without making progress. Stop it or keep waiting?`
+      : `The agent has been quiet for ${mins} min. Stop it or keep waiting?`;
+    broadcast({ type: "session.turn_attention", sessionId, trigger, idleMs, at, message });
   }
 }
 
@@ -2111,7 +2120,14 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   abort(msg, ctx) {
     const record = resolveSession(msg.sessionId);
     if (!record || !sessionBusy(record)) return;
-    abortSessionRecord(record, ctx.broadcast);
+    if (record.turnAttention) turnWatchdog.resolveTurnAttention(record, "stop");
+    else abortSessionRecord(record, ctx.broadcast);
+  },
+  "session.turn_attention.resolve"(msg) {
+    const record = resolveSession(msg.sessionId);
+    const action = msg.action === "stop" ? "stop" : msg.action === "continue" ? "continue" : undefined;
+    if (!record || !action) return;
+    turnWatchdog.resolveTurnAttention(record, action);
   },
   async "session.command.invoke"(msg, ctx) {
     // Invoke a protocol-mode agent command (AgentCommand.mode === "protocol")
@@ -2259,6 +2275,7 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       // (SessionList.tsx's periodic safety-net poll) clobbering the correct
       // needs_action the live session.question broadcast had just set.
       const pendingApproval = rec ? sessionHasPendingApproval(rec) : approvals.list().some((a) => a.sessionId === s.id && a.status === "pending");
+      const needsAction = pendingApproval || Boolean(rec?.turnAttention);
       return {
         path: s.path,
         id: s.id,
@@ -2274,10 +2291,10 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
         sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,
-        status: pendingApproval ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
+        status: needsAction ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
         sessionState: rec ? sessionState(rec) : undefined,
         open: Boolean(rec),
-        needsAction: pendingApproval,
+        needsAction,
         bivySession: bivySessionEnvelopeFromSummary(s, rec, meta),
       };
     });
@@ -6102,6 +6119,7 @@ function sessionState(record: SessionRecord): SessionState {
     awaitingInput: sessionHasPendingApproval(record),
     workspace: record.workspaceState ?? "clean",
     lastTurnFailed: Boolean(record.lastFailureAt),
+    turnNeedsAttention: Boolean(record.turnAttention),
   });
 }
 
@@ -6486,6 +6504,12 @@ function evictSessionRecord(record: SessionRecord, reason: string) {
 function detachSessionRecord(record: SessionRecord, reason: string) {
   persistSessionMetadata(record, "idle");
   eventLog.flush(record.id);
+  // Evict the in-memory overlay/maps for the detached session (the child stays
+  // alive on the service, and a re-attach lazily reloads the log from disk).
+  // Keeps a churn of detach/re-attach from leaking like close did.
+  eventLog.drop(record.id);
+  mcpInventoryBySession.delete(record.id);
+  eventLogIssues.delete(record.id);
   questionManager.cancelForSession(record.id);
   approvals.cancelForSession(record.id);
   record.unsubscribe?.();
@@ -6510,6 +6534,12 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   void sessionTerminals.forget(record.id).catch(() => {});
   persistSessionMetadata(record, "idle");
   eventLog.flush(record.id);
+  // Evict the flushed session's in-memory overlay so a long-lived daemon doesn't
+  // retain every session it ever opened. drop() only clears the in-memory maps
+  // and cancels the pending timer — the on-disk JSONL stays, and a reopen lazily
+  // reloads it via load(). Without this the EventLog.disk cache grew monotonically
+  // (only deleteSessionFile dropped it), the standout non-recovering leak.
+  eventLog.drop(record.id);
   // Cancel any question still awaiting an answer so its card closes and the
   // guardian promise (and the tool call behind it) settles rather than hanging
   // until timeout. Belt-and-suspenders alongside the tool-call abort signal.
@@ -6535,6 +6565,10 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   openSessions.delete(record.id);
   if (record.sessionFile) openSessions.delete(path.resolve(record.sessionFile));
   lastRecordedCostUsd.delete(record.id);
+  // Per-session maps that were only ever populated, never pruned — evict on close
+  // so they don't accumulate for the daemon's lifetime.
+  mcpInventoryBySession.delete(record.id);
+  eventLogIssues.delete(record.id);
   if (active?.id === record.id) active = undefined;
   broadcast({ type: "session.closed", sessionId: record.id, sessionFile: record.sessionFile, reason });
   scheduleAdvertise();
@@ -6826,11 +6860,25 @@ const stallSweepMs = stallSweepBasis.length ? Math.max(15_000, Math.min(60_000, 
 // The stall/timeout orchestration lives in ./session/turn-watchdog-runtime; its
 // whole coupling surface to the daemon is this deps object. The narrow
 // WatchdogSession it operates on is structurally satisfied by SessionRecord.
+const stallAction = process.env.BIVY_TURN_STALL_ACTION?.trim().toLowerCase() === "recover" ? "recover" : "notify";
 const turnWatchdog = createTurnWatchdog({
   turnTimeoutMs,
   turnStallMs,
   turnActivityStallMs,
+  stallAction,
   broadcast,
+  broadcastSessionState: (record) => broadcastSessionState(record as SessionRecord),
+  notifyTurnAttention: (record, message) => {
+    const session = record as SessionRecord;
+    void sendNotificationHint({
+      kind: "agent_stalled",
+      sessionId: session.id,
+      targetSessionId: session.id,
+      attentionId: session.id,
+      title: `${sessionNotifyLabel(session)} may be stuck`,
+      body: message,
+    });
+  },
   markSessionFailed: (id) => metadata.touchSession(id, "failed"),
   abortSessionRecord: (record) => abortSessionRecord(record as SessionRecord),
   evaluateEphemeralTeardown,
@@ -6861,7 +6909,9 @@ function markSessionWorking(record: SessionRecord, activity: unknown, opts?: { s
   // separately anchors the wedged band. Raw subprocess output (tool_execution_
   // update) bumps lastProgressAt above but NOT this, so a chatty-but-hung tool
   // still trips the wedged watchdog. Non-event callers default to structural.
-  if (opts?.structural !== false) record.lastStructuralProgressAt = now;
+  const structural = opts?.structural !== false;
+  if (structural) record.lastStructuralProgressAt = now;
+  turnWatchdog.clearTurnAttentionOnProgress(record, structural);
   // A new attempt resolves the prior turn's failure condition at its source.
   record.lastFailureAt = undefined;
   metadata.touchSession(record.id, "working");
@@ -6872,6 +6922,7 @@ function markSessionWorking(record: SessionRecord, activity: unknown, opts?: { s
 }
 
 function clearSessionWorking(record: SessionRecord, forcedStatus?: BivySessionStatus) {
+  turnWatchdog.clearTurnAttentionOnProgress(record, true);
   turnWatchdog.clearTurnWatchdog(record);
   touchSession(record);
   record.isWorking = false;
@@ -8248,6 +8299,7 @@ const forkStandUp = createForkStandUp<SessionRecord>({
   createWorktree,
   resolveDefaultBaseRef,
   resolveAdoptBaseRef,
+  resolveForkBaseRef,
   applyDirtyPatch,
   gitRepoRoot,
   materializeFork,
@@ -10418,7 +10470,23 @@ app.post("/api/session/abort", (req, res, next) => {
   try {
     const record = resolveSession(req.body?.sessionId);
     if (!record) return res.status(404).json({ error: "No active session" });
-    if (sessionBusy(record)) abortSessionRecord(record);
+    if (sessionBusy(record)) {
+      if (record.turnAttention) turnWatchdog.resolveTurnAttention(record, "stop");
+      else abortSessionRecord(record);
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/session/turn-attention", (req, res, next) => {
+  try {
+    const record = resolveSession(req.body?.sessionId);
+    if (!record) return res.status(404).json({ error: "No active session" });
+    const action = req.body?.action === "stop" ? "stop" : req.body?.action === "continue" ? "continue" : undefined;
+    if (!action) return res.status(400).json({ error: "Action must be stop or continue" });
+    turnWatchdog.resolveTurnAttention(record, action);
     res.json({ ok: true });
   } catch (error) {
     next(error);
