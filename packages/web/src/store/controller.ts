@@ -40,6 +40,9 @@ import {
   destroyHostedMachine as apiDestroyHostedMachine,
   validateHostedProviderCredential as apiValidateHostedProviderCredential,
   rotateHostedProvisioning as apiRotateHostedProvisioning,
+  connectHostedGithubApp as apiConnectHostedGithubApp,
+  fetchHostedGithubRepositories,
+  type HostedGithubAppConnection,
   triggerHostedProvision as apiTriggerHostedProvision,
   type EphemeralNodeConfig,
   type EphemeralConfigInput,
@@ -1959,6 +1962,12 @@ export class AppController {
    *  refreshes it in the background instead of flashing a spinner. */
   listRepos(): void {
     if (this.store.getState().repos.length === 0) this.store.setReposLoading(true);
+    if (!this.direct && this.signedIn && !this.local.cur) {
+      void fetchHostedGithubRepositories(this.local)
+        .then((repos) => this.store.apply({ type: "repos.list", repos, authed: true } as never))
+        .catch((error) => this.store.apply({ type: "repos.list", repos: [], authed: false, error: String((error as Error)?.message || error) } as never));
+      return;
+    }
     this.send({ kind: "repos.list" });
   }
 
@@ -2275,6 +2284,11 @@ export class AppController {
       privateKeyPem: input.privateKeyPem,
       nodeLabel: input.nodeLabel || undefined,
     });
+  }
+
+  /** Store and validate an App for unattended execution without a node. */
+  connectHostedGithubApp(input: { appId: string; privateKeyPem: string; installationId?: string }): Promise<HostedGithubAppConnection> {
+    return apiConnectHostedGithubApp(this.local, input);
   }
 
   // --- Settings: account / billing / push --------------------------------

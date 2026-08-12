@@ -10,6 +10,7 @@ import webpush from "web-push";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
+import { listAppInstallations, listInstallationRepositories } from "./hosted-github-auth.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { createStore } from "./store-factory.js";
@@ -2089,6 +2090,7 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
   // run an app itself, so "connected" (a hook exists) is not the same as "a live
   // node is serving it" — a deleted/reinstalled node clears servingNodeId.
   const nodes = await store.listNodes(client.accountId);
+  const hostedAppId = (await store.getHostedProvisioning(client.accountId)).githubApp?.appId;
   const describe = (hook: (typeof hooks)[number]) => {
     const slug = hook.botMention || "";
     const servingNode = hook.servingNodeId ? nodes.find((n) => n.id === hook.servingNodeId) : undefined;
@@ -2127,12 +2129,85 @@ app.get("/account/github-app", asyncHandler(async (req, res) => {
       // signal that lets the UI say "no node is running this app; connect one".
       servedBy,
       servingNodeSeenAt: hook.servingNodeSeenAt,
+      // A hosted App is served on demand by ephemeral runners; it intentionally
+      // has no servingNodeId and must not be presented as broken for that reason.
+      hosted: Boolean(hostedAppId && hook.appId === hostedAppId),
     };
   };
   const apps = hooks.map(describe);
   // Flat top-level fields describe the first app, so clients written against the
   // single-app shape keep working against a multi-app account.
   res.json({ ...apps[0], apps });
+}));
+
+// Node-less GitHub App onboarding for unattended/ephemeral execution. The App
+// key is validated against GitHub before it is sealed in hosted provisioning;
+// the response includes the account hook that must be configured on an existing
+// App. Unlike the legacy node flow, no always-on machine owns this credential.
+app.post("/account/hosted-github-app/connect", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  if (!hostedEncryptionAvailable()) {
+    return res.status(503).json({ error: "Credential encryption is not configured. Refusing to store the GitHub App key." });
+  }
+  const appId = String(req.body?.appId ?? "").trim();
+  const privateKeyPem = String(req.body?.privateKeyPem ?? "").trim();
+  const requestedInstallationId = String(req.body?.installationId ?? "").trim();
+  if (!/^\d+$/.test(appId) || !privateKeyPem.includes("PRIVATE KEY")) {
+    return res.status(400).json({ error: "A numeric App ID and PEM private key are required" });
+  }
+  try {
+    const installations = await listAppInstallations(appId, privateKeyPem);
+    if (!installations.length) {
+      return res.status(409).json({ error: "Install this GitHub App on at least one account or organization first", installations });
+    }
+    const selected = requestedInstallationId
+      ? installations.find((item) => item.id === requestedInstallationId)
+      : installations.length === 1 ? installations[0] : undefined;
+    if (!selected) {
+      return res.status(409).json({ error: "Choose which GitHub App installation bivy should use", installations });
+    }
+
+    let hook = await store.getGithubAppHook(account.id, appId);
+    if (!hook) hook = await store.createInboundHook(account.id, "github_app");
+    hook = (await store.setInboundHookAppMeta(account.id, hook.id, {
+      appId,
+      owner: selected.account,
+      ownerType: selected.accountType,
+    })) ?? hook;
+    const githubApp = { appId, installationId: selected.id, privateKeyPem };
+    const repositories = await listInstallationRepositories(githubApp);
+    await store.setInboundHookInstallStatus(account.id, hook.id, repositories.length);
+    await store.setHostedProvisioning(account.id, {
+      githubApp,
+    });
+    await store.appendHostedAudit(account.id, {
+      at: new Date().toISOString(),
+      action: "github_app_connected",
+      detail: `app ${appId}; installation ${selected.id}`,
+    });
+    res.json({
+      ok: true,
+      appId,
+      installation: selected,
+      webhookUrl: `${baseUrl(req)}/webhooks/github_app/${hook.id}`,
+      webhookSecret: hook.secret,
+    });
+  } catch (error) {
+    res.status(400).json({ error: String((error as Error)?.message || error).slice(0, 240) });
+  }
+}));
+
+// Repo discovery for the browser when no persistent node exists. Installation
+// tokens are minted just in time and never returned to the client.
+app.get("/account/hosted-github-repositories", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const hosted = await store.getHostedProvisioning(account.id);
+  if (!hosted.githubApp) return res.status(409).json({ error: "No hosted GitHub App is configured" });
+  try {
+    res.json({ repos: await listInstallationRepositories(hosted.githubApp) });
+  } catch (error) {
+    res.status(502).json({ error: String((error as Error)?.message || error).slice(0, 240) });
+  }
 }));
 
 // Set (or clear) the account's default node: untagged issues/comments that
@@ -2205,6 +2280,15 @@ app.delete("/account/github-app", asyncHandler(async (req, res) => {
     : hookId
       ? (await store.deleteInboundHook(client.accountId, hookId)) ? 1 : 0
       : await store.deleteGithubAppHooks(client.accountId);
+  const hosted = await store.getHostedProvisioning(client.accountId);
+  if (hosted.githubApp && (!appId || hosted.githubApp.appId === appId)) {
+    await store.setHostedProvisioning(client.accountId, { githubApp: undefined });
+    await store.appendHostedAudit(client.accountId, {
+      at: new Date().toISOString(),
+      action: "github_app_disconnected",
+      detail: `app ${hosted.githubApp.appId}`,
+    });
+  }
   res.json({ ok: true, removed });
 }));
 
