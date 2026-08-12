@@ -390,6 +390,7 @@ export function AutomationsView({
   section,
   onSectionChange,
   onOpenSession,
+  onOpenRun,
   githubQueue,
   onRefreshGithubQueue,
 }: {
@@ -399,6 +400,8 @@ export function AutomationsView({
   section: AutomationsSection | null;
   onSectionChange: (section: AutomationsSection | null) => void;
   onOpenSession: (sessionId: string) => void;
+  /** Open the routable Run detail screen (/runs/:runId) for a Run in the feed. */
+  onOpenRun?: (runId: string) => void;
   /** Incoming GitHub/Linear work-queue items — polled at the app shell and
    *  rendered by the Work Queue tab (was a Settings panel). */
   githubQueue?: GithubQueueItem[] | null;
@@ -935,6 +938,15 @@ export function AutomationsView({
                           {detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}
                         </div>
                         <div className="automation-row-actions">
+                          {onOpenRun && (
+                            <button
+                              type="button"
+                              className="btn sm"
+                              onClick={() => onOpenRun(run.id)}
+                            >
+                              Run details
+                            </button>
+                          )}
                           {!isTerminalRun(run) && (
                             <button
                               type="button"

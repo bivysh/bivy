@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { cancelAutomationRun, fetchAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -14,7 +14,9 @@ import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { closeAutomations, getAutomationsRoute, openAutomations, setAutomationsSection, subscribeAutomationsRoute } from "./automationsRoute.js";
 // openAutomations({ setup }) is the sole entry for source connection lifecycle.
+import { closeRun, getRunRoute, openRun, subscribeRunRoute } from "./runRoute.js";
 import { AutomationsView } from "./components/AutomationsView.js";
+import { RunDetails } from "./components/RunDetails.js";
 import { SessionMenu } from "./components/SessionMenu.js";
 import { TuiLockedView } from "./components/TuiLockedView.js";
 import { GithubPill } from "./components/GithubPill.js";
@@ -51,6 +53,10 @@ export function App() {
   // Automations is a first-class destination reached from the sidebar foot,
   // URL-backed the same overlay way Settings is (see automationsRoute.ts).
   const automationsOpen = useSyncExternalStore(subscribeAutomationsRoute, getAutomationsRoute);
+  // The routable Run detail screen (/runs/:runId), URL-backed the same overlay
+  // way Settings and Automations are (see runRoute.ts). Null whenever the URL is
+  // on anything else. A copied Run URL restores this directly on cold load.
+  const runRoute = useSyncExternalStore(subscribeRunRoute, getRunRoute);
   // Returning from a GitHub App redirect reloads the SPA — finish in Automations
   // (the sole place for source connections), not Settings.
   const githubAppReturning = state.githubApp?.returning;
@@ -767,6 +773,13 @@ export function App() {
           onSectionChange={setAutomationsSection}
           githubQueue={githubQueue}
           onRefreshGithubQueue={refreshGithubQueue}
+          onOpenRun={(runId) => {
+            // Land on the Run route: dismiss Automations onto the session behind
+            // it first (replace, no extra history), then push /runs/:runId so
+            // Back returns to that session rather than stacking two overlays.
+            closeAutomations(state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" });
+            openRun(runId);
+          }}
           onClose={() =>
             closeAutomations(
               state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
@@ -782,6 +795,27 @@ export function App() {
             closeAutomations({ kind: "session", id: sessionId });
             closeDrawer();
           }}
+        />
+      )}
+
+      {runRoute && (
+        <RunDetails
+          runId={runRoute.runId}
+          load={(id) => fetchAutomationRun(controller.local, id)}
+          onCancel={async (id) => { await cancelAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
+          resolveMachineName={(machineId) => state.nodes.find((n) => n.id === machineId)?.name || undefined}
+          isSessionResolvable={(sessionId) => state.sessions.some((s) => s.sessionId === sessionId)}
+          onOpenSession={(sessionId) => {
+            const s = state.sessions.find((x) => x.sessionId === sessionId);
+            controller.openSessionOnNode(sessionId, s?.path, s?.nodeId);
+            closeRun({ kind: "session", id: sessionId });
+            closeDrawer();
+          }}
+          onClose={() =>
+            closeRun(
+              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+            )
+          }
         />
       )}
 
