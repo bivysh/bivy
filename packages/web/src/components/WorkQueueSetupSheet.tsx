@@ -11,12 +11,14 @@ import {
   type GithubAppInfo,
   type LinearHook,
   type SlackHook,
+  type HostedProvisioningStatus,
   connectLinearHook,
   connectSlackHook,
   disconnectLinearHook,
   disconnectSlackHook,
   fetchLinearHook,
   fetchSlackHook,
+  fetchHostedProvisioning,
 } from "@bivy/core";
 import { controller } from "../store/controller.js";
 
@@ -82,6 +84,7 @@ export function WorkQueueSetupSheet({
   const [nodes, setNodes] = useState<AccountNode[]>([]);
   const [linear, setLinear] = useState<LinearHook | null>(null);
   const [slack, setSlack] = useState<SlackHook | null>(null);
+  const [hosted, setHosted] = useState<HostedProvisioningStatus | null>(null);
   const [loadErr, setLoadErr] = useState("");
   const [org, setOrg] = useState("");
   const [defaultNode, setDefaultNode] = useState("");
@@ -131,16 +134,18 @@ export function WorkQueueSetupSheet({
     }
     setLoadErr("");
     try {
-      const [gh, nodeList, lin, sl] = await Promise.all([
+      const [gh, nodeList, lin, sl, hostedStatus] = await Promise.all([
         controller.fetchGithubApp(),
         controller.listNodes(),
         fetchLinearHook(controller.local).catch(() => null),
         fetchSlackHook(controller.local).catch(() => null),
+        fetchHostedProvisioning(controller.local).catch(() => null),
       ]);
       setInfo(gh);
       setNodes(nodeList);
       setLinear(lin);
       setSlack(sl);
+      setHosted(hostedStatus);
       const stored = gh.apps.find((a) => a.defaultNode)?.defaultNode ?? gh.defaultNode ?? "";
       setDefaultNode(stored || "");
       const access = gh.apps.find((a) => a.triggerAccess)?.triggerAccess ?? gh.triggerAccess ?? "everyone";
@@ -164,7 +169,8 @@ export function WorkQueueSetupSheet({
   const mention = apps.find((a) => a.mention)?.mention || "bivy";
   const anyInstalled = apps.some((a) => a.installed);
   const anyServed = apps.some((a) => a.hosted || a.servedBy?.online);
-  const readyToRun = apps.length > 0 && anyInstalled && (anyServed || apps.some((a) => a.servedBy));
+  const hostedReady = Boolean(hosted?.execution.ready);
+  const readyToRun = apps.length > 0 && anyInstalled && (hostedReady || anyServed || apps.some((a) => a.servedBy));
 
   async function saveDefaultNode() {
     setSavingNode(true);
@@ -385,7 +391,7 @@ export function WorkQueueSetupSheet({
                   Add a <code>bivy</code> label (or <code>{'bivy/<machine>'}</code> to pin a node) on an issue —
                   or comment <code>@{mention}</code> with what to do.
                 </li>
-                <li>An online machine that holds the app key claims the item, runs your checks, and opens a PR.</li>
+                <li>An online machine—or your configured hosted ephemeral runner—claims the item, runs your checks, and opens a PR.</li>
               </ol>
             </div>
           )}
@@ -486,12 +492,12 @@ export function WorkQueueSetupSheet({
                       <div className="wq-app-row-main">
                         <div className="wq-app-title-row">
                           <strong>{entry.name || entry.mention || "GitHub App"}</strong>
-                          <span className={`autom-status ${entry.installed === false ? "warn" : entry.hosted || entry.servedBy?.online ? "on" : "warn"}`}>
+                          <span className={`autom-status ${entry.installed === false ? "warn" : entry.hosted || entry.servedBy?.online || hostedReady ? "on" : "warn"}`}>
                             {entry.installed === false
                               ? "Needs install"
-                              : entry.hosted
+                              : entry.hosted || hostedReady
                                 ? "Ephemeral ready"
-                              : entry.servedBy?.online
+                                : entry.servedBy?.online
                                 ? "Live"
                                 : entry.servedBy
                                   ? "Node offline"
@@ -517,7 +523,7 @@ export function WorkQueueSetupSheet({
                             <a href={installHref(entry)} target="_blank" rel="noreferrer">Manage →</a>
                           </span>
                         )}
-                        {entry.hosted ? (
+                        {entry.hosted || hostedReady ? (
                           <span className="settings-hint">Served on demand by your ephemeral runner.</span>
                         ) : entry.servedBy === null ? (
                           <p className="schedule-hint warn">

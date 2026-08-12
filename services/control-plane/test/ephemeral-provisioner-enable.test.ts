@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 process.env.HOSTED_CREDENTIAL_KEY = Buffer.alloc(32, 7).toString("base64");
 import { createPgMemStore } from "../src/pg-mem-store.js";
 import { providerCredentialFingerprint } from "../src/store.js";
-import { planAutoProvision, ephemeralMachinesEnabled } from "../src/ephemeral-provisioner.js";
+import { planAutoProvision, hostedExecutionReadiness, ephemeralMachinesEnabled } from "../src/ephemeral-provisioner.js";
 
 async function makeStore() {
   const store = createPgMemStore();
@@ -68,6 +68,17 @@ try {
     const { store, acctId } = await readyAccount();
     const plan = await planAutoProvision(store, acctId);
     assert.equal(plan.willProvision, true, "per-account opt-in provisions without a deploy opt-in");
+    const readiness = await hostedExecutionReadiness(store, acctId);
+    assert.deepEqual(readiness, { ready: true, reason: "hosted ephemeral execution is ready", configId: "cfg1" });
+  });
+
+  await test("automation readiness explains missing execution setup", async () => {
+    delete process.env.EPHEMERAL_MACHINES_ENABLED;
+    const store = await makeStore();
+    const acct = await store.findOrCreateAccount("not-ready@example.com");
+    assert.deepEqual(await hostedExecutionReadiness(store, acct.id), { ready: false, reason: "unattended provisioning is disabled" });
+    await store.setHostedProvisioning(acct.id, { enabled: true });
+    assert.deepEqual(await hostedExecutionReadiness(store, acct.id), { ready: false, reason: "automation routing has no ephemeral config" });
   });
 } finally {
   if (PREV_ENABLED === undefined) delete process.env.EPHEMERAL_MACHINES_ENABLED;

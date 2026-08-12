@@ -17,6 +17,7 @@ import {
   fetchAutomationRuns,
   fetchAutomations,
   fetchGithubApp,
+  fetchHostedProvisioning,
   fetchLinearHook,
   fetchSlackHook,
   runAutomationNow,
@@ -35,6 +36,7 @@ import {
   type GithubAppInfo,
   type LinearHook,
   type SlackHook,
+  type HostedProvisioningStatus,
 } from "@bivy/core";
 import { controller } from "../store/controller.js";
 import {
@@ -217,13 +219,14 @@ interface SourcesSnapshot {
   linear: LinearHook | null;
   slack: SlackHook | null;
   nodes: AccountNode[];
+  hosted: HostedProvisioningStatus | null;
 }
 
 function emptySources(): SourcesSnapshot {
-  return { github: null, linear: null, slack: null, nodes: [] };
+  return { github: null, linear: null, slack: null, nodes: [], hosted: null };
 }
 
-function githubSourceStatus(gh: GithubAppInfo | null): { tone: "on" | "off" | "warn"; label: string; detail: string } {
+function githubSourceStatus(gh: GithubAppInfo | null, hostedReady = false): { tone: "on" | "off" | "warn"; label: string; detail: string } {
   if (!gh?.connected || !gh.apps?.length) {
     return { tone: "off", label: "Not connected", detail: "Connect a GitHub App to run issue and CI automations." };
   }
@@ -233,6 +236,7 @@ function githubSourceStatus(gh: GithubAppInfo | null): { tone: "on" | "off" | "w
   if (!installed) {
     return { tone: "warn", label: "App created · not installed", detail: "Install the app on at least one repository." };
   }
+  if (hostedReady) return { tone: "on", label: `Installed${count ? ` · ${count} repo(s)` : ""} · ephemeral ready`, detail: "Hosted ephemeral execution can claim work without a persistent node." };
   if (!served && !gh.apps.some((a) => a.servedBy)) {
     return { tone: "warn", label: `Installed${count ? ` · ${count} repo(s)` : ""} · no node`, detail: "No machine is serving the app key yet." };
   }
@@ -262,10 +266,12 @@ function sourceAutomationChip(
   sources: SourcesSnapshot,
 ): { tone: "on" | "off" | "warn"; label: string } {
   if (!item.enabled) return { tone: "off", label: "Paused" };
+  const executorReady = sources.nodes.some((node) => node.online) || Boolean(sources.hosted?.execution.ready);
   if (item.trigger === "github" || item.trigger === "github_ci") {
-    const gh = githubSourceStatus(sources.github);
+    const gh = githubSourceStatus(sources.github, Boolean(sources.hosted?.execution.ready));
     if (gh.tone === "off") return { tone: "warn", label: "Needs GitHub" };
     if (gh.tone === "warn") return { tone: "warn", label: gh.label };
+    if (!executorReady) return { tone: "warn", label: "Needs executor" };
     if (item.trigger === "github_ci") return { tone: "on", label: "Active · verify workflow_run" };
     return { tone: "on", label: "Active" };
   }
@@ -273,9 +279,9 @@ function sourceAutomationChip(
     const lin = linearSourceStatus(sources.linear);
     if (lin.tone === "off") return { tone: "warn", label: "Needs Linear" };
     if (lin.tone === "warn") return { tone: "warn", label: lin.label };
-    return { tone: "on", label: "Active" };
+    return executorReady ? { tone: "on", label: "Active" } : { tone: "warn", label: "Needs executor" };
   }
-  return { tone: item.enabled ? "on" : "off", label: item.enabled ? "Active" : "Paused" };
+  return executorReady ? { tone: "on", label: "Active" } : { tone: "warn", label: "Needs executor" };
 }
 
 function runOutcome(status: AccountAutomationRun["status"]): { label: string; tone: "ok" | "warn" | "bad" | "info" } {
@@ -425,17 +431,18 @@ export function AutomationsView({
 
   const refresh = useCallback(async () => {
     const canQuery = !controller.direct;
-    const [definitions, recent, gh, lin, slack, nodes] = await Promise.all([
+    const [definitions, recent, gh, lin, slack, nodes, hosted] = await Promise.all([
       fetchAutomations(controller.local),
       fetchAutomationRuns(controller.local, 30),
       canQuery ? fetchGithubApp(controller.local).catch(() => null) : Promise.resolve(null),
       canQuery ? fetchLinearHook(controller.local).catch(() => null) : Promise.resolve(null),
       canQuery ? fetchSlackHook(controller.local).catch(() => null) : Promise.resolve(null),
       canQuery ? fetchAccountNodes(controller.local).catch(() => [] as AccountNode[]) : Promise.resolve([] as AccountNode[]),
+      canQuery ? fetchHostedProvisioning(controller.local).catch(() => null) : Promise.resolve(null),
     ]);
     setItems(definitions);
     setRuns(recent);
-    setSources({ github: gh, linear: lin, slack, nodes });
+    setSources({ github: gh, linear: lin, slack, nodes, hosted });
     setLoading(false);
   }, []);
 
