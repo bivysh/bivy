@@ -132,11 +132,25 @@ open client.
 Claude Code/Codex → isolated worktree → deterministic checks → checked changes
 or PR → Receipt.
 
-- [ ] Create one account-level Run projection over existing automation/work-item
-  records; do not create another queue.
-- [ ] Build a routable Run detail view with status/attempt, Session, attention,
-  changes, checks, branch/commit/PR, recovery, outcome, and Receipt.
-- [ ] Link Run → Session and Session → Run in all clients.
+- [x] Create one account-level Run projection over existing automation/work-item
+  records; do not create another queue. **Implemented in PR #505:** a single
+  `Run` type in `@bivy/core` with `runFromQueueItem`/`runFromAutomationRun`
+  adapting both legacy shapes through one derivation (reusing `deriveRunOutcome`,
+  so outcome truth stays single-sourced). Missing evidence is preserved as
+  unknown; a bare `succeeded` process stays Needs review. Tests prove both legacy
+  shapes project identically and that Cancel/Retry appear only for the correct
+  durable states.
+- [x] Build a routable Run detail view with status/attempt, Session, attention,
+  changes, checks, branch/commit/PR, recovery, outcome, and Receipt. **PR #505:**
+  `/runs/:runId` (id parse/serialize in core, browser-restorable) backed by a
+  non-leaking `GET /account/automation-runs/:id` (unknown and cross-account ids
+  both 404). The `RunDetails` screen handles loading, offline, not-found,
+  unauthorized, and stale explicitly, refreshes durable state after a mutation,
+  and shows Receipt as **unavailable** — not overstated — until Receipt v1.
+- [x] Link Run → Session and Session → Run in all clients. **PR #505, web PWA:**
+  Automation activity, queue/history, and the in-session Run pill deep-link to
+  the exact `/runs/:runId`; the Run screen offers "Open Session" only when the
+  Session is resolvable. Expo client parity follows when that client lands.
 - [ ] Make “Continue in background” / “Delegate this Session” preserve context
   and explain any fidelity boundary.
 - [ ] Ensure every accepted Run reaches exactly one explicit outcome from the
