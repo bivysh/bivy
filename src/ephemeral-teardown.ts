@@ -74,6 +74,19 @@ export function shouldSelfTeardown(cfg: EphemeralTeardownConfig, state: Teardown
   return state.idleForMs >= grace;
 }
 
+/** Result of persisting the open sessions that would otherwise disappear with
+ * the machine. A teardown is safe only when every non-empty session snapshot
+ * reached durable storage. Empty sessions do not require a snapshot. */
+export interface SnapshotFlushResult {
+  required: number;
+  persisted: number;
+  failed: number;
+}
+
+export function snapshotsDurableForTeardown(result: SnapshotFlushResult): boolean {
+  return result.failed === 0 && result.persisted === result.required;
+}
+
 export interface TeardownActionDeps {
   provider: string;
   /** Best-effort POST /node/settled so the control plane can reap providers that
