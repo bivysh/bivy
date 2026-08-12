@@ -38,9 +38,18 @@ describe("launchEphemeralMachine — machine record naming", () => {
     const keys = createEphemeralKeyStore(memoryBackend());
     await keys.setToken("fly", "fly-tok");
     const machines = createMachineStore(memoryBackend());
+    const progress: string[] = [];
 
     const machine = await launchEphemeralMachine(
-      { provider: "fly", region: "lhr", size: "shared-1x-2gb", name: "EU coding node", setupId: "setup-abc", ttlMinutes: 60 },
+      {
+        provider: "fly",
+        region: "lhr",
+        size: "shared-1x-2gb",
+        name: "EU coding node",
+        setupId: "setup-abc",
+        ttlMinutes: 60,
+        onProgress: (message) => progress.push(message),
+      },
       {
         store: fakeStore(),
         exec: flyExec,
@@ -58,6 +67,13 @@ describe("launchEphemeralMachine — machine record naming", () => {
     expect(machine.name).toBe("EU coding node");
     expect(machine.setupId).toBe("setup-abc");
     expect(machine.nodeId).toMatch(/^eph-/);
+    expect(progress).toEqual([
+      "Preparing Fly.io launch…",
+      "Enrolling a secure Bivy node…",
+      "Node enrolled. Building its secure bootstrap…",
+      "Creating the machine in lhr (shared-1x-2gb)…",
+      "Machine created. Boot setup is installing and starting Bivy…",
+    ]);
 
     const stored = await machines.list();
     expect(stored[0]?.name).toBe("EU coding node");

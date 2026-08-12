@@ -242,6 +242,11 @@ export class AppController {
   private pendingResume: Array<{ sessionId: string; text: string; clientMessageId: string; attachments?: PromptAttachment[] }> = [];
   /** Guards a resume/rebuild already in flight so repeated sends don't re-launch. */
   private resumingNode = new Set<string>();
+  /** Freshly-provisioned nodes still inside their boot grace. The relay quite
+   *  correctly reports these as offline before boot setup has started Bivy, but
+   *  that is launch progress rather than an actionable error. It also lets the
+   *  online edge finish the visible setup log. */
+  private startingEphemeralNodes = new Map<string, { name: string }>();
   // Durable session↔machine correlations fetched from the control plane (Gap 1),
   // so a torn-down destroy-lane session stays rebuildable after its node drops
   // from the registry. Refreshed on reconnect; written (deduped) before teardown.
@@ -538,8 +543,14 @@ export class AppController {
       onStatus: (status: ConnectionStatus) => {
         const prev = this.store.getState().status;
         this.store.setStatus(status);
-        if (status === "online" && prev !== "online") this.onReconnected();
-        else if (status === "reconnecting" || status === "offline") {
+        if (status === "online" && prev !== "online") {
+          const starting = this.startingEphemeralNodes.get(this.local.cur);
+          if (starting) {
+            this.startingEphemeralNodes.delete(this.local.cur);
+            this.store.pushSystemMessage(`Setup · ${starting.name} is online. Running your message…`);
+          }
+          this.onReconnected();
+        } else if (status === "reconnecting" || status === "offline") {
           this.store.markStreamInterrupted();
           // Re-pull the node list on the *transition* into a dropped state so the
           // header's online dot reflects the node's real presence instead of a
@@ -549,7 +560,13 @@ export class AppController {
           if (prev !== "reconnecting" && prev !== "offline") this.refreshNodesThrottled();
         }
       },
-      onError: (message: string) => this.store.setError(message),
+      onError: (message: string) => {
+        // A new ephemeral has been enrolled but its daemon has not joined the
+        // relay yet. "Node offline" is expected throughout that boot window;
+        // the setup log communicates the useful state instead of an error toast.
+        if (/^node offline$/i.test(message.trim()) && this.startingEphemeralNodes.has(this.local.cur)) return;
+        this.store.setError(message);
+      },
     };
     return this.direct
       ? new DirectTransport({ bootstrap: new URLSearchParams(location.search).get("bootstrap") || "", handlers })
@@ -1895,9 +1912,15 @@ export class AppController {
     cmid: string,
     files?: PromptAttachment[],
   ): Promise<void> {
-    // Instant feedback on the current pane while the provider API call runs
-    // (switchNode below resets the pane, so we re-show it after).
+    // Instant feedback on the current pane while the provider API call runs.
+    // switchNode below resets the pane, so retain and replay every setup line on
+    // the new node rather than replacing useful progress with one vague status.
     this.store.addUserMessage(text, cmid, files);
+    const setupLog: string[] = [];
+    const logSetup = (message: string) => {
+      setupLog.push(message);
+      this.store.pushSystemMessage(`Setup · ${message}`);
+    };
     try {
       const machine = await this.launchEphemeral({
         provider: config.provider,
@@ -1908,15 +1931,18 @@ export class AppController {
         teardownOnAgentFinish: config.teardownOnAgentFinish === true,
         name: config.name,
         setupId: config.id,
+        onProgress: logSetup,
       });
-      // Bind the draft to the freshly-enrolled node and connect. switchNode resets
-      // the pane (clearing draftEphemeralConfig too) but leaves pendingPrompt.
+      // Bind the draft to the freshly-enrolled node and connect. Mark it as
+      // starting BEFORE switchNode dials the relay, so an immediate expected
+      // "Node offline" response cannot flash as an error toast.
       if (!machine.nodeId) throw new Error("machine launched without a node id");
+      this.startingEphemeralNodes.set(machine.nodeId, { name: config.name });
       this.switchNode(machine.nodeId);
-      // Re-show the message + a status note now that the pane was reset, so the
-      // send doesn't visually vanish while the machine boots.
+      // Re-show the message and the complete setup log after the pane reset. New
+      // progress (online / timeout) is appended on this bound pane.
       this.store.addUserMessage(text, cmid, files);
-      this.store.pushSystemMessage(`Starting ${config.name} — it'll come online shortly, then your message runs.`);
+      for (const line of setupLog) this.store.pushSystemMessage(`Setup · ${line}`);
       this.watchRunnerBoot(machine.nodeId, config.name, config.provider);
     } catch (e) {
       this.pendingPrompt = null;
@@ -1934,6 +1960,7 @@ export class AppController {
    */
   private watchRunnerBoot(nodeId: string, name: string, provider: string): void {
     this.waitForOnline(RUNNER_BOOT_TIMEOUT_MS).catch(() => {
+      this.startingEphemeralNodes.delete(nodeId);
       // Moved to another node, or it actually came online right at the edge.
       if (this.local.cur !== nodeId || this.store.getState().status === "online") return;
       const mins = Math.round(RUNNER_BOOT_TIMEOUT_MS / 60000);
