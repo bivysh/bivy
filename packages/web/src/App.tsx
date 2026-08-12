@@ -18,6 +18,8 @@ import { closeAutomations, getAutomationsRoute, openAutomations, setAutomationsS
 import { closeRun, getRunRoute, openRun, subscribeRunRoute } from "./runRoute.js";
 import { AutomationsView } from "./components/AutomationsView.js";
 import { RunDetails } from "./components/RunDetails.js";
+import { ReadinessChecklist } from "./components/ReadinessChecklist.js";
+import { activationFromState } from "@bivy/core";
 import { SessionMenu } from "./components/SessionMenu.js";
 import { TuiLockedView } from "./components/TuiLockedView.js";
 import { GithubPill } from "./components/GithubPill.js";
@@ -100,6 +102,9 @@ export function App() {
   // In-memory by design — a reload re-surfaces current attention, which is the
   // safe default (better to re-show than to silently swallow a blocked agent).
   const [seenAttn, setSeenAttn] = useState<Set<string>>(() => new Set());
+  // Once dismissed, the activation strip stays hidden for the session (in-memory
+  // by design — a reload re-surfaces it if the agent still hasn't answered).
+  const [readinessDismissed, setReadinessDismissed] = useState(false);
   const refreshGithubQueue = useCallback(() => {
     if (controller.direct || !state.signedIn) return;
     controller.fetchGithubQueue().then(setGithubQueue).catch(() => {});
@@ -129,6 +134,13 @@ export function App() {
     queue: githubQueue ?? [],
     runs: automationRuns ?? [],
   }), [state.sessions, state.approvals, state.questions, state.nodes, githubQueue, automationRuns]);
+  // Honest activation readiness: the distinct checks toward a first real agent
+  // response. `activated` flips only on a real assistant message, so this strip
+  // guides the user until then and never claims premature success.
+  const activation = useMemo(
+    () => activationFromState(state),
+    [state],
+  );
   // Something needs the user that they haven't seen yet → the ☰ burger wears a
   // red dot. Opening the session drawer (openDrawer) marks the current set seen.
   const attnUnseen = inboxItems.some((it) => !seenAttn.has(it.id));
@@ -657,6 +669,22 @@ export function App() {
           />
         ) : (
           <>
+            {!controller.direct && state.signedIn && !!state.currentNodeId && !activation.activated && !readinessDismissed && (
+              <ReadinessChecklist
+                activation={activation}
+                onDismiss={() => setReadinessDismissed(true)}
+                onRemediate={{
+                  connect_machine: () => openDrawer(),
+                  install_agent: () => openSettings("models"),
+                  authenticate_credential: () => openSettings("models"),
+                  grant_repository: () => openAutomations({ setup: "github" }),
+                  run_starter_task: () => {
+                    const el = document.querySelector<HTMLTextAreaElement>(".composer textarea, textarea.composer-input");
+                    el?.focus();
+                  },
+                }}
+              />
+            )}
             <ChatView
               entries={state.transcript}
               working={state.working}
