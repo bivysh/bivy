@@ -8,7 +8,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import Stripe from "stripe";
 import webpush from "web-push";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, validateHostedProviderToken, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
@@ -1266,7 +1266,16 @@ app.get("/node/account", requireNode, asyncHandler(async (req, res) => {
 app.post("/node/heartbeat", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   await store.setNodeOnline(node.id, true);
+  await markHostedMachineMilestone(store, node.accountId, node.id, "nodeReadyAt").catch(() => false);
   res.json({ ok: true });
+}));
+
+app.post("/node/ephemeral-milestone", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const milestone = String(req.body?.milestone ?? "");
+  if (!(EPHEMERAL_MILESTONES as readonly string[]).includes(milestone)) return res.status(400).json({ error: "unknown milestone" });
+  const tracked = await markHostedMachineMilestone(store, node.accountId, node.id, milestone as (typeof EPHEMERAL_MILESTONES)[number]);
+  res.json({ ok: true, tracked });
 }));
 
 app.post("/node/name", requireNode, asyncHandler(async (req, res) => {

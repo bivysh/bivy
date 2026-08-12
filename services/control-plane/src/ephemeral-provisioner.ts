@@ -42,6 +42,43 @@ export interface ProvisionPlan {
   reason: string;
 }
 
+export const EPHEMERAL_MILESTONES = ["nodeReadyAt", "credentialsReadyAt", "snapshotReadyAt", "firstAgentEventAt"] as const;
+export type EphemeralMilestone = (typeof EPHEMERAL_MILESTONES)[number];
+
+/** Server-stamp a hosted runner milestone. First write wins so reconnects and
+ * repeated agent events cannot move the SLO boundary later. */
+export async function markHostedMachineMilestone(
+  store: MeshStore,
+  accountId: string,
+  nodeId: string,
+  milestone: EphemeralMilestone,
+  at = new Date().toISOString(),
+): Promise<boolean> {
+  const machines = await store.getHostedMachines(accountId);
+  let found = false;
+  let recorded = false;
+  let requestedAt: string | undefined;
+  const next = machines.map((machine) => {
+    if (machine.nodeId !== nodeId) return machine;
+    found = true;
+    const milestones = machine.milestones && typeof machine.milestones === "object"
+      ? machine.milestones as Record<string, unknown>
+      : {};
+    if (typeof milestones[milestone] === "string") return machine;
+    recorded = true;
+    requestedAt = typeof milestones.requestedAt === "string" ? milestones.requestedAt : undefined;
+    return { ...machine, milestones: { ...milestones, [milestone]: at } };
+  });
+  if (found) await store.setHostedMachines(accountId, next);
+  if (recorded) {
+    const startMs = Date.parse(String(requestedAt || ""));
+    const atMs = Date.parse(at);
+    const elapsed = Number.isFinite(startMs) && Number.isFinite(atMs) && atMs >= startMs ? ` elapsedMs=${atMs - startMs}` : "";
+    await audit(store, accountId, { action: "machine_milestone", nodeId, detail: `${milestone}${elapsed}` });
+  }
+  return found;
+}
+
 const DEDUPE_WINDOW_MS = 60 * 60 * 1000; // don't stack hosted machines within an hour
 const MAX_PROVISIONS_PER_HOUR = Math.max(1, Number(process.env.HOSTED_PROVISION_MAX_PER_HOUR ?? 5));
 
