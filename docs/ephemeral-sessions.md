@@ -84,6 +84,21 @@ no non-smoke routing or runners: the workflow deliberately disables hosted
 provisioning and restores shared routing during cleanup. Enable the optional
 10-second assertion only for a prebuilt/ready-capacity lane advertised as fast.
 
+### Ready capacity
+
+A saved stable BYO-cloud config can opt into one account-owned ready runner. The
+global hosted reconciler creates it before work arrives; it is enrolled to that
+account and serves only its unique empty queue label. On work arrival the control
+plane atomically changes its purpose from `ready-capacity` to `queue-default`,
+routes waiting work to its label, and replenishes in the background. A Postgres
+lease serializes reconcile, claim, and launch across control-plane replicas.
+
+Capacity is never shared across customers. Managed-compute providers use their
+native fast-start or suspend path, and normal TTL/provider teardown remains the
+bill-safety backstop. A standby with less than five minutes remaining is deleted
+at the provider before replacement and is never claimed; failed deletion remains
+tracked and blocks replacement rather than risking double billing.
+
 ## Adding a new provider
 
 The whole point of `ProviderAdapter` is that adding a provider is additive — no shared dispatch/call site (the UI, the controller, `launchEphemeralMachine`/`destroyEphemeralMachine`/`listEphemeralSizes`) needs to change. It only needs to know a provider's `id` string. Checklist, using the AWS adapter as the reference example:
