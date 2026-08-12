@@ -3543,15 +3543,20 @@ async function cmdSetup(args = []) {
   }
 
   const finalConfig = loadConfig();
-  const modelReady = setupAgent?.needsBivyModel ? hasModelConfig(finalConfig) : agentAuthReady;
+  let liveReadiness = null;
+  try { liveReadiness = await localApi(finalConfig, "/api/activation/readiness"); } catch {}
+  const modelReady = setupAgent?.needsBivyModel
+    ? Boolean(liveReadiness?.credential?.ok ?? hasModelConfig(finalConfig))
+    : agentAuthReady;
+  const repoReady = Boolean(liveReadiness?.repository?.ok);
   console.log(c.bold(c.green("\n  ✓ Node running. Check first-task readiness below.\n")));
   console.log(`  ${c.green("✓")} node reachable at ${url(finalConfig)}`);
   console.log(`  ${agentReady ? c.green("✓") : c.yellow("!")} runtime ${agentReady ? `${setupAgent?.label || "Pi"} available` : "not installed — run 'bivy agents:install'"}`);
   console.log(`  ${modelReady ? c.green("✓") : c.yellow("!")} model ${modelReady ? (setupAgent?.needsBivyModel ? "credential configured" : "native agent login ready") : (setupAgent?.needsBivyModel ? "not configured — run 'bivy login'" : `${setupAgent?.loginHint || "sign in through the selected agent"}`)}`);
-  console.log(`  ${c.dim("○")} repository chosen from the directory where you start Bivy`);
+  console.log(`  ${repoReady ? c.green("✓") : c.dim("○")} repository ${repoReady ? "accessible" : "choose one from the directory where you start Bivy or in the app"}`);
   const ghReady = githubConnected(finalConfig);
   console.log(`  ${ghReady ? c.green("✓") : c.dim("○")} GitHub ${ghReady ? "connected — your repos will list in the app" : c.dim("optional — connect later in the app under Settings → GitHub App")}`);
-  console.log(`  ${agentReady && modelReady ? c.green("✓") : c.yellow("!")} first task ${agentReady && modelReady ? "ready to try" : "blocked by the stage above"}`);
+  console.log(`  ${agentReady && modelReady && repoReady ? c.green("✓") : c.yellow("!")} first task ${agentReady && modelReady && repoReady ? "ready to try" : "blocked by the stage above"}`);
   console.log(`  ${fs.existsSync(relayConfigPath) ? c.green("✓") : c.yellow("!")} remote ${fs.existsSync(relayConfigPath) ? "configured" : "not configured — run 'bivy relay:setup'"}\n`);
   // Get the user into the product immediately; terminal commands are the
   // fallback/next-step checklist after the remote app has been opened or linked.
@@ -3815,9 +3820,11 @@ async function cmdDoctor(args = []) {
   const reachable = await isReachable(config);
   let status = null;
   let runtimes = null;
+  let readiness = null;
   if (reachable) {
     try { status = await localApi(config, "/api/status"); } catch {}
     try { runtimes = await localApi(config, "/api/runtimes"); } catch {}
+    try { readiness = await localApi(config, "/api/activation/readiness"); } catch {}
   }
 
   const ok = c.green("✓");
@@ -3847,7 +3854,13 @@ async function cmdDoctor(args = []) {
   const setupAgent = setupAgentByRuntime(defaultAgent);
   const authOwner = runtimeInfo?.authOwner || (setupAgent?.needsBivyModel ? "bivy" : "agent");
   console.log(`  ${mark(agentAvailable, true)} agent ${runtimeInfo?.displayName || defaultAgent}${agentAvailable ? "" : c.dim(" not available — install it or run 'bivy setup'")}`);
-  console.log(`  ${mark(hasModelConfig(config), authOwner !== "bivy")} model ${hasModelConfig(config) ? "configured" : authOwner === "bivy" ? c.dim("not configured — run 'bivy login'") : c.dim("agent-native auth — use the agent's CLI login if needed")}`);
+  const credentialReady = readiness?.credential?.ok ?? hasModelConfig(config);
+  const credentialKnown = readiness?.credential?.probed || readiness?.credential?.configured;
+  console.log(`  ${mark(credentialReady, authOwner !== "bivy" || !credentialKnown)} model ${credentialReady ? (readiness?.credential?.probed ? "access verified" : "configured") : authOwner === "bivy" ? c.dim("not ready — run 'bivy login'") : c.dim("agent-native auth — use the agent's CLI login if needed")}`);
+  const repositoryReady = Boolean(readiness?.repository?.ok);
+  console.log(`  ${mark(repositoryReady, true)} repository ${repositoryReady ? "accessible" : c.dim("not selected or access could not be verified")}`);
+  const firstTaskReady = reachable && agentAvailable && credentialReady && repositoryReady;
+  console.log(`  ${mark(firstTaskReady, true)} first task ${firstTaskReady ? c.green("ready to try") : c.dim("blocked by a stage above")}`);
   const relayConfigured = Boolean(status?.relay?.configured || fs.existsSync(relayConfigPath));
   const relayConnected = Boolean(status?.relay?.connected);
   const relayApp = status?.relay?.controlPlaneUrl;
