@@ -227,6 +227,47 @@ export async function resolveAdoptBaseRef(repoDir: string, branch: string): Prom
 }
 
 /**
+ * Resolve the best base for a same-node fork without assuming the source branch
+ * ref still exists. Prefer the live source checkout because it preserves its
+ * exact committed tip, including commits that were never pushed. Then try the
+ * local and remote branch refs before degrading to the repository default.
+ */
+export async function resolveForkBaseRef(
+  repoDir: string,
+  branch: string | undefined,
+  sourceWorktree?: string,
+): Promise<string> {
+  if (sourceWorktree) {
+    try {
+      const { stdout } = await exec("git", ["-C", sourceWorktree, "rev-parse", "--verify", "HEAD"], { cwd: sourceWorktree });
+      const head = stdout.trim();
+      if (head) return head;
+    } catch {
+      // The source checkout may have been pruned; continue through the refs.
+    }
+  }
+
+  if (branch) {
+    try {
+      await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: repoDir });
+      return branch;
+    } catch {
+      // The local branch may have been pruned or lost in a re-clone.
+    }
+
+    await fetchOrigin(repoDir);
+    try {
+      await exec("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`], { cwd: repoDir });
+      return `origin/${branch}`;
+    } catch {
+      // A never-pushed branch is expected to be absent remotely.
+    }
+  }
+
+  return resolveDefaultBaseRef(repoDir);
+}
+
+/**
  * Whether an existing Bivy-owned checkout at `dest` can be reused as-is, i.e. it
  * has a `.git` entry AND `git rev-parse` accepts it as a real repository. A
  * `.git` can survive an interrupted/corrupt clone, so presence alone is not

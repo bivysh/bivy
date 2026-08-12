@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveAdoptBaseRef } from "../src/repo-workspace.js";
+import { resolveAdoptBaseRef, resolveForkBaseRef } from "../src/repo-workspace.js";
 import { createWorktree } from "../src/worktree.js";
 
 // Integration coverage for the cross-node fork stand-up path (fork bugs #2, #5):
@@ -119,6 +119,38 @@ async function run() {
       "git refuses a second worktree on the same branch",
     );
     assert.ok(fs.existsSync(path.join(first.path, "feature.txt")), "the first worktree survived the second attempt");
+  });
+
+  await test("resolveForkBaseRef preserves an unpushed local branch", async () => {
+    const { dest } = seedOriginAndClone();
+    git(dest, ["checkout", "-q", "-b", "local-only"]);
+    fs.writeFileSync(path.join(dest, "local.txt"), "local only\n");
+    git(dest, ["add", "-A"]);
+    git(dest, ["commit", "-qm", "local only commit"]);
+    git(dest, ["checkout", "-q", "main"]);
+    const base = await resolveForkBaseRef(dest, "local-only");
+    assert.equal(base, "local-only");
+    assert.match(execFileSync("git", ["-C", dest, "show", `${base}:local.txt`], { encoding: "utf8" }), /local only/);
+  });
+
+  await test("resolveForkBaseRef recovers origin and default fallbacks", async () => {
+    const { dest } = seedOriginAndClone();
+    assert.equal(await resolveForkBaseRef(dest, "feature"), "origin/feature");
+    assert.equal(await resolveForkBaseRef(dest, "never-existed"), "origin/main");
+  });
+
+  await test("resolveForkBaseRef prefers the live source worktree HEAD", async () => {
+    const { dest } = seedOriginAndClone();
+    const src = await createWorktree({ repoDir: dest, id: "src-feature", branch: "bivy/src-feature", base: "origin/feature" });
+    const expected = execFileSync("git", ["-C", src.path, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    assert.equal(await resolveForkBaseRef(dest, "missing-branch", src.path), expected);
+  });
+
+  await test("createWorktree falls back to HEAD for a stale base ref", async () => {
+    const { dest } = seedOriginAndClone();
+    const wt = await createWorktree({ repoDir: dest, id: "fork-invalid-base", branch: "bivy/fork-invalid-base", base: "bivy/does-not-exist" });
+    assert.equal(wt.branch, "bivy/fork-invalid-base");
+    assert.ok(fs.existsSync(path.join(wt.path, "base.txt")));
   });
 }
 
