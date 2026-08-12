@@ -138,7 +138,7 @@ export function App() {
   // guides the user until then and never claims premature success.
   const activation = useMemo(
     () => activationFromState(state),
-    [state.status, state.runtimes, state.providers, state.reposAuthed, state.transcript],
+    [state],
   );
   // Something needs the user that they haven't seen yet → the ☰ burger wears a
   // red dot. Opening the session drawer (openDrawer) marks the current set seen.
