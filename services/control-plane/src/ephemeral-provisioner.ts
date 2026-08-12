@@ -453,16 +453,35 @@ export async function reconcileHostedMachines(store: MeshStore, accountId: strin
       kept.push(m);
       continue;
     }
-    reaped++;
     const nodeId = typeof m.nodeId === "string" ? m.nodeId : "";
     const provider = typeof m.provider === "string" ? m.provider : "";
     const providerToken = env && provider ? hosted?.providerTokens?.[provider] : undefined;
     if (env && providerToken) {
       try {
         await destroyOneHostedMachine(store, accountId, m as unknown as EphemeralMachine, providerToken, env, nowMs, destroy);
-      } catch {
-        if (nodeId) await store.removeNode(accountId, nodeId).catch(() => {});
+      } catch (error) {
+        // Never forget a resource whose provider deletion failed: it may still
+        // be billing, and retaining the record lets the next sweep retry.
+        kept.push(m);
+        await audit(store, accountId, {
+          action: "reconcile_failed",
+          provider: provider || undefined,
+          nodeId: nodeId || undefined,
+          detail: `provider destroy: ${String((error as Error)?.message || error).slice(0, 120)}`,
+        });
+        continue;
       }
+    } else if (env) {
+      // A hosted resource without a usable provider credential cannot be proven
+      // deleted. Keep tracking it so credential repair allows a later retry.
+      kept.push(m);
+      await audit(store, accountId, {
+        action: "reconcile_failed",
+        provider: provider || undefined,
+        nodeId: nodeId || undefined,
+        detail: "provider credential unavailable; resource retained for retry",
+      });
+      continue;
     } else if (nodeId) {
       try {
         await store.removeNode(accountId, nodeId);
@@ -470,10 +489,42 @@ export async function reconcileHostedMachines(store: MeshStore, accountId: strin
         /* best effort — Fly/EC2 self-destruct regardless */
       }
     }
+    reaped++;
     await audit(store, accountId, { action: "machine_reaped", nodeId: nodeId || undefined, detail: `ttl ${ttlMin}m elapsed${env && providerToken ? " — destroyed" : ""}` });
   }
   if (reaped) await store.setHostedMachines(accountId, kept);
   return reaped;
+}
+
+export interface ReconcileAllResult {
+  accounts: number;
+  reaped: number;
+  failed: number;
+}
+
+/** Sweep every account with tracked hosted machines. This is the TTL leak
+ * backstop when no new work arrives and a runner never sends /node/settled.
+ * Accounts are isolated: one provider/store failure cannot stop the rest. */
+export async function reconcileAllHostedMachines(
+  store: MeshStore,
+  env: ProvisionEnv,
+  nowMs = Date.now(),
+  destroy: DestroyFn = destroyEphemeralMachine,
+): Promise<ReconcileAllResult> {
+  const accountIds = await store.listHostedMachineAccountIds();
+  const result: ReconcileAllResult = { accounts: accountIds.length, reaped: 0, failed: 0 };
+  for (const accountId of accountIds) {
+    try {
+      result.reaped += await reconcileHostedMachines(store, accountId, nowMs, env, destroy);
+    } catch (error) {
+      result.failed++;
+      await audit(store, accountId, {
+        action: "reconcile_failed",
+        detail: String((error as Error)?.message || error).slice(0, 160),
+      });
+    }
+  }
+  return result;
 }
 
 /**

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
-import { reapSettledHostedMachine, reconcileHostedMachines, type DestroyFn } from "../src/ephemeral-provisioner.js";
+import { reapSettledHostedMachine, reconcileHostedMachines, reconcileAllHostedMachines, type DestroyFn } from "../src/ephemeral-provisioner.js";
 import type { MeshStore } from "../src/store.js";
 
 function fakeStore(machines: Array<Record<string, unknown>>, providerTokens: Record<string, string>) {
@@ -80,6 +80,53 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
   const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; });
   assert.equal(n, 0);
   assert.equal(destroyed, 0);
+}
+
+// Fleet reconciliation scans accounts without requiring a new enqueue. One
+// broken account is audited and does not prevent another account being reaped.
+{
+  const old = { id: "srv5", provider: "hetzner", nodeId: "eph-5", createdAt: iso(200 * 60_000), ttlMinutes: 60 };
+  const audits: Array<{ accountId: string; action?: string }> = [];
+  const byAccount = new Map<string, Array<Record<string, unknown>>>([["good", [old]]]);
+  const store = {
+    listHostedMachineAccountIds: async () => ["broken", "good"],
+    getHostedMachines: async (accountId: string) => {
+      if (accountId === "broken") throw new Error("database row unavailable");
+      return byAccount.get(accountId) ?? [];
+    },
+    setHostedMachines: async (accountId: string, list: Array<Record<string, unknown>>) => { byAccount.set(accountId, list); return list; },
+    getHostedProvisioning: async () => ({ enabled: true, providerTokens: { hetzner: "hz-token" } }),
+    createSession: async () => "sess-token",
+    removeNode: async () => true,
+    appendHostedAudit: async (accountId: string, event: { action?: string }) => { audits.push({ accountId, action: event.action }); },
+  } as unknown as MeshStore;
+  let destroyed = 0;
+  const result = await reconcileAllHostedMachines(store, env, Date.now(), async () => { destroyed++; });
+  assert.deepEqual(result, { accounts: 2, reaped: 1, failed: 1 });
+  assert.equal(destroyed, 1);
+  assert.ok(audits.some((event) => event.accountId === "broken" && event.action === "reconcile_failed"));
+}
+
+// A provider DELETE failure must keep the resource tracked for the next sweep;
+// otherwise a still-billing VM becomes an invisible orphan.
+{
+  const old = { id: "srv6", provider: "hetzner", nodeId: "eph-6", createdAt: iso(200 * 60_000), ttlMinutes: 60 };
+  const { store, audits } = fakeStore([old], { hetzner: "hz-token" });
+  const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { throw new Error("provider unavailable"); });
+  assert.equal(n, 0);
+  assert.deepEqual(await store.getHostedMachines("acct"), [old]);
+  assert.ok(audits.some((event) => event.action === "reconcile_failed"));
+}
+
+// Missing credentials are not proof of deletion. Keep tracking the machine so
+// rotating/re-adding the token lets a later sweep destroy it.
+{
+  const old = { id: "srv7", provider: "hetzner", nodeId: "eph-7", createdAt: iso(200 * 60_000), ttlMinutes: 60 };
+  const { store, audits } = fakeStore([old], {});
+  const n = await reconcileHostedMachines(store, "acct", Date.now(), env);
+  assert.equal(n, 0);
+  assert.deepEqual(await store.getHostedMachines("acct"), [old]);
+  assert.ok(audits.some((event) => event.action === "reconcile_failed"));
 }
 
 console.log("ephemeral-teardown (control-plane): all tests passed");

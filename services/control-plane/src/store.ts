@@ -392,7 +392,7 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "credential_rotated" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "room_key_escrowed" | "room_key_reused";
+  action: "credential_updated" | "credential_rotated" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused";
   provider?: string;
   configId?: string;
   nodeId?: string;
@@ -1145,6 +1145,9 @@ export interface MeshStore {
   setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
   getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
   setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
+  /** Accounts that currently track at least one control-plane-provisioned
+   * machine. Used by the global lifecycle reconciler; returns ids only. */
+  listHostedMachineAccountIds(): Promise<string[]>;
   // Append-only audit trail of hosted-credential use (capped, newest-first read).
   appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
   listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;

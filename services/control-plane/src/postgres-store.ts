@@ -1638,6 +1638,16 @@ export class PostgresStore implements MeshStore {
     return arr;
   }
 
+  async listHostedMachineAccountIds(): Promise<string[]> {
+    const { rows } = await this.query(
+      `SELECT id FROM accounts
+       WHERE hosted_machines IS NOT NULL
+         AND jsonb_typeof(hosted_machines) = 'array'
+         AND jsonb_array_length(hosted_machines) > 0`,
+    );
+    return rows.map((row) => String(row.id));
+  }
+
   async appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void> {
     const { rows } = await this.query(`SELECT hosted_audit FROM accounts WHERE id = $1`, [accountId]);
     const cur = Array.isArray(rows[0]?.hosted_audit) ? (rows[0].hosted_audit as HostedAuditEvent[]) : [];
