@@ -14,6 +14,7 @@
 //
 // SECURITY: this path depends on credentials held on the control plane (see
 // HostedProvisioning in store.ts). It is gated per account and off by default.
+import { randomUUID } from "node:crypto";
 import {
   launchEphemeralMachine,
   destroyEphemeralMachine,
@@ -585,12 +586,18 @@ export async function maybeAutoProvision(
   env: ProvisionEnv,
   launcher = launchEphemeralMachine,
 ): Promise<EphemeralMachine | null> {
+  const leaseHolder = randomUUID();
   try {
     // Lazy lifecycle reconciliation: prune (and actively destroy leak-prone)
     // machines past TTL before deciding, so dedupe/rate-cap see fresh state and
     // node slots are freed. Passing env lets it DELETE the provider resource
     // (Hetzner) rather than only forgetting the record.
     await reconcileHostedMachines(store, accountId, Date.now(), env).catch(() => {});
+    // Planning and launching must be one cross-replica critical section. Without
+    // this lease, two webhook/control-plane workers can both observe no active
+    // machine and each create a separately billed VM. Five minutes covers slow
+    // compatibility boot APIs; expiry recovers automatically after a crash.
+    if (!(await store.acquireHostedProvisionLease(accountId, leaseHolder, 5 * 60))) return null;
     const plan = await planAutoProvision(store, accountId);
     if (!plan.willProvision || !plan.targetConfigId) return null;
     const configs = await store.getEphemeralConfigs(accountId);
@@ -626,5 +633,7 @@ export async function maybeAutoProvision(
   } catch (e) {
     console.error(`[hosted-provision] account ${accountId}:`, (e as Error)?.message || e);
     return null;
+  } finally {
+    await store.releaseHostedProvisionLease(accountId, leaseHolder).catch(() => {});
   }
 }
