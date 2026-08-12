@@ -54,7 +54,8 @@ import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { AutomationsSection } from "../router.js";
 import type { GithubQueueItem } from "@bivy/core";
-import { projectRunDetail } from "../runDetail.js";
+import { isTerminalRun, projectRunDetail } from "../runDetail.js";
+import { ConfirmDialog } from "./AppDialog.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -414,6 +415,9 @@ export function AutomationsView({
   const [rotated, setRotated] = useState<{ id: string; secret: string } | null>(null);
   const [setupFocus, setSetupFocus] = useState<SourceSetupFocus | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
+  const [cancelRun, setCancelRun] = useState<AccountAutomationRun | null>(null);
+  const [cancelBusyId, setCancelBusyId] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   /** Create chooser (scratch + templates). Opens from New automation. */
   const [chooserOpen, setChooserOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -654,6 +658,23 @@ export function AutomationsView({
     } catch (e) { setError(String((e as Error).message || e)); }
   }
 
+  async function cancelConfirmedRun() {
+    const run = cancelRun;
+    if (!run) return;
+    setCancelRun(null);
+    setCancelError(null);
+    setCancelBusyId(run.id);
+    try {
+      const refreshed = await controller.cancelAutomationRun(run.id);
+      setRuns(refreshed.runs);
+      onRefreshGithubQueue?.();
+    } catch (e) {
+      setCancelError(String((e as Error)?.message || e));
+    } finally {
+      setCancelBusyId(null);
+    }
+  }
+
   async function rotate(item: AccountAutomation) {
     setMenuId(null);
     setError("");
@@ -889,6 +910,7 @@ export function AutomationsView({
 
             <section className="autom-section">
               <h2 className="autom-section-label">Recent activity</h2>
+              {cancelError && <div className="banner error inline">Could not cancel Run: {cancelError}</div>}
               {definitionRuns.length === 0 ? (
                 <p className="settings-hint autom-empty-hint">
                   Runs show up here once an automation fires. Try <strong>Run now</strong> on a scheduled one to see it end-to-end.
@@ -913,6 +935,16 @@ export function AutomationsView({
                           {detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}
                         </div>
                         <div className="automation-row-actions">
+                          {!isTerminalRun(run) && (
+                            <button
+                              type="button"
+                              className="btn sm danger"
+                              disabled={cancelBusyId === run.id}
+                              onClick={() => { setCancelError(null); setCancelRun(run); }}
+                            >
+                              {cancelBusyId === run.id ? "Cancelling…" : "Cancel Run"}
+                            </button>
+                          )}
                           {sessionId && (
                             <button
                               type="button"
@@ -957,6 +989,17 @@ export function AutomationsView({
 
         {section === "rulesets" && <RulesetsPanel state={state} />}
       </div>
+
+      {cancelRun && (
+        <ConfirmDialog
+          title="Cancel Run?"
+          message={`Request cancellation of “${cancelRun.title}”? The Run will remain active until its durable record reports a terminal result.`}
+          confirmLabel="Cancel Run"
+          danger
+          onCancel={() => setCancelRun(null)}
+          onConfirm={() => void cancelConfirmedRun()}
+        />
+      )}
 
       {chooserOpen && (
         <NewAutomationChooser
