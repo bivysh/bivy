@@ -35,8 +35,8 @@ test("the control plane serves the shell and a non-leaking single-Run API", asyn
 
 test("the Run details screen handles every explicit state and never overclaims a Receipt", async () => {
   const detail = await read("../../packages/web/src/components/RunDetails.tsx");
-  // Loading, offline, not-found, and unauthorized are all distinct states.
-  for (const state of ['kind: "loading"', 'kind: "offline"', 'kind: "not_found"', 'kind: "unauthorized"', 'kind: "ready"']) {
+  // Loading, offline, not-found, unauthorized, and ready are all distinct states.
+  for (const state of ['status === "loading"', 'status === "offline"', 'status === "not_found"', 'status === "unauthorized"', 'status === "ready"']) {
     expect(detail).toContain(state);
   }
   // Mutations refresh the durable record rather than inventing terminal state.

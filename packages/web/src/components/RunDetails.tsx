@@ -14,7 +14,7 @@
 // correlated (Receipt v1), so the Receipt section is shown as unavailable — this
 // screen must not overstate a Receipt.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   RunFetchError,
   runFromAutomationRun,
@@ -74,12 +74,7 @@ function hasAnyReference(refs: RunReferences): boolean {
   return Boolean(refs.branch || refs.commit || refs.pullRequest || refs.checkpoint || refs.artifact);
 }
 
-export type RunDetailsLoadState =
-  | { kind: "loading" }
-  | { kind: "ready"; run: Run; stale: boolean }
-  | { kind: "not_found" }
-  | { kind: "unauthorized" }
-  | { kind: "offline" };
+export type RunDetailsStatus = "loading" | "ready" | "not_found" | "unauthorized" | "offline";
 
 export function RunDetails({
   runId,
@@ -104,34 +99,54 @@ export function RunDetails({
   /** Whether the correlated Session exists in the current session list. */
   isSessionResolvable?: (sessionId: string) => boolean;
 }) {
-  const [state, setState] = useState<RunDetailsLoadState>({ kind: "loading" });
+  const [status, setStatus] = useState<RunDetailsStatus>("loading");
+  const [record, setRecord] = useState<AccountAutomationRun | null>(null);
+  const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+
+  // App passes `load`/`resolveMachineName` as fresh closures every render; keep
+  // them in refs so the fetch is keyed only on runId and never storms the
+  // endpoint on an unrelated re-render. The Machine name is resolved at render
+  // time (below), not baked into the fetched record.
+  const loadRef = useRef(load);
+  loadRef.current = load;
 
   const refresh = useCallback(
     async (opts: { keepPrevious?: boolean } = {}) => {
       try {
-        const record = await load(runId);
-        if (record === null) {
-          setState((prev) => (opts.keepPrevious && prev.kind === "ready" ? { ...prev, stale: true } : { kind: "not_found" }));
+        const next = await loadRef.current(runId);
+        if (next === null) {
+          if (opts.keepPrevious) { setStale(true); return; }
+          setRecord(null);
+          setStatus("not_found");
           return;
         }
-        setState({ kind: "ready", run: runFromAutomationRun(record, { resolveMachineName }), stale: false });
+        setRecord(next);
+        setStatus("ready");
+        setStale(false);
       } catch (err) {
         const reason = err instanceof RunFetchError ? err.reason : "error";
-        if (reason === "unauthorized") return setState({ kind: "unauthorized" });
+        if (reason === "unauthorized") { setStatus("unauthorized"); return; }
         // Offline / transient: keep any record we already showed, but mark it
         // stale rather than inventing a fresh state.
-        setState((prev) => (opts.keepPrevious && prev.kind === "ready" ? { ...prev, stale: true } : { kind: "offline" }));
+        if (opts.keepPrevious) { setStale(true); return; }
+        setStatus("offline");
       }
     },
-    [load, runId, resolveMachineName],
+    [runId],
   );
 
   useEffect(() => {
-    setState({ kind: "loading" });
+    setStatus("loading");
+    setStale(false);
     void refresh();
-  }, [refresh]);
+  }, [runId, refresh]);
+
+  const run = useMemo(
+    () => (record ? runFromAutomationRun(record, { resolveMachineName }) : null),
+    [record, resolveMachineName],
+  );
 
   const cancel = useCallback(async () => {
     if (!onCancel) return;
@@ -161,9 +176,9 @@ export function RunDetails({
       </header>
 
       <div className="automations-view-body run-details-body">
-        {state.kind === "loading" && <div className="run-details-state" role="status">Loading this Run…</div>}
+        {status === "loading" && <div className="run-details-state" role="status">Loading this Run…</div>}
 
-        {state.kind === "offline" && (
+        {status === "offline" && (
           <div className="autom-notice warn" role="alert">
             <div className="autom-notice-text">
               <strong>Can&apos;t reach this Run right now</strong>
@@ -173,7 +188,7 @@ export function RunDetails({
           </div>
         )}
 
-        {state.kind === "unauthorized" && (
+        {status === "unauthorized" && (
           <div className="autom-notice warn" role="alert">
             <div className="autom-notice-text">
               <strong>Sign in to view this Run</strong>
@@ -182,17 +197,17 @@ export function RunDetails({
           </div>
         )}
 
-        {state.kind === "not_found" && (
+        {status === "not_found" && (
           <div className="run-details-state" role="status">
             <strong>Run not found</strong>
             <p>This Run doesn&apos;t exist or isn&apos;t available on your account.</p>
           </div>
         )}
 
-        {state.kind === "ready" && (
+        {status === "ready" && run && (
           <RunBody
-            run={state.run}
-            stale={state.stale}
+            run={run}
+            stale={stale}
             busy={busy}
             actionError={actionError}
             onCancel={onCancel ? cancel : undefined}
