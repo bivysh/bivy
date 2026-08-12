@@ -93,6 +93,10 @@ export function WorkQueueSetupSheet({
   const [showExisting, setShowExisting] = useState(false);
   const [ceAppId, setCeAppId] = useState("");
   const [cePem, setCePem] = useState("");
+  const [ceInstallationId, setCeInstallationId] = useState("");
+  const [ceHostedBusy, setCeHostedBusy] = useState(false);
+  const [ceHostedResult, setCeHostedResult] = useState<{ webhookUrl: string; webhookSecret: string } | null>(null);
+  const [ceHostedError, setCeHostedError] = useState("");
   const [, setCeApp] = useState<GithubAppEntry | null>(null);
   const [addAppOpen, setAddAppOpen] = useState(false);
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
@@ -164,7 +168,7 @@ export function WorkQueueSetupSheet({
   const apps = info?.apps ?? [];
   const mention = apps.find((a) => a.mention)?.mention || "bivy";
   const anyInstalled = apps.some((a) => a.installed);
-  const anyServed = apps.some((a) => a.servedBy?.online);
+  const anyServed = apps.some((a) => a.hosted || a.servedBy?.online);
   const hostedReady = Boolean(hosted?.execution.ready);
   const readyToRun = apps.length > 0 && anyInstalled && (hostedReady || anyServed || apps.some((a) => a.servedBy));
 
@@ -183,6 +187,30 @@ export function WorkQueueSetupSheet({
       setNodeMsg(String((e as Error).message || e));
     } finally {
       setSavingNode(false);
+    }
+  }
+
+  async function connectExistingApp() {
+    if (state.currentNodeId) {
+      controller.githubAppConnectExisting({ appId: ceAppId.trim(), privateKeyPem: cePem.trim() });
+      return;
+    }
+    setCeHostedBusy(true);
+    setCeHostedError("");
+    try {
+      const result = await controller.connectHostedGithubApp({
+        appId: ceAppId.trim(),
+        privateKeyPem: cePem.trim(),
+        ...(ceInstallationId.trim() ? { installationId: ceInstallationId.trim() } : {}),
+      });
+      setCeHostedResult({ webhookUrl: result.webhookUrl, webhookSecret: result.webhookSecret });
+      setCePem("");
+      await refresh();
+      onChanged?.();
+    } catch (error) {
+      setCeHostedError(String((error as Error)?.message || error));
+    } finally {
+      setCeHostedBusy(false);
     }
   }
 
@@ -424,14 +452,26 @@ export function WorkQueueSetupSheet({
                         placeholder="…or paste the PEM here"
                         onChange={(e) => setCePem(e.target.value)}
                       />
+                      {!state.currentNodeId && (
+                        <>
+                          <label className="field-label">Installation ID (only needed for apps installed on multiple accounts)</label>
+                          <input className="picker-search" value={ceInstallationId} placeholder="auto-selected when there is one" onChange={(e) => setCeInstallationId(e.target.value)} />
+                        </>
+                      )}
                       <button
                         type="button"
                         className="btn primary"
-                        disabled={!ceAppId.trim() || !cePem.trim() || phase === "completing"}
-                        onClick={() => controller.githubAppConnectExisting({ appId: ceAppId.trim(), privateKeyPem: cePem.trim() })}
+                        disabled={!ceAppId.trim() || !cePem.trim() || phase === "completing" || ceHostedBusy}
+                        onClick={() => void connectExistingApp()}
                       >
-                        {phase === "completing" ? "Connecting…" : "Connect app to this machine"}
+                        {phase === "completing" || ceHostedBusy ? "Connecting…" : state.currentNodeId ? "Connect app to this machine" : "Connect app for ephemeral runs"}
                       </button>
+                      {ceHostedError && <div className="banner error inline">{ceHostedError}</div>}
+                      {ceHostedResult && (
+                        <div className="autom-success" role="status">
+                          <strong>Hosted App ready.</strong> Set its webhook URL to <code>{ceHostedResult.webhookUrl}</code> and secret to <code>{ceHostedResult.webhookSecret}</code>.
+                        </div>
+                      )}
                     </div>
                   )}
                   {phase === "completing" && <p className="settings-hint">Finishing on the node…</p>}
@@ -452,10 +492,10 @@ export function WorkQueueSetupSheet({
                       <div className="wq-app-row-main">
                         <div className="wq-app-title-row">
                           <strong>{entry.name || entry.mention || "GitHub App"}</strong>
-                          <span className={`autom-status ${entry.installed === false ? "warn" : entry.servedBy?.online || hostedReady ? "on" : "warn"}`}>
+                          <span className={`autom-status ${entry.installed === false ? "warn" : entry.hosted || entry.servedBy?.online || hostedReady ? "on" : "warn"}`}>
                             {entry.installed === false
                               ? "Needs install"
-                              : hostedReady
+                              : entry.hosted || hostedReady
                                 ? "Ephemeral ready"
                                 : entry.servedBy?.online
                                 ? "Live"
@@ -483,7 +523,9 @@ export function WorkQueueSetupSheet({
                             <a href={installHref(entry)} target="_blank" rel="noreferrer">Manage →</a>
                           </span>
                         )}
-                        {entry.servedBy === null && !hostedReady ? (
+                        {entry.hosted || hostedReady ? (
+                          <span className="settings-hint">Served on demand by your ephemeral runner.</span>
+                        ) : entry.servedBy === null ? (
                           <p className="schedule-hint warn">
                             No online machine holds this app&apos;s key — queue items won&apos;t be claimed.{" "}
                             <button type="button" className="link-btn" onClick={() => openReconnect(entry)}>
@@ -601,14 +643,26 @@ export function WorkQueueSetupSheet({
                             placeholder="…or paste the PEM here"
                             onChange={(e) => setCePem(e.target.value)}
                           />
+                          {!state.currentNodeId && (
+                            <>
+                              <label className="field-label">Installation ID (only needed for apps installed on multiple accounts)</label>
+                              <input className="picker-search" value={ceInstallationId} placeholder="auto-selected when there is one" onChange={(e) => setCeInstallationId(e.target.value)} />
+                            </>
+                          )}
                           <button
                             type="button"
                             className="btn primary"
-                            disabled={!ceAppId.trim() || !cePem.trim() || phase === "completing"}
-                            onClick={() => controller.githubAppConnectExisting({ appId: ceAppId.trim(), privateKeyPem: cePem.trim() })}
+                            disabled={!ceAppId.trim() || !cePem.trim() || phase === "completing" || ceHostedBusy}
+                            onClick={() => void connectExistingApp()}
                           >
-                            {phase === "completing" ? "Connecting…" : "Connect app to this machine"}
+                            {phase === "completing" || ceHostedBusy ? "Connecting…" : state.currentNodeId ? "Connect app to this machine" : "Connect app for ephemeral runs"}
                           </button>
+                          {ceHostedError && <div className="banner error inline">{ceHostedError}</div>}
+                          {ceHostedResult && (
+                            <div className="autom-success" role="status">
+                              <strong>Hosted App ready.</strong> Set its webhook URL to <code>{ceHostedResult.webhookUrl}</code> and secret to <code>{ceHostedResult.webhookSecret}</code>.
+                            </div>
+                          )}
                         </div>
                       )}
                       <button type="button" className="link-btn" onClick={() => setAddAppOpen(false)}>Cancel</button>

@@ -58,8 +58,19 @@ function DiffStat({ added, removed }: { added: number; removed: number }) {
  *  already-computed ToolFormat (the sheet computes one per tool for the list
  *  regardless, via toolGroupSummary) rather than recomputing formatTool here
  *  — for an Edit/Write call that's a real LCS diff pass, not free. */
+function elapsedLabel(tool: ToolActivity): string {
+  if (tool.detail?.kind !== "delegation") return "";
+  const seconds = Number((tool.input as { elapsedSeconds?: unknown } | undefined)?.elapsedSeconds);
+  if (!Number.isFinite(seconds) || seconds < 1) return "";
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.floor(seconds % 60)}s`;
+}
+
 function ToolListRow({ tool, f, onSelect }: { tool: ToolActivity; f: ToolFormat; onSelect: (callId: string) => void }) {
-  const label = toolRowLabel(f);
+  const elapsed = elapsedLabel(tool);
+  const baseLabel = toolRowLabel(f);
+  const label = elapsed ? `${baseLabel || "Sub-agent"} · ${elapsed}` : baseLabel;
   const running = tool.status === "running";
   return (
     <div className={`activity${running ? " is-running" : ""}`}>
@@ -84,8 +95,15 @@ function ToolListRow({ tool, f, onSelect }: { tool: ToolActivity; f: ToolFormat;
 function ToolDetail({ tool, f }: { tool: ToolActivity; f: ToolFormat }) {
   const output = tool.result || f.output || "";
   const showOutput = output && (f.diffs.length === 0 || f.command || f.verb === "Agent output");
+  const elapsed = elapsedLabel(tool);
   return (
     <div className="activity-detail">
+      {tool.detail?.kind === "delegation" && tool.status === "running" && (
+        <div className="tool-detail-block">
+          <div className="tool-detail-label">Status</div>
+          <div className="tool-detail-value">Sub-agent active{elapsed ? ` · ${elapsed} elapsed` : ""}</div>
+        </div>
+      )}
       {f.path && (
         <div className="tool-detail-block">
           <div className="tool-detail-label">File</div>
@@ -131,6 +149,11 @@ function ToolDetail({ tool, f }: { tool: ToolActivity; f: ToolFormat }) {
 function runningSummary(tool: ToolActivity): string {
   const f = formatTool(tool.name, tool.input, tool.detail);
   if (f.verb === "Agent output") return "Reading agent output…";
+  if (tool.detail?.kind === "delegation") {
+    const agent = tool.detail.label ? `${tool.detail.label} sub-agent` : "Sub-agent";
+    const elapsed = elapsedLabel(tool);
+    return `${agent} working${elapsed ? ` · ${elapsed}` : ""}…`;
+  }
   const label = toolRowLabel(f);
   if (f.command) return `Running ${label || "command"}…`;
   if (label) return `${f.verb} ${label}…`;
@@ -206,7 +229,14 @@ export const ToolGroup = memo(function ToolGroup({ tools }: { tools: ToolActivit
   // yanking focus back to the top of the sheet while a tool call streams.
   const close = useCallback(() => setOpen(false), []);
   const running = tools.some((t) => t.status === "running");
-  const summary = running && tools.every((t) => t.status === "running") && tools.length === 1 ? runningSummary(tools[0]!) : toolGroupSummary(tools);
+  const runningDelegations = tools.filter((t) => t.status === "running" && t.detail?.kind === "delegation");
+  const summary = runningDelegations.length > 1
+    ? `${runningDelegations.length} sub-agents working…`
+    : runningDelegations.length === 1
+      ? runningSummary(runningDelegations[0]!)
+      : running && tools.every((t) => t.status === "running") && tools.length === 1
+        ? runningSummary(tools[0]!)
+        : toolGroupSummary(tools);
   return (
     <div className="tool-group">
       <button className={`tool-group-line${running ? " is-running" : ""}`} onClick={() => setOpen(true)}>
