@@ -250,8 +250,13 @@ export function parseRunRoute(pathnameOrUrl: string): string | null {
   try {
     path = new URL(path).pathname;
   } catch {
-    // Not an absolute URL; strip any query/hash from a bare path.
-    path = path.replace(/[?#].*$/, "");
+    // Not an absolute URL; strip any query/hash from a bare path. Plain indexOf
+    // slicing (no regex) so a pasted value can't drive backtracking.
+    const cut = Math.min(
+      ...["?", "#"].map((c) => path.indexOf(c)).filter((i) => i >= 0),
+      path.length,
+    );
+    path = path.slice(0, cut);
   }
   const match = /^\/runs\/([^/]+)\/?$/.exec(path);
   if (!match || !match[1]) return null;

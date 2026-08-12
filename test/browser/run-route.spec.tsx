@@ -27,7 +27,8 @@ test("a Run detail is an overlay that never resets the active Session", async ()
 
 test("the control plane serves the shell and a non-leaking single-Run API", async () => {
   const cp = await read("../../services/control-plane/src/index.ts");
-  expect(cp).toContain("/^\\/runs\\/.+/");
+  // The shell fallback covers /runs alongside /sessions (one handler, one sink).
+  expect(cp).toContain("/^\\/(?:sessions|runs)\\/.+/");
   expect(cp).toContain('app.get("/account/automation-runs/:id"');
   // Unknown and cross-account ids are indistinguishable (a non-leaking 404).
   expect(cp).toContain('return res.status(404).json({ error: "Automation run not found" })');

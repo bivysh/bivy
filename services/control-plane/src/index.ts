@@ -558,12 +558,14 @@ if (hasReactApp) {
 // separate from the built bundle, which doesn't carry them.
 app.use(express.static(path.join(__dirname, "..", "public"), { index: false }));
 
-// SPA deep links: the client routes `/sessions/new` and `/sessions/:id` in the
-// browser, so a cold load or copied URL on those paths must serve the app shell.
-// The regex requires a segment after `/sessions/`, so it can't shadow the
-// `GET /sessions` JSON API (exact path) below.
+// SPA deep links: the client routes `/sessions/new`, `/sessions/:id`, and the
+// routable Run detail `/runs/:runId` (see packages/web/src/router.ts and
+// @bivy/core runRoutePath) in the browser, so a cold load or copied URL on those
+// paths must serve the app shell. Each regex requires a segment after its prefix,
+// so it can't shadow the `GET /sessions` JSON API (exact path) below, and the Run
+// JSON API lives under `/account/automation-runs/:id`, not `/runs`.
 if (hasReactApp) {
-  app.get(/^\/sessions\/.+/, (_req, res) => {
+  app.get(/^\/(?:sessions|runs)\/.+/, (_req, res) => {
     noStorePwaShell(res);
     res.sendFile(reactIndexFile);
   });
@@ -573,14 +575,6 @@ if (hasReactApp) {
   // these paths (only `github.com/settings/...` strings appear elsewhere in
   // this file), so nothing here is shadowed.
   app.get(/^\/settings(?:\/.+)?$/, (_req, res) => {
-    noStorePwaShell(res);
-    res.sendFile(reactIndexFile);
-  });
-  // The routable Run detail screen (`/runs/:runId` — see packages/web/src/
-  // router.ts and @bivy/core runRoutePath) must serve the same shell on a cold
-  // load or a Run URL copied to another device. The Run JSON API lives under
-  // `/account/automation-runs/:id`, so nothing here is shadowed.
-  app.get(/^\/runs\/.+/, (_req, res) => {
     noStorePwaShell(res);
     res.sendFile(reactIndexFile);
   });
