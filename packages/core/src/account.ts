@@ -18,6 +18,11 @@ export interface LinkPayload {
   relay?: string;
   pairSecret?: string;
   node?: { id?: string; pub?: string };
+  /** Account-free ("solo") relay admission: an unguessable room id + bearer token
+   *  the phone presents to the relay INSTEAD of a control-plane-minted ticket.
+   *  Present (with no `session`/`controlPlane`) in a solo pairing QR. */
+  room?: string;
+  roomToken?: string;
   /** Agent selected by the node setup wizard for its first app draft. */
   defaultAgent?: string;
 }
@@ -71,6 +76,11 @@ export function consumeLinkPayload(store: LocalStore, text: string): boolean {
     store.cur = p.node.id;
     if (p.node.pub) store.addNodePub(p.node.id, p.node.pub); // X25519 handshake
     if (p.pairSecret) store.setPairSecret(p.node.id, p.pairSecret);
+    // Account-free pairing: remember the room id + bearer token so the transport
+    // dials `/client?room=&roomToken=` for this node instead of minting a
+    // control-plane ticket. The token never leaves this device except in the
+    // relay dial itself.
+    if (p.room && p.roomToken) store.setSolo(p.node.id, { room: p.room, roomToken: p.roomToken });
     // Setup opens the app on a browser that may carry a last-used agent from a
     // different machine. Treat the explicit installer handoff as the newest
     // choice so the first draft matches what the user just selected.
