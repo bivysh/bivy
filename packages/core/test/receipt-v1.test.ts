@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
-import { projectReceiptV1, receiptV1Json, type ReceiptV1ProjectionInput } from "../src/receipt-v1.js";
+import { projectReceiptV1, receiptV1FromRun, receiptV1Json, type ReceiptV1ProjectionInput } from "../src/receipt-v1.js";
+import type { Run } from "../src/run.js";
 
 const base = (over: Partial<ReceiptV1ProjectionInput["run"]> = {}): ReceiptV1ProjectionInput => ({
   receiptId: "receipt-run-1",
@@ -27,6 +28,24 @@ const base = (over: Partial<ReceiptV1ProjectionInput["run"]> = {}): ReceiptV1Pro
 });
 
 describe("Receipt v1 projection", () => {
+  it("projects an existing canonical Run as an honest partial Receipt", () => {
+    const run: Run = {
+      id: "run-1", origin: { projection: "automation_run", status: "succeeded" }, lifecycle: "finished",
+      outcome: { kind: "changes_ready", label: "Changes ready", tone: "success", terminal: true, reviewable: true }, attempt: 1,
+      title: "Fix issue", source: { kind: "github:issue", reference: "bivy/example#12" },
+      sessionId: "session-1", machine: { id: "node-1", name: "Build machine" },
+      timestamps: { createdAt: "2026-08-13T12:00:00Z", startedAt: "2026-08-13T12:01:00Z", completedAt: "2026-08-13T12:02:00Z" },
+      durationMs: 60_000, requested: { runtimeId: "codex", sandbox: "workspace-write" }, checks: [], events: [],
+      references: { branch: "bivy/issue-12" }, actions: [],
+    };
+    const receipt = receiptV1FromRun(run, "2026-08-13T12:03:00Z");
+    expect(receipt.runId).toBe("run-1");
+    expect(receipt.execution.machineName).toBe("Build machine");
+    expect(receipt.changes.branch).toBe("bivy/issue-12");
+    expect(receipt.completeness).toBe("partial");
+    expect(receipt.missingEvidence).toContain("effective_protection");
+  });
+
   it("stays partial when current run evidence lacks audit and effective protection", () => {
     const receipt = projectReceiptV1(base());
     expect(receipt.completeness).toBe("partial");

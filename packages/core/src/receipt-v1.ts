@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 
 import type { GithubQueueItem } from "./account.js";
+import type { Run } from "./run.js";
 
 /** Receipt v1 is an observation report, not an attestation.  This module is a
  * pure projection over the control plane's already-sanitized run metadata. */
@@ -262,6 +263,48 @@ export function projectReceiptV1(input: ReceiptV1ProjectionInput): ReceiptV1 {
     changes, checks, auditHealth, missingEvidence: missing,
     observationLimitations: limitationCodes.map((code) => ({ code, message: LIMITATIONS[code] })),
   };
+}
+
+/** Project the canonical account-facing Run into an honest Receipt. This is the
+ * bridge used by the Run route while richer node audit evidence is being
+ * correlated. Missing effective protection/audit evidence remains explicit, so
+ * an existing durable Run can produce a useful partial Receipt without the UI
+ * inventing facts. */
+export function receiptV1FromRun(run: Run, createdAt: string): ReceiptV1 {
+  const source = run.source.kind || "unknown";
+  const reference = run.source.reference;
+  const repoMatch = reference?.match(/^([^#]+)#(\d+)$/);
+  return projectReceiptV1({
+    receiptId: `receipt-${run.id}`,
+    createdAt,
+    run: {
+      id: run.id,
+      source,
+      status: run.origin.status,
+      createdAt: run.timestamps.createdAt,
+      claimedAt: run.timestamps.claimedAt,
+      startedAt: run.timestamps.startedAt,
+      completedAt: run.timestamps.completedAt,
+      attempt: run.attempt,
+      ...(repoMatch ? { repo: repoMatch[1], issueNumber: Number(repoMatch[2]) } : reference ? { externalId: reference } : {}),
+      ...(run.machine?.id ? { claimedByNodeId: run.machine.id } : {}),
+      ...(run.requested.runtimeId ? { runtimeId: run.requested.runtimeId } : {}),
+      ...(run.requested.model ? { model: run.requested.model } : {}),
+      ...(run.requested.approvalMode ? { approvalMode: run.requested.approvalMode } : {}),
+      ...(run.requested.sandbox ? { sandbox: run.requested.sandbox } : {}),
+      output: {
+        ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+        ...(run.references.branch ? { branch: run.references.branch } : {}),
+        ...(run.references.commit ? { commit: run.references.commit } : {}),
+        ...(run.references.pullRequest ? { prUrl: run.references.pullRequest } : {}),
+        ...(run.references.checkpoint ? { checkpoint: run.references.checkpoint } : {}),
+        ...(run.references.artifact ? { artifactUrl: run.references.artifact } : {}),
+      },
+      checks: run.checks,
+      events: run.events,
+    },
+    ...(run.machine?.name ? { execution: { machineName: run.machine.name } } : {}),
+  });
 }
 
 /** Defense-in-depth export. Re-projecting through an explicit allowlist strips
