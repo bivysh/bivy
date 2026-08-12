@@ -479,7 +479,10 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     for (const status of ["pending", "claimed", "needs_attention"] as const) {
       const candidate = await store.enqueueAutomationRun(acct.id, { source: "manual", title: `Cancel ${status}` });
       if (status !== "pending") assert.ok(await store.claimWorkItem(acct.id, node.id, candidate.id));
-      if (status === "needs_attention") assert.ok(await store.transitionAutomationRun(acct.id, candidate.id, "needs_attention"));
+      if (status === "needs_attention") {
+        assert.ok(await store.transitionAutomationRun(acct.id, candidate.id, "running"));
+        assert.ok(await store.transitionAutomationRun(acct.id, candidate.id, "needs_attention"));
+      }
       const result = await store.cancelAutomationRun(acct.id, candidate.id);
       assert.equal(result?.previousStatus, status);
       assert.equal(result?.run.status, "cancelled");
