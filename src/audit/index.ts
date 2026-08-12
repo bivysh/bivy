@@ -22,12 +22,26 @@ import path from "node:path";
 /** A single governance event. `ts` is stamped by the writer. */
 export interface AuditEvent {
   ts: number;
-  /** Dotted event kind: "tool.call" | "net.attempt" | "approval" | … */
+  /** Dotted event kind: "tool.call" | "net.attempt" | "approval.request"
+   *  | "approval.decision" | … */
   kind: string;
   /** The session the action belongs to, when known. */
   session?: string;
   /** The agent/runtime id that produced it (agent-agnostic attribution). */
   agent?: string;
+  /** Allow/deny the node made ("allowed" | "blocked") — tool.call / net.attempt. */
+  decision?: string;
+  /** Human-readable reason for a block/deny (never a payload). */
+  reason?: string;
+  /** Tool name — tool.call / approval.{request,decision} (never its args). */
+  tool?: string;
+  /** Egress destination — net.attempt (host + port only, never bytes). */
+  host?: string;
+  port?: number;
+  /** Approval correlation id, tying an approval.decision to its request. */
+  requestId?: string;
+  /** Whether a human approval was granted — approval.decision. */
+  approved?: boolean;
   /** Bounded, non-secret metadata for this kind (never payloads). */
   [field: string]: unknown;
 }

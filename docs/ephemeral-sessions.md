@@ -307,7 +307,12 @@ Note this scope limit applies **only** to the lone-node cold start. When the acc
 - **Seeding** — the web controller watches for coming **online on a node it launched** (a device-local `MachineStore` record) and, once the E2E transport is live, sends one `provider.apiKey` frame per held key. Guarded per session (so a reconnect doesn't re-push) and idempotent on the node regardless.
 - **Configuration UI** — Settings → Ephemeral machines lets the user save the model keys to seed with, right beside the per-provider cloud tokens.
 
-Still gated behind `EPHEMERAL_MACHINES_ENABLED` (`packages/web/src/flags.ts`) along with the rest of the ephemeral surface while the feature is built out.
+Provider onboarding now performs a read-only authentication check before a
+device-local token is saved. Hosted provisioning records a token fingerprint
+only after `/account/hosted-provisioning/validate-provider` succeeds, and refuses
+automatic launch if the stored token does not match that validation. Account
+`hosted.enabled` is the product opt-in; `EPHEMERAL_MACHINES_ENABLED=0` (and the
+web build equivalent) remains an emergency switch for stopping new launches.
 
 ## Resume after inactivity
 

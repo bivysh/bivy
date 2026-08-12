@@ -77,6 +77,7 @@ import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./
 import { createWorktree, removeWorktree, gitRepoRoot, type Worktree } from "./worktree.js";
 import { HarnessManager } from "./harness/manager.js";
 import { startEgressProxyIfEnabled, applySessionSandboxEgress, stopSessionEgress } from "./harness/egress.js";
+import type { NetEvent } from "./harness/net-proxy.js";
 import { initSharedDepCache, sharedDepCacheRoot } from "./harness/dep-cache.js";
 import { evictToCap, dirSizeBytes } from "./harness/cache-evict.js";
 import { checkDiskAdmission } from "./harness/disk-admission.js";
@@ -520,6 +521,7 @@ function resolveApproval(id: string, approved: boolean) {
     const resolved = approvals.list().find((a) => a.id === id);
     if (resolved) {
       persistApprovalRequest(resolved, Date.now());
+      recordApprovalDecisionAudit(resolved, approved);
       const record = openSessions.get(resolved.sessionId);
       if (record) broadcastSessionState(record);
     }
@@ -3423,6 +3425,9 @@ async function syncModelAuthFromControlPlane() {
     }
 
     await processModelAuthKeyRequests(data.requests ?? []);
+    // Ready means there is no encrypted vault to hydrate, or this node has the
+    // key needed to consume it. Ciphertext with no key remains not-ready.
+    if (!data.vault?.ciphertext || readLocalModelAuthVaultKey()) void reportEphemeralMilestone("credentialsReadyAt");
   } catch (error) {
     console.warn("[auth-sync] model auth sync failed:", (error as Error).message);
   }
@@ -3759,6 +3764,21 @@ let advertiseAgain = false;
 // doesn't flap a healthy node's status.
 const NODE_HEARTBEAT_MS = 30_000;
 let nodeHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
+const reportedEphemeralMilestones = new Set<string>();
+
+async function reportEphemeralMilestone(milestone: "credentialsReadyAt" | "snapshotReadyAt" | "firstAgentEventAt"): Promise<void> {
+  if (!sessionAdvertiseTarget || reportedEphemeralMilestones.has(milestone)) return;
+  try {
+    const res = await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/ephemeral-milestone`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ milestone }),
+    });
+    if (res.ok) reportedEphemeralMilestones.add(milestone);
+  } catch {
+    // Best effort; later sync/events retry until acknowledged.
+  }
+}
 
 /** Re-affirm this node's online status so the registry self-heals a lost
  *  relay connect/close race (see the heartbeat wiring in the relay connector
@@ -5516,6 +5536,57 @@ function recordToolCallAudit(params: { sessionId: string; toolName: string }, ou
   });
 }
 
+// --- Audit hooks for the other two governance decision classes (moat #1, slice
+// 2): egress (network) attempts and human approval requests/decisions. Mirrors
+// recordToolCallAudit above — observe-and-record only. Records bounded METADATA
+// (host:port, tool name, approved boolean, requestId, session, agent) and NEVER
+// a payload: no request/response bodies, tunneled bytes, or tool arguments.
+function auditAgentOf(sessionId: string | undefined): string | undefined {
+  return sessionId ? openSessions.get(sessionId)?.runtimeId : undefined;
+}
+
+// Fed from the egress proxy's onEvent seam, which fires AFTER the decider ran
+// with the allow/deny already decided — so recording here can never alter (or
+// delay) the network decision; it is observe-only by construction.
+function recordNetAttempt(event: NetEvent, sessionId?: string): void {
+  const agent = auditAgentOf(sessionId);
+  auditLog.record({
+    kind: "net.attempt",
+    ...(sessionId ? { session: sessionId } : {}),
+    ...(agent ? { agent } : {}),
+    host: event.host,
+    port: event.port,
+    decision: event.allowed ? "allowed" : "blocked",
+    ...(!event.allowed && typeof event.reason === "string" ? { reason: event.reason } : {}),
+  });
+}
+
+// A human approval was raised; the grant/deny is recorded when resolveApproval
+// settles it. Tool NAME + requestId only, never the tool input (redaction).
+function recordApprovalRequestAudit(request: ApprovalRequest): void {
+  const agent = auditAgentOf(request.sessionId);
+  auditLog.record({
+    kind: "approval.request",
+    session: request.sessionId,
+    ...(agent ? { agent } : {}),
+    tool: request.toolName,
+    requestId: request.id,
+  });
+}
+
+// The human approval decision (grant/deny), correlated to its request by id.
+function recordApprovalDecisionAudit(request: ApprovalRequest, approved: boolean): void {
+  const agent = auditAgentOf(request.sessionId);
+  auditLog.record({
+    kind: "approval.decision",
+    session: request.sessionId,
+    ...(agent ? { agent } : {}),
+    tool: request.toolName,
+    requestId: request.id,
+    approved,
+  });
+}
+
 const guardianInterceptor: ToolInterceptor = async (params) => {
   try {
     const outcome = await guardianInterceptorImpl(params);
@@ -6538,6 +6609,7 @@ async function restoreSessionFromSnapshot(sessionId: string): Promise<boolean> {
       /* best-effort listing */
     }
     console.log(`[restore] session ${sessionId}: ${applied.recordCount} records, checkpoint ${applied.checkpointCommit ?? "none"}`);
+    void reportEphemeralMilestone("snapshotReadyAt");
     return true;
   } catch (e) {
     console.error(`[restore] session ${sessionId} failed: ${(e as Error)?.message || e}`);
@@ -6972,6 +7044,7 @@ function attachSessionListeners(record: SessionRecord) {
     });
   }
   record.unsubscribe = record.session.subscribe((event) => {
+    if (event.type === "agent_start" || event.type === "turn_start") void reportEphemeralMilestone("firstAgentEventAt");
     // Keep streamed assistant text ordered ahead of everything else: any event
     // that is not itself a superseding update must flush the session's pending
     // coalesced update first, so a tool_call / message_end never overtakes the
@@ -7663,7 +7736,10 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // a read-only session then actually blocks outbound network even for a CLI agent
   // whose own sandbox doesn't (opencode/aider/goose). No-op otherwise. Fire-and-
   // forget — a slow proxy listen never delays session creation.
-  void applySessionSandboxEgress(record.id, sessionSandbox, (event) => broadcast({ type: "node.egress", event }));
+  void applySessionSandboxEgress(record.id, sessionSandbox, (event) => {
+    broadcast({ type: "node.egress", event });
+    recordNetAttempt(event, record.id);
+  });
   // Stage 2 slice 4: a re-attached session recovers its still-running TUI
   // terminal link (the PTY survives a detach) from the session→terminal registry.
   if (attached) {
@@ -8121,6 +8197,7 @@ const sessionNamer = createSessionNamer({
 
 approvals.onRequest((request: ApprovalRequest) => {
   persistApprovalRequest(request);
+  recordApprovalRequestAudit(request);
   scheduleAdvertise();
   if (approvalMode === "never") {
     resolveApproval(request.id, true);
@@ -10447,7 +10524,10 @@ const server = app.listen(port, host, async () => {
   // Universal Agent Harness — network effect boundary (opt-in via
   // BIVY_EGRESS_PROXY). Governs/logs outbound traffic of CLI agents, which
   // inherit the proxy env from process.ts.
-  const egress = await startEgressProxyIfEnabled((event) => broadcast({ type: "node.egress", event }));
+  const egress = await startEgressProxyIfEnabled((event) => {
+    broadcast({ type: "node.egress", event });
+    recordNetAttempt(event);
+  });
   if (egress) console.log(`Egress broker: http://127.0.0.1:${egress.port} (agent traffic governed)`);
   // Point `bivy mcp-proxy` subprocesses at this node's actual port (they inherit
   // this env). Defaults to 4317 in the CLI, so only needed on a custom port.

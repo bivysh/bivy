@@ -63,6 +63,7 @@ import {
   createGithubTaskTokenStore,
   createTranscriptCache,
   cloudExec,
+  validateEphemeralProviderToken,
   launchEphemeralMachine,
   destroyEphemeralMachine,
   wakeEphemeralMachine,
@@ -2398,6 +2399,7 @@ export class AppController {
     return this.ephemeralKeys.getToken(id);
   }
   async setEphemeralToken(id: string, token: string): Promise<void> {
+    await validateEphemeralProviderToken(id, token, cloudExec(this.local));
     await this.ephemeralKeys.setToken(id, token);
     // Connecting a provider should be enough to start — auto-create one sensible
     // default runner so it appears in the node picker immediately, without a
@@ -2407,6 +2409,7 @@ export class AppController {
   /** Save a provider token and return the provider's default runner (creating one
    *  if needed), so the connect UI can immediately pick it for the draft session. */
   async connectEphemeralProvider(providerId: string, token: string): Promise<EphemeralNodeConfig | null> {
+    await validateEphemeralProviderToken(providerId, token, cloudExec(this.local));
     await this.ephemeralKeys.setToken(providerId, token);
     return this.ensureDefaultRunner(providerId);
   }

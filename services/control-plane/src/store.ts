@@ -347,6 +347,13 @@ export interface HostedProvisioning {
   githubToken?: string;
   /** Cloud provider tokens keyed by provider id (fly/hetzner/aws), used to launch. */
   providerTokens?: Record<string, string>;
+  /** SHA-256 fingerprints of credentials that passed the provider's read-only
+   * validation call. A launch is allowed only while this matches the token. */
+  validatedProviders?: Record<string, string>;
+}
+
+export function providerCredentialFingerprint(token: string): string {
+  return createHash("sha256").update(String(token || "").trim()).digest("hex");
 }
 
 export const DEFAULT_HOSTED_PROVISIONING: HostedProvisioning = { enabled: false };
@@ -370,6 +377,13 @@ export function normalizeHostedProvisioning(value: unknown): HostedProvisioning 
     }
     if (Object.keys(tokens).length) out.providerTokens = tokens;
   }
+  if (v.validatedProviders && typeof v.validatedProviders === "object") {
+    const validated: Record<string, string> = {};
+    for (const [k, val] of Object.entries(v.validatedProviders as Record<string, unknown>)) {
+      if (typeof val === "string" && /^[a-f0-9]{64}$/.test(val)) validated[k.trim()] = val;
+    }
+    if (Object.keys(validated).length) out.validatedProviders = validated;
+  }
   return out;
 }
 
@@ -379,6 +393,7 @@ export interface HostedProvisioningStatus {
   credential: "app" | "pat" | "none";
   githubAppId?: string;
   providers: string[];
+  validatedProviders: string[];
 }
 export function redactHostedProvisioning(h: HostedProvisioning): HostedProvisioningStatus {
   return {
@@ -386,13 +401,16 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
     credential: h.githubApp ? "app" : h.githubToken ? "pat" : "none",
     githubAppId: h.githubApp?.appId,
     providers: Object.keys(h.providerTokens ?? {}),
+    validatedProviders: Object.entries(h.providerTokens ?? {})
+      .filter(([provider, token]) => h.validatedProviders?.[provider] === providerCredentialFingerprint(token))
+      .map(([provider]) => provider),
   };
 }
 
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "credential_rotated" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "room_key_escrowed" | "room_key_reused";
+  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused";
   provider?: string;
   configId?: string;
   nodeId?: string;
@@ -1145,6 +1163,9 @@ export interface MeshStore {
   setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
   getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
   setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
+  /** Accounts that currently track at least one control-plane-provisioned
+   * machine. Used by the global lifecycle reconciler; returns ids only. */
+  listHostedMachineAccountIds(): Promise<string[]>;
   // Append-only audit trail of hosted-credential use (capped, newest-first read).
   appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
   listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;
