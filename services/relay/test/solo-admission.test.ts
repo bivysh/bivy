@@ -89,7 +89,11 @@ function connect(url: string, timeoutMs = 3000): Conn {
   };
   ws.on("message", (d) => {
     try {
-      push(JSON.parse(d.toString()));
+      const m = JSON.parse(d.toString());
+      // Only queue forwarded data frames for next(); control messages
+      // ("ready", "peer.*") are handled by the ready promise, and queuing them
+      // would make next() return a stale control message instead of the frame.
+      if (m.t === "frame") push(m);
     } catch {
       // ignore non-JSON
     }
