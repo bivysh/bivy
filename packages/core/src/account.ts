@@ -687,6 +687,20 @@ export interface HostedAuditEvent {
 
 export interface HostedProvisionPlan { willProvision: boolean; targetConfigId: string | null; reason: string; }
 
+export interface HostedMachineSummary {
+  id: string;
+  nodeId?: string;
+  name?: string;
+  provider: string;
+  region?: string;
+  status?: string;
+  createdAt: string;
+  ttlMinutes?: number;
+  setupId?: string;
+  purpose?: string;
+  milestones?: Record<string, string>;
+}
+
 function coerceHostedStatus(d: any): HostedProvisioningStatus {
   return {
     enabled: Boolean(d?.enabled),
@@ -724,6 +738,25 @@ export async function fetchHostedAudit(store: LocalStore, fetchImpl: typeof fetc
   if (!res.ok) throw new Error(`hosted-audit request failed: ${res.status}`);
   const d: unknown = await res.json().catch(() => []);
   return Array.isArray(d) ? (d as HostedAuditEvent[]) : [];
+}
+
+export async function fetchHostedMachines(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<HostedMachineSummary[]> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-machines`, { headers: authHeaders(store) });
+  if (!res.ok) throw new Error(`hosted-machines request failed: ${res.status}`);
+  const data: unknown = await res.json().catch(() => []);
+  if (!Array.isArray(data)) return [];
+  return data.filter((m: any) => m && typeof m.id === "string" && typeof m.provider === "string") as HostedMachineSummary[];
+}
+
+export async function destroyHostedMachine(store: LocalStore, nodeId: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/hosted-machines/${encodeURIComponent(nodeId)}`, {
+    method: "DELETE",
+    headers: authHeaders(store),
+  });
+  if (!res.ok) {
+    const data: any = await res.json().catch(() => ({}));
+    throw new Error(data?.error || `hosted machine teardown failed: ${res.status}`);
+  }
 }
 
 export async function triggerHostedProvision(store: LocalStore, execute = false, fetchImpl: typeof fetch = fetch): Promise<{ plan: HostedProvisionPlan; provisioned?: { id: string; nodeId?: string } | null }> {
