@@ -6,6 +6,7 @@
 **Product contract:** [`product-contract.md`](product-contract.md)
 **Receipt contract:** [`receipt-v1.md`](receipt-v1.md)
 **Decision record:** [`product-roadmap-decisions.md`](product-roadmap-decisions.md)
+**Next-agent handoff:** [`revised-strategy-next-agent-handoff.md`](revised-strategy-next-agent-handoff.md)
 
 ## North-star outcome
 
@@ -265,9 +266,13 @@ transcript, diff, file content, secret, email, account id, Session id, or Run id
 
 ## Next execution slice
 
-1. PWA vocabulary/surface audit with screenshots.
-2. Activation and task-to-outcome metric contract.
-3. Highest-friction setup and remote failure fixes, selected from observed data.
-4. Unified Run projection and detail route over existing records.
-5. First five target-developer recruitment in parallel.
-6. Provider selection only after persistent-Machine Runs meet their gate.
+The bounded PR sequence, ownership guidance, acceptance tests, and blockers are
+specified in the [next-agent implementation handoff](revised-strategy-next-agent-handoff.md).
+
+1. Unified account Run projection and exact Run detail route over existing records.
+2. Explicit-outcome, retry/reclaim, and external-effect idempotency proof.
+3. Receipt v1 audit/approval/change correlation and partial Receipt UI.
+4. PWA/CLI/documentation vocabulary audit with desktop/mobile screenshots.
+5. Setup and remote fault validation plus the missing aggregate metrics.
+6. First five target-developer recruitment in parallel.
+7. Provider selection only after persistent-Machine Runs meet their gate.
