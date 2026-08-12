@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
-import { RelayConnector, type RelayConfig } from "../src/relay-client.js";
+import { RelayConnector, type RelayConfig } from "../src/remote/index.js";
 import { PairingStore } from "../src/device-registry.js";
 import { generatePairingKeypair, pairingProof, deriveWrapKey, unwrapRoomKey } from "../src/pairing-crypto.js";
 import { sealFrame, openFrame } from "../src/e2e.js";

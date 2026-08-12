@@ -15,4 +15,4 @@
 // Next slices invert construction + the model-auth sync wire behind ports, then
 // the remaining remote-only code moves in.
 export { RelayConnector, loadRelayConfig } from "./relay-client.js";
-export type { ClientMessage } from "./relay-client.js";
+export type { ClientMessage, RelayConfig } from "./relay-client.js";
