@@ -330,6 +330,20 @@ describe("aws ProviderAdapter", () => {
     expect(runCall!.headers?.authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\/\d{8}\/us-east-1\/ec2\/aws4_request/);
   });
 
+  it("uses a prebuilt AMI directly without paying the SSM lookup", async () => {
+    const { exec, calls } = fakeAwsExec();
+    const adapter = ephemeralAdapter("aws")!;
+    await adapter.provision({
+      exec,
+      token: TOKEN,
+      config: { slug: "fast", region: "us-west-2", size: "t3.medium", image: "ami-prebuilt123" },
+      userData: "#cloud-config\n",
+    });
+    expect(calls.some((c) => new URL(c.url).host.startsWith("ssm."))).toBe(false);
+    const run = calls.find((c) => String(c.body ?? "").includes("Action=RunInstances"))!;
+    expect(new URLSearchParams(String(run.body)).get("ImageId")).toBe("ami-prebuilt123");
+  });
+
   it("reports status from DescribeInstances", async () => {
     const { exec } = fakeAwsExec();
     const adapter = ephemeralAdapter("aws")!;

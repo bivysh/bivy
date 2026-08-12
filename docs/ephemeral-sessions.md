@@ -273,6 +273,31 @@ Selecting an agent should be enough. If the selected runtime is allowlisted and 
 
 Implemented now for regular managed sessions/select paths where an allowlisted runtime installer exists (currently Claude Code SDK). CLI-only agents still need explicit safe installer specs before daemon-side auto-install should run them.
 
+## Sub-10-second runner fast lane
+
+The generic Ubuntu bootstrap remains the compatibility lane: it may install OS
+packages, Node, Bivy, and agent dependencies after the provider accepts the VM,
+so it cannot satisfy a request-to-agent target under ten seconds. The fast lane
+uses the credential-free image built by
+`deploy/Dockerfile.ephemeral-runner` and published as
+`ghcr.io/bivysh/bivy-ephemeral-runner:sha-<commit>` by
+`.github/workflows/ephemeral-runner-image.yml`.
+
+The image contains only public runtime material (Node, Bivy, git, SSH/certificate
+tools, and installed agent dependencies). Enrollment tokens, E2E room keys,
+model/provider credentials, repo selection, and restore state are injected at
+claim/launch time. A saved ephemeral config may set the provider-native `image`
+identifier: the GHCR reference for Fly, a snapshot/image id for Hetzner, or an AMI
+id for AWS. E2B already uses versioned `bivy-<size>` templates; Sprites pays the
+install once and persists it across suspends.
+
+Every bootstrap now checks `command -v bivy` first. A prebuilt image starts the
+daemon immediately; a generic/old image falls back to the existing installer.
+This makes image rollout reversible and prevents a missing image pipeline from
+removing the compatibility path. Cold-start success is still measured from
+request to the first agent event—not image pull or provider “running.” A warm
+ready-capacity pool is the next latency layer after this image baseline.
+
 ## Closing the cold-start gap (device-seeded model keys)
 
 A brand-new ephemeral machine has no model credentials of its own. For most sessions that's fine — Bivy's **model-auth vault** syncs provider keys/OAuth records end-to-end across your nodes (see [`credential-sync.md`](credential-sync.md) §2), so a freshly-enrolled node just pulls them. But that sync is **node → node**: a requesting node asks the account for the wrapped vault key and *another node that already holds it* wraps it back. In the **true cold-start case — the ephemeral machine is your only node** (e.g. launched from a phone that owns no computer) — there is no peer to wrap from, so the vault can't seed and the agent boots with no model key.

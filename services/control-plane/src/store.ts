@@ -258,6 +258,8 @@ export interface EphemeralNodeConfig {
   provider: string;
   region?: string;
   size?: string;
+  /** Curated provider-native runner image/snapshot for fast boot. */
+  image?: string;
   ttlMinutes?: number;
   teardownOnAgentFinish?: boolean;
   createdAt: string;
@@ -283,6 +285,7 @@ export function normalizeEphemeralConfigs(value: unknown): EphemeralNodeConfig[]
     };
     if (typeof v.region === "string" && v.region.trim()) cfg.region = v.region.trim();
     if (typeof v.size === "string" && v.size.trim()) cfg.size = v.size.trim();
+    if (typeof v.image === "string" && v.image.trim()) cfg.image = v.image.trim();
     if (typeof v.ttlMinutes === "number" && Number.isFinite(v.ttlMinutes)) cfg.ttlMinutes = Math.max(5, Math.min(24 * 60, Math.floor(v.ttlMinutes)));
     if (v.teardownOnAgentFinish === true) cfg.teardownOnAgentFinish = true;
     out.push(cfg);

@@ -41,4 +41,9 @@ describe("bootstrap ephemeral self-teardown env", () => {
     expect(restore).toContain("export BIVY_RESTORE='sess-xyz'");
     expect(buildBootstrapUserData({ ...base, provider: "fly" })).not.toContain("BIVY_RESTORE");
   });
+
+  it("skips network installation when a runner image already has bivy", () => {
+    const userData = buildBootstrapUserData({ ...base, provider: "hetzner" });
+    expect(userData).toContain("command -v bivy >/dev/null 2>&1 || curl -fsSL");
+  });
 });

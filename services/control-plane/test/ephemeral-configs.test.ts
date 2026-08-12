@@ -101,10 +101,11 @@ async function main() {
   expect(routing0.json?.primary?.kind === "shared", "fresh account routes to the shared queue");
 
   // Create a config; ttl below the floor clamps to 5.
-  const created = await req(port, "POST", "/account/ephemeral-configs", { name: "fly-small-iad", provider: "fly", region: "iad", size: "shared-1x", ttlMinutes: 1, teardownOnAgentFinish: true }, token);
+  const created = await req(port, "POST", "/account/ephemeral-configs", { name: "fly-small-iad", provider: "fly", region: "iad", size: "shared-1x", image: "ghcr.io/bivysh/bivy-ephemeral-runner:sha-test", ttlMinutes: 1, teardownOnAgentFinish: true }, token);
   expect(created.status === 200 && typeof created.json?.id === "string" && created.json.id.startsWith("cfg-"), "create returns a config with a cfg- id");
   expect(created.json?.ttlMinutes === 5, `create clamps ttlMinutes 1 → 5 (got ${created.json?.ttlMinutes})`);
   expect(created.json?.provider === "fly" && created.json?.teardownOnAgentFinish === true, "create keeps provider + teardown");
+  expect(created.json?.image === "ghcr.io/bivysh/bivy-ephemeral-runner:sha-test", "create keeps curated runner image");
   const id = created.json.id;
 
   // Create requires a name.
