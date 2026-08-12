@@ -83,6 +83,16 @@ try {
   const crossAccount = await request(port, "POST", `/account/automation-runs/${active.body.id}/cancel`, otherToken);
   assert.equal(crossAccount.status, 404, "cross-account cancellation must not reveal the run");
 
+  // Routable single-Run fetch backing /runs/:runId. Auth is required, an unknown
+  // id and a cross-account id are indistinguishable (a non-leaking 404), and the
+  // owner reads the durable record.
+  assert.equal((await request(port, "GET", `/account/automation-runs/${active.body.id}`)).status, 401);
+  assert.equal((await request(port, "GET", "/account/automation-runs/does-not-exist", token)).status, 404, "an unknown Run id returns a non-leaking 404");
+  assert.equal((await request(port, "GET", `/account/automation-runs/${active.body.id}`, otherToken)).status, 404, "a cross-account Run id is indistinguishable from unknown");
+  const ownGet = await request(port, "GET", `/account/automation-runs/${active.body.id}`, token);
+  assert.equal(ownGet.status, 200);
+  assert.equal(ownGet.body.id, active.body.id);
+
   const cancelled = await request(port, "POST", `/account/automation-runs/${active.body.id}/cancel`, token);
   assert.equal(cancelled.status, 200);
   assert.equal(cancelled.body.run.status, "cancelled");

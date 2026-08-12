@@ -576,6 +576,14 @@ if (hasReactApp) {
     noStorePwaShell(res);
     res.sendFile(reactIndexFile);
   });
+  // The routable Run detail screen (`/runs/:runId` — see packages/web/src/
+  // router.ts and @bivy/core runRoutePath) must serve the same shell on a cold
+  // load or a Run URL copied to another device. The Run JSON API lives under
+  // `/account/automation-runs/:id`, so nothing here is shadowed.
+  app.get(/^\/runs\/.+/, (_req, res) => {
+    noStorePwaShell(res);
+    res.sendFile(reactIndexFile);
+  });
 }
 
 function bearer(req: Request): string | null {
@@ -2715,6 +2723,18 @@ app.get("/account/automation-runs", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   res.json(await store.listAutomationRuns(client.accountId, Number(req.query.limit) || 50));
+}));
+
+// Single Run by id, for the routable /runs/:runId detail screen. Account-scoped:
+// an id that belongs to another account or does not exist is indistinguishable —
+// both return the same 404 so the endpoint never leaks Run existence across
+// accounts.
+app.get("/account/automation-runs/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const run = await store.getAutomationRun(client.accountId, String(req.params.id));
+  if (!run) return res.status(404).json({ error: "Automation run not found" });
+  res.json(run);
 }));
 
 app.get("/account/automation-triggers", asyncHandler(async (req, res) => {

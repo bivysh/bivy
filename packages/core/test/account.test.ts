@@ -19,6 +19,8 @@ import {
   fetchEphemeralQueueDefault,
   setEphemeralQueueDefault,
   cancelAutomationRun,
+  fetchAutomationRun,
+  RunFetchError,
 } from "../src/index.js";
 
 function mem(): Storage {
@@ -460,6 +462,47 @@ describe("cancelAutomationRun", () => {
       json: async () => ({ error: "Cannot cancel a succeeded automation run" }),
     }) as Response) as unknown as typeof fetch;
     await expect(cancelAutomationRun(store, "run-1", fakeFetch)).rejects.toThrow("Cannot cancel a succeeded automation run");
+  });
+});
+
+describe("fetchAutomationRun", () => {
+  it("GETs the encoded single-run path and returns the run", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.s = "tok";
+    store.cp = "https://app.bivy.sh";
+    let seenUrl = "";
+    let seenAuth = "";
+    const run = { id: "run/a b", status: "running", title: "t", triggerKind: "manual", createdAt: "2026-08-12T00:00:00.000Z" };
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      seenUrl = String(url);
+      seenAuth = String((init?.headers as Record<string, string>)?.authorization);
+      return { ok: true, status: 200, json: async () => run } as Response;
+    }) as unknown as typeof fetch;
+
+    await expect(fetchAutomationRun(store, "run/a b", fakeFetch)).resolves.toEqual(run);
+    expect(seenUrl).toBe("https://app.bivy.sh/account/automation-runs/run%2Fa%20b");
+    expect(seenAuth).toBe("Bearer tok");
+  });
+
+  it("returns null for a non-leaking 404 (unknown or cross-account id)", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const fakeFetch = (async () => ({ ok: false, status: 404, json: async () => ({ error: "Automation run not found" }) }) as Response) as unknown as typeof fetch;
+    await expect(fetchAutomationRun(store, "nope", fakeFetch)).resolves.toBeNull();
+  });
+
+  it("distinguishes unauthorized, offline, and other errors", async () => {
+    const store = createLocalStore(mem(), mem());
+    store.cp = "https://app.bivy.sh";
+    const unauth = (async () => ({ ok: false, status: 401, json: async () => ({}) }) as Response) as unknown as typeof fetch;
+    await expect(fetchAutomationRun(store, "r", unauth)).rejects.toMatchObject({ reason: "unauthorized" });
+
+    const offline = (async () => { throw new TypeError("Failed to fetch"); }) as unknown as typeof fetch;
+    await expect(fetchAutomationRun(store, "r", offline)).rejects.toBeInstanceOf(RunFetchError);
+    await expect(fetchAutomationRun(store, "r", offline)).rejects.toMatchObject({ reason: "error" });
+
+    const boom = (async () => ({ ok: false, status: 500, json: async () => ({}) }) as Response) as unknown as typeof fetch;
+    await expect(fetchAutomationRun(store, "r", boom)).rejects.toMatchObject({ reason: "error", status: 500 });
   });
 });
 
