@@ -115,9 +115,13 @@ export async function exportSyncableRecords(credsDir: string): Promise<Record<st
  */
 export async function exportAccountApiKeys(credsDir: string): Promise<Array<{ provider: string; key: string; updatedAt?: number }>> {
   return (await createCredentialVault(credsDir).listRecords())
-    .filter((record) => record.label === DEFAULT_LABEL && record.sync === "account"
-      && record.source.kind === "stored" && record.source.cred.type === "api_key")
-    .map((record) => ({ provider: record.provider, key: record.source.kind === "stored" ? record.source.cred.key : "", updatedAt: record.updatedAt }));
+    .flatMap((record) => {
+      if (record.label !== DEFAULT_LABEL || record.sync !== "account" || record.source.kind !== "stored") return [];
+      const credential = record.source.cred;
+      return credential.type === "api_key" && typeof credential.key === "string"
+        ? [{ provider: record.provider, key: credential.key, updatedAt: record.updatedAt }]
+        : [];
+    });
 }
 
 /** Record-keyed tombstones for record-shaped cross-node convergence. */

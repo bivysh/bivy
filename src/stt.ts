@@ -100,7 +100,7 @@ export function setSttProvider(appDir: string, provider: SttProvider): SttProvid
 /** Resolve voice through the same provider credential used by agents/models. */
 export async function resolveSttKey(appDir: string, provider: SttProvider): Promise<string | undefined> {
   const credential = await createCredentialStore(path.join(appDir, "credentials")).getCredential(provider).catch(() => undefined);
-  if (credential?.kind === "api-key" && credential.apiKey.trim()) return credential.apiKey.trim();
+  if (credential?.kind === "api_key" && credential.token.trim()) return credential.token.trim();
   // Migration fallback: old releases wrote a separate stt.<provider> secret.
   // New writes never use it; retaining this read prevents an abrupt voice outage.
   const legacy = await new SecretVault(appDir).resolve(sttKeyId(provider)).catch(() => undefined);
