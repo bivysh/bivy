@@ -268,22 +268,24 @@ function sourceAutomationChip(
   item: AccountAutomation,
   sources: SourcesSnapshot,
 ): { tone: "on" | "off" | "warn"; label: string } {
-  if (!item.enabled) return { tone: "off", label: "Paused" };
   const executorReady = sources.nodes.some((node) => node.online) || Boolean(sources.hosted?.execution.ready);
   if (item.trigger === "github" || item.trigger === "github_ci") {
     const gh = githubSourceStatus(sources.github, Boolean(sources.hosted?.execution.ready));
-    if (gh.tone === "off") return { tone: "warn", label: "Needs GitHub" };
-    if (gh.tone === "warn") return { tone: "warn", label: gh.label };
+    if (gh.tone === "off") return { tone: "warn", label: item.enabled ? "Needs GitHub" : "Draft · needs GitHub" };
+    if (gh.tone === "warn") return { tone: "warn", label: item.enabled ? gh.label : `Draft · ${gh.label}` };
+    if (!item.enabled) return { tone: "off", label: "Paused" };
     if (!executorReady) return { tone: "warn", label: "Needs executor" };
     if (item.trigger === "github_ci") return { tone: "on", label: "Active · verify workflow_run" };
     return { tone: "on", label: "Active" };
   }
   if (item.trigger === "linear") {
     const lin = linearSourceStatus(sources.linear);
-    if (lin.tone === "off") return { tone: "warn", label: "Needs Linear" };
-    if (lin.tone === "warn") return { tone: "warn", label: lin.label };
+    if (lin.tone === "off") return { tone: "warn", label: item.enabled ? "Needs Linear" : "Draft · needs Linear" };
+    if (lin.tone === "warn") return { tone: "warn", label: item.enabled ? lin.label : `Draft · ${lin.label}` };
+    if (!item.enabled) return { tone: "off", label: "Paused" };
     return executorReady ? { tone: "on", label: "Active" } : { tone: "warn", label: "Needs executor" };
   }
+  if (!item.enabled) return { tone: "off", label: "Paused" };
   return executorReady ? { tone: "on", label: "Active" } : { tone: "warn", label: "Needs executor" };
 }
 
@@ -533,45 +535,46 @@ export function AutomationsView({
     setError("");
     setNotice(null);
     try {
+      // A source Automation is a Draft until its source is actually connected.
+      // Creating an enabled definition first made the UI claim “on” while no
+      // event could reach it. Probe before writing, then persist truthful state.
+      const github = template.trigger === "github" || template.trigger === "github_ci"
+        ? await fetchGithubApp(controller.local).catch(() => null)
+        : null;
+      const linear = template.trigger === "linear"
+        ? await fetchLinearHook(controller.local).catch(() => null)
+        : null;
+      const needsGithub = Boolean(github && githubSourceStatus(github).tone !== "on") || ((template.trigger === "github" || template.trigger === "github_ci") && !github);
+      const needsLinear = template.trigger === "linear" && linearSourceStatus(linear).tone !== "on";
+      const sourceReady = !needsGithub && !needsLinear;
+
       const existing = items.find((i) => i.trigger === template.trigger);
       if (existing) {
-        if (!existing.enabled) {
-          await updateAutomation(controller.local, existing.id, { enabled: true });
-        }
+        if (sourceReady && !existing.enabled) await updateAutomation(controller.local, existing.id, { enabled: true });
       } else {
         await createAutomation(controller.local, {
           name: template.prefill.name,
           trigger: template.trigger,
           templateId: template.prefill.templateId,
           labels: template.prefill.labels,
-          enabled: true,
+          enabled: sourceReady,
         });
       }
       await refresh();
-
-      // Stay here. Only open the connect sheet when the source itself is missing.
-      const needsGithub = (template.trigger === "github" || template.trigger === "github_ci")
-        && githubSourceStatus(
-          // Re-read after refresh would race; use a fresh fetch path via sources after refresh.
-          // refresh() just set sources — but state is async. Fetch inline.
-          await fetchGithubApp(controller.local).catch(() => null),
-        ).tone !== "on";
-      const needsLinear = template.trigger === "linear"
-        && linearSourceStatus(await fetchLinearHook(controller.local).catch(() => null)).tone !== "on";
 
       if (needsGithub) {
         openSetup(template.trigger === "github_ci" ? "github" : "work-queue");
         setNotice({
           tone: "info",
-          title: `${template.title} is on — finish connecting GitHub`,
-          body: "Stay on this sheet. Once the app is installed, matching events start sessions.",
+          title: `${template.title} saved as a draft`,
+          body: "Connect and install the GitHub App, then resume the Automation. It cannot receive events yet.",
         });
       } else if (needsLinear) {
         openSetup("linear");
         setNotice({
           tone: "info",
-          title: `${template.title} is on — finish connecting Linear`,
-          body: "Create the webhook URL, paste it into Linear, then bring the signing secret back.",
+          title: `${template.title} saved as a draft`,
+          body: "Finish connecting Linear, then resume the Automation. It cannot receive events yet.",
         });
       } else {
         setNotice({
@@ -872,7 +875,7 @@ export function AutomationsView({
                   const chip = isSourceTrigger(item.trigger)
                     ? sourceAutomationChip(item, sources)
                     : { tone: item.enabled ? "on" as const : "off" as const, label: item.enabled ? "Active" : "Paused" };
-                  const needsConnect = isSourceTrigger(item.trigger) && chip.tone === "warn" && chip.label.startsWith("Needs");
+                  const needsConnect = isSourceTrigger(item.trigger) && chip.tone === "warn" && chip.label.toLowerCase().includes("needs");
                   return (
                     <div className={`automation-row${item.enabled ? "" : " is-paused"}`} key={item.id}>
                       <div className="automation-row-main">

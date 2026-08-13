@@ -18,7 +18,11 @@ import { ConfirmDialog } from "./AppDialog.js";
 export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => void; firstRun?: boolean }) {
   const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
   const [provider, setProvider] = useState<string | null>(null);
+  const [showMore, setShowMore] = useState(false);
   const refreshKeys = () => controller.listEphemeralKeys().then(setKeys).catch(() => {});
+  const recommended = EPHEMERAL_PROVIDERS.find((p) => p.id === "fly" && p.maturity === "stable")
+    ?? EPHEMERAL_PROVIDERS.find((p) => p.maturity === "stable");
+  const alternatives = EPHEMERAL_PROVIDERS.filter((p) => p.id !== recommended?.id);
   useEffect(() => { refreshKeys(); }, []);
 
   const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === provider);
@@ -37,14 +41,31 @@ export function EphemeralSheet({ onClose, firstRun = false }: { onClose: () => v
               ? "Connect your own cloud account to run agents on temporary servers. Pick a provider, paste a token, and you're ready — your first message launches the machine."
               : "Pick a provider and paste a token. Connecting one adds an isolated machine profile you can pick in the machine menu."}
           </p>
-          {EPHEMERAL_PROVIDERS.map((p) => {
+          {recommended && (() => {
+            const k = keys.find((x) => x.id === recommended.id);
+            return (
+              <PickerItem
+                key={recommended.id}
+                title={`${recommended.name} · Recommended`}
+                meta={recommended.blurb}
+                right={k?.configured ? <span className="chip ok">Connected</span> : <span className="chip">Stable</span>}
+                onClick={() => setProvider(recommended.id)}
+              />
+            );
+          })()}
+          <button type="button" className="btn ghost block" aria-expanded={showMore} onClick={() => setShowMore((value) => !value)}>
+            {showMore ? "Hide other cloud providers" : "Other cloud providers"}
+          </button>
+          {showMore && alternatives.map((p) => {
             const k = keys.find((x) => x.id === p.id);
             return (
               <PickerItem
                 key={p.id}
                 title={p.name}
                 meta={p.blurb}
-                right={k?.configured ? <span className="chip ok">Connected</span> : undefined}
+                right={k?.configured
+                  ? <span className="chip ok">Connected</span>
+                  : <span className={`chip${p.maturity === "experimental" ? " warn" : ""}`}>{p.maturity === "experimental" ? "Experimental" : "Stable"}</span>}
                 onClick={() => setProvider(p.id)}
               />
             );
@@ -123,7 +144,7 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
           <button className="btn primary" disabled={!token.trim() || saving} onClick={connect}>
             {saving ? "Connecting…" : "Connect"}
           </button>
-          <p className="muted small">The token stays on this device — Bivy never stores it. You can fine-tune region, size, and auto-destroy later in Settings → Isolated machine profiles.</p>
+          <p className="muted small">For this interactive profile, the token stays on this device and is sent only to the selected provider. Unattended Automations require a separate, explicit hosted-custody opt-in. You can fine-tune region, size, and auto-destroy later in Settings → Isolated machine profiles.</p>
         </>
       ) : (
         <>

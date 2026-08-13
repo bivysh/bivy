@@ -22,11 +22,12 @@ test("the readiness strip renders nothing once activated and never claims premat
   expect(view).toContain("activation.checks.map((check)");
 });
 
-test("setup readiness never interrupts the normal session surface", async () => {
+test("setup readiness is scoped to a first isolated Machine and stays out of established workstation Sessions", async () => {
   const app = await read("../../packages/web/src/App.tsx");
-  expect(app).not.toContain("<ReadinessChecklist");
-  expect(app).not.toContain("activationFromState(state)");
-  expect(app).not.toContain('authenticate_credential: () => openSettings("models")');
+  expect(app).toContain("<ReadinessChecklist");
+  expect(app).toContain("activationFromState(state)");
+  expect(app).toContain('state.currentNodeId?.startsWith("eph-") && !activation.activated');
+  expect(app).toContain('authenticate_credential: () => openSettings("providers")');
 });
 
 test("the readiness UI uses only canonical customer vocabulary", async () => {
