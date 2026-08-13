@@ -650,11 +650,14 @@ describe("SessionStore", () => {
 
     // Long-running agent tools emit elapsed-time progress with no repeated
     // detail. The card must retain its sub-agent identity while accepting the
-    // fresh activity payload, rather than degrading back to an opaque tool.
+    // fresh activity payload, rather than degrading back to an opaque tool. The
+    // progress ping is MERGED onto the original input, so the delegation's task
+    // description survives alongside the new elapsed marker instead of being
+    // clobbered away.
     store.apply({ type: "tool_execution_update", toolCallId: "sub-1", name: "Task", input: { elapsedSeconds: 42 } });
     const updated = store.getState().transcript.find((entry) => entry.tool)?.tool;
     expect(updated?.detail?.kind).toBe("delegation");
-    expect(updated?.input).toEqual({ elapsedSeconds: 42 });
+    expect(updated?.input).toEqual({ description: "trace auth", elapsedSeconds: 42 });
     expect(store.getState().workingLabel).toBe("Explore sub-agent is working…");
   });
 
