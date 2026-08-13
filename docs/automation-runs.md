@@ -103,7 +103,7 @@ reclaim on a fresh process. That path is tracked separately.
 stopped short (`checks` / `timeout` / `agent` / `needs_review`), derived from the
 run's own evidence. Neither carries a run, session, account, or user identifier.
 
-## Observable lifecycle and outcome reports
+## Run evidence and outcome reports
 
 A Run keeps one causal, append-only milestone timeline. The vocabulary covers
 `trigger_received`, `trigger_matched`, `queued`, `routed`, `provisioning`,
