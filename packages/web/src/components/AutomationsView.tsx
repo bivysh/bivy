@@ -23,6 +23,7 @@ import {
   fetchSlackHook,
   runAutomationNow,
   rotateAutomationWebhook,
+  simulateAutomation,
   updateAutomation,
   importRoomKey,
   seal,
@@ -34,6 +35,10 @@ import {
   type AccountAutomation,
   type AccountAutomationRun,
   type AccountNode,
+  type AutomationPreflightSeverity,
+  type AutomationSimulationDraft,
+  type AutomationSimulationEvent,
+  type AutomationSimulationResult,
   type GithubAppInfo,
   type LinearHook,
   type SlackHook,
@@ -201,6 +206,28 @@ function buildGithubOn(
     });
   }
   return on;
+}
+
+/**
+ * A representative event fixture for the editor's "Test event" workflow —
+ * derived from whichever GitHub event toggle (or the Linear label filter) is
+ * currently enabled, so testing needs no separate fixture-authoring step. The
+ * first enabled toggle wins, matching first-match's own "first wins"
+ * intuition; a source trigger with nothing enabled yet has nothing
+ * representative to test.
+ */
+function buildRepresentativeEvent(d: Draft): AutomationSimulationEvent | undefined {
+  const repo = d.repo.trim() || d.repos.split(/[,\n]/).map((v) => v.trim()).find(Boolean);
+  const labels = d.labels.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
+  const workflows = d.workflows.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
+  if (d.trigger === "linear") return { kind: "linear", repo, labels: labels.length ? labels : ["bivy"] };
+  if (d.trigger !== "github") return undefined;
+  if (d.githubEvents.issuesLabeled) return { kind: "github", repo, event: "issues", action: "labeled", labels: labels.length ? labels : ["bivy"] };
+  if (d.githubEvents.issueMention) return { kind: "github", repo, event: "issue_comment", mention: true };
+  if (d.githubEvents.prLabeled) return { kind: "github", repo, event: "pull_request", action: "labeled", labels: labels.length ? labels : ["bivy"] };
+  if (d.githubEvents.prMention) return { kind: "github", repo, event: "pull_request_review_comment", mention: true };
+  if (d.githubEvents.workflowFailed) return { kind: "github", repo, event: "workflow_run", action: "completed", conclusion: "failure", workflow: workflows[0] };
+  return undefined;
 }
 
 function nodeLabelSuffix(nodeLabel?: string): string {
@@ -1463,6 +1490,122 @@ function TemplateCard({
 
 // ── Source automation editor (GitHub / Linear / CI) ─────────────────────────
 
+// ── Test event / preflight — shared by both editors ────────────────────────
+// Explains, without creating a run, which automation a representative event
+// would fire (and why the rest didn't), overlap/shadow warnings across the
+// account's rules, and the seven-check preflight — the same contract
+// `bivy automation test` and the control-plane's live intake use (see
+// docs/automation-evaluator.md). Every Save also runs this silently (no
+// event) so a hard failure never reaches the API, and a non-blocking warning
+// always requires the explicit acknowledgement checkbox below before Save
+// is enabled — the draft/gate can change between runs, so a fresh result
+// always clears any prior acknowledgement.
+function useAutomationPreflight(automationId: string | undefined) {
+  const [result, setResult] = useState<AutomationSimulationResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [ack, setAck] = useState(false);
+
+  const run = useCallback(async (
+    draft: AutomationSimulationDraft,
+    event?: AutomationSimulationEvent,
+    opts?: { resetAck?: boolean },
+  ) => {
+    setBusy(true);
+    setError("");
+    try {
+      const r = await simulateAutomation(controller.local, { automationId, draft, event });
+      setResult(r);
+      // An explicit Test event / Check readiness click always clears a stale
+      // acknowledgement (new warnings deserve a fresh look). Save's own
+      // silent pre-check passes resetAck: false so a user who already ticked
+      // the box doesn't get it cleared out from under them by the very same
+      // click that's supposed to consume it.
+      if (opts?.resetAck !== false) setAck(false);
+      return r;
+    } catch (e) {
+      setResult(null);
+      setError(String((e as Error).message || e));
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }, [automationId]);
+
+  return { result, busy, error, ack, setAck, run };
+}
+
+function preflightIcon(severity: AutomationPreflightSeverity): string {
+  if (severity === "ok") return "✓";
+  if (severity === "block") return "✗";
+  if (severity === "warn") return "⚠";
+  if (severity === "skipped") return "·";
+  return "ℹ";
+}
+
+function AutomationPreflightPanel({
+  result,
+  error,
+  ack,
+  onAckChange,
+  showTrail,
+}: {
+  result: AutomationSimulationResult | null;
+  error: string;
+  ack: boolean;
+  onAckChange: (value: boolean) => void;
+  showTrail: boolean;
+}) {
+  if (error) return <p className="settings-error">{error}</p>;
+  if (!result) return null;
+  const ownOverlaps = result.overlaps.filter((o) => o.beforeId === result.subjectId || o.afterId === result.subjectId);
+  const visibleChecks = result.preflight.filter((c) => c.severity !== "skipped");
+  return (
+    <div className="autom-preflight" role="status">
+      {showTrail && result.trail.length > 0 && (
+        <div className="autom-preflight-trail">
+          <div className="autom-field-label">Rule evaluation (first match wins)</div>
+          <ul className="autom-preflight-list">
+            {result.trail.map((t) => (
+              <li key={t.id} className={t.matched ? "ok" : undefined}>
+                <span>{t.matched ? "✓" : "·"}</span>{" "}
+                {t.id === result.subjectId ? <strong>this automation</strong> : t.id}: {t.reason}
+              </li>
+            ))}
+          </ul>
+          {!result.matchedId && <p className="schedule-hint warn">No automation — including this one — would fire for this event.</p>}
+        </div>
+      )}
+      {ownOverlaps.map((o, i) => (
+        <p key={i} className={o.kind === "shadowed" ? "settings-error" : "schedule-hint warn"}>{o.detail}</p>
+      ))}
+      {visibleChecks.length > 0 && (
+        <div className="autom-preflight-checks">
+          <div className="autom-field-label">Preflight</div>
+          <ul className="autom-preflight-list">
+            {visibleChecks.map((c) => (
+              <li key={c.id} className={`preflight-${c.severity}`}>
+                <span>{preflightIcon(c.severity)}</span> <strong>{c.label}</strong>: {c.detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {result.gate.blocked && (
+        <p className="settings-error">
+          Can&apos;t save yet — {result.gate.blockingChecks.map((c) => c.label).join(", ")}.
+        </p>
+      )}
+      {!result.gate.blocked && result.gate.requiresAck && (
+        <label className="autom-check-row">
+          <input type="checkbox" checked={ack} onChange={(e) => onAckChange(e.target.checked)} />
+          <span>I understand the warnings above and want to save anyway.</span>
+        </label>
+      )}
+    </div>
+  );
+}
+
 function SourceAutomationEditor({
   item,
   state,
@@ -1503,6 +1646,7 @@ function SourceAutomationEditor({
     ?? "everyone";
   const [triggerAccess, setTriggerAccess] = useState<"everyone" | "contributor" | "collaborator">(initialTriggerAccess);
   const [triggerAccessDirty, setTriggerAccessDirty] = useState(false);
+  const preflight = useAutomationPreflight(item.id || undefined);
 
   const needsConnect =
     (trigger === "github" || trigger === "github_ci") && githubSourceStatus(sources.github).tone === "off"
@@ -1552,6 +1696,18 @@ function SourceAutomationEditor({
           patch.labels = workflows ?? [];
         }
       }
+
+      // Shared preflight gate before ever calling create/update (see
+      // docs/automation-evaluator.md). resetAck: false so a box already
+      // ticked on a prior Save click still counts on this one.
+      const evaluation = await preflight.run({ ...patch, trigger, templateCiphertext: item.templateCiphertext }, undefined, { resetAck: false });
+      if (evaluation.gate.blocked) {
+        throw new Error(`Can't save yet — ${evaluation.gate.blockingChecks.map((c) => c.label).join(", ")}. See the checklist below.`);
+      }
+      if (evaluation.gate.requiresAck && !preflight.ack) {
+        throw new Error("Review the warnings below, check the acknowledgement box, then save again.");
+      }
+
       if (item.id) {
         await updateAutomation(controller.local, item.id, patch);
       } else {
@@ -1571,6 +1727,34 @@ function SourceAutomationEditor({
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Best-effort draft (works even before the form is complete, unlike
+   *  save()) run through the shared evaluator — explains source connection,
+   *  machine, credential, and quota readiness without starting a run. */
+  async function checkAutomation() {
+    const labels = parseList(labelsText);
+    const workflows = parseList(workflowsText);
+    const repos = parseList(reposText);
+    const draft: AutomationSimulationDraft = {
+      name: name.trim() || item.name,
+      trigger,
+      enabled,
+      templateCiphertext: item.templateCiphertext,
+      labels: labels ?? [],
+      repos: repos ?? [],
+      repo: repoDefault.trim() || undefined,
+      nodeLabel: nodeSuffix.trim() ? `bivy/${nodeSuffix.trim()}` : undefined,
+      runtimeId: runtimeId.trim() || undefined,
+      model: model.trim() || undefined,
+      ...(isGithub ? { on: buildGithubOn(events, labels, workflows) } : {}),
+    };
+    const event: AutomationSimulationEvent | undefined = trigger === "linear"
+      ? { kind: "linear", repo: repoDefault.trim() || undefined, labels: labels ?? ["bivy"] }
+      : trigger === "github_ci"
+        ? { kind: "github", repo: repoDefault.trim() || undefined, event: "workflow_run", action: "completed", conclusion: "failure", workflow: workflows?.[0] }
+        : undefined;
+    await preflight.run(draft, event, { resetAck: true }).catch(() => {});
   }
 
   const action = item.id ? "Edit" : "Create";
@@ -1777,6 +1961,23 @@ function SourceAutomationEditor({
             </div>
           </details>
 
+          <div className="settings-field">
+            <button type="button" className="btn sm" disabled={preflight.busy} onClick={() => void checkAutomation()}>
+              {preflight.busy ? "Checking…" : "Check readiness"}
+            </button>
+            <p className="settings-hint">
+              Explains source connection, machine, credential, and quota readiness — and, for CI, whether a
+              representative failed-workflow event would fire — without starting a run.
+            </p>
+            <AutomationPreflightPanel
+              result={preflight.result}
+              error={preflight.error}
+              ack={preflight.ack}
+              onAckChange={preflight.setAck}
+              showTrail={trigger === "github_ci" || trigger === "linear"}
+            />
+          </div>
+
           {error && <p className="settings-error">{error}</p>}
         </div>
         <div className="wizard-actions">
@@ -1819,8 +2020,10 @@ function AutomationEditor({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<{ url: string; secret: string; name: string } | null>(null);
+  const [allowDangerous, setAllowDangerous] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((prev) => ({ ...prev, [k]: v }));
+  const preflight = useAutomationPreflight(d.id || undefined);
 
   const tzList = useMemo(() => timezoneOptions(d.timezone), [d.timezone]);
   const cronHuman = useMemo(() => describeCron(d.cron), [d.cron]);
@@ -1890,6 +2093,43 @@ function AutomationEditor({
   if (!d.nodeId) missing.push("a machine");
   else if (!controller.local.keys()[d.nodeId]) missing.push("a paired machine (encryption key missing)");
   const canSave = missing.length === 0;
+  const unsafeCombo = d.approvalMode === "autonomous" && d.sandbox === "danger-full-access";
+
+  /** Builds the same draft shape save() would submit (best-effort — this
+   *  works even on an incomplete draft, unlike save() which requires
+   *  canSave) and runs it through the shared evaluator, with a
+   *  representative event for source triggers. Powers the "Test event" /
+   *  "Check readiness" button; save() runs its own stricter pass right
+   *  before submitting (see below). */
+  async function checkAutomation() {
+    const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
+    let templateCiphertext: string | undefined;
+    if (d.nodeId && roomKey && d.instructions.trim()) {
+      templateCiphertext = `${TEMPLATE_PREFIX}:${d.nodeId}:${await seal(await importRoomKey(unb64url(roomKey)), d.instructions.trim())}`;
+    }
+    const labels = d.labels.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
+    const repos = d.repos.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
+    const workflows = d.workflows.split(/[,\n]/).map((v) => v.trim()).filter(Boolean);
+    const draft: AutomationSimulationDraft = {
+      name: d.name.trim() || undefined,
+      trigger: d.trigger,
+      enabled: true,
+      templateCiphertext,
+      nodeLabel: selectedNode?.name ? `bivy/${selectedNode.name}` : undefined,
+      runtimeId: d.runtimeId.trim() || undefined,
+      model: d.model.trim() || undefined,
+      approvalMode: d.approvalMode,
+      sandbox: d.sandbox,
+      allowDangerous,
+      repo: d.repo.trim() || undefined,
+      ...(d.trigger === "github" || d.trigger === "linear" ? {
+        labels,
+        repos,
+        ...(d.trigger === "github" ? { on: buildGithubOn(d.githubEvents, labels, workflows) } : {}),
+      } : {}),
+    };
+    await preflight.run(draft, buildRepresentativeEvent(d), { resetAck: true }).catch(() => {});
+  }
 
   async function save() {
     if (!canSave) return;
@@ -1918,6 +2158,7 @@ function AutomationEditor({
         model: d.model.trim() || undefined,
         approvalMode: d.approvalMode,
         sandbox: d.sandbox,
+        allowDangerous,
         enabled: true,
         trigger: d.trigger,
         repo: repo || (d.id ? "" : undefined),
@@ -1934,6 +2175,23 @@ function AutomationEditor({
             }
           : {}),
       };
+
+      // Run the shared preflight gate before ever calling create/update — a
+      // hard failure (e.g. autonomous + full access without the checkbox
+      // below) never reaches the API, and a non-blocking warning always
+      // needs the acknowledgement checkbox first (see
+      // docs/automation-evaluator.md). resetAck: false so a box the user
+      // already ticked on a prior Save click still counts on this one.
+      const evaluation = await preflight.run(input, undefined, { resetAck: false });
+      if (evaluation.gate.blocked) {
+        setError(`Can't save yet — ${evaluation.gate.blockingChecks.map((c) => c.label).join(", ")}. See the checklist below.`);
+        return;
+      }
+      if (evaluation.gate.requiresAck && !preflight.ack) {
+        setError("Review the warnings below, check the acknowledgement box, then save again.");
+        return;
+      }
+
       if (d.id) {
         await updateAutomation(controller.local, d.id, input);
         onSaved({ kind: "updated", name: d.name.trim(), id: d.id });
@@ -2325,10 +2583,41 @@ function AutomationEditor({
                         <option value="danger-full-access">Full access</option>
                       </select>
                     </div>
+                    {unsafeCombo && (
+                      <label className="autom-check-row">
+                        <input type="checkbox" checked={allowDangerous} onChange={(e) => setAllowDangerous(e.target.checked)} />
+                        <span>I understand the risk of autonomous approval with full access — allow it anyway.</span>
+                      </label>
+                    )}
                   </div>
                 )}
                 <p className="settings-hint">Encrypted for the assigned machine before upload. The hosted control plane never sees the prompt, your code, or credentials.</p>
               </div>
+
+              {d.hasTrigger && (
+                <div className="settings-field">
+                  <button
+                    type="button"
+                    className="btn sm"
+                    disabled={preflight.busy}
+                    onClick={() => void checkAutomation()}
+                  >
+                    {preflight.busy ? "Checking…" : (d.trigger === "github" || d.trigger === "linear") ? "Test event" : "Check readiness"}
+                  </button>
+                  <p className="settings-hint">
+                    {(d.trigger === "github" || d.trigger === "linear")
+                      ? "Explains which automation a representative event would fire — including overlap/shadow warnings — without starting a run."
+                      : "Explains source connection, machine, credential, and quota readiness without starting a run."}
+                  </p>
+                  <AutomationPreflightPanel
+                    result={preflight.result}
+                    error={preflight.error}
+                    ack={preflight.ack}
+                    onAckChange={preflight.setAck}
+                    showTrail={d.trigger === "github" || d.trigger === "linear"}
+                  />
+                </div>
+              )}
 
               {error && <p className="settings-error">{error}</p>}
               {!canSave && missing.length > 0 && (

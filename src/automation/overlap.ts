@@ -10,7 +10,7 @@
 // Scope: only github/linear source triggers go through matchFirst at all —
 // schedule/webhook/manual automations each own their intake (cron occurrence,
 // signed URL, direct id) with no first-match ambiguity, so they're excluded.
-import { effectiveEventRules, labelsMatch, repoAllowed } from "./match.js";
+import { effectiveEventRules, repoAllowed } from "./match.js";
 import type { EvaluableAutomation, EvaluableEventRule, OverlapFinding } from "./types.js";
 
 function listCovers(a: string[] | undefined, b: string[] | undefined): boolean {

@@ -319,7 +319,11 @@ export function gatherPreflightSignals(def: SignalDefinitionInput, ctx: Prefligh
       knownInstalled,
     },
     encryptedKeyOwnership: {
-      required: true,
+      // Legacy github_ci rows run on a server-known plaintext default
+      // (DEFAULT_FIX_CI_PROMPT, see dispatchAutomationDefinition) when no
+      // ciphertext is set — the only trigger with that fallback, so it's the
+      // only one exempt from requiring one.
+      required: def.trigger !== "github_ci",
       hasCiphertext: Boolean(def.templateCiphertext),
       ownerNodeOnline: suffix ? assignedNode?.online : undefined,
     },
