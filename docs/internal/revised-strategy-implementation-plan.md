@@ -73,6 +73,10 @@ Known coherence gaps found in the same audit:
   surfaces now use Runs, Machines, and isolated Machine profiles; a source-level
   regression test protects the migrated labels. Screenshot/flow audit remains.
 - [ ] Audit CLI help, setup output, README, docs, and API response labels against the canonical model.
+  **Progress:** README, Why Bivy, and primary Slack/Run/CLI entry points now use
+  the accepted capability-first position, canonical objects, and explicit hosted
+  custody boundary. The remaining integration/reference corpus and API errors
+  still require a complete audit.
 - [ ] Replace primary UI terms Work Queue, Nodes, and Outcome report with Runs, Machines, and Receipt; retain legacy API/storage names only behind adapters.
   **Progress:** legacy labels are now Runs, Machines, and Run details. The final
   Receipt label remains intentionally blocked until Receipt v1 correlation is
@@ -82,9 +86,15 @@ Known coherence gaps found in the same audit:
   are aggregate counters. A bounded, content-free product-event metric and
   authenticated collection endpoint now cover the fixed activation, first-response,
   remote-continuity, Run-acceptance, and Receipt-review vocabulary; Receipt review
-  is wired at the PWA Receipt surface. Remaining customer-path emission points and
-  elapsed-time histograms keep this item open.
-- [ ] Add a CI vocabulary check for prohibited terms in new customer-facing copy with explicit diagnostics/compatibility exceptions.
+  is wired at the PWA Receipt surface. PWA activation-ready, first live assistant
+  response (excluding history replay), and manual/delegated Run acceptance are
+  now wired with once-only activation latches and content-free placement tests.
+  CLI activation, automatic-source acceptance attribution, and elapsed-time
+  histograms keep this item open.
+- [x] Add a CI vocabulary check for prohibited terms in new customer-facing copy with explicit diagnostics/compatibility exceptions.
+  **Implemented:** `test/product-vocabulary.test.ts` protects primary PWA and
+  public-document surfaces while allowing legacy identifiers in storage,
+  compatibility APIs, diagnostics, and technical implementation prose.
 
 **Gate:** no primary customer screen requires “work item,” “routing label,” or
 “ephemeral config”; one product specification governs all clients.
@@ -332,9 +342,20 @@ transcript, diff, file content, secret, email, account id, Session id, or Run id
 
 ## Next execution slice
 
-1. PWA vocabulary/surface audit with screenshots.
-2. Activation and task-to-outcome metric contract.
-3. Highest-friction setup and remote failure fixes, selected from observed data.
-4. Unified Run projection and detail route over existing records.
-5. First five target-developer recruitment in parallel.
-6. Provider selection only after persistent-Machine Runs meet their gate.
+Until this slice closes, feature/catalog/provider breadth is frozen unless tied
+to an observed activation or reliability failure.
+
+1. Complete the PWA/CLI/docs vocabulary and trust-claim audit with desktop and
+   mobile screenshots plus a migration list.
+2. Wire activation-ready, first-useful-response, and Run-acceptance emissions;
+   add elapsed-time histograms and exactly-once placement tests.
+3. Recruit and observe the first five target developers; record setup stage,
+   time to first useful response, first remote continuation, and first accepted
+   Run without collecting customer content.
+4. Fix the highest-friction setup and remote failures selected from those
+   observations; add desktop/mobile regression coverage for each failure class.
+5. Complete Receipt aggregation for approvals, changes, checks, artifacts, and
+   enforced/observed/unavailable controls, then test comprehension without the
+   transcript.
+6. Do not select or expand isolated providers until persistent-Machine Runs meet
+   their behavioral gate and live lifecycle evidence is recorded.

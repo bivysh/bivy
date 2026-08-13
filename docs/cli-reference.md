@@ -414,7 +414,7 @@ success it prints the new epoch and the `bivy resume` command to continue. See
 bivy promote 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
 ```
 
-## Nodes and remote access
+## Machines and remote access
 
 ### `bivy relay:setup [flags]`
 

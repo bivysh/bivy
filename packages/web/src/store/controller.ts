@@ -21,6 +21,8 @@ import {
   fetchAutomationRuns,
   cancelAutomationRun as apiCancelAutomationRun,
   recordProductMetric,
+  activationFromState,
+  type ProductMetricEvent,
   assignWorkItem,
   deleteWorkItem,
   clearWorkQueue,
@@ -292,6 +294,10 @@ export class AppController {
   private composerPrefillListeners = new Set<(text: string) => void>();
   /** Subscribers that want the composer's slash-command menu opened (the "/" pill). */
   private slashOpenListeners = new Set<() => void>();
+  /** Product milestones are aggregate and content-free. Once-only activation
+   *  events are latched in this browser so reconnect/history replay cannot
+   *  inflate them; the in-flight guard also closes double-emission races. */
+  private productMetricsInFlight = new Set<ProductMetricEvent>();
 
   constructor() {
     // Persist each applied history snapshot + cursor, and re-request canonical
@@ -541,8 +547,10 @@ export class AppController {
           this.resolveFork(event);
           return;
         }
+        const before = this.store.getState();
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
+        this.observeActivationMilestones(before, appliedEvent);
         if (appliedEvent.type === "session.deleted") this.persistDeletedSessionTombstones();
         this.maybeFlushPendingPrompt(appliedEvent);
         this.maybeConfirmFollowup(appliedEvent);
@@ -551,8 +559,10 @@ export class AppController {
         this.reconcileSessionList(appliedEvent);
       },
       onStatus: (status: ConnectionStatus) => {
-        const prev = this.store.getState().status;
+        const before = this.store.getState();
+        const prev = before.status;
         this.store.setStatus(status);
+        this.observeActivationMilestones(before, { type: "connection.status" });
         if (status === "online" && prev !== "online") {
           this.onReconnected();
         } else if (status === "reconnecting" || status === "offline") {
@@ -572,6 +582,47 @@ export class AppController {
     return this.direct
       ? new DirectTransport({ bootstrap: new URLSearchParams(location.search).get("bootstrap") || "", handlers })
       : new RelayTransport({ store: this.local, handlers });
+  }
+
+  private productMetricClient(): "desktop" | "mobile" {
+    return matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop";
+  }
+
+  /** Emit a content-free milestone. Once-only events are persisted only after
+   *  the authenticated endpoint accepts them, so an offline attempt can retry. */
+  recordProductMilestone(event: ProductMetricEvent, once = false): void {
+    if (this.direct || this.solo || !this.local.s) return;
+    const key = `bivy.product-metric.${event}`;
+    if (once) {
+      try { if (localStorage.getItem(key) === "1") return; } catch { /* best effort */ }
+      if (this.productMetricsInFlight.has(event)) return;
+      this.productMetricsInFlight.add(event);
+    }
+    void recordProductMetric(this.local, event, this.productMetricClient())
+      .then(() => {
+        if (once) {
+          try { localStorage.setItem(key, "1"); } catch { /* best effort */ }
+        }
+      })
+      .catch(() => {})
+      .finally(() => this.productMetricsInFlight.delete(event));
+  }
+
+  /** Observe only concrete state transitions. History snapshots are excluded
+   *  from first response: opening an old Session must not look like activation. */
+  private observeActivationMilestones(before: ReturnType<SessionStore["getState"]>, event: { type?: unknown }): void {
+    const after = this.store.getState();
+    const beforeActivation = activationFromState(before);
+    const afterActivation = activationFromState(after);
+    const readyBefore = beforeActivation.checks.slice(0, 4).every((check) => check.state === "passed");
+    const readyAfter = afterActivation.checks.slice(0, 4).every((check) => check.state === "passed");
+    if (!readyBefore && readyAfter) this.recordProductMilestone("activation_ready", true);
+
+    if (event.type === "session.history") return;
+    const assistantCount = (state: typeof after) => state.transcript.filter((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool).length;
+    if (assistantCount(before) === 0 && assistantCount(after) > 0) {
+      this.recordProductMilestone("first_useful_response", true);
+    }
   }
 
   /** Hosted control plane, not signed in yet. */
@@ -3565,6 +3616,7 @@ export class AppController {
       });
       automationId = created.id;
       const run = await runAutomationNow(this.local, created.id);
+      this.recordProductMilestone("run_accepted");
       return { runId: run.id };
     } catch (error) {
       return { error: error instanceof Error ? error.message : "Could not delegate this Session." };

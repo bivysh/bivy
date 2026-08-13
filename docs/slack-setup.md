@@ -31,7 +31,7 @@ agent transcripts, and model credentials still stay on the node.
 - `in <owner/repo>` clones or refreshes that GitHub repository, creates an isolated worktree, and instructs the agent to test, commit, push, and open a pull request. The node must have access to the repository through its connected GitHub App or GitHub token.
 - With neither clause, the request runs in the node's configured default workspace. If that workspace is a GitHub checkout, Bivy still creates an isolated worktree.
 
-Slack receives an immediate private acknowledgement. Progress and outcomes appear in **Settings → Work Queue**; completed repository runs include the pull-request URL when one was opened.
+Slack receives an immediate private acknowledgement. Progress and outcomes appear in **Runs**; completed repository Runs include the pull-request URL when one was opened.
 
 ## Troubleshooting
 

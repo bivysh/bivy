@@ -135,7 +135,7 @@ becomes `Needs review`, never silent success.
 The evidence endpoint requires the reporting node to be the run's current
 claimant and rejects (400, not a silent drop) any field that looks like a
 prompt, transcript, diff, file content, secret, token, or raw command/tool
-output. The GitHub queue UI renders this as a per-run "Outcome reports"
+output. The Runs UI renders this as per-Run details
 timeline with a **Copy sanitized report** export — the same JSON object the
 control plane stores, nothing more.
 
