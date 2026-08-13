@@ -91,11 +91,18 @@ try {
   assert.equal((await request(port, "POST", `/node/work/${id}/claim`, nodeA)).status, 200);
   assert.equal((await request(port, "POST", `/node/work/${id}/running`, nodeA)).status, 200);
   assert.equal((await request(port, "GET", `/account/automation-runs/${id}`, token)).body.attempt, 1);
+  // A's attempt stood up a live session before its machine restarted. That id
+  // lands in the run's output via a routine evidence report.
+  assert.equal((await request(port, "POST", `/node/work/${id}/evidence`, nodeA, { output: { sessionId: "live-sess-A" } })).status, 200);
 
-  await delay(LEASE_MS + 300); // let A's lease expire
+  await delay(LEASE_MS + 300); // let A's lease expire (as a machine restart would)
   const bClaim = await request(port, "POST", `/node/work/${id}/claim`, nodeB);
   assert.equal(bClaim.status, 200, "B reclaims the expired lease");
   assert.equal(bClaim.body.item.attempt, 2, "a reclaim is another attempt of the same Run");
+  // Resume, don't restart: a reclaim after the machine restarted must CONTINUE
+  // the session A already started, not cold-start a new one.
+  assert.equal(bClaim.body.item.targetKind, "existing_session", "a reclaimed run with a live session resumes it");
+  assert.equal(bClaim.body.item.targetSessionId, "live-sess-A", "the reclaimed run targets the session the prior attempt started");
 
   assert.equal((await request(port, "POST", `/node/work/${id}/heartbeat`, nodeA)).status, 409, "the stale Machine cannot renew a reclaimed lease");
   assert.equal((await request(port, "POST", `/node/work/${id}/complete`, nodeA)).status, 409, "the stale Machine cannot complete the new attempt");
