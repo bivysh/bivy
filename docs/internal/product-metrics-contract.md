@@ -9,7 +9,10 @@ This internal contract describes the bounded product metrics emitted by the host
 - A matching content-free structured funnel log is emitted for each Run result.
 - `bivy_product_events_total{event,client}` accepts only fixed event and client
   enums. Receipt review is emitted when an authenticated PWA successfully opens
-  a durable Run and renders its Receipt; the body contains no Run or Session id.
+  a durable Run and renders its Receipt. Remote reconnect is emitted after a
+  previously-live relay transport reaches its Machine again; remote intervention
+  is emitted when a hosted PWA answers an approval or question. Event bodies
+  contain no Run, Session, decision, question, or Machine identifier.
 
 A retried request that cannot perform its transition does not emit another result. This measures durable transition events, not unique customers or Runs. `cancelled` is recorded only when the customer cancellation endpoint performs the durable transition; an idempotent repeat does not increment it again.
 
@@ -19,9 +22,8 @@ The following are not measured yet and must not be inferred from current counter
 
 - time to first useful response or whether a response was useful;
 - remote reconnect or human intervention in a remote Session;
-- activation-ready, first-useful-response, remote reconnect/intervention, and
-  Run-acceptance event types now have a bounded collection contract, but their
-  customer-path emission points are not all wired yet and must not be inferred
-  from the metric until their focused placement tests land.
+- activation-ready, first-useful-response, and Run-acceptance event types now
+  have a bounded collection contract, but their customer-path emission points
+  are not wired yet and must not be inferred from the metric.
 
 Adding any gap requires a concrete product event, fixed low-cardinality labels, an explicit privacy review, and focused exactly-once placement tests. The broad implementation-plan metrics item remains open until the complete contracted funnel exists.

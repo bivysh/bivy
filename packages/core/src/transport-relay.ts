@@ -81,6 +81,7 @@ export class RelayTransport implements Transport {
   /** Consecutive failed connect attempts, reset the moment a socket goes live.
    *  Gates the transient-vs-real error toast (see CONNECT_FAILURES_BEFORE_ALERT). */
   private connectFailures = 0;
+  private hasReachedNode = false;
   private curKey: RoomKey | null = null;
   private devicePromise: Promise<DeviceKeypair> | null = null;
   private readonly sendQueue: string[] = [];
@@ -98,6 +99,16 @@ export class RelayTransport implements Transport {
 
   private cpBase(): string {
     return (this.store.cp || (typeof location !== "undefined" ? location.origin : "")).replace(/\/$/, "");
+  }
+
+  private reportRemoteReconnect(): void {
+    if (!this.store.s) return; // account-free pairing has no hosted collector
+    const mobile = typeof navigator !== "undefined" && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+    void this.fetchImpl(`${this.cpBase()}/account/product-events`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${this.store.s}` },
+      body: JSON.stringify({ event: "remote_reconnect", client: mobile ? "mobile" : "desktop" }),
+    }).catch(() => {});
   }
 
   private setStatus(s: ConnectionStatus): void {
@@ -204,6 +215,12 @@ export class RelayTransport implements Transport {
         return;
       }
       if (env.t === "ready" || env.t === "peer.online") {
+        const socket = ws as WebSocket & { _productReconnectReported?: boolean };
+        if (this.hasReachedNode && !socket._productReconnectReported) {
+          socket._productReconnectReported = true;
+          this.reportRemoteReconnect();
+        }
+        this.hasReachedNode = true;
         this.connected = true;
         this.backoff = this.initialBackoff;
         this.connectFailures = 0; // a live socket clears the transient-failure streak

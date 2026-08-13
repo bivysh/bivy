@@ -20,6 +20,7 @@ import {
   fetchGithubQueue,
   fetchAutomationRuns,
   cancelAutomationRun as apiCancelAutomationRun,
+  recordProductMetric,
   assignWorkItem,
   deleteWorkItem,
   clearWorkQueue,
@@ -3849,6 +3850,7 @@ export class AppController {
 
   resolveApproval(id: string, approved: boolean): void {
     this.send({ kind: "approval", id, approved });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 
   /** Answer a pending clarifying question (see UserQuestionRequest). Unlike
@@ -3856,10 +3858,12 @@ export class AppController {
    *  approvals are looked up in a single global list keyed by id alone. */
   answerQuestion(requestId: string, sessionId: string | undefined, answers: Record<string, string>): void {
     this.send({ kind: "session.question.answer", requestId, sessionId, answers });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 
   cancelQuestion(requestId: string, sessionId: string | undefined): void {
     this.send({ kind: "session.question.answer", requestId, sessionId, cancelled: true });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 }
 
