@@ -4139,6 +4139,11 @@ interface RunIssueOverrides {
   /** Cancellation for a control-plane-dispatched Run. Aborts the active runtime
    * turn; callers must still rely on the durable control-plane status. */
   signal?: AbortSignal;
+  correlation?: { runId: string; attempt: number; machineId: string };
+}
+
+function recordRunAuditCorrelation(record: SessionRecord, correlation?: RunIssueOverrides["correlation"]): void {
+  if (correlation) auditLog.record({ kind: "run.correlation", session: record.id, agent: record.runtimeId, ...correlation });
 }
 
 async function runIssueTask(cfg: GitHubTaskConfig, issue: GitHubIssue, overrides: RunIssueOverrides = {}) {
@@ -4185,6 +4190,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
           approvalMode: record.approvalMode,
           runtimeEnforcement: runtimeInfo?.protectionLevel,
           toolInterception: runtimeInfo?.capabilities?.toolInterception === true,
+          correlation: overrides.correlation,
         }) } : {}),
       });
     }
@@ -4287,6 +4293,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   if (!record.worktree) throw new Error("worktree was not created for the issue session");
 
   try {
+    recordRunAuditCorrelation(record, overrides.correlation);
     emit(record, "started", `Started work on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
     await runSessionTurn(record, buildTaskPrompt(issue, nodeGithubIssuePrompt()), overrides.signal);
     if (overrides.signal?.aborted) throw overrides.signal.reason ?? new Error("Run cancelled");
@@ -4312,6 +4319,7 @@ async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, recor
   const wt = record.worktree;
   if (!wt) throw new Error("issue session has no worktree");
   try {
+    recordRunAuditCorrelation(record, overrides.correlation);
     emit(record, "started", `Follow-up on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
 
     // Bring the branch up to date with the base before the agent starts its
@@ -5013,6 +5021,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       approvalMode: approvalModeFrom(item.approvalMode),
       onEvidence: report,
       signal,
+      correlation: { runId: item.id, attempt: item.attempt ?? 1, machineId: identity.nodeId },
     });
     return;
   }
@@ -7714,7 +7723,7 @@ async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
 }
 
 /** Shared Stop path for relay/web clients and the local HTTP/CLI API. */
-function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => void = broadcast): void {
+function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => void = broadcast): Promise<void> {
   // A wedged runtime may never resolve abort() or emit agent_end. Settle the
   // daemon and client first, then make the SDK abort best-effort. The synthetic
   // agent_end also closes running tool cards and drains visible follow-ups.
@@ -7733,6 +7742,7 @@ function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => voi
     onAbortError: (error) => console.warn(`[session-abort] runtime abort failed for ${record.id}:`, error),
   });
   record.abortRecovery = recoverRecordAfterAbort(record);
+  return record.abortRecovery;
 }
 
 async function createSession(workspace = defaultWorkspace, sessionFile?: string, opts: CreateSessionOptions = {}) {
@@ -8733,6 +8743,7 @@ app.get("/api/diagnostics", (_req, res) => {
       approvalMode,
       relayConnected: Boolean(relay?.connected),
       turnRecoveries: turnWatchdog.turnRecoveryStats(),
+      turnRecoverySlo: turnWatchdog.turnRecoverySloStats(),
       audit: auditLog.health(),
       eventLog: {
         ok: eventLog.health().ok,

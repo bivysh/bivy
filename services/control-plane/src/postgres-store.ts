@@ -2793,7 +2793,7 @@ export class PostgresStore implements MeshStore {
        ORDER BY created_at ASC`,
       [accountId, labels],
     );
-    return rows.map(mapWorkItem);
+    return rows.map(mapWorkItem).map(withResumeTarget);
   }
 
   async listWorkItems(accountId: string, limit = 50): Promise<WorkItem[]> {
@@ -2827,7 +2827,7 @@ export class PostgresStore implements MeshStore {
       `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
       [accountId, id, JSON.stringify(events)],
     );
-    return mapWorkItem(withEvent[0] ?? rows[0]);
+    return withResumeTarget(mapWorkItem(withEvent[0] ?? rows[0]));
   }
 
   async renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
@@ -3030,6 +3030,28 @@ function mapWorkItem(row: any): WorkItem {
     output: row.output ?? undefined,
     ...mapEvidenceFields(row),
   };
+}
+
+/**
+ * Re-dispatch continuity ("resume, don't restart"). When a work item is served to
+ * a node for a *repeat* attempt whose prior attempt already stood up a session —
+ * its id survives in `output.sessionId` — the node must CONTINUE that session
+ * rather than cold-start a new one. The canonical case: a node/machine restart
+ * drops the lease mid-run, so a stale-lease reclaim re-dispatches the same row
+ * with its output intact; without this the reclaimed attempt would ignore the
+ * live session and open a fresh one.
+ *
+ * Only applied on the node-dispatch paths (list-pending / claim). An explicit
+ * retry (`startAutomationRunAttempt`) deliberately NULLs `output`, so a
+ * genuinely-fresh attempt has no `output.sessionId` and correctly falls back to
+ * the stored (`new_session`) target. An item already targeted at an existing
+ * session keeps its explicit target.
+ */
+function withResumeTarget(item: WorkItem): WorkItem {
+  if (item.targetKind === "existing_session") return item;
+  const sessionId = item.output?.sessionId;
+  if (typeof sessionId !== "string" || !sessionId) return item;
+  return { ...item, targetKind: "existing_session", targetSessionId: sessionId };
 }
 
 function triggerKindForSource(explicit: AutomationTriggerKind | undefined, source: string): AutomationTriggerKind {

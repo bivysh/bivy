@@ -394,6 +394,15 @@ self-contained setups.
 | `BIVY_MCP_SESSION` | session id | `""` | Internal — set by Bivy when spawning the MCP proxy |
 | `BIVY_TERMINAL` | `1` | — | Internal marker. Bivy sets it in every PTY so shells (and `bivy update`) can tell they are inside Bivy. Never read as input by the node |
 
+Watchdog reliability is measured against two explicit bounds. Silence/wedged
+detection occurs by its configured threshold plus the periodic sweep interval
+(15–60 seconds); the wall-clock cap uses its own timer. After detection or an
+operator Stop, the runtime abort-and-reopen path has a 10-second settlement SLO.
+`GET /api/diagnostics` reports per-runtime/trigger observations, total and maximum
+settlement milliseconds, the target, and the number within target. These counters
+are node-process-local operational measurements, not a claim about fleet-wide
+percentiles; production SLO reporting must aggregate them across restarts.
+
 Standard OS variables are also honoured: `PATH`, `SHELL` (default `/bin/bash`),
 `HOME`, `COMSPEC` and `PATHEXT` (Windows), and `LC_ALL`/`LC_CTYPE`/`LANG`. If
 none of the three locale variables is set, PTY children get

@@ -77,7 +77,7 @@ export interface WatchdogDeps {
   /** Mark the session failed in the metadata store (was metadata.touchSession(id,"failed")). */
   markSessionFailed(id: string): void;
   /** Settle + abort + reopen so the session lands at a clean, resumable idle. */
-  abortSessionRecord(record: WatchdogSession): void;
+  abortSessionRecord(record: WatchdogSession): void | Promise<void>;
   evaluateEphemeralTeardown(): void;
   /** Whether the session's turn is currently running (isWorking || isStreaming). */
   sessionBusy(record: WatchdogSession): boolean;
@@ -97,6 +97,7 @@ export interface TurnWatchdog {
   stallTriggerFor(record: WatchdogSession, now?: number): StallTrigger | null;
   sweepStalledTurns(): void;
   turnRecoveryStats(): Record<string, number>;
+  turnRecoverySloStats(): Record<string, { observations: number; totalMs: number; maxMs: number; withinTarget: number; targetMs: number }>;
   /** Resolve a pending stall review: "stop" runs the force-recovery, "continue"
    *  vouches the turn is healthy — reset the progress anchors and dismiss. */
   resolveTurnAttention(record: WatchdogSession, action: "stop" | "continue"): void;
@@ -189,12 +190,17 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
   // /api/diagnostics health bag so operators can see which runtime hangs and how.
   // See docs/session-reliability-plan.md (Phase 1).
   const turnRecoveryCounts = new Map<string, number>();
+  const recoveryTargetMs = 10_000;
+  const turnRecoveryDurations = new Map<string, { observations: number; totalMs: number; maxMs: number; withinTarget: number; targetMs: number }>();
   function recordTurnRecovery(runtimeId: string, trigger: StallTrigger): void {
     const key = `${runtimeId}:${trigger}`;
     turnRecoveryCounts.set(key, (turnRecoveryCounts.get(key) ?? 0) + 1);
   }
   function turnRecoveryStats(): Record<string, number> {
     return Object.fromEntries([...turnRecoveryCounts.entries()].sort(([a], [b]) => a.localeCompare(b)));
+  }
+  function turnRecoverySloStats() {
+    return Object.fromEntries([...turnRecoveryDurations.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, { ...value }]));
   }
 
   /**
@@ -237,7 +243,20 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
     deps.broadcast({ type: "session.error", sessionId: record.id, error: reason });
     // Settle the client, force the runtime abort (SIGKILL escalation guarantees the
     // wedged child dies), and reopen so a follow-up prompt runs a fresh turn.
-    deps.abortSessionRecord(record);
+    const recoveryStartedAt = now();
+    const recordRecoveryDuration = () => {
+      const durationMs = Math.max(0, now() - recoveryStartedAt);
+      const key = `${record.runtimeId}:${trigger}`;
+      const previous = turnRecoveryDurations.get(key) ?? { observations: 0, totalMs: 0, maxMs: 0, withinTarget: 0, targetMs: recoveryTargetMs };
+      turnRecoveryDurations.set(key, {
+        ...previous,
+        observations: previous.observations + 1,
+        totalMs: previous.totalMs + durationMs,
+        maxMs: Math.max(previous.maxMs, durationMs),
+        withinTarget: previous.withinTarget + (durationMs <= recoveryTargetMs ? 1 : 0),
+      });
+    };
+    void Promise.resolve(deps.abortSessionRecord(record)).then(recordRecoveryDuration, recordRecoveryDuration);
     deps.evaluateEphemeralTeardown();
   }
 
@@ -373,6 +392,7 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
     stallTriggerFor,
     sweepStalledTurns,
     turnRecoveryStats,
+    turnRecoverySloStats,
     resolveTurnAttention,
     clearTurnAttentionOnProgress,
   };
