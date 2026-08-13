@@ -5,6 +5,7 @@ import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolAc
 import { ToolGroup } from "./ToolGroup.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { writeClipboard } from "../clipboard.js";
+import { markdownToSpeech, speechSynthesisSupported } from "../speech.js";
 import { controller } from "../store/useStore.js";
 import { captureChatScroll, restoredChatScrollTop, type ChatScrollMemory } from "../chatScroll.js";
 
@@ -160,6 +161,89 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/** Speaker glyph (cone + sound waves) — the resting state of the read-aloud
+ *  affordance, styled to match CopyGlyph (stroked line-art, size 15). */
+function SpeakGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+    </svg>
+  );
+}
+
+/** Stop glyph shown while a reply is being read aloud — tap to stop early. */
+function StopGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="6" y="6" width="12" height="12" rx="1.5" />
+    </svg>
+  );
+}
+
+/**
+ * Icon-only read-aloud affordance for a final assistant reply. Uses the browser's
+ * SpeechSynthesis API (no key, no backend — see speech.ts), reading the markdown
+ * reduced to plain prose. Toggles: tap to speak, tap again to stop. Starting one
+ * cancels any other reply that was already speaking, so at most one plays at a
+ * time; that other button resets itself via its utterance's end/error handler.
+ */
+function SpeakButton({ text }: { text: string }) {
+  const [speaking, setSpeaking] = useState(false);
+  const utterRef = useRef<SpeechSynthesisUtterance | null>(null);
+
+  const stop = useCallback(() => {
+    const utter = utterRef.current;
+    if (utter) {
+      // Detach handlers first so cancel()'s "interrupted" error doesn't re-run reset.
+      utter.onend = null;
+      utter.onerror = null;
+      utterRef.current = null;
+    }
+    window.speechSynthesis.cancel();
+    setSpeaking(false);
+  }, []);
+
+  // Stop any in-flight speech if the row unmounts (scrolled out, session change).
+  useEffect(() => stop, [stop]);
+
+  const onClick = useCallback(() => {
+    if (speaking) {
+      stop();
+      return;
+    }
+    const spoken = markdownToSpeech(text);
+    if (!spoken) return;
+    const synth = window.speechSynthesis;
+    synth.cancel(); // stop whatever other message was reading
+    const utter = new SpeechSynthesisUtterance(spoken);
+    const done = () => {
+      if (utterRef.current === utter) {
+        utterRef.current = null;
+        setSpeaking(false);
+      }
+    };
+    utter.onend = done;
+    utter.onerror = done;
+    utterRef.current = utter;
+    setSpeaking(true);
+    synth.speak(utter);
+  }, [speaking, stop, text]);
+
+  return (
+    <button
+      type="button"
+      className={`msg-speak-btn${speaking ? " speaking" : ""}`}
+      onClick={onClick}
+      title={speaking ? "Stop" : "Read aloud"}
+      aria-label={speaking ? "Stop reading" : "Read message aloud"}
+    >
+      {speaking ? <StopGlyph /> : <SpeakGlyph />}
+    </button>
+  );
+}
+
 // Memoized so a streaming token that produces a new transcript array only
 // re-renders the entries whose object identity actually changed. The store
 // preserves references for untouched entries (map/spread keep them), so with a
@@ -295,7 +379,12 @@ const EntryView = memo(function EntryView({
       {(entry.text || !hasAttachments) && (
         <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
       )}
-      {entry.text && <CopyButton text={entry.text} />}
+      {entry.text && (
+        <div className="msg-actions">
+          <CopyButton text={entry.text} />
+          {speechSynthesisSupported() && <SpeakButton text={entry.text} />}
+        </div>
+      )}
     </div>
   );
 });

@@ -554,16 +554,19 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    discoverability pattern as .row-menu-btn — and a touch-friendly baseline
    opacity on devices with no hover. */
 .assistant-row { align-self: stretch; width: 100%; }
-.msg-copy-btn {
-  margin-top: 4px; border: 0; background: transparent; color: var(--muted);
+.msg-actions { display: flex; align-items: center; gap: 2px; margin-top: 4px; }
+.msg-copy-btn, .msg-speak-btn {
+  border: 0; background: transparent; color: var(--muted);
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; padding: 0; border-radius: 6px; opacity: 0.35;
   cursor: pointer; transition: opacity 0.12s ease, color 0.12s ease;
 }
-.assistant-row:hover .msg-copy-btn, .msg-copy-btn:focus-visible { opacity: 1; }
-.msg-copy-btn:hover { background: var(--surface-2); color: var(--ink); }
+.assistant-row:hover .msg-copy-btn, .assistant-row:hover .msg-speak-btn,
+.msg-copy-btn:focus-visible, .msg-speak-btn:focus-visible { opacity: 1; }
+.msg-copy-btn:hover, .msg-speak-btn:hover { background: var(--surface-2); color: var(--ink); }
 .msg-copy-btn.copied { color: var(--ok, #2ea043); opacity: 1; }
-@media (hover: none) { .msg-copy-btn { opacity: 0.6; } }
+.msg-speak-btn.speaking { color: var(--accent); opacity: 1; }
+@media (hover: none) { .msg-copy-btn, .msg-speak-btn { opacity: 0.6; } }
 
 /* ---- Tool activity (grouped summary line -> bottom sheet detail + diff) ---- */
 .tool-group { align-self: stretch; width: 100%; max-width: 760px; }
