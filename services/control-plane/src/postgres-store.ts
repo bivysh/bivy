@@ -641,6 +641,9 @@ export class PostgresStore implements MeshStore {
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS config_key TEXT;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS config_order INTEGER;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS max_attempts INTEGER;
+      -- Explicit acknowledgement of autonomous + danger-full-access, checked by
+      -- the shared preflight gate on create/update (see automation-match.ts).
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS allow_dangerous BOOLEAN;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_definitions_config_key
         ON automation_definitions(account_id, config_key) WHERE config_key IS NOT NULL;
       CREATE TABLE IF NOT EXISTS trigger_events (
@@ -2360,8 +2363,8 @@ export class PostgresStore implements MeshStore {
       `INSERT INTO automation_definitions
       (id, account_id, name, template_ciphertext, runtime_id, model, node_label, ephemeral,
        approval_mode, sandbox, enabled, schedule, next_run_at, trigger, webhook_secret, repo,
-       labels, repos, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26) RETURNING *`,
+       labels, repos, template_id, on_events, target_kind, target_session_id, message, config_key, config_order, max_attempts, allow_dangerous)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) RETURNING *`,
       [`automation_${randomUUID()}`, accountId, input.name, input.templateCiphertext ?? null,
         input.runtimeId ?? null, input.model ?? null, input.nodeLabel ?? null, input.ephemeral ?? null,
         input.approvalMode ?? null, input.sandbox ?? null, input.enabled ?? false,
@@ -2376,7 +2379,8 @@ export class PostgresStore implements MeshStore {
         input.message ?? false,
         input.configKey ?? null,
         input.configOrder ?? null,
-        input.maxAttempts ?? null],
+        input.maxAttempts ?? null,
+        input.allowDangerous ?? null],
     );
     return mapAutomationDefinition(rows[0]);
   }
@@ -2411,7 +2415,7 @@ export class PostgresStore implements MeshStore {
        enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
        repo=$16, labels=$17, repos=$18, template_id=$19, on_events=$20,
        target_kind=$21, target_session_id=$22, message=$23, config_key=$24,
-       config_order=$25, max_attempts=$26, updated_at=now()
+       config_order=$25, max_attempts=$26, allow_dangerous=$27, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
@@ -2427,7 +2431,8 @@ export class PostgresStore implements MeshStore {
         next.message ?? false,
         next.configKey ?? null,
         next.configOrder ?? null,
-        next.maxAttempts ?? null],
+        next.maxAttempts ?? null,
+        next.allowDangerous ?? null],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -3168,6 +3173,7 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     enabled: Boolean(row.enabled),
     trigger: row.trigger ?? undefined,
     webhookSecret: row.webhook_secret ?? undefined,
+    allowDangerous: row.allow_dangerous ?? undefined,
     repo: row.repo ?? undefined,
     labels: mapStringList(row.labels),
     repos: mapStringList(row.repos),

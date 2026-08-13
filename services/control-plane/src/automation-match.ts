@@ -13,16 +13,19 @@
 import {
   effectiveEventRules as sharedEffectiveEventRules,
   eventRuleMatches as sharedEventRuleMatches,
+  evaluateAutomation,
   findOverlaps as sharedFindOverlaps,
   labelsMatch as sharedLabelsMatch,
   matchFirst,
   repoAllowed as sharedRepoAllowed,
+  type AutomationEvaluation,
   type EvaluableAutomation,
   type EvaluationEvent,
   type MatchTrailEntry,
   type OverlapFinding,
+  type PreflightSignals,
 } from "@bivy/automation-core";
-import type { AutomationDefinition } from "./store.js";
+import type { AutomationDefinition, InboundHook, NodeRecord } from "./store.js";
 
 /** GitHub delivery families Bivy understands today. Grow this list; don't add
  *  new top-level trigger enums. */
@@ -253,6 +256,148 @@ export function findAutomationOverlaps(definitions: AutomationDefinition[]): Ove
       return a.createdAt.localeCompare(b.createdAt);
     });
   return sharedFindOverlaps(candidates);
+}
+
+/** `bivy/<name>` -> `<name>`; the bare shared queue label (`bivy` or unset) -> undefined. */
+function nodeLabelSuffix(nodeLabel: string | undefined): string | undefined {
+  if (!nodeLabel) return undefined;
+  const suffix = nodeLabel.startsWith("bivy/") ? nodeLabel.slice("bivy/".length) : nodeLabel;
+  return suffix && suffix !== "bivy" ? suffix : undefined;
+}
+
+/** Already-fetched store data the preflight signal adapter below needs. Kept
+ *  I/O-free like preflight.ts itself — the route handler does the fetching. */
+export interface PreflightSignalContext {
+  hooks: InboundHook[];
+  nodes: NodeRecord[];
+  allowance: { limit?: number; used: number; warn: boolean; exhausted: boolean };
+}
+
+type SignalDefinitionInput = Pick<
+  AutomationDefinition,
+  "trigger" | "repo" | "repos" | "templateCiphertext" | "nodeLabel" | "runtimeId" | "model" | "approvalMode" | "sandbox" | "allowDangerous"
+>;
+
+/**
+ * Adapt control-plane store data into the shared PreflightSignals shape (see
+ * docs/automation-evaluator.md). Powers both the create/update save gate and
+ * the simulate endpoint, so a draft and an already-saved automation see the
+ * exact same checklist.
+ *
+ * Known simplifications (no durable per-label routing table exists to check
+ * against): a `bivy/<name>` assignment has no automatic fallback — only the
+ * shared `bivy` queue does, so an offline named node reports "no machine
+ * online" rather than a false "a fallback will pick this up." The encrypted
+ * instructions' key-holder is approximated as the assigned node (accurate for
+ * the common single-target case; the shared queue reports unknown since any
+ * paired node can hold the room key).
+ */
+export function gatherPreflightSignals(def: SignalDefinitionInput, ctx: PreflightSignalContext): PreflightSignals {
+  const sourceRequired = def.trigger === "github" || def.trigger === "github_ci" || def.trigger === "linear";
+  const hookKind: "github" | "linear" = def.trigger === "linear" ? "linear" : "github";
+  const hook = ctx.hooks.find((h) => (hookKind === "linear" ? h.kind === "linear" : h.kind === "github" || h.kind === "github_app"));
+
+  const configuredRepos = def.repos?.length ? def.repos : def.repo ? [def.repo] : [];
+  const knownInstalled = hookKind === "linear" || hook?.installCount === undefined ? undefined : hook.installCount > 0;
+
+  const onlineNodes = ctx.nodes.filter((n) => n.online);
+  const suffix = nodeLabelSuffix(def.nodeLabel);
+  const assignedNode = suffix ? ctx.nodes.find((n) => n.name === suffix) : undefined;
+
+  const requestedApproval = def.approvalMode ?? "risky";
+  const requestedSandbox = def.sandbox ?? "workspace-write";
+
+  return {
+    sourceConnection: {
+      required: sourceRequired,
+      connected: Boolean(hook),
+      detail: sourceRequired && !hook ? `No ${hookKind === "linear" ? "Linear" : "GitHub"} source is connected yet.` : undefined,
+    },
+    repoAccess: {
+      required: sourceRequired && configuredRepos.length > 0,
+      configuredRepos,
+      knownInstalled,
+    },
+    encryptedKeyOwnership: {
+      required: true,
+      hasCiphertext: Boolean(def.templateCiphertext),
+      ownerNodeOnline: suffix ? assignedNode?.online : undefined,
+    },
+    assignedMachine: suffix
+      ? {
+        nodeLabel: def.nodeLabel,
+        primaryOnline: Boolean(assignedNode?.online),
+        hasFallback: false,
+        fallbackAvailable: false,
+        // Explicitly node-targeted work has no other server for that label —
+        // an offline named node genuinely has no fallback today.
+        sharedQueueHasOnlineNode: false,
+      }
+      : {
+        nodeLabel: def.nodeLabel ?? "bivy",
+        primaryOnline: onlineNodes.length > 0,
+        sharedQueueHasOnlineNode: onlineNodes.length > 0,
+      },
+    agentModelCredentials: def.runtimeId || def.model
+      ? {
+        agent: def.runtimeId,
+        model: def.model,
+        explicit: true,
+        detail: "The control plane cannot see a node's local credential vault; the assigned node confirms this at run time.",
+      }
+      : undefined,
+    sandboxPolicy: {
+      requestedApproval,
+      requestedSandbox,
+      effectiveApproval: requestedApproval,
+      effectiveSandbox: requestedSandbox,
+      unsafeCombo: requestedApproval === "autonomous" && requestedSandbox === "danger-full-access" && !def.allowDangerous,
+    },
+    quota: ctx.allowance,
+  };
+}
+
+/**
+ * Full evaluation (match + overlaps + preflight + gate) for one automation —
+ * an existing definition, or a not-yet-saved draft — against the account's
+ * other definitions. `subject` replaces the definition sharing its id in
+ * `definitions` (an edit) or is appended (a create/simulate-only draft) so
+ * overlap detection and first-match ordering see the draft in its real
+ * position. Powers the simulate endpoint and the create/update save gate.
+ * Match/overlap only apply to source triggers (github/linear/github_ci) —
+ * schedule/webhook/manual subjects still get a real preflight + gate, just an
+ * empty match trail and no overlap findings, matching findOverlaps' scope.
+ */
+export function evaluateAccountAutomation(
+  subject: AutomationDefinition,
+  definitions: AutomationDefinition[],
+  // The public, documented fixture vocabulary (docs/automations-as-code.md) —
+  // the same shape `bivy automation test` and config-as-code's
+  // parseSimulationEvent accept — not the webhook-ingress-internal
+  // SourceTriggerEvent. Keeps "what event am I testing against" identical
+  // across all three call sites.
+  event: EvaluationEvent | undefined,
+  signalContext: PreflightSignalContext,
+): AutomationEvaluation<EvaluableAutomation> {
+  const others = definitions.filter((d) => d.id !== subject.id);
+  const merged = [...others, subject].sort((a, b) => {
+    if (a.configKey && b.configKey && a.configOrder !== undefined && b.configOrder !== undefined) {
+      return a.configOrder - b.configOrder || a.createdAt.localeCompare(b.createdAt);
+    }
+    return a.createdAt.localeCompare(b.createdAt);
+  });
+  const candidates = merged
+    .filter((d) => {
+      if (d.enabled === false) return false;
+      if (!isSourceTrigger(d.trigger)) return false;
+      return true;
+    })
+    .map(toEvaluable);
+  return evaluateAutomation({
+    candidates,
+    event,
+    signals: gatherPreflightSignals(subject, signalContext),
+  });
 }
 
 /** Repo allowlist: undefined/empty = all; otherwise exact owner/name match. */
