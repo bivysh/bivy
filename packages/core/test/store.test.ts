@@ -75,6 +75,13 @@ describe("stripAttachmentPlaceholders", () => {
 });
 
 describe("SessionStore", () => {
+  it("retains node audit degradation in Session context", () => {
+    const store = new SessionStore();
+    store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", auditHealth: { storage: "corrupt", writes: "degraded", failedWrites: 2, corruptLines: 1 }, eventLogHealth: { state: "degraded", operation: "append", at: 42 } }] } as never);
+    expect(store.getState().sessions[0].auditHealth).toEqual({ storage: "corrupt", writes: "degraded", failedWrites: 2, corruptLines: 1 });
+    expect(store.getState().sessions[0].eventLogHealth).toEqual({ state: "degraded", operation: "append", at: 42 });
+  });
+
   it("retains observed Session protection context from the node", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", sandbox: "workspace-write", approvalMode: "risky", ephemeral: true, executionProfile: "isolated_customer_cloud" }] } as never);

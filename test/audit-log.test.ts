@@ -88,6 +88,17 @@ test("record never throws when the dir is unwritable (best-effort)", () => {
   fs.writeFileSync(blocker, "x");
   const log = createAuditLog(path.join(blocker, "nope"));
   assert.doesNotThrow(() => log.record({ kind: "tool.call", session: "s", decision: "allowed" }));
+  assert.deepEqual(log.health(), { storage: "unreadable", writes: "degraded", successfulWrites: 0, failedWrites: 1, corruptLines: 0 });
+});
+
+test("health reports successful writes and corrupt storage without exposing content", () => {
+  const dir = tmpDir();
+  const log = createAuditLog(dir);
+  assert.equal(log.health().writes, "unknown");
+  log.record({ kind: "tool.call", session: "s", decision: "allowed" });
+  assert.deepEqual(log.health(), { storage: "healthy", writes: "healthy", successfulWrites: 1, failedWrites: 0, corruptLines: 0 });
+  fs.appendFileSync(log.file, "not-json\n");
+  assert.deepEqual(log.health(), { storage: "corrupt", writes: "healthy", successfulWrites: 1, failedWrites: 0, corruptLines: 1 });
 });
 
 test("net.attempt and approval events round-trip their metadata", () => {

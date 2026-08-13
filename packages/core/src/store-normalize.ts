@@ -255,6 +255,8 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       approvalMode: normalizeApprovalMode(s?.approvalMode ?? s?.bivySession?.approvalMode),
       ephemeral: (s?.ephemeral ?? s?.bivySession?.ephemeral) === true ? true : undefined,
       executionProfile: normalizeExecutionProfile(s?.executionProfile ?? s?.bivySession?.executionProfile),
+      auditHealth: s?.auditHealth ?? s?.bivySession?.auditHealth,
+      eventLogHealth: s?.eventLogHealth ?? s?.bivySession?.eventLogHealth,
       prUrl: s?.prUrl || undefined,
       prs: normalizePrs(s?.prs, s?.prUrl),
       attention: Array.isArray(s?.attention) ? s.attention : previous?.attention,

@@ -213,6 +213,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-actions-context { display: grid; gap: 5px; padding: 8px 10px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; line-height: 1.35; }
 .session-actions-context span { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 6px; }
 .session-actions-context strong { color: var(--text); font-weight: 600; }
+.session-actions-audit-warning { display: grid; gap: 3px; margin: 4px; padding: 8px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--warn, #d4a017) 40%, var(--line)); background: color-mix(in srgb, var(--warn, #d4a017) 10%, var(--surface)); color: var(--ink); font-size: 11px; }
 .session-actions-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--ink); padding: 9px 12px; font-size: 13px; border-radius: 8px; }
 .session-actions-item:has(svg) { display: flex; align-items: center; gap: 8px; }
 .session-actions-item svg { flex: none; color: var(--muted); }

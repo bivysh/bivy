@@ -587,6 +587,8 @@ export function App() {
                 executionProfile={executionProfile}
                 effectiveProtection={[activeSession?.sandbox, activeSession?.approvalMode, activeRuntime?.protectionLabel].filter(Boolean).join(" · ") || undefined}
                 trustMode={trustMode}
+                auditHealth={activeSession?.auditHealth}
+                eventLogHealth={activeSession?.eventLogHealth}
                 onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
               />
             )}
