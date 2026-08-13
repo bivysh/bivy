@@ -34,7 +34,7 @@ test("settings use task-oriented groups and search panel concepts", async () => 
 
 test("automations is the single hub for connections, Runs and rulesets", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/AutomationsView.tsx", import.meta.url), "utf8");
-  for (const tab of ["Overview", "Runs", "Rulesets"]) {
+  for (const tab of ["Automations", "Runs", "Rulesets"]) {
     expect(source).toContain(`label: "${tab}"`);
   }
   // The standalone Webhooks tab was removed — a webhook is just an automation

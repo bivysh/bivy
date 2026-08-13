@@ -11,7 +11,7 @@
 // Work Queue tab (AutomationsView) — the natural home for "where does queued
 // work run". Gated by EPHEMERAL_MACHINES_ENABLED, same as before.
 import { useEffect, useState } from "react";
-import { ephemeralCatalogEntry, type AccountNode, type EphemeralNodeConfig, type ProviderKeyInfo, type QueueRouting } from "@bivy/core";
+import { ephemeralCatalogEntry, type AccountNode, type EphemeralNodeConfig, type HostedProvisioningStatus, type ProviderKeyInfo, type QueueRouting } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -51,7 +51,13 @@ function Toggle({ checked, onChange, disabled, label }: { checked: boolean; onCh
   );
 }
 
-export function QueueRoutingSection() {
+export function QueueRoutingSection({
+  hosted,
+  onConfigureCredentials,
+}: {
+  hosted?: HostedProvisioningStatus | null;
+  onConfigureCredentials?: () => void;
+}) {
   const [nodes, setNodes] = useState<AccountNode[]>([]);
   const [configs, setConfigs] = useState<EphemeralNodeConfig[]>([]);
   const [routing, setRouting] = useState<QueueRouting | null>(null);
@@ -138,8 +144,43 @@ export function QueueRoutingSection() {
     }
   };
 
+  const selectedConfigId = routing?.primary.kind === "config" ? routing.primary.configId : "";
+  const fallbackConfigId = routing?.fallback?.configId ?? "";
+  const selectedConfig = selectedConfigId ? configs.find((c) => c.id === selectedConfigId) : undefined;
+  const fallbackConfig = fallbackConfigId ? configs.find((c) => c.id === fallbackConfigId) : undefined;
+  const hostedCanRun = (config?: EphemeralNodeConfig) => Boolean(
+    config && hosted?.enabled && hosted.validatedProviders.includes(config.provider)
+    && hosted.credential !== "none" && hosted.encryptionReady,
+  );
+  const primaryNodeName = routing?.primary.kind === "node" ? routing.primary.node : "";
+  const routeReady = routing?.primary.kind === "config"
+    ? hostedCanRun(selectedConfig)
+    : routing?.primary.kind === "node"
+      ? persistentNodes.some((node) => (node.name || node.id) === primaryNodeName && node.online) || hostedCanRun(fallbackConfig)
+      : persistentNodes.some((node) => node.online);
+
   return (
     <>
+      <div className={`routing-readiness ${routeReady ? "ready" : "warn"}`} role="status">
+        <div className="routing-readiness-copy">
+          <strong>{routing === null ? "Checking run readiness…" : routeReady ? "Ready for unattended runs" : "Setup needs attention"}</strong>
+          <span>
+            {routing === null
+              ? "Loading machines, routing, and credential status."
+              : routing.primary.kind === "config"
+              ? routeReady
+                ? `${selectedConfig?.name || "Isolated profile"} can start without an online personal machine.`
+                : "Ephemeral-only runs need hosted provisioning, a validated cloud credential, and GitHub/model sign-ins available to the fresh runner."
+              : routing.primary.kind === "node"
+                ? "The selected persistent machine must be online, or have an isolated fallback."
+                : "The shared queue needs at least one online persistent machine."}
+          </span>
+        </div>
+        {routing !== null && !routeReady && onConfigureCredentials && (
+          <button type="button" className="btn sm" onClick={onConfigureCredentials}>Fix setup</button>
+        )}
+      </div>
+
       <label className="field-label"><span>Primary machine</span>
         <select className="picker-search" value={primaryValue} disabled={busy} onChange={(e) => saveRouting(e.target.value, fallbackValue)}>
           <option value="shared">Shared queue (any online machine)</option>
@@ -171,10 +212,10 @@ export function QueueRoutingSection() {
       )}
       <p className="muted small">
         {primaryIsNode
-          ? "Runs wait for this machine; if it's offline and a fallback is set, an isolated machine is provisioned instead."
+          ? "Runs wait for this machine; if it's offline and a fallback is set, a fresh isolated machine is provisioned instead."
           : routing?.primary.kind === "config"
-            ? "Runs provision a fresh isolated machine from this profile when no trusted workstation is online."
-            : "Runs are picked up by any online machine."}
+            ? "Every run starts from this isolated profile. Cloud credentials authorize machine creation; GitHub credentials clone and push; model credentials authorize the agent. These sign-ins are separate and secret values are never shown here."
+            : "Runs are picked up by any online persistent machine. No cloud credential is needed."}
       </p>
 
       <h4 className="settings-subhead">Isolated machine profiles</h4>
