@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   effectiveEventRules,
   eventRuleMatches,
+  findAutomationOverlaps,
   labelsMatch,
   matchSourceAutomation,
   normalizeEventRules,
@@ -12,6 +13,7 @@ import {
 } from "../src/automation-match.js";
 import type { AutomationDefinition } from "../src/store.js";
 import { createPgMemStore } from "../src/pg-mem-store.js";
+import { findOverlaps as sharedFindOverlaps, matchFirst as sharedMatchFirst, type EvaluableAutomation } from "@bivy/automation-core";
 
 function def(partial: Partial<AutomationDefinition> & Pick<AutomationDefinition, "id" | "trigger">): AutomationDefinition {
   return {
@@ -304,5 +306,30 @@ assert.ok(matchSourceAutomation(ciOn, {
   repo: "acme/api",
   labels: [],
 }));
+
+// Parity: the control-plane adapters (matchSourceAutomation,
+// findAutomationOverlaps) and the shared core they delegate to
+// (@bivy/automation-core) produce IDENTICAL results for equivalent input —
+// not just "the same rules", the same code path. This is what
+// docs/automation-evaluator.md's "literally the same code" claim rests on;
+// a regression here means the control plane silently forked behavior from
+// config-as-code's `bivy automation test`.
+const parityDefs: AutomationDefinition[] = [
+  def({ id: "wide", trigger: "github", createdAt: "2026-01-01T00:00:00.000Z", on: [{ event: "issues" }] }),
+  def({ id: "narrow", trigger: "github", createdAt: "2026-01-02T00:00:00.000Z", on: [{ event: "issues", actions: ["labeled"] }] }),
+];
+const parityEvaluable: EvaluableAutomation[] = [
+  { id: "wide", enabled: true, trigger: "github", on: [{ event: "issues" }] },
+  { id: "narrow", enabled: true, trigger: "github", on: [{ event: "issues", actions: ["labeled"] }] },
+];
+const viaAdapter = matchSourceAutomation(parityDefs, { kind: "github", githubEvent: "issues", action: "labeled", repo: undefined, labels: ["bivy"] });
+const viaShared = sharedMatchFirst(parityEvaluable, { kind: "github", event: "issues", action: "labeled", labels: ["bivy"] }).matched;
+assert.equal(viaAdapter?.id, "wide", "the adapter's first-match winner is the earlier, broader automation");
+assert.equal(viaAdapter?.id, viaShared?.id, "the control-plane adapter and the shared core agree on the winner");
+
+const overlapsAdapter = findAutomationOverlaps(parityDefs);
+const overlapsShared = sharedFindOverlaps(parityEvaluable);
+assert.deepEqual(overlapsAdapter, overlapsShared, "overlap findings are identical, not just similarly-shaped");
+assert.equal(overlapsAdapter[0]?.kind, "shadowed");
 
 console.log("automation-match tests passed");
