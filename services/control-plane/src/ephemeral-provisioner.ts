@@ -363,7 +363,7 @@ export async function provisionEphemeralForAccount(
   const localStore = serverLocalStore({ sessionToken, env, onAddKey: (_id, key) => { roomKeyB64 = key; } });
   const attemptId = retry?.attemptId ?? randomUUID();
   const createdAt = new Date(nowMs).toISOString();
-  let attempt: HostedMachineAttempt | undefined;
+  let attempt: HostedMachineAttempt | undefined = retry ? await store.getHostedMachineAttempt(accountId, attemptId) : undefined;
   const onLifecycle = async (event: EphemeralLaunchEvent): Promise<void> => {
     attempt = await store.putHostedMachineAttempt({
       accountId, attemptId: event.attemptId, provider: config.provider, configId: config.id,
@@ -496,7 +496,7 @@ export async function provisionEphemeralRestore(
   accountId: string,
   config: EphemeralNodeConfig,
   env: ProvisionEnv,
-  opts: { reuseNodeId: string; restoreSessionId: string },
+  opts: { reuseNodeId: string; restoreSessionId: string; attemptId?: string; retryCount?: number },
   launcher = launchEphemeralMachine,
   nowMs = Date.now(),
 ): Promise<EphemeralMachine> {
@@ -512,10 +512,25 @@ export async function provisionEphemeralRestore(
 
   const sessionToken = await store.createSession(accountId);
   const localStore = serverLocalStore({ sessionToken, env, onAddKey: () => {} });
+  const attemptId = opts.attemptId ?? randomUUID();
+  const createdAt = new Date(nowMs).toISOString();
+  let attempt: HostedMachineAttempt | undefined = opts.attemptId ? await store.getHostedMachineAttempt(accountId, attemptId) : undefined;
+  const onLifecycle = async (event: EphemeralLaunchEvent): Promise<void> => {
+    attempt = await store.putHostedMachineAttempt({
+      accountId, attemptId: event.attemptId, provider: config.provider, configId: config.id,
+      nodeId: event.nodeId, state: event.phase as HostedMachineAttemptState,
+      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose: "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId },
+      machine: event.machine as unknown as Record<string, unknown> | undefined,
+      lastError: event.error, retryCount: opts.retryCount ?? 0,
+      createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
+    });
+  };
   try {
     const machine = await launcher(
       {
         provider: config.provider,
+        attemptId,
+        onLifecycle,
         region: config.region,
         size: config.size,
         image: config.image,
@@ -534,10 +549,12 @@ export async function provisionEphemeralRestore(
       },
       { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs) },
     );
+    if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "tracked", machine: machine as unknown as Record<string, unknown>, updatedAt: new Date().toISOString() });
     await audit(store, accountId, { action: "room_key_reused", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
     await audit(store, accountId, { action: "provision_launched", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
     return machine;
   } catch (e) {
+    if (attempt && attempt.state !== "failed") await store.putHostedMachineAttempt({ ...attempt, state: "failed", lastError: String((e as Error)?.message || e).slice(0, 500), updatedAt: new Date().toISOString() }).catch(() => {});
     await audit(store, accountId, { action: "provision_failed", provider: config.provider, configId: config.id, detail: String((e as Error)?.message || e).slice(0, 200) });
     throw e;
   }
@@ -615,6 +632,10 @@ export async function reapSettledHostedMachine(
   const providerToken = hosted.providerTokens?.[machine.provider];
   try {
     if (providerToken) {
+      if (machine.attemptId) {
+        const attempt = await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined);
+        if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleting", updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
+      }
       await destroyOneHostedMachine(store, accountId, machine, providerToken, env, nowMs, destroy);
       if (machine.attemptId) {
         const attempt = await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined);
@@ -660,7 +681,7 @@ export async function reconcileHostedMachines(store: MeshStore, accountId: strin
   let adopted = false;
   for (const attempt of attempts) {
     if (!attempt.machine || machines.some((m) => m.attemptId === attempt.attemptId || (m.id && m.id === attempt.machine?.id))) continue;
-    machines.push({ ...attempt.machine, attemptId: attempt.attemptId, nodeId: attempt.nodeId, setupId: attempt.configId });
+    machines.push({ ...attempt.machine, attemptId: attempt.attemptId, nodeId: attempt.nodeId, setupId: attempt.configId, purpose: attempt.desired.purpose });
     await store.putHostedMachineAttempt({ ...attempt, state: "tracked", updatedAt: new Date(nowMs).toISOString() });
     adopted = true;
   }
@@ -689,7 +710,12 @@ export async function reconcileHostedMachines(store: MeshStore, accountId: strin
       };
       const retryCount = attempt.retryCount + 1;
       await store.putHostedMachineAttempt({ ...attempt, state: "requested", retryCount, lastError: undefined, updatedAt: new Date(nowMs).toISOString() });
-      await provisionEphemeralForAccount(store, accountId, config, env, launchEphemeralMachine, nowMs, (attempt.desired.purpose as EphemeralMachine["purpose"]) || "queue-default", { attemptId: attempt.attemptId, nodeId: attempt.nodeId, retryCount }).catch(() => {});
+      const restoreSessionId = typeof attempt.desired.restoreSessionId === "string" ? attempt.desired.restoreSessionId : "";
+      if (restoreSessionId) {
+        await provisionEphemeralRestore(store, accountId, config, env, { reuseNodeId: attempt.nodeId, restoreSessionId, attemptId: attempt.attemptId, retryCount }, launchEphemeralMachine, nowMs).catch(() => {});
+      } else {
+        await provisionEphemeralForAccount(store, accountId, config, env, launchEphemeralMachine, nowMs, (attempt.desired.purpose as EphemeralMachine["purpose"]) || "queue-default", { attemptId: attempt.attemptId, nodeId: attempt.nodeId, retryCount }).catch(() => {});
+      }
     }
     machines = await store.getHostedMachines(accountId);
   }
@@ -740,6 +766,11 @@ export async function reconcileHostedMachines(store: MeshStore, accountId: strin
     }
     if (env && providerToken) {
       try {
+        const deletingAttemptId = typeof m.attemptId === "string" ? m.attemptId : "";
+        if (deletingAttemptId) {
+          const attempt = await store.getHostedMachineAttempt(accountId, deletingAttemptId).catch(() => undefined);
+          if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleting", updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
+        }
         await destroyOneHostedMachine(store, accountId, m as unknown as EphemeralMachine, providerToken, env, nowMs, destroy);
       } catch (error) {
         // Never forget a resource whose provider deletion failed: it may still
