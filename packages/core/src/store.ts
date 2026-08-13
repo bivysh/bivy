@@ -3634,6 +3634,7 @@ export class SessionStore {
         return;
       }
       case "message_update":
+      case "message_boundary":
       case "message_end": {
         const msg = (event as any).message;
         if (msg?.role !== "assistant") return;
@@ -3642,7 +3643,11 @@ export class SessionStore {
         // on `text` so a reasoning-only update (content:[{thinking}] → text:"")
         // can't wipe prose the model already produced this turn.
         if (text) this.draft.pendingText = text;
-        const finalize = kind === "message_end";
+        // `message_boundary` seals one discrete prose item without ending the
+        // turn (Codex commentary commonly alternates these with tool calls).
+        // Treat it like message_end for bubble placement while leaving the
+        // runtime/server's actual turn-final semantics to message_end.
+        const finalize = kind === "message_end" || kind === "message_boundary";
         // Reasoning can arrive two ways: as an accumulated `thinking` block on
         // the message, or (for runtimes that only stream reasoning) as
         // incremental `thinking_delta` / `thinking_end` on the event itself. Keep

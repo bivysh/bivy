@@ -288,6 +288,11 @@ class ProtocolSession implements RuntimeSession {
   private readonly resumeRef?: string;
   private started = false;
   private assistantText = "";
+  /** A protocol agent can produce several discrete assistant messages in one
+   * turn (Codex commentary items are the common case). After a
+   * `message.boundary`, separate the next item's text in the cumulative stream
+   * instead of welding `"first." + "Second"` into `"first.Second"`. */
+  private assistantItemBoundary = false;
   private reasoningText = "";
   private stderrOutput = "";
   private lastUsage?: UsageSnapshot;
@@ -606,6 +611,15 @@ class ProtocolSession implements RuntimeSession {
       if (!text) return;
       if (this.streaming) {
         if (!this.assistantText) this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
+        if (this.assistantItemBoundary && this.assistantText) {
+          // If a tool already flushed the preceding item, advance the persisted
+          // prefix over this display-only separator too; the next turnContent
+          // block should contain `Second message`, not `\n\nSecond message`.
+          const wasFullyFlushed = this.turnTextFlushed === this.assistantText;
+          this.assistantText += "\n\n";
+          if (wasFullyFlushed) this.turnTextFlushed = this.assistantText;
+        }
+        this.assistantItemBoundary = false;
         this.assistantText += text;
         this.emit({ type: "message_update", message: { role: "assistant", content: this.assistantText } });
         return;
@@ -617,6 +631,26 @@ class ProtocolSession implements RuntimeSession {
       // the drain: fold it onto the last assistant message so it survives a reopen
       // instead of opening a fresh draft that is never persisted.
       this.foldLateAssistantDelta(text);
+      return;
+    }
+    if (type === "message.boundary") {
+      // Codex emits multiple agentMessage items during one turn: commentary,
+      // then tools, then more commentary. Seal the prose item now so the client
+      // can place the next tool card AFTER it. Waiting for session.done flattens
+      // every item into one growing bubble and leaves all tools in a block below.
+      // Keep assistantText cumulative: SessionStore uses the committed prefix to
+      // derive each new run, and session.done still persists the complete turn.
+      if (this.streaming && this.assistantText) {
+        // Keep the boundary durable too. The marker is display-only, but it lets
+        // renderHistory split adjacent prose items after reload even when no tool
+        // happened between them.
+        this.flushPendingTurnText();
+        if (this.turnContent[this.turnContent.length - 1]?.type !== "bivy_message_boundary") {
+          this.turnContent.push({ type: "bivy_message_boundary" });
+        }
+        this.emit({ type: "message_boundary", message: { role: "assistant", content: this.assistantText } });
+        this.assistantItemBoundary = true;
+      }
       return;
     }
     if (type === "message.reasoning" || type === "reasoning.delta") {
@@ -663,6 +697,7 @@ class ProtocolSession implements RuntimeSession {
       this.emit({ type: "message_end", message });
       this.streaming = false;
       this.assistantText = "";
+      this.assistantItemBoundary = false;
       this.reasoningText = "";
       this.turnContent = [];
       this.turnTextFlushed = "";
@@ -873,6 +908,7 @@ class ProtocolSession implements RuntimeSession {
     this.messages.push({ role: "user", content: prompt, timestamp: Date.now() });
     this.streaming = true;
     this.assistantText = "";
+    this.assistantItemBoundary = false;
     this.reasoningText = "";
     this.stderrOutput = "";
     this.turnContent = [];

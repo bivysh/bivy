@@ -36,6 +36,58 @@ describe("renderHistory block interleaving", () => {
     expect(entries[4].text).not.toContain("I'll make the temporary file");
   });
 
+  it("restores Pi's persisted streaming reasoning in source order", () => {
+    // Pi's live message_update path renders thinking blocks immediately. The
+    // daemon persists those as assistant intermediate sidecars with the same
+    // block shape; renderHistory must not discard them on reopen.
+    const entries = renderHistory([
+      { role: "assistant", content: [{ type: "thinking", thinking: "Inspecting the implementation" }] },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "read", input: { path: "src/a.ts" } }] },
+      { role: "assistant", content: [{ type: "reasoning", reasoning: "Planning the fix" }] },
+      { role: "assistant", content: [{ type: "text", text: "Done." }] },
+    ]);
+    expect(entries.map((entry) => entry.tool
+      ? { role: "tool", id: entry.tool.callId }
+      : { role: entry.role, text: entry.text })).toEqual([
+      { role: "thinking", text: "Inspecting the implementation" },
+      { role: "tool", id: "t1" },
+      { role: "thinking", text: "Planning the fix" },
+      { role: "assistant", text: "Done." },
+    ]);
+  });
+
+  it("keeps text/thinking/tool runs interleaved inside one persisted Pi message", () => {
+    const entries = renderHistory([{
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Plan" },
+        { type: "text", text: "Checking now." },
+        { type: "tool_use", id: "t1", name: "bash", input: {} },
+        { type: "thinking", thinking: "Result looks good" },
+        { type: "text", text: "Finished." },
+      ],
+    }]);
+    expect(entries.map((entry) => entry.tool ? `tool:${entry.tool.callId}` : `${entry.role}:${entry.text}`)).toEqual([
+      "thinking:Plan",
+      "assistant:Checking now.",
+      "tool:t1",
+      "thinking:Result looks good",
+      "assistant:Finished.",
+    ]);
+  });
+
+  it("keeps protocol assistant-item boundaries after reload", () => {
+    const entries = renderHistory([{
+      role: "assistant",
+      content: [
+        { type: "text", text: "First commentary." },
+        { type: "bivy_message_boundary" },
+        { type: "text", text: "Second commentary." },
+      ],
+    }]);
+    expect(entries.map((entry) => entry.text)).toEqual(["First commentary.", "Second commentary."]);
+  });
+
   it("drops harness meta turns (interrupt marker, task-notification/system-reminder) from history", () => {
     // Defense-in-depth for transcripts persisted before the runtime-level filter
     // existed. The CLI writes these into its transcript for the model; they must

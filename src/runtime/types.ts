@@ -25,6 +25,7 @@ export type RuntimeEventType =
   | "turn_start"
   | "message_start"
   | "message_update"
+  | "message_boundary"
   | "turn_end"
   | "tool_call"
   | "tool_execution_start"

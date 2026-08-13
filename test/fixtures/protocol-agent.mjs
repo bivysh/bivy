@@ -120,6 +120,10 @@ rl.on('line', (line) => {
     // Reasoning stream (surfaced as a thinking sidecar) before the answer text.
     send({ type: 'message.reasoning', sessionId: msg.sessionId, text: `thinking with ${selectedModel}` });
     send({ type: 'message.delta', sessionId: msg.sessionId, role: 'assistant', text: 'hello ' });
+    // Discrete assistant-item boundary (the shape Codex commentary uses): the
+    // host must seal this prose before the following tool instead of waiting for
+    // session.done and concatenating every item into one bubble.
+    send({ type: 'message.boundary', sessionId: msg.sessionId, itemId: 'msg_fixture_1' });
     pendingTool = { sessionId: msg.sessionId, toolCallId: 'tc_fixture' };
     send({ type: observedTool ? 'tool.observe' : 'tool.call', sessionId: msg.sessionId, toolCallId: pendingTool.toolCallId, name: observedTool ? 'spawn_agent' : 'shell', risk: 'medium', input: observedTool ? { agent: 'explorer', description: 'Inspect the workspace' } : { cmd: 'echo ok' } });
     if (!advertiseInterception || observedTool) {
