@@ -676,7 +676,7 @@ export class AppController {
     // Reconcile the device vault once on sign-in: a producer device satisfies any
     // pending wrapped-key requests from the account's other devices; a consumer
     // device pulls its wrapped key so a synced token is ready to wake a machine.
-    void this.syncDeviceVault();
+    void this.syncDeviceVault().catch(() => { /* durable sync state exposes retry */ });
     this.connect();
   }
 
@@ -2855,7 +2855,7 @@ export class AppController {
     } catch {
       /* noop */
     }
-    if (enabled) void this.syncDeviceVault();
+    if (enabled) void this.syncDeviceVault().catch(() => { /* surfaced by getDeviceVaultSyncState */ });
   }
   /** Reconcile the device vault. Failures remain observable through
    * `getDeviceVaultSyncState()` and reject explicit callers instead of being
