@@ -23,6 +23,11 @@ const advertiseResume = !!process.env.FIXTURE_RESUME || process.env.FIXTURE_PROT
 const streamingBehaviors = process.env.FIXTURE_STREAMING_BEHAVIORS
   ? process.env.FIXTURE_STREAMING_BEHAVIORS.split(',').filter(Boolean)
   : undefined;
+// An agent that runs its own tools without a host approve/deny round-trip
+// (toolInterception:false — e.g. a third-party ACP agent). The host must still
+// stream the tool_call card live; when set, this fixture delivers the tool
+// result itself instead of waiting for a tool.decision that will never come.
+const advertiseInterception = !process.env.FIXTURE_NO_INTERCEPTION;
 let selectedModel = 'fixture-small';
 send({
   type: 'hello',
@@ -44,7 +49,7 @@ send({
     chat: true,
     streaming: true,
     abort: true,
-    toolInterception: true,
+    toolInterception: advertiseInterception,
     modelSelection: false,
     resume: advertiseResume,
     ...(streamingBehaviors ? { streamingBehaviors } : {}),
@@ -114,6 +119,14 @@ rl.on('line', (line) => {
     send({ type: 'message.delta', sessionId: msg.sessionId, role: 'assistant', text: 'hello ' });
     pendingTool = { sessionId: msg.sessionId, toolCallId: 'tc_fixture' };
     send({ type: 'tool.call', sessionId: msg.sessionId, toolCallId: pendingTool.toolCallId, name: 'shell', risk: 'medium', input: { cmd: 'echo ok' } });
+    if (!advertiseInterception) {
+      // No tool.decision will arrive — run the tool ourselves and finish the turn.
+      send({ type: 'tool.result', sessionId: msg.sessionId, toolCallId: pendingTool.toolCallId, status: 'ok', summary: 'auto' });
+      send({ type: 'message.delta', sessionId: msg.sessionId, role: 'assistant', text: 'world' });
+      send({ type: 'usage', sessionId: msg.sessionId, usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 } });
+      send({ type: 'session.status', sessionId: msg.sessionId, status: 'idle' });
+      send({ type: 'session.done', sessionId: msg.sessionId });
+    }
     return;
   }
   if (msg.type === 'tool.decision') {

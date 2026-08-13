@@ -600,7 +600,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .activity-row:hover { background: var(--surface-2); }
 .activity-ic { flex: none; width: 20px; height: 20px; display: grid; place-content: center; color: var(--muted); }
 .activity.is-running .activity-ic { color: var(--accent); }
+.activity.is-error .activity-ic { color: var(--danger); }
 .activity-verb { flex: none; font-weight: 650; font-size: 14px; }
+/* Failed tool call: a compact badge on the row and an error-tinted outcome. */
+.tool-fail { flex: none; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: var(--danger); background: var(--danger-soft); border-radius: 5px; padding: 1px 6px; }
+.tool-group-line.is-error:not(.is-running) .tool-group-state { display: block; width: 8px; height: 8px; flex: none; border-radius: 999px; background: var(--danger); }
+.tool-detail-value.is-error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
 .activity-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .activity-detail { display: grid; gap: 14px; padding: 4px 14px 16px; }
 .tool-detail-block { display: grid; gap: 4px; min-width: 0; }

@@ -3720,6 +3720,11 @@ export class SessionStore {
           input: {},
           status: "done",
           result: typeof (event as any).result === "string" ? (event as any).result : contentToText((event as any).result),
+          // Carry the result-time detail (it merges the call classification with
+          // the tool's outcome: exitCode / isError / truncated) so the card can
+          // show a command that FAILED as failed. Without this the reducer kept
+          // only the call-time detail and the outcome was invisible.
+          detail: toolDetail(event as any),
         });
         return;
       case "turn_end":

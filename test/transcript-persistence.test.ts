@@ -61,6 +61,25 @@ test("tool_call maps to a tool_use entry; tool_result to a tool_result entry; ot
   assert.equal(eventLog.appended[1].entry.content[0].type, "tool_result");
 });
 
+test("a progress-only tool_execution_update (elapsedSeconds, no detail) does not overwrite the tool-call overlay", () => {
+  const { tp, eventLog } = harness();
+  // The initiating call records the real input + classification.
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_call", toolName: "Read", input: { path: "/x" }, id: "call-1", detail: { kind: "read", path: "/x" } } as any);
+  // A keep-alive ping shares the `bivy-tool-call-call-1` key; persisting it
+  // would clobber the real overlay, so it must be dropped from the log.
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_execution_update", toolName: "Read", id: "call-1", input: { elapsedSeconds: 3 } } as any);
+  assert.equal(eventLog.appended.length, 1, "only the real tool_call overlay is persisted");
+  assert.equal(eventLog.appended[0].entry.content[0].input.path, "/x");
+  assert.ok(eventLog.appended[0].entry.content[0].detail, "classification survives");
+});
+
+test("an enriching tool_execution_update (with detail or real input) is still persisted", () => {
+  const { tp, eventLog } = harness();
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_execution_update", toolName: "bash", id: "call-9", input: { command: "npm test" } } as any);
+  assert.equal(eventLog.appended.length, 1, "an update that carries real tool input still records");
+  assert.equal(eventLog.appended[0].entry.content[0].input.command, "npm test");
+});
+
 test("intermediate coalescing: skips an unchanged non-final append, always writes final, re-opens after clear", () => {
   const { tp, eventLog } = harness();
   const ev = { assistantMessageEvent: { type: "thinking_end", content: "hello" } };

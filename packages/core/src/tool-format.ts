@@ -83,6 +83,12 @@ export interface ToolFormat {
   diffs: DiffHunk[];
   /** Number of edits when there are several but no rendered diff. */
   edits?: number;
+  /** The tool call finished in error (non-zero exit / agent-reported failure). */
+  isError?: boolean;
+  /** Shell exit code, when the agent reported one. */
+  exitCode?: number;
+  /** The captured output was clipped to a bound. */
+  truncated?: boolean;
 }
 
 export type DiffOp =
@@ -335,6 +341,15 @@ export function formatTool(name: string, input: unknown, detail?: ToolCallDetail
     }
   }
 
+  // Surface the tool's OUTCOME (present once the result-time detail lands): a
+  // failed command should read as failed, not sit identical to a success. This
+  // is independent of the call classification above, so it applies to every kind.
+  if (detail?.result) {
+    if (detail.result.isError || (typeof detail.result.exitCode === "number" && detail.result.exitCode !== 0)) result.isError = true;
+    if (typeof detail.result.exitCode === "number") result.exitCode = detail.result.exitCode;
+    if (detail.result.truncated) result.truncated = true;
+  }
+
   return result;
 }
 
@@ -350,8 +365,10 @@ export function toolGroupSummary(tools: Array<{ name: string; input: unknown; de
   let read = 0;
   let output = 0;
   let delegated = 0;
+  let failed = 0;
   for (const t of tools) {
     const f = formatTool(t.name, t.input, t.detail);
+    if (f.isError) failed++;
     if (f.verb === "Agent output") output++;
     else if (f.verb === "Delegated") delegated++;
     else if (f.command) ran++;
@@ -365,8 +382,9 @@ export function toolGroupSummary(tools: Array<{ name: string; input: unknown; de
   if (edited) parts.push(`edited ${plural(edited, "file", "files")}`);
   if (delegated) parts.push(`delegated ${plural(delegated, "task", "tasks")}`);
   if (output) parts.push(output === 1 ? "agent output" : `${output} agent output streams`);
-  if (!parts.length) return tools.length === 1 ? "1 tool call" : `${tools.length} tool calls`;
+  const failedSuffix = failed ? ` · ${failed} failed` : "";
+  if (!parts.length) return `${tools.length === 1 ? "1 tool call" : `${tools.length} tool calls`}${failedSuffix}`;
   // Capitalize the first fragment; join with commas.
   const joined = parts.join(", ");
-  return joined.charAt(0).toUpperCase() + joined.slice(1);
+  return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}${failedSuffix}`;
 }
