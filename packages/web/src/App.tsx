@@ -41,6 +41,9 @@ import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 const TerminalOverlay = lazy(() =>
   import("./components/Terminal.js").then((m) => ({ default: m.TerminalOverlay })),
 );
+const ReadinessChecklist = lazy(() =>
+  import("./components/ReadinessChecklist.js").then((m) => ({ default: m.ReadinessChecklist })),
+);
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { controller } from "./store/useStore.js";
 import { isUnseen, statusClass, statusLabel } from "./sessionStatus.js";
@@ -637,16 +640,18 @@ export function App() {
         )}
 
         {!state.activeSessionId && state.transcript.length === 0 && (
-          <ReadinessChecklist
-            activation={activation}
-            onRemediate={{
-              connect_machine: () => openSettings("nodes"),
-              install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
-              authenticate_credential: () => openSettings("providers"),
-              grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
-              run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
-            }}
-          />
+          <Suspense fallback={null}>
+            <ReadinessChecklist
+              activation={activation}
+              onRemediate={{
+                connect_machine: () => openSettings("nodes"),
+                install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
+                authenticate_credential: () => openSettings("providers"),
+                grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
+                run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
+              }}
+            />
+          </Suspense>
         )}
 
         {needsNode && (
