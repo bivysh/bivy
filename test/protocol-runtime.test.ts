@@ -52,6 +52,18 @@ await waitFor(events, (event) => event.type === "agent_end");
 assert.equal(decisions.length, 1);
 assert.equal((decisions[0] as { toolName: string }).toolName, "shell");
 
+// A discrete assistant item is sealed before the following tool. Codex emits
+// this shape for commentary throughout a turn; losing the boundary makes every
+// message grow into one bubble while all tool cards collect below it.
+const firstMessageBoundary = events.findIndex((event) => event.type === "message_boundary");
+const firstToolCall = events.findIndex((event) => event.type === "tool_call");
+assert.ok(firstMessageBoundary >= 0 && firstMessageBoundary < firstToolCall, "assistant item ends before its following tool call");
+assert.equal(
+  ((events[firstMessageBoundary] as { message?: { content?: unknown } }).message?.content),
+  "hello ",
+  "the item boundary seals only the prose streamed so far",
+);
+
 // History keeps the whole turn: the user prompt, an assistant message whose
 // content blocks interleave the reply text with the tool_use in the order they
 // actually streamed (the fixture sends "hello " before the tool call and
@@ -67,11 +79,11 @@ const assistantBlocks = history[1].content as Array<Record<string, unknown>>;
 assert.ok(Array.isArray(assistantBlocks));
 assert.deepEqual(
   assistantBlocks.map((b) => b.type),
-  ["text", "tool_use", "text"],
-  "text and tool_use blocks interleave in streamed order, not text-then-all-tools",
+  ["text", "bivy_message_boundary", "tool_use", "text"],
+  "assistant-item boundaries, text, and tool_use blocks persist in streamed order",
 );
 assert.equal(assistantBlocks[0]?.text, "hello ");
-assert.equal(assistantBlocks[2]?.text, "world");
+assert.equal(assistantBlocks[3]?.text, "world");
 const toolUse = assistantBlocks.find((b) => b.type === "tool_use");
 assert.equal(toolUse?.name, "shell");
 assert.equal(toolUse?.id, "tc_fixture");

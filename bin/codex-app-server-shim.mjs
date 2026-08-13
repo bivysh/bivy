@@ -178,6 +178,11 @@ function handleCompletedItem(params) {
         agentMessageItems.add(itemId);
         bivy({ type: "message.delta", text: String(item.text) });
       }
+      // An agentMessage is a real prose item, not merely another token in one
+      // turn-wide answer. Tell the protocol host it ended so commentary and tool
+      // activity render in source order (message → tools → message → tools)
+      // instead of one concatenated bubble followed by a single tool block.
+      bivy({ type: "message.boundary", itemId });
       return;
     case "plan":
       if (!reasoningItems.has(itemId) && item.text) emitReasoning(itemId, item.text);
