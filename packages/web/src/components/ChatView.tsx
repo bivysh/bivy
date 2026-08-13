@@ -5,7 +5,7 @@ import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type ToolAc
 import { ToolGroup } from "./ToolGroup.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { writeClipboard } from "../clipboard.js";
-import { markdownToSpeech, speechSynthesisSupported } from "../speech.js";
+import { getSpeechPreferences, markdownToSpeech, readAloudSupported, speechSynthesisSupported, speechToneInstructions } from "../speech.js";
 import { controller } from "../store/useStore.js";
 import { captureChatScroll, restoredChatScrollTop, type ChatScrollMemory } from "../chatScroll.js";
 
@@ -182,52 +182,75 @@ function StopGlyph() {
   );
 }
 
-/**
- * Icon-only read-aloud affordance for a final assistant reply. Uses the browser's
- * SpeechSynthesis API (no key, no backend — see speech.ts), reading the markdown
- * reduced to plain prose. Toggles: tap to speak, tap again to stop. Starting one
- * cancels any other reply that was already speaking, so at most one plays at a
- * time; that other button resets itself via its utterance's end/error handler.
- */
+/** The one active reader across all message rows (browser or cloud audio). */
+let stopActiveReader: (() => void) | null = null;
+
+/** Icon-only read-aloud affordance for a final assistant reply. */
 function SpeakButton({ text }: { text: string }) {
   const [speaking, setSpeaking] = useState(false);
   const utterRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const audioRef = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
+  const generationRef = useRef(0);
 
   const stop = useCallback(() => {
+    generationRef.current += 1; // invalidate an in-flight OpenAI request
     const utter = utterRef.current;
-    if (utter) {
-      // Detach handlers first so cancel()'s "interrupted" error doesn't re-run reset.
-      utter.onend = null;
-      utter.onerror = null;
-      utterRef.current = null;
-    }
+    if (utter) { utter.onend = null; utter.onerror = null; utterRef.current = null; }
     window.speechSynthesis.cancel();
+    const cloud = audioRef.current;
+    if (cloud) { cloud.audio.pause(); URL.revokeObjectURL(cloud.url); audioRef.current = null; }
     setSpeaking(false);
+    if (stopActiveReader === stop) stopActiveReader = null;
   }, []);
 
-  // Stop any in-flight speech if the row unmounts (scrolled out, session change).
   useEffect(() => stop, [stop]);
 
-  const onClick = useCallback(() => {
-    if (speaking) {
+  const onClick = useCallback(async () => {
+    if (speaking) { stop(); return; }
+    const spoken = markdownToSpeech(text);
+    if (!spoken) return;
+    stopActiveReader?.();
+    stopActiveReader = stop;
+    setSpeaking(true);
+    const prefs = getSpeechPreferences();
+
+    if (prefs.reader === "openai") {
+      const generation = ++generationRef.current;
+      try {
+        const result = await controller.synthesize(spoken, prefs.openaiVoice, speechToneInstructions(prefs.tone));
+        if (generationRef.current !== generation) return;
+        const url = base64ToBlobUrl(result.audio, result.mimeType);
+        if (!url) throw new Error("The generated speech audio was invalid.");
+        const audio = new Audio(url);
+        audioRef.current = { audio, url };
+        audio.onended = stop;
+        audio.onerror = () => { controller.store.setError("Could not play the generated speech."); stop(); };
+        await audio.play();
+      } catch (error) {
+        if (generationRef.current === generation) {
+          controller.store.setError(error instanceof Error ? error.message : String(error));
+          stop();
+        }
+      }
+      return;
+    }
+
+    if (!speechSynthesisSupported()) {
+      controller.store.setError("Browser speech is not supported on this device. Choose OpenAI under Settings → Voice.");
       stop();
       return;
     }
-    const spoken = markdownToSpeech(text);
-    if (!spoken) return;
     const synth = window.speechSynthesis;
-    synth.cancel(); // stop whatever other message was reading
+    synth.cancel();
     const utter = new SpeechSynthesisUtterance(spoken);
-    const done = () => {
-      if (utterRef.current === utter) {
-        utterRef.current = null;
-        setSpeaking(false);
-      }
-    };
+    utter.rate = prefs.rate;
+    if (prefs.browserVoice) {
+      utter.voice = synth.getVoices().find((voice) => voice.voiceURI === prefs.browserVoice || voice.name === prefs.browserVoice) ?? null;
+    }
+    const done = () => { if (utterRef.current === utter) stop(); };
     utter.onend = done;
     utter.onerror = done;
     utterRef.current = utter;
-    setSpeaking(true);
     synth.speak(utter);
   }, [speaking, stop, text]);
 
@@ -382,7 +405,7 @@ const EntryView = memo(function EntryView({
       {entry.text && (
         <div className="msg-actions">
           <CopyButton text={entry.text} />
-          {speechSynthesisSupported() && <SpeakButton text={entry.text} />}
+          {readAloudSupported() && <SpeakButton text={entry.text} />}
         </div>
       )}
     </div>

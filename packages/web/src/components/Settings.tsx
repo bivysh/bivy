@@ -13,6 +13,7 @@ import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { getSpeechPreferences, OPENAI_VOICES, setSpeechPreferences, SPEECH_TONES, type SpeechPreferences } from "../speech.js";
 
 // The view enumeration lives in router.ts (as `SettingsView`) so the router can
 // validate a `/settings/:view` path without importing this component module;
@@ -137,7 +138,7 @@ const TITLES: Record<View, string> = {
   import: "Import session",
   providers: "Keys & OAuth",
   models: "Local models",
-  voice: "Voice input",
+  voice: "Voice",
   github: "GitHub App",
   linear: "Linear",
   slack: "Slack",
@@ -158,7 +159,7 @@ const SEARCH_TERMS: Record<View, string> = {
   import: "session transcript file upload migrate",
   providers: "api key oauth openai anthropic google login credentials",
   models: "ollama local model endpoint",
-  voice: "microphone speech transcription",
+  voice: "microphone speech transcription read aloud reader text to speech voice tone speed",
   github: "github app repository installation issue pull request",
   linear: "linear workspace issue integration",
   slack: "slack workspace channel integration",
@@ -257,7 +258,7 @@ export function Settings({
       items: [
         { id: "appearance", label: "Appearance", icon: <IconAppearance /> },
         { id: "notifications", label: "Notifications", icon: <IconBell /> },
-        { id: "voice", label: "Voice input", icon: <IconMic /> },
+        { id: "voice", label: "Voice", icon: <IconMic /> },
         { id: "import", label: "Import session", icon: <IconImport /> },
       ],
     },
@@ -1173,46 +1174,88 @@ function LocalModelsPanel({ state }: { state: AppState }) {
   );
 }
 
-// ---- Voice input (speech-to-text) ----
+// ---- Voice input (STT) and read aloud (TTS) ----
 function VoicePanel({ state }: { state: AppState }) {
+  const [speech, setSpeech] = useState<SpeechPreferences>(() => getSpeechPreferences());
+  const [browserVoices, setBrowserVoices] = useState<SpeechSynthesisVoice[]>([]);
+  useEffect(() => { controller.getSttConfig(); }, []);
   useEffect(() => {
-    controller.getSttConfig();
+    if (!("speechSynthesis" in window)) return;
+    const refresh = () => setBrowserVoices(window.speechSynthesis.getVoices());
+    refresh();
+    window.speechSynthesis.addEventListener("voiceschanged", refresh);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", refresh);
   }, []);
+  const updateSpeech = (patch: Partial<SpeechPreferences>) => {
+    const next = { ...speech, ...patch };
+    setSpeech(next);
+    setSpeechPreferences(next);
+  };
   const config = state.sttConfig;
   const providers = config?.providers ?? [];
+  const openAiReady = providers.some((provider) => provider.id === "openai" && provider.configured);
 
   return (
     <div className="settings-form">
-      <p className="muted settings-intro">
-        Dictate into the composer with the mic button. Voice uses the same Groq or OpenAI API key shown under
-        <strong> Keys &amp; OAuth</strong>; there is no separate speech key. With no key, voice falls back to your browser's
-        built-in dictation (no key needed, but lower accuracy). Note: <strong>Groq</strong> is different from xAI / Grok.
-      </p>
-
-      <label className="field-label">Preferred provider</label>
-      <div className="seg-row">
-        {providers.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            className={`seg-btn${config?.provider === p.id ? " active" : ""}`}
-            onClick={() => controller.setSttProvider(p.id)}
-          >
-            {p.label}
-          </button>
-        ))}
-        {providers.length === 0 && <span className="muted">Loading…</span>}
-      </div>
-
-      {providers.map((p) => (
-        <div key={p.id} className="voice-provider">
-          <div className="voice-provider-head">
-            <span className="field-label">{p.label}</span>
-            {p.configured ? <span className="chip ok">Available from Keys &amp; OAuth</span> : <span className="chip">No account key</span>}
-          </div>
-          <div className="muted small">{p.model} · Add, rotate, scope, or remove this provider under Keys &amp; OAuth.</div>
+      <section className="settings-section">
+        <h3>Voice input</h3>
+        <p className="muted settings-intro">
+          Dictate with the composer mic. Whisper converts speech to text using the same Groq or OpenAI key under
+          <strong> Keys &amp; OAuth</strong>. With no key, supported browsers use built-in dictation.
+        </p>
+        <label className="field-label">Preferred transcription provider</label>
+        <div className="seg-row">
+          {providers.map((p) => (
+            <button key={p.id} type="button" className={`seg-btn${config?.provider === p.id ? " active" : ""}`} onClick={() => controller.setSttProvider(p.id)}>
+              {p.label}
+            </button>
+          ))}
+          {providers.length === 0 && <span className="muted">Loading…</span>}
         </div>
-      ))}
+        {providers.map((p) => (
+          <div key={p.id} className="voice-provider">
+            <div className="voice-provider-head">
+              <span className="field-label">{p.label}</span>
+              {p.configured ? <span className="chip ok">Available</span> : <span className="chip">No account key</span>}
+            </div>
+            <div className="muted small">{p.model} · Manage this key under Keys &amp; OAuth.</div>
+          </div>
+        ))}
+      </section>
+
+      <section className="settings-section">
+        <h3>Read aloud</h3>
+        <p className="muted settings-intro">Choose the reader used by the speaker button on assistant replies. OpenAI speech is higher quality; browser speech is free and stays on this device.</p>
+        <label className="field-label" htmlFor="speech-reader">Reader</label>
+        <select id="speech-reader" className="picker-search" value={speech.reader} onChange={(e) => updateSpeech({ reader: e.target.value as SpeechPreferences["reader"] })}>
+          <option value="browser">Browser voice (free, on-device)</option>
+          <option value="openai" disabled={!openAiReady}>OpenAI neural voice{openAiReady ? "" : " — add OpenAI key"}</option>
+        </select>
+
+        {speech.reader === "browser" ? (
+          <>
+            <label className="field-label" htmlFor="browser-reader-voice">Voice</label>
+            <select id="browser-reader-voice" className="picker-search" value={speech.browserVoice} onChange={(e) => updateSpeech({ browserVoice: e.target.value })}>
+              <option value="">System default</option>
+              {browserVoices.map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name} ({voice.lang})</option>)}
+            </select>
+            <label className="field-label" htmlFor="reader-speed">Speed · {speech.rate.toFixed(1)}×</label>
+            <input id="reader-speed" type="range" min="0.7" max="1.5" step="0.1" value={speech.rate} onChange={(e) => updateSpeech({ rate: Number(e.target.value) })} />
+          </>
+        ) : (
+          <>
+            <label className="field-label" htmlFor="openai-reader-voice">Voice</label>
+            <select id="openai-reader-voice" className="picker-search" value={speech.openaiVoice} onChange={(e) => updateSpeech({ openaiVoice: e.target.value })}>
+              {OPENAI_VOICES.map((voice) => <option key={voice} value={voice}>{voice.charAt(0).toUpperCase() + voice.slice(1)}</option>)}
+            </select>
+            <label className="field-label" htmlFor="reader-tone">Tone</label>
+            <select id="reader-tone" className="picker-search" value={speech.tone} onChange={(e) => updateSpeech({ tone: e.target.value as SpeechPreferences["tone"] })}>
+              {SPEECH_TONES.map((tone) => <option key={tone.id} value={tone.id}>{tone.label}</option>)}
+            </select>
+            <div className="muted small">Uses gpt-4o-mini-tts and your existing OpenAI API key. Audio text is sent to OpenAI and may incur usage charges.</div>
+          </>
+        )}
+      </section>
     </div>
   );
 }

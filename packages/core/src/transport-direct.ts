@@ -676,6 +676,16 @@ export class DirectTransport implements Transport {
             { requestId: String(obj.requestId ?? "") },
           );
           break;
+        case "synthesize":
+          this.emitMerged(
+            "speech.audio",
+            await this.directApi("/api/speech", {
+              method: "POST",
+              body: JSON.stringify({ text: obj.text, voice: obj.voice, instructions: obj.instructions }),
+            }),
+            { requestId: String(obj.requestId ?? "") },
+          );
+          break;
         case "node.update": {
           try {
             await this.directApi("/api/node/update", { method: "POST", body: "{}" });

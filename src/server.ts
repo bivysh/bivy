@@ -179,6 +179,7 @@ import {
   MAX_AUDIO_BYTES,
   type SttProvider,
 } from "./stt.js";
+import { synthesizeOpenAiSpeech } from "./tts.js";
 import { seal, open } from "./e2e.js";
 import {
   ControlPlaneTaskPoller,
@@ -2776,6 +2777,20 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       relay?.sendEvent({ type: "transcription", requestId, text });
     } catch (error) {
       relay?.sendEvent({ type: "transcription", requestId, error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async synthesize(msg) {
+    const requestId = String(msg.requestId ?? "");
+    try {
+      const audio = await synthesizeOpenAiSpeech({
+        appDir,
+        text: String(msg.text ?? ""),
+        voice: msg.voice,
+        instructions: msg.instructions,
+      });
+      relay?.sendEvent({ type: "speech.audio", requestId, audio: audio.toString("base64"), mimeType: "audio/mpeg" });
+    } catch (error) {
+      relay?.sendEvent({ type: "speech.audio", requestId, error: error instanceof Error ? error.message : String(error) });
     }
   },
   // Session replication (docs/session-replication.md): the STANDBY receives a
@@ -9415,6 +9430,20 @@ app.post("/api/transcribe", async (req, res) => {
     // 200 with an `error` field: the client resolves transcription through a
     // uniform result event across transports, so a failure must still carry a
     // readable message rather than a bare HTTP error the event layer drops.
+    res.json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/api/speech", async (req, res) => {
+  try {
+    const audio = await synthesizeOpenAiSpeech({
+      appDir,
+      text: String(req.body?.text ?? ""),
+      voice: req.body?.voice,
+      instructions: req.body?.instructions,
+    });
+    res.json({ audio: audio.toString("base64"), mimeType: "audio/mpeg" });
+  } catch (error) {
     res.json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
