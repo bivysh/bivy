@@ -432,9 +432,9 @@ function hasModelConfig(config) {
 }
 
 const SETUP_AGENT_CHOICES = [
-  { key: "p", label: "Pi (default; uses your existing login and configuration)", runtimeId: "pi", command: "pi", needsBivyModel: false, loginHint: "Sign in through Pi (/login)" },
   { key: "c", label: "Claude Code", runtimeId: "claude-code-sdk", command: "claude", authProbe: ["auth", "status"], needsBivyModel: false, loginHint: "Sign in through Claude Code" },
-  { key: "x", label: "Codex", runtimeId: "codex", command: "codex", authProbe: ["login", "status"], needsBivyModel: false, loginHint: "Sign in through Codex" },
+  { key: "x", label: "Codex", runtimeId: "codex-approvals", command: "codex", authProbe: ["login", "status"], needsBivyModel: false, loginHint: "Sign in through Codex" },
+  { key: "p", label: "Pi", runtimeId: "pi", command: "pi", needsBivyModel: false, loginHint: "Sign in through Pi (/login)" },
   { key: "o", label: "OpenCode", runtimeId: "opencode", command: "opencode", needsBivyModel: false },
   { key: "g", label: "Gemini CLI", runtimeId: "gemini", command: "gemini", needsBivyModel: false, loginHint: "Sign in through Gemini" },
   { key: "q", label: "Qwen Code", runtimeId: "qwen", command: "qwen", needsBivyModel: false, loginHint: "Sign in through Qwen" },
@@ -442,16 +442,23 @@ const SETUP_AGENT_CHOICES = [
   { key: "l", label: "Cline", runtimeId: "cline", needsBivyModel: false },
   { key: "r", label: "Crush", runtimeId: "crush", needsBivyModel: false },
 ];
+const RECOMMENDED_SETUP_AGENT_IDS = new Set(["claude-code-sdk", "codex-approvals"]);
+const recommendedSetupAgents = () => SETUP_AGENT_CHOICES.filter((choice) => RECOMMENDED_SETUP_AGENT_IDS.has(choice.runtimeId));
+const additionalSetupAgents = () => SETUP_AGENT_CHOICES.filter((choice) => !RECOMMENDED_SETUP_AGENT_IDS.has(choice.runtimeId));
 
 function setupAgentByRuntime(runtimeId) {
+  // Migrate the former ungoverned Codex exec default into the single recommended
+  // Codex surface when setup is re-run; existing Sessions retain their own id.
+  if (runtimeId === "codex") runtimeId = "codex-approvals";
   return SETUP_AGENT_CHOICES.find((choice) => choice.runtimeId === runtimeId);
 }
 
 function setupAgentDefaultKey(config) {
   const saved = setupAgentByRuntime(String(config?.env?.BIVY_RUNTIME || ""));
-  if (saved) return saved.key;
-  const installed = SETUP_AGENT_CHOICES.find((choice) => choice.command && commandExists(choice.command));
-  return installed?.key || "p";
+  if (saved && RECOMMENDED_SETUP_AGENT_IDS.has(saved.runtimeId)) return saved.key;
+  if (saved) return "m";
+  const installed = recommendedSetupAgents().find((choice) => choice.command && commandExists(choice.command));
+  return installed?.key || "c";
 }
 
 function nativeAgentAuthDetected(choice) {
@@ -653,7 +660,7 @@ async function ensureSetupAgent(choice) {
     const cli = await ensureNpmCommand("claude", "@anthropic-ai/claude-code", "Claude Code");
     return sdk && cli;
   }
-  if (choice.runtimeId === "codex") return ensureNpmCommand("codex", "@openai/codex", "Codex");
+  if (choice.runtimeId === "codex-approvals") return ensureNpmCommand("codex", "@openai/codex", "Codex");
   if (choice.runtimeId === "opencode") return ensureNpmCommand("opencode", "opencode-ai/opencode", "OpenCode");
   if (choice.runtimeId === "gemini") return ensureNpmCommand("gemini", "@google/gemini-cli", "Gemini CLI");
   if (choice.runtimeId === "qwen") return ensureNpmCommand("qwen", "@qwen-code/qwen-code", "Qwen Code");
@@ -980,6 +987,19 @@ function defaultRunWorkspace(config) {
   const cwd = process.cwd();
   const res = runQuiet("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree"]);
   return res.code === 0 && res.stdout.trim() === "true" ? cwd : fallback;
+}
+
+/** First setup should use the repository the developer deliberately ran it
+ * from, when there is one. Never mistake Bivy's own source/install checkout for
+ * the customer's first repository; that path keeps the safe dedicated folder. */
+function firstSetupWorkspace(config) {
+  if (config.workspace && config.workspace !== repoRoot) return config.workspace;
+  const cwd = path.resolve(process.cwd());
+  if (cwd !== repoRoot) {
+    const top = runQuiet("git", ["-C", cwd, "rev-parse", "--show-toplevel"]);
+    if (top.code === 0 && top.stdout.trim()) return path.resolve(top.stdout.trim());
+  }
+  return path.join(os.homedir(), "bivy-workspace");
 }
 
 // --- nodes registry ---------------------------------------------------------
@@ -3337,9 +3357,9 @@ async function cmdSetup(args = []) {
   const rl = createPrompter();
   const { ask, askChoice, askYesNo } = rl;
 
-  // 1. Workspace + local port — chosen for the user, no prompts. The workspace
-  // defaults to a dedicated ~/bivy-workspace folder that won't collide with the
-  // user's own projects; the local port is for this machine only (remote access
+  // 1. Repository workspace + local port — chosen for the user, no prompts. If
+  // setup is run from a repository, that repository is the first-task workspace;
+  // otherwise use a dedicated ~/bivy-workspace folder. The local port is for this machine only (remote access
   // goes through the relay). Both are changeable later in Settings.
   //
   // Port selection auto-avoids collisions so multiple nodes on one machine (e.g.
@@ -3348,7 +3368,7 @@ async function cmdSetup(args = []) {
   // otherwise we take the first free port at or above 4317. Without this the
   // second node would default to 4317 too and silently fail to bind.
   if (!existingConfig || config.workspace === repoRoot) {
-    const workspace = config.workspace !== repoRoot ? config.workspace : path.join(os.homedir(), "bivy-workspace");
+    const workspace = firstSetupWorkspace(config);
     if (!fs.existsSync(workspace)) fs.mkdirSync(workspace, { recursive: true });
     config.workspace = workspace;
     const explicitPort = Number(process.env.PORT);
@@ -3370,15 +3390,24 @@ async function cmdSetup(args = []) {
   // credentials. Prefer an already-installed native agent on a fresh machine,
   // while retaining the saved choice when setup is re-run.
   console.log(c.bold("\n  Agent\n"));
-  const agentChoice = await askChoice(
+  const recommended = recommendedSetupAgents();
+  const initialChoice = await askChoice(
     "Which agent do you want to try first?",
-    SETUP_AGENT_CHOICES.map((choice) => ({
+    [...recommended.map((choice) => ({
       key: choice.key,
       label: `${choice.label}${choice.command && commandExists(choice.command) ? " (installed)" : ""}`,
-    })),
+    })), { key: "m", label: "More agents…" }],
     setupAgentDefaultKey(config),
   );
-  const setupAgent = SETUP_AGENT_CHOICES.find((choice) => choice.key === agentChoice) || setupAgentByRuntime("pi");
+  const savedAgent = setupAgentByRuntime(String(config?.env?.BIVY_RUNTIME || ""));
+  const agentChoice = initialChoice === "m"
+    ? await askChoice(
+      "Choose another agent",
+      additionalSetupAgents().map((choice) => ({ key: choice.key, label: `${choice.label}${choice.command && commandExists(choice.command) ? " (installed)" : ""}` })),
+      savedAgent && !RECOMMENDED_SETUP_AGENT_IDS.has(savedAgent.runtimeId) ? savedAgent.key : "p",
+    )
+    : initialChoice;
+  const setupAgent = SETUP_AGENT_CHOICES.find((choice) => choice.key === agentChoice) || setupAgentByRuntime("claude-code-sdk");
   if (setupAgent) {
     config.env = { ...config.env, BIVY_RUNTIME: setupAgent.runtimeId };
     saveConfig(config);
