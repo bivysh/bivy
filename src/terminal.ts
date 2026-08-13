@@ -299,7 +299,7 @@ export class TerminalManager {
     const env = {
       ...localeDefaults,
       ...process.env,
-      ...depCacheEnv(),
+      ...depCacheEnv(options.workspace),
       ...options.env,
       TERM: "xterm-256color",
       // Make it obvious in the shell that this is a Bivy terminal.
