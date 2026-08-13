@@ -5098,6 +5098,15 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
   }
+  // Record the session id with the control plane BEFORE the (potentially long)
+  // turn runs, not just after it completes. A machine restart mid-turn must leave
+  // the Run pointing at THIS session so a stale-lease reclaim resumes it
+  // (withResumeTarget derives an existing_session target from output.sessionId).
+  // Reporting only after runSessionTurn — as this path used to — meant an
+  // interrupted turn left output.sessionId unset, so the reclaim cold-started a
+  // duplicate session while the original sat abandoned on disk (two sidebar
+  // sessions for one Run). Mirrors the Linear path's create-then-report ordering.
+  await report({ output: { sessionId: record.id, branch: record.worktree?.branch } });
   const prompt = isMessage
     ? request
     : (parsedRepo || record.worktree)
