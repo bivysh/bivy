@@ -622,6 +622,22 @@ export interface RunReceiptEvidence {
   approvals: { requests: number; approved: number; denied: number };
   fileChanges: { files: Array<{ path: string; op?: string; added?: number; removed?: number }>; added: number; removed: number };
   auditHealth: { correlation: "healthy" | "missing"; readableStorage: "healthy" | "missing"; successfulWrites: "healthy" | "missing" };
+  execution?: {
+    profile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+    controller?: "customer" | "bivy_hosted_provisioning";
+    agentVersion?: string;
+    modelVersionStatus?: "available" | "unavailable" | "unknown";
+  };
+  protection?: {
+    effective?: {
+      executionProfile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+      sandboxTier?: "read-only" | "workspace-write" | "danger-full-access";
+      approvalMode?: "never" | "risky" | "always" | "autonomous";
+      runtimeEnforcement?: string;
+      trustModes?: string[];
+    };
+    capabilities?: Array<{ capability: "sandbox" | "approval" | "tool" | "network" | "credential_custody" | "runtime_policy"; evidenceClass: "enforced" | "observed" | "unavailable"; mechanism?: string }>;
+  };
 }
 /** Sanitized, allowlisted patch a node may report against its own claimed run.
  *  `checks`/`events` are treated as INCREMENTAL — appended to, never replacing,

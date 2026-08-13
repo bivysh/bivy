@@ -16,7 +16,7 @@ import { SessionRerouteController, type ResumePlan } from "./policy/session-rero
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
 import { createAuditLog, readAuditEvents } from "./audit/index.js";
-import { receiptEvidenceFromAudit } from "./audit/receipt-evidence.js";
+import { receiptEvidenceForRun } from "./audit/receipt-evidence.js";
 import { createWorkspaceController } from "./controllers/workspaces.js";
 import { createModelController } from "./controllers/models.js";
 import { Type, type TSchema } from "typebox";
@@ -4142,6 +4142,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
     if (kind) {
       const terminal = stage === "failed" || stage === "checks_failed" || stage === "no_changes" || stage === "pr_opened";
       const auditEvents = terminal ? readAuditEvents(auditLog.file, { session: record.id }) : [];
+      const runtimeInfo = runtimeList(record.runtimeId).find((runtime) => runtime.id === record.runtimeId);
       const summary = stage === "pr_opened" ? "Pull request opened."
         : stage === "started" ? "Working branch and session created."
           : stage === "pushed" ? "Changes pushed; no pull request is open."
@@ -4158,7 +4159,14 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
           url: typeof extra.prUrl === "string" ? extra.prUrl : undefined,
           ...(stage === "checks_failed" || stage === "failed" ? { status: "failed" } : {}),
         }],
-        ...(terminal ? { receiptEvidence: receiptEvidenceFromAudit(auditEvents, fs.existsSync(auditLog.file)) } : {}),
+        ...(terminal ? { receiptEvidence: receiptEvidenceForRun(auditEvents, fs.existsSync(auditLog.file), {
+          profile: record.ephemeral ? "isolated_customer_cloud" : "trusted_workstation",
+          controller: record.ephemeral ? "bivy_hosted_provisioning" : "customer",
+          sandboxTier: record.sandbox,
+          approvalMode: record.approvalMode,
+          runtimeEnforcement: runtimeInfo?.protectionLevel,
+          toolInterception: runtimeInfo?.capabilities?.toolInterception === true,
+        }) } : {}),
       });
     }
   };

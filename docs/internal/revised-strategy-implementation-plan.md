@@ -151,8 +151,10 @@ or PR → Receipt.
   Automation activity, queue/history, and the in-session Run pill deep-link to
   the exact `/runs/:runId`; the Run screen offers "Open Session" only when the
   Session is resolvable. Expo client parity follows when that client lands.
-- [ ] Make “Continue in background” / “Delegate this Session” preserve context
-  and explain any fidelity boundary.
+- [x] Make “Continue in background” / “Delegate this Session” preserve context
+  and explain any fidelity boundary. **Implemented in PR #522:** delegation targets
+  the exact existing Session id, preserves its native context, and discloses that
+  continuation stays on the owning Machine rather than implying a transcript copy.
 - [x] Ensure every accepted Run reaches exactly one explicit outcome from the
   product contract; preserve ambiguous completion as Needs review. **PR #506:**
   terminal outcomes are immutable (no terminal is a valid transition source), a
@@ -177,10 +179,13 @@ or PR → Receipt.
   issue comments are made idempotent via a hidden marker (`commentIssueOnce`). A
   fixed `bivy_run_failure_stage_total{stage}` counter joins the outcome counter.
   Known gap documented: random-branch Slack/schedule/webhook runs.
-- [ ] Give every failed outcome a working next action (fix, retry, fork, review,
-  re-auth, or cancel as applicable).
+- [x] Give every failed outcome a working next action (fix, retry, fork, review,
+  re-auth, or cancel as applicable). **Implemented in PRs #521 and #524:** actions
+  are derived from durable evidence; failed checks, authentication failures,
+  ambiguous completion, active cancellation, and retryable terminals each lead
+  to a real surface or mutation rather than an inert generic button.
 - [x] Add end-to-end tests for the golden workflow on both recommended agents.
-  **Implemented 2026-08-13:** one shared contract now certifies the real Claude
+  **Implemented in PR #526:** one shared contract now certifies the real Claude
   Code and Codex adapter identities/version pins/capabilities, then carries each
   deterministic agent boundary through an isolated worktree, checks, commit,
   push, idempotent PR creation, explicit outcome, correlated audit evidence, and
@@ -195,7 +200,7 @@ failure has a next action.
 
 **Goal:** useful individual governance, without premature audit claims.
 
-- [ ] Implement the allowlisted, bounded Receipt v1 schema independently of
+- [x] Implement the allowlisted, bounded Receipt v1 schema independently of
   legacy queue transport fields. **Progress:** a core-only allowlisted projection
   and sanitized JSON exporter now reject prohibited/oversized fields. Every
   current projection remains partial because approval decisions, bounded
@@ -204,13 +209,17 @@ failure has a next action.
 - [ ] Aggregate execution identity, requested/effective protection, approvals,
   observed decisions, checks, changes, artifacts, retries, duration, and outcome.
 - [ ] Mark every control/signal enforced, observed, or unavailable.
-- [ ] Mark Receipts partial and visibly warn when audit storage is missing,
+- [x] Mark Receipts partial and visibly warn when audit storage is missing,
   corrupt, unwritable, or cannot be correlated.
-- [ ] Keep prompts, transcripts, reasoning, diffs, files, check output, raw tool
+- [x] Keep prompts, transcripts, reasoning, diffs, files, check output, raw tool
   payloads, and secrets out of hosted metadata.
-- [ ] Add PWA Receipt view and sanitized JSON export.
-- [ ] Add adversarial sanitizer, bounds, cross-account, and observation-gap tests.
-- [ ] Remove “attestation” claims until the future signed-evidence gate is met.
+- [x] Add PWA Receipt view and sanitized JSON export. **Implemented in PR #519.**
+- [x] Add adversarial sanitizer, bounds, cross-account, and observation-gap tests.
+  **Implemented across PRs #519/#520 and the authoritative-evidence follow-up:**
+  prohibited nested keys fail closed, values/lists are bounded, Run reads are
+  account-scoped, and missing/corrupt evidence remains an explicit limitation.
+- [x] Remove “attestation” claims until the future signed-evidence gate is met.
+  Receipt v1 is explicitly an observation report, not an attestation.
 
 **Gate:** a developer can answer what ran, what Bivy allowed, what it could not
 observe, what changed, and whether checks passed from the Receipt alone.
