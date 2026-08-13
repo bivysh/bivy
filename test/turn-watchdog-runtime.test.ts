@@ -84,6 +84,22 @@ test("recoverStuckTurn is idempotent while a recovery is in flight", () => {
   assert.equal(watchdog.turnRecoveryStats()["claude-code-sdk:stalled"], 1, "counted once");
 });
 
+test("recovery settlement duration is measured against the 10s SLO", async () => {
+  const clock = { at: 1_000 };
+  let settle!: () => void;
+  const recovery = new Promise<void>((resolve) => { settle = resolve; });
+  const { watchdog } = harness({ abortSessionRecord: () => recovery }, clock);
+  watchdog.recoverStuckTurn(fakeRecord(), "stuck", { trigger: "wedged" });
+  assert.deepEqual(watchdog.turnRecoverySloStats(), {}, "an in-flight recovery is not reported as settled");
+  clock.at += 7_500;
+  settle();
+  await recovery;
+  await Promise.resolve();
+  assert.deepEqual(watchdog.turnRecoverySloStats()["claude-code-sdk:wedged"], {
+    observations: 1, totalMs: 7_500, maxMs: 7_500, withinTarget: 1, targetMs: 10_000,
+  });
+});
+
 test("sweep recovers a silence-stalled turn and skips healthy/blocked ones", () => {
   const clock = { at: 10 * 60_000 }; // 10 min in
   const stalled = fakeRecord({ id: "stalled", busy: true, lastProgressAt: 0 }); // 10 min idle

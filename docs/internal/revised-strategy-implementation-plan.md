@@ -122,8 +122,17 @@ complete the first task; no false-positive readiness.
   best-effort write failures are exposed as bounded counters/states in diagnostics
   and live Session context; corrupt, unreadable, or write-degraded state produces
   an explicit Session warning without exposing audit content.
-- [ ] Productize supported native Session adoption and document fidelity limits.
-- [ ] Define and measure watchdog termination/recovery SLOs.
+- [x] Productize supported native Session adoption and document fidelity limits.
+  **Implemented in PRs #163/#195/#350:** Settings can discover and import bounded
+  provider-native Claude Code and governed Codex Sessions across Machines; live
+  external writers block takeover, seeded fallback requires explicit disclosure,
+  and the runtime support matrix documents native-resume, seeded, and follow-only
+  fidelity limits.
+- [x] Define and measure watchdog termination/recovery SLOs. **Implemented in PR
+  #538:** detection is bounded by the configured threshold plus the 15–60 second
+  sweep, abort/reopen settlement has a 10-second SLO, and redacted diagnostics
+  report per-runtime/trigger observations, total/max duration, target, and
+  within-target counts.
 
 **Gate:** correct Session resumes without duplicate prompts; all attention links
 are exact; stuck turns settle within contract; work continues safely without an

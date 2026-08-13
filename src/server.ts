@@ -7711,7 +7711,7 @@ async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
 }
 
 /** Shared Stop path for relay/web clients and the local HTTP/CLI API. */
-function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => void = broadcast): void {
+function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => void = broadcast): Promise<void> {
   // A wedged runtime may never resolve abort() or emit agent_end. Settle the
   // daemon and client first, then make the SDK abort best-effort. The synthetic
   // agent_end also closes running tool cards and drains visible follow-ups.
@@ -7730,6 +7730,7 @@ function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => voi
     onAbortError: (error) => console.warn(`[session-abort] runtime abort failed for ${record.id}:`, error),
   });
   record.abortRecovery = recoverRecordAfterAbort(record);
+  return record.abortRecovery;
 }
 
 async function createSession(workspace = defaultWorkspace, sessionFile?: string, opts: CreateSessionOptions = {}) {
@@ -8730,6 +8731,7 @@ app.get("/api/diagnostics", (_req, res) => {
       approvalMode,
       relayConnected: Boolean(relay?.connected),
       turnRecoveries: turnWatchdog.turnRecoveryStats(),
+      turnRecoverySlo: turnWatchdog.turnRecoverySloStats(),
       audit: auditLog.health(),
       eventLog: {
         ok: eventLog.health().ok,
