@@ -138,7 +138,8 @@ export function sanitizeEvidencePatch(value: unknown): RunEvidencePatch {
     const approvalMode = oneOf(effective.approvalMode, ["never", "risky", "always", "autonomous"] as const);
     const capabilityNames = ["sandbox", "approval", "tool", "network", "credential_custody", "runtime_policy"] as const;
     const evidenceClasses = ["enforced", "observed", "unavailable"] as const;
-    const capabilities = Array.isArray(protection.capabilities) ? protection.capabilities.slice(0, 20).flatMap((value): NonNullable<RunReceiptEvidence["protection"]>["capabilities"] => {
+    type ProtectionCapability = NonNullable<NonNullable<RunReceiptEvidence["protection"]>["capabilities"]>[number];
+    const capabilities: ProtectionCapability[] = Array.isArray(protection.capabilities) ? protection.capabilities.slice(0, 20).flatMap((value): ProtectionCapability[] => {
       if (!value || typeof value !== "object" || Array.isArray(value)) return [];
       const capability = value as Record<string, unknown>;
       assertNoForbiddenKeys(capability);
