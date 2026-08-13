@@ -372,8 +372,30 @@ function onNotification(m) {
       else turnCompletionTimer = setTimeout(finishCompletedTurn, 500);
       return;
     }
-    case "turn/failed":
+    case "turn/failed": {
+      // A failed turn is TERMINAL in the app-server — no `turn/completed` follows
+      // it — so end the turn here rather than merely stashing the error for a
+      // completion event that never arrives. Stashing (the old behavior) left the
+      // turn open on the Bivy side: ProtocolRuntime never saw session.done/error,
+      // never emitted agent_end, and the daemon pinned the session "working" until
+      // the stall watchdog force-recovered it minutes later (the "Codex gets stuck,
+      // I have to prompt it again" symptom). session.error makes ProtocolRuntime
+      // emit agent_end, settling the turn immediately.
+      const message = params?.error?.message || params?.message || "Codex turn failed";
+      pendingTurnCompletion = false;
+      if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
+      turnCompletionTimer = null;
+      activeObservedItems.clear();
+      bivy({ type: "session.status", status: "idle" });
+      bivy({ type: "session.error", error: message });
+      sawError = null;
+      return;
+    }
     case "error":
+      // A non-turn-scoped error notification (e.g. transient reconnect noise, per
+      // the codex exec parser's read of this event). Stash it so a following
+      // turn/completed surfaces it; a genuinely turn-ending failure arrives as
+      // turn/failed above, which never leaves the turn open.
       sawError = params?.error?.message || params?.message || "Codex turn failed";
       return;
     default:

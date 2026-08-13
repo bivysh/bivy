@@ -19,6 +19,27 @@ import type { StallTrigger } from "./turn-watchdog.js";
 /** How a follow-up prompt relates to the in-flight turn. */
 export type StreamingBehavior = "steer" | "followUp";
 
+/**
+ * Resolve the streamingBehavior for a prompt when the client didn't request one.
+ * A prompt sent while a turn is genuinely in flight defaults to *steering* it
+ * (inject guidance into the running turn); otherwise it starts a fresh turn.
+ *
+ * "In flight" is judged from BOTH Bivy's own authoritative turn flag (`isWorking`,
+ * set on the first turn event and cleared on `agent_end`) AND the runtime's
+ * `isStreaming` — never `isStreaming` alone. `isStreaming` is the SDK/runtime's
+ * bit and can be stuck-true after a turn has actually ended. When it is,
+ * defaulting to "steer" injects the user's message into a turn that no longer
+ * exists, so it silently vanishes and the session looks wedged. Requiring both
+ * flags means a message to an already-ended turn starts a fresh turn instead.
+ */
+export function resolveStreamingBehavior(
+  requested: StreamingBehavior | undefined,
+  turn: { isWorking?: boolean; isStreaming: boolean },
+): StreamingBehavior | undefined {
+  if (requested) return requested;
+  return turn.isWorking && turn.isStreaming ? "steer" : undefined;
+}
+
 /** A stalled/wedged turn the watchdog flagged for the user to Stop or keep going,
  *  instead of force-killing it. Set by flagTurnForReview; cleared when the user
  *  resolves it, the turn resumes progress, or it ends/recovers (turn-watchdog-runtime). */
