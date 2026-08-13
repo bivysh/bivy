@@ -103,6 +103,19 @@ function toolEventId(event: Record<string, unknown>): string {
   return `${String(event.toolName || event.name || toolCall?.name || "tool")}:${String(input.path || input.file || input.filePath || input.command || input.cmd || input.query || "")}`;
 }
 
+// Input keys that carry only "still working" liveness, no tool identity.
+const PROGRESS_ONLY_INPUT_KEYS = new Set(["elapsedSeconds", "elapsed_time_seconds", "elapsedTimeSeconds", "status"]);
+
+/** A `tool_execution_start`/`_update` (or `tool_progress`) keep-alive that adds
+ *  no classification (`detail`) and whose input is purely liveness markers —
+ *  the shape that must never overwrite the initiating `tool_call`'s overlay. */
+function isProgressOnlyPing(type: string, detail: unknown, input: Record<string, unknown>): boolean {
+  if (detail) return false;
+  if (type !== "tool_execution_start" && type !== "tool_execution_update" && type !== "tool_progress") return false;
+  const keys = Object.keys(input);
+  return keys.length > 0 && keys.every((k) => PROGRESS_ONLY_INPUT_KEYS.has(k));
+}
+
 function thinkingTextFromEvent(event: Record<string, unknown>): string {
   const message = event.message as { content?: unknown } | undefined;
   const delta = event.assistantMessageEvent as { type?: unknown; delta?: unknown; content?: unknown } | undefined;
@@ -179,6 +192,15 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
     const base = { role: "assistant" as const, bivyKind: "tool" as const, afterMessageCount: record.session.getMessages().length, createdAt: now };
     if (type === "tool_result" || type === "tool_execution_end" || type === "function_result") {
       eventLog.append(record.id, { ...base, id: `bivy-tool-result-${callId}`, content: [{ type: "tool_result", toolUseId: callId, tool_use_id: callId, content: event.message ?? event.result ?? event.output ?? input.output ?? "", isError: Boolean(event.error || event.errorMessage), ...(event.detail ? { detail: event.detail } : {}) }] } as ToolActivityMessage);
+    } else if (isProgressOnlyPing(type, event.detail, input)) {
+      // A progress-only keep-alive (e.g. Claude's `tool_execution_update`
+      // carrying just `{ elapsedSeconds }` and no `detail`) would otherwise
+      // land under the same `bivy-tool-call-${callId}` key and overwrite the
+      // original call's real input AND classification, so a reloaded transcript
+      // renders the tool generically. The initiating `tool_call` already
+      // recorded the overlay; the live stream still delivers the ping to open
+      // clients, so dropping it from the persisted log loses nothing.
+      return;
     } else {
       eventLog.append(record.id, { ...base, id: `bivy-tool-call-${callId}`, content: [{ type: "tool_use", id: callId, name, input, ...(event.detail ? { detail: event.detail } : {}) }] } as ToolActivityMessage);
     }

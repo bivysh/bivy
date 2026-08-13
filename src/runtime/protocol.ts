@@ -689,19 +689,23 @@ class ProtocolSession implements RuntimeSession {
       if (detail) this.toolDetailsByCallId.set(toolCallId, detail);
       this.flushPendingTurnText();
       this.turnContent.push({ type: "tool_use", id: toolCallId, name: toolName, input: msg.input ?? {}, ...(detail ? { detail } : {}) });
-    }
-    if (type === "tool.call" && this.capabilitiesRef.toolInterception && this.toolInterceptor) {
-      const toolCallId = String(msg.toolCallId || "");
-      const toolName = String(msg.name || "tool");
-      const detail = this.toolDetailsByCallId.get(toolCallId);
+      // Stream the live tool card for EVERY protocol agent, with its normalized
+      // detail — not only ones that gate tool calls. Interception is an
+      // additional approve/deny round-trip for agents that advertise it, not a
+      // prerequisite for surfacing the call; emitting it here (rather than only
+      // inside the interception branch) means an ACP agent with
+      // `toolInterception:false` still shows its activity live instead of only
+      // after the turn ends and history reconciles.
       this.emit({ type: "tool_call", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}) });
-      const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
-      try {
-        this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, decision: decision?.block ? "deny" : "allow", reason: decision?.reason });
-      } catch {
-        // The child exited before we could answer (aborted/disposed mid-turn).
-        // There is nowhere to deliver the decision; drop it rather than throw out
-        // of this async event handler (which would surface as an unhandled rejection).
+      if (this.capabilitiesRef.toolInterception && this.toolInterceptor) {
+        const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
+        try {
+          this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, decision: decision?.block ? "deny" : "allow", reason: decision?.reason });
+        } catch {
+          // The child exited before we could answer (aborted/disposed mid-turn).
+          // There is nowhere to deliver the decision; drop it rather than throw out
+          // of this async event handler (which would surface as an unhandled rejection).
+        }
       }
       return;
     }
