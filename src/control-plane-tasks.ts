@@ -47,6 +47,8 @@ export interface WorkItem {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   /** Hard ceiling from the automation definition; retry rules cannot exceed it. */
   maxAttempts?: number;
+  /** Node-local attempt currently being executed; assigned by the policy loop. */
+  attempt?: number;
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)
   // Case B: the control plane sets this to "existing_session" + a sessionId when an
@@ -133,9 +135,16 @@ export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promis
   return res.ok;
 }
 
-export async function renewWorkLease(cfg: ControlPlaneTaskConfig, id: string): Promise<boolean> {
+export type WorkLeaseRenewal = "renewed" | "cancelled" | "lost";
+
+/** Renew ownership and retain the reason a renewal was rejected. Cancellation is
+ *  intentionally distinct from a generic lost lease so an active agent can be
+ *  stopped promptly when the account cancels its Run. */
+export async function renewWorkLease(cfg: ControlPlaneTaskConfig, id: string): Promise<WorkLeaseRenewal> {
   const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/heartbeat`);
-  return res.ok;
+  if (res.ok) return "renewed";
+  const data = (await res.json().catch(() => ({}))) as { reason?: unknown };
+  return data.reason === "cancelled" ? "cancelled" : "lost";
 }
 
 export async function completeWork(cfg: ControlPlaneTaskConfig, id: string): Promise<void> {
@@ -179,19 +188,32 @@ export interface ControlPlaneTaskPollerOptions {
   policy?: RunPolicy | ((item: WorkItem) => RunPolicy | undefined);
   /** Injectable sleep for backoff waits (deterministic in tests). */
   sleep?: (ms: number) => Promise<void>;
+  /** Lease heartbeat cadence. Primarily useful for deterministic focused tests. */
+  leaseHeartbeatMs?: number;
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+type RunState = "active" | "cancelled" | "lost";
+interface InFlightRun {
+  controller: AbortController;
+  state: RunState;
+  heartbeat?: NodeJS.Timeout;
+  leaseCheck?: Promise<void>;
+}
+
 export class ControlPlaneTaskPoller {
   private timer?: NodeJS.Timeout;
-  private inFlight = new Set<string>();
+  /** Keep the controller alongside the reservation: relay pokes can arrive at
+   *  any point from claim through policy retries and must address the same Run. */
+  private inFlight = new Map<string, InFlightRun>();
   private readonly policy?: RunPolicy | ((item: WorkItem) => RunPolicy | undefined);
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly leaseHeartbeatMs: number;
 
   constructor(
     private readonly cfg: ControlPlaneTaskConfig,
-    private readonly runItem: (item: WorkItem, report: (patch: EvidencePatch) => Promise<void>) => Promise<void>,
+    private readonly runItem: (item: WorkItem, report: (patch: EvidencePatch) => Promise<void>, signal: AbortSignal) => Promise<void>,
     /** Node's cap on concurrently-running queue sessions (0/undefined = unlimited).
      *  Read fresh each tick so the Settings → Nodes value takes effect live. */
     private readonly maxConcurrent?: () => number,
@@ -199,6 +221,7 @@ export class ControlPlaneTaskPoller {
   ) {
     this.policy = options.policy;
     this.sleep = options.sleep ?? defaultSleep;
+    this.leaseHeartbeatMs = options.leaseHeartbeatMs ?? 30_000;
   }
 
   start(): void {
@@ -208,8 +231,16 @@ export class ControlPlaneTaskPoller {
     console.log(`[control-plane-tasks] watching hosted queue for labels [${this.cfg.labels.join(", ")}] (relay push + ${Math.round(this.cfg.pollMs / 1000)}s fallback poll)`);
   }
 
-  /** Trigger an immediate fetch after a relay push says work may be available. */
-  poke(): void {
+  /** React to a relay work notification. If it names a Run already executing,
+   *  check its lease immediately (the notification may be its cancellation);
+   *  otherwise fetch the queue as before. The optional id keeps old callers
+   *  that only use poke() fully compatible. */
+  poke(id?: string): void {
+    const run = id ? this.inFlight.get(id) : undefined;
+    if (id && run) {
+      void this.checkLease(id, run);
+      return;
+    }
     void this.tick();
   }
 
@@ -262,34 +293,65 @@ export class ControlPlaneTaskPoller {
       // within a single tick: items ran one at a time regardless of `max`, and
       // only overlapping `setInterval` ticks happened to run more than one
       // concurrently.
-      this.inFlight.add(item.id);
-      running.push(this.runOne(item));
+      const run: InFlightRun = { controller: new AbortController(), state: "active" };
+      this.inFlight.set(item.id, run);
+      running.push(this.runOne(item, run));
     }
     await Promise.all(running);
   }
 
-  private async runOne(item: WorkItem): Promise<void> {
-    let leaseHeartbeat: NodeJS.Timeout | undefined;
+  private async runOne(item: WorkItem, reserved?: InFlightRun): Promise<void> {
+    // runOne is exercised directly by a few callers/tests, so create a control
+    // when there was no tick reservation. Never replace an existing control.
+    const run = reserved ?? this.inFlight.get(item.id) ?? { controller: new AbortController(), state: "active" };
+    if (!this.inFlight.has(item.id)) this.inFlight.set(item.id, run);
     try {
       // Claim first so only one node runs it; skip if another node won (no
       // claim → not ours → don't run or complete it). A heartbeat keeps the
       // finite lease alive; process death stops it and makes the item reclaimable.
-      if (!(await claimWork(this.cfg, item.id))) return;
-      leaseHeartbeat = setInterval(() => void renewWorkLease(this.cfg, item.id), 30_000);
-      leaseHeartbeat.unref?.();
+      if (!(await claimWork(this.cfg, item.id)) || run.state !== "active") return;
+      run.heartbeat = setInterval(() => void this.checkLease(item.id, run), this.leaseHeartbeatMs);
+      run.heartbeat.unref?.();
       const report = (patch: EvidencePatch) => reportEvidence(this.cfg, item.id, patch);
       await transitionWork(this.cfg, item.id, "running");
+      if (run.state !== "active") return;
       console.log(`[control-plane-tasks] running ${item.source} item ${item.id}: ${item.title}`);
       // routingReason is a coarse baseline — a manual "Run…" override picked
       // this agent/model explicitly; otherwise it's whatever the queue label
       // routed to. runWorkItem/runIssueTask may layer a more specific reason
       // (e.g. a fallback after an error) on top via the same `report` hook.
       await report({ routingReason: item.runtimeId || item.model ? "manual override" : "queue label" });
-      await this.runWithPolicy(item, report);
+      if (run.state !== "active") return;
+      await this.runWithPolicy(item, report, run);
     } finally {
-      if (leaseHeartbeat) clearInterval(leaseHeartbeat);
-      this.inFlight.delete(item.id);
+      if (run.heartbeat) clearInterval(run.heartbeat);
+      // A stale completion must not remove a newer reservation for the same id.
+      if (this.inFlight.get(item.id) === run) this.inFlight.delete(item.id);
     }
+  }
+
+  private checkLease(id: string, run: InFlightRun): Promise<void> {
+    if (run.state !== "active") return Promise.resolve();
+    if (run.leaseCheck) return run.leaseCheck;
+    run.leaseCheck = (async () => {
+      try {
+        const renewal = await renewWorkLease(this.cfg, id);
+        if (renewal === "renewed" || this.inFlight.get(id) !== run || run.state !== "active") return;
+        run.state = renewal;
+        if (run.heartbeat) {
+          clearInterval(run.heartbeat);
+          run.heartbeat = undefined;
+        }
+        run.controller.abort(new Error(renewal === "cancelled" ? "Run cancelled" : "Run lease lost"));
+      } catch (error) {
+        // A transient network error does not prove ownership was lost. Keep the
+        // Run alive and let the next heartbeat retry.
+        console.warn(`[control-plane-tasks] work ${id} heartbeat failed:`, error instanceof Error ? error.message : error);
+      } finally {
+        run.leaseCheck = undefined;
+      }
+    })();
+    return run.leaseCheck;
   }
 
   /**
@@ -301,16 +363,23 @@ export class ControlPlaneTaskPoller {
    * safe evidence event. With no policy injected this is the historical path:
    * one attempt, any throw fails the run.
    */
-  private async runWithPolicy(item: WorkItem, report: (patch: EvidencePatch) => Promise<void>): Promise<void> {
+  private async runWithPolicy(item: WorkItem, report: (patch: EvidencePatch) => Promise<void>, run: InFlightRun): Promise<void> {
     let current = item;
     let attempt = 1;
     let rerouteCount = 0;
     for (;;) {
+      if (run.state !== "active") return;
       try {
-        await this.runItem(current, report);
+        // Functions declared with the historical two arguments remain valid in
+        // TypeScript/JavaScript; cancellation-aware runners can use the third.
+        await this.runItem({ ...current, attempt }, report, run.controller.signal);
+        if (run.state !== "active") return;
         await completeWork(this.cfg, item.id);
         return;
       } catch (error) {
+        // Abort errors are ordinary throws to the policy layer unless guarded.
+        // A cancelled/lost Run has no node-side terminal transition or retry.
+        if (run.state !== "active") return;
         const policy = typeof this.policy === "function" ? this.policy(current) : this.policy;
         const decision: RunDecision = policy?.decide({
           routing: { runtimeId: current.runtimeId, model: current.model },
@@ -326,6 +395,7 @@ export class ControlPlaneTaskPoller {
           const summary = `Attempt limit reached (${maxAttempts}); automation parked for review.`;
           console.warn(`[control-plane-tasks] item ${item.id} needs attention: ${summary}`);
           await report({ events: [{ at: new Date().toISOString(), kind: "needs_attention", summary, attempt }] });
+          if (run.state !== "active") return;
           await needsAttentionWork(this.cfg, item.id);
           return;
         }
@@ -351,17 +421,20 @@ export class ControlPlaneTaskPoller {
             await report({ routingReason: `fallback: ${decision.ref}` });
           }
           if (decision.delayMs > 0) await this.sleep(decision.delayMs);
+          if (run.state !== "active") return;
           continue;
         }
 
         if (decision.action === "park") {
           console.warn(`[control-plane-tasks] item ${item.id} needs attention (${decision.condition}): ${decision.summary}`);
           await report({ events: [{ at: new Date().toISOString(), kind: "needs_attention", summary: decision.summary }] });
+          if (run.state !== "active") return;
           await needsAttentionWork(this.cfg, item.id);
           return;
         }
 
         console.warn(`[control-plane-tasks] item ${item.id} failed:`, error);
+        if (run.state !== "active") return;
         await failWork(this.cfg, item.id);
         return;
       }

@@ -11,10 +11,13 @@ WORKDIR /repo
 # the control-plane service reads for server-side enforcement.
 ARG VITE_EPHEMERAL_MACHINES_ENABLED
 ENV VITE_EPHEMERAL_MACHINES_ENABLED=$VITE_EPHEMERAL_MACHINES_ENABLED
-COPY package.json package-lock.json ./
+# The monorepo root installs with pnpm; corepack ships with the node image and
+# resolves the version pinned in package.json's `packageManager`.
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/ ./packages/
-RUN npm ci --ignore-scripts
-RUN npm run build -w @bivy/web
+RUN pnpm install --frozen-lockfile --ignore-scripts
+RUN pnpm --filter @bivy/web run build
 
 # Stage 2 — the control plane service.
 FROM node:22-slim

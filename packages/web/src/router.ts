@@ -18,6 +18,8 @@
 // settingsRoute.ts, which layers Settings' open/closed/section state on top of
 // this module without disturbing which session is open underneath.
 
+import { parseRunRoute, runRoutePath } from "@bivy/core";
+
 /** Settings' navigable top-level sections — the mobile drill-in list / desktop
  *  nav. Kept here (rather than in Settings.tsx) so the router can validate a
  *  `/settings/:view` path without importing the component module. */
@@ -75,6 +77,7 @@ function isAutomationsSection(v: string): v is AutomationsSection {
 
 export type Route =
   | { kind: "session"; id: string }
+  | { kind: "run"; id: string }
   | { kind: "new" }
   | { kind: "settings"; view: SettingsView | null }
   | { kind: "automations"; section: AutomationsSection | null }
@@ -93,6 +96,10 @@ export function parseRoute(pathname: string = location.pathname): Route {
     if (id === "new") return { kind: "new" };
     return { kind: "session", id };
   }
+  // /runs/:runId — id parsing/serialization lives in @bivy/core so the route is
+  // identical across clients and independently tested.
+  const runId = parseRunRoute(pathname);
+  if (runId) return { kind: "run", id: runId };
   const settingsMatch = SETTINGS_PATH.exec(pathname);
   if (settingsMatch) {
     const raw = settingsMatch[1] ? decodeURIComponent(settingsMatch[1]) : "";
@@ -116,6 +123,8 @@ export function routePath(route: Route): string {
   const base =
     route.kind === "session"
       ? `/sessions/${encodeURIComponent(route.id)}`
+      : route.kind === "run"
+        ? runRoutePath(route.id)
       : route.kind === "new"
         ? "/sessions/new"
         : route.kind === "settings"

@@ -1,166 +1,131 @@
-# Bivy — the governed, agent-agnostic agent substrate you own outright
+# Why Bivy
 
-Run any AI coding agent on **your own machines**; reach and automate it from
-**anywhere**; and keep a **provable record** of everything it did — with **no
-lock-in, no compute markup, and every hosted piece blind or self-hostable.**
+> **Run agents where your environment lives. Reach, automate, and govern them
+> from anywhere.**
 
-Local-first power. Remote-first convenience. Governed by you. Yours to keep.
+Bivy makes coding agents on your infrastructure available from anywhere. They
+can use the repositories, tools, services, caches, networks, and compute already
+present in your development environment; you can continue their Sessions from a
+phone, leave work running, and review checked outcomes without surrendering
+control of the Machine.
 
 ## The problem
 
-AI coding agents can do real work now — but today they come with a bad trade:
+A coding agent is most capable in the environment where the real work lives.
+That is often a developer workstation, a private server, or an isolated Machine
+in the customer's cloud—not a generic hosted sandbox. But an agent tied to one
+terminal is difficult to reach, supervise, or trust with unattended work.
 
-- **Run them locally** and you're chained to your desk: one machine, one terminal,
-  babysitting the agent while it works.
-- **Run them in the cloud** and you hand your code, your secrets, and your model
-  keys to someone else's servers — locked into their agent, their pricing, and
-  with no real record of what ran against your code.
+Bivy closes that gap:
 
-You shouldn't have to choose between **keeping control of your code** and **using
-your agents from anywhere** — nor give up **knowing and governing what the agent
-actually did.**
+- **Capability:** use the real repository and development environment.
+- **Freedom:** choose a supported agent, model, Machine, and cloud.
+- **Reach:** reconnect, steer, stop, and approve from another device.
+- **Autonomy:** turn live work into background Runs and Automations.
+- **Safety:** show effective protection, checks, outcomes, and Receipts.
+- **Sovereignty:** keep control of execution and pay infrastructure providers
+  directly, without a Bivy compute markup.
 
-## What bivy is
+## The product loop
 
-Bivy runs AI coding agents on **your own machines** and lets you reach, steer,
-automate, and **govern** them from anywhere — your phone, another laptop, or on a
-schedule — **without your code or secrets ever leaving hardware you own.**
+```text
+Install Bivy
+→ use Claude Code or Codex in a real environment
+→ continue from phone
+→ leave work running
+→ receive checked changes or a pull request
+→ review a clear Receipt
+```
 
-It's the *substrate* agents run on, not another walled garden: bring any agent
-(Claude Code, Codex, opencode, Pi, …) and any model, and get one uniform boundary
-— policy, credentials, and an audit trail — across all of them.
+A **Session** is live agent work that can be steered and resumed. A **Run** is
+delegated work with checks and an explicit outcome. An **Automation** creates
+Runs from GitHub, Linear, Slack, a schedule, or a webhook. Work executes on a
+**Machine**: either a trusted workstation or an isolated environment in the
+customer's cloud. The **Inbox** collects questions, approvals, failures, and
+completed work. A **Receipt** reports what Bivy observed and enforced, what
+changed, which checks passed, and what it could not observe.
 
-## The three pillars
+## Use the environment where the work lives
 
-Reachability alone is now table stakes (the agent vendors ship it too). Bivy's
-value is the **combination** none of them assemble:
+Agents can use existing repositories and files, local services and databases,
+established tools and caches, private networks, GPUs and local models, and
+long-running processes—subject to the permissions and protection of the chosen
+Machine and runtime.
 
-### 1. Sovereign & no lock-in
-- **Your data stays yours.** The agent runs where your code already is. Everything
-  crossing the network is end-to-end encrypted; the parts we help host are *blind*
-  — they route and coordinate, they never read your code or keys.
-- **Your choice of agents and models.** Bring your own providers and keys; no
-  privileged built-in agent.
-- **You never pay us for compute.** Background/automated work runs on *your own*
-  cloud account, at cost.
-- **Self-host anything.** Every hosted convenience has a run-it-yourself twin — up
-  to the entire stack on your own infrastructure. Even our hosted pieces are blind,
-  so self-hosting isn't about privacy (you already have that) — it's **sovereignty.**
+Bivy does not replace Claude Code, Codex, or another coding agent. It provides a
+consistent layer for remote continuity, unattended execution, recovery,
+approvals, checks, and bounded evidence around supported agents.
 
-### 2. Governed & provable
-This is what a careful team — and any unattended run — actually needs, and what no
-agent *vendor* will build neutrally across *all* agents:
-- **One boundary for every agent.** The same sandbox tier, network-egress policy,
-  MCP brokerage, approvals, and credential policy apply uniformly to whatever agent
-  you run — *and to whatever it spawns natively* (a native sub-agent inherits the
-  boundary; it can't escape it). Bivy governs the **substrate**, not the agent's
-  choices.
-- **Provable, not just private.** A per-node audit trail records what each agent
-  did — tool calls and their allow/deny outcome, network attempts, approvals, cost
-  — attributed per session and agent, redaction-aware (decisions and metadata, never
-  your payloads), queryable and exportable with `bivy audit`. *Private* control is
-  table stakes; *provable* control is the difference.
+## Continue from anywhere
 
-### 3. Reachable & unattended
-- **Reach from anywhere — no account.** Pair a machine with one QR scan and drive it
-  from your phone or another laptop; your machine never gets exposed to the internet,
-  only an encrypted connection rides a blind relay.
-- **Agents that don't clock out.** Put an agent on a schedule or a trigger (a GitHub
-  event, a webhook) and it runs *without you* — on your own cloud — so you wake up to
-  finished work, and every unattended run lands in the audit trail.
-- **Sign in once, use everywhere.** Model logins and API keys sync across your
-  machines, end-to-end encrypted (we never see them). Keep separate work/personal
-  accounts per provider and choose which one each project uses; or point at your
-  password manager and the secret never enters bivy at all — you decide, per
-  credential, what travels.
+A Machine dials out to an end-to-end encrypted relay, so it does not need an
+inbound public port. Interactive frames are encrypted between the Machine and
+the paired device. The relay can route, delay, or drop those frames and observe
+routing metadata, but cannot decrypt their content.
 
-## How ephemeral runners fit
+From a phone or another computer, a developer can reconnect to the same Session,
+answer a question, approve or deny an action, stop work, or leave it running.
+Account-free pairing provides direct remote reach; an account adds durable fleet
+coordination, notifications, Automations, and hosted provisioning options.
 
-Ephemeral runners are the execution layer behind “agents that don't clock out,”
-not a separate hosted-compute product. A trigger or schedule creates a governed
-run; Bivy provisions the runner in the user's Fly, Hetzner, or AWS account; the
-normal agent-agnostic policy and audit boundary executes the work;
-and the runner is destroyed or suspended when it settles. The user supplies the
-provider credential and pays the provider directly. Bivy neither resells compute
-nor adds a compute margin.
+## Leave work running and review an outcome
 
-That makes ephemerals the point where all three pillars reinforce each other:
+A live Session can continue in the background without copying it into a separate
+chat system. A manual task or GitHub issue can become a Run on an isolated
+worktree. Bivy runs deterministic repository checks and derives a conservative
+outcome such as **PR open**, **Changes ready**, **Checks failed**, or **Needs
+review**. A successful process exit alone is never treated as proof of success.
 
-- **Sovereign:** the code, process, provider keys, and cloud bill remain in the
-  user's account. Hosted orchestration may hold explicitly opted-in encrypted
-  credentials, but it is not the compute owner.
-- **Governed and provable:** unattended work gets the same sandbox, approvals,
-  credential policy, and per-node audit events as an interactive run. This matters
-  most when nobody is watching; a successful automation without durable evidence
-  is not a trustworthy automation.
-- **Reachable and unattended:** an account supplies durable fleet metadata,
-  encrypted session snapshots, and optional credential escrow so a schedule can
-  start—and a later message can resume—a session with no laptop or persistent node
-  online. Account-free pairing remains the direct-reach entry point; unattended
-  provisioning is the point where an account becomes useful rather than mandatory.
+Receipts are bounded observation reports. They exclude prompts, transcripts,
+reasoning, diffs, file contents, check output, raw tool payloads, and secrets.
+Receipt v1 is not a signed attestation; missing or uncorrelated evidence is shown
+as a limitation rather than silently omitted.
 
-The product contract is therefore stronger than “boot a VM”: a runner must start
-quickly, never leak past its TTL, persist a reconstructable session before destroy,
-and make its cost and teardown status visible. Suspend-to-zero providers preserve
-the runtime exactly; destroy-lane providers preserve an encrypted transcript and
-git checkpoint and reconstruct the runtime on a fresh runner.
+## Choose the execution profile
 
-Fly Sprites and E2B are optional, experimental managed-compute adapters. They are
-valuable fast-start and suspend/resume lanes, but they overlap Bivy's agent-cloud
-market and do not prove the sovereignty-economics claim in the same way as raw
-infrastructure in the user's account. Bivy therefore never makes session
-durability depend on their proprietary snapshots: the governed run, audit trail,
-and portable encrypted checkpoint remain Bivy-owned and can move to another
-provider. Providers supply replaceable compute; Bivy owns orchestration,
-governance, evidence, and session continuity.
+Bivy supports three customer-readable profiles:
 
-## How it works — three simple parts
+- **Trusted workstation:** maximum context and capability in the user's real
+  environment. Work runs with that user's OS permissions; Bivy is not an OS
+  isolation boundary.
+- **Isolated customer-cloud Machine:** stronger isolation and reproducibility in
+  a VM or container controlled and paid for by the customer. Provider support is
+  experimental until a path is live-certified.
+- **Restricted/read-only:** narrowly scoped investigation where the selected
+  runtime or OS mechanism can enforce the restriction.
 
-Only the first ever touches your actual work:
+The UI reports requested and effective protection separately and distinguishes
+controls that are **enforced**, signals that are only **observed**, and
+capabilities that are **unavailable**. Effect-level interception must not be
+confused with machine isolation.
 
-1. **Your node — where the agent runs.** The bivy app on your machine. It runs the
-   agent and holds your code, secrets, history, *and the audit trail*. This is the
-   **data plane**, always yours.
-2. **The relay — how you reach it.** A blind pipe carrying the encrypted connection
-   between your phone and your machine. It can't read a thing — it moves sealed
-   bytes.
-3. **The control plane — how you manage many.** An *optional* coordinator that
-   remembers your machines, syncs your view across devices, and notifies you. It
-   sees *metadata only* — never content.
+## A precise trust boundary
 
-**The one rule that keeps you safe:** your agent, data, and audit trail live on
-hardware you own; anything hosted is blind.
+> **Bivy is blind on the E2E relay and a credential custodian in explicitly
+> enabled hosted-provisioning paths.**
 
-## Local, remote, control plane
+Interactive traffic and workspace content remain encrypted across the relay.
+However, unattended hosted provisioning can require the control plane to store
+encrypted cloud, repository, or key-escrow material that the service can
+technically access. Third-party sources such as Slack and generic webhooks also
+send their bounded instructions to the control plane in plaintext. These are
+explicit trust modes, not cryptographic blindness.
 
-| | **Local** | **Remote** | **Control plane** |
-|---|---|---|---|
-| What it is | Agent on your machine, at your desk | Reach your machines from anywhere | Your whole fleet, synced |
-| Account? | No | **No** | Yes |
-| What's hosted | Nothing | A blind relay | A metadata-only coordinator |
+Customers can self-host the relay and control plane, keep relevant keys on their
+own devices, or explicitly opt into hosted custody where unattended launch
+requires it. See the [security model](security-model.md) and
+[hosted-provisioning trust model](hosted-provisioning-trust-model.md) for the
+current implementation boundaries.
 
-- **Local** — run agents on your own computer, drive them from your browser.
-  Private, powerful, nothing to set up. *Free.*
-- **Remote** — reach those same machines from your phone or another laptop, one QR
-  scan each, **with no account** and nothing exposed to the internet. Pair several,
-  drive them, fork sessions across them — all *without* a control plane.
-- **Control plane** — the step where paired machines become a **fleet owned by your
-  account**: sign in on any device and everything's there, sessions/history follow
-  you, and you get push notifications when an agent needs you.
+## Who Bivy is for
 
-## Start where you are
+Bivy starts with individual power developers, technical founders, and senior
+engineers already using Claude Code or Codex locally. The paid individual value
+is persistent remote access, unattended Runs, Automations, notifications,
+recovery, and coordination across Machines.
 
-Each step extends your reach and your governance. Add them only as you need them:
+Shared policy, approver routing, budgets, evidence retention, and signed audit
+are future team expansion—not claims of the current individual product.
 
-1. **At your desk** — run private, powerful, *governed* agents locally. *Free.*
-2. **From anywhere** — steer them from your phone; your machine stays private.
-   *Free, no account.*
-3. **All machines as one** — sign in; fleet, history, and notifications follow you.
-4. **While you're away** — agents run on a schedule or trigger, on *your own cloud*
-   (your keys, your bill), each unattended run captured in the audit trail.
-
-You never hand over your code. You never pay us for compute you didn't run on your
-own infrastructure. You can prove what every agent did. And you can self-host any
-part.
-
-**Cloud-agent convenience, local-first control, and governance you can prove.**
+**Capability is the hook. Remote reach and unattended work are the product.
+Governance is the seatbelt. Team control is the expansion.**

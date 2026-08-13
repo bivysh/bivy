@@ -4,13 +4,20 @@
 /**
  * Production audit gate with a narrow, documented allowlist.
  *
- * Equivalent to `npm audit --omit=dev --audit-level=high`, except that a small
- * set of advisories we have explicitly reviewed and accepted are ignored. Any
- * OTHER high/critical advisory still fails the build, and any allowlisted entry
- * that npm no longer reports is flagged as stale so the list can't rot.
+ * Equivalent to `pnpm audit --prod --audit-level=high`, except that a small set
+ * of advisories we have explicitly reviewed and accepted are ignored. Any OTHER
+ * high/critical advisory still fails the build, and any allowlisted entry that
+ * the registry no longer reports is flagged as stale so the list can't rot.
  *
  * The allowlist is deliberately keyed by GHSA id, scoped with a reason and a
  * review date. Keep it tiny; each entry is a standing risk-acceptance.
+ *
+ * NOTE ON THE REPORT SHAPE: `pnpm audit --json` emits the registry's v1 bulk
+ * format — a flat `advisories` map keyed by advisory id — whereas `npm audit
+ * --json` emits npm's own v2 format, a `vulnerabilities` map keyed by package
+ * name. They are not interchangeable, and reading the wrong key yields an empty
+ * result rather than an error, which would turn this gate into a silent no-op.
+ * assertKnownShape() below refuses to pass on a report it does not recognise.
  */
 import { execFileSync } from "node:child_process";
 
@@ -27,46 +34,76 @@ function ghsaFromUrl(url) {
   return m ? m[0] : undefined;
 }
 
+const AUDIT_CMD = "pnpm";
+const AUDIT_ARGS = ["audit", "--prod", "--json"];
+
 let report;
 try {
-  const out = execFileSync("npm", ["audit", "--omit=dev", "--json"], {
+  const out = execFileSync(AUDIT_CMD, AUDIT_ARGS, {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
   report = JSON.parse(out);
 } catch (err) {
-  // `npm audit` exits non-zero when vulnerabilities exist; the JSON is still on
+  // The audit exits non-zero when vulnerabilities exist; the JSON is still on
   // stdout. Only a genuinely unparseable result is a hard error.
   if (err.stdout) {
     try {
       report = JSON.parse(err.stdout);
     } catch {
-      console.error("Could not parse `npm audit --json` output.");
+      console.error(`Could not parse \`${AUDIT_CMD} ${AUDIT_ARGS.join(" ")}\` output.`);
       console.error(err.stdout || err.message);
       process.exit(2);
     }
   } else {
-    console.error("Failed to run `npm audit`.");
+    console.error(`Failed to run \`${AUDIT_CMD} ${AUDIT_ARGS.join(" ")}\`.`);
     console.error(err.message);
     process.exit(2);
   }
 }
 
+/**
+ * Refuse to report "clean" from a report we cannot actually read. An empty
+ * `advisories` map is a legitimate clean result, but a report missing the key
+ * entirely means the tool changed its output format — treat that as a failure,
+ * not as zero findings. The dependency count is the second half of that check:
+ * auditing nothing also produces no advisories.
+ */
+function assertKnownShape(r) {
+  if (!r || typeof r !== "object" || !r.advisories || typeof r.advisories !== "object") {
+    console.error(
+      `Unrecognised audit report: expected a v1 \`advisories\` map from \`${AUDIT_CMD} ${AUDIT_ARGS.join(" ")}\`.\n` +
+        `Got keys: ${r && typeof r === "object" ? Object.keys(r).join(", ") || "(none)" : typeof r}.\n` +
+        "npm's v2 \`vulnerabilities\` shape is NOT compatible — update this script rather than letting the gate pass silently.",
+    );
+    process.exit(2);
+  }
+  const total = r.metadata?.totalDependencies;
+  if (typeof total !== "number" || total <= 0) {
+    console.error(
+      `Audit reported ${total ?? "no"} dependencies, so it examined nothing. ` +
+        "Run `pnpm install` first, or fix the audit invocation.",
+    );
+    process.exit(2);
+  }
+}
+
+assertKnownShape(report);
+
 const blocking = new Map(); // GHSA -> { pkg, title }
 const seenAllowed = new Set();
 
-for (const [name, v] of Object.entries(report.vulnerabilities || {})) {
-  for (const via of v.via || []) {
-    if (typeof via !== "object") continue; // string = a package name, not an advisory
-    if (!BLOCKING.has(via.severity)) continue;
-    const ghsa = ghsaFromUrl(via.url);
-    if (ghsa && ALLOW[ghsa]) {
-      seenAllowed.add(ghsa);
-      continue;
-    }
-    const key = ghsa || `${via.source || via.title}`;
-    blocking.set(key, { pkg: via.name || name, title: via.title });
+// v1 shape: advisories[<id>] = { severity, title, module_name, url,
+// github_advisory_id, ... } — one entry per advisory, already flattened, so
+// there is no `via` chain to walk.
+for (const [id, advisory] of Object.entries(report.advisories)) {
+  if (!BLOCKING.has(advisory.severity)) continue;
+  const ghsa = advisory.github_advisory_id || ghsaFromUrl(advisory.url);
+  if (ghsa && ALLOW[ghsa]) {
+    seenAllowed.add(ghsa);
+    continue;
   }
+  blocking.set(ghsa || id, { pkg: advisory.module_name || "(unknown)", title: advisory.title });
 }
 
 // Report what we ignored, and warn on stale allowlist entries.

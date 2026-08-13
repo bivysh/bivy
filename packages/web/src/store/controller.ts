@@ -19,6 +19,10 @@ import {
   fetchGithubApp,
   fetchGithubQueue,
   fetchAutomationRuns,
+  cancelAutomationRun as apiCancelAutomationRun,
+  recordProductMetric,
+  activationFromState,
+  type ProductMetricEvent,
   assignWorkItem,
   deleteWorkItem,
   clearWorkQueue,
@@ -67,6 +71,7 @@ import {
   createEphemeralPrefsStore,
   createEphemeralSetupStore,
   createMachineStore,
+  createPendingEphemeralLaunchStore,
   createGithubTaskTokenStore,
   createTranscriptCache,
   cloudExec,
@@ -95,6 +100,8 @@ import {
   type EphemeralSetupStore,
   type EphemeralSetup,
   type EphemeralMachine,
+  type PendingEphemeralLaunch,
+  type PendingEphemeralLaunchStore,
   type GithubTaskTokenStore,
   type EphemeralQueueDefault,
   type LaunchOpts,
@@ -120,12 +127,13 @@ import {
   type StreamingBehavior,
   supportsSteering as runtimeSupportsSteering,
   type Transport,
+  type LocalStore,
   importRoomKey,
   open as openSealed,
   unb64url,
   seal,
-  unb64,
   createAutomation,
+  runAutomationNow,
   deleteAutomation,
   fetchAutomations,
   updateAutomation,
@@ -172,15 +180,11 @@ export class NeedsDisclosureError extends Error {
 }
 
 function requestId(): string {
-  return `r${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `r-${crypto.randomUUID()}`;
 }
 
 function clientMessageId(): string {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `m${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  }
+  return crypto.randomUUID();
 }
 
 const LOOPBACK = /^(localhost|127\.0\.0\.1|\[?::1\]?)$/;
@@ -229,7 +233,15 @@ export class AppController {
    *  reconnect (mobile Safari can drop the reply while backgrounded) — the node
    *  dedupes by requestId, so the retry adopts the same session rather than
    *  creating a duplicate. See retryPendingSessionNew / maybeFlushPendingPrompt. */
-  private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[]; frame: Command } | null = null;
+  private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[]; frame: Command; provisionalId?: string } | null = null;
+  /** Ephemeral cold starts outlive the pane that launched them. Each first
+   *  message gets a sidebar placeholder immediately, and its launch continues
+   *  here even if the user presses New and starts another session. */
+  private pendingLaunches = new Map<string, PendingEphemeralLaunch & { transport?: Transport }>();
+  /** Timed, factual boot updates. Provider creation returning only means the VM
+   *  exists; these heartbeats make the otherwise silent cloud-init wait visible. */
+  private bootProgressTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
+  private bootstrapPhaseByNode = new Map<string, string>();
   /** Further prompts sent by the user *while* that session is still being
    *  created — queued instead of firing their own `session.new`, then drained
    *  into the one real session by maybeFlushPendingPrompt. See sendPrompt. */
@@ -248,8 +260,9 @@ export class AppController {
   private correlatedSessions = new Set<string>();
   /** Subscribers for terminal / multiplexer events (the terminal overlay). */
   private terminalListeners = new Set<(e: ServerEvent) => void>();
-  /** In-flight transcription requests, resolved when the node returns text. */
+  /** In-flight transcription and speech requests, correlated with node replies. */
   private pendingTranscriptions = new Map<string, { resolve: (text: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private pendingSpeech = new Map<string, { resolve: (audio: { audio: string; mimeType: string }) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight session-fork requests (export → bundle, import → done), by requestId. */
   private pendingForks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight saves awaiting a node ack (node.settings, provider.apiKey,
@@ -281,6 +294,10 @@ export class AppController {
   private composerPrefillListeners = new Set<(text: string) => void>();
   /** Subscribers that want the composer's slash-command menu opened (the "/" pill). */
   private slashOpenListeners = new Set<() => void>();
+  /** Product milestones are aggregate and content-free. Once-only activation
+   *  events are latched in this browser so reconnect/history replay cannot
+   *  inflate them; the in-flight guard also closes double-emission races. */
+  private productMetricsInFlight = new Set<ProductMetricEvent>();
 
   constructor() {
     // Persist each applied history snapshot + cursor, and re-request canonical
@@ -355,6 +372,7 @@ export class AppController {
     this.seedSessionsFromCache();
     this.installSessionCachePersist();
     this.installFollowupAutoDrain();
+    void this.restorePendingLaunches();
     if (!this.direct && this.local.s) void this.refreshAccountSessions();
     // Seed the reactive auth flag from the token we may have just consumed above,
     // so the very first render lands on the right surface (sign-in vs. shell).
@@ -512,6 +530,10 @@ export class AppController {
           this.resolveTranscription(event);
           return;
         }
+        if (type === "speech.audio") {
+          this.resolveSpeech(event);
+          return;
+        }
         // One-shot session-fork replies (bundle / done / error) resolve the
         // awaiting forkSession() step; only the error variant is surfaced in the
         // reducer (as a toast) — the rest is orchestration, not session state.
@@ -525,8 +547,10 @@ export class AppController {
           this.resolveFork(event);
           return;
         }
+        const before = this.store.getState();
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
+        this.observeActivationMilestones(before, appliedEvent);
         if (appliedEvent.type === "session.deleted") this.persistDeletedSessionTombstones();
         this.maybeFlushPendingPrompt(appliedEvent);
         this.maybeConfirmFollowup(appliedEvent);
@@ -535,10 +559,13 @@ export class AppController {
         this.reconcileSessionList(appliedEvent);
       },
       onStatus: (status: ConnectionStatus) => {
-        const prev = this.store.getState().status;
+        const before = this.store.getState();
+        const prev = before.status;
         this.store.setStatus(status);
-        if (status === "online" && prev !== "online") this.onReconnected();
-        else if (status === "reconnecting" || status === "offline") {
+        this.observeActivationMilestones(before, { type: "connection.status" });
+        if (status === "online" && prev !== "online") {
+          this.onReconnected();
+        } else if (status === "reconnecting" || status === "offline") {
           this.store.markStreamInterrupted();
           // Re-pull the node list on the *transition* into a dropped state so the
           // header's online dot reflects the node's real presence instead of a
@@ -548,11 +575,54 @@ export class AppController {
           if (prev !== "reconnecting" && prev !== "offline") this.refreshNodesThrottled();
         }
       },
-      onError: (message: string) => this.store.setError(message),
+      onError: (message: string) => {
+        this.store.setError(message);
+      },
     };
     return this.direct
       ? new DirectTransport({ bootstrap: new URLSearchParams(location.search).get("bootstrap") || "", handlers })
       : new RelayTransport({ store: this.local, handlers });
+  }
+
+  private productMetricClient(): "desktop" | "mobile" {
+    return matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop";
+  }
+
+  /** Emit a content-free milestone. Once-only events are persisted only after
+   *  the authenticated endpoint accepts them, so an offline attempt can retry. */
+  recordProductMilestone(event: ProductMetricEvent, once = false): void {
+    if (this.direct || this.solo || !this.local.s) return;
+    const key = `bivy.product-metric.${event}`;
+    if (once) {
+      try { if (localStorage.getItem(key) === "1") return; } catch { /* best effort */ }
+      if (this.productMetricsInFlight.has(event)) return;
+      this.productMetricsInFlight.add(event);
+    }
+    void recordProductMetric(this.local, event, this.productMetricClient())
+      .then(() => {
+        if (once) {
+          try { localStorage.setItem(key, "1"); } catch { /* best effort */ }
+        }
+      })
+      .catch(() => {})
+      .finally(() => this.productMetricsInFlight.delete(event));
+  }
+
+  /** Observe only concrete state transitions. History snapshots are excluded
+   *  from first response: opening an old Session must not look like activation. */
+  private observeActivationMilestones(before: ReturnType<SessionStore["getState"]>, event: { type?: unknown }): void {
+    const after = this.store.getState();
+    const beforeActivation = activationFromState(before);
+    const afterActivation = activationFromState(after);
+    const readyBefore = beforeActivation.checks.slice(0, 4).every((check) => check.state === "passed");
+    const readyAfter = afterActivation.checks.slice(0, 4).every((check) => check.state === "passed");
+    if (!readyBefore && readyAfter) this.recordProductMilestone("activation_ready", true);
+
+    if (event.type === "session.history") return;
+    const assistantCount = (state: typeof after) => state.transcript.filter((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool).length;
+    if (assistantCount(before) === 0 && assistantCount(after) > 0) {
+      this.recordProductMilestone("first_useful_response", true);
+    }
   }
 
   /** Hosted control plane, not signed in yet. */
@@ -727,9 +797,11 @@ export class AppController {
    */
   private applyRoute(route: Route, opts: { navigate?: boolean } = {}): void {
     if (route.kind === "session") this.openSession(route.id, undefined, opts);
-    // Settings and Automations are overlays layered on top of whichever session
-    // is open behind them — neither should reset the active session to a draft.
-    else if (route.kind !== "settings" && route.kind !== "automations") this.newSession(opts);
+    // Settings, Automations, and a Run detail (/runs/:runId) are overlays layered
+    // on top of whichever session is open behind them — none should reset the
+    // active session to a draft, so a deep link / reload / Back onto them keeps
+    // the underlying session intact.
+    else if (route.kind !== "settings" && route.kind !== "automations" && route.kind !== "run") this.newSession(opts);
   }
 
   /** Replay the boot route once we're first online (session.open et al. need a
@@ -1532,6 +1604,10 @@ export class AppController {
   }
 
   openSessionOnNode(sessionId: string, path?: string, nodeId?: string): void {
+    if (this.pendingLaunches.has(sessionId)) {
+      this.openPendingLaunch(sessionId);
+      return;
+    }
     if (!this.direct && nodeId && nodeId !== this.local.cur) {
       this.pendingCrossNodeOpen = { sessionId, path };
       navigate({ kind: "session", id: sessionId });
@@ -1548,6 +1624,10 @@ export class AppController {
   }
 
   openSession(sessionId: string, path?: string, opts: { navigate?: boolean } = {}): void {
+    if (this.pendingLaunches.has(sessionId)) {
+      this.openPendingLaunch(sessionId, opts);
+      return;
+    }
     // Reflect the open session in the URL (/sessions/:id) so it's copyable and
     // survives a reload. Skipped when the change *came from* the URL (initial
     // deep link / popstate); navigate() also no-ops on an identical path.
@@ -1599,6 +1679,10 @@ export class AppController {
       openedAfterNodeSwitch = true;
     }
     void this.refreshAccountSessions();
+    // Converge account API keys in both directions. This also handles the
+    // node-less-first flow: keys added in the PWA are installed when the user's
+    // first persistent or ephemeral node appears.
+    void this.syncAccountCredentialsWithNode();
     // A scheduled message may have delivered while this device was offline —
     // drop its queue row so it stops showing as "scheduled" (see the method doc).
     void this.resyncScheduledFollowups();
@@ -1724,6 +1808,9 @@ export class AppController {
     if (opts.navigate !== false) navigate({ kind: "new" });
     // Autofocus the composer so the user can start typing right away.
     this.focusComposer();
+    // Detach from an in-flight cold start, but do not cancel it. Its prompt and
+    // setup log live in pendingLaunches and its placeholder remains in the
+    // sidebar, so this pane is immediately free for another new session.
     this.pendingPrompt = null;
     this.pendingFollowups = [];
     this.store.resetActiveSession();
@@ -1819,6 +1906,14 @@ export class AppController {
     if (!trimmed && !files) return;
     const cmid = clientMessageId();
     const active = this.store.getState().activeSessionId;
+    // A cold-start placeholder is a persisted session intent, not a node
+    // session id. Keep extra messages queued locally until its session.new
+    // resolves instead of accidentally sending `prompt` with the placeholder.
+    if (active && this.pendingLaunches.has(active)) {
+      this.store.addUserMessage(trimmed, cmid, files);
+      this.pendingLaunches.get(active)!.followups.push({ text: trimmed, clientMessageId: cmid, attachments: files });
+      return;
+    }
     if (active) {
       if (this.mustQueue(active)) {
         this.store.enqueueFollowup(active, { id: cmid, text: trimmed, attachments: files }, Date.now());
@@ -1867,36 +1962,51 @@ export class AppController {
     const frame: Command = { kind: "session.new", requestId: rid, title: trimmed || undefined, ...this.draftSessionFields() };
     this.pendingPrompt = { text: trimmed, requestId: rid, clientMessageId: cmid, attachments: files, frame };
     // The draft targets a saved ephemeral runner that has no machine yet: sending
-    // IS the launch. Provision a fresh machine from the config, bind this session
-    // to it, and let the existing pendingPrompt/onReconnected replay fire
-    // session.new once it's online — no "launch machine" button, no modal. Guarded
-    // to the picked-runner case so ordinary sessions are completely unaffected.
+    // IS the launch. Persist a sidebar row, provision the machine, and use a
+    // background relay connection to create and start the real session once the
+    // node is online — no launch modal, and the main pane is immediately free.
     const runner = this.store.getState().draftEphemeralConfig;
     if (runner) {
-      void this.launchDraftRunnerAndBind(runner, trimmed, cmid, files);
+      const provisionalId = `starting-${rid}`;
+      this.pendingPrompt.provisionalId = provisionalId;
+      const now = new Date().toISOString();
+      const task: PendingEphemeralLaunch = {
+        id: provisionalId,
+        prompt: this.pendingPrompt,
+        config: runner,
+        logs: [],
+        followups: [],
+        phase: "provisioning",
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.pendingLaunches.set(provisionalId, task);
+      void this.pendingLaunchStore.put(task);
+      this.store.addUserMessage(trimmed, cmid, files);
+      this.store.persistPendingSession(provisionalId, trimmed);
+      // Persisting the placeholder before the first provider request is the key
+      // UX invariant: New is now safe immediately, not only after cloud-init and
+      // session.new eventually finish.
+      void this.launchDraftRunnerAndBind(provisionalId);
       return;
     }
     this.store.addUserMessage(trimmed, cmid, files);
     this.send(frame);
   }
 
-  /**
-   * First-message launch of a picked-but-unlaunched ephemeral runner. Provisions
-   * a fresh machine from the saved config, then binds the draft session to the
-   * new `eph-` node via switchNode. The stashed `pendingPrompt` survives the
-   * switch; once the node pairs, `onReconnected` → `retryPendingSessionNew` fires
-   * the `session.new` on it and `maybeFlushPendingPrompt` flushes this prompt.
-   * The exact analogue of the resume-on-send path, for a not-yet-created session.
-   */
-  private async launchDraftRunnerAndBind(
-    config: EphemeralNodeConfig,
-    text: string,
-    cmid: string,
-    files?: PromptAttachment[],
-  ): Promise<void> {
-    // Instant feedback on the current pane while the provider API call runs
-    // (switchNode below resets the pane, so we re-show it after).
-    this.store.addUserMessage(text, cmid, files);
+  /** Provision the selected runner while its local sidebar row remains usable. */
+  private async launchDraftRunnerAndBind(provisionalId: string): Promise<void> {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task) return;
+    const { config } = task;
+    const logSetup = (message: string) => {
+      task.logs.push(message);
+      task.updatedAt = new Date().toISOString();
+      void this.pendingLaunchStore.put(task);
+      if (this.store.getState().activeSessionId === provisionalId || this.pendingPrompt?.provisionalId === provisionalId) {
+        this.store.pushSystemMessage(`Setup · ${message}`);
+      }
+    };
     try {
       const machine = await this.launchEphemeral({
         provider: config.provider,
@@ -1907,39 +2017,216 @@ export class AppController {
         teardownOnAgentFinish: config.teardownOnAgentFinish === true,
         name: config.name,
         setupId: config.id,
+        onProgress: logSetup,
       });
-      // Bind the draft to the freshly-enrolled node and connect. switchNode resets
-      // the pane (clearing draftEphemeralConfig too) but leaves pendingPrompt.
       if (!machine.nodeId) throw new Error("machine launched without a node id");
-      this.switchNode(machine.nodeId);
-      // Re-show the message + a status note now that the pane was reset, so the
-      // send doesn't visually vanish while the machine boots.
-      this.store.addUserMessage(text, cmid, files);
-      this.store.pushSystemMessage(`Starting ${config.name} — it'll come online shortly, then your message runs.`);
-      this.watchRunnerBoot(machine.nodeId, config.name, config.provider);
+      task.machine = machine;
+      task.phase = "booting";
+      task.updatedAt = new Date().toISOString();
+      await this.pendingLaunchStore.put(task);
+      this.store.bindPendingSessionNode(provisionalId, machine.nodeId);
+      this.startPendingRunner(provisionalId);
     } catch (e) {
-      this.pendingPrompt = null;
+      const message = `Launch failed: ${(e as Error)?.message || e}`;
+      task.logs.push(message);
+      task.phase = "failed";
+      task.updatedAt = new Date().toISOString();
+      void this.pendingLaunchStore.put(task);
+      if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
+      this.store.failPendingSession(provisionalId);
+      if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
       this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`);
     }
   }
 
-  /**
-   * Surface a boot failure instead of an endless "Reconnecting…". A bare ephemeral
-   * VM installs from scratch and, if any step fails, self-destructs (Fly
-   * `auto_destroy`) — so the device would otherwise dial a node that no longer
-   * exists forever. If the runner isn't online within the boot window, drop a
-   * clear system note. Non-fatal: a slower-than-expected boot still connects and
-   * runs (pendingPrompt is left intact), the note just may arrive early.
-   */
-  private watchRunnerBoot(nodeId: string, name: string, provider: string): void {
-    this.waitForOnline(RUNNER_BOOT_TIMEOUT_MS).catch(() => {
-      // Moved to another node, or it actually came online right at the edge.
-      if (this.local.cur !== nodeId || this.store.getState().status === "online") return;
-      const mins = Math.round(RUNNER_BOOT_TIMEOUT_MS / 60000);
-      this.store.pushSystemMessage(
-        `${name} still isn't online after ${mins} min. A temporary machine self-destructs if its boot install fails, so it may be gone — check your ${provider} dashboard for a "bivy-…" app and its logs. Start a new session to try again.`,
-      );
+  private openPendingLaunch(provisionalId: string, opts: { navigate?: boolean } = {}): void {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task) return;
+    if (opts.navigate !== false) navigate({ kind: "session", id: provisionalId });
+    this.store.beginOpen(provisionalId);
+    this.store.addUserMessage(task.prompt.text, task.prompt.clientMessageId, task.prompt.attachments);
+    for (const line of task.logs) this.store.pushSystemMessage(`Setup · ${line}`);
+    this.pendingPrompt = task.prompt;
+  }
+
+  /** Connect a freshly-created runner on its own small transport. This is what
+   *  makes the placeholder genuinely independent: pressing New can switch the
+   *  main pane anywhere while this node finishes booting and starts its prompt. */
+  private startPendingRunner(provisionalId: string): void {
+    const task = this.pendingLaunches.get(provisionalId);
+    const nodeId = task?.machine?.nodeId;
+    if (!task || !nodeId || task.transport) return;
+    const log = (message: string) => {
+      task.logs.push(message);
+      task.updatedAt = new Date().toISOString();
+      void this.pendingLaunchStore.put(task);
+      if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
+    };
+    log("Machine accepted. Waiting for its secure Bivy service to come online…");
+    this.startBootProgress(nodeId, provisionalId, log);
+    this.pollBootstrapStatus(nodeId, provisionalId, log);
+
+    // RelayTransport reads `cur` from its store. Scope only that property to the
+    // new node; credentials and room keys still come from the normal local store.
+    const scopedStore = new Proxy(this.local, {
+      get: (target, property, receiver) => property === "cur" ? nodeId : Reflect.get(target, property, receiver),
+      set: (target, property, value, receiver) => property === "cur" ? true : Reflect.set(target, property, value, receiver),
+    }) as LocalStore;
+    let transport: Transport;
+    transport = new RelayTransport({
+      store: scopedStore,
+      handlers: {
+        onStatus: (status) => {
+          if (status !== "online") return;
+          log(`${task.config.name} is online. Creating the session…`);
+          this.clearBootProgress(nodeId);
+          void transport.send(task.prompt.frame);
+        },
+        onEvent: (event) => {
+          if (event.type === "session.error") {
+            this.failPendingLaunch(provisionalId, String(event.error || "Session creation failed."));
+            return;
+          }
+          if (event.type !== "session.history" || event.requestId !== task.prompt.requestId || !event.sessionId) return;
+          void this.finishPendingLaunch(provisionalId, String(event.sessionId), transport);
+        },
+        onError: (message) => {
+          if (!/^node offline$/i.test(message.trim())) log(`Connection retry: ${message}`);
+        },
+      },
     });
+    task.transport = transport;
+    void transport.connect();
+  }
+
+  private async finishPendingLaunch(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
+    const task = this.pendingLaunches.get(provisionalId);
+    const nodeId = task?.machine?.nodeId;
+    if (!task || !nodeId) return;
+    await transport.send({ kind: "prompt", sessionId, text: task.prompt.text, clientMessageId: task.prompt.clientMessageId, attachments: task.prompt.attachments });
+    for (const followup of task.followups) {
+      await transport.send({ kind: "prompt", sessionId, ...followup });
+    }
+    this.clearBootProgress(nodeId);
+    this.pendingLaunches.delete(provisionalId);
+    await this.pendingLaunchStore.remove(provisionalId);
+    if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
+    this.store.completePendingSession(provisionalId, sessionId, nodeId);
+    const wasOpen = this.store.getState().activeSessionId === sessionId;
+    if (wasOpen) this.openSessionOnNode(sessionId, undefined, nodeId);
+    // Keep the transport alive long enough to flush its sealed frames, then let
+    // the normal account index/main connection own the now-real session.
+    setTimeout(() => transport.close(), 1000);
+    setTimeout(() => this.refreshSessions(), 1500);
+  }
+
+  private failPendingLaunch(provisionalId: string, message: string): void {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task) return;
+    if (task.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
+    task.transport?.close();
+    task.logs.push(`Startup failed: ${message}`);
+    task.phase = "failed";
+    task.updatedAt = new Date().toISOString();
+    void this.pendingLaunchStore.put(task);
+    this.store.failPendingSession(provisionalId);
+    if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · Startup failed: ${message}`);
+    this.store.setError(`Couldn't start ${task.config.name}: ${message}`);
+  }
+
+  private startBootProgress(nodeId: string, provisionalId: string, log: (message: string) => void): void {
+    this.clearBootProgress(nodeId);
+    const updates = [
+      [15_000, "Booting the machine and installing Bivy…"],
+      [45_000, "Still installing Bivy (45s elapsed). A first boot can take a few minutes…"],
+      [90_000, "Still waiting for Bivy to join the secure relay (90s elapsed)…"],
+      [180_000, "Boot is taking longer than usual (3 min elapsed). Still retrying…"],
+      [RUNNER_BOOT_TIMEOUT_MS, `Still offline after ${Math.round(RUNNER_BOOT_TIMEOUT_MS / 60000)} min. Check the provider's machine logs for a failed install.`],
+    ] as const;
+    const timers = updates.map(([delay, message]) => setTimeout(() => {
+      if (this.pendingLaunches.has(provisionalId)) log(message);
+    }, delay));
+    this.bootProgressTimers.set(nodeId, timers);
+  }
+
+  private clearBootProgress(nodeId: string): void {
+    for (const timer of this.bootProgressTimers.get(nodeId) ?? []) clearTimeout(timer);
+    this.bootProgressTimers.delete(nodeId);
+    this.bootstrapPhaseByNode.delete(nodeId);
+  }
+
+  private pollBootstrapStatus(nodeId: string, provisionalId: string, log: (message: string) => void): void {
+    const labels: Record<string, string> = {
+      booting: "The machine booted and cloud-init started.",
+      installing: "Cloud-init is installing Bivy…",
+      starting: "Bivy is installed. Starting its secure service…",
+      ready: "Bivy reported ready.",
+      failed: "Cloud-init reported that the Bivy install failed.",
+    };
+    const poll = async () => {
+      const task = this.pendingLaunches.get(provisionalId);
+      if (!task || task.machine?.nodeId !== nodeId) return;
+      try {
+        const nodes = await fetchAccountNodes(this.local);
+        const phase = nodes.find((n) => n.id === nodeId)?.bootstrapStatus?.phase;
+        if (phase && phase !== this.bootstrapPhaseByNode.get(nodeId)) {
+          this.bootstrapPhaseByNode.set(nodeId, phase);
+          log(labels[phase] || `Bootstrap: ${phase}`);
+          if (phase === "failed") this.failPendingLaunch(provisionalId, labels.failed!);
+        }
+      } catch {
+        // The relay connection remains authoritative; status polling is additive.
+      }
+      if (this.pendingLaunches.has(provisionalId)) setTimeout(poll, 3000);
+    };
+    void poll();
+  }
+
+  /** Restore pending first messages after a reload. A machine record means the
+   *  provider already accepted it, so reconnect without provisioning twice.
+   *  An interrupted provider request is marked failed and offered as a retry. */
+  private async restorePendingLaunches(): Promise<void> {
+    const launches = await this.pendingLaunchStore.list();
+    for (const launch of launches) {
+      this.pendingLaunches.set(launch.id, launch);
+      this.store.persistPendingSession(launch.id, launch.prompt.text, false);
+      if (launch.machine?.nodeId && launch.phase !== "failed") {
+        this.store.bindPendingSessionNode(launch.id, launch.machine.nodeId);
+        this.startPendingRunner(launch.id);
+      } else if (launch.phase === "provisioning") {
+        launch.phase = "failed";
+        launch.logs.push("Startup was interrupted before the cloud provider confirmed the machine.");
+        launch.updatedAt = new Date().toISOString();
+        await this.pendingLaunchStore.put(launch);
+        this.store.failPendingSession(launch.id);
+      } else if (launch.phase === "failed") {
+        this.store.failPendingSession(launch.id);
+      }
+    }
+  }
+
+  async retryPendingLaunch(id: string): Promise<void> {
+    const task = this.pendingLaunches.get(id);
+    if (!task) return;
+    task.transport?.close();
+    task.transport = undefined;
+    task.logs.push("Retrying startup…");
+    task.phase = task.machine?.nodeId ? "booting" : "provisioning";
+    task.updatedAt = new Date().toISOString();
+    this.store.retryPendingSession(id);
+    await this.pendingLaunchStore.put(task);
+    if (task.machine?.nodeId) this.startPendingRunner(id);
+    else await this.launchDraftRunnerAndBind(id);
+  }
+
+  async dismissPendingLaunch(id: string): Promise<void> {
+    const task = this.pendingLaunches.get(id);
+    task?.transport?.close();
+    if (task?.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
+    this.pendingLaunches.delete(id);
+    await this.pendingLaunchStore.remove(id);
+    this.store.dismissPendingSession(id);
+    if (this.store.getState().activeSessionId == null) this.newSession();
   }
 
   /**
@@ -2146,6 +2433,32 @@ export class AppController {
   listCredentialRecords(): void {
     this.send({ kind: "credentials.list" });
   }
+  private credentialSyncInFlight: Promise<void> | null = null;
+  /** Bidirectional API-key convergence between the PWA account vault and node. */
+  private syncAccountCredentialsWithNode(): Promise<void> {
+    if (this.direct || this.store.getState().status !== "online") return Promise.resolve();
+    if (this.credentialSyncInFlight) return this.credentialSyncInFlight;
+    this.credentialSyncInFlight = (async () => {
+      // Pull first so an existing node seeds a new device. Then push the merged
+      // account set so a node-less-created key reaches the newly enrolled node.
+      const event = await this.awaitAck({ kind: "credentials.account.export" });
+      const incoming = Array.isArray(event.entries)
+        ? event.entries.filter((entry): entry is { provider: string; key: string } => Boolean(entry)
+          && typeof (entry as { provider?: unknown }).provider === "string"
+          && typeof (entry as { key?: unknown }).key === "string")
+        : [];
+      await this.ephemeralKeys.importModelKeys(incoming);
+      const accountKeys = (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account");
+      for (const { provider, key } of accountKeys) {
+        await this.awaitAck({ kind: "credential.set", provider, label: "default", key });
+      }
+      this.listCredentialRecords();
+      this.listProviders();
+    })().catch(() => {
+      // Best effort during reconnect; the next reconnect/settings open retries.
+    }).finally(() => { this.credentialSyncInFlight = null; });
+    return this.credentialSyncInFlight;
+  }
   /** Add/replace a labeled credential — an API key, or an op://…/env://… reference. */
   setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> {
     return this.awaitAck({ kind: "credential.set", provider, label, ...value }).then(() => undefined);
@@ -2252,6 +2565,30 @@ export class AppController {
     else pending.resolve(String((event as any).text ?? "").trim());
   }
 
+  /** Generate neural read-aloud audio on the node using its OpenAI key. */
+  synthesize(text: string, voice: string, instructions: string): Promise<{ audio: string; mimeType: string }> {
+    const rid = requestId();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingSpeech.delete(rid);
+        reject(new Error("Speech generation timed out. Check your connection and try again."));
+      }, 60_000);
+      this.pendingSpeech.set(rid, { resolve, reject, timer });
+      void this.transport.send({ kind: "synthesize", requestId: rid, text, voice, instructions });
+    });
+  }
+
+  private resolveSpeech(event: ServerEvent): void {
+    const rid = String(event.requestId || "");
+    const pending = rid ? this.pendingSpeech.get(rid) : undefined;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingSpeech.delete(rid);
+    const error = (event as any).error;
+    if (error) pending.reject(new Error(String(error)));
+    else pending.resolve({ audio: String((event as any).audio ?? ""), mimeType: String((event as any).mimeType ?? "audio/mpeg") });
+  }
+
   // --- Settings: GitHub App one-click (manifest) flow --------------------
   // Works on a headless/remote node: we hand the node *this browser's* origin
   // as the redirect base, so GitHub sends the code back to wherever the user
@@ -2275,15 +2612,25 @@ export class AppController {
    * app's webhook keeps working. Reuses the manifest flow's done/error events, so
    * the phase machine surfaces success/failure just like the create flow.
    */
-  githubAppConnectExisting(input: { appId: string; privateKeyPem: string; nodeLabel?: string }): void {
+  async githubAppConnectExisting(input: { appId: string; privateKeyPem: string; nodeLabel?: string }): Promise<void> {
     this.store.setGithubAppPhase("completing");
-    this.send({
-      kind: "github.app.connect-existing",
-      requestId: requestId(),
-      appId: input.appId,
-      privateKeyPem: input.privateKeyPem,
-      nodeLabel: input.nodeLabel || undefined,
-    });
+    try {
+      // This used to be fire-and-forget. A dropped relay command, offline node,
+      // or validation failure therefore left the form looking unchanged (or
+      // stuck on “Connecting…”) with no actionable result for the user.
+      await this.awaitAck({
+        kind: "github.app.connect-existing",
+        appId: input.appId,
+        privateKeyPem: input.privateKeyPem,
+        nodeLabel: input.nodeLabel || undefined,
+      }, 60_000);
+    } catch (error) {
+      this.store.setGithubAppPhase("error", {
+        error: error instanceof Error ? error.message : String(error),
+        returning: false,
+      });
+      throw error;
+    }
   }
 
   /** Store and validate an App for unattended execution without a node. */
@@ -2308,6 +2655,20 @@ export class AppController {
    *  to surface runs that need attention or failed their final attempt. */
   fetchAutomationRuns(limit = 50): ReturnType<typeof fetchAutomationRuns> {
     return fetchAutomationRuns(this.local, limit);
+  }
+  /** Request cancellation, then re-read both durable Run projections. The UI
+   *  must render these records rather than treating an accepted request as a
+   *  terminal result. */
+  async cancelAutomationRun(id: string): Promise<{
+    runs: Awaited<ReturnType<typeof fetchAutomationRuns>>;
+    queue: Awaited<ReturnType<typeof fetchGithubQueue>>;
+  }> {
+    await apiCancelAutomationRun(this.local, id);
+    const [runs, queue] = await Promise.all([
+      fetchAutomationRuns(this.local, 50),
+      fetchGithubQueue(this.local, 30),
+    ]);
+    return { runs, queue };
   }
   /** Set (empty string clears) the default node for untagged GitHub work. Without
    *  an appId it covers every connected app — it's an account-level preference. */
@@ -2379,16 +2740,21 @@ export class AppController {
   // in (Settings), they're additionally synced to the account's other devices
   // through an E2E device vault so a second device can wake/reach a machine the
   // first launched (P2 / Gap A) — the control plane only ever sees ciphertext.
+  private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralKeys: DeviceVaultKeyStore = createDeviceVaultKeyStore({
     local: createEphemeralKeyStore(),
+    modelKeys: this.ephemeralModelKeys,
     remote: this.deviceVaultRemote(),
     device: () => deviceKeypair(this.local),
-    enabled: () => this.deviceTokenSyncEnabled(),
+    // The account credential vault is available before the first node exists.
+    // Compute-provider token widening remains a separate explicit opt-in.
+    enabled: () => !this.direct && Boolean(this.local.s),
+    providerTokenSyncEnabled: () => this.deviceTokenSyncEnabled(),
   });
-  private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
   private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
   private ephemeralMachines: MachineStore = createMachineStore();
+  private pendingLaunchStore: PendingEphemeralLaunchStore = createPendingEphemeralLaunchStore();
   /** Ephemeral node ids we've already seeded with device-held model keys this
    *  session, so a reconnect doesn't re-push (the node write is idempotent
    *  regardless). See `seedEphemeralNodeIfNeeded`. */
@@ -2406,13 +2772,13 @@ export class AppController {
    *  vault over the E2E channel (closes the cold-start gap — see
    *  docs/ephemeral-sessions.md, "Closing the cold-start gap"). API keys only. */
   listEphemeralModelKeys(): Promise<EphemeralModelKeyInfo[]> {
-    return this.ephemeralModelKeys.list();
+    return this.ephemeralKeys.listModelKeys();
   }
-  setEphemeralModelKey(provider: string, key: string): Promise<void> {
-    return this.ephemeralModelKeys.set(provider, key);
+  setEphemeralModelKey(provider: string, key: string, scope: "account" | "device" = "account"): Promise<void> {
+    return this.ephemeralKeys.setModelKey(provider, key, scope);
   }
   removeEphemeralModelKey(provider: string): Promise<void> {
-    return this.ephemeralModelKeys.remove(provider);
+    return this.ephemeralKeys.removeModelKey(provider);
   }
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralKeys.getToken(id);
@@ -2565,7 +2931,7 @@ export class AppController {
     if (!machines.some((m) => m.nodeId === nodeId)) return;
     let entries: { provider: string; key: string }[];
     try {
-      entries = await this.ephemeralModelKeys.entries();
+      entries = await this.ephemeralKeys.modelKeyEntries();
     } catch {
       return;
     }
@@ -3133,6 +3499,10 @@ export class AppController {
     if (active) this.send({ kind: "abort", sessionId: active });
   }
 
+  resolveTurnAttention(sessionId: string, action: "stop" | "continue"): void {
+    this.send({ kind: "session.turn_attention.resolve", sessionId, action });
+  }
+
   // --- Queued follow-ups (issue #154) -------------------------------------
   //
   // A prompt sent to an already-busy session used to go straight over the
@@ -3193,7 +3563,7 @@ export class AppController {
     const roomKeyB64 = this.local.keys()[nodeId];
     if (!roomKeyB64) return;
     try {
-      const roomKey = await importRoomKey(unb64(roomKeyB64));
+      const roomKey = await importRoomKey(unb64url(roomKeyB64));
       const encrypted = await seal(roomKey, text);
       const at = new Date(Date.now() + 60_000).toISOString();
       const created = await createAutomation(this.local, {
@@ -3214,6 +3584,44 @@ export class AppController {
       }
     } catch {
       // Best-effort: keep the in-memory queue path as the only delivery.
+    }
+  }
+
+  /** Turn the current Session into unattended work without dropping its
+   * conversation/native-resume context. The instruction is E2E-sealed for the
+   * owning Machine; the control plane stores ciphertext and creates a Run that
+   * targets this exact Session. The node resumes/waits for that Session or
+   * fails explicitly—it never silently cold-starts a replacement. */
+  async delegateSession(sessionId: string, instruction: string): Promise<{ runId?: string; error?: string }> {
+    const text = instruction.trim();
+    if (!text) return { error: "Describe what the agent should finish in the background." };
+    if (!this.accountMode()) return { error: "Sign in to delegate this Session." };
+    const nodeId = this.resolveSessionNodeId(sessionId);
+    if (!nodeId) return { error: "This Session has no owning Machine." };
+    const roomKeyB64 = this.local.keys()[nodeId];
+    if (!roomKeyB64) return { error: "This Machine isn't paired on this device—open it first so the instruction can be encrypted." };
+    let automationId: string | undefined;
+    try {
+      const roomKey = await importRoomKey(unb64url(roomKeyB64));
+      const encrypted = await seal(roomKey, text);
+      const created = await createAutomation(this.local, {
+        name: "Delegated Session work",
+        templateCiphertext: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}`,
+        trigger: "manual",
+        nodeLabel: this.resolveNodeLabel(nodeId),
+        targetKind: "existing_session",
+        targetSessionId: sessionId,
+        message: false,
+        enabled: true,
+      });
+      automationId = created.id;
+      const run = await runAutomationNow(this.local, created.id);
+      this.recordProductMilestone("run_accepted");
+      return { runId: run.id };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : "Could not delegate this Session." };
+    } finally {
+      if (automationId) void deleteAutomation(this.local, automationId).catch(() => {});
     }
   }
 
@@ -3256,7 +3664,7 @@ export class AppController {
     const roomKeyB64 = this.local.keys()[nodeId];
     if (!roomKeyB64) return "This machine isn't paired on this device — open it first so the message can be encrypted.";
     try {
-      const roomKey = await importRoomKey(unb64(roomKeyB64));
+      const roomKey = await importRoomKey(unb64url(roomKeyB64));
       const encrypted = await seal(roomKey, trimmed);
       const created = await createAutomation(this.local, {
         name: "Scheduled message",
@@ -3557,6 +3965,7 @@ export class AppController {
 
   resolveApproval(id: string, approved: boolean): void {
     this.send({ kind: "approval", id, approved });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 
   /** Answer a pending clarifying question (see UserQuestionRequest). Unlike
@@ -3564,10 +3973,12 @@ export class AppController {
    *  approvals are looked up in a single global list keyed by id alone. */
   answerQuestion(requestId: string, sessionId: string | undefined, answers: Record<string, string>): void {
     this.send({ kind: "session.question.answer", requestId, sessionId, answers });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 
   cancelQuestion(requestId: string, sessionId: string | undefined): void {
     this.send({ kind: "session.question.answer", requestId, sessionId, cancelled: true });
+    if (!this.direct) void recordProductMetric(this.local, "remote_intervention", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {});
   }
 }
 

@@ -288,6 +288,11 @@ class ProtocolSession implements RuntimeSession {
   private readonly resumeRef?: string;
   private started = false;
   private assistantText = "";
+  /** A protocol agent can produce several discrete assistant messages in one
+   * turn (Codex commentary items are the common case). After a
+   * `message.boundary`, separate the next item's text in the cumulative stream
+   * instead of welding `"first." + "Second"` into `"first.Second"`. */
+  private assistantItemBoundary = false;
   private reasoningText = "";
   private stderrOutput = "";
   private lastUsage?: UsageSnapshot;
@@ -606,6 +611,15 @@ class ProtocolSession implements RuntimeSession {
       if (!text) return;
       if (this.streaming) {
         if (!this.assistantText) this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
+        if (this.assistantItemBoundary && this.assistantText) {
+          // If a tool already flushed the preceding item, advance the persisted
+          // prefix over this display-only separator too; the next turnContent
+          // block should contain `Second message`, not `\n\nSecond message`.
+          const wasFullyFlushed = this.turnTextFlushed === this.assistantText;
+          this.assistantText += "\n\n";
+          if (wasFullyFlushed) this.turnTextFlushed = this.assistantText;
+        }
+        this.assistantItemBoundary = false;
         this.assistantText += text;
         this.emit({ type: "message_update", message: { role: "assistant", content: this.assistantText } });
         return;
@@ -617,6 +631,26 @@ class ProtocolSession implements RuntimeSession {
       // the drain: fold it onto the last assistant message so it survives a reopen
       // instead of opening a fresh draft that is never persisted.
       this.foldLateAssistantDelta(text);
+      return;
+    }
+    if (type === "message.boundary") {
+      // Codex emits multiple agentMessage items during one turn: commentary,
+      // then tools, then more commentary. Seal the prose item now so the client
+      // can place the next tool card AFTER it. Waiting for session.done flattens
+      // every item into one growing bubble and leaves all tools in a block below.
+      // Keep assistantText cumulative: SessionStore uses the committed prefix to
+      // derive each new run, and session.done still persists the complete turn.
+      if (this.streaming && this.assistantText) {
+        // Keep the boundary durable too. The marker is display-only, but it lets
+        // renderHistory split adjacent prose items after reload even when no tool
+        // happened between them.
+        this.flushPendingTurnText();
+        if (this.turnContent[this.turnContent.length - 1]?.type !== "bivy_message_boundary") {
+          this.turnContent.push({ type: "bivy_message_boundary" });
+        }
+        this.emit({ type: "message_boundary", message: { role: "assistant", content: this.assistantText } });
+        this.assistantItemBoundary = true;
+      }
       return;
     }
     if (type === "message.reasoning" || type === "reasoning.delta") {
@@ -663,6 +697,7 @@ class ProtocolSession implements RuntimeSession {
       this.emit({ type: "message_end", message });
       this.streaming = false;
       this.assistantText = "";
+      this.assistantItemBoundary = false;
       this.reasoningText = "";
       this.turnContent = [];
       this.turnTextFlushed = "";
@@ -682,26 +717,39 @@ class ProtocolSession implements RuntimeSession {
       this.emit({ type: "agent_end" });
       return;
     }
-    if (type === "tool.call") {
+    if (type === "tool.call" || type === "tool.observe") {
       const toolCallId = String(msg.toolCallId || msg.id || "");
       const toolName = String(msg.name || "tool");
       const detail = mapToolCall(toolName, msg.input, { provider: this.runtimeOptions.id || "acp", protocol: "protocol" });
       if (detail) this.toolDetailsByCallId.set(toolCallId, detail);
-      this.flushPendingTurnText();
-      this.turnContent.push({ type: "tool_use", id: toolCallId, name: toolName, input: msg.input ?? {}, ...(detail ? { detail } : {}) });
-    }
-    if (type === "tool.call" && this.capabilitiesRef.toolInterception && this.toolInterceptor) {
-      const toolCallId = String(msg.toolCallId || "");
-      const toolName = String(msg.name || "tool");
-      const detail = this.toolDetailsByCallId.get(toolCallId);
-      this.emit({ type: "tool_call", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}) });
-      const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
-      try {
-        this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, decision: decision?.block ? "deny" : "allow", reason: decision?.reason });
-      } catch {
-        // The child exited before we could answer (aborted/disposed mid-turn).
-        // There is nowhere to deliver the decision; drop it rather than throw out
-        // of this async event handler (which would surface as an unhandled rejection).
+      // `tool.observe` is for activity an upstream runtime reports after it has
+      // already begun (Codex read-only MCP and sub-agent items, for example).
+      // It must render and persist exactly like a call, but must never open a
+      // misleading approval that can no longer stop the work. A preceding
+      // governed `tool.call` may be followed by an observed item/started update;
+      // refresh that block in place rather than duplicating it in the transcript.
+      const existing = this.turnContent.find((b) => b.type === "tool_use" && b.id === toolCallId);
+      if (existing) {
+        existing.name = toolName;
+        existing.input = msg.input ?? {};
+        if (detail) existing.detail = detail;
+      } else {
+        this.flushPendingTurnText();
+        this.turnContent.push({ type: "tool_use", id: toolCallId, name: toolName, input: msg.input ?? {}, ...(detail ? { detail } : {}) });
+      }
+      // Stream the live tool card for every protocol agent. Interception is an
+      // additional round-trip only for a real `tool.call`; observed activity is
+      // informational because the upstream runtime is already executing it.
+      this.emit({ type: existing ? "tool_execution_update" : "tool_call", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}) });
+      if (type === "tool.call" && this.capabilitiesRef.toolInterception && this.toolInterceptor) {
+        const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
+        try {
+          this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, decision: decision?.block ? "deny" : "allow", reason: decision?.reason });
+        } catch {
+          // The child exited before we could answer (aborted/disposed mid-turn).
+          // There is nowhere to deliver the decision; drop it rather than throw out
+          // of this async event handler (which would surface as an unhandled rejection).
+        }
       }
       return;
     }
@@ -860,6 +908,7 @@ class ProtocolSession implements RuntimeSession {
     this.messages.push({ role: "user", content: prompt, timestamp: Date.now() });
     this.streaming = true;
     this.assistantText = "";
+    this.assistantItemBoundary = false;
     this.reasoningText = "";
     this.stderrOutput = "";
     this.turnContent = [];

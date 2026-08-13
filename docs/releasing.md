@@ -165,9 +165,9 @@ version in a follow-up PR so subsequent staging builds carry the new number.
 ### Publishing by hand (discouraged)
 
 ```bash
-npm run publish:npm:dry            # inspect what would ship (dry-run, latest)
-npm run publish:npm                # publish to `latest`
-npm run publish:npm -- --tag staging   # publish to `staging`
+pnpm run publish:npm:dry            # inspect what would ship (dry-run, latest)
+pnpm run publish:npm                # publish to `latest`
+pnpm run publish:npm -- --tag staging   # publish to `staging`
 ```
 
 A hand publish produces **no** provenance attestation — npm can only attest to
@@ -203,7 +203,7 @@ script, which fails in a packaged install.
 | Install kind | Update action |
 |---|---|
 | `npm-global` | `npm install -g @bivy/bivy@latest`, then restart the service |
-| `git` | `git pull` + `npm ci`, then restart |
+| `git` | `git pull` + `pnpm install --frozen-lockfile`, then restart |
 | `packaged` | re-runs `install.sh`, which migrates the install to npm |
 | `npx` | nothing to update; each run fetches afresh |
 

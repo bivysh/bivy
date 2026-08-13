@@ -33,6 +33,7 @@ import {
   DEFAULT_HOSTED_PROVISIONING,
   type HostedProvisioningStatus,
   type HostedAuditEvent,
+  type HostedMachineAttempt,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
@@ -53,6 +54,8 @@ import {
   type AutomationDefinition,
   type AutomationRun,
   type AutomationRunStatus,
+  type CancelAutomationRunResult,
+  type RetryAutomationRunResult,
   type AutomationTriggerKind,
   type TriggerEvent,
   type RunEvidenceEvent,
@@ -68,7 +71,13 @@ import {
   SESSION_TTL_MS,
 } from "./store.js";
 
-const WORK_LEASE_MS = 2 * 60 * 1000;
+// A claimed Run's renewable lease. A live node renews every ~30s; if it crashes
+// the item becomes reclaimable once this expires. Overridable via env for tuning
+// and for deterministic reclaim tests (default two minutes).
+const WORK_LEASE_MS = ((): number => {
+  const raw = Number(process.env.BIVY_WORK_LEASE_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 2 * 60 * 1000;
+})();
 const workLeaseExpiry = (): string => new Date(Date.now() + WORK_LEASE_MS).toISOString();
 
 /**
@@ -187,6 +196,23 @@ export class PostgresStore implements MeshStore {
         holder      TEXT NOT NULL,
         expires_at  TIMESTAMPTZ NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS hosted_machine_attempts (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        attempt_id  TEXT NOT NULL,
+        provider    TEXT NOT NULL,
+        config_id   TEXT,
+        node_id     TEXT NOT NULL,
+        state       TEXT NOT NULL,
+        desired     JSONB NOT NULL DEFAULT '{}',
+        machine     JSONB,
+        last_error  TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, attempt_id)
+      );
+      CREATE INDEX IF NOT EXISTS hosted_machine_attempts_active_idx
+        ON hosted_machine_attempts (account_id, state, updated_at);
       -- The paid single-user plan was renamed 'individual' -> 'pro' to match what
       -- it is sold as. The plan column is plain TEXT with no enum or CHECK, so the
       -- backfill is a straight UPDATE; it is idempotent (the second run matches no
@@ -267,6 +293,7 @@ export class PostgresStore implements MeshStore {
       -- the owning node alongside its encrypted model-auth vault. Same trust
       -- tier as online/last_seen_at above: never credential material.
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS providers JSONB;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bootstrap_status JSONB;
 
       CREATE TABLE IF NOT EXISTS session_index (
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -651,6 +678,7 @@ export class PostgresStore implements MeshStore {
       -- empty JSON array, which then silently corrupts every array spread.
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS checks JSONB NOT NULL DEFAULT '[]'::jsonb;
       ALTER TABLE work_items ADD COLUMN IF NOT EXISTS events JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE work_items ADD COLUMN IF NOT EXISTS receipt_evidence JSONB;
       INSERT INTO trigger_events (id, account_id, kind, created_at)
         SELECT 'legacy:' || id, account_id,
           CASE WHEN source LIKE 'github:%' THEN 'github'
@@ -1139,6 +1167,13 @@ export class PostgresStore implements MeshStore {
     await this.query(
       `UPDATE nodes SET providers = $2 WHERE id = $1`,
       [nodeId, JSON.stringify(providers)],
+    );
+  }
+
+  async setNodeBootstrapStatus(nodeId: string, phase: string): Promise<void> {
+    await this.query(
+      `UPDATE nodes SET bootstrap_status = $2 WHERE id = $1`,
+      [nodeId, JSON.stringify({ phase, updatedAt: new Date().toISOString() })],
     );
   }
 
@@ -1658,12 +1693,57 @@ export class PostgresStore implements MeshStore {
     return arr;
   }
 
+  private hostedAttemptFromRow(row: Record<string, any>): HostedMachineAttempt {
+    return {
+      accountId: String(row.account_id), attemptId: String(row.attempt_id),
+      provider: String(row.provider), configId: row.config_id || undefined,
+      nodeId: String(row.node_id), state: row.state,
+      desired: row.desired && typeof row.desired === "object" ? row.desired : {},
+      machine: row.machine && typeof row.machine === "object" ? row.machine : undefined,
+      lastError: row.last_error || undefined, retryCount: Number(row.retry_count) || 0,
+      createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
+    };
+  }
+
+  async putHostedMachineAttempt(attempt: HostedMachineAttempt): Promise<HostedMachineAttempt> {
+    const { rows } = await this.query(
+      `INSERT INTO hosted_machine_attempts
+         (account_id, attempt_id, provider, config_id, node_id, state, desired, machine, last_error, retry_count, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (account_id, attempt_id) DO UPDATE SET
+         provider=EXCLUDED.provider, config_id=EXCLUDED.config_id, node_id=EXCLUDED.node_id,
+         state=EXCLUDED.state, desired=EXCLUDED.desired, machine=EXCLUDED.machine,
+         last_error=EXCLUDED.last_error, retry_count=EXCLUDED.retry_count, updated_at=EXCLUDED.updated_at
+       RETURNING *`,
+      [attempt.accountId, attempt.attemptId, attempt.provider, attempt.configId ?? null, attempt.nodeId,
+       attempt.state, JSON.stringify(attempt.desired ?? {}), attempt.machine ? JSON.stringify(attempt.machine) : null,
+       attempt.lastError ?? null, attempt.retryCount, attempt.createdAt, attempt.updatedAt],
+    );
+    return this.hostedAttemptFromRow(rows[0]);
+  }
+
+  async getHostedMachineAttempt(accountId: string, attemptId: string): Promise<HostedMachineAttempt | undefined> {
+    const { rows } = await this.query(`SELECT * FROM hosted_machine_attempts WHERE account_id=$1 AND attempt_id=$2`, [accountId, attemptId]);
+    return rows[0] ? this.hostedAttemptFromRow(rows[0]) : undefined;
+  }
+
+  async listHostedMachineAttempts(accountId: string, activeOnly = false): Promise<HostedMachineAttempt[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM hosted_machine_attempts WHERE account_id=$1${activeOnly ? " AND state <> 'deleted'" : ""} ORDER BY created_at`,
+      [accountId],
+    );
+    return rows.map((row) => this.hostedAttemptFromRow(row));
+  }
+
   async listHostedMachineAccountIds(): Promise<string[]> {
     // Filter in JS: pg-mem (the dev/test backend) does not implement Postgres's
     // jsonb_typeof/jsonb_array_length functions, and this scan runs only on the
     // small account metadata rows (never session content).
     const { rows } = await this.query(`SELECT id, hosted_machines FROM accounts WHERE hosted_machines IS NOT NULL`);
-    return rows.filter((row) => Array.isArray(row.hosted_machines) && row.hosted_machines.length > 0).map((row) => String(row.id));
+    const ids = new Set(rows.filter((row) => Array.isArray(row.hosted_machines) && row.hosted_machines.length > 0).map((row) => String(row.id)));
+    const attempts = await this.query(`SELECT DISTINCT account_id FROM hosted_machine_attempts WHERE state <> 'deleted'`);
+    for (const row of attempts.rows) ids.add(String(row.account_id));
+    return [...ids];
   }
 
   async listReadyCapacityAccountIds(): Promise<string[]> {
@@ -1680,6 +1760,16 @@ export class PostgresStore implements MeshStore {
        SET holder = EXCLUDED.holder, expires_at = EXCLUDED.expires_at
        WHERE hosted_provision_leases.expires_at < now()
        RETURNING holder`,
+      [accountId, holder, expiresAt],
+    );
+    return rows[0]?.holder === holder;
+  }
+
+  async renewHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean> {
+    const expiresAt = new Date(Date.now() + Math.max(30, ttlSeconds) * 1000).toISOString();
+    const { rows } = await this.query(
+      `UPDATE hosted_provision_leases SET expires_at=$3
+       WHERE account_id=$1 AND holder=$2 AND expires_at >= now() RETURNING holder`,
       [accountId, holder, expiresAt],
     );
     return rows[0]?.holder === holder;
@@ -2552,7 +2642,114 @@ export class PostgresStore implements MeshStore {
     return rows.map(mapAutomationRun);
   }
 
-  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined> {
+  async cancelAutomationRun(accountId: string, id: string): Promise<CancelAutomationRunResult | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // The account predicate makes unknown and cross-account ids identical. The
+      // row lock serializes cancellation with another cancellation/transition,
+      // so the status, bounded event, completion timestamp, and lease release
+      // are one durable operation.
+      const selected = await client.query(
+        `SELECT * FROM work_items WHERE account_id = $1 AND id = $2 FOR UPDATE`,
+        [accountId, id],
+      );
+      const current = selected.rows[0];
+      if (!current) {
+        await client.query("COMMIT");
+        return undefined;
+      }
+      const previousStatus = current.status as AutomationRunStatus;
+      if (previousStatus === "cancelled" || previousStatus === "succeeded" || previousStatus === "failed") {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), previousStatus, transitioned: false };
+      }
+      if (!["pending", "claimed", "running", "needs_attention"].includes(previousStatus)) {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), previousStatus, transitioned: false };
+      }
+      const events = [
+        ...(current.events ?? []),
+        { at: new Date().toISOString(), kind: "cancelled", summary: "Automation run cancelled." },
+      ].slice(-100);
+      const updated = await client.query(
+        `UPDATE work_items SET status = 'cancelled', completed_at = COALESCE(completed_at, now()),
+         lease_expires_at = NULL, events = $3::jsonb
+         WHERE account_id = $1 AND id = $2 RETURNING *`,
+        [accountId, id, JSON.stringify(events)],
+      );
+      // Keep claimed_by_node_id as a privacy-safe ownership tombstone. It lets
+      // only that node's heartbeat distinguish cancellation from a generic lost
+      // lease while the actual renewable lease above is always cleared.
+      await client.query("COMMIT");
+      return { run: mapAutomationRun(updated.rows[0]), previousStatus, transitioned: true };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async retryAutomationRun(accountId: string, id: string): Promise<RetryAutomationRunResult | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const selected = await client.query(
+        `SELECT * FROM work_items WHERE account_id = $1 AND id = $2 FOR UPDATE`,
+        [accountId, id],
+      );
+      const current = selected.rows[0];
+      if (!current) { await client.query("COMMIT"); return undefined; }
+      const checks = Array.isArray(current.checks) ? current.checks : [];
+      const output = current.output ?? {};
+      const events = Array.isArray(current.events) ? current.events : [];
+      const failedCheck = checks.some((check: RunCheck) => check.status === "failed");
+      const explicitNoChanges = events.some((event: RunEvidenceEvent) => /no (file )?changes/i.test(event.summary));
+      const hasArtifact = Boolean(output.branch || output.commit || output.prUrl || output.checkpoint || output.artifactUrl);
+      const ambiguousSuccess = current.status === "succeeded" && !failedCheck && !explicitNoChanges && !hasArtifact;
+      const eligible = current.status === "failed" || failedCheck || ambiguousSuccess;
+      if (!eligible) {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), transitioned: false, reason: "not_retryable" };
+      }
+      const attempt = Math.max(1, Number(current.attempt ?? 1));
+      const maxAttempts = Number(current.max_attempts);
+      if (Number.isFinite(maxAttempts) && maxAttempts > 0 && attempt >= maxAttempts) {
+        await client.query("COMMIT");
+        return { run: mapAutomationRun(current), transitioned: false, reason: "attempt_limit" };
+      }
+      if (current.collapse_key) {
+        const pending = await client.query(
+          `SELECT id FROM work_items WHERE account_id = $1 AND collapse_key = $2 AND status = 'pending' AND id <> $3 LIMIT 1`,
+          [accountId, current.collapse_key, id],
+        );
+        if (pending.rows[0]) {
+          await client.query("COMMIT");
+          return { run: mapAutomationRun(current), transitioned: false, reason: "not_retryable" };
+        }
+      }
+      const retryEvent: RunEvidenceEvent = {
+        at: new Date().toISOString(), kind: "retry", summary: "A new attempt was requested.", attempt: attempt + 1,
+      };
+      const updated = await client.query(
+        `UPDATE work_items SET status = 'pending', attempt = $3, claimed_by_node_id = NULL,
+         claimed_at = NULL, started_at = NULL, completed_at = NULL, lease_expires_at = NULL,
+         output = NULL, checks = '[]'::jsonb, receipt_evidence = NULL, events = $4::jsonb
+         WHERE account_id = $1 AND id = $2 RETURNING *`,
+        [accountId, id, attempt + 1, JSON.stringify([...events, retryEvent].slice(-100))],
+      );
+      await client.query("COMMIT");
+      return { run: mapAutomationRun(updated.rows[0]), transitioned: true };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string): Promise<AutomationRun | undefined> {
     const from: Record<AutomationRunStatus, AutomationRunStatus[]> = {
       pending: [],
       claimed: [],
@@ -2585,6 +2782,9 @@ export class PostgresStore implements MeshStore {
     // is a two-query round trip instead of one atomic statement, but this event
     // append is a best-effort timeline entry, not the transition's atomicity
     // guard (the conditional `status = ANY(from[status])` above already is).
+    // $8 node guard: when set, the Run must still be claimed by that node, so a
+    // Machine that lost its lease to a reclaim (claimed_by_node_id now points at
+    // the new owner) no-ops here instead of overwriting the fresh attempt.
     const { rows } = await this.query(
       `UPDATE work_items SET status = $3,
        started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, now()) ELSE started_at END,
@@ -2594,8 +2794,9 @@ export class PostgresStore implements MeshStore {
          WHEN $3 = 'running' THEN $7
          ELSE lease_expires_at END,
        output = COALESCE($5, output)
-       WHERE account_id = $1 AND id = $2 AND status = ANY($6) RETURNING *`,
-      [accountId, id, status, terminal, output ? JSON.stringify(output) : null, from[status], workLeaseExpiry()],
+       WHERE account_id = $1 AND id = $2 AND status = ANY($6)
+         AND ($8::text IS NULL OR claimed_by_node_id = $8) RETURNING *`,
+      [accountId, id, status, terminal, output ? JSON.stringify(output) : null, from[status], workLeaseExpiry(), expectedNodeId ?? null],
     );
     if (!rows[0]) return undefined;
     if (!event) return mapAutomationRun(rows[0]);
@@ -2621,10 +2822,11 @@ export class PostgresStore implements MeshStore {
     const output = patch.output ? { ...(current.output ?? {}), ...patch.output } : (current.output ?? {});
     const checks = patch.checks ? [...(current.checks ?? []), ...patch.checks].slice(-50) : (current.checks ?? []);
     const events = patch.events ? [...(current.events ?? []), ...patch.events].slice(-100) : (current.events ?? []);
+    const receiptEvidence = patch.receiptEvidence ?? current.receipt_evidence ?? null;
     const { rows: updated } = await this.query(
-      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb
+      `UPDATE work_items SET routing_reason = $3, output = $4::jsonb, checks = $5::jsonb, events = $6::jsonb, receipt_evidence = $7::jsonb
        WHERE account_id = $1 AND id = $2 RETURNING *`,
-      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(events)],
+      [accountId, id, routingReason ?? null, JSON.stringify(output), JSON.stringify(checks), JSON.stringify(events), JSON.stringify(receiptEvidence)],
     );
     return updated[0] ? mapAutomationRun(updated[0]) : undefined;
   }
@@ -2664,7 +2866,7 @@ export class PostgresStore implements MeshStore {
        ORDER BY created_at ASC`,
       [accountId, labels],
     );
-    return rows.map(mapWorkItem);
+    return rows.map(mapWorkItem).map(withResumeTarget);
   }
 
   async listWorkItems(accountId: string, limit = 50): Promise<WorkItem[]> {
@@ -2698,7 +2900,7 @@ export class PostgresStore implements MeshStore {
       `UPDATE work_items SET events = $3::jsonb WHERE account_id = $1 AND id = $2 RETURNING *`,
       [accountId, id, JSON.stringify(events)],
     );
-    return mapWorkItem(withEvent[0] ?? rows[0]);
+    return withResumeTarget(mapWorkItem(withEvent[0] ?? rows[0]));
   }
 
   async renewWorkItemLease(accountId: string, nodeId: string, id: string): Promise<WorkItem | undefined> {
@@ -2794,12 +2996,15 @@ export class PostgresStore implements MeshStore {
     return total;
   }
 
-  async completeWorkItem(accountId: string, id: string): Promise<void> {
+  async completeWorkItem(accountId: string, id: string, expectedNodeId?: string): Promise<AutomationRun | undefined> {
     // Older nodes only know claim → complete. Adapt that boundary onto the
     // canonical lifecycle without preserving a second legacy transition path.
+    // The node guard flows into both hops so a reclaimed-away Machine cannot
+    // complete the new attempt (returns undefined, and the caller reports a
+    // conflict rather than a spurious success).
     const current = await this.getAutomationRun(accountId, id);
-    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running");
-    await this.transitionAutomationRun(accountId, id, "succeeded");
+    if (current?.status === "claimed") await this.transitionAutomationRun(accountId, id, "running", undefined, expectedNodeId);
+    return (await this.transitionAutomationRun(accountId, id, "succeeded", undefined, expectedNodeId)) ?? undefined;
   }
 
   async deleteWorkItem(accountId: string, id: string): Promise<boolean> {
@@ -2848,11 +3053,12 @@ function mapHook(row: any): InboundHook {
  *  mapAutomationRun. Defensively re-bounds on read (in addition to the bounds
  *  already enforced at write time by run-evidence.ts) so a row written by an
  *  older/looser server version can never balloon a response unbounded. */
-function mapEvidenceFields(row: any): { routingReason?: string; checks: RunCheck[]; events: RunEvidenceEvent[] } {
+function mapEvidenceFields(row: any): { routingReason?: string; checks: RunCheck[]; events: RunEvidenceEvent[]; receiptEvidence?: AutomationRun["receiptEvidence"] } {
   return {
     routingReason: row.routing_reason ?? undefined,
     checks: Array.isArray(row.checks) ? row.checks.slice(-50) : [],
     events: Array.isArray(row.events) ? row.events.slice(-100) : [],
+    receiptEvidence: row.receipt_evidence && typeof row.receipt_evidence === "object" ? row.receipt_evidence : undefined,
   };
 }
 
@@ -2897,6 +3103,28 @@ function mapWorkItem(row: any): WorkItem {
     output: row.output ?? undefined,
     ...mapEvidenceFields(row),
   };
+}
+
+/**
+ * Re-dispatch continuity ("resume, don't restart"). When a work item is served to
+ * a node for a *repeat* attempt whose prior attempt already stood up a session —
+ * its id survives in `output.sessionId` — the node must CONTINUE that session
+ * rather than cold-start a new one. The canonical case: a node/machine restart
+ * drops the lease mid-run, so a stale-lease reclaim re-dispatches the same row
+ * with its output intact; without this the reclaimed attempt would ignore the
+ * live session and open a fresh one.
+ *
+ * Only applied on the node-dispatch paths (list-pending / claim). An explicit
+ * retry (`startAutomationRunAttempt`) deliberately NULLs `output`, so a
+ * genuinely-fresh attempt has no `output.sessionId` and correctly falls back to
+ * the stored (`new_session`) target. An item already targeted at an existing
+ * session keeps its explicit target.
+ */
+function withResumeTarget(item: WorkItem): WorkItem {
+  if (item.targetKind === "existing_session") return item;
+  const sessionId = item.output?.sessionId;
+  if (typeof sessionId !== "string" || !sessionId) return item;
+  return { ...item, targetKind: "existing_session", targetSessionId: sessionId };
 }
 
 function triggerKindForSource(explicit: AutomationTriggerKind | undefined, source: string): AutomationTriggerKind {
@@ -2992,6 +3220,7 @@ function mapAutomationRun(row: any): AutomationRun {
     triggerKind: triggerKindForSource(row.trigger_kind ?? undefined, row.source),
     status: row.status === "done" ? "succeeded" : row.status,
     attempt: Number(row.attempt ?? 1),
+    maxAttempts: row.max_attempts == null ? undefined : Number(row.max_attempts),
     target: row.target_kind === "existing_session"
       ? { kind: "existing_session", sessionId: row.target_session_id }
       : { kind: "new_session" },
@@ -3043,6 +3272,7 @@ function mapNode(row: any): NodeRecord {
     lastSeenAt: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
     providers: row.providers ?? undefined,
+    bootstrapStatus: row.bootstrap_status ?? undefined,
   };
 }
 

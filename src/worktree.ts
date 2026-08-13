@@ -107,14 +107,23 @@ export async function createWorktree(opts: {
     // first, then check the existing branch out into a fresh worktree.
     const localExists = await refExists(repoRoot, `refs/heads/${branch}`);
     const remoteExists = !localExists && (await refExists(repoRoot, `refs/remotes/origin/${branch}`));
-    if (!localExists && !remoteExists) throw error;
-    await removeWorktree(repoRoot, wtPath);
-    fs.rmSync(wtPath, { recursive: true, force: true });
-    if (localExists) {
-      await exec("git", ["-C", repoRoot, "worktree", "add", wtPath, branch]);
+    if (localExists || remoteExists) {
+      await removeWorktree(repoRoot, wtPath);
+      fs.rmSync(wtPath, { recursive: true, force: true });
+      if (localExists) {
+        await exec("git", ["-C", repoRoot, "worktree", "add", wtPath, branch]);
+      } else {
+        // Recreate the local branch from origin, then check it out in the worktree.
+        await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, `origin/${branch}`]);
+      }
+    } else if (base !== "HEAD" && !(await refExists(repoRoot, base))) {
+      // Defense in depth for stale internal metadata: callers should resolve a
+      // fork base first, but a missing ref must not prevent session stand-up.
+      await removeWorktree(repoRoot, wtPath);
+      fs.rmSync(wtPath, { recursive: true, force: true });
+      await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, "HEAD"]);
     } else {
-      // Recreate the local branch from origin, then check it out in the worktree.
-      await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, `origin/${branch}`]);
+      throw error;
     }
   }
 

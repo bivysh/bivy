@@ -67,6 +67,7 @@ function harness(over: Partial<ForkStandUpDeps<FakeRecord>> = {}) {
     createWorktree: async (args) => { calls.createWorktree.push(args); return { path: "/repo/wt", branch: args.branch ?? "b", repoRoot: "/repo" } as any; },
     resolveDefaultBaseRef: async () => "origin/main",
     resolveAdoptBaseRef: async (_d, branch) => `origin/${branch}`,
+    resolveForkBaseRef: async (_d, branch) => branch ?? "origin/main",
     applyDirtyPatch: () => ({}),
     gitRepoRoot: async () => undefined,
     materializeFork: async () => ({ kind: "resume", sessionFile: "/s.json" } as any),
@@ -105,12 +106,19 @@ test("ADOPT bases the worktree on origin/<branch> so cross-node commits travel",
   assert.equal(wt.base, "origin/feature-x", "base is the pushed origin ref, NOT the repo default — the commit-drop guard");
 });
 
-test("FRESH cuts a new branch based on the source's local branch", async () => {
-  const { standUp, calls } = harness();
+test("FRESH cuts a new branch based on the resilient fork-base resolver", async () => {
+  const resolved: Array<{ repoDir: string; branch: string | undefined; worktree: string | undefined }> = [];
+  const { standUp, calls } = harness({
+    resolveForkBaseRef: async (repoDir, branch, worktree) => {
+      resolved.push({ repoDir, branch, worktree });
+      return "resolved-source-tip";
+    },
+  });
   await standUp.standUpFork(opts({ worktree: "fresh" }));
   const wt = calls.createWorktree[0];
   assert.match(wt.branch, /^feature-x-fork-[0-9a-f]{8}$/, "new <branch>-fork-<hex> branch");
-  assert.equal(wt.base, "feature-x", "based on the source's local branch, not origin/adopt");
+  assert.equal(wt.base, "resolved-source-tip");
+  assert.deepEqual(resolved, [{ repoDir: "/repo", branch: "feature-x", worktree: undefined }]);
 });
 
 test("ADOPT with no source branch falls back to the repo default base", async () => {

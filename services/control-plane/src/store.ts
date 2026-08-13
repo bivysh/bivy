@@ -107,6 +107,8 @@ export interface NodeRecord {
   lastSeenAt: string | null;
   createdAt: string;
   providers?: NodeProviderSummary[];
+  /** Non-secret, fixed-vocabulary cloud-init progress from an ephemeral node. */
+  bootstrapStatus?: { phase: string; updatedAt: string };
 }
 
 export interface ResolvedClient {
@@ -417,6 +419,28 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
   };
 }
 
+/** Durable control-plane intent for one paid machine creation. Written before
+ * enrollment/provider calls and retained through confirmed deletion so a crash
+ * cannot make a provider resource invisible to reconciliation. */
+export type HostedMachineAttemptState =
+  | "requested" | "enrolled" | "provider-accepted" | "tracked"
+  | "ready" | "claimed" | "working" | "deleting" | "deleted" | "failed";
+
+export interface HostedMachineAttempt {
+  accountId: string;
+  attemptId: string;
+  provider: string;
+  configId?: string;
+  nodeId: string;
+  state: HostedMachineAttemptState;
+  desired: Record<string, unknown>;
+  machine?: Record<string, unknown>;
+  lastError?: string;
+  retryCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
@@ -560,6 +584,17 @@ export type AutomationRunStatus =
   | "cancelled";
 /** Compatibility status accepted by clients deployed before the automation model. */
 export type WorkItemStatus = AutomationRunStatus | "done";
+
+export interface CancelAutomationRunResult {
+  run: AutomationRun;
+  previousStatus: AutomationRunStatus;
+  transitioned: boolean;
+}
+export interface RetryAutomationRunResult {
+  run: AutomationRun;
+  transitioned: boolean;
+  reason?: "not_retryable" | "attempt_limit";
+}
 export type AutomationTriggerKind = "github" | "slack" | "manual" | "webhook" | "schedule";
 
 // --- Privacy-safe run evidence (issue #153) -----------------------------------
@@ -605,6 +640,27 @@ export interface RunCheck {
   exitCode?: number;
   durationMs?: number;
 }
+export interface RunReceiptEvidence {
+  approvals: { requests: number; approved: number; denied: number };
+  fileChanges: { files: Array<{ path: string; op?: string; added?: number; removed?: number }>; added: number; removed: number };
+  auditHealth: { correlation: "healthy" | "missing"; readableStorage: "healthy" | "missing"; successfulWrites: "healthy" | "missing" };
+  execution?: {
+    profile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+    controller?: "customer" | "bivy_hosted_provisioning";
+    agentVersion?: string;
+    modelVersionStatus?: "available" | "unavailable" | "unknown";
+  };
+  protection?: {
+    effective?: {
+      executionProfile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+      sandboxTier?: "read-only" | "workspace-write" | "danger-full-access";
+      approvalMode?: "never" | "risky" | "always" | "autonomous";
+      runtimeEnforcement?: string;
+      trustModes?: string[];
+    };
+    capabilities?: Array<{ capability: "sandbox" | "approval" | "tool" | "network" | "credential_custody" | "runtime_policy"; evidenceClass: "enforced" | "observed" | "unavailable"; mechanism?: string }>;
+  };
+}
 /** Sanitized, allowlisted patch a node may report against its own claimed run.
  *  `checks`/`events` are treated as INCREMENTAL — appended to, never replacing,
  *  the run's existing history. */
@@ -613,6 +669,7 @@ export interface RunEvidencePatch {
   output?: Partial<NonNullable<AutomationRun["output"]>>;
   checks?: RunCheck[];
   events?: RunEvidenceEvent[];
+  receiptEvidence?: RunReceiptEvidence;
 }
 export interface AutomationDefinition {
   id: string;
@@ -701,6 +758,7 @@ export interface AutomationRun {
   triggerKind: AutomationTriggerKind;
   status: AutomationRunStatus;
   attempt: number;
+  maxAttempts?: number;
   target: { kind: "new_session" } | { kind: "existing_session"; sessionId: string };
   routing: {
     nodeLabel: string;
@@ -729,6 +787,8 @@ export interface AutomationRun {
   checks?: RunCheck[];
   /** Ordered, capped, privacy-safe event timeline for the run-detail/outcome report. */
   events?: RunEvidenceEvent[];
+  /** Bounded governance metadata correlated from the node audit stream. */
+  receiptEvidence?: RunReceiptEvidence;
   title: string;
   body?: string;
   /** Plain chat message (no automation boilerplate/push/checks). */
@@ -802,6 +862,7 @@ export interface WorkItem {
   routingReason?: string;
   checks?: RunCheck[];
   events?: RunEvidenceEvent[];
+  receiptEvidence?: RunReceiptEvidence;
   /** Plain chat message (no automation boilerplate/push/checks). */
   message?: boolean;
 }
@@ -1089,6 +1150,7 @@ export interface MeshStore {
   // Plaintext per-node provider status summary (see NodeProviderSummary) —
   // overwritten wholesale by the owning node on every credential change.
   setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void>;
+  setNodeBootstrapStatus(nodeId: string, phase: string): Promise<void>;
 
   // Session index (cross-node unified view). A node replaces its full current
   // session list; clients read the merged list for the account.
@@ -1173,9 +1235,14 @@ export interface MeshStore {
   setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
   getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
   setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
+  putHostedMachineAttempt(attempt: HostedMachineAttempt): Promise<HostedMachineAttempt>;
+  getHostedMachineAttempt(accountId: string, attemptId: string): Promise<HostedMachineAttempt | undefined>;
+  listHostedMachineAttempts(accountId: string, activeOnly?: boolean): Promise<HostedMachineAttempt[]>;
   /** Cross-replica mutex around the read/decide/provider-launch sequence. The
    * lease expires so a crashed control-plane process cannot wedge the account. */
   acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean>;
+  /** Extend only a lease still owned by `holder`; false means ownership was lost. */
+  renewHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean>;
   releaseHostedProvisionLease(accountId: string, holder: string): Promise<void>;
   /** Accounts that currently track at least one control-plane-provisioned
    * machine. Used by the global lifecycle reconciler; returns ids only. */
@@ -1340,7 +1407,21 @@ export interface MeshStore {
   getAutomationRunBySourceKey(accountId: string, sourceKey: string): Promise<AutomationRun | undefined>;
   listAutomationRuns(accountId: string, limit?: number): Promise<AutomationRun[]>;
   getAutomationRun(accountId: string, id: string): Promise<AutomationRun | undefined>;
-  transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"]): Promise<AutomationRun | undefined>;
+  /** Transition a Run's durable lifecycle. Terminal targets are only reachable
+   *  from non-terminal states (the state machine makes an outcome immutable once
+   *  set — a stale or losing Machine cannot rewrite it). When `expectedNodeId` is
+   *  given the transition ALSO requires the Run to still be claimed by that node,
+   *  so a Machine that lost its lease to a reclaim cannot complete or fail the
+   *  new attempt in the read-then-write window. Returns undefined when the
+   *  transition was not applied (wrong source state or ownership lost). */
+  transitionAutomationRun(accountId: string, id: string, status: AutomationRunStatus, output?: AutomationRun["output"], expectedNodeId?: string): Promise<AutomationRun | undefined>;
+  /** Account-scoped, transactional cancellation. Already-cancelled runs are
+   *  returned idempotently; callers inspect previousStatus for terminal conflicts. */
+  cancelAutomationRun(accountId: string, id: string): Promise<CancelAutomationRunResult | undefined>;
+  /** Start another attempt of the same customer-visible Run. Only terminal
+   * failure/ambiguous outcomes are eligible; attempt ceilings are enforced
+   * transactionally with the state reset. */
+  retryAutomationRun(accountId: string, id: string): Promise<RetryAutomationRunResult | undefined>;
   // Record privacy-safe run evidence reported by the node that CLAIMED this run
   // (issue #153) — routing reason, output refs (branch/PR/checkpoint/commit/...),
   // declared-check results, and new timeline events. `checks`/`events` in the
@@ -1389,7 +1470,7 @@ export interface MeshStore {
   // an interval by the control plane, mirroring pruneRunStartsBefore. Returns
   // how many rows were removed in total.
   pruneExpiredAuthTokens(nowIso: string): Promise<number>;
-  completeWorkItem(accountId: string, id: string): Promise<void>;
+  completeWorkItem(accountId: string, id: string, expectedNodeId?: string): Promise<AutomationRun | undefined>;
   // Re-route every *pending* item that landed on the shared/default queue
   // (defaultRouted === true) to `label` — used when the account's default node
   // changes so already-queued work follows the new default. Returns the updated items.

@@ -42,7 +42,17 @@ export interface WatchdogSession {
   turnTimeoutSignal?: Promise<void>;
   turnTimeoutResolve?: () => void;
   turnTimedOut?: boolean;
+  /** Set when a soft stall (stalled/wedged) was flagged for the user to Stop or
+   *  keep going instead of being force-killed. Presence gates re-flagging and
+   *  drives the needs_attention projection. */
+  turnAttention?: { trigger: StallTrigger; idleMs: number; at: number };
 }
+
+/** What the watchdog does when a soft stall (silence or wedged) is detected:
+ *  - `notify`  — flag the turn for review (notification + Stop/keep-going card),
+ *                never auto-kill; the wall-clock cap remains the backstop.
+ *  - `recover` — the legacy behavior: force-recover (kill + reopen) immediately. */
+export type StallAction = "notify" | "recover";
 
 /** Everything the watchdog needs from the rest of the daemon. Making this an
  *  explicit object is the point: the hub coupling that was invisible inline is
@@ -54,11 +64,20 @@ export interface WatchdogDeps {
   turnStallMs: number;
   /** Wedged/structural-stall window (ms); 0 disables the wedged band. */
   turnActivityStallMs: number;
+  /** How a detected soft stall is handled — notify-and-ask (default) vs the legacy
+   *  force-recover. `pid_dead` and the wall-clock cap always auto-recover. */
+  stallAction: StallAction;
   broadcast(payload: unknown): void;
+  /** Re-broadcast the session's derived state (so a flag/clear flips the
+   *  needs_attention projection without a runtime event to carry it). */
+  broadcastSessionState(record: WatchdogSession): void;
+  /** Send a push-notification hint so the user learns a turn needs their decision
+   *  even when they aren't looking at the session. Best-effort. */
+  notifyTurnAttention(record: WatchdogSession, message: string): void;
   /** Mark the session failed in the metadata store (was metadata.touchSession(id,"failed")). */
   markSessionFailed(id: string): void;
   /** Settle + abort + reopen so the session lands at a clean, resumable idle. */
-  abortSessionRecord(record: WatchdogSession): void;
+  abortSessionRecord(record: WatchdogSession): void | Promise<void>;
   evaluateEphemeralTeardown(): void;
   /** Whether the session's turn is currently running (isWorking || isStreaming). */
   sessionBusy(record: WatchdogSession): boolean;
@@ -78,6 +97,14 @@ export interface TurnWatchdog {
   stallTriggerFor(record: WatchdogSession, now?: number): StallTrigger | null;
   sweepStalledTurns(): void;
   turnRecoveryStats(): Record<string, number>;
+  turnRecoverySloStats(): Record<string, { observations: number; totalMs: number; maxMs: number; withinTarget: number; targetMs: number }>;
+  /** Resolve a pending stall review: "stop" runs the force-recovery, "continue"
+   *  vouches the turn is healthy — reset the progress anchors and dismiss. */
+  resolveTurnAttention(record: WatchdogSession, action: "stop" | "continue"): void;
+  /** Dismiss a pending stall review because the turn made (relevant) progress or
+   *  ended on its own. `structural` distinguishes a wedged flag (needs structural
+   *  progress) from a silence flag (any progress clears it). */
+  clearTurnAttentionOnProgress(record: WatchdogSession, structural: boolean): void;
 }
 
 /**
@@ -142,6 +169,12 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
     return `The agent stopped responding (no activity for ${mins} min) and was recovered. Send a message to continue.`;
   }
 
+  function turnAttentionMessage(idleMs: number, trigger: StallTrigger): string {
+    const mins = Math.max(1, Math.round(idleMs / 60_000));
+    if (trigger === "wedged") return `A tool call has run for ${mins} min without making progress. Stop it or keep waiting?`;
+    return `The agent has been quiet for ${mins} min. Stop it or keep waiting?`;
+  }
+
   /** Idle used for a stall's diagnostic/message. A `wedged` turn is measured from
    *  the last STRUCTURAL progress (raw output kept flowing), every other trigger
    *  from the last progress of any kind. */
@@ -157,12 +190,17 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
   // /api/diagnostics health bag so operators can see which runtime hangs and how.
   // See docs/session-reliability-plan.md (Phase 1).
   const turnRecoveryCounts = new Map<string, number>();
+  const recoveryTargetMs = 10_000;
+  const turnRecoveryDurations = new Map<string, { observations: number; totalMs: number; maxMs: number; withinTarget: number; targetMs: number }>();
   function recordTurnRecovery(runtimeId: string, trigger: StallTrigger): void {
     const key = `${runtimeId}:${trigger}`;
     turnRecoveryCounts.set(key, (turnRecoveryCounts.get(key) ?? 0) + 1);
   }
   function turnRecoveryStats(): Record<string, number> {
     return Object.fromEntries([...turnRecoveryCounts.entries()].sort(([a], [b]) => a.localeCompare(b)));
+  }
+  function turnRecoverySloStats() {
+    return Object.fromEntries([...turnRecoveryDurations.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, { ...value }]));
   }
 
   /**
@@ -177,6 +215,10 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
   function recoverStuckTurn(record: WatchdogSession, reason: string, diag?: { trigger: StallTrigger; idleMs?: number }): void {
     if (record.turnTimedOut) return; // already recovering this turn
     record.turnTimedOut = true;
+    // A real recovery (user hit Stop, wall-clock cap, or a dead subprocess)
+    // supersedes any pending "needs your decision" card — drop it so the client
+    // closes it and the failed/outcome events below take over.
+    record.turnAttention = undefined;
     record.lastFailureAt = now();
     const trigger = diag?.trigger ?? "stalled";
     const turnMs = record.workingStartedAt ? record.lastFailureAt - record.workingStartedAt : undefined;
@@ -201,7 +243,20 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
     deps.broadcast({ type: "session.error", sessionId: record.id, error: reason });
     // Settle the client, force the runtime abort (SIGKILL escalation guarantees the
     // wedged child dies), and reopen so a follow-up prompt runs a fresh turn.
-    deps.abortSessionRecord(record);
+    const recoveryStartedAt = now();
+    const recordRecoveryDuration = () => {
+      const durationMs = Math.max(0, now() - recoveryStartedAt);
+      const key = `${record.runtimeId}:${trigger}`;
+      const previous = turnRecoveryDurations.get(key) ?? { observations: 0, totalMs: 0, maxMs: 0, withinTarget: 0, targetMs: recoveryTargetMs };
+      turnRecoveryDurations.set(key, {
+        ...previous,
+        observations: previous.observations + 1,
+        totalMs: previous.totalMs + durationMs,
+        maxMs: Math.max(previous.maxMs, durationMs),
+        withinTarget: previous.withinTarget + (durationMs <= recoveryTargetMs ? 1 : 0),
+      });
+    };
+    void Promise.resolve(deps.abortSessionRecord(record)).then(recordRecoveryDuration, recordRecoveryDuration);
     deps.evaluateEphemeralTeardown();
   }
 
@@ -228,9 +283,52 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
     });
   }
 
-  /** Periodic sweep: recover any working session whose turn has stalled. This is
-   *  what makes a hang self-heal without the user hitting Stop or waiting out the
-   *  hour-long cap. */
+  function clearTurnAttention(record: WatchdogSession): void {
+    if (!record.turnAttention) return;
+    record.turnAttention = undefined;
+    deps.broadcast({ type: "session.turn_attention.resolved", sessionId: record.id });
+    deps.broadcastSessionState(record);
+  }
+
+  function flagTurnForReview(record: WatchdogSession, trigger: StallTrigger, idleMs: number, at: number): void {
+    if (record.turnAttention) return;
+    const message = turnAttentionMessage(idleMs, trigger);
+    record.turnAttention = { trigger, idleMs, at };
+    deps.broadcast({ type: "session.turn_attention", sessionId: record.id, trigger, idleMs, at, message });
+    deps.broadcastSessionState(record);
+    deps.notifyTurnAttention(record, message);
+  }
+
+  function resolveTurnAttention(record: WatchdogSession, action: "stop" | "continue"): void {
+    const attention = record.turnAttention;
+    if (!attention) return;
+    if (action === "stop") {
+      recoverStuckTurn(record, turnStallMessage(attention.idleMs, attention.trigger), attention);
+      // recoverStuckTurn clears the field, but it intentionally emits failure
+      // frames rather than the ordinary resolved frame. Emit this one too so a
+      // client can deterministically remove its card before those frames arrive.
+      deps.broadcast({ type: "session.turn_attention.resolved", sessionId: record.id });
+      deps.broadcastSessionState(record);
+      return;
+    }
+    const at = now();
+    record.lastProgressAt = at;
+    record.lastStructuralProgressAt = at;
+    clearTurnAttention(record);
+  }
+
+  function clearTurnAttentionOnProgress(record: WatchdogSession, structural: boolean): void {
+    const attention = record.turnAttention;
+    if (!attention) return;
+    // Silence means any activity disproves the warning. A wedged tool can keep
+    // producing raw output forever, so only structural progress dismisses it.
+    if (attention.trigger === "wedged" && !structural) return;
+    clearTurnAttention(record);
+  }
+
+  /** Periodic sweep: dead subprocesses are always recovered. Time-based soft
+   *  stalls normally ask the user instead; operators can opt into the legacy
+   *  automatic recovery with stallAction="recover". */
   function sweepStalledTurns(): void {
     if (turnStallMs <= 0 && turnActivityStallMs <= 0) return;
     const at = now();
@@ -238,7 +336,11 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
       const trigger = stallTriggerFor(record, at);
       if (!trigger) continue;
       const idleMs = stallIdleMs(record, trigger, at);
-      recoverStuckTurn(record, turnStallMessage(idleMs, trigger), { trigger, idleMs });
+      if (trigger === "pid_dead" || deps.stallAction === "recover") {
+        recoverStuckTurn(record, turnStallMessage(idleMs, trigger), { trigger, idleMs });
+      } else {
+        flagTurnForReview(record, trigger, idleMs, at);
+      }
     }
   }
 
@@ -290,5 +392,8 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
     stallTriggerFor,
     sweepStalledTurns,
     turnRecoveryStats,
+    turnRecoverySloStats,
+    resolveTurnAttention,
+    clearTurnAttentionOnProgress,
   };
 }

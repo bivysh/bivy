@@ -60,8 +60,9 @@ export function ConnectRunner({
         <div className="connect-kicker">Signed in — one step left</div>
         <h2 className="connect-title" id="connect-runner-title">Choose where your first agent runs</h2>
         <p className="connect-sub">
-          Use your own computer for an always-ready machine, or launch a temporary
-          runner in your cloud account. Bivy never receives your code or keys.
+          Use a trusted workstation you control, or launch an isolated Machine
+          in your cloud account. Interactive traffic stays end-to-end encrypted;
+          any optional hosted credential custody is disclosed before you enable it.
         </p>
       </div>
 
@@ -75,7 +76,7 @@ export function ConnectRunner({
               </svg>
             </span>
             <div className="connect-option-copy">
-              <h3>Install on your own machine</h3>
+              <h3>Set up a trusted workstation</h3>
               <p>Run one command on your Mac or Linux computer for persistent, always-ready work.</p>
             </div>
           </div>
@@ -120,12 +121,12 @@ export function ConnectRunner({
                 </svg>
               </span>
               <div className="connect-option-copy">
-                <h3>Launch a temporary cloud runner</h3>
-                <p>Fastest if you don't want to install anything. Connect your own Fly.io, Hetzner, or AWS token and you're ready — your first message launches the server. Bivy adds no fee.</p>
+                <h3>Set up an isolated Machine</h3>
+                <p>Fastest if you don't want to install anything. Start with the recommended cloud, review its estimated cost and teardown policy, then launch explicitly with your first task. Bivy adds no fee.</p>
               </div>
             </div>
             <button type="button" className="btn primary connect-option-cta" onClick={onEphemeral}>
-              Set up cloud runner
+              Set up isolated Machine
             </button>
           </div>
         )}
@@ -160,7 +161,7 @@ export function ConnectRunner({
       <div className="connect-waiting">
         <span className="onboarding-spinner" aria-hidden />
         <span className="connect-waiting-text">
-          {persistentNodes.length > 0 ? "Or wait for another runner to connect…" : "Waiting for a runner to connect…"}
+          {persistentNodes.length > 0 ? "Or wait for another machine to connect…" : "Waiting for a machine to connect…"}
         </span>
         <button type="button" className="connect-refresh" onClick={onRefresh}>
           Refresh now

@@ -1,0 +1,51 @@
+# pnpm workspace + settings.
+#
+# Bivy develops with pnpm but PUBLISHES an npm-installable package: end users run
+# `npm i -g @bivy/bivy`, and scripts/build-release.mjs regenerates a
+# package-lock.json from the curated manifest at publish time. So the two package
+# managers are deliberately split — pnpm owns the repo, npm owns the artifact.
+#
+# Why pnpm: Bivy creates a git worktree per session, and every worktree grew its
+# own full node_modules (~1.2 GB for this repo). pnpm hardlinks from one
+# content-addressed store, which brings a second worktree down to ~106 MB. It is
+# also the only installed-tree dedup that works on ext4/NTFS, where the
+# copy-on-write path in src/worktree-provision.ts correctly does nothing.
+# See docs/configuration.md and src/harness/dep-cache.ts.
+
+packages:
+  - packages/*
+
+# Security pins for transitive dependencies. These MUST stay in sync with the
+# npm-format `overrides` in package.json: pnpm reads this file and ignores that
+# field, while the published artifact is resolved by npm and ignores this file.
+# `pnpm run check:pins` (scripts/check-security-pins.mjs, run in CI) fails if
+# they drift, so a pin added for our own install can never silently miss the
+# package users actually get.
+overrides:
+  "@hono/node-server": 2.0.12
+  "@modelcontextprotocol/sdk": 1.30.0
+  brace-expansion: 5.0.9
+  undici: 8.9.0
+  # npm expresses these as a nested object under the parent package; pnpm uses a
+  # `parent>child` selector. Same intent: pi-coding-agent ships an npm-shrinkwrap
+  # pinning vulnerable copies below its own node_modules.
+  "@earendil-works/pi-coding-agent>brace-expansion": 5.0.9
+  "@earendil-works/pi-coding-agent>undici": 8.9.0
+
+# pnpm does not run a dependency's install scripts unless it is listed here.
+# Each `true` is arbitrary code we let run at install time, so every entry is a
+# deliberate decision rather than a copy of whatever pnpm reported. A new
+# dependency that wants to build fails the install with ERR_PNPM_IGNORED_BUILDS
+# instead of being silently skipped, which is the behaviour we want.
+allowBuilds:
+  # Native PTY addon — `node scripts/prebuild.js || node-gyp rebuild`. Bivy has
+  # no terminal without it.
+  node-pty: true
+  # `node install.js` fetches/validates the platform binary. Vite cannot build
+  # the PWA without it.
+  esbuild: true
+  # postinstall only rewrites protobufjs' own files for CLI use; nothing Bivy
+  # calls needs it.
+  protobufjs: false
+  # preinstall is literally `echo 'preinstall: no-op'`.
+  "@google/genai": false

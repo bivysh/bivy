@@ -40,7 +40,7 @@ const nodeSealer: Sealer = { seal, open };
 // The canonical credential shapes now live in the pure domain layer
 // (../credentials/types.ts) so the domain no longer points up here for them.
 // Re-exported so credential-store.js stays a stable surface for existing
-// importers. See docs/internal/platform-modularization-plan.md (two-layer pilot).
+// importers.
 export type { ApiKeyCredential, OAuthCredential, StoredCredential };
 
 export type CredentialTombstones = Record<string, number>;

@@ -11,7 +11,7 @@
 // Work Queue tab (AutomationsView) — the natural home for "where does queued
 // work run". Gated by EPHEMERAL_MACHINES_ENABLED, same as before.
 import { useEffect, useState } from "react";
-import { ephemeralCatalogEntry, type AccountNode, type EphemeralNodeConfig, type ProviderKeyInfo, type QueueRouting } from "@bivy/core";
+import { ephemeralCatalogEntry, type AccountNode, type EphemeralNodeConfig, type HostedProvisioningStatus, type ProviderKeyInfo, type QueueRouting } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -51,7 +51,13 @@ function Toggle({ checked, onChange, disabled, label }: { checked: boolean; onCh
   );
 }
 
-export function QueueRoutingSection() {
+export function QueueRoutingSection({
+  hosted,
+  onConfigureCredentials,
+}: {
+  hosted?: HostedProvisioningStatus | null;
+  onConfigureCredentials?: () => void;
+}) {
   const [nodes, setNodes] = useState<AccountNode[]>([]);
   const [configs, setConfigs] = useState<EphemeralNodeConfig[]>([]);
   const [routing, setRouting] = useState<QueueRouting | null>(null);
@@ -100,7 +106,7 @@ export function QueueRoutingSection() {
   const saveConfig = async () => {
     if (!draft) return;
     const name = draft.name.trim();
-    if (!name) { setErr("Config name is required"); return; }
+    if (!name) { setErr("Profile name is required"); return; }
     if (!draft.provider) { setErr("Choose a provider"); return; }
     setErr(null);
     setBusy(true);
@@ -138,20 +144,55 @@ export function QueueRoutingSection() {
     }
   };
 
+  const selectedConfigId = routing?.primary.kind === "config" ? routing.primary.configId : "";
+  const fallbackConfigId = routing?.fallback?.configId ?? "";
+  const selectedConfig = selectedConfigId ? configs.find((c) => c.id === selectedConfigId) : undefined;
+  const fallbackConfig = fallbackConfigId ? configs.find((c) => c.id === fallbackConfigId) : undefined;
+  const hostedCanRun = (config?: EphemeralNodeConfig) => Boolean(
+    config && hosted?.enabled && hosted.validatedProviders.includes(config.provider)
+    && hosted.credential !== "none" && hosted.encryptionReady,
+  );
+  const primaryNodeName = routing?.primary.kind === "node" ? routing.primary.node : "";
+  const routeReady = routing?.primary.kind === "config"
+    ? hostedCanRun(selectedConfig)
+    : routing?.primary.kind === "node"
+      ? persistentNodes.some((node) => (node.name || node.id) === primaryNodeName && node.online) || hostedCanRun(fallbackConfig)
+      : persistentNodes.some((node) => node.online);
+
   return (
     <>
-      <label className="field-label"><span>Primary runner</span>
+      <div className={`routing-readiness ${routeReady ? "ready" : "warn"}`} role="status">
+        <div className="routing-readiness-copy">
+          <strong>{routing === null ? "Checking run readiness…" : routeReady ? "Ready for unattended runs" : "Setup needs attention"}</strong>
+          <span>
+            {routing === null
+              ? "Loading machines, routing, and credential status."
+              : routing.primary.kind === "config"
+              ? routeReady
+                ? `${selectedConfig?.name || "Isolated profile"} can start without an online personal machine.`
+                : "Ephemeral-only runs need hosted provisioning, a validated cloud credential, and GitHub/model sign-ins available to the fresh runner."
+              : routing.primary.kind === "node"
+                ? "The selected persistent machine must be online, or have an isolated fallback."
+                : "The shared queue needs at least one online persistent machine."}
+          </span>
+        </div>
+        {routing !== null && !routeReady && onConfigureCredentials && (
+          <button type="button" className="btn sm" onClick={onConfigureCredentials}>Fix setup</button>
+        )}
+      </div>
+
+      <label className="field-label"><span>Primary machine</span>
         <select className="picker-search" value={primaryValue} disabled={busy} onChange={(e) => saveRouting(e.target.value, fallbackValue)}>
-          <option value="shared">Shared queue (any online node)</option>
+          <option value="shared">Shared queue (any online machine)</option>
           {persistentNodes.length > 0 && (
-            <optgroup label="Persistent nodes">
+            <optgroup label="Trusted workstations">
               {persistentNodes.map((n) => (
                 <option key={n.id} value={`node:${n.name || n.id}`}>{n.name || n.id}</option>
               ))}
             </optgroup>
           )}
           {configs.length > 0 && (
-            <optgroup label="Ephemeral configs">
+            <optgroup label="Isolated machine profiles">
               {configs.map((c) => (
                 <option key={c.id} value={`config:${c.id}`}>{c.name} · {c.provider}</option>
               ))}
@@ -160,9 +201,9 @@ export function QueueRoutingSection() {
         </select>
       </label>
       {primaryIsNode && (
-        <label className="field-label"><span>Fallback if node is offline</span>
+        <label className="field-label"><span>Fallback if machine is offline</span>
           <select className="picker-search" value={fallbackValue} disabled={busy} onChange={(e) => saveRouting(primaryValue, e.target.value)}>
-            <option value="">None — wait for the node</option>
+            <option value="">None — wait for the machine</option>
             {configs.map((c) => (
               <option key={c.id} value={`config:${c.id}`}>{c.name} · {c.provider}</option>
             ))}
@@ -171,13 +212,13 @@ export function QueueRoutingSection() {
       )}
       <p className="muted small">
         {primaryIsNode
-          ? "Queued work waits for this node; if it's offline and a fallback is set, that ephemeral config is provisioned instead."
+          ? "Runs wait for this machine; if it's offline and a fallback is set, a fresh isolated machine is provisioned instead."
           : routing?.primary.kind === "config"
-            ? "Queued work provisions a fresh machine from this config when nothing persistent is online."
-            : "Queued work is picked up by any online node."}
+            ? "Every run starts from this isolated profile. Cloud credentials authorize machine creation; GitHub credentials clone and push; model credentials authorize the agent. These sign-ins are separate and secret values are never shown here."
+            : "Runs are picked up by any online persistent machine. No cloud credential is needed."}
       </p>
 
-      <h4 className="settings-subhead">Ephemeral configs</h4>
+      <h4 className="settings-subhead">Isolated machine profiles</h4>
       {draft ? (
         <div className="settings-form">
           <label className="field-label"><span>Name</span>
@@ -212,15 +253,15 @@ export function QueueRoutingSection() {
           </div>
           <div className="settings-toggle-row">
             <div className="settings-toggle-text">
-              <span className="settings-toggle-title">Keep one runner ready</span>
-              <span className="muted small">Starts an account-owned runner before work arrives for faster claims. It may incur idle provider charges and remains bounded by the TTL.</span>
+              <span className="settings-toggle-title">Keep one machine ready</span>
+              <span className="muted small">Starts an account-owned machine before a Run arrives for faster startup. It may incur idle provider charges and remains bounded by the TTL.</span>
             </div>
-            <Toggle checked={draft.readyCapacity && readyCapacityEligible} disabled={!readyCapacityEligible} onChange={(v) => setDraft({ ...draft, readyCapacity: v })} label="Keep one runner ready" />
+            <Toggle checked={draft.readyCapacity && readyCapacityEligible} disabled={!readyCapacityEligible} onChange={(v) => setDraft({ ...draft, readyCapacity: v })} label="Keep one machine ready" />
           </div>
           {!readyCapacityEligible && <p className="muted small">Managed-compute providers use their native fast-start or suspend path instead of Bivy ready capacity.</p>}
           <div className="row-actions">
             <button className="btn primary" disabled={busy || !draft.name.trim() || !draft.provider} onClick={saveConfig}>
-              {busy ? "Saving…" : draft.editing ? "Save changes" : "Add config"}
+              {busy ? "Saving…" : draft.editing ? "Save changes" : "Add profile"}
             </button>
             <button className="btn" onClick={() => { setErr(null); setDraft(null); }}>Cancel</button>
           </div>
@@ -228,7 +269,7 @@ export function QueueRoutingSection() {
       ) : (
         <>
           <div className="picker-list">
-            {configs.length === 0 && <div className="picker-empty">No ephemeral configs yet.</div>}
+            {configs.length === 0 && <div className="picker-empty">No isolated machine profiles yet.</div>}
             {configs.map((c) => (
               <PickerItem
                 key={c.id}
@@ -239,14 +280,14 @@ export function QueueRoutingSection() {
               />
             ))}
           </div>
-          <button className="btn primary block" onClick={() => { setErr(null); setDraft({ name: "", provider: keys[0]?.id ?? "", region: "", size: "", ttlMinutes: null, readyCapacity: false, teardownOnAgentFinish: false }); }}>+ Add config</button>
+          <button className="btn primary block" onClick={() => { setErr(null); setDraft({ name: "", provider: keys[0]?.id ?? "", region: "", size: "", ttlMinutes: null, readyCapacity: false, teardownOnAgentFinish: false }); }}>+ Add profile</button>
         </>
       )}
       {err && <span className="chip err">{err}</span>}
       {confirmRemove && (
         <ConfirmDialog
-          title="Remove config?"
-          message={`Remove ${confirmRemove.name}? Queued work routed to it will fall back to the shared queue.`}
+          title="Remove profile?"
+          message={`Remove ${confirmRemove.name}? Runs assigned to it will fall back to the shared queue.`}
           confirmLabel="Remove"
           danger
           onCancel={() => setConfirmRemove(null)}

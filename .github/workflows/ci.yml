@@ -3,6 +3,11 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Merge queue validates the exact result of applying queued PRs to the latest
+  # main. Without this event, the required ci-ok check never reports for the
+  # temporary merge group and queued PRs eventually time out.
+  merge_group:
+    types: [checks_requested]
   # Lets other workflows call this one to run the exact same gate rather than
   # re-implementing it. Used by release.yml so a production promotion runs the
   # full suite before publishing, instead of a hand-rolled subset that can drift
@@ -57,7 +62,8 @@ jobs:
             root:
               - *common
               - 'package.json'
-              - 'package-lock.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
               - 'tsconfig.json'
               - 'playwright.config.ts'
               - 'src/**'
@@ -74,7 +80,7 @@ jobs:
               - 'services/control-plane/**'
             e2e:
               - *common
-              - 'package-lock.json'
+              - 'pnpm-lock.yaml'
               - 'src/**'
               - 'packages/core/**'
               - 'services/relay/**'
@@ -96,25 +102,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
-          cache: npm
-      - run: npm ci
-      # Verify the temporary postinstall repair for pi-coding-agent's published
-      # shrinkwrap actually changed the on-disk package, not only npm's lockfile.
-      - name: Verify patched pi dependencies
-        run: |
-          brace="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion/package.json').version")"
-          undici="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/node_modules/undici/package.json').version")"
-          test "$brace" = "5.0.9"
-          test "$undici" = "8.9.0"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Verify the transitive security pins actually took effect on disk, and
+      # that package.json (which resolves the published npm artifact) and
+      # pnpm-workspace.yaml (which resolves what CI tests) declare the same ones.
+      # This replaces an older check for pi-coding-agent's patched NESTED
+      # node_modules: pnpm ignores a dependency's shrinkwrap, so those nested
+      # copies no longer exist here at all. See scripts/check-security-pins.mjs.
+      - run: pnpm run check:pins
       # Production dependencies ship to users; do not release an unreviewed
       # high/critical advisory. audit:prod applies the documented narrow
       # allowlist in scripts/audit-prod.mjs.
-      - run: npm run audit:prod
-      - run: npm run check:licenses
-      - run: npm run check:secrets -- --current-only
+      - run: pnpm run audit:prod
+      - run: pnpm run check:licenses
+      - run: pnpm run check:secrets -- --current-only
 
   root-quality:
     needs: changes
@@ -123,31 +129,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
-          cache: npm
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run typecheck:web
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+      - run: pnpm run typecheck
+      - run: pnpm run typecheck:web
 
   root-tests:
     needs: changes
     if: inputs.force_all || needs.changes.outputs.root == 'true'
-    name: Root unit tests
+    name: Root unit tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
-          cache: npm
-      - run: npm ci
-      - run: npm run test:core
-      # scripts/run-tests.mjs parallelizes independent suites across the runner's
-      # CPUs while serializing suites that use the same fixed port.
-      - run: npm run test:unit
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:core
+        if: matrix.shard == '1/2'
+      # Each machine gets a stable shard; within it, run independent suites
+      # across the runner's CPUs while serializing suites with a shared port.
+      - run: pnpm run test:unit
+        env:
+          TEST_SHARD: ${{ matrix.shard }}
 
   root-builds:
     needs: changes
@@ -156,18 +171,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       # Initial-bundle budget (B4b): fail if the PWA entry chunk grows past its
       # raw/gzip ceiling. The long-transcript budget runs in test:unit.
-      - run: npm run build:web
+      - run: pnpm run build:web
       - run: node scripts/check-bundle-size.mjs
       # Exercise the emitted node RELEASE build and curated standalone package,
       # which catches cross-boundary imports that tsc --noEmit can miss.
-      - run: npm run build:release
+      - run: pnpm run build:release
 
   # Install the exact curated npm tarball into a fresh consumer project on both
   # supported desktop OS families. This catches release-only dependency/audit,
@@ -183,12 +199,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
-          cache: npm
-      - run: npm ci
-      - run: npm run test:release-smoke
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:release-smoke
 
   # The PWA is a principal product client. Playwright parallelizes its test files
   # and desktop/mobile projects within this runner.
@@ -198,15 +215,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm run test:browser
 
-  # Cheap, dependency-free check: no npm ci is needed because check-links only
+  # Cheap, dependency-free check: no install is needed because check-links only
   # uses node:fs/node:path. Its own filter keeps docs-only feedback fast.
   docs-links:
     needs: changes
@@ -229,6 +247,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # services/* are standalone npm projects with their own package-lock.json;
+      # only the repo root migrated to pnpm.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
@@ -250,6 +270,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # services/* are standalone npm projects with their own package-lock.json;
+      # only the repo root migrated to pnpm.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
@@ -286,16 +308,17 @@ jobs:
             script: test/remote-pairing-e2e.ts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - run: npm ci
         working-directory: services/control-plane
       - run: npm ci
         working-directory: services/relay
-      - run: npx tsx ${{ matrix.script }}
+      - run: pnpm exec tsx ${{ matrix.script }}
 
   # Single gate for branch protection. Always runs, and passes only if no needed
   # job failed or was cancelled. A skipped job means its area was untouched and

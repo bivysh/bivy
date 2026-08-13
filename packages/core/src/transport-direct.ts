@@ -359,6 +359,12 @@ export class DirectTransport implements Transport {
         case "abort":
           await this.directApi("/api/session/abort", { method: "POST", body: JSON.stringify({ sessionId: obj.sessionId }) });
           break;
+        case "session.turn_attention.resolve":
+          await this.directApi("/api/session/turn-attention", {
+            method: "POST",
+            body: JSON.stringify({ sessionId: obj.sessionId, action: obj.action }),
+          });
+          break;
         case "session.command.invoke":
           // Protocol-mode agent command. Any output rides back over the live WS
           // (session.status / message / session.done), so no synthetic event here.
@@ -666,6 +672,16 @@ export class DirectTransport implements Transport {
             await this.directApi("/api/transcribe", {
               method: "POST",
               body: JSON.stringify({ audio: obj.audio, mimeType: obj.mimeType, provider: obj.provider, language: obj.language }),
+            }),
+            { requestId: String(obj.requestId ?? "") },
+          );
+          break;
+        case "synthesize":
+          this.emitMerged(
+            "speech.audio",
+            await this.directApi("/api/speech", {
+              method: "POST",
+              body: JSON.stringify({ text: obj.text, voice: obj.voice, instructions: obj.instructions }),
             }),
             { requestId: String(obj.requestId ?? "") },
           );

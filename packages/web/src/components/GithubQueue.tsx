@@ -2,7 +2,6 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  deriveRunOutcome,
   githubIssueRefFromSource,
   isGithubQueueSource,
   type AccountNode,
@@ -19,6 +18,7 @@ import { classifySource } from "../sessionSource.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { writeClipboard } from "../clipboard.js";
+import { isTerminalRun, projectRunDetail } from "../runDetail.js";
 
 // Issue #153: a queue item is worth an "Outcome report" once it has left
 // "pending" and picked up at least one timeline event (the control plane
@@ -70,11 +70,15 @@ export function GithubQueuePanel({
   queue,
   onRefresh,
   onPick,
+  onOpenRun,
   onOpenGithubSettings,
 }: {
   queue: GithubQueueItem[] | null;
   onRefresh: () => void;
   onPick: (sessionId: string, path?: string, nodeId?: string) => void;
+  /** Open the routable Run detail screen (/runs/:runId). A queue item's id is
+   *  the Run id (both are the same work_items record). */
+  onOpenRun?: (runId: string) => void;
   onOpenGithubSettings: () => void;
 }) {
   const { sessions, activeSessionId, prRefreshAllResult, runtimes } = useAppState();
@@ -120,6 +124,8 @@ export function GithubQueuePanel({
   const [clearing, setClearing] = useState(false);
   const [queueActionErr, setQueueActionErr] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [cancelRun, setCancelRun] = useState<EvidenceQueueItem | null>(null);
+  const [cancelBusyId, setCancelBusyId] = useState<string | null>(null);
   // Global "refresh GitHub status" scan (issue #530): reconciles every session
   // this node has tracked that carries PR state, not just the ones listed here
   // — a session that finished or was never reattached keeps whatever PR state
@@ -138,6 +144,22 @@ export function GithubQueuePanel({
     const t = setTimeout(() => controller.store.clearPrRefreshAllResult(), 8000);
     return () => clearTimeout(t);
   }, [prRefreshAllResult]);
+
+  const cancelConfirmedRun = async () => {
+    const run = cancelRun;
+    if (!run) return;
+    setCancelRun(null);
+    setQueueActionErr(null);
+    setCancelBusyId(run.id);
+    try {
+      await controller.cancelAutomationRun(run.id);
+      onRefresh();
+    } catch (e) {
+      setQueueActionErr(String((e as Error)?.message || e));
+    } finally {
+      setCancelBusyId(null);
+    }
+  };
 
   const refreshAllStatus = () => {
     setRefreshingAll(true);
@@ -265,7 +287,7 @@ export function GithubQueuePanel({
         });
       if (primarySel.kind === "config") {
         const setup = configById.get(primarySel.id);
-        if (!setup) throw new Error("That ephemeral config is no longer available");
+        if (!setup) throw new Error("That isolated machine profile is no longer available");
         await runFromConfig(setup);
       } else if (primarySel.kind === "node") {
         // Fallback (prototype): if the chosen node is offline right now and a
@@ -572,7 +594,7 @@ export function GithubQueuePanel({
                       {open && (
                         <div className="queue-run">
                           <label className="queue-run-field">
-                            <span>Runner</span>
+                            <span>Machine</span>
                             <select value={assignPrimary} onChange={(e) => setAssignPrimary(e.target.value)}>
                               <option value="shared">Shared queue (any online machine)</option>
                               {persistentNodes.length > 0 && (
@@ -585,7 +607,7 @@ export function GithubQueuePanel({
                                 </optgroup>
                               )}
                               {EPHEMERAL_MACHINES_ENABLED && ephemeralConfigs.length > 0 && (
-                                <optgroup label="Ephemeral configs">
+                                <optgroup label="Isolated machine profiles">
                                   {ephemeralConfigs.map((s) => (
                                     <option key={s.id} value={`config:${s.id}`}>{s.name} · {s.provider}</option>
                                   ))}
@@ -671,22 +693,32 @@ export function GithubQueuePanel({
 
         {canQuery && reports.length > 0 && (
           <>
-            <div className="queue-head"><h4 className="settings-subhead">Outcome reports</h4></div>
+            <div className="queue-head"><h4 className="settings-subhead">Run details</h4></div>
+            {cancelRun && (
+              <ConfirmDialog
+                title="Cancel Run?"
+                message="Request cancellation of this Run? It will remain active until the refreshed durable record reports a terminal result."
+                confirmLabel="Cancel Run"
+                danger
+                onCancel={() => setCancelRun(null)}
+                onConfirm={() => void cancelConfirmedRun()}
+              />
+            )}
             <div className="evidence-list">
               {reports.map((item) => {
-                const outcome = deriveRunOutcome(item);
-                const outcomeClass = outcome.tone === "danger" ? "err" : outcome.tone === "success" ? "ok" : outcome.tone === "warning" ? "warn" : "";
+                const detail = projectRunDetail(item);
+                const outcomeClass = detail.outcome.tone === "danger" ? "err" : detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "warning" ? "warn" : "";
                 return (
                   <details className="evidence-report" key={item.id}>
                     <summary>
                       <span>{item.repo}{item.issueNumber ? ` #${item.issueNumber}` : ""} · {queueItemSourceLabel(item.source)}</span>
-                      <span className={`chip ${outcomeClass}`}>{outcome.label}</span>
+                      <span className={`chip ${outcomeClass}`}>{detail.outcome.label}</span>
                     </summary>
                     <div className="evidence-meta">
                       <span>Trigger: {item.triggerKind ?? item.source}</span>
-                      {item.attempt !== undefined && item.attempt > 1 && <span>Attempt {item.attempt}</span>}
-                      {item.runtimeId && <span>Agent: {item.runtimeId}</span>}
-                      {item.model && <span>Model: {item.model}</span>}
+                      {detail.attempt > 1 && <span>Attempt {detail.attempt}</span>}
+                      {detail.agent && <span>Agent: {detail.agent}</span>}
+                      {detail.checksSummary && <span>Checks: {detail.checksSummary}</span>}
                       {item.routingReason && <span>Routing: {item.routingReason}</span>}
                       {item.sandbox && <span>Sandbox: {item.sandbox}</span>}
                       {item.approvalMode && <span>Approval: {item.approvalMode}</span>}
@@ -695,7 +727,7 @@ export function GithubQueuePanel({
                       {item.output?.prUrl && <a href={item.output.prUrl} target="_blank" rel="noreferrer">Pull request</a>}
                       {item.output?.artifactUrl && <a href={item.output.artifactUrl} target="_blank" rel="noreferrer">Artifact</a>}
                     </div>
-                    {item.output?.failure && <p className="muted">{item.output.failure}</p>}
+                    {detail.failure && <p className="muted">{detail.failure}</p>}
                     <ol className="evidence-timeline">
                       {item.events.map((event, index) => (
                         <li key={`${event.at}-${index}`}>
@@ -712,9 +744,25 @@ export function GithubQueuePanel({
                         ))}
                       </ul>
                     )}
-                    <button className="link-btn" onClick={() => void copyReport(item)}>
-                      {copiedReportId === item.id ? "Copied!" : "Copy sanitized report"}
-                    </button>
+                    <div className="row-actions">
+                      {onOpenRun && (
+                        <button className="link-btn" onClick={() => onOpenRun(item.id)}>
+                          Open Run details
+                        </button>
+                      )}
+                      {!isTerminalRun(item) && (
+                        <button
+                          className="link-btn danger"
+                          disabled={cancelBusyId === item.id}
+                          onClick={() => { setQueueActionErr(null); setCancelRun(item); }}
+                        >
+                          {cancelBusyId === item.id ? "Cancelling…" : "Cancel Run"}
+                        </button>
+                      )}
+                      <button className="link-btn" onClick={() => void copyReport(item)}>
+                        {copiedReportId === item.id ? "Copied!" : "Copy sanitized Run JSON"}
+                      </button>
+                    </div>
                   </details>
                 );
               })}

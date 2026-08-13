@@ -414,7 +414,7 @@ success it prints the new epoch and the `bivy resume` command to continue. See
 bivy promote 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
 ```
 
-## Nodes and remote access
+## Machines and remote access
 
 ### `bivy relay:setup [flags]`
 
@@ -796,7 +796,7 @@ not.)
 
 What it actually does depends on how Bivy was installed (`<ch>` = the channel):
 
-- **git checkout** — `git pull --ff-only`, then `npm ci`/`npm install`.
+- **git checkout** — `git pull --ff-only`, then `pnpm install --frozen-lockfile`.
 - **`npm i -g @bivy/bivy`** — `npm install -g @bivy/bivy@<ch>`.
 - **`npx bivy`** — nothing; explains that npx always fetches the latest.
 - **installer tarball** — re-runs `curl -fsSL https://bivy.sh/install.sh | bash`

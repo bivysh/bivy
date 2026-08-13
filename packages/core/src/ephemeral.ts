@@ -21,6 +21,8 @@
 
 import { b64, b64url, unb64url } from "./base64.js";
 import type { LocalStore } from "./local-store.js";
+import type { EphemeralNodeConfig } from "./account.js";
+import type { Command, PromptAttachment } from "./protocol.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -276,15 +278,21 @@ export function createEphemeralKeyStore(backend: KvBackend = defaultBackend("pro
   };
 }
 
+export type DeviceCredentialScope = "device" | "account";
+
 export interface EphemeralModelKeyInfo {
   provider: string;
   configured: boolean;
   updatedAt: string | null;
+  /** Account keys enter the E2E device vault; device keys never leave this PWA. */
+  scope: DeviceCredentialScope;
 }
 
 export interface EphemeralModelKeyEntry {
   provider: string;
   key: string;
+  updatedAt?: string | null;
+  scope: DeviceCredentialScope;
 }
 
 /**
@@ -306,7 +314,7 @@ export interface EphemeralModelKeyStore {
   /** The stored keys, for seeding a node. Secrets — never surface in the UI. */
   entries(): Promise<EphemeralModelKeyEntry[]>;
   get(provider: string): Promise<string>;
-  set(provider: string, key: string): Promise<void>;
+  set(provider: string, key: string, scope?: DeviceCredentialScope): Promise<void>;
   remove(provider: string): Promise<void>;
 }
 
@@ -326,14 +334,27 @@ export function createEphemeralModelKeyStore(
       const stored = await all();
       return stored
         .filter((r) => r && r.provider)
-        .map((r) => ({ provider: String(r.provider), configured: Boolean(r.key), updatedAt: r.updatedAt ?? null }))
+        .map((r) => ({
+          provider: String(r.provider),
+          configured: Boolean(r.key),
+          updatedAt: r.updatedAt ?? null,
+          // Existing ephemeral seed keys become account keys: this preserves their
+          // old purpose (making a newly-created node usable) while moving them to
+          // the unified account vault.
+          scope: r.scope === "device" ? "device" as const : "account" as const,
+        }))
         .sort((a, b) => a.provider.localeCompare(b.provider));
     },
     async entries() {
       const stored = await all();
       return stored
         .filter((r) => r && r.provider && r.key)
-        .map((r) => ({ provider: String(r.provider), key: String(r.key) }));
+        .map((r) => ({
+          provider: String(r.provider),
+          key: String(r.key),
+          updatedAt: r.updatedAt ?? null,
+          scope: r.scope === "device" ? "device" as const : "account" as const,
+        }));
     },
     async get(provider) {
       const id = norm(provider);
@@ -341,12 +362,13 @@ export function createEphemeralModelKeyStore(
       const rec = (await all()).find((r) => r.provider === id);
       return rec && rec.key ? rec.key : "";
     },
-    async set(provider, key) {
+    async set(provider, key, scope = "account") {
       const id = norm(provider);
       if (!id) throw new Error("Provider is required");
       const value = String(key || "").trim();
       if (!value) throw new Error("API key cannot be empty");
-      await backend.put(id, { provider: id, key: value, updatedAt: nowIso() });
+      if (scope !== "account" && scope !== "device") throw new Error("Credential scope must be account or device");
+      await backend.put(id, { provider: id, key: value, scope, updatedAt: nowIso() });
     },
     async remove(provider) {
       const id = norm(provider);
@@ -544,6 +566,55 @@ export function createEphemeralSetupStore(
   };
 }
 
+/** Device-local durable intent for a first message waiting on an ephemeral
+ * runner. Prompt content stays on the user's device; the control plane only
+ * receives it later through the normal encrypted relay. */
+export interface PendingEphemeralLaunch {
+  id: string;
+  config: EphemeralNodeConfig;
+  prompt: {
+    text: string;
+    requestId: string;
+    clientMessageId: string;
+    attachments?: PromptAttachment[];
+    frame: Command;
+  };
+  followups: Array<{ text: string; clientMessageId: string; attachments?: PromptAttachment[] }>;
+  logs: string[];
+  phase: "provisioning" | "booting" | "failed";
+  machine?: EphemeralMachine;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PendingEphemeralLaunchStore {
+  list(): Promise<PendingEphemeralLaunch[]>;
+  put(launch: PendingEphemeralLaunch): Promise<void>;
+  remove(id: string): Promise<void>;
+}
+
+export function createPendingEphemeralLaunchStore(
+  backend: KvBackend = defaultBackend("pending-launches", "id"),
+): PendingEphemeralLaunchStore {
+  return {
+    async list() {
+      try {
+        return (await backend.getAll())
+          .filter((r) => r && r.id && r.config && r.prompt)
+          .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))) as PendingEphemeralLaunch[];
+      } catch {
+        return [];
+      }
+    },
+    async put(launch) {
+      await backend.put(launch.id, launch);
+    },
+    async remove(id) {
+      await backend.delete(id);
+    },
+  };
+}
+
 export interface EphemeralMachine {
   id: string;
   provider: string;
@@ -553,6 +624,10 @@ export interface EphemeralMachine {
   status: string; // starting | running | stopped | gone
   ip: string | null;
   createdAt: string;
+  /** Stable id for the launch operation. Provider resources are tagged with it
+   * and idempotent create APIs use it, so a controller can recover an accepted
+   * create whose response was lost instead of launching a duplicate. */
+  attemptId?: string;
   /** Cold-start timestamps. `requestedAt` begins the user-visible budget;
    * `providerAcceptedAt` means the create API returned, not that the agent is
    * ready. Later milestones are server-stamped from the enrolled node. */
@@ -823,6 +898,8 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
   const ttl = clampTtlMinutes(opts.ttlMinutes);
   const installUrl = opts.installUrl || "https://bivy.sh/install.sh";
   const startScript = bivyStartScript(opts);
+  const status = (phase: string) =>
+    `curl -fsS -X POST -H 'content-type: application/json' -H ${shq(`authorization: Bearer ${opts.enrollmentToken}`)} --data ${shq(JSON.stringify({ phase }))} ${shq(`${opts.controlPlaneUrl.replace(/\/$/, "")}/node/bootstrap-status`)} >/dev/null 2>&1 || true`;
   return (
     [
       "#cloud-config",
@@ -836,9 +913,11 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
       "    content: |",
       indentJson(startScript, "      "),
       "runcmd:",
+      `  - [ bash, -lc, ${JSON.stringify(status("booting"))} ]`,
       // 1. Install Bivy (state lands in /etc/bivy via BIVY_DATA_DIR).
-      `  - [ bash, -lc, "mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && command -v bivy >/dev/null 2>&1 || curl -fsSL ${shq(installUrl)} | bash" ]`,
+      `  - [ bash, -lc, ${JSON.stringify(`${status("installing")}; mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && (command -v bivy >/dev/null 2>&1 || curl -fsSL ${shq(installUrl)} | bash) || { ${status("failed")}; exit 1; }`)} ]`,
       // 2. Start the daemon. On a systemd VM a transient system unit keeps it
+      `  - [ bash, -lc, ${JSON.stringify(status("starting"))} ]`,
       //    running after cloud-init's own unit exits (a bare backgrounded process
       //    would be cleaned up with cloud-final's cgroup); the setsid fallback
       //    covers a rare image without systemd-run.
@@ -940,6 +1019,10 @@ export interface ProviderAdapter {
    * invalid/under-scoped credentials fail before Bivy stores or launches with
    * them. Must never create, update, wake, stop, or delete a resource. */
   validateToken?(args: { exec: ExecFn; token: string; region?: string }): Promise<void>;
+  /** False when guest shutdown does not delete the paid resource. Such a
+   * provider may launch only when an independent controller has teardown
+   * credentials; device-only TTL shutdown is not a billing guarantee. */
+  guestCanEnsureDeletion?: boolean;
   /** Optionally fetch the provider's live, currently-orderable sizes so the
    *  hardcoded `sizes` list can't silently go stale (e.g. a plan gets
    *  deprecated). When a region is given, results are narrowed to what that
@@ -1139,6 +1222,9 @@ const hetzner: ProviderAdapter = {
   // x86, 4 GB — closest drop-in for the retired cx22, and x86 avoids the
   // Arm-compat pitfalls of the cax line for Docker images and binaries.
   defaultSize: "cpx21",
+  // `shutdown -h now` only powers a Hetzner server off; billing continues until
+  // the API resource is deleted. Hosted reconciliation supplies that authority.
+  guestCanEnsureDeletion: false,
   async validateToken({ exec, token }) {
     const res = await call(exec, {
       method: "GET",
@@ -1170,6 +1256,20 @@ const hetzner: ProviderAdapter = {
   },
   async provision({ exec, token, config, userData }) {
     const name = `bivy-${config.slug}`;
+    // Hetzner has no create idempotency token. The stable attempt label is the
+    // recovery key: after a timeout, a retry adopts the accepted server instead
+    // of issuing another paid create.
+    if (config.attemptId) {
+      const found = await call(exec, {
+        method: "GET",
+        url: `https://api.hetzner.cloud/v1/servers?label_selector=${encodeURIComponent(`bivy-attempt=${config.attemptId}`)}`,
+        headers: bearer(token),
+      });
+      if (found.status < 300 && Array.isArray(found.body?.servers) && found.body.servers[0]) {
+        const s = found.body.servers[0];
+        return { id: String(s.id), provider: "hetzner", name, region: config.region || "nbg1", status: mapHetznerStatus(s.status), ip: s.public_net?.ipv4?.ip || null, createdAt: nowIso(), ttlMinutes: config.ttlMinutes };
+      }
+    }
     const res = await call(exec, {
       method: "POST",
       url: "https://api.hetzner.cloud/v1/servers",
@@ -1181,7 +1281,7 @@ const hetzner: ProviderAdapter = {
         location: config.region || "nbg1",
         user_data: userData,
         start_after_create: true,
-        labels: { bivy: "ephemeral" },
+        labels: { bivy: "ephemeral", ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}) },
       },
     });
     if (res.status >= 300) throw new Error(providerError(res, "create server"));
@@ -1307,6 +1407,19 @@ const fly: ProviderAdapter = {
       body: { app_name: app, org_slug: org },
     });
     if (created.status >= 300 && created.status !== 409) throw new Error(providerError(created, "create app"));
+    // Fly app creation is naturally name-idempotent, but machine creation is
+    // not. Adopt a machine carrying this attempt metadata before retrying create.
+    if (config.attemptId) {
+      const found = await call(exec, {
+        method: "GET",
+        url: `https://api.machines.dev/v1/apps/${encodeURIComponent(app)}/machines`,
+        headers: bearer(token),
+      });
+      const existing = Array.isArray(found.body) ? found.body.find((m: any) => m?.config?.metadata?.["bivy-attempt"] === String(config.attemptId)) : null;
+      if (found.status < 300 && existing?.id) {
+        return { id: String(existing.id), provider: "fly", app, name: app, region: existing.region || config.region || "iad", status: mapFlyStatus(existing.state), ip: null, createdAt: nowIso(), ttlMinutes: config.ttlMinutes };
+      }
+    }
     // A Fly Machine is an OCI image in a Firecracker microVM, NOT a cloud-init
     // VM: the `#cloud-config` user_data the other providers use is never
     // executed, and a bare `ubuntu:24.04` just runs `/bin/bash`, which exits
@@ -1314,15 +1427,11 @@ const fly: ProviderAdapter = {
     // self-destructs before it ever installs Bivy (that's the "app has no
     // machines" / node-offline symptom). Instead we materialize the same
     // relay.json + start.sh via `files` and run them ourselves as a blocking
-    // foreground init process. `auto_destroy` then tears the machine down once
-    // the daemon exits — but note the daemon (`bivy start`) is a persistent
-    // session process that stays alive across turns to serve follow-ups, so it
-    // does NOT exit on a single `agent_end`. In practice this fires only when the
-    // TTL `timeout` elapses (or the daemon crashes) — i.e. it implements the TTL
-    // safety fallback, NOT the per-turn "destroy when the agent finishes"
-    // contract. That per-turn teardown is device-driven (the launching browser
-    // issues the destroy on `agent_end`; see controller.maybeTeardownFinishedEphemeral).
-    // Falls back to user_data only if no structured bootstrap is given.
+    // foreground init process. `auto_destroy` tears the machine down when the
+    // daemon exits. The daemon's quiet-state teardown snapshots completed work
+    // and exits after `agent_end`, so this no longer depends on a watching
+    // device; the TTL `timeout` remains an independent hard backstop. Falls back
+    // to user_data only if no structured bootstrap is given.
     const machineInit = bootstrap ? flyInit(bootstrap) : { init: { user_data: userData } };
     const machine = await call(exec, {
       method: "POST",
@@ -1337,7 +1446,7 @@ const fly: ProviderAdapter = {
           auto_destroy: bootstrap?.debugKeepMachine ? false : true,
           restart: { policy: "no" },
           guest: { cpu_kind: "shared", cpus: Number(config.cpus) || guest.cpus, memory_mb: Number(config.memoryMb) || guest.memoryMb },
-          metadata: { bivy: "ephemeral" },
+          metadata: { bivy: "ephemeral", ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}) },
           ...machineInit,
         },
       },
@@ -1816,11 +1925,18 @@ const aws: ProviderAdapter = {
         MaxCount: "1",
         UserData: b64(utf8.encode(userData)),
         InstanceInitiatedShutdownBehavior: "terminate",
+        // EC2 makes RunInstances idempotent for this token. A retry after a
+        // timeout returns the original instance rather than billing for another.
+        ...(config.attemptId ? { ClientToken: String(config.attemptId) } : {}),
         "TagSpecification.1.ResourceType": "instance",
         "TagSpecification.1.Tag.1.Key": "Name",
         "TagSpecification.1.Tag.1.Value": name,
         "TagSpecification.1.Tag.2.Key": "bivy",
         "TagSpecification.1.Tag.2.Value": "ephemeral",
+        ...(config.attemptId ? {
+          "TagSpecification.1.Tag.3.Key": "bivy-attempt",
+          "TagSpecification.1.Tag.3.Value": String(config.attemptId),
+        } : {}),
       },
       "launch instance",
     );
@@ -2199,10 +2315,32 @@ function randHex(bytes: number): string {
   return [...arr].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+export type EphemeralLaunchPhase = "requested" | "enrolled" | "provider-accepted" | "tracked" | "failed";
+
+export interface EphemeralLaunchEvent {
+  attemptId: string;
+  nodeId: string;
+  phase: EphemeralLaunchPhase;
+  machine?: EphemeralMachine;
+  error?: string;
+}
+
 export interface LaunchOpts {
   provider: string;
+  /** Stable operation identity. Hosted controllers persist this before any
+   * side effect; device launches generate one locally. */
+  attemptId?: string;
+  /** The caller has an independent, durable controller holding deletion
+   * authority. Required for providers where guest shutdown does not stop billing. */
+  externalTeardownGuaranteed?: boolean;
+  /** Durable lifecycle sink. The initial `requested` callback is awaited before
+   * enrollment, and `provider-accepted` is awaited before local machine storage. */
+  onLifecycle?: (event: EphemeralLaunchEvent) => Promise<void>;
   region?: string;
   size?: string;
+  /** Optional, device-local progress sink for an interactive launch. Messages
+   *  describe safe lifecycle steps only — never tokens or bootstrap secrets. */
+  onProgress?: (message: string) => void;
   /** Optional provider-native prebuilt runner image/snapshot. Enrollment and
    * credentials are still injected at claim time, never baked into the image. */
   image?: string;
@@ -2345,14 +2483,29 @@ export async function launchEphemeralMachine(
   const fetchImpl = deps.fetchImpl ?? fetch;
   const adapter = ephemeralAdapter(opts.provider);
   if (!adapter) throw new Error(`Unknown provider: ${opts.provider}`);
+  // Progress is deliberately best-effort: presentation code must never be able
+  // to abort provisioning. Keep these messages free of credentials, enrollment
+  // tokens, user-data, and provider response bodies.
+  const progress = (message: string) => {
+    try { opts.onProgress?.(message); } catch { /* UI observer only */ }
+  };
+  progress(`Preparing ${adapter.name} launch…`);
   const token = await deps.keys.getToken(opts.provider);
   if (!token) throw new Error(`Add a ${adapter.name} token first.`);
+  if (adapter.guestCanEnsureDeletion === false && !opts.externalTeardownGuaranteed) {
+    throw new Error(`${adapter.name} requires hosted provisioning: powering off its guest does not delete the billable server, so a device-only launch is unsafe.`);
+  }
 
   // Rebuild-resume reuses the torn-down session's node id so the launching device
   // still reaches it (it holds that node's room key) and the daemon knows which
-  // snapshot to restore; a normal launch mints a fresh one.
+  // snapshot to restore; a normal launch mints a fresh one. Persist the stable
+  // attempt before enrollment: after this callback every later side effect has a
+  // durable owner even if this process crashes.
+  const attemptId = opts.attemptId || randHex(16);
   const nodeId = opts.reuseNodeId || "eph-" + randHex(8);
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "requested" });
   const enrollBody = JSON.stringify({ nodeId, name: opts.name || `Ephemeral ${adapter.name}` });
+  progress("Enrolling a secure Bivy node…");
   const enrollOnce = async () => {
     const res = await fetchImpl(`${cpBase(deps.store)}/nodes/enroll`, {
       method: "POST",
@@ -2373,7 +2526,13 @@ export async function launchEphemeralMachine(
   if (!enrollRes.ok && enrollRes.status === 402 && /node limit/i.test(String(enroll?.error ?? ""))) {
     if ((await reapOrphanEphemeralNodes(deps, fetchImpl)) > 0) ({ res: enrollRes, data: enroll } = await enrollOnce());
   }
-  if (!enrollRes.ok || !enroll?.enrollmentToken) throw new Error(enroll?.error || "Could not enroll the machine");
+  if (!enrollRes.ok || !enroll?.enrollmentToken) {
+    const error = enroll?.error || "Could not enroll the machine";
+    await opts.onLifecycle?.({ attemptId, nodeId, phase: "failed", error });
+    throw new Error(error);
+  }
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "enrolled" });
+  progress("Node enrolled. Building its secure bootstrap…");
 
   // Reuse the old session's room key on rebuild so the device (which already
   // holds it) reaches the new machine and the daemon can decrypt the snapshot
@@ -2407,13 +2566,29 @@ export async function launchEphemeralMachine(
   // substitute the default when nothing was picked. An invalid value surfaces
   // as a clear provider error rather than being silently swapped out.
   const size = opts.size || adapter.defaultSize;
-  const machine = await adapter.provision({
-    exec: deps.exec,
-    token,
-    userData,
-    bootstrap,
-    config: { slug: ephemeralNodeLabel(nodeId), region: opts.region || adapter.defaultRegion, size, image: opts.image, ttlMinutes: opts.ttlMinutes },
-  });
+  const region = opts.region || adapter.defaultRegion;
+  progress(`Creating the machine in ${region} (${size})…`);
+  let machine: EphemeralMachine;
+  try {
+    machine = await adapter.provision({
+      exec: deps.exec,
+      token,
+      userData,
+      bootstrap,
+      config: { slug: ephemeralNodeLabel(nodeId), region, size, image: opts.image, ttlMinutes: opts.ttlMinutes, attemptId },
+    });
+  } catch (error) {
+    await opts.onLifecycle?.({
+      attemptId,
+      nodeId,
+      phase: "failed",
+      error: String((error as Error)?.message || error).slice(0, 500),
+    });
+    throw error;
+  }
+  machine.attemptId = attemptId;
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "provider-accepted", machine });
+  progress("Machine created. Boot setup is installing and starting Bivy…");
   machine.size = size;
   machine.milestones = { ...(machine.milestones ?? {}), requestedAt, providerAcceptedAt: nowIso() };
   machine.nodeId = nodeId;
@@ -2430,6 +2605,7 @@ export async function launchEphemeralMachine(
   if (opts.workItemId) machine.workItemId = opts.workItemId;
   if (opts.purpose) machine.purpose = opts.purpose;
   await deps.machines.add(machine);
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "tracked", machine });
   return machine;
 }
 

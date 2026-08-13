@@ -21,14 +21,16 @@ import {
   ephemeralNodeLabel,
   ephemeralCatalogEntry,
   validateEphemeralProviderToken,
+  ephemeralAdapter,
   type ExecFn,
   type ExecRequest,
   type LocalStore,
   type EphemeralMachine,
   type EphemeralKeyStore,
   type MachineStore,
+  type EphemeralLaunchEvent,
 } from "@bivy/core";
-import { providerCredentialFingerprint, type MeshStore, type EphemeralNodeConfig, type QueueRouting, type HostedAuditEvent } from "./store.js";
+import { providerCredentialFingerprint, type MeshStore, type EphemeralNodeConfig, type QueueRouting, type HostedAuditEvent, type HostedMachineAttempt, type HostedMachineAttemptState } from "./store.js";
 import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
 
@@ -93,6 +95,18 @@ export async function markHostedMachineMilestone(
   });
   if (found) await store.setHostedMachines(accountId, next);
   if (recorded) {
+    const machine = next.find((m) => m.nodeId === nodeId);
+    const attemptId = typeof machine?.attemptId === "string" ? machine.attemptId : "";
+    if (attemptId) {
+      const attempt = await store.getHostedMachineAttempt(accountId, attemptId).catch(() => undefined);
+      if (attempt) {
+        const state: HostedMachineAttemptState = milestone === "firstAgentEventAt" ? "working"
+          : milestone === "credentialsReadyAt" ? "ready"
+          : attempt.state;
+        await store.putHostedMachineAttempt({ ...attempt, state, machine, updatedAt: at }).catch(() => {});
+      }
+    }
+
     const startMs = Date.parse(String(requestedAt || ""));
     const atMs = Date.parse(at);
     const elapsed = Number.isFinite(startMs) && Number.isFinite(atMs) && atMs >= startMs ? ` elapsedMs=${atMs - startMs}` : "";
@@ -104,6 +118,20 @@ export async function markHostedMachineMilestone(
 const DEDUPE_WINDOW_MS = 60 * 60 * 1000; // don't stack hosted machines within an hour
 const MAX_PROVISIONS_PER_HOUR = Math.max(1, Number(process.env.HOSTED_PROVISION_MAX_PER_HOUR ?? 5));
 const READY_MIN_REMAINING_MS = 5 * 60 * 1000;
+const PROVISION_LEASE_SECONDS = 5 * 60;
+
+/** Keep a cross-replica provision lease alive while a slow provider call is in
+ * flight. Without renewal, expiry permits a second replica to launch another
+ * paid machine while the first request is merely slow. */
+function startLeaseHeartbeat(store: MeshStore, accountId: string, holder: string): () => void {
+  const timer = setInterval(() => {
+    void store.renewHostedProvisionLease(accountId, holder, PROVISION_LEASE_SECONDS).then((owned) => {
+      if (!owned) console.error(`[hosted-provision] lost lease account=${accountId} holder=${holder}`);
+    }).catch((error) => console.error(`[hosted-provision] lease renewal failed account=${accountId}:`, error));
+  }, 60_000);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
 
 function readyMachineUsable(machine: Record<string, unknown>, nowMs = Date.now()): boolean {
   const createdAt = Date.parse(String(machine.createdAt || ""));
@@ -153,9 +181,9 @@ export function resolveAutoProvisionTarget(
 
 /** Decide whether to provision, without launching. Safe to expose for dry-runs. */
 export async function planAutoProvision(store: MeshStore, accountId: string, nowMs = Date.now()): Promise<ProvisionPlan> {
-  // Fail-closed deployment gate: ephemeral machines are off unless the deploy set
-  // EPHEMERAL_MACHINES_ENABLED=1 (production leaves it off). This is the single
-  // choke point for ALL server-initiated auto-launches — both maybeAutoProvision
+  // Deployment emergency gate: exact `0` disables new launches; otherwise the
+  // per-account hosted opt-in is authoritative. This is the single choke point
+  // for ALL server-initiated auto-launches — both maybeAutoProvision
   // call sites route through here. Mirrors the /api/ephemeral/exec relay guard
   // (device-initiated launches) and the web VITE_EPHEMERAL_MACHINES_ENABLED flag.
   if (!ephemeralMachinesEnabled()) {
@@ -315,6 +343,7 @@ export async function provisionEphemeralForAccount(
   launcher = launchEphemeralMachine,
   nowMs = Date.now(),
   purpose: EphemeralMachine["purpose"] = "queue-default",
+  retry?: { attemptId: string; nodeId: string; retryCount: number },
 ): Promise<EphemeralMachine> {
   const hosted = await store.getHostedProvisioning(accountId);
   const providerToken = hosted.providerTokens?.[config.provider];
@@ -332,10 +361,27 @@ export async function provisionEphemeralForAccount(
   const sessionToken = await store.createSession(accountId);
   let roomKeyB64 = "";
   const localStore = serverLocalStore({ sessionToken, env, onAddKey: (_id, key) => { roomKeyB64 = key; } });
+  const attemptId = retry?.attemptId ?? randomUUID();
+  const createdAt = new Date(nowMs).toISOString();
+  let attempt: HostedMachineAttempt | undefined = retry ? await store.getHostedMachineAttempt(accountId, attemptId) : undefined;
+  const onLifecycle = async (event: EphemeralLaunchEvent): Promise<void> => {
+    attempt = await store.putHostedMachineAttempt({
+      accountId, attemptId: event.attemptId, provider: config.provider, configId: config.id,
+      nodeId: event.nodeId, state: event.phase as HostedMachineAttemptState,
+      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose, setupId: config.id },
+      machine: event.machine as unknown as Record<string, unknown> | undefined,
+      lastError: event.error, retryCount: retry?.retryCount ?? 0,
+      createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
+    });
+  };
   try {
     const machine = await launcher(
       {
         provider: config.provider,
+        attemptId,
+        onLifecycle,
+        reuseNodeId: retry?.nodeId,
+        externalTeardownGuaranteed: true,
         region: config.region,
         size: config.size,
         image: config.image,
@@ -349,6 +395,11 @@ export async function provisionEphemeralForAccount(
       },
       { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs) },
     );
+    // Custom/injected launchers may not emit callbacks. Production launchers do;
+    // once accepted, preserve the provider identity before any later bookkeeping.
+    if (attempt) {
+      attempt = await store.putHostedMachineAttempt({ ...attempt, state: "tracked", machine: machine as unknown as Record<string, unknown>, updatedAt: new Date().toISOString() });
+    }
     await audit(store, accountId, { action: "provision_launched", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
     // Gap 3: escrow the room key the control plane just generated, sealed at rest
     // with this account's hosted-provisioning key, keyed by the (reusable) node id.
@@ -362,6 +413,9 @@ export async function provisionEphemeralForAccount(
     }
     return machine;
   } catch (e) {
+    if (attempt && attempt.state !== "failed") {
+      await store.putHostedMachineAttempt({ ...attempt, state: "failed", lastError: String((e as Error)?.message || e).slice(0, 500), updatedAt: new Date().toISOString() }).catch(() => {});
+    }
     await audit(store, accountId, { action: "provision_failed", provider: config.provider, configId: config.id, detail: String((e as Error)?.message || e).slice(0, 200) });
     throw e;
   }
@@ -388,7 +442,8 @@ export async function ensureReadyCapacity(
   launcher = launchEphemeralMachine,
 ): Promise<EphemeralMachine | null> {
   const holder = `capacity:${randomUUID()}`;
-  if (!(await store.acquireHostedProvisionLease(accountId, holder, 5 * 60))) return null;
+  if (!(await store.acquireHostedProvisionLease(accountId, holder, PROVISION_LEASE_SECONDS))) return null;
+  const stopHeartbeat = startLeaseHeartbeat(store, accountId, holder);
   try {
     if (!ephemeralMachinesEnabled()) return null;
     const hosted = await store.getHostedProvisioning(accountId);
@@ -412,6 +467,7 @@ export async function ensureReadyCapacity(
     await audit(store, accountId, { action: "capacity_ready", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
     return machine;
   } finally {
+    stopHeartbeat();
     await store.releaseHostedProvisionLease(accountId, holder).catch(() => {});
   }
 }
@@ -440,7 +496,7 @@ export async function provisionEphemeralRestore(
   accountId: string,
   config: EphemeralNodeConfig,
   env: ProvisionEnv,
-  opts: { reuseNodeId: string; restoreSessionId: string },
+  opts: { reuseNodeId: string; restoreSessionId: string; attemptId?: string; retryCount?: number },
   launcher = launchEphemeralMachine,
   nowMs = Date.now(),
 ): Promise<EphemeralMachine> {
@@ -456,15 +512,31 @@ export async function provisionEphemeralRestore(
 
   const sessionToken = await store.createSession(accountId);
   const localStore = serverLocalStore({ sessionToken, env, onAddKey: () => {} });
+  const attemptId = opts.attemptId ?? randomUUID();
+  const createdAt = new Date(nowMs).toISOString();
+  let attempt: HostedMachineAttempt | undefined = opts.attemptId ? await store.getHostedMachineAttempt(accountId, attemptId) : undefined;
+  const onLifecycle = async (event: EphemeralLaunchEvent): Promise<void> => {
+    attempt = await store.putHostedMachineAttempt({
+      accountId, attemptId: event.attemptId, provider: config.provider, configId: config.id,
+      nodeId: event.nodeId, state: event.phase as HostedMachineAttemptState,
+      desired: { region: config.region, size: config.size, image: config.image, ttlMinutes: config.ttlMinutes, purpose: "queue-default", setupId: config.id, restoreSessionId: opts.restoreSessionId },
+      machine: event.machine as unknown as Record<string, unknown> | undefined,
+      lastError: event.error, retryCount: opts.retryCount ?? 0,
+      createdAt: attempt?.createdAt ?? createdAt, updatedAt: new Date().toISOString(),
+    });
+  };
   try {
     const machine = await launcher(
       {
         provider: config.provider,
+        attemptId,
+        onLifecycle,
         region: config.region,
         size: config.size,
         image: config.image,
         ttlMinutes: config.ttlMinutes,
         hostedTasks: true,
+        externalTeardownGuaranteed: true,
         githubToken,
         hostedMint: useHostedMint,
         setupId: config.id,
@@ -477,10 +549,12 @@ export async function provisionEphemeralRestore(
       },
       { store: localStore, exec: directExec(), keys: serverKeyStore(providerToken), machines: serverMachineStore(store, accountId, nowMs) },
     );
+    if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "tracked", machine: machine as unknown as Record<string, unknown>, updatedAt: new Date().toISOString() });
     await audit(store, accountId, { action: "room_key_reused", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
     await audit(store, accountId, { action: "provision_launched", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
     return machine;
   } catch (e) {
+    if (attempt && attempt.state !== "failed") await store.putHostedMachineAttempt({ ...attempt, state: "failed", lastError: String((e as Error)?.message || e).slice(0, 500), updatedAt: new Date().toISOString() }).catch(() => {});
     await audit(store, accountId, { action: "provision_failed", provider: config.provider, configId: config.id, detail: String((e as Error)?.message || e).slice(0, 200) });
     throw e;
   }
@@ -506,6 +580,13 @@ export async function mintHostedInstallationToken(store: MeshStore, accountId: s
  *  the server keeps billing until an explicit DELETE — and is idempotent /
  *  404-tolerant for Fly/EC2 that may already be gone. */
 export type DestroyFn = typeof destroyEphemeralMachine;
+export type ObserveFn = (machine: EphemeralMachine, providerToken: string) => Promise<string>;
+
+const observeProviderMachine: ObserveFn = async (machine, providerToken) => {
+  const adapter = ephemeralAdapter(machine.provider);
+  if (!adapter) throw new Error(`unknown provider ${machine.provider}`);
+  return adapter.status({ exec: directExec(), token: providerToken, machine });
+};
 
 async function destroyOneHostedMachine(
   store: MeshStore,
@@ -551,14 +632,26 @@ export async function reapSettledHostedMachine(
   const providerToken = hosted.providerTokens?.[machine.provider];
   try {
     if (providerToken) {
+      if (machine.attemptId) {
+        const attempt = await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined);
+        if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleting", updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
+      }
       await destroyOneHostedMachine(store, accountId, machine, providerToken, env, nowMs, destroy);
+      if (machine.attemptId) {
+        const attempt = await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined);
+        if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleted", machine: machine as unknown as Record<string, unknown>, updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
+      }
       await audit(store, accountId, { action: "machine_reaped", provider: machine.provider, nodeId, detail: "settled — destroyed" });
     } else {
-      // No hosted token to authenticate a destroy (unexpected for hosted): at
-      // least forget the record + unenroll so the node slot frees.
-      await store.setHostedMachines(accountId, machines.filter((m) => m.nodeId !== nodeId));
-      await store.removeNode(accountId, nodeId).catch(() => {});
-      await audit(store, accountId, { action: "machine_reaped", nodeId, detail: "settled — no token" });
+      // Missing credentials are not proof that the provider resource is gone.
+      // Keep the record visible so restoring the credential permits a retry;
+      // silently forgetting it could orphan a still-billing VM.
+      await audit(store, accountId, {
+        action: "reconcile_failed",
+        provider: machine.provider,
+        nodeId,
+        detail: "provider credential unavailable; resource retained for retry",
+      });
     }
   } catch (e) {
     await audit(store, accountId, { action: "provision_failed", nodeId, detail: `settled reap: ${String((e as Error)?.message || e).slice(0, 120)}` });
@@ -574,25 +667,110 @@ export async function reapSettledHostedMachine(
  * node — the VM self-destructs at its own TTL for Fly/EC2). Returns the number
  * reaped. Safe to run lazily or on a timer.
  */
-export async function reconcileHostedMachines(store: MeshStore, accountId: string, nowMs = Date.now(), env?: ProvisionEnv, destroy: DestroyFn = destroyEphemeralMachine): Promise<number> {
-  const machines = await store.getHostedMachines(accountId);
-  if (!machines.length) return 0;
+export async function reconcileHostedMachines(store: MeshStore, accountId: string, nowMs = Date.now(), env?: ProvisionEnv, destroy: DestroyFn = destroyEphemeralMachine, observe: ObserveFn = observeProviderMachine): Promise<number> {
+  let machines = await store.getHostedMachines(accountId);
+  // Older self-hosted/test store shims may not expose the new attempt table
+  // until their migration completes; legacy tracked-machine cleanup must still run.
+  const attempts = store.listHostedMachineAttempts
+    ? await store.listHostedMachineAttempts(accountId, true).catch(() => [])
+    : [];
+
+  // Recover the crash window after provider acceptance but before legacy
+  // inventory tracking. The attempt row was committed first and contains the
+  // provider identity, so reconciliation can adopt it without another create.
+  let adopted = false;
+  for (const attempt of attempts) {
+    if (!attempt.machine || machines.some((m) => m.attemptId === attempt.attemptId || (m.id && m.id === attempt.machine?.id))) continue;
+    machines.push({ ...attempt.machine, attemptId: attempt.attemptId, nodeId: attempt.nodeId, setupId: attempt.configId, purpose: attempt.desired.purpose });
+    await store.putHostedMachineAttempt({ ...attempt, state: "tracked", updatedAt: new Date(nowMs).toISOString() });
+    adopted = true;
+  }
+  if (adopted) await store.setHostedMachines(accountId, machines);
+
+  // Retry pre-acceptance attempts with the SAME attempt/node identity. Provider
+  // adapters first discover by the attempt tag (and EC2 uses ClientToken), so an
+  // accepted create whose response was lost is adopted, never duplicated.
+  if (env && attempts.length) {
+    const configs = await store.getEphemeralConfigs(accountId);
+    for (const attempt of attempts) {
+      if (attempt.machine || !["requested", "enrolled", "failed"].includes(attempt.state)) continue;
+      const age = nowMs - Date.parse(attempt.updatedAt);
+      const backoff = Math.min(15 * 60_000, 30_000 * 2 ** Math.min(attempt.retryCount, 5));
+      if (!Number.isFinite(age) || age < backoff) continue;
+      const config = configs.find((c) => c.id === attempt.configId) ?? {
+        id: attempt.configId || `recovered-${attempt.attemptId}`,
+        name: "Recovered ephemeral runner",
+        provider: attempt.provider,
+        region: typeof attempt.desired.region === "string" ? attempt.desired.region : undefined,
+        size: typeof attempt.desired.size === "string" ? attempt.desired.size : undefined,
+        image: typeof attempt.desired.image === "string" ? attempt.desired.image : undefined,
+        ttlMinutes: typeof attempt.desired.ttlMinutes === "number" ? attempt.desired.ttlMinutes : 60,
+        createdAt: attempt.createdAt,
+        updatedAt: attempt.updatedAt,
+      };
+      const retryCount = attempt.retryCount + 1;
+      await store.putHostedMachineAttempt({ ...attempt, state: "requested", retryCount, lastError: undefined, updatedAt: new Date(nowMs).toISOString() });
+      const restoreSessionId = typeof attempt.desired.restoreSessionId === "string" ? attempt.desired.restoreSessionId : "";
+      if (restoreSessionId) {
+        await provisionEphemeralRestore(store, accountId, config, env, { reuseNodeId: attempt.nodeId, restoreSessionId, attemptId: attempt.attemptId, retryCount }, launchEphemeralMachine, nowMs).catch(() => {});
+      } else {
+        await provisionEphemeralForAccount(store, accountId, config, env, launchEphemeralMachine, nowMs, (attempt.desired.purpose as EphemeralMachine["purpose"]) || "queue-default", { attemptId: attempt.attemptId, nodeId: attempt.nodeId, retryCount }).catch(() => {});
+      }
+    }
+    machines = await store.getHostedMachines(accountId);
+  }
+
+  if (!machines.length && !attempts.length) return 0;
   const hosted = env ? await store.getHostedProvisioning(accountId) : null;
   const kept: Array<Record<string, unknown>> = [];
   let reaped = 0;
-  for (const m of machines) {
+  let inventoryChanged = adopted;
+  for (const original of machines) {
+    let m = original;
     const createdAt = typeof m.createdAt === "string" ? Date.parse(m.createdAt) : NaN;
     const ttlMin = typeof m.ttlMinutes === "number" ? m.ttlMinutes : 60;
-    const graceMs = (ttlMin + 15) * 60 * 1000; // TTL + boot/teardown grace
-    if (Number.isFinite(createdAt) && nowMs - createdAt <= graceMs) {
-      kept.push(m);
-      continue;
-    }
     const nodeId = typeof m.nodeId === "string" ? m.nodeId : "";
     const provider = typeof m.provider === "string" ? m.provider : "";
     const providerToken = env && provider ? hosted?.providerTokens?.[provider] : undefined;
+
+    // Attempts opt into active observation. Legacy rows remain TTL-reconciled so
+    // upgrades do not suddenly fan out provider calls for old inventory.
+    if (env && providerToken && typeof m.attemptId === "string") {
+      try {
+        const observed = await observe(m as unknown as EphemeralMachine, providerToken);
+        if (observed === "gone") {
+          if (nodeId) await store.removeNode(accountId, nodeId).catch(() => {});
+          const attempt = await store.getHostedMachineAttempt(accountId, m.attemptId).catch(() => undefined);
+          if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleted", machine: m, updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
+          reaped++;
+          inventoryChanged = true;
+          await audit(store, accountId, { action: "machine_reaped", provider, nodeId: nodeId || undefined, detail: "provider confirmed gone" });
+          continue;
+        }
+        if (observed !== m.status) {
+          m = { ...m, status: observed };
+          inventoryChanged = true;
+        }
+      } catch (error) {
+        await audit(store, accountId, { action: "reconcile_failed", provider, nodeId: nodeId || undefined, detail: `provider observe: ${String((error as Error)?.message || error).slice(0, 120)}` });
+      }
+    }
+
+    const ttlGraceMs = (ttlMin + 15) * 60 * 1000;
+    const bootDeadlineMs = 15 * 60 * 1000;
+    const nodeReady = typeof (m.milestones as Record<string, unknown> | undefined)?.nodeReadyAt === "string";
+    const bootTimedOut = typeof m.attemptId === "string" && Number.isFinite(createdAt) && !nodeReady && nowMs - createdAt > bootDeadlineMs;
+    if (Number.isFinite(createdAt) && nowMs - createdAt <= ttlGraceMs && !bootTimedOut) {
+      kept.push(m);
+      continue;
+    }
     if (env && providerToken) {
       try {
+        const deletingAttemptId = typeof m.attemptId === "string" ? m.attemptId : "";
+        if (deletingAttemptId) {
+          const attempt = await store.getHostedMachineAttempt(accountId, deletingAttemptId).catch(() => undefined);
+          if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleting", updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
+        }
         await destroyOneHostedMachine(store, accountId, m as unknown as EphemeralMachine, providerToken, env, nowMs, destroy);
       } catch (error) {
         // Never forget a resource whose provider deletion failed: it may still
@@ -625,9 +803,15 @@ export async function reconcileHostedMachines(store: MeshStore, accountId: strin
       }
     }
     reaped++;
-    await audit(store, accountId, { action: "machine_reaped", nodeId: nodeId || undefined, detail: `ttl ${ttlMin}m elapsed${env && providerToken ? " — destroyed" : ""}` });
+    const attemptId = typeof m.attemptId === "string" ? m.attemptId : "";
+    if (attemptId) {
+      const attempt = await store.getHostedMachineAttempt(accountId, attemptId).catch(() => undefined);
+      if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "deleted", machine: m, updatedAt: new Date(nowMs).toISOString() }).catch(() => {});
+    }
+    inventoryChanged = true;
+    await audit(store, accountId, { action: "machine_reaped", nodeId: nodeId || undefined, detail: `${bootTimedOut ? "boot deadline exceeded" : `ttl ${ttlMin}m elapsed`}${env && providerToken ? " — destroyed" : ""}` });
   }
-  if (reaped) await store.setHostedMachines(accountId, kept);
+  if (inventoryChanged || reaped) await store.setHostedMachines(accountId, kept);
   return reaped;
 }
 
@@ -675,6 +859,7 @@ export async function maybeAutoProvision(
 ): Promise<EphemeralMachine | null> {
   const leaseHolder = randomUUID();
   let replenish = false;
+  let stopHeartbeat: (() => void) | undefined;
   try {
     // Lazy lifecycle reconciliation: prune (and actively destroy leak-prone)
     // machines past TTL before deciding, so dedupe/rate-cap see fresh state and
@@ -685,7 +870,8 @@ export async function maybeAutoProvision(
     // this lease, two webhook/control-plane workers can both observe no active
     // machine and each create a separately billed VM. Five minutes covers slow
     // compatibility boot APIs; expiry recovers automatically after a crash.
-    if (!(await store.acquireHostedProvisionLease(accountId, leaseHolder, 5 * 60))) return null;
+    if (!(await store.acquireHostedProvisionLease(accountId, leaseHolder, PROVISION_LEASE_SECONDS))) return null;
+    stopHeartbeat = startLeaseHeartbeat(store, accountId, leaseHolder);
     const routing = await store.getQueueRouting(accountId);
     const configs = await store.getEphemeralConfigs(accountId);
     const target = resolveAutoProvisionTarget(routing, configs);
@@ -698,9 +884,15 @@ export async function maybeAutoProvision(
       const hasPending = (await store.listWorkItems(accountId, 100)).some((item) => item.status === "pending" && item.label === sourceLabel);
       if (ready && hasPending) {
         const claimed = { ...ready, purpose: "queue-default", claimedAt: new Date().toISOString() };
-        await store.setHostedMachines(accountId, machines.map((m) => m.id === ready.id ? claimed : m));
-        await audit(store, accountId, { action: "capacity_claimed", provider: target.provider, configId: target.id, nodeId: typeof ready.nodeId === "string" ? ready.nodeId : undefined });
+        // Route first. If the controller crashes afterward the work still reaches
+        // this unique runner; the inverse order strands paid claimed capacity.
         await routePendingWorkToMachine(store, accountId, target, claimed as unknown as EphemeralMachine);
+        await store.setHostedMachines(accountId, machines.map((m) => m.id === ready.id ? claimed : m));
+        if (typeof ready.attemptId === "string") {
+          const attempt = await store.getHostedMachineAttempt(accountId, ready.attemptId).catch(() => undefined);
+          if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "claimed", machine: claimed, updatedAt: new Date().toISOString() }).catch(() => {});
+        }
+        await audit(store, accountId, { action: "capacity_claimed", provider: target.provider, configId: target.id, nodeId: typeof ready.nodeId === "string" ? ready.nodeId : undefined });
         replenish = true;
         return claimed as unknown as EphemeralMachine;
       }
@@ -726,6 +918,7 @@ export async function maybeAutoProvision(
     console.error(`[hosted-provision] account ${accountId}:`, (e as Error)?.message || e);
     return null;
   } finally {
+    stopHeartbeat?.();
     await store.releaseHostedProvisionLease(accountId, leaseHolder).catch(() => {});
     if (replenish) void ensureReadyCapacity(store, accountId, env, launcher).catch(() => {});
   }

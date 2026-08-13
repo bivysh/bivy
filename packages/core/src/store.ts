@@ -116,6 +116,10 @@ export interface SessionSummary {
    *  carries this from the node — see src/server.ts — it was previously dropped
    *  here, which is why the sidebar had no branch/PR context per row). */
   branch?: string;
+  /** Device-local placeholder while an ephemeral runner is provisioning. It is
+   *  preserved across authoritative session-list refreshes until the controller
+   *  replaces it with the node's canonical session id. */
+  pendingLaunch?: boolean;
   /** This session's ephemeral node was torn down (unenrolled, gone from the
    *  registry) but is REBUILDABLE from a durable correlation + the room key this
    *  device still holds — so the row stays in the sidebar as offline-but-rebuildable
@@ -125,6 +129,16 @@ export interface SessionSummary {
    *  = the node default. Baked in at creation and read-only for the session's life
    *  — surfaced so a running session can show its sandbox mode read-only. */
   sandbox?: SandboxTier;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  ephemeral?: boolean;
+  executionProfile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+  auditHealth?: {
+    storage: "healthy" | "missing" | "corrupt" | "unreadable";
+    writes: "healthy" | "unknown" | "degraded";
+    failedWrites: number;
+    corruptLines: number;
+  };
+  eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
   /** Pull request opened for this session's branch, if any (the live open one). */
   prUrl?: string;
   /** Every PR seen for this session's branch (open, merged, closed). */
@@ -306,6 +320,16 @@ export interface UserQuestionRequest {
   sessionId?: string;
   questions: UserQuestionItem[];
   createdAt?: number;
+}
+
+/** A soft watchdog warning that asks the user whether to stop a possibly stuck
+ * turn or keep waiting. One may be pending per session. */
+export interface TurnAttentionRequest {
+  sessionId: string;
+  trigger: "stalled" | "wedged";
+  idleMs: number;
+  at: number;
+  message: string;
 }
 
 /** Reasoning/thinking capability of the current model. */
@@ -665,6 +689,8 @@ export interface AppState {
   approvals: ApprovalRequest[];
   /** Pending clarifying questions (see UserQuestionRequest) across every session. */
   questions: UserQuestionRequest[];
+  /** Soft watchdog decisions pending across sessions. */
+  turnAttentions: TurnAttentionRequest[];
   models: ModelInfo[];
   /** The runtime the current `models`/`currentModel` were resolved for (the
    *  node tags each models.list with its runtime). Null when unknown — e.g. the
@@ -865,6 +891,7 @@ export function initialState(): AppState {
     opening: false,
     approvals: [],
     questions: [],
+    turnAttentions: [],
     models: [],
     modelsRuntimeId: null,
     currentModelId: null,
@@ -1825,11 +1852,14 @@ export class SessionStore {
    */
   setSessions(list: unknown): void {
     const sessions = this.withoutRecentlyDeleted(normalizeSessions(list, this.state.sessions));
+    const ids = new Set(sessions.map((s) => s.sessionId));
+    const pending = this.state.sessions.filter((s) => s.pendingLaunch && !ids.has(s.sessionId));
+    const merged = [...pending, ...sessions];
     const activeId = this.state.activeSessionId;
     this.set({
       sessions: activeId
-        ? sessions.map((s) => (s.sessionId === activeId ? { ...s, lastSeenAt: Date.now() } : s))
-        : sessions,
+        ? merged.map((s) => (s.sessionId === activeId ? { ...s, lastSeenAt: Date.now() } : s))
+        : merged,
     });
   }
 
@@ -1872,6 +1902,7 @@ export class SessionStore {
       opening: false,
       approvals: [],
       questions: [],
+      turnAttentions: [],
       // Per-session display state must not blend across nodes either.
       usage: null,
       changes: null,
@@ -2100,6 +2131,7 @@ export class SessionStore {
       opening: false,
       approvals: [],
       questions: [],
+      turnAttentions: [],
       // A fresh draft must not keep showing whichever agent the *previously
       // viewed* session happened to be running — currentAgentName/selectedAgentId
       // otherwise just carry over from that session's applyHistory (or a stale
@@ -2119,6 +2151,67 @@ export class SessionStore {
       // A brand-new draft hasn't picked an ephemeral runner yet.
       draftEphemeralConfig: null,
     });
+  }
+
+  /** Materialize a first-message draft in the sidebar before its node is ready.
+   *  Ephemeral cold starts can take minutes; giving the draft a stable local id
+   *  lets the user leave it running and start another session without discarding
+   *  the launch. The controller replaces this row with the node's canonical id
+   *  as soon as session.new completes. */
+  persistPendingSession(sessionId: string, name: string, activate = true): void {
+    const existing = this.state.sessions.find((s) => s.sessionId === sessionId);
+    const row: SessionSummary = {
+      ...existing,
+      sessionId,
+      name: name.trim() || existing?.name || "New session",
+      status: existing?.status === "failed" ? "failed" : "working",
+      pendingLaunch: true,
+      updatedAt: existing?.updatedAt || Date.now(),
+    };
+    this.set({
+      ...(activate ? { activeSessionId: sessionId, activeTitle: row.name } : {}),
+      sessions: [row, ...this.state.sessions.filter((s) => s.sessionId !== sessionId)],
+    });
+  }
+
+  retryPendingSession(sessionId: string): void {
+    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "working", updatedAt: Date.now() } : s) });
+  }
+
+  dismissPendingSession(sessionId: string): void {
+    this.set({
+      activeSessionId: this.state.activeSessionId === sessionId ? null : this.state.activeSessionId,
+      sessions: this.state.sessions.filter((s) => s.sessionId !== sessionId),
+    });
+  }
+
+  /** Add provider routing to a pending row once provisioning returns a node id. */
+  bindPendingSessionNode(sessionId: string, nodeId: string): void {
+    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, nodeId } : s) });
+  }
+
+  /** Replace a cold-start placeholder with the node's canonical session. */
+  completePendingSession(pendingId: string, sessionId: string, nodeId: string): void {
+    const pending = this.state.sessions.find((s) => s.sessionId === pendingId);
+    const row: SessionSummary = {
+      ...pending,
+      sessionId,
+      nodeId,
+      name: pending?.name || "New session",
+      status: "working",
+      pendingLaunch: false,
+      updatedAt: Date.now(),
+    };
+    this.set({
+      activeSessionId: this.state.activeSessionId === pendingId ? sessionId : this.state.activeSessionId,
+      sessions: [row, ...this.state.sessions.filter((s) => s.sessionId !== pendingId && s.sessionId !== sessionId)],
+    });
+  }
+
+  /** Keep a failed cold start visible and clearly settled so its setup log can
+   *  still be opened, instead of leaving an endless working spinner. */
+  failPendingSession(sessionId: string): void {
+    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "failed" } : s) });
   }
 
   setActiveTitle(name: string): void {
@@ -2310,7 +2403,7 @@ export class SessionStore {
             updatedAt: e.updatedAt || e.modified || (known ? undefined : Date.now()),
             status: sessionStatusFromState(sessionState) ?? "idle",
             sessionState,
-            needsAction: sessionState?.agent === "awaiting-input" ? true : false,
+            needsAction: sessionState?.displayStatus === "needs_attention" ? true : false,
           });
         }
         // Fold the live runtime's refined capabilities (e.g. modelSelection from
@@ -2330,7 +2423,7 @@ export class SessionStore {
         this.updateSessionRow(sid, {
           sessionState,
           status: sessionStatusFromState(sessionState),
-          needsAction: sessionState.agent === "awaiting-input",
+          needsAction: sessionState.displayStatus === "needs_attention",
         });
         if (sid === this.state.activeSessionId) {
           this.set({ working: sessionState.agent === "working", ...(sessionState.agent !== "working" ? { workingLabel: "" } : {}) });
@@ -2631,6 +2724,29 @@ export class SessionStore {
         if (resolved?.sessionId && !this.sessionStillNeedsAction(resolved.sessionId)) {
           this.updateSessionRow(resolved.sessionId, { status: "idle", needsAction: false });
         }
+        return;
+      }
+      case "session.turn_attention": {
+        const e = event as any;
+        const sessionId = String(e.sessionId || "");
+        const trigger = e.trigger === "wedged" ? "wedged" : e.trigger === "stalled" ? "stalled" : undefined;
+        if (!sessionId || !trigger) return;
+        const request: TurnAttentionRequest = {
+          sessionId,
+          trigger,
+          idleMs: Math.max(0, Number(e.idleMs) || 0),
+          at: Number(e.at) || Date.now(),
+          message: String(e.message || "This turn may be stuck. Stop it or keep waiting?"),
+        };
+        this.set({ turnAttentions: [...this.state.turnAttentions.filter((a) => a.sessionId !== sessionId), request] });
+        this.updateSessionRow(sessionId, { status: "needs_action", needsAction: true, updatedAt: Date.now() });
+        return;
+      }
+      case "session.turn_attention.resolved": {
+        const sessionId = String((event as any).sessionId || "");
+        if (!sessionId) return;
+        this.set({ turnAttentions: this.state.turnAttentions.filter((a) => a.sessionId !== sessionId) });
+        if (!this.sessionStillNeedsAction(sessionId)) this.updateSessionRow(sessionId, { status: "working", needsAction: false });
         return;
       }
       case "models.list": {
@@ -3408,13 +3524,13 @@ export class SessionStore {
   }
 
   /** Whether a session still has anything outstanding that should keep its
-   *  sidebar dot on "needs your response" — a pending approval OR a pending
-   *  clarifying question. Shared by approval.resolved/removed and
-   *  session.question.resolved so resolving one kind can't clear the dot out
-   *  from under the other kind still pending on the same session (see the
-   *  regression test covering exactly that ordering in store.test.ts). */
+   *  sidebar dot on "needs your response" — a pending approval, clarifying
+   *  question, or watchdog decision. Shared by resolution handlers so resolving
+   *  one kind can't clear the dot out from under another still-pending kind. */
   private sessionStillNeedsAction(sessionId: string): boolean {
-    return this.state.approvals.some((a) => a.sessionId === sessionId) || this.state.questions.some((q) => q.sessionId === sessionId);
+    return this.state.approvals.some((a) => a.sessionId === sessionId)
+      || this.state.questions.some((q) => q.sessionId === sessionId)
+      || this.state.turnAttentions.some((a) => a.sessionId === sessionId);
   }
 
   /**
@@ -3518,6 +3634,7 @@ export class SessionStore {
         return;
       }
       case "message_update":
+      case "message_boundary":
       case "message_end": {
         const msg = (event as any).message;
         if (msg?.role !== "assistant") return;
@@ -3526,7 +3643,11 @@ export class SessionStore {
         // on `text` so a reasoning-only update (content:[{thinking}] → text:"")
         // can't wipe prose the model already produced this turn.
         if (text) this.draft.pendingText = text;
-        const finalize = kind === "message_end";
+        // `message_boundary` seals one discrete prose item without ending the
+        // turn (Codex commentary commonly alternates these with tool calls).
+        // Treat it like message_end for bubble placement while leaving the
+        // runtime/server's actual turn-final semantics to message_end.
+        const finalize = kind === "message_end" || kind === "message_boundary";
         // Reasoning can arrive two ways: as an accumulated `thinking` block on
         // the message, or (for runtimes that only stream reasoning) as
         // incremental `thinking_delta` / `thinking_end` on the event itself. Keep
@@ -3604,6 +3725,11 @@ export class SessionStore {
           input: {},
           status: "done",
           result: typeof (event as any).result === "string" ? (event as any).result : contentToText((event as any).result),
+          // Carry the result-time detail (it merges the call classification with
+          // the tool's outcome: exitCode / isError / truncated) so the card can
+          // show a command that FAILED as failed. Without this the reducer kept
+          // only the call-time detail and the outcome was invisible.
+          detail: toolDetail(event as any),
         });
         return;
       case "turn_end":

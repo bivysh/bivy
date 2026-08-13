@@ -15,7 +15,8 @@ import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
-import { createAuditLog } from "./audit/index.js";
+import { createAuditLog, readAuditEvents } from "./audit/index.js";
+import { receiptEvidenceForRun } from "./audit/receipt-evidence.js";
 import { createWorkspaceController } from "./controllers/workspaces.js";
 import { createModelController } from "./controllers/models.js";
 import { Type, type TSchema } from "typebox";
@@ -31,6 +32,7 @@ import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption
 import { createCredentialStore } from "./runtime/credentials.js";
 import { isModelAuthError, authProviderForSession } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
+import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
 import { provisionAgentRun } from "./runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
 import { createSessionNamer, fallbackSessionName } from "./session/session-namer.js";
@@ -49,7 +51,7 @@ import { deriveSessionState, type SessionState } from "./session/session-state.j
 import type { SessionRecord, PromptOptions, StreamingBehavior, PromptImage } from "./session/record.js";
 import { resolveStreamingBehavior } from "./session/record.js";
 import { createSessionEngine } from "./session/engine.js";
-import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
+import { exportProviderAuth, exportAccountApiKeys, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
@@ -85,7 +87,7 @@ import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
 import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
-import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
+import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, resolveForkBaseRef, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
   GitHubTaskPoller,
@@ -106,7 +108,7 @@ import {
   findMergedPullRequestForBranch,
   issueBranchName,
   getPullRequest,
-  commentIssue,
+  commentIssueOnce,
   listOpenLabelledIssues,
   selectActionableIssues,
   getIssue,
@@ -178,6 +180,7 @@ import {
   MAX_AUDIO_BYTES,
   type SttProvider,
 } from "./stt.js";
+import { synthesizeOpenAiSpeech } from "./tts.js";
 import { seal, open } from "./e2e.js";
 import {
   ControlPlaneTaskPoller,
@@ -494,6 +497,15 @@ function replayPendingInteractions(sessionId: string) {
     if (a.sessionId === sessionId && a.status === "pending") {
       broadcast({ type: "approval.created", approval: a });
     }
+  }
+  const record = resolveSession(sessionId);
+  if (record?.turnAttention) {
+    const { trigger, idleMs, at } = record.turnAttention;
+    const mins = Math.max(1, Math.round(idleMs / 60_000));
+    const message = trigger === "wedged"
+      ? `A tool call has run for ${mins} min without making progress. Stop it or keep waiting?`
+      : `The agent has been quiet for ${mins} min. Stop it or keep waiting?`;
+    broadcast({ type: "session.turn_attention", sessionId, trigger, idleMs, at, message });
   }
 }
 
@@ -855,7 +867,7 @@ function startOAuthLoginSweeper(): void {
 // SessionRecord + its prompt helper types now live in ./session/record.ts (the
 // SessionEngine decomposition, step 2a) — imported at the top of this file.
 // Kept as a plain mutable data shape; server.ts still reads/writes fields in
-// place. See docs/internal/platform-modularization-plan.md.
+// place.
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
@@ -1747,6 +1759,12 @@ const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets, 500, (is
   broadcast({ type: "session.notice", sessionId: record.id, level: "error", message: warning });
 });
 
+function eventLogHealthForSession(sessionId: string): { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number } {
+  const issue = eventLogIssues.get(sessionId);
+  if (!issue) return { state: "healthy" };
+  return { state: "degraded", operation: issue.operation as "read" | "parse" | "append" | "rewrite", at: issue.at };
+}
+
 // Global content-addressed store for message attachments (images + files). Unlike
 // the per-session `.bivy-attachments/` worktree copy (kept so the agent can open
 // files with its tools), this is durable, session-independent, and re-findable:
@@ -2119,7 +2137,14 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   abort(msg, ctx) {
     const record = resolveSession(msg.sessionId);
     if (!record || !sessionBusy(record)) return;
-    abortSessionRecord(record, ctx.broadcast);
+    if (record.turnAttention) turnWatchdog.resolveTurnAttention(record, "stop");
+    else abortSessionRecord(record, ctx.broadcast);
+  },
+  "session.turn_attention.resolve"(msg) {
+    const record = resolveSession(msg.sessionId);
+    const action = msg.action === "stop" ? "stop" : msg.action === "continue" ? "continue" : undefined;
+    if (!record || !action) return;
+    turnWatchdog.resolveTurnAttention(record, action);
   },
   async "session.command.invoke"(msg, ctx) {
     // Invoke a protocol-mode agent command (AgentCommand.mode === "protocol")
@@ -2267,6 +2292,7 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       // (SessionList.tsx's periodic safety-net poll) clobbering the correct
       // needs_action the live session.question broadcast had just set.
       const pendingApproval = rec ? sessionHasPendingApproval(rec) : approvals.list().some((a) => a.sessionId === s.id && a.status === "pending");
+      const needsAction = pendingApproval || Boolean(rec?.turnAttention);
       return {
         path: s.path,
         id: s.id,
@@ -2280,12 +2306,17 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
         forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
         branch: rec?.worktree?.branch ?? meta?.branch,
         sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
+        approvalMode: rec?.approvalMode,
+        ephemeral: rec?.ephemeral,
+        executionProfile: rec ? (rec.ephemeral ? "isolated_customer_cloud" : "trusted_workstation") : undefined,
+        auditHealth: rec ? auditLog.health() : undefined,
+        eventLogHealth: rec ? eventLogHealthForSession(rec.id) : undefined,
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,
-        status: pendingApproval ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
+        status: needsAction ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
         sessionState: rec ? sessionState(rec) : undefined,
         open: Boolean(rec),
-        needsAction: pendingApproval,
+        needsAction,
         bivySession: bivySessionEnvelopeFromSummary(s, rec, meta),
       };
     });
@@ -2613,6 +2644,11 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   async "credentials.list"() {
     relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
   },
+  async "credentials.account.export"(_msg, ctx) {
+    // This reply travels inside the already-paired E2E node channel. It contains
+    // API keys only; OAuth/ref/node-local material is excluded by the API.
+    ctx.reply({ type: "credentials.account.export", requestId: _msg.requestId, entries: await exportAccountApiKeys(credsDir) });
+  },
   async "credential.set"(msg, ctx) {
     try {
       const provider = String(msg.provider ?? "").trim().toLowerCase();
@@ -2749,6 +2785,20 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       relay?.sendEvent({ type: "transcription", requestId, text });
     } catch (error) {
       relay?.sendEvent({ type: "transcription", requestId, error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  async synthesize(msg) {
+    const requestId = String(msg.requestId ?? "");
+    try {
+      const audio = await synthesizeOpenAiSpeech({
+        appDir,
+        text: String(msg.text ?? ""),
+        voice: msg.voice,
+        instructions: msg.instructions,
+      });
+      relay?.sendEvent({ type: "speech.audio", requestId, audio: audio.toString("base64"), mimeType: "audio/mpeg" });
+    } catch (error) {
+      relay?.sendEvent({ type: "speech.audio", requestId, error: error instanceof Error ? error.message : String(error) });
     }
   },
   // Session replication (docs/session-replication.md): the STANDBY receives a
@@ -3149,8 +3199,8 @@ function startRelayIfConfigured() {
   terminals.dropClient(RELAY_CLIENT_ID);
   relay = new RelayConnector(config, (msg) => void handleRelayMessage(msg), {
     pairing: pairingStore,
-    onWorkAvailable: () => {
-      controlPlanePoller?.poke();
+    onWorkAvailable: (hint) => {
+      controlPlanePoller?.poke(hint.id);
       // A relay wake also means "something changed for this account" — kick a
       // (debounced) model-auth sync so a peer node answers any pending vault-key
       // request from a freshly-launched ephemeral runner without waiting for its
@@ -4106,6 +4156,14 @@ interface RunIssueOverrides {
    *  plane's run-evidence endpoint. Only set for control-plane-dispatched runs
    *  (self-hosted direct GitHub polling has no control-plane run to attach to). */
   onEvidence?: (patch: Record<string, unknown>) => void | Promise<void>;
+  /** Cancellation for a control-plane-dispatched Run. Aborts the active runtime
+   * turn; callers must still rely on the durable control-plane status. */
+  signal?: AbortSignal;
+  correlation?: { runId: string; attempt: number; machineId: string };
+}
+
+function recordRunAuditCorrelation(record: SessionRecord, correlation?: RunIssueOverrides["correlation"]): void {
+  if (correlation) auditLog.record({ kind: "run.correlation", session: record.id, agent: record.runtimeId, ...correlation });
 }
 
 async function runIssueTask(cfg: GitHubTaskConfig, issue: GitHubIssue, overrides: RunIssueOverrides = {}) {
@@ -4126,6 +4184,9 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
         : stage === "failed" || stage === "checks_failed" || stage === "no_changes" ? "completed"
           : undefined;
     if (kind) {
+      const terminal = stage === "failed" || stage === "checks_failed" || stage === "no_changes" || stage === "pr_opened";
+      const auditEvents = terminal ? readAuditEvents(auditLog.file, { session: record.id }) : [];
+      const runtimeInfo = runtimeList(record.runtimeId).find((runtime) => runtime.id === record.runtimeId);
       const summary = stage === "pr_opened" ? "Pull request opened."
         : stage === "started" ? "Working branch and session created."
           : stage === "pushed" ? "Changes pushed; no pull request is open."
@@ -4142,6 +4203,15 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
           url: typeof extra.prUrl === "string" ? extra.prUrl : undefined,
           ...(stage === "checks_failed" || stage === "failed" ? { status: "failed" } : {}),
         }],
+        ...(terminal ? { receiptEvidence: receiptEvidenceForRun(auditEvents, fs.existsSync(auditLog.file), {
+          profile: record.ephemeral ? "isolated_customer_cloud" : "trusted_workstation",
+          controller: record.ephemeral ? "bivy_hosted_provisioning" : "customer",
+          sandboxTier: record.sandbox,
+          approvalMode: record.approvalMode,
+          runtimeEnforcement: runtimeInfo?.protectionLevel,
+          toolInterception: runtimeInfo?.capabilities?.toolInterception === true,
+          correlation: overrides.correlation,
+        }) } : {}),
       });
     }
   };
@@ -4243,12 +4313,18 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   if (!record.worktree) throw new Error("worktree was not created for the issue session");
 
   try {
+    recordRunAuditCorrelation(record, overrides.correlation);
     emit(record, "started", `Started work on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
-    await runSessionTurn(record, buildTaskPrompt(issue, nodeGithubIssuePrompt()));
+    await runSessionTurn(record, buildTaskPrompt(issue, nodeGithubIssuePrompt()), overrides.signal);
+    if (overrides.signal?.aborted) throw overrides.signal.reason ?? new Error("Run cancelled");
     emit(record, "agent_done", `Agent finished issue #${issue.number}; running deterministic checks.`);
     await reportIssueOutcome(cfg, issue, record, emit, { followUp: false, onEvidence: overrides.onEvidence });
   } catch (error) {
-    emit(record, "failed", `GitHub issue #${issue.number} failed: ${error instanceof Error ? error.message : String(error)}`);
+    // Cancellation has its own durable control-plane outcome. Do not append a
+    // misleading execution-failed event after the operator stopped the Run.
+    if (!overrides.signal?.aborted) {
+      emit(record, "failed", `GitHub issue #${issue.number} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     throw error;
   }
 }
@@ -4263,6 +4339,7 @@ async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, recor
   const wt = record.worktree;
   if (!wt) throw new Error("issue session has no worktree");
   try {
+    recordRunAuditCorrelation(record, overrides.correlation);
     emit(record, "started", `Follow-up on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
 
     // Bring the branch up to date with the base before the agent starts its
@@ -4274,7 +4351,8 @@ async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, recor
     const merge = await mergeBaseIntoBranch(cfg, wt.path, base);
     if (merge.status === "conflicts") {
       emit(record, "resolving_conflicts", `Merge conflicts with ${base} in ${merge.conflicts.length} file(s); asking the agent to resolve them.`, { files: merge.conflicts });
-      await runSessionTurn(record, buildConflictPrompt(base, merge.conflicts));
+      await runSessionTurn(record, buildConflictPrompt(base, merge.conflicts), overrides.signal);
+      if (overrides.signal?.aborted) throw overrides.signal.reason ?? new Error("Run cancelled");
       const resolved = await completeMerge(wt.path, merge.conflicts);
       if (resolved) {
         emit(record, "conflicts_resolved", `Resolved merge conflicts with ${base}.`);
@@ -4287,11 +4365,14 @@ async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, recor
       }
     }
 
-    await runSessionTurn(record, buildFollowUpPrompt(issue));
+    await runSessionTurn(record, buildFollowUpPrompt(issue), overrides.signal);
+    if (overrides.signal?.aborted) throw overrides.signal.reason ?? new Error("Run cancelled");
     emit(record, "agent_done", `Agent handled the follow-up on issue #${issue.number}; running deterministic checks.`);
     await reportIssueOutcome(cfg, issue, record, emit, { followUp: true, onEvidence: overrides.onEvidence });
   } catch (error) {
-    emit(record, "failed", `GitHub issue #${issue.number} follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
+    if (!overrides.signal?.aborted) {
+      emit(record, "failed", `GitHub issue #${issue.number} follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     throw error;
   }
 }
@@ -4354,7 +4435,9 @@ async function reportIssueOutcome(
 
   if (record.prUrl) {
     emit(record, "pr_opened", `Pull request ready for issue #${issue.number}.`, { prUrl: record.prUrl });
-    await commentIssue(cfg, issue.number, `🤖 ${record.prUrl}`).catch(() => {});
+    // Keyed by the PR URL so a reclaim/retry that lands on the same PR does not
+    // post a second link, while a genuinely new PR still gets its own comment.
+    await commentIssueOnce(cfg, issue.number, `🤖 ${record.prUrl}`, `pr:${record.prUrl}`).catch(() => {});
     // Clean up the claim label now that the PR itself is the live "in progress"
     // signal on the issue (linked in the timeline + the comment above) — keeping
     // `bivy:in-progress` around after a PR exists is stale and, per the issue's
@@ -4369,7 +4452,9 @@ async function reportIssueOutcome(
       ? "Bivy handled the follow-up but produced no file changes."
       : "Bivy ran on this issue but produced no file changes.";
     emit(record, "no_changes", message);
-    await commentIssue(cfg, issue.number, message).catch(() => {});
+    // Keyed by the deterministic issue branch so a reclaim doesn't repeat the
+    // no-changes note for the same attempt cycle.
+    await commentIssueOnce(cfg, issue.number, message, `no-changes:${wt.branch}`).catch(() => {});
     // The run is finished with nothing in progress — drop the claim label so it
     // doesn't linger on the issue. A stale `bivy/<node>:in-progress` label was
     // also mis-routing follow-up mentions before pickRoutingLabel was hardened;
@@ -4379,10 +4464,11 @@ async function reportIssueOutcome(
   }
 
   emit(record, "pushed", `Pushed ${wt.branch} for issue #${issue.number}; no pull request yet.`);
-  await commentIssue(
+  await commentIssueOnce(
     cfg,
     issue.number,
     `🤖 Pushed \`${wt.branch}\` but didn't open a pull request. Comment \`@bivy\` again to continue, or open one from the session's chat (\`/pr\`).`,
+    `pushed:${wt.branch}`,
   ).catch(() => {});
 }
 
@@ -4431,17 +4517,28 @@ function buildConflictPrompt(base: string, conflicts: string[]): string {
  * Mirrors how the issue pickup awaited a turn inline; factored out so both the
  * implementation turn and the conflict-resolution turn share it.
  */
-async function runSessionTurn(record: SessionRecord, prompt: string): Promise<void> {
+async function runSessionTurn(record: SessionRecord, prompt: string, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw signal.reason ?? new Error("Run cancelled");
+  let unsubscribe = () => {};
   const finished = new Promise<void>((resolve) => {
-    const off = record.session.subscribe((event) => {
-      if (event.type === "agent_end") {
-        off();
-        resolve();
-      }
+    unsubscribe = record.session.subscribe((event) => {
+      if (event.type === "agent_end") resolve();
     });
   });
-  await turnWatchdog.promptWithWatchdog(record, prompt);
-  await finished;
+  let rejectCancellation: (reason?: unknown) => void = () => {};
+  const cancelled = new Promise<never>((_resolve, reject) => { rejectCancellation = reject; });
+  const onAbort = () => {
+    abortSessionRecord(record);
+    rejectCancellation(signal?.reason ?? new Error("Run cancelled"));
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    await turnWatchdog.promptWithWatchdog(record, prompt);
+    await (signal ? Promise.race([finished, cancelled]) : finished);
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    unsubscribe();
+  }
 }
 
 async function anthropicHeadersFromNodeCredential(): Promise<Record<string, string> | undefined> {
@@ -4769,7 +4866,7 @@ async function continueCorrelatedSession(
   item: ControlPlaneWorkItem,
   prompt: string,
   report: (patch: EvidencePatch) => Promise<void>,
-  opts?: { resumeOnMissing?: boolean; isMessage?: boolean },
+  opts?: { resumeOnMissing?: boolean; isMessage?: boolean; signal?: AbortSignal },
 ): Promise<boolean> {
   if (item.targetKind !== "existing_session" || !item.targetSessionId) return false;
   let record = openSessions.get(item.targetSessionId);
@@ -4790,21 +4887,21 @@ async function continueCorrelatedSession(
     // failed run rather than silently starting a new session. Everything else
     // keeps the established best-effort fall-through to a fresh pickup.
     if (opts?.resumeOnMissing) {
-      throw new Error(`Scheduled message could not be delivered: session ${item.targetSessionId} is not available on this node`);
+      throw new Error(`This Run could not continue session ${item.targetSessionId}: the session is not available on this Machine`);
     }
     return false;
   }
   const branch = record.worktree?.branch;
   if (opts?.resumeOnMissing) {
-    // "Send when the turn ends": a scheduled message that fires mid-turn waits
-    // for the session to go idle instead of interrupting it (bounded, so a
-    // stuck session still surfaces as a failed run rather than hanging forever).
+    // Durable work targeting an existing Session waits for its current turn to
+    // settle instead of interrupting it (bounded, so a stuck Session surfaces
+    // as a failed Run rather than hanging forever).
     await waitForSessionIdle(record);
     // Double-send guard: when the app is open and already delivered this exact
     // message as a follow-up (and deleted the pending schedule), the scheduled
     // run must not send it a second time. Matches the last user message, which
     // is all a text-only scheduled message can have produced.
-    if (lastUserMessageText(record).trim() === prompt.trim()) {
+    if (opts.isMessage && lastUserMessageText(record).trim() === prompt.trim()) {
       await report({
         output: { sessionId: record.id },
         events: [{
@@ -4826,8 +4923,9 @@ async function continueCorrelatedSession(
     throw new Error(`Repository policy requires ${safety.sandbox}; refusing to continue a session opened as ${currentSandbox}`);
   }
   record.approvalMode = safety.approval;
-  await runSessionTurn(record, prompt);
-  if (record.worktree && !opts?.isMessage && !opts?.resumeOnMissing) {
+  await runSessionTurn(record, prompt, opts?.signal);
+  if (opts?.signal?.aborted) throw opts.signal.reason ?? new Error("Run cancelled");
+  if (record.worktree && !opts?.isMessage) {
     await branchPublish.maybePushWorktreeBranch(record);
     await prDetection.maybeDetectPullRequest(record);
   }
@@ -4863,7 +4961,8 @@ function lastUserMessageText(record: SessionRecord): string {
   return "";
 }
 
-async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>) {
+async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidencePatch) => Promise<void>, signal: AbortSignal) {
+  if (signal.aborted) throw signal.reason ?? new Error("Run cancelled");
   // Scheduled, manual, and webhook-triggered automations carry the operator's
   // instructions as an E2E template (`bivy-room-v1:<node>:<ciphertext>`) only the
   // assigned node can read. The envelope prefix is Bivy's own and never appears
@@ -4941,6 +5040,8 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       sandbox: normalizeSandboxTier(item.sandbox),
       approvalMode: approvalModeFrom(item.approvalMode),
       onEvidence: report,
+      signal,
+      correlation: { runId: item.id, attempt: item.attempt ?? 1, machineId: identity.nodeId },
     });
     return;
   }
@@ -4955,7 +5056,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     if (!parsed) throw new Error(`Linear work item has an invalid repo "${repoSlug}"`);
     // Case B: a re-dispatch the control plane correlated to an existing session
     // continues it as a normal chat instead of starting cold (mirrors GitHub).
-    if (await continueCorrelatedSession(item, buildLinearTaskPrompt(issue), report)) return;
+    if (await continueCorrelatedSession(item, buildLinearTaskPrompt(issue), report, { resumeOnMissing: item.targetKind === "existing_session", signal })) return;
     const githubToken = await resolveGitHubToken();
     if (!githubToken) throw new Error("no GitHub token available to clone the Linear issue repository");
     const repoDir = await cloneOrUpdateRepo({ owner: parsed.owner, repo: parsed.repo, token: githubToken, root: reposRoot });
@@ -4975,7 +5076,8 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
     sessionNamer.setSessionName(record, `${issue.identifier}: ${issue.title}`);
     if (item.model) { try { await record.session.setModel("", item.model); } catch {} }
     await report({ output: { sessionId: record.id, branch }, events: [{ at: new Date().toISOString(), kind: "branch", summary: "Linear issue working branch and session created.", ref: branch, url: issue.url }] });
-    await runSessionTurn(record, buildLinearTaskPrompt(issue));
+    await runSessionTurn(record, buildLinearTaskPrompt(issue), signal);
+    if (signal.aborted) throw signal.reason ?? new Error("Run cancelled");
     await branchPublish.maybePushWorktreeBranch(record);
     await prDetection.maybeDetectPullRequest(record);
     await report({ output: { sessionId: record.id, branch, prUrl: record.prUrl }, events: record.prUrl ? [{ at: new Date().toISOString(), kind: "pull_request", summary: "Pull request opened.", ref: branch, url: record.prUrl }] : undefined });
@@ -5005,7 +5107,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // Scheduled runs targeting an existing session are STRICT: the message must
   // land in that session (resumed from disk if needed), never silently in a new
   // one — so a session that can't be resumed fails the run instead.
-  if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: item.source === "schedule", isMessage })) return;
+  if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: item.source === "schedule" || item.targetKind === "existing_session", isMessage, signal })) return;
   const requestedSandbox = normalizeSandboxTier(item.sandbox);
   // Prepare an explicit repository before resolving its policy. Otherwise a
   // first-ever run would inspect a not-yet-cloned path and miss the policy on
@@ -5033,6 +5135,15 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   if (item.model) {
     try { await record.session.setModel("", item.model); } catch {}
   }
+  // Record the session id with the control plane BEFORE the (potentially long)
+  // turn runs, not just after it completes. A machine restart mid-turn must leave
+  // the Run pointing at THIS session so a stale-lease reclaim resumes it
+  // (withResumeTarget derives an existing_session target from output.sessionId).
+  // Reporting only after runSessionTurn — as this path used to — meant an
+  // interrupted turn left output.sessionId unset, so the reclaim cold-started a
+  // duplicate session while the original sat abandoned on disk (two sidebar
+  // sessions for one Run). Mirrors the Linear path's create-then-report ordering.
+  await report({ output: { sessionId: record.id, branch: record.worktree?.branch } });
   const prompt = isMessage
     ? request
     : (parsedRepo || record.worktree)
@@ -5043,7 +5154,8 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
           "When finished, commit and push your changes, then open a pull request with a clear title and description. If you cannot open it, leave the changes committed on this branch.",
         ].join("\n")
       : request;
-  await runSessionTurn(record, prompt);
+  await runSessionTurn(record, prompt, signal);
+  if (signal.aborted) throw signal.reason ?? new Error("Run cancelled");
   if (!isMessage && record.worktree) {
     await branchPublish.maybePushWorktreeBranch(record);
     await prDetection.maybeDetectPullRequest(record);
@@ -6077,6 +6189,7 @@ function sessionState(record: SessionRecord): SessionState {
     awaitingInput: sessionHasPendingApproval(record),
     workspace: record.workspaceState ?? "clean",
     lastTurnFailed: Boolean(record.lastFailureAt),
+    turnNeedsAttention: Boolean(record.turnAttention),
   });
 }
 
@@ -6145,6 +6258,11 @@ function bivySessionEnvelope(record: SessionRecord): BivySessionRecord {
     lastActivityAt: isoFrom(record.workingStartedAt ?? touched, now),
     capabilities: rt.capabilities,
     sandbox: record.sandbox,
+    approvalMode: record.approvalMode,
+    ephemeral: record.ephemeral,
+    executionProfile: record.ephemeral ? "isolated_customer_cloud" : "trusted_workstation",
+    auditHealth: auditLog.health(),
+    eventLogHealth: eventLogHealthForSession(record.id),
     repoSlug: gh.repoSlug,
     issueNumber: gh.issueNumber,
     issueUrl: issueUrl || record.githubIssueUrl,
@@ -6461,6 +6579,12 @@ function evictSessionRecord(record: SessionRecord, reason: string) {
 function detachSessionRecord(record: SessionRecord, reason: string) {
   persistSessionMetadata(record, "idle");
   eventLog.flush(record.id);
+  // Evict the in-memory overlay/maps for the detached session (the child stays
+  // alive on the service, and a re-attach lazily reloads the log from disk).
+  // Keeps a churn of detach/re-attach from leaking like close did.
+  eventLog.drop(record.id);
+  mcpInventoryBySession.delete(record.id);
+  eventLogIssues.delete(record.id);
   questionManager.cancelForSession(record.id);
   approvals.cancelForSession(record.id);
   record.unsubscribe?.();
@@ -6485,6 +6609,12 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   void sessionTerminals.forget(record.id).catch(() => {});
   persistSessionMetadata(record, "idle");
   eventLog.flush(record.id);
+  // Evict the flushed session's in-memory overlay so a long-lived daemon doesn't
+  // retain every session it ever opened. drop() only clears the in-memory maps
+  // and cancels the pending timer — the on-disk JSONL stays, and a reopen lazily
+  // reloads it via load(). Without this the EventLog.disk cache grew monotonically
+  // (only deleteSessionFile dropped it), the standout non-recovering leak.
+  eventLog.drop(record.id);
   // Cancel any question still awaiting an answer so its card closes and the
   // guardian promise (and the tool call behind it) settles rather than hanging
   // until timeout. Belt-and-suspenders alongside the tool-call abort signal.
@@ -6510,6 +6640,10 @@ function closeSessionRecord(record: SessionRecord, reason = "closed") {
   openSessions.delete(record.id);
   if (record.sessionFile) openSessions.delete(path.resolve(record.sessionFile));
   lastRecordedCostUsd.delete(record.id);
+  // Per-session maps that were only ever populated, never pruned — evict on close
+  // so they don't accumulate for the daemon's lifetime.
+  mcpInventoryBySession.delete(record.id);
+  eventLogIssues.delete(record.id);
   if (active?.id === record.id) active = undefined;
   broadcast({ type: "session.closed", sessionId: record.id, sessionFile: record.sessionFile, reason });
   scheduleAdvertise();
@@ -6801,11 +6935,25 @@ const stallSweepMs = stallSweepBasis.length ? Math.max(15_000, Math.min(60_000, 
 // The stall/timeout orchestration lives in ./session/turn-watchdog-runtime; its
 // whole coupling surface to the daemon is this deps object. The narrow
 // WatchdogSession it operates on is structurally satisfied by SessionRecord.
+const stallAction = process.env.BIVY_TURN_STALL_ACTION?.trim().toLowerCase() === "recover" ? "recover" : "notify";
 const turnWatchdog = createTurnWatchdog({
   turnTimeoutMs,
   turnStallMs,
   turnActivityStallMs,
+  stallAction,
   broadcast,
+  broadcastSessionState: (record) => broadcastSessionState(record as SessionRecord),
+  notifyTurnAttention: (record, message) => {
+    const session = record as SessionRecord;
+    void sendNotificationHint({
+      kind: "agent_stalled",
+      sessionId: session.id,
+      targetSessionId: session.id,
+      attentionId: session.id,
+      title: `${sessionNotifyLabel(session)} may be stuck`,
+      body: message,
+    });
+  },
   markSessionFailed: (id) => metadata.touchSession(id, "failed"),
   abortSessionRecord: (record) => abortSessionRecord(record as SessionRecord),
   evaluateEphemeralTeardown,
@@ -6836,7 +6984,9 @@ function markSessionWorking(record: SessionRecord, activity: unknown, opts?: { s
   // separately anchors the wedged band. Raw subprocess output (tool_execution_
   // update) bumps lastProgressAt above but NOT this, so a chatty-but-hung tool
   // still trips the wedged watchdog. Non-event callers default to structural.
-  if (opts?.structural !== false) record.lastStructuralProgressAt = now;
+  const structural = opts?.structural !== false;
+  if (structural) record.lastStructuralProgressAt = now;
+  turnWatchdog.clearTurnAttentionOnProgress(record, structural);
   // A new attempt resolves the prior turn's failure condition at its source.
   record.lastFailureAt = undefined;
   metadata.touchSession(record.id, "working");
@@ -6847,6 +6997,7 @@ function markSessionWorking(record: SessionRecord, activity: unknown, opts?: { s
 }
 
 function clearSessionWorking(record: SessionRecord, forcedStatus?: BivySessionStatus) {
+  turnWatchdog.clearTurnAttentionOnProgress(record, true);
   turnWatchdog.clearTurnWatchdog(record);
   touchSession(record);
   record.isWorking = false;
@@ -7601,7 +7752,7 @@ async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
 }
 
 /** Shared Stop path for relay/web clients and the local HTTP/CLI API. */
-function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => void = broadcast): void {
+function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => void = broadcast): Promise<void> {
   // A wedged runtime may never resolve abort() or emit agent_end. Settle the
   // daemon and client first, then make the SDK abort best-effort. The synthetic
   // agent_end also closes running tool cards and drains visible follow-ups.
@@ -7620,6 +7771,7 @@ function abortSessionRecord(record: SessionRecord, emit: (event: unknown) => voi
     onAbortError: (error) => console.warn(`[session-abort] runtime abort failed for ${record.id}:`, error),
   });
   record.abortRecovery = recoverRecordAfterAbort(record);
+  return record.abortRecovery;
 }
 
 async function createSession(workspace = defaultWorkspace, sessionFile?: string, opts: CreateSessionOptions = {}) {
@@ -8223,6 +8375,7 @@ const forkStandUp = createForkStandUp<SessionRecord>({
   createWorktree,
   resolveDefaultBaseRef,
   resolveAdoptBaseRef,
+  resolveForkBaseRef,
   applyDirtyPatch,
   gitRepoRoot,
   materializeFork,
@@ -8619,6 +8772,17 @@ app.get("/api/diagnostics", (_req, res) => {
       approvalMode,
       relayConnected: Boolean(relay?.connected),
       turnRecoveries: turnWatchdog.turnRecoveryStats(),
+      turnRecoverySlo: turnWatchdog.turnRecoverySloStats(),
+      audit: auditLog.health(),
+      eventLog: {
+        ok: eventLog.health().ok,
+        pendingSessions: eventLog.health().pendingSessions,
+        affectedSessions: eventLogIssues.size,
+        issuesByOperation: [...eventLogIssues.values()].reduce<Record<string, number>>((counts, issue) => {
+          counts[issue.operation] = (counts[issue.operation] ?? 0) + 1;
+          return counts;
+        }, {}),
+      },
       plugins: (() => {
         const installed = listInstalledPlugins(appDir);
         return {
@@ -9219,12 +9383,12 @@ async function applySttConfigChange(body: {
   if (setKey && setKey.provider !== undefined) {
     const p = String(setKey.provider);
     if (!isSttProvider(p)) throw new Error(`Unknown speech provider: ${p}`);
-    setSttKey(appDir, p, String(setKey.value ?? ""));
+    await setSttKey(appDir, p, String(setKey.value ?? ""));
   }
   if (body.removeKey !== undefined) {
     const p = String(body.removeKey);
     if (!isSttProvider(p)) throw new Error(`Unknown speech provider: ${p}`);
-    removeSttKey(appDir, p);
+    await removeSttKey(appDir, p);
   }
   return getSttConfig(appDir);
 }
@@ -9274,6 +9438,20 @@ app.post("/api/transcribe", async (req, res) => {
     // 200 with an `error` field: the client resolves transcription through a
     // uniform result event across transports, so a failure must still carry a
     // readable message rather than a bare HTTP error the event layer drops.
+    res.json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/api/speech", async (req, res) => {
+  try {
+    const audio = await synthesizeOpenAiSpeech({
+      appDir,
+      text: String(req.body?.text ?? ""),
+      voice: req.body?.voice,
+      instructions: req.body?.instructions,
+    });
+    res.json({ audio: audio.toString("base64"), mimeType: "audio/mpeg" });
+  } catch (error) {
     res.json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
@@ -10240,6 +10418,41 @@ app.get("/api/repos", async (_req, res) => {
   res.json(await listAccessibleRepos());
 });
 
+// Authoritative, read-only first-task probes. Unlike the web client's presence
+// flags, these checks run where the credential and repository access actually
+// live. Inconclusive provider/network failures remain "unknown" instead of
+// falsely blocking activation.
+app.get("/api/activation/readiness", async (_req, res) => {
+  const vault = createCredentialVault(credsDir, piDir);
+  const configured = await vault.list();
+  const anthropic = configured.some((entry) => entry.providerId === "anthropic")
+    ? await vault.read("anthropic")
+    : undefined;
+  const anthropicProbe = anthropic?.type === "api_key"
+    ? await probeAnthropicAccess(typeof anthropic.key === "string" ? anthropic.key : undefined)
+    : undefined;
+  const repos = await listAccessibleRepos();
+  const repositoryChosen = Boolean(await gitRepoRoot(defaultWorkspace));
+  res.json({
+    credential: {
+      configured: configured.length > 0,
+      providers: configured.map((entry) => entry.providerId),
+      probed: Boolean(anthropicProbe?.probed),
+      ok: configured.length > 0 && anthropicProbe?.ok !== false,
+      ...(anthropicProbe?.reason ? { reason: anthropicProbe.reason } : {}),
+    },
+    repository: {
+      chosen: repositoryChosen,
+      probed: true,
+      // GitHub login proves that repositories can be listed, not that a target
+      // repository has been selected or cloned for the first task.
+      ok: repositoryChosen,
+      authed: repos.authed,
+      ...(repos.error ? { reason: repos.error } : {}),
+    },
+  });
+});
+
 // Direct-transport (local PWA) equivalents of the github.connect.* commands.
 app.post("/api/github/connect/start", async (_req, res) => {
   res.json(await startGithubConnect());
@@ -10393,7 +10606,23 @@ app.post("/api/session/abort", (req, res, next) => {
   try {
     const record = resolveSession(req.body?.sessionId);
     if (!record) return res.status(404).json({ error: "No active session" });
-    if (sessionBusy(record)) abortSessionRecord(record);
+    if (sessionBusy(record)) {
+      if (record.turnAttention) turnWatchdog.resolveTurnAttention(record, "stop");
+      else abortSessionRecord(record);
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/session/turn-attention", (req, res, next) => {
+  try {
+    const record = resolveSession(req.body?.sessionId);
+    if (!record) return res.status(404).json({ error: "No active session" });
+    const action = req.body?.action === "stop" ? "stop" : req.body?.action === "continue" ? "continue" : undefined;
+    if (!action) return res.status(400).json({ error: "Action must be stop or continue" });
+    turnWatchdog.resolveTurnAttention(record, action);
     res.json({ ok: true });
   } catch (error) {
     next(error);

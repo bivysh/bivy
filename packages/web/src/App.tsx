@@ -1,20 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { activationFromState, cancelAutomationRun, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
 import { Composer } from "./components/Composer.js";
 import { ApprovalStack } from "./components/ApprovalCard.js";
 import { QuestionStack } from "./components/QuestionCard.js";
+import { TurnAttentionCard } from "./components/TurnAttentionCard.js";
 import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import { SetupNotice } from "./components/SetupNotice.js";
 import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { closeAutomations, getAutomationsRoute, openAutomations, setAutomationsSection, subscribeAutomationsRoute } from "./automationsRoute.js";
 // openAutomations({ setup }) is the sole entry for source connection lifecycle.
+import { closeRun, getRunRoute, openRun, subscribeRunRoute } from "./runRoute.js";
 import { AutomationsView } from "./components/AutomationsView.js";
+import { RunDetails } from "./components/RunDetails.js";
 import { SessionMenu } from "./components/SessionMenu.js";
 import { TuiLockedView } from "./components/TuiLockedView.js";
 import { GithubPill } from "./components/GithubPill.js";
@@ -29,6 +32,7 @@ import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
+import { ReadinessChecklist } from "./components/ReadinessChecklist.js";
 import { buildInboxItems } from "./components/Inbox.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
@@ -51,6 +55,10 @@ export function App() {
   // Automations is a first-class destination reached from the sidebar foot,
   // URL-backed the same overlay way Settings is (see automationsRoute.ts).
   const automationsOpen = useSyncExternalStore(subscribeAutomationsRoute, getAutomationsRoute);
+  // The routable Run detail screen (/runs/:runId), URL-backed the same overlay
+  // way Settings and Automations are (see runRoute.ts). Null whenever the URL is
+  // on anything else. A copied Run URL restores this directly on cold load.
+  const runRoute = useSyncExternalStore(subscribeRunRoute, getRunRoute);
   // Returning from a GitHub App redirect reloads the SPA — finish in Automations
   // (the sole place for source connections), not Settings.
   const githubAppReturning = state.githubApp?.returning;
@@ -114,6 +122,11 @@ export function App() {
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
   const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
+  const activation = useMemo(() => activationFromState(state), [state]);
+  // Keep first-use readiness in the customer journey, not in Settings. Scope it
+  // to an isolated Machine so established workstation Sessions never acquire an
+  // onboarding panel; it disappears only after a real assistant response.
+  const showFirstRunReadiness = Boolean(state.currentNodeId?.startsWith("eph-") && !activation.activated);
   const inboxItems = useMemo(() => buildInboxItems({
     sessions: state.sessions,
     approvals: state.approvals,
@@ -360,7 +373,7 @@ export function App() {
     target.scrollIntoView({ block: "center" });
     target.setAttribute("tabindex", "-1");
     target.focus({ preventScroll: true });
-  }, [state.activeSessionId, state.approvals, state.questions]);
+  }, [state.activeSessionId, state.approvals, state.questions, state.turnAttentions]);
 
   // Auth/setup gates, derived from reactive store fields (not read live off
   // localStorage) so signing in swaps the sign-in screen for the app shell the
@@ -413,6 +426,11 @@ export function App() {
     | { interactiveTui?: boolean }
     | undefined;
   const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
+  const activeRuntime = state.runtimes.find((r) => r.id === activeSession?.runtimeId);
+  const executionProfile = activeSession?.executionProfile === "isolated_customer_cloud" ? "Isolated customer-cloud"
+    : activeSession?.executionProfile === "trusted_workstation" ? "Trusted workstation"
+      : activeSession?.executionProfile === "restricted" ? "Restricted" : undefined;
+  const trustMode = controller.direct ? "Direct to Machine" : "E2E relay-blind";
 
   // Approval/question cards render inline in the active session's chat scroll, so
   // only show the ones that belong to that session. Items are still kept globally
@@ -421,6 +439,7 @@ export function App() {
   // no sessionId are treated as global and shown everywhere.
   const activeApprovals = state.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSessionId);
   const activeQuestions = state.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSessionId);
+  const activeTurnAttention = state.turnAttentions.find((a) => a.sessionId === state.activeSessionId);
   return (
     <div className="app">
       <aside className={`sidebar${drawerOpen ? " open" : ""}`}>
@@ -571,6 +590,11 @@ export function App() {
                 worktree={activeSession?.worktree}
                 branch={activeSession?.branch}
                 sessionFile={activeSession?.path}
+                executionProfile={executionProfile}
+                effectiveProtection={[activeSession?.sandbox, activeSession?.approvalMode, activeRuntime?.protectionLabel].filter(Boolean).join(" · ") || undefined}
+                trustMode={trustMode}
+                auditHealth={activeSession?.auditHealth}
+                eventLogHealth={activeSession?.eventLogHealth}
                 onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
               />
             )}
@@ -649,6 +673,14 @@ export function App() {
           />
         ) : (
           <>
+            {showFirstRunReadiness && (
+              <ReadinessChecklist
+                activation={activation}
+                onRemediate={{
+                  authenticate_credential: () => openSettings("providers"),
+                }}
+              />
+            )}
             <ChatView
               entries={state.transcript}
               working={state.working}
@@ -670,6 +702,12 @@ export function App() {
                     onAnswer={(id, sessionId, answers) => controller.answerQuestion(id, sessionId, answers)}
                     onCancel={(id, sessionId) => controller.cancelQuestion(id, sessionId)}
                   />
+                  {activeTurnAttention && (
+                    <TurnAttentionCard
+                      attention={activeTurnAttention}
+                      onResolve={(sessionId, action) => controller.resolveTurnAttention(sessionId, action)}
+                    />
+                  )}
                 </>
               }
             />
@@ -701,6 +739,7 @@ export function App() {
                   forkedFrom={activeForkedFrom}
                   filesEdited={countUniqueEditedFiles(state.changesHistory)}
                   onOpenChanges={() => setChangesSheetOpen(true)}
+                  onOpenRun={(runId) => openRun(runId)}
                   onRecover={(kind) => {
                     // C2: recover a terminal run using existing capabilities. fix/retry
                     // send a targeted prompt to this session; fork branches it off.
@@ -767,6 +806,13 @@ export function App() {
           onSectionChange={setAutomationsSection}
           githubQueue={githubQueue}
           onRefreshGithubQueue={refreshGithubQueue}
+          onOpenRun={(runId) => {
+            // Land on the Run route: dismiss Automations onto the session behind
+            // it first (replace, no extra history), then push /runs/:runId so
+            // Back returns to that session rather than stacking two overlays.
+            closeAutomations(state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" });
+            openRun(runId);
+          }}
           onClose={() =>
             closeAutomations(
               state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
@@ -782,6 +828,35 @@ export function App() {
             closeAutomations({ kind: "session", id: sessionId });
             closeDrawer();
           }}
+        />
+      )}
+
+      {runRoute && (
+        <RunDetails
+          runId={runRoute.runId}
+          load={(id) => fetchAutomationRun(controller.local, id)}
+          onCancel={async (id) => { await cancelAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
+          onRetry={async (id) => { await retryAutomationRun(controller.local, id); refreshAutomationRuns(); refreshGithubQueue(); }}
+          onReauthenticate={async (provider, machineId, reason) => {
+            const targetNode = machineId || state.currentNodeId;
+            if (!targetNode) throw new Error("The Machine for this Run is not available.");
+            await controller.connectToNode(targetNode);
+            controller.store.setNeedsModelAuth({ nodeId: targetNode, provider, reason });
+          }}
+          resolveMachineName={(machineId) => state.nodes.find((n) => n.id === machineId)?.name || undefined}
+          isSessionResolvable={(sessionId) => state.sessions.some((s) => s.sessionId === sessionId)}
+          onReceiptReviewed={() => { void recordProductMetric(controller.local, "receipt_reviewed", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {}); }}
+          onOpenSession={(sessionId) => {
+            const s = state.sessions.find((x) => x.sessionId === sessionId);
+            controller.openSessionOnNode(sessionId, s?.path, s?.nodeId);
+            closeRun({ kind: "session", id: sessionId });
+            closeDrawer();
+          }}
+          onClose={() =>
+            closeRun(
+              state.activeSessionId ? { kind: "session", id: state.activeSessionId } : { kind: "new" },
+            )
+          }
         />
       )}
 

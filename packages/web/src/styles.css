@@ -210,6 +210,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-actions-btn { border: 0; background: transparent; color: var(--ink); font-size: 20px; line-height: 1; padding: 4px 8px; border-radius: 8px; }
 .session-actions-btn:hover, .session-actions-btn[aria-expanded="true"] { background: var(--surface-3); }
 .session-actions-menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 190px; z-index: 40; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.28); overflow: hidden; padding: 4px; animation: sheet-up 0.14s ease; }
+.session-actions-context { display: grid; gap: 5px; padding: 8px 10px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; line-height: 1.35; }
+.session-actions-context span { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 6px; }
+.session-actions-context strong { color: var(--text); font-weight: 600; }
+.session-actions-audit-warning { display: grid; gap: 3px; margin: 4px; padding: 8px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--warn, #d4a017) 40%, var(--line)); background: color-mix(in srgb, var(--warn, #d4a017) 10%, var(--surface)); color: var(--ink); font-size: 11px; }
 .session-actions-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--ink); padding: 9px 12px; font-size: 13px; border-radius: 8px; }
 .session-actions-item:has(svg) { display: flex; align-items: center; gap: 8px; }
 .session-actions-item svg { flex: none; color: var(--muted); }
@@ -330,6 +334,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .row-menu-btn { border: 0; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; padding: 4px 8px; border-radius: 8px; opacity: 0.35; }
 .session-row:hover .row-menu-btn { opacity: 1; }
 .row-menu-btn:hover { background: var(--surface-3); color: var(--ink); }
+.pending-launch-actions { display: flex; flex: none; gap: 4px; padding-right: 6px; }
+.pending-launch-actions button { border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-2); color: var(--ink); padding: 5px 8px; font-size: 12px; cursor: pointer; }
+.pending-launch-actions button:last-child { color: var(--muted); background: transparent; }
+.pending-launch-actions button:hover { background: var(--surface-3); }
 @media (hover: none) { .row-menu-btn { opacity: 0.6; } }
 .row-menu-pop { position: absolute; right: 0; top: calc(100% + 2px); min-width: 180px; z-index: 20; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.28); overflow: hidden; padding: 4px; }
 .row-menu-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--ink); padding: 9px 12px; font-size: 13px; border-radius: 8px; }
@@ -554,16 +562,19 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    discoverability pattern as .row-menu-btn — and a touch-friendly baseline
    opacity on devices with no hover. */
 .assistant-row { align-self: stretch; width: 100%; }
-.msg-copy-btn {
-  margin-top: 4px; border: 0; background: transparent; color: var(--muted);
+.msg-actions { display: flex; align-items: center; gap: 2px; margin-top: 4px; }
+.msg-copy-btn, .msg-speak-btn {
+  border: 0; background: transparent; color: var(--muted);
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; padding: 0; border-radius: 6px; opacity: 0.35;
   cursor: pointer; transition: opacity 0.12s ease, color 0.12s ease;
 }
-.assistant-row:hover .msg-copy-btn, .msg-copy-btn:focus-visible { opacity: 1; }
-.msg-copy-btn:hover { background: var(--surface-2); color: var(--ink); }
+.assistant-row:hover .msg-copy-btn, .assistant-row:hover .msg-speak-btn,
+.msg-copy-btn:focus-visible, .msg-speak-btn:focus-visible { opacity: 1; }
+.msg-copy-btn:hover, .msg-speak-btn:hover { background: var(--surface-2); color: var(--ink); }
 .msg-copy-btn.copied { color: var(--ok, #2ea043); opacity: 1; }
-@media (hover: none) { .msg-copy-btn { opacity: 0.6; } }
+.msg-speak-btn.speaking { color: var(--accent); opacity: 1; }
+@media (hover: none) { .msg-copy-btn, .msg-speak-btn { opacity: 0.6; } }
 
 /* ---- Tool activity (grouped summary line -> bottom sheet detail + diff) ---- */
 .tool-group { align-self: stretch; width: 100%; max-width: 760px; }
@@ -589,7 +600,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .activity-row:hover { background: var(--surface-2); }
 .activity-ic { flex: none; width: 20px; height: 20px; display: grid; place-content: center; color: var(--muted); }
 .activity.is-running .activity-ic { color: var(--accent); }
+.activity.is-error .activity-ic { color: var(--danger); }
 .activity-verb { flex: none; font-weight: 650; font-size: 14px; }
+/* Failed tool call: a compact badge on the row and an error-tinted outcome. */
+.tool-fail { flex: none; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: var(--danger); background: var(--danger-soft); border-radius: 5px; padding: 1px 6px; }
+.tool-group-line.is-error:not(.is-running) .tool-group-state { display: block; width: 8px; height: 8px; flex: none; border-radius: 999px; background: var(--danger); }
+.tool-detail-value.is-error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
 .activity-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .activity-detail { display: grid; gap: 14px; padding: 4px 14px 16px; }
 .tool-detail-block { display: grid; gap: 4px; min-width: 0; }
@@ -1689,8 +1705,43 @@ button.template-card.is-featured .template-card-icon {
   display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap;
   margin-top: 2px;
 }
-.automation-row .row-menu-btn { opacity: 0.55; }
+.automation-row .row-menu-btn { opacity: 0.72; }
 .automation-row:hover .row-menu-btn { opacity: 1; }
+.run-row { align-items: center; }
+.run-row-open {
+  appearance: none; border: 0; background: transparent; color: inherit; font: inherit;
+  text-align: left; padding: 0; cursor: pointer;
+}
+.run-row-open:disabled { cursor: default; }
+.run-row-open:not(:disabled):hover .automation-row-title strong { color: var(--accent); }
+.run-row-chevron { color: var(--muted); font-size: 24px; line-height: 1; padding-left: 2px; }
+.runs-overview { margin-top: 12px; }
+.runs-overview .autom-section-head > div { min-width: 0; }
+.runs-overview .autom-section-head .settings-hint { margin: 3px 0 0; }
+
+/* A runner is a first-class requirement, not a tiny select hidden under the
+   prompt. Pairing/key readiness is visible before Save can become disabled. */
+.autom-runner-card {
+  border: 1px solid var(--line); border-radius: 16px; background: var(--surface-2);
+  overflow: hidden; min-width: 0;
+}
+.autom-runner-card.ready { border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
+.autom-runner-card.warn { border-color: color-mix(in srgb, var(--warn, #d4a017) 45%, var(--line)); }
+.autom-runner-select-row { display: flex; align-items: center; gap: 10px; padding: 11px 12px; min-width: 0; }
+.autom-runner-icon {
+  width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+  border-radius: 11px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--accent); font-size: 20px;
+}
+.autom-runner-select-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.autom-runner-select-copy strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.autom-runner-select-copy span { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.autom-runner-select-row .autom-inline-select { flex: none; width: min(42%, 190px); }
+.autom-runner-help {
+  padding: 10px 12px; border-top: 1px solid var(--line);
+  color: var(--ink); background: color-mix(in srgb, var(--warn, #d4a017) 9%, var(--surface));
+  font-size: 12px; line-height: 1.45;
+}
 .autom-status, .run-status {
   font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px;
   border: 1px solid var(--line); color: var(--muted); background: var(--surface-2);
@@ -1727,6 +1778,34 @@ button.template-card.is-featured .template-card-icon {
 .run-status.bad { color: var(--danger); border-color: currentColor; }
 .run-status.info { color: var(--muted); }
 
+/* Routable run detail: readable as a page on desktop and a compact native-like
+   drill-in on mobile. The shared row primitives otherwise have no page rhythm. */
+.run-details-body { max-width: 760px; padding-top: 14px; }
+.run-details-title {
+  margin: 4px 0 8px; font-family: var(--font-serif); font-size: clamp(22px, 4vw, 30px);
+  font-weight: 700; line-height: 1.2; overflow-wrap: anywhere;
+}
+.run-details .run-sheet-status { margin-bottom: 18px; }
+.run-details .run-sheet-rows {
+  margin-top: 14px; border: 1px solid var(--line); border-radius: 14px;
+  overflow: hidden; background: var(--surface);
+}
+.run-details .run-sheet-checks { justify-content: flex-start; margin: 14px 2px 0; }
+.run-details .run-sheet-failure { margin-top: 14px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line)); border-radius: 12px; }
+.run-details-receipt { margin-top: 18px !important; }
+.run-details-state {
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  margin-top: 20px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+}
+.run-details-state p { margin: 0; color: var(--muted); }
+.run-details-muted { color: var(--muted); font-weight: 500; }
+.run-details-close { width: auto; gap: 3px; padding: 0 8px; font-size: 14px; }
+.run-details-close span:first-child { font-size: 24px; line-height: 1; }
+.run-details .run-sheet-recovery {
+  position: sticky; bottom: 0; margin: 18px -4px 0; padding: 12px 4px max(12px, env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, var(--bg) 18%);
+}
+
 /* Create/edit sheet: single-page form modal. */
 .wizard-scrim {
   position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,0.40);
@@ -1756,6 +1835,19 @@ button.template-card.is-featured .template-card-icon {
 .wizard-actions {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
   padding: 14px 16px max(18px, env(safe-area-inset-bottom)); flex: none;
+}
+@media (max-width: 479px) {
+  .wizard-scrim { align-items: flex-end; padding: 0; backdrop-filter: none; }
+  .wizard {
+    max-height: 100dvh; height: 100dvh; border-width: 0; border-radius: 0;
+    box-shadow: none;
+  }
+  .wizard-head { padding-top: max(14px, env(safe-area-inset-top)); border-bottom: 1px solid var(--line); }
+  .wizard-actions { border-top: 1px solid var(--line); background: var(--surface); }
+  .wizard-actions .btn { min-height: 44px; }
+  .wizard-actions .autom-save-btn { flex: 1; }
+  .autom-runner-select-row { align-items: flex-start; flex-wrap: wrap; }
+  .autom-runner-select-row .autom-inline-select { width: 100%; max-width: none; height: 44px; }
 }
 @media (min-width: 480px) {
   .wizard-scrim { padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
@@ -1997,6 +2089,15 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .queue-run-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .queue-run-field select, .queue-run-field input { font-size: 16px; }
 .queue-run-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.routing-readiness {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2);
+}
+.routing-readiness.ready { border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background: color-mix(in srgb, var(--ok) 8%, var(--surface)); }
+.routing-readiness.warn { border-color: color-mix(in srgb, var(--warn, #d4a017) 45%, var(--line)); background: color-mix(in srgb, var(--warn, #d4a017) 8%, var(--surface)); }
+.routing-readiness-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.routing-readiness-copy strong { font-size: 14px; }
+.routing-readiness-copy span { color: var(--muted); font-size: 12px; line-height: 1.4; }
 .chip.outcome-success { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
 .chip.outcome-warning { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
 .chip.outcome-danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
@@ -2011,6 +2112,19 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 /* First-session decision summary (B2): the four decisions a new session makes. */
 .composer-first-session { font-size: 11px; color: var(--muted); padding: 2px 4px 4px; }
 .composer-first-session .fs-decisions { color: var(--fg); }
+.composer-starter {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0 0 8px; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface);
+}
+.composer-starter > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.composer-starter strong { font-size: 12px; color: var(--fg); }
+.composer-starter span { font-size: 11px; line-height: 1.4; color: var(--muted); }
+.composer-starter .btn { flex: none; }
+@media (max-width: 520px) {
+  .composer-starter { align-items: stretch; flex-direction: column; }
+  .composer-starter .btn { min-height: 40px; }
+}
 
 /* Review surface (C3): state badges, checks strip, view-mode toggle, file tree,
    per-file actions, and the split (side-by-side) diff layout. */
@@ -2145,6 +2259,38 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-toggle.on .settings-toggle-knob { transform: translateX(18px); }
 
 @media (max-width: 720px) {
+  .automations-view-head { align-items: center; padding-bottom: 8px; }
+  .automations-view-sub { display: none; }
+  .automations-view-head-actions .icon-btn { min-width: 44px; min-height: 44px; }
+  .autom-new-btn { min-height: 44px; padding-inline: 13px; }
+  .automations-tabs {
+    flex-wrap: nowrap; overflow-x: auto; padding: 0 8px; margin-top: 0;
+    scrollbar-width: none; background: var(--bg);
+  }
+  .automations-tabs::-webkit-scrollbar { display: none; }
+  .automations-tab { flex: 1 0 auto; min-height: 44px; padding: 10px 14px; }
+  .automations-view-body { padding-inline: 12px; }
+  .autom-sources-strip { display: grid; grid-template-columns: 1fr; }
+  .autom-source-pill { width: 100%; min-height: 46px; justify-content: flex-start; }
+  .autom-source-pill-cta { margin-left: auto; }
+  .automation-row { padding: 13px 12px; }
+  .automation-row-main { flex-basis: 100%; }
+  .automation-row-actions { width: 100%; justify-content: flex-end; border-top: 1px solid var(--line); padding-top: 10px; }
+  .automation-row-actions .btn { min-height: 40px; }
+  .automation-row .row-menu-btn { min-width: 40px; min-height: 40px; opacity: 1; }
+  .run-row-chevron { margin-left: auto; }
+  .runs-overview .autom-section-head { align-items: flex-end; }
+  .run-details .automations-view-heading { font-size: 20px; }
+  .run-details .automations-view-head-text { display: none; }
+  .run-details .automations-view-head { justify-content: flex-start; border-bottom: 1px solid var(--line); }
+  .run-details .automations-view-head-actions { width: 100%; }
+  .run-details-close { flex-direction: row; font-weight: 650; }
+  .run-details-body { padding-top: 10px; }
+  .run-details .run-sheet-row { flex-direction: column; gap: 4px; padding: 11px 12px; }
+  .run-details .run-sheet-row .v { justify-content: flex-start; text-align: left; overflow-wrap: anywhere; }
+  .run-details .run-sheet-recovery .btn { min-height: 44px; flex: 1; }
+  .routing-readiness { align-items: stretch; flex-direction: column; }
+  .routing-readiness .btn { min-height: 44px; }
   .inbox { inset: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)); max-height: none; border-radius: 14px; }
   .inbox-filters { display: grid; grid-template-columns: 1fr 1fr; }
   .inbox-filters select { width: 100%; }
@@ -2817,3 +2963,30 @@ select.picker-search { appearance: auto; }
   font-weight: 500;
   letter-spacing: -0.01em;
 }
+
+/* Activation readiness strip (src/components/ReadinessChecklist.tsx) — the honest
+   "get to your first agent response" checklist shown until the agent answers. */
+.readiness {
+  margin: 10px 12px 0; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+}
+.readiness-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.readiness-title { font-weight: 600; font-size: 0.92rem; letter-spacing: -0.01em; }
+.readiness-dismiss {
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 1.1rem; line-height: 1; padding: 2px 6px; border-radius: 6px;
+}
+.readiness-dismiss:hover { background: var(--surface-2); color: var(--ink); }
+.readiness-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.readiness-check { display: flex; align-items: baseline; gap: 8px; font-size: 0.88rem; }
+.readiness-mark {
+  flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; font-size: 0.72rem; font-weight: 700; background: var(--surface-2); color: var(--muted);
+}
+.readiness-mark.mark-passed { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
+.readiness-mark.mark-failed { background: var(--danger-soft); color: var(--danger); }
+.readiness-mark.mark-checking { color: var(--accent); }
+.readiness-check.state-pending { opacity: 0.55; }
+.readiness-label { font-weight: 500; }
+.readiness-detail { color: var(--muted); font-size: 0.82rem; }
+.readiness-next { margin-top: 10px; }

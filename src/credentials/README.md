@@ -81,9 +81,7 @@ lifted into its own package by adding a `package.json`).
 
 ## Roadmap
 
-See [`docs/credentials-service-plan.md`](../../docs/credentials-service-plan.md)
-and the modularization sequencing in
-[`docs/internal/platform-modularization-plan.md`](../../docs/internal/platform-modularization-plan.md).
+See [`docs/credentials-service-plan.md`](../../docs/credentials-service-plan.md).
 The vault and resolver now live under this directory (two-layer split complete),
 and compatibility shims remain at `runtime/credential-store.ts` and
 `runtime/credentials.ts` for existing importers. The last step is a

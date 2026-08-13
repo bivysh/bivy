@@ -5,8 +5,8 @@
 // turn or starts a fresh one. The bug it guards against: defaulting to "steer" on
 // the runtime's `isStreaming` alone, which can be stuck-true after a turn has
 // actually ended — so a brand-new message gets injected into a dead turn and
-// silently vanishes (docs/session-reliability-plan.md, root cause #2). The fix
-// requires BOTH Bivy's authoritative `isWorking` and the runtime's `isStreaming`
+// silently vanishes. The fix requires BOTH Bivy's authoritative `isWorking`
+// and the runtime's `isStreaming`
 // before defaulting to steer.
 import assert from "node:assert/strict";
 import test from "node:test";

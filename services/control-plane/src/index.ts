@@ -17,7 +17,7 @@ import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
-import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent } from "./metrics.js";
+import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage, recordProductEvent, PRODUCT_EVENT_VALUES, PRODUCT_CLIENT_VALUES, type ProductEvent, type ProductClient } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
 import {
@@ -162,22 +162,26 @@ function relayHttpUrl(relayUrl: string): string {
   return relayUrl;
 }
 
-async function notifyRelaysWorkAvailable(accountId: string, item: { id: string; label: string }) {
+async function notifyRelaysWorkAvailable(
+  accountId: string,
+  item: { id: string; label: string },
+  options: { nodeId?: string; autoProvision?: boolean } = {},
+) {
   // Best-effort push: relay-connected nodes get an immediate hint and then fetch
-  // + atomically claim via /node/work. Fallback polling still guarantees pickup
-  // if the relay/shard is offline or the node is disconnected.
+  // + atomically claim via /node/work. A cancellation targets only the active
+  // owner; enqueue notifications intentionally remain account-wide.
   await Promise.allSettled(
     relayShardUrls.map(async (url) => {
       await fetch(`${relayHttpUrl(url).replace(/\/$/, "")}/internal/work-available`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${process.env.RELAY_SECRET ?? "dev-relay-secret"}` },
-        body: JSON.stringify({ accountId, id: item.id, label: item.label }),
+        body: JSON.stringify({ accountId, id: item.id, label: item.label, nodeId: options.nodeId }),
       });
     }),
   );
-  // Unattended provisioning: any enqueued work triggers a hosted-provisioning
-  // check (gated + deduped inside). Fire-and-forget; never blocks the notify.
-  void maybeAutoProvision(store, accountId, provisionEnv());
+  // Cancelling must never start a machine. Normal enqueue notifications retain
+  // the unattended-provisioning check.
+  if (options.autoProvision !== false) void maybeAutoProvision(store, accountId, provisionEnv());
 }
 if (relayShardUrls.length > 1) {
   console.log(`[relay] sharding across ${relayShardUrls.length} relays: ${relayShardUrls.join(", ")}`);
@@ -532,6 +536,10 @@ if (janitorServiceUrl && janitorProxySecret) {
 const reactAppDir = path.join(__dirname, "..", "public", "react");
 const reactIndexFile = path.join(reactAppDir, "index.html");
 const hasReactApp = fs.existsSync(reactIndexFile);
+// The app shell, read once at boot for deep-link fallbacks that serve it from
+// memory (no per-request file-system access). Deploys replace the process, so a
+// cached copy is always current.
+const reactIndexHtml = hasReactApp ? fs.readFileSync(reactIndexFile) : null;
 app.get("/", (_req, res) => {
   noStorePwaShell(res);
   if (hasReactApp) return res.sendFile(reactIndexFile);
@@ -571,6 +579,15 @@ if (hasReactApp) {
   app.get(/^\/settings(?:\/.+)?$/, (_req, res) => {
     noStorePwaShell(res);
     res.sendFile(reactIndexFile);
+  });
+  // The routable Run detail screen (`/runs/:runId` — see packages/web/src/
+  // router.ts and @bivy/core runRoutePath) needs the same shell on a cold load
+  // or a Run URL copied to another device. Served from the boot-time in-memory
+  // copy so this fallback performs no per-request file-system access. The Run
+  // JSON API lives under `/account/automation-runs/:id`, so nothing is shadowed.
+  app.get(/^\/runs\/.+/, (_req, res) => {
+    noStorePwaShell(res);
+    res.type("html").send(reactIndexHtml);
   });
 }
 
@@ -876,6 +893,16 @@ const requireNode = asyncHandler(async (req, res, next) => {
   if (!node) return res.status(401).json({ error: "Unauthorized node" });
   (req as Request & { node: NodeRecord }).node = node;
   next();
+});
+
+app.post("/account/product-events", requireUser, (req, res) => {
+  const event = String(req.body?.event ?? "") as ProductEvent;
+  const productClient = String(req.body?.client ?? "") as ProductClient;
+  if (!(PRODUCT_EVENT_VALUES as readonly string[]).includes(event) || !(PRODUCT_CLIENT_VALUES as readonly string[]).includes(productClient)) {
+    return res.status(400).json({ error: "Invalid product event" });
+  }
+  recordProductEvent(event, productClient);
+  res.status(204).end();
 });
 
 // --- Accounts -----------------------------------------------------------
@@ -1271,7 +1298,19 @@ app.get("/node/account", requireNode, asyncHandler(async (req, res) => {
 app.post("/node/heartbeat", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   await store.setNodeOnline(node.id, true);
+  await store.setNodeBootstrapStatus(node.id, "ready");
   await markHostedMachineMilestone(store, node.accountId, node.id, "nodeReadyAt").catch(() => false);
+  res.json({ ok: true });
+}));
+
+// Fixed-vocabulary, credential-free cloud-init progress. The enrollment bearer
+// scopes writes to this node; clients read it through the ordinary node list.
+const BOOTSTRAP_PHASES = new Set(["booting", "installing", "starting", "ready", "failed"]);
+app.post("/node/bootstrap-status", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const phase = String(req.body?.phase ?? "");
+  if (!BOOTSTRAP_PHASES.has(phase)) return res.status(400).json({ error: "unknown bootstrap phase" });
+  await store.setNodeBootstrapStatus(node.id, phase);
   res.json({ ok: true });
 }));
 
@@ -2337,6 +2376,7 @@ app.get("/account/work-items", asyncHandler(async (req, res) => {
     routingReason: w.routingReason,
     checks: w.checks,
     events: w.events,
+    receiptEvidence: w.receiptEvidence,
   })));
 }));
 
@@ -2713,10 +2753,61 @@ app.get("/account/automation-runs", asyncHandler(async (req, res) => {
   res.json(await store.listAutomationRuns(client.accountId, Number(req.query.limit) || 50));
 }));
 
+// Single Run by id, for the routable /runs/:runId detail screen. Account-scoped:
+// an id that belongs to another account or does not exist is indistinguishable —
+// both return the same 404 so the endpoint never leaks Run existence across
+// accounts.
+app.get("/account/automation-runs/:id", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const run = await store.getAutomationRun(client.accountId, String(req.params.id));
+  if (!run) return res.status(404).json({ error: "Automation run not found" });
+  res.json(run);
+}));
+
 app.get("/account/automation-triggers", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   res.json(await store.listTriggerEvents(client.accountId, Number(req.query.limit) || 50));
+}));
+
+// Account-scoped operator cancellation. Pending/active/parked runs transition
+// durably; repeating a cancellation is a successful no-op, while a different
+// terminal outcome cannot be rewritten.
+app.post("/account/automation-runs/:id/cancel", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const result = await store.cancelAutomationRun(client.accountId, String(req.params.id));
+  if (!result) return res.status(404).json({ error: "Automation run not found" });
+  if (result.previousStatus === "succeeded" || result.previousStatus === "failed") {
+    return res.status(409).json({ error: `Cannot cancel a ${result.previousStatus} automation run`, status: result.previousStatus });
+  }
+  if (result.transitioned) {
+    recordDurableRunLifecycleResult(result.run, "cancelled");
+    const owner = result.run.claimedByNodeId;
+    if (owner) {
+      void notifyRelaysWorkAvailable(client.accountId, { id: result.run.id, label: result.run.routing.nodeLabel }, {
+        nodeId: owner,
+        autoProvision: false,
+      });
+    }
+  }
+  res.json({ ok: true, run: result.run });
+}));
+
+app.post("/account/automation-runs/:id/retry", asyncHandler(async (req, res) => {
+  const client = await store.resolveClient(bearer(req));
+  if (!client) return res.status(401).json({ error: "Unauthorized" });
+  const result = await store.retryAutomationRun(client.accountId, String(req.params.id));
+  if (!result) return res.status(404).json({ error: "Automation run not found" });
+  if (!result.transitioned) {
+    const message = result.reason === "attempt_limit"
+      ? "This Run has reached its attempt limit."
+      : "This Run is not retryable in its current state.";
+    return res.status(409).json({ error: message, reason: result.reason, run: result.run });
+  }
+  void notifyRelaysWorkAvailable(client.accountId, { id: result.run.id, label: result.run.routing.nodeLabel });
+  res.json({ ok: true, run: result.run });
 }));
 
 app.post("/account/automation-runs", asyncHandler(async (req, res) => {
@@ -3510,8 +3601,18 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
 // heartbeats stop and list/claim may atomically reclaim the item after expiry.
 app.post("/node/work/:id/heartbeat", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  const item = await store.renewWorkItemLease(node.accountId, node.id, String(req.params.id));
-  if (!item) return res.status(409).json({ error: "Run lease is not owned by this node" });
+  const id = String(req.params.id);
+  const item = await store.renewWorkItemLease(node.accountId, node.id, id);
+  if (!item) {
+    // Cancellation retains claimedByNodeId only as an ownership tombstone, so
+    // the active worker gets an actionable stop reason without exposing another
+    // node's cancellation to arbitrary enrolled nodes.
+    const current = await store.getAutomationRun(node.accountId, id);
+    if (current?.status === "cancelled" && current.claimedByNodeId === node.id) {
+      return res.status(409).json({ error: "Automation run was cancelled", reason: "cancelled" });
+    }
+    return res.status(409).json({ error: "Run lease is not owned by this node" });
+  }
   res.json({ ok: true, leaseExpiresAt: item.leaseExpiresAt });
 }));
 
@@ -3522,11 +3623,20 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  await store.completeWorkItem(node.accountId, id);
+  const run = await store.completeWorkItem(node.accountId, id, node.id);
+  // A no-op means the Run already reached a terminal outcome (e.g. cancelled) or
+  // was reclaimed out from under this node in the read-then-write window. Report
+  // the conflict instead of a false success, and never emit a lifecycle metric
+  // for a completion that did not durably happen.
+  if (!run) {
+    const latest = await store.getAutomationRun(node.accountId, id);
+    return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed", reason: latest?.status ?? "unknown" });
+  }
+  recordDurableRunLifecycleResult(run, "succeeded");
   // Compatibility for older nodes that skip the explicit /running transition.
   const started = await store.recordRunStart(node.accountId, `automation:${id}`);
   if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
-  res.json({ ok: true });
+  res.json({ ok: true, run });
 }));
 
 app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) => {
@@ -3536,7 +3646,8 @@ app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) =>
   if (!current || current.claimedByNodeId !== node.id || current.status !== "claimed") {
     return res.status(409).json({ error: "Run is not claimed by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "running");
+  const run = await store.transitionAutomationRun(node.accountId, id, "running", undefined, node.id);
+  if (!run) return res.status(409).json({ error: "Run is no longer claimed by this node" });
   const started = await store.recordRunStart(node.accountId, `automation:${id}`);
   if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
   res.json({ ok: true, run });
@@ -3549,8 +3660,12 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "failed");
-  if (!run) return res.status(404).json({ error: "Unknown run" });
+  const run = await store.transitionAutomationRun(node.accountId, id, "failed", undefined, node.id);
+  // No-op → already terminal or reclaimed away. A terminal outcome is immutable,
+  // so report the conflict rather than counting a second lifecycle result.
+  if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
+  recordDurableRunLifecycleResult(run, "failed");
+  recordRunFailureStage(classifyRunFailureStage(run));
   res.json({ ok: true, run });
 }));
 
@@ -3566,8 +3681,11 @@ app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req,
   if (!current || current.claimedByNodeId !== node.id) {
     return res.status(409).json({ error: "Run is not owned by this node" });
   }
-  const run = await store.transitionAutomationRun(node.accountId, id, "needs_attention");
-  if (!run) return res.status(404).json({ error: "Unknown run" });
+  const run = await store.transitionAutomationRun(node.accountId, id, "needs_attention", undefined, node.id);
+  // No-op → already terminal (a finished Run stays finished) or reclaimed away.
+  if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
+  recordDurableRunLifecycleResult(run, "needs_attention");
+  recordRunFailureStage(classifyRunFailureStage(run, true));
   res.json({ ok: true, run });
 }));
 

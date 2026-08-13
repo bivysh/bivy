@@ -23,7 +23,7 @@ test("settings use task-oriented groups and search panel concepts", async () => 
   for (const group of ["Models & agents", "Machines", "App", "Account"]) {
     expect(source).toContain(`label: "${group}"`);
   }
-  // Integrations (GitHub/Linear/Slack) and automation & policy (Work Queue,
+  // Integrations (GitHub/Linear/Slack) and automation & policy (Runs,
   // Rulesets) moved to the Automations hub — Settings no longer lists
   // them, it only redirects stale /settings/:view deep links there.
   expect(source).not.toContain('label: "Integrations"');
@@ -32,9 +32,9 @@ test("settings use task-oriented groups and search panel concepts", async () => 
   expect(source).toContain("SEARCH_TERMS[item.id]");
 });
 
-test("automations is the single hub for connections, work queue and rulesets", async () => {
+test("automations is the single hub for connections, Runs and rulesets", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/AutomationsView.tsx", import.meta.url), "utf8");
-  for (const tab of ["Overview", "Work Queue", "Rulesets"]) {
+  for (const tab of ["Automations", "Runs", "Rulesets"]) {
     expect(source).toContain(`label: "${tab}"`);
   }
   // The standalone Webhooks tab was removed — a webhook is just an automation
@@ -45,6 +45,15 @@ test("automations is the single hub for connections, work queue and rulesets", a
   // Source connections and the panels reused from Settings all live here now.
   expect(source).toContain("GithubQueuePanel");
   expect(source).toContain("RulesetsPanel");
+});
+
+test("GitHub trigger creation stays in one complete automation editor", async () => {
+  const source = await readFile(new URL("../../packages/web/src/components/AutomationsView.tsx", import.meta.url), "utf8");
+  expect(source).toContain("onSelectSource(opt.source, d)");
+  expect(source).toContain('items.find((item) => item.trigger === source)');
+  expect(source).toContain('missing.push("a GitHub event")');
+  expect(source).toContain('templateCiphertext: `${TEMPLATE_PREFIX}:${d.nodeId}:${encrypted}`');
+  expect(source).toContain('on: buildGithubOn(d.githubEvents, labels, workflows)');
 });
 
 test("provider key save awaits an authoritative acknowledgement", async () => {
@@ -69,7 +78,7 @@ test("opening the queue panel cannot trigger billable provisioning", async () =>
 
 test("interactive billable runners disclose cost and teardown before selection", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/Ephemeral.tsx", import.meta.url), "utf8");
-  expect(source).toContain('title="Use this billable runner?"');
+  expect(source).toContain('title="Use this billable machine profile?"');
   expect(source).toContain("ephemeralCostHint");
   expect(source).toContain("controller.pickDraftEphemeralRunner(pendingRunner)");
 });

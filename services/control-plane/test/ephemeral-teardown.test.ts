@@ -46,6 +46,17 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
   assert.equal(called, 0);
 }
 
+// A settled machine without a provider credential remains tracked; neither the
+// settled callback nor manual teardown may turn missing auth into false absence.
+{
+  const old = { id: "srv-no-token", provider: "hetzner", nodeId: "eph-no-token", createdAt: iso(0), ttlMinutes: 60 };
+  const { store, audits } = fakeStore([old], {});
+  const found = await reapSettledHostedMachine(store, "acct", "eph-no-token", env);
+  assert.equal(found, true);
+  assert.deepEqual(await store.getHostedMachines("acct"), [old]);
+  assert.ok(audits.some((event) => event.action === "reconcile_failed"));
+}
+
 // Reconcile actively destroys a machine past its TTL grace when env + token given.
 {
   const { store } = fakeStore(
@@ -55,6 +66,26 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
   let destroyed = 0;
   const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; });
   assert.equal(n, 1);
+  assert.equal(destroyed, 1);
+}
+
+// A tracked attempt is actively observed and a runner that never joins is
+// deleted at the boot deadline rather than burning its full TTL.
+{
+  const old = { id: "boot-stuck", provider: "fly", nodeId: "eph-stuck", attemptId: "attempt-stuck", createdAt: iso(20 * 60_000), ttlMinutes: 60, status: "starting" };
+  const { store } = fakeStore([old], { fly: "fly-token" });
+  const attempt = { accountId: "acct", attemptId: "attempt-stuck", provider: "fly", nodeId: "eph-stuck", state: "tracked", desired: {}, machine: old, retryCount: 0, createdAt: old.createdAt, updatedAt: old.createdAt } as const;
+  Object.assign(store, {
+    listHostedMachineAttempts: async () => [attempt],
+    getHostedMachineAttempt: async () => attempt,
+    putHostedMachineAttempt: async (next: unknown) => next,
+    getEphemeralConfigs: async () => [],
+  });
+  let observed = 0;
+  let destroyed = 0;
+  const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; }, async () => { observed++; return "starting"; });
+  assert.equal(n, 1);
+  assert.equal(observed, 1);
   assert.equal(destroyed, 1);
 }
 

@@ -35,6 +35,7 @@ export interface Command extends CommandBase {
     | "sessions.pr.refresh_all"
     | "prompt"
     | "abort"
+    | "session.turn_attention.resolve"
     | "session.command.invoke"
     | "session.pause"
     | "session.resume"
@@ -62,6 +63,7 @@ export interface Command extends CommandBase {
     // `credentials.records` ({ records: CredentialRecordSummary[] }). set/remove/
     // sync.set mutate one `provider:label` slot and ack via requestId.
     | "credentials.list"
+    | "credentials.account.export"
     | "credential.set"
     | "credential.remove"
     | "credential.sync.set"
@@ -97,6 +99,7 @@ export interface Command extends CommandBase {
     | "stt.config.get"
     | "stt.config.set"
     | "transcribe"
+    | "synthesize"
     | "terminal.list"
     | "terminal.multiplexers"
     | "terminal.takeover"

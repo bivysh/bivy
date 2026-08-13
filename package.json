@@ -24,6 +24,7 @@
   "engines": {
     "node": ">=22.19.0"
   },
+  "packageManager": "pnpm@11.21.0",
   "workspaces": [
     "packages/*"
   ],
@@ -36,19 +37,20 @@
   "scripts": {
     "prepare": "node scripts/disable-git-hooks.mjs",
     "postinstall": "node bin/patch-pi-dependencies.mjs",
-    "prepublishOnly": "node -e \"console.error('\\nRefusing to publish from the repo root — this would ship the whole monorepo (src/, services/, tests, and any local .env).\\nUse: npm run publish:npm  (scripts/build-release.mjs publishes a curated staging dir). See docs/releasing.md.\\n'); process.exit(1)\"",
+    "prepublishOnly": "node -e \"console.error('\\nRefusing to publish from the repo root — this would ship the whole monorepo (src/, services/, tests, and any local .env).\\nUse: pnpm run publish:npm  (scripts/build-release.mjs publishes a curated staging dir). See docs/releasing.md.\\n'); process.exit(1)\"",
     "setup": "node bin/bivy.mjs setup",
     "bivy": "node bin/bivy.mjs",
     "dev": "tsx src/server.ts",
     "start": "tsx src/server.ts",
     "agent-service": "tsx src/runtime/agent-service-bin.ts",
-    "typecheck": "tsc --noEmit && npm run typecheck -w @bivy/plugin-sdk",
+    "typecheck": "tsc --noEmit && pnpm --filter @bivy/plugin-sdk run typecheck",
     "lint": "eslint .",
-    "build:web": "npm run build -w @bivy/web",
-    "dev:web": "npm run dev -w @bivy/web",
-    "test:core": "npm run test -w @bivy/core",
-    "typecheck:web": "npm run typecheck -w @bivy/core && npm run typecheck -w @bivy/web",
+    "build:web": "pnpm --filter @bivy/web run build",
+    "dev:web": "pnpm --filter @bivy/web run dev",
+    "test:core": "pnpm --filter @bivy/core run test",
+    "typecheck:web": "pnpm --filter @bivy/core run typecheck && pnpm --filter @bivy/web run typecheck",
     "check:licenses": "node scripts/check-licenses.mjs",
+    "check:pins": "node scripts/check-security-pins.mjs",
     "check:secrets": "node scripts/secret-scan.mjs",
     "gen:agent-manifest": "tsx scripts/generate-agent-manifest.ts",
     "check:links": "node scripts/check-links.mjs",
@@ -76,6 +78,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.220",
     "@earendil-works/pi-ai": "0.83.0",
     "@earendil-works/pi-coding-agent": "0.83.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "brace-expansion": "5.0.9",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",

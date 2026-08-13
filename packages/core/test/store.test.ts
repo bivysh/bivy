@@ -75,6 +75,19 @@ describe("stripAttachmentPlaceholders", () => {
 });
 
 describe("SessionStore", () => {
+  it("retains node audit degradation in Session context", () => {
+    const store = new SessionStore();
+    store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", auditHealth: { storage: "corrupt", writes: "degraded", failedWrites: 2, corruptLines: 1 }, eventLogHealth: { state: "degraded", operation: "append", at: 42 } }] } as never);
+    expect(store.getState().sessions[0].auditHealth).toEqual({ storage: "corrupt", writes: "degraded", failedWrites: 2, corruptLines: 1 });
+    expect(store.getState().sessions[0].eventLogHealth).toEqual({ state: "degraded", operation: "append", at: 42 });
+  });
+
+  it("retains observed Session protection context from the node", () => {
+    const store = new SessionStore();
+    store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", sandbox: "workspace-write", approvalMode: "risky", ephemeral: true, executionProfile: "isolated_customer_cloud" }] } as never);
+    expect(store.getState().sessions[0]).toMatchObject({ sandbox: "workspace-write", approvalMode: "risky", ephemeral: true, executionProfile: "isolated_customer_cloud" });
+  });
+
   it("notifies subscribers and exposes immutable snapshots", () => {
     const store = new SessionStore();
     const seen: number = 0;
@@ -637,12 +650,26 @@ describe("SessionStore", () => {
 
     // Long-running agent tools emit elapsed-time progress with no repeated
     // detail. The card must retain its sub-agent identity while accepting the
-    // fresh activity payload, rather than degrading back to an opaque tool.
+    // fresh activity payload, rather than degrading back to an opaque tool. The
+    // progress ping is MERGED onto the original input, so the delegation's task
+    // description survives alongside the new elapsed marker instead of being
+    // clobbered away.
     store.apply({ type: "tool_execution_update", toolCallId: "sub-1", name: "Task", input: { elapsedSeconds: 42 } });
     const updated = store.getState().transcript.find((entry) => entry.tool)?.tool;
     expect(updated?.detail?.kind).toBe("delegation");
-    expect(updated?.input).toEqual({ elapsedSeconds: 42 });
+    expect(updated?.input).toEqual({ description: "trace auth", elapsedSeconds: 42 });
     expect(store.getState().workingLabel).toBe("Explore sub-agent is working…");
+  });
+
+  it("carries a tool call's failure outcome (exitCode/isError) onto the done card", () => {
+    const store = new SessionStore();
+    store.apply({ type: "tool_call", toolCallId: "c1", name: "bash", input: { command: "make" }, detail: { kind: "shell", command: "make" } });
+    store.apply({ type: "tool_result", toolCallId: "c1", name: "bash", result: "boom", detail: { kind: "shell", command: "make", result: { exitCode: 2, isError: true } } });
+    const tool = store.getState().transcript.find((e) => e.tool?.callId === "c1")?.tool;
+    expect(tool?.status).toBe("done");
+    // The result-time detail (call classification + outcome) replaced the
+    // call-time detail, so the UI can render this command as failed.
+    expect(tool?.detail).toMatchObject({ kind: "shell", result: { exitCode: 2, isError: true } });
   });
 
   it("coalesces unnamed agent output updates into one live card", () => {

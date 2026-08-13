@@ -17,7 +17,7 @@ import { ProtocolRuntime } from "../../runtime/protocol.js";
 import { codexSlashCommands } from "../../runtime/slash-commands.js";
 import type { AgentRuntime } from "../../runtime/types.js";
 
-export const CODEX_TESTED_VERSION = "0.145.0";
+export const CODEX_TESTED_VERSION = "0.147.0";
 const CODEX_AVAILABLE_CACHE = new Map<string, boolean>();
 
 function codexCommand(): string {
@@ -89,9 +89,19 @@ export function codexAppServerRuntime(tier?: SandboxTier): AgentRuntime {
       id: "openai-codex",
       name: "OpenAI Codex (ChatGPT)",
       oauth: true,
+      // Session-less placeholder list shown in the picker before a Codex thread
+      // opens; once the app-server's `model/list` handshake lands, the shim
+      // replaces this with the authoritative per-account set. Kept current with
+      // the Codex CLI's listed (non-hidden) models — the retired gpt-5-codex/gpt-5
+      // generation was superseded by the GPT-5.6 Sol frontier line.
       models: [
-        { provider: "openai-codex", id: "gpt-5-codex", name: "GPT-5 Codex", reasoning: true },
-        { provider: "openai-codex", id: "gpt-5", name: "GPT-5", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.6-sol", name: "GPT-5.6 Sol", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.6-terra", name: "GPT-5.6 Terra", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.6-luna", name: "GPT-5.6 Luna", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.4-mini", name: "GPT-5.4 mini", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", reasoning: true },
       ],
     }],
     capabilities: {

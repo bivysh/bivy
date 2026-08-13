@@ -238,6 +238,7 @@ export interface AccountNode {
    *  the machine so it can wake a suspend-to-zero node (see
    *  `ephemeralMachineFromNode` and docs/ephemeral-sessions.md "Gap A"). This is
    *  identity only (a Fly machine id / E2B sandbox id), never a credential. */
+  bootstrapStatus?: { phase: string; updatedAt: string };
   ephemeral?: {
     provider: string;
     /** The provider's machine/sandbox id (the adapter's `EphemeralMachine.id`). */
@@ -867,6 +868,31 @@ export interface GithubQueueItem {
     url?: string;
     status?: "passed" | "failed" | "denied" | "approved";
   }>;
+  receiptEvidence?: {
+    approvals: { requests: number; approved: number; denied: number };
+    fileChanges: { files: Array<{ path: string; op?: string; added?: number; removed?: number }>; added: number; removed: number };
+    auditHealth: { correlation: "healthy" | "missing"; readableStorage: "healthy" | "missing"; successfulWrites: "healthy" | "missing" };
+    execution?: {
+      profile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+      controller?: "customer" | "bivy_hosted_provisioning";
+      agentVersion?: string;
+      modelVersionStatus?: "available" | "unavailable" | "unknown";
+    };
+    protection?: {
+      effective?: {
+        executionProfile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+        sandboxTier?: "read-only" | "workspace-write" | "danger-full-access";
+        approvalMode?: "never" | "risky" | "always" | "autonomous";
+        runtimeEnforcement?: string;
+        trustModes?: string[];
+      };
+      capabilities?: Array<{
+        capability: "sandbox" | "approval" | "tool" | "network" | "credential_custody" | "runtime_policy";
+        evidenceClass: "enforced" | "observed" | "unavailable";
+        mechanism?: string;
+      }>;
+    };
+  };
 }
 
 export type AutomationSchedule =
@@ -945,7 +971,17 @@ export interface AccountAutomationRun {
   startedAt?: string;
   completedAt?: string;
   leaseExpiresAt?: string;
-  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+  attempt?: number;
+  maxAttempts?: number;
+  runtimeId?: string;
+  model?: string;
+  routingReason?: string;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  checks?: GithubQueueItem["checks"];
+  events?: GithubQueueItem["events"];
+  receiptEvidence?: GithubQueueItem["receiptEvidence"];
+  output?: GithubQueueItem["output"];
 }
 
 async function automationRequest<T>(
@@ -1012,6 +1048,87 @@ export function fetchAutomationRuns(
   fetchImpl: typeof fetch = fetch,
 ): Promise<AccountAutomationRun[]> {
   return automationRequest(store, `/account/automation-runs?limit=${encodeURIComponent(String(limit))}`, {}, fetchImpl);
+}
+
+/** A failed Run fetch that still tells the caller which explicit state to show:
+ *  `unauthorized`, `not_found`, or an `error` (offline/unknown). Lets the
+ *  routable Run screen render distinct states without string-matching. */
+export class RunFetchError extends Error {
+  constructor(
+    message: string,
+    readonly reason: "unauthorized" | "not_found" | "error",
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = "RunFetchError";
+  }
+}
+
+/** Fetch one Run by id for the routable /runs/:runId screen. Returns `null` when
+ *  the Run does not exist for this account (a non-leaking 404 — an id owned by
+ *  another account is indistinguishable from an unknown one). Throws a
+ *  {@link RunFetchError} for unauthorized, offline, and other failures so the UI
+ *  can distinguish loading/offline/not-found/unauthorized explicitly. */
+export async function fetchAutomationRun(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun | null> {
+  let res: Response;
+  try {
+    res = await fetchImpl(`${cpBase(store)}/account/automation-runs/${encodeURIComponent(id)}`, {
+      headers: authHeaders(store),
+    });
+  } catch (cause) {
+    throw new RunFetchError("Could not reach the control plane", "error");
+  }
+  if (res.status === 404) return null;
+  if (res.status === 401) throw new RunFetchError("Unauthorized", "unauthorized", 401);
+  if (!res.ok) throw new RunFetchError(`automation run request failed: ${res.status}`, "error", res.status);
+  return (await res.json()) as AccountAutomationRun;
+}
+
+export type ProductMetricEvent = "activation_ready" | "first_useful_response" | "remote_reconnect" | "remote_intervention" | "run_accepted" | "receipt_reviewed";
+export type ProductMetricClient = "desktop" | "mobile" | "cli" | "node";
+
+/** Emit one content-free milestone. The request contains closed enums only. */
+export async function recordProductMetric(store: LocalStore, event: ProductMetricEvent, client: ProductMetricClient, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/product-events`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify({ event, client }),
+  });
+  if (!res.ok) throw new Error(`product event request failed: ${res.status}`);
+}
+
+/** Cancel a pending or active automation run. Repeating this call after a
+ * successful cancellation is idempotent; completed/failed runs are rejected. */
+export function cancelAutomationRun(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun> {
+  return automationRequest<{ ok: true; run: AccountAutomationRun }>(
+    store,
+    `/account/automation-runs/${encodeURIComponent(id)}/cancel`,
+    { method: "POST" },
+    fetchImpl,
+  ).then((result) => result.run);
+}
+
+/** Start another durable attempt of the same Run. The control plane rejects
+ * successful/non-retryable Runs and exhausted attempt budgets. */
+export function retryAutomationRun(
+  store: LocalStore,
+  id: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun> {
+  return automationRequest<{ ok: true; run: AccountAutomationRun }>(
+    store,
+    `/account/automation-runs/${encodeURIComponent(id)}/retry`,
+    { method: "POST" },
+    fetchImpl,
+  ).then((result) => result.run);
 }
 
 /** Recent incoming work items for the account, newest first (queue UI). */

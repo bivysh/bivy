@@ -373,11 +373,36 @@ self-contained setups.
 | `BIVY_WORKTREE_SOFT_CAP_BYTES` | integer bytes | `0` (off) | Supported (opt-in) | **Advisory only** — logs oversized worktrees, never deletes |
 | `BIVY_MIN_FREE_DISK_BYTES` | integer bytes | `0` (off) | Supported (opt-in) | Refuses new disk-consuming work below this free-space threshold. An unmeasurable filesystem always admits |
 | `BIVY_WORKTREE_COW_CLONE` | any non-empty | unset | Supported (opt-in, experimental) | Copy-on-write cloning of installed dirs (`node_modules` etc.) from a sibling worktree. Requires filesystem CoW support; silently disabled otherwise |
-| `BIVY_SHARED_DEP_CACHE` | `1`/`true`, **or a path** | unset | Supported (opt-in) | Points npm/yarn/pip/cargo/go *caches* at one directory for every agent and terminal. `1`/`true` uses `<data-dir>/dep-cache`; any other value is taken as an explicit path. Cache-only — never changes a project's lockfile or install location |
-| `BIVY_SHARED_DEP_CACHE_MAX_BYTES` | integer bytes | `21474836480` (20 GiB) | Supported | LRU eviction cap for the shared cache. `0` disables eviction |
+| `BIVY_SHARED_DEP_CACHE` | `1`/`true`, **or a path** | unset | Supported (opt-in) | Points npm/pnpm/yarn/pip/cargo/go *caches* at one directory for every agent and terminal. `1`/`true` uses `<data-dir>/dep-cache`; any other value is taken as an explicit path. Cache-only — never changes a project's lockfile or install location. For pnpm this also shares its hardlink store, which dedups the installed `node_modules` too (see below) |
+| `BIVY_SHARED_DEP_CACHE_MAX_BYTES` | integer bytes | `21474836480` (20 GiB) | Supported | LRU eviction cap for the shared cache. `0` disables eviction. Entries hardlinked into a live worktree are counted but never evicted (removing them would reclaim nothing), so a cache dominated by them can sit above the cap |
 | `BIVY_ATTACHMENT_MAX_FILE_BYTES` | integer bytes | `26214400` (25 MiB) | Supported | Node-side hard limit for a durably stored attachment; composer uploads have a stricter 10 MiB limit |
 | `BIVY_ATTACHMENT_STORE_MAX_BYTES` | integer bytes | `2147483648` (2 GiB) | Supported | Global admission cap for new blobs. GC removes only unreferenced blobs; if a lowered cap is already exceeded by referenced history, it is retained and an over-cap warning is reported |
 | `BIVY_ATTACHMENT_RETENTION_MS` | integer ms | `2592000000` (30 days) | Supported | Minimum age before an unreferenced attachment is collected during the disk sweep |
+
+### pnpm and worktree disk
+
+For most ecosystems `BIVY_SHARED_DEP_CACHE` dedups *downloads* only — every
+worktree still grows its own full `node_modules`. pnpm is the exception: it
+hardlinks files out of a content-addressed store, so worktrees sharing one store
+share inodes and a second worktree costs roughly its own diff. Measured on this
+repo, a second worktree costs ~1.2 GB under npm and ~17 MB under pnpm against a
+warm store (~106 MB if the store is cold and has to materialize the packages
+pnpm copies rather than links, mostly prebuilt native binaries).
+
+This is also the one form of installed-tree dedup that works on ext4 and NTFS,
+where `BIVY_WORKTREE_COW_CLONE` correctly does nothing for lack of filesystem
+copy-on-write. The two are complementary.
+
+Two caveats worth knowing:
+
+- Hardlinks cannot cross filesystems. Bivy only points pnpm at the shared store
+  when the store and the worktree are on the same device; otherwise it leaves
+  pnpm on its own default store (`~/.local/share/pnpm/store`), which is already
+  per-user global and still dedups. Pointing a store at a different volume would
+  make pnpm silently *copy* — a full tree per worktree plus a full store.
+- Bivy sets `PNPM_CONFIG_STORE_DIR`. pnpm 10+ ignores `npm_config_store_dir`,
+  `PNPM_STORE_DIR`, and a `store-dir=` line in `.npmrc`; project-level config
+  moved to `storeDir:` in `pnpm-workspace.yaml`.
 
 ## Terminals and notifications
 
@@ -393,6 +418,15 @@ self-contained setups.
 | `BIVY_MCP_ENDPOINT` | URL | `http://127.0.0.1:4317` | Internal — the daemon sets it to its real port for `bivy mcp-proxy` children |
 | `BIVY_MCP_SESSION` | session id | `""` | Internal — set by Bivy when spawning the MCP proxy |
 | `BIVY_TERMINAL` | `1` | — | Internal marker. Bivy sets it in every PTY so shells (and `bivy update`) can tell they are inside Bivy. Never read as input by the node |
+
+Watchdog reliability is measured against two explicit bounds. Silence/wedged
+detection occurs by its configured threshold plus the periodic sweep interval
+(15–60 seconds); the wall-clock cap uses its own timer. After detection or an
+operator Stop, the runtime abort-and-reopen path has a 10-second settlement SLO.
+`GET /api/diagnostics` reports per-runtime/trigger observations, total and maximum
+settlement milliseconds, the target, and the number within target. These counters
+are node-process-local operational measurements, not a claim about fleet-wide
+percentiles; production SLO reporting must aggregate them across restarts.
 
 Standard OS variables are also honoured: `PATH`, `SHELL` (default `/bin/bash`),
 `HOME`, `COMSPEC` and `PATHEXT` (Windows), and `LC_ALL`/`LC_CTYPE`/`LANG`. If
