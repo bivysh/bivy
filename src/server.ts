@@ -47,6 +47,7 @@ import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
 import type { BivySessionRecord, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState } from "./session/session-state.js";
 import type { SessionRecord, PromptOptions, StreamingBehavior, PromptImage } from "./session/record.js";
+import { resolveStreamingBehavior } from "./session/record.js";
 import { createSessionEngine } from "./session/engine.js";
 import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
@@ -1021,7 +1022,14 @@ function streamingBehaviorFrom(value: unknown): StreamingBehavior | undefined {
 }
 
 function promptOptionsFor(record: SessionRecord, requested?: unknown, images?: PromptImage[]): PromptOptions {
-  const streamingBehavior = streamingBehaviorFrom(requested) ?? (record.session.isStreaming ? "steer" : undefined);
+  // Default to steering only when a turn is genuinely in flight — judged from
+  // Bivy's own `isWorking` AND the runtime's `isStreaming`, not `isStreaming`
+  // alone (which can be stuck-true after a turn ends and would silently steer a
+  // fresh message into a dead turn). See resolveStreamingBehavior.
+  const streamingBehavior = resolveStreamingBehavior(streamingBehaviorFrom(requested), {
+    isWorking: record.isWorking,
+    isStreaming: record.session.isStreaming,
+  });
   return { ...(streamingBehavior ? { streamingBehavior } : {}), ...(images?.length ? { images } : {}) };
 }
 
