@@ -13,6 +13,7 @@ import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+import { ChevronRightIcon, CloseIcon } from "./UiIcons.js";
 
 const VoiceSettings = lazy(() => import("./VoiceSettings.js").then((module) => ({ default: module.VoiceSettings })));
 
@@ -289,7 +290,7 @@ export function Settings({
         <aside className="settings-nav">
           <div className="settings-nav-top">
             <span className="settings-nav-heading">Settings</span>
-            <button className="settings-x" onClick={onClose} aria-label="Close settings">×</button>
+            <button className="settings-x" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
           </div>
           <div className="settings-search-wrap">
             <svg className="settings-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
@@ -319,7 +320,7 @@ export function Settings({
                     >
                       <span className="settings-nav-icon">{it.icon}</span>
                       <span className="settings-nav-label">{it.label}</span>
-                      <span className="settings-nav-chevron" aria-hidden>›</span>
+                      <span className="settings-nav-chevron"><ChevronRightIcon size={18} /></span>
                     </button>
                   ))}
                 </div>
@@ -342,7 +343,7 @@ export function Settings({
               </button>
             )}
             <h2 className="settings-head-title">{title}</h2>
-            <button className="settings-x settings-x-content" onClick={onClose} aria-label="Close settings">×</button>
+            <button className="settings-x settings-x-content" onClick={onClose} aria-label="Close settings"><CloseIcon /></button>
           </header>
           <div className="settings-body">
             {activeView === "appearance" && <AppearancePanel />}
@@ -1382,8 +1383,9 @@ function NodesPanel({ state }: { state: AppState }) {
             <p className="muted small">{SANDBOX_TIERS.find((t) => t.id === form.defaultSandbox)?.hint}</p>
           </section>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">GitHub</h4>
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">GitHub</summary>
+            <div className="settings-disclosure-body">
             <label className="field-label">GitHub session limit</label>
             <input
               className="picker-search"
@@ -1409,10 +1411,12 @@ function NodesPanel({ state }: { state: AppState }) {
             <div className="row-actions">
               <button className="btn" onClick={resetIssuePrompt}>Reset to default</button>
             </div>
-          </section>
+            </div>
+          </details>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">Session resume</h4>
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">Session resume</summary>
+            <div className="settings-disclosure-body">
             <label className="field-label">After a restart interrupts a session</label>
             <div className="seg-row">
               {([
@@ -1435,10 +1439,12 @@ function NodesPanel({ state }: { state: AppState }) {
                 ? "Interrupted sessions wait for you to tap Resume — nothing runs on its own. GitHub issue automation still resumes automatically."
                 : "The agent picks up an interrupted turn on its own after the machine restarts."}
             </p>
-          </section>
+            </div>
+          </details>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">Attachments</h4>
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">Attachments</summary>
+            <div className="settings-disclosure-body">
             <div className="settings-toggle-row">
               <div className="settings-toggle-text">
                 <span className="settings-toggle-title">Auto-attach images from tool results</span>
@@ -1454,10 +1460,12 @@ function NodesPanel({ state }: { state: AppState }) {
                 label="Enable auto-attach for tool images"
               />
             </div>
-          </section>
+            </div>
+          </details>
 
-          <section className="settings-section">
-            <h4 className="settings-subhead">Session sync</h4>
+          <details className="settings-section settings-disclosure">
+            <summary className="settings-disclosure-summary">Session sync</summary>
+            <div className="settings-disclosure-body">
             <div className="settings-toggle-row">
               <div className="settings-toggle-text">
                 <span className="settings-toggle-title">Keep sessions synced to a standby machine</span>
@@ -1515,9 +1523,10 @@ function NodesPanel({ state }: { state: AppState }) {
                 </p>
               </>
             )}
-          </section>
+            </div>
+          </details>
 
-          <div className="row-actions">
+          <div className="row-actions settings-save-actions">
             <button className="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
             {savedMsg && <span className="chip ok">{savedMsg}</span>}
             {saveErr && <span className="chip err">{saveErr}</span>}

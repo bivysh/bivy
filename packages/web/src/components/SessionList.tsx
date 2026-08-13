@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueItem, type PrRef, type RunTerminalSummary } from "@bivy/core";
 import { useAppState } from "../store/useStore.js";
@@ -10,6 +10,8 @@ import { attentionRank, isUnseen, statusClass, statusLabel } from "../sessionSta
 import { SourceGlyph } from "./SourceMark.js";
 import { classifySource, CLI_SOURCE, type SourceKind } from "../sessionSource.js";
 import { rowHint } from "../runEvidence.js";
+import { sessionDateGroup } from "../sessionPresentation.js";
+import { CheckIcon, CloseIcon, MoreIcon } from "./UiIcons.js";
 
 /** The leading indicator on a session row: a tinted source tile carrying the
  *  trigger's glyph, with the live status as a small dot badge on its corner.
@@ -208,7 +210,7 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
           setOpen((v) => !v);
         }}
       >
-        ⋯
+        <MoreIcon />
       </button>
       {renaming && (
         <RenameDialog
@@ -238,7 +240,7 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
             <div className="action-sheet-head">
               <span className="action-sheet-title">{name}</span>
               <button className="action-sheet-close" onClick={close} aria-label="Close">
-                ×
+                <CloseIcon />
               </button>
             </div>
             <button className="action-sheet-item" onClick={rename} disabled={prBusy}>
@@ -453,7 +455,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                     }}
                   >
                     <span>All machines</span>
-                    {!nodeFilter && <span className="session-filter-check">✓</span>}
+                    {!nodeFilter && <span className="session-filter-check"><CheckIcon size={15} /></span>}
                   </button>
                   {nodes.length === 0 ? (
                     <div className="session-filter-empty">No machines</div>
@@ -470,7 +472,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                         }}
                       >
                         <span>{n.name || n.id}</span>
-                        {n.id === nodeFilter && <span className="session-filter-check">✓</span>}
+                        {n.id === nodeFilter && <span className="session-filter-check"><CheckIcon size={15} /></span>}
                       </button>
                     ))
                   )}
@@ -488,7 +490,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                   }}
                 >
                   <span>All repositories</span>
-                  {!repoFilter && <span className="session-filter-check">✓</span>}
+                  {!repoFilter && <span className="session-filter-check"><CheckIcon size={15} /></span>}
                 </button>
                 {repoOptions.length === 0 && <div className="session-filter-empty">No GitHub repos</div>}
                 {repoOptions.map((repo) => (
@@ -503,7 +505,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                     }}
                   >
                     <span>{repo}</span>
-                    {repo === repoFilter && <span className="session-filter-check">✓</span>}
+                    {repo === repoFilter && <span className="session-filter-check"><CheckIcon size={15} /></span>}
                   </button>
                 ))}
               </div>
@@ -532,6 +534,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
       )}
       {filtered.length === 0 && filteredRuns.length === 0 && <div className="session-empty">{emptyText}</div>}
       <ul>
+        {filteredRuns.length > 0 && <li className="session-group-label" role="separator">Running</li>}
         {filteredRuns.map((t) => {
           const title = t.name || t.label || t.agent || "Terminal session";
           const meta = runMeta(t);
@@ -554,12 +557,22 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
             </li>
           );
         })}
-        {visible.map((s) => {
+        {visible.map((s, index) => {
+          const group = attentionRank(s) > 0 ? "Needs attention" : sessionDateGroup(s.updatedAt);
+          const previous = index > 0 ? visible[index - 1] : undefined;
+          const previousGroup = previous
+            ? attentionRank(previous) > 0 ? "Needs attention" : sessionDateGroup(previous.updatedAt)
+            : null;
+          const groupHeading = group !== previousGroup
+            ? <li className="session-group-label" role="separator">{group}</li>
+            : null;
           // Trial-locked stub: no content to show and not openable. Render a muted
           // lock row that routes to checkout instead of opening the session.
           if (s.locked) {
             return (
-              <li key={s.sessionId} className="session-row">
+              <Fragment key={s.sessionId}>
+                {groupHeading}
+                <li className="session-row">
                 <button
                   className="session-item locked"
                   type="button"
@@ -578,7 +591,8 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                     </span>
                   </span>
                 </button>
-              </li>
+                </li>
+              </Fragment>
             );
           }
           const meta = sessionMeta(s, nodeName(s.nodeId));
@@ -596,7 +610,9 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
             (attentionRank(s) > 0 ? { text: statusLabel(s), tone: "warn" as const } : null);
           const failedLaunch = s.pendingLaunch && s.status === "failed";
           return (
-            <li key={s.sessionId} className="session-row">
+            <Fragment key={s.sessionId}>
+              {groupHeading}
+              <li className="session-row">
               <button
                 className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
                 onClick={() => onPick(s.sessionId, s.path, s.nodeId)}
@@ -629,7 +645,8 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
               ) : (controller.direct || !s.nodeId || s.nodeId === currentNodeId) && (
                 <RowMenu sessionId={s.sessionId} name={s.name} isRepo={Boolean(repoFromSource(s.source))} prs={s.prs} />
               )}
-            </li>
+              </li>
+            </Fragment>
           );
         })}
       </ul>

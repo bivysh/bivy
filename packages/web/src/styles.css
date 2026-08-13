@@ -266,6 +266,11 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-filter-summary { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-filter-clear { flex: none; border: 0; background: transparent; color: var(--accent); padding: 2px 0; font-size: 12px; }
 .session-list ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.session-group-label {
+  padding: 12px 8px 4px; color: var(--muted); font-size: 11px; line-height: 1.2;
+  font-weight: 650; letter-spacing: 0.02em;
+}
+.session-group-label:first-child { padding-top: 6px; }
 .session-item {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
   padding: 9px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink);
@@ -1388,6 +1393,20 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .settings-section { display: flex; flex-direction: column; gap: 10px; }
 .settings-section + .settings-section { margin-top: 8px; padding-top: 18px; border-top: 1px solid var(--line); }
 .settings-section > .settings-subhead { margin-top: 0; }
+.settings-disclosure { gap: 0; }
+.settings-disclosure + .settings-disclosure { margin-top: 0; padding-top: 0; }
+.settings-disclosure-summary {
+  min-height: 48px; display: flex; align-items: center; justify-content: space-between;
+  cursor: pointer; list-style: none; color: var(--ink); font-size: 14px; font-weight: 600;
+}
+.settings-disclosure-summary::-webkit-details-marker { display: none; }
+.settings-disclosure-summary::after {
+  content: "›"; color: var(--muted); font-size: 20px; font-weight: 400;
+  transition: transform 140ms ease;
+}
+.settings-disclosure[open] > .settings-disclosure-summary::after { transform: rotate(90deg); }
+.settings-disclosure-body { display: flex; flex-direction: column; gap: 10px; padding: 2px 0 16px; }
+.settings-save-actions { position: sticky; bottom: 0; padding: 10px 0; background: var(--surface); }
 
 /* Automations destination (AutomationsView.tsx): full-screen surface.
    Outcome-first: compact source strip, empty hero, your list, ideas, activity.

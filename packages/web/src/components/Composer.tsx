@@ -834,16 +834,18 @@ export function Composer({
 
             {/* Voice input sits just left of Send — tap to dictate (server
                 transcription when a key is set, on-device Web Speech otherwise). */}
-            <button
-              type="button"
-              className="composer-btn mic"
-              onClick={startRecording}
-              disabled={disabled}
-              title="Voice input"
-              aria-label="Voice input"
-            >
-              <MicGlyph />
-            </button>
+            {!canSend && (
+              <button
+                type="button"
+                className="composer-btn mic"
+                onClick={startRecording}
+                disabled={disabled}
+                title="Voice input"
+                aria-label="Voice input"
+              >
+                <MicGlyph />
+              </button>
+            )}
 
             {/* While busy with something typed AND the active runtime has
                 advertised real steer support, offer an explicit way to inject
