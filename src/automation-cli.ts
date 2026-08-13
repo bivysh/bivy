@@ -23,6 +23,8 @@ function usage(): never {
 Version-controlled, locally testable coding-agent automations.
 
 Commands:
+  list [--json]               List automations on the enrolled account
+  trigger <id|config-key>     Start an automation run (alias: run)
   init [path]                 Write a safe starter .bivy/automations.yaml
   validate [path]             Parse and validate without network access
   plan [path] [--json]        Show triggers, routing, and effective safety
@@ -30,8 +32,9 @@ Commands:
   apply [path] [--prune]      Encrypt instructions and reconcile the control plane
 
 Default path: ${DEFAULT_AUTOMATION_CONFIG_PATH}
-Apply requires an enrolled node ('bivy setup'). Instructions are encrypted on
-this machine before upload; the control plane receives ciphertext only.`);
+List, trigger, and apply require an enrolled node ('bivy setup'). Instructions
+are encrypted on this machine before upload; the control plane receives
+ciphertext only.`);
   process.exit(0);
 }
 
@@ -123,6 +126,49 @@ function appliedInput(entry: AutomationConfigEntry, configOrder: number, nodeId:
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (!command || ["help", "-h", "--help"].includes(command)) usage();
+
+  if (command === "list") {
+    const relay = relayConfig(appDataDir());
+    const result = await request<{ automations: Array<{
+      id: string; name: string; configKey?: string; enabled?: boolean; trigger?: string;
+      nodeLabel?: string; nextRunAt?: string;
+    }> }>(relay, "/node/automations");
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result.automations, null, 2));
+      return;
+    }
+    if (result.automations.length === 0) {
+      console.log("No automations.");
+      return;
+    }
+    for (const automation of result.automations) {
+      const ref = automation.configKey ? ` · key ${automation.configKey}` : "";
+      console.log(`${automation.enabled === false ? "○" : "+"} ${automation.name} (${automation.trigger ?? "schedule"})`);
+      console.log(`  id ${automation.id}${ref}`);
+      if (automation.nodeLabel) console.log(`  node ${automation.nodeLabel.replace(/^bivy\//, "")}`);
+      if (automation.nextRunAt) console.log(`  next ${automation.nextRunAt}`);
+    }
+    return;
+  }
+
+  if (command === "trigger" || command === "run") {
+    const requested = args.find((arg) => !arg.startsWith("-"));
+    if (!requested) throw new Error("Usage: bivy automation trigger <id|config-key> [--json]");
+    const relay = relayConfig(appDataDir());
+    const listed = await request<{ automations: Array<{ id: string; name: string; configKey?: string }> }>(relay, "/node/automations");
+    const matches = listed.automations.filter((automation) => automation.id === requested || automation.configKey === requested);
+    if (matches.length === 0) throw new Error(`Automation not found: ${requested}. Run 'bivy automation list' to see available automations.`);
+    if (matches.length > 1) throw new Error(`Automation reference is ambiguous: ${requested}. Use its id instead.`);
+    const automation = matches[0]!;
+    const run = await request<{ id: string; status?: string }>(relay, `/node/automations/${encodeURIComponent(automation.id)}/run`, { method: "POST" });
+    if (args.includes("--json")) console.log(JSON.stringify(run, null, 2));
+    else {
+      console.log(`Started ${automation.name}`);
+      console.log(`  run ${run.id}`);
+      if (run.status) console.log(`  status ${run.status}`);
+    }
+    return;
+  }
 
   if (command === "init") {
     const file = configPath(args);

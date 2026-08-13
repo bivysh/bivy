@@ -3,6 +3,20 @@
 Store coding-agent jobs in `.bivy/automations.yaml`, review them like application
 code, and test their routing without creating a run.
 
+## List and trigger
+
+Once the node is enrolled, list every automation on its account and manually
+start one by immutable id or source-controlled key:
+
+```bash
+bivy automation list
+bivy automation list --json
+bivy automation trigger fix-failed-ci
+```
+
+`trigger` creates a real manual run and prints its run id. Use `--json` for the
+complete run record. `bivy automation run` is an alias.
+
 ## Start
 
 ```bash

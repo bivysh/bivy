@@ -2398,6 +2398,47 @@ function publicAutomation(def: AutomationDefinition, req: Request) {
     : base;
 }
 
+function nodePublicAutomation(definition: AutomationDefinition, req: Request) {
+  const { accountId: _accountId, templateCiphertext: _templateCiphertext, ...safe } = publicAutomation(definition, req);
+  return safe;
+}
+
+async function dispatchAutomationDefinition(definition: AutomationDefinition) {
+  const run = await store.enqueueAutomationRun(definition.accountId, {
+    source: "manual",
+    triggerKind: "manual",
+    title: definition.name,
+    body: definition.templateCiphertext,
+    definitionId: definition.id,
+    label: definition.nodeLabel,
+    runtimeId: definition.runtimeId,
+    model: definition.model,
+    approvalMode: definition.approvalMode,
+    sandbox: definition.sandbox,
+    target: definition.target,
+    message: definition.message,
+    repo: definition.repo,
+  });
+  void notifyRelaysWorkAvailable(definition.accountId, { id: run.id, label: run.routing.nodeLabel });
+  return run;
+}
+
+// Node-authenticated operator surface used by `bivy automation list/trigger`.
+// An enrollment token is account-scoped and already authorizes this node to
+// receive account work; these routes make that same capability explicit for a
+// local operator without requiring a browser session token.
+app.get("/node/automations", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  res.json({ automations: (await store.listAutomationDefinitions(node.accountId)).map((d) => nodePublicAutomation(d, req)) });
+}));
+
+app.post("/node/automations/:id/run", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const definition = await store.getAutomationDefinition(node.accountId, String(req.params.id));
+  if (!definition) return res.status(404).json({ error: "Automation not found" });
+  res.status(201).json(await dispatchAutomationDefinition(definition));
+}));
+
 // Node-authenticated reconciliation surface for `.bivy/automations.yaml`.
 // A definition applied from a node is deliberately bound to that node: its
 // instructions are encrypted with that node's room key, so allowing another
@@ -2728,23 +2769,7 @@ app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const definition = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!definition) return res.status(404).json({ error: "Automation not found" });
-  const run = await store.enqueueAutomationRun(client.accountId, {
-    source: "manual",
-    triggerKind: "manual",
-    title: definition.name,
-    body: definition.templateCiphertext,
-    definitionId: definition.id,
-    label: definition.nodeLabel,
-    runtimeId: definition.runtimeId,
-    model: definition.model,
-    approvalMode: definition.approvalMode,
-    sandbox: definition.sandbox,
-    target: definition.target,
-    message: definition.message,
-    repo: definition.repo,
-  });
-  void notifyRelaysWorkAvailable(client.accountId, { id: run.id, label: run.routing.nodeLabel });
-  res.status(201).json(run);
+  res.status(201).json(await dispatchAutomationDefinition(definition));
 }));
 
 app.get("/account/automation-runs", asyncHandler(async (req, res) => {

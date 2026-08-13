@@ -97,6 +97,10 @@ async function main() {
   expect(managedUpdate.status === 200 && managedUpdate.body.id === managed.body.id, "re-applying a config key updates instead of duplicating");
   const managedList = await json(port, "GET", "/node/automation-config", undefined, nodeToken);
   expect(managedList.body.automations.filter((d: any) => d.configKey === "managed-ci").length === 1, "managed definitions list by stable config key");
+  const cliList = await json(port, "GET", "/node/automations", undefined, nodeToken);
+  expect(cliList.status === 200 && cliList.body.automations.some((d: any) => d.id === managed.body.id), "an enrolled node can list account automations for the CLI");
+  const unauthorizedCliList = await json(port, "GET", "/node/automations");
+  expect(unauthorizedCliList.status === 401, "listing automations requires node authentication");
   const pwaEdit = await json(port, "PUT", `/account/automations/${managed.body.id}`, { name: "UI overwrite" }, token);
   expect(pwaEdit.status === 409, "the account/PWA API cannot overwrite a file-managed automation");
   const pwaDelete = await json(port, "DELETE", `/account/automations/${managed.body.id}`, undefined, token);
@@ -105,6 +109,10 @@ async function main() {
   expect(wrongNode.status === 400, "a node cannot apply instructions encrypted for another node");
   const managedRun = await json(port, "POST", `/account/automations/${managed.body.id}/run`, undefined, token);
   expect(managedRun.status === 201, "a managed automation can be dispatched normally");
+  const cliRun = await json(port, "POST", `/node/automations/${managed.body.id}/run`, undefined, nodeToken);
+  expect(cliRun.status === 201 && cliRun.body.definitionId === managed.body.id, "an enrolled node can trigger an automation for the CLI");
+  const unauthorizedCliRun = await json(port, "POST", `/node/automations/${managed.body.id}/run`);
+  expect(unauthorizedCliRun.status === 401, "triggering an automation requires node authentication");
   const managedWork = await json(port, "GET", "/account/work-items", undefined, token);
   expect(managedWork.body.find((w: any) => w.id === managedRun.body.id)?.maxAttempts === 2, "managed run inherits its hard attempt ceiling");
 
