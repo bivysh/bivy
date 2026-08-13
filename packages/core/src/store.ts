@@ -17,6 +17,7 @@
 import type { AttachmentRef, ConnectionStatus, CredentialPresetsView, CredentialRecordSummary, PromptAttachment, ServerEvent } from "./protocol.js";
 import type { AccountNode, EphemeralNodeConfig } from "./account.js";
 import type { InboxAdvert } from "./inbox.js";
+import type { SessionContract } from "./session-contract.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml, extractRemoteImageUrls } from "./markdown.js";
 import { eventKind, normalizeEventType, toolCallId, toolDetail, toolInput, toolName } from "./tool-activity.js";
@@ -139,6 +140,14 @@ export interface SessionSummary {
     corruptLines: number;
   };
   eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
+  /** The Effective Session Contract resolved once at session creation from
+   *  real launch facts (not live-recomputed on every refresh — see
+   *  session-contract.ts) — what this specific session actually got, as
+   *  distinct from the catalog-level `RuntimeInfo` promise. Absent for a
+   *  session that predates this field (an older node, or a session opened
+   *  before the daemon started stamping one) or one that hasn't been
+   *  reopened since. */
+  contract?: SessionContract;
   /** Pull request opened for this session's branch, if any (the live open one). */
   prUrl?: string;
   /** Every PR seen for this session's branch (open, merged, closed). */
