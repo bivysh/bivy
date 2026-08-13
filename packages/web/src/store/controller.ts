@@ -174,15 +174,11 @@ export class NeedsDisclosureError extends Error {
 }
 
 function requestId(): string {
-  return `r${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `r-${crypto.randomUUID()}`;
 }
 
 function clientMessageId(): string {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `m${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  }
+  return crypto.randomUUID();
 }
 
 const LOOPBACK = /^(localhost|127\.0\.0\.1|\[?::1\]?)$/;
