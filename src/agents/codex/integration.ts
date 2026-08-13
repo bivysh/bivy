@@ -89,19 +89,19 @@ export function codexAppServerRuntime(tier?: SandboxTier): AgentRuntime {
       id: "openai-codex",
       name: "OpenAI Codex (ChatGPT)",
       oauth: true,
-      // Curated to the Codex CLI's own current model list (the frontier
-      // agentic-coding models it exposes under the ChatGPT subscription). The
-      // live session picker is authoritative — the app-server shim fetches the
-      // real set via `model/list` at startup — so this list only feeds the
-      // cross-agent "Models & providers" screen; keeping it current avoids
-      // advertising models the installed CLI has since retired (e.g. the old
-      // `gpt-5-codex`). Refreshed against codex 0.145.0.
+      // Session-less placeholder list shown in the picker before a Codex thread
+      // opens; once the app-server's `model/list` handshake lands, the shim
+      // replaces this with the authoritative per-account set. Kept current with
+      // the Codex CLI's listed (non-hidden) models — the retired gpt-5-codex/gpt-5
+      // generation was superseded by the GPT-5.6 Sol frontier line.
       models: [
         { provider: "openai-codex", id: "gpt-5.6-sol", name: "GPT-5.6 Sol", reasoning: true },
         { provider: "openai-codex", id: "gpt-5.6-terra", name: "GPT-5.6 Terra", reasoning: true },
         { provider: "openai-codex", id: "gpt-5.6-luna", name: "GPT-5.6 Luna", reasoning: true },
         { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
         { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.4-mini", name: "GPT-5.4 mini", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", reasoning: true },
       ],
     }],
     capabilities: {
