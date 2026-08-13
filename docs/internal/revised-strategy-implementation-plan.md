@@ -91,7 +91,7 @@ Known coherence gaps found in the same audit:
 within ten minutes.
 
 - [ ] Turn setup into one resumable sequence: install → repository → recommended agent → auth validation → remote reach → starter task.
-- [ ] Certify Claude Code and Codex versions and move all other agents behind More agents.
+- [x] Certify Claude Code and Codex versions and move all other agents behind More agents. **Implemented in PRs #526/#532:** the golden workflow pins and exercises both recommended adapter identities, while setup recommends Claude Code and governed Codex and places the remaining catalog behind More agents.
 - [ ] Preselect the only sensible Machine, agent, model, and protection profile.
 - [ ] Present Machine online, agent installed, credential valid, repository ready,
   and ready-to-run as distinct checks.
@@ -109,14 +109,20 @@ complete the first task; no false-positive readiness.
 
 **Goal:** leaving the desk does not interrupt or confuse live work.
 
-- [ ] Run a fault-injection matrix for prompt delivery, reconnect, dedupe,
+- [x] Run a fault-injection matrix for prompt delivery, reconnect, dedupe,
   background execution, resume, and multi-client handoff on Claude Code/Codex.
+  **Implemented in PR #533:** one shared matrix covers lost acknowledgement,
+  midstream reconnect, authoritative replay, pending decisions, multi-client
+  handoff, Stop, and teardown settlement for both recommended runtimes.
 - [ ] Verify every approval, question, Stop, and re-auth action remotely on
   desktop and mobile.
-- [ ] Ensure notification links land on the exact decision and reconnect to the
-  correct Session without duplicate prompts.
-- [ ] Show the active execution profile, effective enforcement, and trust mode
-  in Session context.
+- [x] Ensure notification links land on the exact decision and reconnect to the
+  correct Session without duplicate prompts. **Implemented in commit f704c5f and
+  PR #533:** Inbox and push share one exact approval/question/outcome resolver,
+  node-aware cold links focus the matching anchor after reconnect, and the fault
+  matrix proves lost acknowledgements do not duplicate prompts.
+- [x] Show the active execution profile, effective enforcement, and trust mode
+  in Session context. **Implemented in PR #534.**
 - [x] Surface event-log persistence and audit-write degradation in the Session
   and diagnostics export. **Implemented in PR #536:** node audit storage health and
   best-effort write failures are exposed as bounded counters/states in diagnostics
@@ -208,7 +214,11 @@ failure has a next action.
   and sanitized JSON exporter now reject prohibited/oversized fields. Every
   current projection remains partial because approval decisions, bounded
   file/change summaries, and complete check/audit evidence are not correlated.
-- [ ] Correlate local node audit events with Run, Session, attempt, and Machine.
+- [x] Correlate local node audit events with Run, Session, attempt, and Machine.
+  **Implemented in PR #540:** the node writes a payload-free marker before each
+  hosted GitHub Run attempt and only projects audit events at or after a marker
+  matching the exact Run, Session, attempt, and Machine; a retry or Machine
+  mismatch is reported as missing correlation rather than mixed evidence.
 - [ ] Aggregate execution identity, requested/effective protection, approvals,
   observed decisions, checks, changes, artifacts, retries, duration, and outcome.
 - [ ] Mark every control/signal enforced, observed, or unavailable.
