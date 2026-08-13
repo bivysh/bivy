@@ -1019,6 +1019,10 @@ export interface ProviderAdapter {
    * invalid/under-scoped credentials fail before Bivy stores or launches with
    * them. Must never create, update, wake, stop, or delete a resource. */
   validateToken?(args: { exec: ExecFn; token: string; region?: string }): Promise<void>;
+  /** False when guest shutdown does not delete the paid resource. Such a
+   * provider may launch only when an independent controller has teardown
+   * credentials; device-only TTL shutdown is not a billing guarantee. */
+  guestCanEnsureDeletion?: boolean;
   /** Optionally fetch the provider's live, currently-orderable sizes so the
    *  hardcoded `sizes` list can't silently go stale (e.g. a plan gets
    *  deprecated). When a region is given, results are narrowed to what that
@@ -1218,6 +1222,9 @@ const hetzner: ProviderAdapter = {
   // x86, 4 GB — closest drop-in for the retired cx22, and x86 avoids the
   // Arm-compat pitfalls of the cax line for Docker images and binaries.
   defaultSize: "cpx21",
+  // `shutdown -h now` only powers a Hetzner server off; billing continues until
+  // the API resource is deleted. Hosted reconciliation supplies that authority.
+  guestCanEnsureDeletion: false,
   async validateToken({ exec, token }) {
     const res = await call(exec, {
       method: "GET",
@@ -1420,15 +1427,11 @@ const fly: ProviderAdapter = {
     // self-destructs before it ever installs Bivy (that's the "app has no
     // machines" / node-offline symptom). Instead we materialize the same
     // relay.json + start.sh via `files` and run them ourselves as a blocking
-    // foreground init process. `auto_destroy` then tears the machine down once
-    // the daemon exits — but note the daemon (`bivy start`) is a persistent
-    // session process that stays alive across turns to serve follow-ups, so it
-    // does NOT exit on a single `agent_end`. In practice this fires only when the
-    // TTL `timeout` elapses (or the daemon crashes) — i.e. it implements the TTL
-    // safety fallback, NOT the per-turn "destroy when the agent finishes"
-    // contract. That per-turn teardown is device-driven (the launching browser
-    // issues the destroy on `agent_end`; see controller.maybeTeardownFinishedEphemeral).
-    // Falls back to user_data only if no structured bootstrap is given.
+    // foreground init process. `auto_destroy` tears the machine down when the
+    // daemon exits. The daemon's quiet-state teardown snapshots completed work
+    // and exits after `agent_end`, so this no longer depends on a watching
+    // device; the TTL `timeout` remains an independent hard backstop. Falls back
+    // to user_data only if no structured bootstrap is given.
     const machineInit = bootstrap ? flyInit(bootstrap) : { init: { user_data: userData } };
     const machine = await call(exec, {
       method: "POST",
@@ -2327,6 +2330,9 @@ export interface LaunchOpts {
   /** Stable operation identity. Hosted controllers persist this before any
    * side effect; device launches generate one locally. */
   attemptId?: string;
+  /** The caller has an independent, durable controller holding deletion
+   * authority. Required for providers where guest shutdown does not stop billing. */
+  externalTeardownGuaranteed?: boolean;
   /** Durable lifecycle sink. The initial `requested` callback is awaited before
    * enrollment, and `provider-accepted` is awaited before local machine storage. */
   onLifecycle?: (event: EphemeralLaunchEvent) => Promise<void>;
@@ -2486,6 +2492,9 @@ export async function launchEphemeralMachine(
   progress(`Preparing ${adapter.name} launch…`);
   const token = await deps.keys.getToken(opts.provider);
   if (!token) throw new Error(`Add a ${adapter.name} token first.`);
+  if (adapter.guestCanEnsureDeletion === false && !opts.externalTeardownGuaranteed) {
+    throw new Error(`${adapter.name} requires hosted provisioning: powering off its guest does not delete the billable server, so a device-only launch is unsafe.`);
+  }
 
   // Rebuild-resume reuses the torn-down session's node id so the launching device
   // still reaches it (it holds that node's room key) and the daemon knows which

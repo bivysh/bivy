@@ -57,6 +57,20 @@ describe("launchEphemeralMachine — durable lifecycle", () => {
     expect(order).toEqual(["requested", "enrolled", "provider-accepted", "tracked"]);
   });
 
+  it("refuses device-only providers whose guest shutdown cannot stop billing", async () => {
+    const keys = createEphemeralKeyStore(memoryBackend());
+    await keys.setToken("hetzner", "hz-token");
+    let fetched = false;
+    await expect(launchEphemeralMachine(
+      { provider: "hetzner" },
+      {
+        store: fakeStore(), exec: flyExec, keys, machines: createMachineStore(memoryBackend()),
+        fetchImpl: (async () => { fetched = true; return {} as Response; }) as typeof fetch,
+      },
+    )).rejects.toThrow(/requires hosted provisioning/);
+    expect(fetched).toBe(false);
+  });
+
   it("does not enroll if durable intent persistence fails", async () => {
     const keys = createEphemeralKeyStore(memoryBackend());
     await keys.setToken("fly", "fly-tok");

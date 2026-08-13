@@ -1,9 +1,9 @@
 # Ephemeral sessions
 
-> **Status: not currently enabled.** The ephemeral-machines UI is hidden behind a
-> feature flag (`EPHEMERAL_MACHINES_ENABLED` in `packages/web/src/flags.ts`) while
-> the feature is built out. This page documents the design and the code that
-> remains in the tree; it is not linked from the docs index or the site yet.
+> **Status: enabled with an emergency kill switch.** Product access is gated by
+> provider onboarding and per-account hosted opt-in. Setting the web/control-plane
+> `EPHEMERAL_MACHINES_ENABLED` flag to exact `0` stops new launches; cleanup and
+> reconciliation continue so the kill switch cannot strand billable resources.
 
 Ephemeral sessions are short-lived Bivy nodes created for one task/session. Interactive prompts, files, tool output, credentials, and agent transcripts remain on the ephemeral machine and are destroyed with it unless the user explicitly exports a branch/PR/artifact. The control plane stores routing/outcome metadata; if the task originated from Slack or a generic webhook, that inbound instruction follows the separately documented automation boundary in [security-model.md](security-model.md#what-the-control-plane-sees).
 
@@ -404,11 +404,11 @@ Teardown authority now lives on the machine and the control plane, so it works f
 |---|---|---|
 | Fly Machines | daemon exits → `auto_destroy` | none |
 | EC2 | daemon `shutdown -h now` → terminate | none |
-| Hetzner (hosted) | daemon `/node/settled` → CP `destroyEphemeralMachine` | the CP's own `hosted.providerTokens` |
-| Hetzner (device-launched) | still device/TTL-bound — CP holds no token for it | — (documented limitation) |
+| Hetzner (hosted) | daemon `/node/settled` plus global provider reconciliation | hosted provider token |
+| Hetzner (device-launched) | **refused** — guest shutdown only powers off the still-billable server | — |
 | Fly Sprites / E2B | n/a — kept and suspended, never destroyed on finish | — |
 
-The device fast path (`maybeTeardownFinishedEphemeral`) is kept for snappy teardown while a device *is* watching; it's just no longer the sole authority. **Follow-up:** a global CP timer sweeping all accounts' hosted machines (today reconciliation is prompt via `/node/settled` and lazy on the next enqueue) needs a store account-enumeration method — tracked separately.
+The device fast path (`maybeTeardownFinishedEphemeral`) is kept for snappy teardown while a device *is* watching; it's just no longer the sole authority. A global control-plane timer scans every account with a tracked machine or active launch attempt every five minutes, independently of new work, and retries provider deletion. Cleanup deliberately ignores the new-launch kill switch.
 
 ## Resumability with no persistent nodes
 
@@ -477,7 +477,7 @@ Both the destroy-lane half of Case A and all of Case B hinge on the **durable se
 
 ## Recommended path
 
-Start with **BYO Fly.io** or **BYO Hetzner** plus the existing account/node pairing. It avoids Bivy owning compute cost and abuse risk while proving the orchestration UX. Add Bivy-hosted machines only after quotas, billing, abuse controls, and teardown reliability are solid. **BYO AWS EC2** is now available on the same footing for users who already run infrastructure on AWS.
+Start with **BYO Fly.io** or **BYO AWS EC2**, whose provider-native process/guest termination deletes the paid resource. Hetzner requires hosted provisioning because powering off its guest does not delete the billable server; the control-plane reconciler must retain deletion authority. These BYO-cloud lanes avoid Bivy owning compute cost while preserving a provider-confirmed cleanup path.
 
 ## Comparable providers (survey)
 
