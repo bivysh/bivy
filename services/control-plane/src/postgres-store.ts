@@ -275,6 +275,7 @@ export class PostgresStore implements MeshStore {
       -- the owning node alongside its encrypted model-auth vault. Same trust
       -- tier as online/last_seen_at above: never credential material.
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS providers JSONB;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bootstrap_status JSONB;
 
       CREATE TABLE IF NOT EXISTS session_index (
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -1148,6 +1149,13 @@ export class PostgresStore implements MeshStore {
     await this.query(
       `UPDATE nodes SET providers = $2 WHERE id = $1`,
       [nodeId, JSON.stringify(providers)],
+    );
+  }
+
+  async setNodeBootstrapStatus(nodeId: string, phase: string): Promise<void> {
+    await this.query(
+      `UPDATE nodes SET bootstrap_status = $2 WHERE id = $1`,
+      [nodeId, JSON.stringify({ phase, updatedAt: new Date().toISOString() })],
     );
   }
 
@@ -3169,6 +3177,7 @@ function mapNode(row: any): NodeRecord {
     lastSeenAt: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
     providers: row.providers ?? undefined,
+    bootstrapStatus: row.bootstrap_status ?? undefined,
   };
 }
 

@@ -16,7 +16,9 @@ const ASSETS = path.resolve("packages/web/dist/assets");
 // The entry chunk is `index-<hash>.js` (see vite output). Budget it specifically:
 // it is what blocks first paint. Lazy chunks (Terminal-*) load on demand.
 const BUDGETS = {
-  "index": { rawKB: 820, gzipKB: 230 },
+  // Durable ephemeral-start recovery + real bootstrap status add a small amount
+  // of first-load orchestration; compressed size remains below the prior cap.
+  "index": { rawKB: 830, gzipKB: 230 },
 };
 
 let files;

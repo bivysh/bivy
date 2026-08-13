@@ -238,6 +238,7 @@ export interface AccountNode {
    *  the machine so it can wake a suspend-to-zero node (see
    *  `ephemeralMachineFromNode` and docs/ephemeral-sessions.md "Gap A"). This is
    *  identity only (a Fly machine id / E2B sandbox id), never a credential. */
+  bootstrapStatus?: { phase: string; updatedAt: string };
   ephemeral?: {
     provider: string;
     /** The provider's machine/sandbox id (the adapter's `EphemeralMachine.id`). */

@@ -68,6 +68,7 @@ import {
   createEphemeralPrefsStore,
   createEphemeralSetupStore,
   createMachineStore,
+  createPendingEphemeralLaunchStore,
   createGithubTaskTokenStore,
   createTranscriptCache,
   cloudExec,
@@ -96,6 +97,8 @@ import {
   type EphemeralSetupStore,
   type EphemeralSetup,
   type EphemeralMachine,
+  type PendingEphemeralLaunch,
+  type PendingEphemeralLaunchStore,
   type GithubTaskTokenStore,
   type EphemeralQueueDefault,
   type LaunchOpts,
@@ -231,17 +234,11 @@ export class AppController {
   /** Ephemeral cold starts outlive the pane that launched them. Each first
    *  message gets a sidebar placeholder immediately, and its launch continues
    *  here even if the user presses New and starts another session. */
-  private pendingLaunches = new Map<string, {
-    prompt: NonNullable<AppController["pendingPrompt"]>;
-    config: EphemeralNodeConfig;
-    logs: string[];
-    followups: Array<{ text: string; clientMessageId: string; attachments?: PromptAttachment[] }>;
-    machine?: EphemeralMachine;
-    transport?: Transport;
-  }>();
+  private pendingLaunches = new Map<string, PendingEphemeralLaunch & { transport?: Transport }>();
   /** Timed, factual boot updates. Provider creation returning only means the VM
    *  exists; these heartbeats make the otherwise silent cloud-init wait visible. */
   private bootProgressTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
+  private bootstrapPhaseByNode = new Map<string, string>();
   /** Further prompts sent by the user *while* that session is still being
    *  created — queued instead of firing their own `session.new`, then drained
    *  into the one real session by maybeFlushPendingPrompt. See sendPrompt. */
@@ -367,6 +364,7 @@ export class AppController {
     this.seedSessionsFromCache();
     this.installSessionCachePersist();
     this.installFollowupAutoDrain();
+    void this.restorePendingLaunches();
     if (!this.direct && this.local.s) void this.refreshAccountSessions();
     // Seed the reactive auth flag from the token we may have just consumed above,
     // so the very first render lands on the right surface (sign-in vs. shell).
@@ -1910,7 +1908,19 @@ export class AppController {
     if (runner) {
       const provisionalId = `starting-${rid}`;
       this.pendingPrompt.provisionalId = provisionalId;
-      this.pendingLaunches.set(provisionalId, { prompt: this.pendingPrompt, config: runner, logs: [], followups: [] });
+      const now = new Date().toISOString();
+      const task: PendingEphemeralLaunch = {
+        id: provisionalId,
+        prompt: this.pendingPrompt,
+        config: runner,
+        logs: [],
+        followups: [],
+        phase: "provisioning",
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.pendingLaunches.set(provisionalId, task);
+      void this.pendingLaunchStore.put(task);
       this.store.addUserMessage(trimmed, cmid, files);
       this.store.persistPendingSession(provisionalId, trimmed);
       // Persisting the placeholder before the first provider request is the key
@@ -1930,6 +1940,8 @@ export class AppController {
     const { config } = task;
     const logSetup = (message: string) => {
       task.logs.push(message);
+      task.updatedAt = new Date().toISOString();
+      void this.pendingLaunchStore.put(task);
       if (this.store.getState().activeSessionId === provisionalId || this.pendingPrompt?.provisionalId === provisionalId) {
         this.store.pushSystemMessage(`Setup · ${message}`);
       }
@@ -1948,11 +1960,17 @@ export class AppController {
       });
       if (!machine.nodeId) throw new Error("machine launched without a node id");
       task.machine = machine;
+      task.phase = "booting";
+      task.updatedAt = new Date().toISOString();
+      await this.pendingLaunchStore.put(task);
       this.store.bindPendingSessionNode(provisionalId, machine.nodeId);
       this.startPendingRunner(provisionalId);
     } catch (e) {
       const message = `Launch failed: ${(e as Error)?.message || e}`;
       task.logs.push(message);
+      task.phase = "failed";
+      task.updatedAt = new Date().toISOString();
+      void this.pendingLaunchStore.put(task);
       if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
       this.store.failPendingSession(provisionalId);
       if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
@@ -1979,10 +1997,13 @@ export class AppController {
     if (!task || !nodeId || task.transport) return;
     const log = (message: string) => {
       task.logs.push(message);
+      task.updatedAt = new Date().toISOString();
+      void this.pendingLaunchStore.put(task);
       if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
     };
     log("Machine accepted. Waiting for its secure Bivy service to come online…");
     this.startBootProgress(nodeId, provisionalId, log);
+    this.pollBootstrapStatus(nodeId, provisionalId, log);
 
     // RelayTransport reads `cur` from its store. Scope only that property to the
     // new node; credentials and room keys still come from the normal local store.
@@ -2027,6 +2048,7 @@ export class AppController {
     }
     this.clearBootProgress(nodeId);
     this.pendingLaunches.delete(provisionalId);
+    await this.pendingLaunchStore.remove(provisionalId);
     if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
     this.store.completePendingSession(provisionalId, sessionId, nodeId);
     const wasOpen = this.store.getState().activeSessionId === sessionId;
@@ -2043,6 +2065,9 @@ export class AppController {
     if (task.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
     task.transport?.close();
     task.logs.push(`Startup failed: ${message}`);
+    task.phase = "failed";
+    task.updatedAt = new Date().toISOString();
+    void this.pendingLaunchStore.put(task);
     this.store.failPendingSession(provisionalId);
     if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · Startup failed: ${message}`);
     this.store.setError(`Couldn't start ${task.config.name}: ${message}`);
@@ -2066,6 +2091,81 @@ export class AppController {
   private clearBootProgress(nodeId: string): void {
     for (const timer of this.bootProgressTimers.get(nodeId) ?? []) clearTimeout(timer);
     this.bootProgressTimers.delete(nodeId);
+    this.bootstrapPhaseByNode.delete(nodeId);
+  }
+
+  private pollBootstrapStatus(nodeId: string, provisionalId: string, log: (message: string) => void): void {
+    const labels: Record<string, string> = {
+      booting: "The machine booted and cloud-init started.",
+      installing: "Cloud-init is installing Bivy…",
+      starting: "Bivy is installed. Starting its secure service…",
+      ready: "Bivy reported ready.",
+      failed: "Cloud-init reported that the Bivy install failed.",
+    };
+    const poll = async () => {
+      const task = this.pendingLaunches.get(provisionalId);
+      if (!task || task.machine?.nodeId !== nodeId) return;
+      try {
+        const nodes = await fetchAccountNodes(this.local);
+        const phase = nodes.find((n) => n.id === nodeId)?.bootstrapStatus?.phase;
+        if (phase && phase !== this.bootstrapPhaseByNode.get(nodeId)) {
+          this.bootstrapPhaseByNode.set(nodeId, phase);
+          log(labels[phase] || `Bootstrap: ${phase}`);
+          if (phase === "failed") this.failPendingLaunch(provisionalId, labels.failed!);
+        }
+      } catch {
+        // The relay connection remains authoritative; status polling is additive.
+      }
+      if (this.pendingLaunches.has(provisionalId)) setTimeout(poll, 3000);
+    };
+    void poll();
+  }
+
+  /** Restore pending first messages after a reload. A machine record means the
+   *  provider already accepted it, so reconnect without provisioning twice.
+   *  An interrupted provider request is marked failed and offered as a retry. */
+  private async restorePendingLaunches(): Promise<void> {
+    const launches = await this.pendingLaunchStore.list();
+    for (const launch of launches) {
+      this.pendingLaunches.set(launch.id, launch);
+      this.store.persistPendingSession(launch.id, launch.prompt.text, false);
+      if (launch.machine?.nodeId && launch.phase !== "failed") {
+        this.store.bindPendingSessionNode(launch.id, launch.machine.nodeId);
+        this.startPendingRunner(launch.id);
+      } else if (launch.phase === "provisioning") {
+        launch.phase = "failed";
+        launch.logs.push("Startup was interrupted before the cloud provider confirmed the machine.");
+        launch.updatedAt = new Date().toISOString();
+        await this.pendingLaunchStore.put(launch);
+        this.store.failPendingSession(launch.id);
+      } else if (launch.phase === "failed") {
+        this.store.failPendingSession(launch.id);
+      }
+    }
+  }
+
+  async retryPendingLaunch(id: string): Promise<void> {
+    const task = this.pendingLaunches.get(id);
+    if (!task) return;
+    task.transport?.close();
+    task.transport = undefined;
+    task.logs.push("Retrying startup…");
+    task.phase = task.machine?.nodeId ? "booting" : "provisioning";
+    task.updatedAt = new Date().toISOString();
+    this.store.retryPendingSession(id);
+    await this.pendingLaunchStore.put(task);
+    if (task.machine?.nodeId) this.startPendingRunner(id);
+    else await this.launchDraftRunnerAndBind(id);
+  }
+
+  async dismissPendingLaunch(id: string): Promise<void> {
+    const task = this.pendingLaunches.get(id);
+    task?.transport?.close();
+    if (task?.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
+    this.pendingLaunches.delete(id);
+    await this.pendingLaunchStore.remove(id);
+    this.store.dismissPendingSession(id);
+    if (this.store.getState().activeSessionId == null) this.newSession();
   }
 
   /**
@@ -2529,6 +2629,7 @@ export class AppController {
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
   private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
   private ephemeralMachines: MachineStore = createMachineStore();
+  private pendingLaunchStore: PendingEphemeralLaunchStore = createPendingEphemeralLaunchStore();
   /** Ephemeral node ids we've already seeded with device-held model keys this
    *  session, so a reconnect doesn't re-push (the node write is idempotent
    *  regardless). See `seedEphemeralNodeIfNeeded`. */
