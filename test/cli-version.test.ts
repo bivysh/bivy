@@ -81,11 +81,11 @@ test("`bivy config --help` exposes typed config and precedence inspection", () =
   for (const command of ["init", "validate", "show", "set", "explain"]) assert.ok(out.includes(command));
 });
 
-test("`bivy automation --help` exposes the local validate/test/apply workflow", () => {
+test("`bivy automation --help` exposes management and dispatch commands", () => {
   const r = runCli(["automation", "--help"]);
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
   const out = r.stdout + r.stderr;
-  for (const command of ["init", "validate", "plan", "test", "apply"]) assert.ok(out.includes(command));
+  for (const command of ["list", "trigger", "init", "validate", "plan", "test", "apply"]) assert.ok(out.includes(command));
 });
 
 test("`bivy setup --help` describes remote enrollment", () => {

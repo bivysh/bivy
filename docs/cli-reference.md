@@ -30,6 +30,7 @@ get shell completion.
 | Turn on voice input | `bivy voice key groq` |
 | Connect GitHub issue pickup | `bivy github:app-create` |
 | Manage version-controlled automations | `bivy automation init`, then `validate`, `test`, and `apply` |
+| List or manually trigger automations | `bivy automation list`, `bivy automation trigger <id-or-key>` |
 | Reclaim disk | `bivy prune` |
 | Upgrade | `bivy update` |
 | Remove Bivy | `bivy uninstall` |
@@ -324,13 +325,18 @@ the secret is stored in the encrypted vault (or, for a reference, only the point
 
 ## Automations as code
 
-### `bivy automation <init|validate|plan|test|apply>`
+### `bivy automation <list|trigger|init|validate|plan|test|apply>`
 
-Defines coding-agent automations in `.bivy/automations.yaml` and reconciles them
-to the enrolled control plane. Validation, planning, and event simulation run
-locally and do not create runs or upload instructions.
+Lists and manually triggers account automations, or defines automations in
+`.bivy/automations.yaml` and reconciles them to the enrolled control plane.
+Validation, planning, and event simulation run locally and do not create runs
+or upload instructions.
 
 ```bash
+bivy automation list
+bivy automation list --json
+bivy automation trigger <automation-id>
+bivy automation trigger <config-key> --json
 bivy automation init
 bivy automation validate
 bivy automation plan --json
@@ -338,6 +344,10 @@ bivy automation test --event .bivy/events/failed-ci.yaml
 bivy automation apply
 bivy automation apply --prune
 ```
+
+`trigger` (alias `run`) accepts the immutable automation id or, for an automation
+managed as code, its `configKey`. It prints the new run id; `--json` prints the
+complete run record. `list`, `trigger`, and `apply` require an enrolled node.
 
 `apply` encrypts instructions for the applying node before upload. `--prune`
 removes only source-controlled definitions absent from the file, never

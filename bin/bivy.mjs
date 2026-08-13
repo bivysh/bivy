@@ -4519,7 +4519,7 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy kill <id>")}    Stop a session/terminal (--delete also removes a saved session)
   ${c.cyan("bivy prune")}         Delete old sessions/workspaces/worktrees (--keep N, --older-than 7d, --dry-run)
   ${c.cyan("bivy exec")} "<prompt>"  One-shot headless run: prints the answer to stdout (pipe-friendly)
-  ${c.cyan("bivy automation")}  init | validate | plan | test | apply (automations as code)
+  ${c.cyan("bivy automation")}  list | trigger | init | validate | plan | test | apply
   ${c.cyan("bivy config")}      init | validate | show | get | set | explain (typed node config)
   ${c.cyan("bivy plugin")}      init | validate | doctor | test | install | list | remove
   ${c.cyan("bivy")}              Show this help
