@@ -440,10 +440,9 @@ export interface HostedMachineAttempt {
   configId?: string;
   nodeId: string;
   state: HostedMachineAttemptState;
-  /** Controller intent — see `HostedMachineAttemptDesiredState`. Defaults to
-   * "active" for backward compatibility with rows written before this field
-   * existed. */
-  desiredState: HostedMachineAttemptDesiredState;
+  /** Controller intent — see `HostedMachineAttemptDesiredState`. Optional on
+   * write (defaults to "active"); always present on read. */
+  desiredState?: HostedMachineAttemptDesiredState;
   /** Last raw status string the provider reported for this resource (e.g.
    * Hetzner "running"/"off"), distinct from the coarse controller `state`. */
   observedState?: string;
@@ -459,10 +458,11 @@ export interface HostedMachineAttempt {
   machine?: Record<string, unknown>;
   lastError?: string;
   retryCount: number;
-  /** Optimistic-concurrency counter. Incremented by the store on every write;
-   * callers that read-modify-write under contention (the reconciler) may pass
+  /** Optimistic-concurrency counter. Incremented by the store on every write
+   * (the input value is ignored — always read back from the row); callers
+   * that read-modify-write under contention (the reconciler) may pass
    * `expectedVersion` to `putHostedMachineAttempt` to fence a stale write. */
-  version: number;
+  version?: number;
   createdAt: string;
   updatedAt: string;
 }
