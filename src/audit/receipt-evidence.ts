@@ -43,11 +43,20 @@ export interface ReceiptExecutionContext {
   runtimeEnforcement?: string;
   toolInterception?: boolean;
   agentVersion?: string;
+  correlation?: { runId: string; attempt: number; machineId: string };
 }
 
 /** Add only node-observed execution facts to the already bounded audit summary. */
 export function receiptEvidenceForRun(events: AuditEvent[], storageReadable: boolean, context: ReceiptExecutionContext) {
-  const audit = receiptEvidenceFromAudit(events, storageReadable);
+  const marker = context.correlation
+    ? [...events].reverse().find((event) => event.kind === "run.correlation"
+      && event.runId === context.correlation!.runId
+      && event.attempt === context.correlation!.attempt
+      && event.machineId === context.correlation!.machineId)
+    : undefined;
+  const scopedEvents = context.correlation ? (marker ? events.filter((event) => event.ts >= marker.ts) : []) : events;
+  const audit = receiptEvidenceFromAudit(scopedEvents, storageReadable);
+  if (context.correlation && !marker) audit.auditHealth.correlation = "missing";
   const enforcement = context.runtimeEnforcement || "unavailable";
   const sandboxClass = enforcement === "native-sandbox" ? "enforced" as const
     : enforcement === "tool-controls" ? "observed" as const : "unavailable" as const;
