@@ -6,6 +6,8 @@ import {
   recordDurableRunLifecycleResult,
   classifyRunFailureStage,
   type RunLifecycleOutcome,
+  PRODUCT_EVENT_VALUES,
+  PRODUCT_CLIENT_VALUES,
 } from "../src/metrics.js";
 
 test("durable Run results record each fixed outcome exactly once", () => {
@@ -19,6 +21,11 @@ test("durable Run results record each fixed outcome exactly once", () => {
   recordDurableRunLifecycleResult(run, "cancelled", recorder);
 
   assert.deepEqual(calls, ["succeeded", "failed", "needs_attention", "cancelled"]);
+});
+
+test("product metric dimensions are closed low-cardinality enums", () => {
+  assert.deepEqual(PRODUCT_EVENT_VALUES, ["activation_ready", "first_useful_response", "remote_reconnect", "remote_intervention", "run_accepted", "receipt_reviewed"]);
+  assert.deepEqual(PRODUCT_CLIENT_VALUES, ["desktop", "mobile", "cli", "node"]);
 });
 
 test("unsuccessful durable transitions do not record a result", () => {

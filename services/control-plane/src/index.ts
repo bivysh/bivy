@@ -17,7 +17,7 @@ import { createStore } from "./store-factory.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
-import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage } from "./metrics.js";
+import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage, recordProductEvent, PRODUCT_EVENT_VALUES, PRODUCT_CLIENT_VALUES, type ProductEvent, type ProductClient } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
 import {
@@ -893,6 +893,16 @@ const requireNode = asyncHandler(async (req, res, next) => {
   if (!node) return res.status(401).json({ error: "Unauthorized node" });
   (req as Request & { node: NodeRecord }).node = node;
   next();
+});
+
+app.post("/account/product-events", requireUser, (req, res) => {
+  const event = String(req.body?.event ?? "") as ProductEvent;
+  const productClient = String(req.body?.client ?? "") as ProductClient;
+  if (!(PRODUCT_EVENT_VALUES as readonly string[]).includes(event) || !(PRODUCT_CLIENT_VALUES as readonly string[]).includes(productClient)) {
+    return res.status(400).json({ error: "Invalid product event" });
+  }
+  recordProductEvent(event, productClient);
+  res.status(204).end();
 });
 
 // --- Accounts -----------------------------------------------------------

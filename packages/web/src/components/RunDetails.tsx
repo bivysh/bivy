@@ -89,6 +89,7 @@ export function RunDetails({
   onReauthenticate,
   resolveMachineName,
   isSessionResolvable,
+  onReceiptReviewed,
 }: {
   runId: string;
   /** Fetch the durable Run record by id. `null` means the Run does not exist for
@@ -107,6 +108,8 @@ export function RunDetails({
   resolveMachineName?: (machineId: string) => string | undefined;
   /** Whether the correlated Session exists in the current session list. */
   isSessionResolvable?: (sessionId: string) => boolean;
+  /** Content-free analytics hook; deliberately receives no Run identifier. */
+  onReceiptReviewed?: () => void;
 }) {
   const [status, setStatus] = useState<RunDetailsStatus>("loading");
   const [record, setRecord] = useState<AccountAutomationRun | null>(null);
@@ -114,6 +117,7 @@ export function RunDetails({
   const [busyAction, setBusyAction] = useState<"cancel" | "retry" | "reauthenticate" | null>(null);
   const [actionError, setActionError] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const reviewedReceipt = useRef(false);
 
   // App passes `load`/`resolveMachineName` as fresh closures every render; keep
   // them in refs so the fetch is keyed only on runId and never storms the
@@ -148,6 +152,7 @@ export function RunDetails({
   );
 
   useEffect(() => {
+    reviewedReceipt.current = false;
     setStatus("loading");
     setStale(false);
     void refresh();
@@ -157,6 +162,12 @@ export function RunDetails({
     () => (record ? runFromAutomationRun(record, { resolveMachineName }) : null),
     [record, resolveMachineName],
   );
+
+  useEffect(() => {
+    if (status !== "ready" || !run || reviewedReceipt.current) return;
+    reviewedReceipt.current = true;
+    onReceiptReviewed?.();
+  }, [onReceiptReviewed, run, status]);
 
   const cancel = useCallback(async () => {
     if (!onCancel) return;

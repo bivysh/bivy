@@ -105,6 +105,23 @@ export function recordFunnelEvent(event: FunnelEvent, source: string, plan: stri
   console.info(`[funnel] ${JSON.stringify({ event, source: safeSource, plan: safePlan, count })}`);
 }
 
+export const PRODUCT_EVENT_VALUES = ["activation_ready", "first_useful_response", "remote_reconnect", "remote_intervention", "run_accepted", "receipt_reviewed"] as const;
+export type ProductEvent = (typeof PRODUCT_EVENT_VALUES)[number];
+export const PRODUCT_CLIENT_VALUES = ["desktop", "mobile", "cli", "node"] as const;
+export type ProductClient = (typeof PRODUCT_CLIENT_VALUES)[number];
+
+const productEvents = new client.Counter({
+  name: "bivy_product_events_total",
+  help: "Privacy-safe activation, remote-continuity, Run, and Receipt milestones.",
+  labelNames: ["event", "client"],
+  registers: [register],
+});
+
+export function recordProductEvent(event: ProductEvent, productClient: ProductClient): void {
+  productEvents.inc({ event, client: productClient });
+  console.info(`[funnel] ${JSON.stringify({ event, client: productClient })}`);
+}
+
 export type RunLifecycleOutcome = "succeeded" | "failed" | "needs_attention" | "cancelled";
 export type RunLifecycleRecorder = (outcome: RunLifecycleOutcome) => void;
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { cancelAutomationRun, fetchAutomationRun, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { cancelAutomationRun, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -829,6 +829,7 @@ export function App() {
           }}
           resolveMachineName={(machineId) => state.nodes.find((n) => n.id === machineId)?.name || undefined}
           isSessionResolvable={(sessionId) => state.sessions.some((s) => s.sessionId === sessionId)}
+          onReceiptReviewed={() => { void recordProductMetric(controller.local, "receipt_reviewed", matchMedia("(max-width: 700px)").matches ? "mobile" : "desktop").catch(() => {}); }}
           onOpenSession={(sessionId) => {
             const s = state.sessions.find((x) => x.sessionId === sessionId);
             controller.openSessionOnNode(sessionId, s?.path, s?.nodeId);
