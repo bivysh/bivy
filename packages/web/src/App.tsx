@@ -11,7 +11,6 @@ import { QuestionStack } from "./components/QuestionCard.js";
 import { TurnAttentionCard } from "./components/TurnAttentionCard.js";
 import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import { SetupNotice } from "./components/SetupNotice.js";
-import { ReadinessChecklist } from "./components/ReadinessChecklist.js";
 import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { closeAutomations, getAutomationsRoute, openAutomations, setAutomationsSection, subscribeAutomationsRoute } from "./automationsRoute.js";
@@ -40,6 +39,9 @@ import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 // paint fast; the chunk is fetched the first time the user opens a terminal.
 const TerminalOverlay = lazy(() =>
   import("./components/Terminal.js").then((m) => ({ default: m.TerminalOverlay })),
+);
+const ReadinessChecklist = lazy(() =>
+  import("./components/ReadinessChecklist.js").then((m) => ({ default: m.ReadinessChecklist })),
 );
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { controller } from "./store/useStore.js";
@@ -635,16 +637,18 @@ export function App() {
         )}
 
         {!state.activeSessionId && state.transcript.length === 0 && (
-          <ReadinessChecklist
-            activation={activation}
-            onRemediate={{
-              connect_machine: () => openSettings("nodes"),
-              install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
-              authenticate_credential: () => openSettings("providers"),
-              grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
-              run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
-            }}
-          />
+          <Suspense fallback={null}>
+            <ReadinessChecklist
+              activation={activation}
+              onRemediate={{
+                connect_machine: () => openSettings("nodes"),
+                install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
+                authenticate_credential: () => openSettings("providers"),
+                grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
+                run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
+              }}
+            />
+          </Suspense>
         )}
 
         {needsNode && (
