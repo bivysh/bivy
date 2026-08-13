@@ -23,6 +23,7 @@ import {
   recordProductMetric,
   activationFromState,
   type ProductMetricEvent,
+  type ActivationCheckId,
   assignWorkItem,
   deleteWorkItem,
   clearWorkQueue,
@@ -608,15 +609,36 @@ export class AppController {
       .finally(() => this.productMetricsInFlight.delete(event));
   }
 
+  /** One ok/failed product-metric pair per readiness-led first-run step,
+   *  keyed by the activation check it tracks. `agent_answered` and
+   *  `account_signed_in` are excluded: the former already has its own
+   *  dedicated `first_useful_response` milestone below, and the latter is
+   *  always resolved by the time this model runs (see activation.ts) so a
+   *  transition into it is never observed. */
+  private static readonly FIRST_RUN_STEP_EVENTS: Partial<Record<ActivationCheckId, { ok: ProductMetricEvent; failed: ProductMetricEvent }>> = {
+    machine_online: { ok: "first_run_machine_ready", failed: "first_run_machine_failed" },
+    agent_installed: { ok: "first_run_agent_verified", failed: "first_run_agent_failed" },
+    credential_valid: { ok: "first_run_provider_connected", failed: "first_run_provider_failed" },
+  };
+
   /** Observe only concrete state transitions. History snapshots are excluded
    *  from first response: opening an old Session must not look like activation. */
   private observeActivationMilestones(before: ReturnType<SessionStore["getState"]>, event: { type?: unknown }): void {
     const after = this.store.getState();
-    const beforeActivation = activationFromState(before);
-    const afterActivation = activationFromState(after);
-    const readyBefore = beforeActivation.checks.slice(0, 4).every((check) => check.state === "passed");
-    const readyAfter = afterActivation.checks.slice(0, 4).every((check) => check.state === "passed");
+    const beforeActivation = activationFromState({ ...before, direct: this.direct });
+    const afterActivation = activationFromState({ ...after, direct: this.direct });
+    // Every check but the final agent-answered one — robust to the chain
+    // growing (e.g. the leading sign-in step) without re-deriving the cutoff.
+    const readyBefore = beforeActivation.checks.slice(0, -1).every((check) => check.state === "passed");
+    const readyAfter = afterActivation.checks.slice(0, -1).every((check) => check.state === "passed");
     if (!readyBefore && readyAfter) this.recordProductMilestone("activation_ready", true);
+
+    for (const [id, events] of Object.entries(AppController.FIRST_RUN_STEP_EVENTS) as Array<[ActivationCheckId, { ok: ProductMetricEvent; failed: ProductMetricEvent }]>) {
+      const b = beforeActivation.checks.find((c) => c.id === id)?.state;
+      const a = afterActivation.checks.find((c) => c.id === id)?.state;
+      if (b !== "passed" && a === "passed") this.recordProductMilestone(events.ok, true);
+      if (b !== "failed" && a === "failed") this.recordProductMilestone(events.failed, true);
+    }
 
     if (event.type === "session.history") return;
     const assistantCount = (state: typeof after) => state.transcript.filter((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool).length;

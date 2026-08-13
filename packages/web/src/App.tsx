@@ -181,12 +181,15 @@ export function App() {
   }, []);
   const online = state.status === "online";
   const activation = useMemo(() => deriveActivation({
+    accountSignedIn: controller.direct ? true : state.signedIn,
     machineOnline: state.status === "online" ? true : state.status === "offline" ? false : undefined,
-    agentInstalled: state.runtimes.length ? state.runtimes.some((runtime) => String(runtime.status ?? "available") === "available") : undefined,
+    agentInstalled: state.runtimes.length
+      ? state.runtimes.some((runtime) => String(runtime.status ?? "available") === "available" && runtime.supportTier === "supported")
+      : undefined,
     credentialValid: state.activationReadiness ? state.activationReadiness.credential.ok : undefined,
     repositoryReady: state.activationReadiness ? state.activationReadiness.repository.ok : undefined,
     agentAnswered: state.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) ? true : undefined,
-  }), [state.activationReadiness, state.runtimes, state.status, state.transcript]);
+  }), [state.activationReadiness, state.runtimes, state.signedIn, state.status, state.transcript]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
