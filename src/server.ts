@@ -4131,6 +4131,11 @@ interface RunIssueOverrides {
   /** Cancellation for a control-plane-dispatched Run. Aborts the active runtime
    * turn; callers must still rely on the durable control-plane status. */
   signal?: AbortSignal;
+  correlation?: { runId: string; attempt: number; machineId: string };
+}
+
+function recordRunAuditCorrelation(record: SessionRecord, correlation?: RunIssueOverrides["correlation"]): void {
+  if (correlation) auditLog.record({ kind: "run.correlation", session: record.id, agent: record.runtimeId, ...correlation });
 }
 
 async function runIssueTask(cfg: GitHubTaskConfig, issue: GitHubIssue, overrides: RunIssueOverrides = {}) {
@@ -4177,6 +4182,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
           approvalMode: record.approvalMode,
           runtimeEnforcement: runtimeInfo?.protectionLevel,
           toolInterception: runtimeInfo?.capabilities?.toolInterception === true,
+          correlation: overrides.correlation,
         }) } : {}),
       });
     }
@@ -4279,6 +4285,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   if (!record.worktree) throw new Error("worktree was not created for the issue session");
 
   try {
+    recordRunAuditCorrelation(record, overrides.correlation);
     emit(record, "started", `Started work on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
     await runSessionTurn(record, buildTaskPrompt(issue, nodeGithubIssuePrompt()), overrides.signal);
     if (overrides.signal?.aborted) throw overrides.signal.reason ?? new Error("Run cancelled");
@@ -4304,6 +4311,7 @@ async function runIssueFollowUp(cfg: GitHubTaskConfig, issue: GitHubIssue, recor
   const wt = record.worktree;
   if (!wt) throw new Error("issue session has no worktree");
   try {
+    recordRunAuditCorrelation(record, overrides.correlation);
     emit(record, "started", `Follow-up on ${cfg.owner}/${cfg.repo}#${issue.number}.`);
 
     // Bring the branch up to date with the base before the agent starts its
@@ -5005,6 +5013,7 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
       approvalMode: approvalModeFrom(item.approvalMode),
       onEvidence: report,
       signal,
+      correlation: { runId: item.id, attempt: item.attempt ?? 1, machineId: identity.nodeId },
     });
     return;
   }

@@ -35,3 +35,28 @@ test("adds node-observed execution and effective protection without content", ()
     { capability: "approval", evidenceClass: "enforced" },
   ]);
 });
+
+test("scopes audit evidence to the exact Run attempt and Machine marker", () => {
+  const context = {
+    profile: "trusted_workstation" as const,
+    controller: "customer" as const,
+    correlation: { runId: "run-2", attempt: 2, machineId: "machine-1" },
+  };
+  const evidence = receiptEvidenceForRun([
+    { ts: 1, kind: "approval.decision", session: "s", approved: false },
+    { ts: 2, kind: "run.correlation", session: "s", runId: "run-2", attempt: 1, machineId: "machine-1" },
+    { ts: 3, kind: "approval.decision", session: "s", approved: false },
+    { ts: 4, kind: "run.correlation", session: "s", runId: "run-2", attempt: 2, machineId: "machine-1" },
+    { ts: 5, kind: "approval.request", session: "s" },
+    { ts: 6, kind: "approval.decision", session: "s", approved: true },
+  ], true, context);
+  assert.deepEqual(evidence.approvals, { requests: 1, approved: 1, denied: 0 });
+  assert.equal(evidence.auditHealth.correlation, "healthy");
+
+  const wrongMachine = receiptEvidenceForRun([
+    { ts: 4, kind: "run.correlation", session: "s", runId: "run-2", attempt: 2, machineId: "machine-other" },
+    { ts: 5, kind: "approval.decision", session: "s", approved: true },
+  ], true, context);
+  assert.deepEqual(wrongMachine.approvals, { requests: 0, approved: 0, denied: 0 });
+  assert.equal(wrongMachine.auditHealth.correlation, "missing");
+});
