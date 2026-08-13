@@ -238,6 +238,7 @@ export class AppController {
   /** Timed, factual boot updates. Provider creation returning only means the VM
    *  exists; these heartbeats make the otherwise silent cloud-init wait visible. */
   private bootProgressTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
+  private bootstrapPhaseByNode = new Map<string, string>();
   /** Further prompts sent by the user *while* that session is still being
    *  created — queued instead of firing their own `session.new`, then drained
    *  into the one real session by maybeFlushPendingPrompt. See sendPrompt. */
@@ -2002,6 +2003,7 @@ export class AppController {
     };
     log("Machine accepted. Waiting for its secure Bivy service to come online…");
     this.startBootProgress(nodeId, provisionalId, log);
+    this.pollBootstrapStatus(nodeId, provisionalId, log);
 
     // RelayTransport reads `cur` from its store. Scope only that property to the
     // new node; credentials and room keys still come from the normal local store.
@@ -2089,6 +2091,34 @@ export class AppController {
   private clearBootProgress(nodeId: string): void {
     for (const timer of this.bootProgressTimers.get(nodeId) ?? []) clearTimeout(timer);
     this.bootProgressTimers.delete(nodeId);
+    this.bootstrapPhaseByNode.delete(nodeId);
+  }
+
+  private pollBootstrapStatus(nodeId: string, provisionalId: string, log: (message: string) => void): void {
+    const labels: Record<string, string> = {
+      booting: "The machine booted and cloud-init started.",
+      installing: "Cloud-init is installing Bivy…",
+      starting: "Bivy is installed. Starting its secure service…",
+      ready: "Bivy reported ready.",
+      failed: "Cloud-init reported that the Bivy install failed.",
+    };
+    const poll = async () => {
+      const task = this.pendingLaunches.get(provisionalId);
+      if (!task || task.machine?.nodeId !== nodeId) return;
+      try {
+        const nodes = await fetchAccountNodes(this.local);
+        const phase = nodes.find((n) => n.id === nodeId)?.bootstrapStatus?.phase;
+        if (phase && phase !== this.bootstrapPhaseByNode.get(nodeId)) {
+          this.bootstrapPhaseByNode.set(nodeId, phase);
+          log(labels[phase] || `Bootstrap: ${phase}`);
+          if (phase === "failed") this.failPendingLaunch(provisionalId, labels.failed);
+        }
+      } catch {
+        // The relay connection remains authoritative; status polling is additive.
+      }
+      if (this.pendingLaunches.has(provisionalId)) setTimeout(poll, 3000);
+    };
+    void poll();
   }
 
   /** Restore pending first messages after a reload. A machine record means the

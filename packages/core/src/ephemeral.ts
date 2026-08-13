@@ -874,6 +874,8 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
   const ttl = clampTtlMinutes(opts.ttlMinutes);
   const installUrl = opts.installUrl || "https://bivy.sh/install.sh";
   const startScript = bivyStartScript(opts);
+  const status = (phase: string) =>
+    `curl -fsS -X POST -H 'content-type: application/json' -H ${shq(`authorization: Bearer ${opts.enrollmentToken}`)} --data ${shq(JSON.stringify({ phase }))} ${shq(`${opts.controlPlaneUrl.replace(/\/$/, "")}/node/bootstrap-status`)} >/dev/null 2>&1 || true`;
   return (
     [
       "#cloud-config",
@@ -887,9 +889,11 @@ export function buildBootstrapUserData(opts: BootstrapOpts): string {
       "    content: |",
       indentJson(startScript, "      "),
       "runcmd:",
+      `  - [ bash, -lc, ${JSON.stringify(status("booting"))} ]`,
       // 1. Install Bivy (state lands in /etc/bivy via BIVY_DATA_DIR).
-      `  - [ bash, -lc, "mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && command -v bivy >/dev/null 2>&1 || curl -fsSL ${shq(installUrl)} | bash" ]`,
+      `  - [ bash, -lc, ${JSON.stringify(`${status("installing")}; mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && (command -v bivy >/dev/null 2>&1 || curl -fsSL ${shq(installUrl)} | bash) || { ${status("failed")}; exit 1; }`)} ]`,
       // 2. Start the daemon. On a systemd VM a transient system unit keeps it
+      `  - [ bash, -lc, ${JSON.stringify(status("starting"))} ]`,
       //    running after cloud-init's own unit exits (a bare backgrounded process
       //    would be cleaned up with cloud-final's cgroup); the setsid fallback
       //    covers a rare image without systemd-run.

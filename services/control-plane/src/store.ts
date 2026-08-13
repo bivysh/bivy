@@ -107,6 +107,8 @@ export interface NodeRecord {
   lastSeenAt: string | null;
   createdAt: string;
   providers?: NodeProviderSummary[];
+  /** Non-secret, fixed-vocabulary cloud-init progress from an ephemeral node. */
+  bootstrapStatus?: { phase: string; updatedAt: string };
 }
 
 export interface ResolvedClient {
@@ -1110,6 +1112,7 @@ export interface MeshStore {
   // Plaintext per-node provider status summary (see NodeProviderSummary) —
   // overwritten wholesale by the owning node on every credential change.
   setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void>;
+  setNodeBootstrapStatus(nodeId: string, phase: string): Promise<void>;
 
   // Session index (cross-node unified view). A node replaces its full current
   // session list; clients read the merged list for the account.

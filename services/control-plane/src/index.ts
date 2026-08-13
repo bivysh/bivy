@@ -1288,7 +1288,19 @@ app.get("/node/account", requireNode, asyncHandler(async (req, res) => {
 app.post("/node/heartbeat", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   await store.setNodeOnline(node.id, true);
+  await store.setNodeBootstrapStatus(node.id, "ready");
   await markHostedMachineMilestone(store, node.accountId, node.id, "nodeReadyAt").catch(() => false);
+  res.json({ ok: true });
+}));
+
+// Fixed-vocabulary, credential-free cloud-init progress. The enrollment bearer
+// scopes writes to this node; clients read it through the ordinary node list.
+const BOOTSTRAP_PHASES = new Set(["booting", "installing", "starting", "ready", "failed"]);
+app.post("/node/bootstrap-status", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const phase = String(req.body?.phase ?? "");
+  if (!BOOTSTRAP_PHASES.has(phase)) return res.status(400).json({ error: "unknown bootstrap phase" });
+  await store.setNodeBootstrapStatus(node.id, phase);
   res.json({ ok: true });
 }));
 
