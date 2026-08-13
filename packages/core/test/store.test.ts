@@ -75,6 +75,12 @@ describe("stripAttachmentPlaceholders", () => {
 });
 
 describe("SessionStore", () => {
+  it("retains observed Session protection context from the node", () => {
+    const store = new SessionStore();
+    store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", sandbox: "workspace-write", approvalMode: "risky", ephemeral: true, executionProfile: "isolated_customer_cloud" }] } as never);
+    expect(store.getState().sessions[0]).toMatchObject({ sandbox: "workspace-write", approvalMode: "risky", ephemeral: true, executionProfile: "isolated_customer_cloud" });
+  });
+
   it("notifies subscribers and exposes immutable snapshots", () => {
     const store = new SessionStore();
     const seen: number = 0;
