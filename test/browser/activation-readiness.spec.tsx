@@ -26,7 +26,8 @@ test("setup readiness is wired only into a fresh draft and credential repair ope
   const app = await read("../../packages/web/src/App.tsx");
   expect(app).toContain("!state.activeSessionId && state.transcript.length === 0");
   expect(app).toContain("<ReadinessChecklist");
-  expect(app).toContain("activationFromState({");
+  expect(app).toContain("deriveActivation({");
+  expect(app).toContain("state.activationReadiness ? state.activationReadiness.credential.ok : undefined");
   expect(app).toContain('authenticate_credential: () => openSettings("providers")');
   expect(app).not.toContain('authenticate_credential: () => openSettings("models")');
 });

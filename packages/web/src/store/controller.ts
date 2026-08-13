@@ -1671,6 +1671,7 @@ export class AppController {
    * turn that streamed during the outage appears and any stuck "working" clears.
    */
   private onReconnected(): void {
+    this.send({ kind: "activation.readiness" });
     let openedAfterNodeSwitch = false;
     if (this.pendingCrossNodeOpen) {
       const pending = this.pendingCrossNodeOpen;
