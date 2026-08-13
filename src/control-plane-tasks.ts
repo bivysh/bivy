@@ -47,6 +47,8 @@ export interface WorkItem {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   /** Hard ceiling from the automation definition; retry rules cannot exceed it. */
   maxAttempts?: number;
+  /** Node-local attempt currently being executed; assigned by the policy loop. */
+  attempt?: number;
   installationId?: string; // GitHub App install to mint a token for (flavor A)
   appId?: string; // which configured app that installation belongs to (a node may serve several)
   // Case B: the control plane sets this to "existing_session" + a sessionId when an
@@ -370,7 +372,7 @@ export class ControlPlaneTaskPoller {
       try {
         // Functions declared with the historical two arguments remain valid in
         // TypeScript/JavaScript; cancellation-aware runners can use the third.
-        await this.runItem(current, report, run.controller.signal);
+        await this.runItem({ ...current, attempt }, report, run.controller.signal);
         if (run.state !== "active") return;
         await completeWork(this.cfg, item.id);
         return;
