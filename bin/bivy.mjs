@@ -1735,7 +1735,7 @@ async function cmdExec(args = []) {
 function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
-    "run", "sessions", "ls", "resume", "promote", "rename", "nodes", "agent", "agents", "agents:install", "shim", "takeover", "token", "exec",
+    "run", "runs", "sessions", "ls", "resume", "promote", "rename", "nodes", "agent", "agents", "agents:install", "shim", "takeover", "token", "exec",
     "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "logs", "login",
     "update", "update:log", "audit", "automation", "config", "plugin", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
@@ -4578,7 +4578,8 @@ ${c.bold("bivy")} — Bivy node CLI
   ${c.cyan("bivy send <id>")} "..."  Send a prompt to an existing session and stream the reply
   ${c.cyan("bivy kill <id>")}    Stop a session/terminal (--delete also removes a saved session)
   ${c.cyan("bivy prune")}         Delete old sessions/workspaces/worktrees (--keep N, --older-than 7d, --dry-run)
-  ${c.cyan("bivy exec")} "<prompt>"  One-shot headless run: prints the answer to stdout (pipe-friendly)
+  ${c.cyan("bivy exec")} "<prompt>"  One-shot headless session: prints the answer to stdout (pipe-friendly)
+  ${c.cyan("bivy runs start")} "<instructions>"  Queue a one-off unattended Run with checks and a Receipt
   ${c.cyan("bivy automation")}  list | trigger | init | validate | plan | test | apply
   ${c.cyan("bivy config")}      init | validate | show | get | set | explain (typed node config)
   ${c.cyan("bivy plugin")}      init | validate | doctor | test | install | list | remove
@@ -4698,6 +4699,17 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
     case "completion":
       cmdCompletions(args);
       break;
+    case "runs": {
+      if (!(await ensureDeps())) process.exit(1);
+      const [action, ...runArgs] = args;
+      if (!action || ["-h", "--help", "help"].includes(action)) {
+        console.log('Usage: bivy runs start "<instructions>" [--name <title>] [--repo <owner/name>] [--agent <id>] [--model <id>] [--approval <mode>] [--sandbox <tier>] [--max-attempts <n>] [--json]\n\nStart a one-off unattended Run. Unlike `bivy run`, this queues governed background work with checks, evidence, and a Receipt.');
+        break;
+      }
+      if (action !== "start" && action !== "create") { console.error(c.red(`Unknown runs action: ${action}`)); process.exit(1); break; }
+      process.exit(await run(nodeBin, [...nodeScriptArgs(automationEntry), "start-run", ...runArgs], { cwd: process.cwd(), env: process.env }));
+      break;
+    }
     case "automation":
     case "automations": {
       if (!(await ensureDeps())) process.exit(1);

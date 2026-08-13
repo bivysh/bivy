@@ -2534,6 +2534,37 @@ app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, re
   return res.status(201).json({ ...publicAutomation(created, req), ...(webhookSecret ? { webhookSecret } : {}) });
 }));
 
+// Start a one-off governed Run from the CLI. Unlike `bivy run`, this is
+// unattended queue work: the instruction is E2E-encrypted for this node, gets
+// checks/evidence, and does not leave behind an Automation definition.
+app.post("/node/automation-runs", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
+  const body = typeof req.body?.body === "string" ? req.body.body : "";
+  if (!title || title.length > 120) return res.status(400).json({ error: "title is required and must be at most 120 characters" });
+  if (!body.startsWith(`bivy-room-v1:${node.id}:`)) {
+    return res.status(400).json({ error: "instructions must be encrypted for this node" });
+  }
+  let repo: string | undefined;
+  try { repo = normalizeAutomationRepo(req.body?.repo); }
+  catch (error) { return res.status(400).json({ error: (error as Error).message }); }
+  const approvalMode = req.body?.approvalMode ?? "risky";
+  const sandbox = req.body?.sandbox ?? "workspace-write";
+  const maxAttempts = Number(req.body?.maxAttempts ?? 2);
+  if (!["never", "risky", "always", "autonomous"].includes(approvalMode)) return res.status(400).json({ error: "unsupported approvalMode" });
+  if (!["read-only", "workspace-write", "danger-full-access"].includes(sandbox)) return res.status(400).json({ error: "unsupported sandbox" });
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) return res.status(400).json({ error: "maxAttempts must be an integer from 1 to 10" });
+  const run = await store.enqueueAutomationRun(node.accountId, {
+    source: "manual", triggerKind: "manual", title, body, repo,
+    label: `bivy/${node.name}`,
+    runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() || undefined : undefined,
+    model: typeof req.body?.model === "string" ? req.body.model.trim() || undefined : undefined,
+    approvalMode, sandbox, maxAttempts,
+  });
+  void notifyRelaysWorkAvailable(node.accountId, { id: run.id, label: run.routing.nodeLabel }, { nodeId: node.id, autoProvision: false });
+  res.status(201).json(run);
+}));
+
 app.delete("/node/automation-config/:key", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const key = String(req.params.key ?? "");
@@ -2840,15 +2871,29 @@ app.post("/account/automation-runs", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
   if (!title) return res.status(400).json({ error: "title is required" });
+  const body = typeof req.body?.body === "string" ? req.body.body : undefined;
+  if (body && !body.startsWith("bivy-room-v1:")) return res.status(400).json({ error: "instructions must be end-to-end encrypted" });
+  let repo: string | undefined;
+  try { repo = normalizeAutomationRepo(req.body?.repo); }
+  catch (error) { return res.status(400).json({ error: (error as Error).message }); }
+  const approvalMode = ["never", "risky", "always", "autonomous"].includes(req.body?.approvalMode) ? req.body.approvalMode : undefined;
+  const sandbox = ["read-only", "workspace-write", "danger-full-access"].includes(req.body?.sandbox) ? req.body.sandbox : undefined;
+  const maxAttempts = Number(req.body?.maxAttempts ?? 2);
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10) return res.status(400).json({ error: "maxAttempts must be an integer from 1 to 10" });
   const run = await store.enqueueAutomationRun(client.accountId, {
     source: "manual",
     triggerKind: "manual",
     title,
+    body,
+    repo,
     label: typeof req.body?.label === "string" ? req.body.label : undefined,
     definitionId: typeof req.body?.definitionId === "string" ? req.body.definitionId : undefined,
     dedupeKey: typeof req.body?.sourceKey === "string" ? req.body.sourceKey : undefined,
     runtimeId: typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined,
     model: typeof req.body?.model === "string" ? req.body.model : undefined,
+    approvalMode,
+    sandbox,
+    maxAttempts,
   });
   // Manual runs are real automation work too: wake connected nodes and, when
   // routing targets an ephemeral config, launch the unattended runner. Without

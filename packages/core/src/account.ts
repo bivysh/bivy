@@ -1042,6 +1042,27 @@ export function runAutomationNow(store: LocalStore, id: string, fetchImpl: typeo
   return automationRequest(store, `/account/automations/${encodeURIComponent(id)}/run`, { method: "POST" }, fetchImpl);
 }
 
+/** Queue one governed, unattended Run without creating an Automation definition.
+ * `body` must already be E2E-encrypted for the machine named by `label`. */
+export function createOneOffRun(
+  store: LocalStore,
+  input: {
+    title: string;
+    body: string;
+    label: string;
+    repo?: string;
+    runtimeId?: string;
+    model?: string;
+    approvalMode?: AccountAutomation["approvalMode"];
+    sandbox?: AccountAutomation["sandbox"];
+    maxAttempts?: number;
+    sourceKey?: string;
+  },
+  fetchImpl: typeof fetch = fetch,
+): Promise<AccountAutomationRun> {
+  return automationRequest(store, "/account/automation-runs", { method: "POST", body: JSON.stringify(input) }, fetchImpl);
+}
+
 export function fetchAutomationRuns(
   store: LocalStore,
   limit = 50,
