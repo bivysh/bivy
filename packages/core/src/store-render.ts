@@ -290,6 +290,16 @@ export function stripAttachmentPlaceholders(text: string): string {
     .trim();
 }
 
+/** Shallow-merge a streaming tool call's inputs so a later partial update
+ *  (a progress ping, a late `rawInput`) augments rather than replaces what the
+ *  card already knows. Non-object inputs fall back to the newer truthy value. */
+function mergeToolInput(prev: unknown, next: unknown): unknown {
+  const prevObj = prev && typeof prev === "object" && !Array.isArray(prev);
+  const nextObj = next && typeof next === "object" && !Array.isArray(next);
+  if (prevObj && nextObj) return { ...(prev as Record<string, unknown>), ...(next as Record<string, unknown>) };
+  return next ?? prev;
+}
+
 export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity): void {
   const existing = tool.callId ? entries.find((e) => e.tool && e.tool.callId === tool.callId) : undefined;
   if (existing && existing.tool) {
@@ -298,7 +308,13 @@ export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity): v
       status: tool.status,
       result: tool.result ?? existing.tool.result,
       detail: tool.detail ?? existing.tool.detail,
-      input: tool.status === "running" ? tool.input : existing.tool.input,
+      // Merge, don't replace, while a call streams. A progress-only ping (e.g.
+      // Claude's `tool_execution_update` carrying just `{ elapsedSeconds }`)
+      // would otherwise clobber the original call's `command`/`path`, blanking
+      // the row label for any tool the node couldn't classify into `detail`.
+      // A later enriching update (e.g. opencode's late `rawInput`) still wins
+      // per-key. On completion (`done`) the input is frozen as-is.
+      input: tool.status === "running" ? mergeToolInput(existing.tool.input, tool.input) : existing.tool.input,
     };
   } else {
     entries.push({ id: nextId(), role: "assistant", text: "", tool });

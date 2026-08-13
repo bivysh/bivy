@@ -5,16 +5,16 @@ Thanks for helping improve Bivy.
 ## Development
 
 ```bash
-npm install
-npm run typecheck
-npm run test:unit
+pnpm install
+pnpm run typecheck
+pnpm run test:unit
 ```
 
 During development, pass filename substrings to run only the relevant suites:
 
 ```bash
-npm run test:unit -- config-cli plugin-cli
-npm run test:unit -- --list config-cli
+pnpm run test:unit -- config-cli plugin-cli
+pnpm run test:unit -- --list config-cli
 ```
 
 CI splits the complete root suite across machines with `TEST_SHARD=1/2` and
@@ -32,10 +32,10 @@ touches. There is no local pre-push gate; run the checks yourself before
 pushing when you want a fast local signal:
 
 ```bash
-npm run lint
-npm run typecheck
-npm run test:unit
-npm run check:links
+pnpm run lint
+pnpm run typecheck
+pnpm run test:unit
+pnpm run check:links
 ```
 
 ## Pull requests

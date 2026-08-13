@@ -16,9 +16,9 @@
  * emits that tarball. Keeping the download channel current is what lets the
  * every-merge staging build reach existing packaged nodes via `bivy update`.
  *
- *   npm run build:release          stage the package, don't publish
- *   npm run publish:npm            stage and publish to npm
- *   npm run publish:npm:dry        stage and dry-run publish
+ *   pnpm run build:release         stage the package, don't publish
+ *   pnpm run publish:npm           stage and publish to npm
+ *   pnpm run publish:npm:dry       stage and dry-run publish
  *   node scripts/build-release.mjs --pack <dir>
  *                                  stage and write <dir>/bivy-latest.tar.gz +
  *                                  bivy-latest.json (self-hosted download channel)
@@ -184,7 +184,7 @@ if (packDir) {
 
 console.log(`Built ${releasePkg.name}@${releasePkg.version}`);
 if (!doPublish && !packDir) {
-  console.log("Not published. Use `npm run publish:npm` (or --dry-run) to publish.");
+  console.log("Not published. Use `pnpm run publish:npm` (or --dry-run) to publish.");
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

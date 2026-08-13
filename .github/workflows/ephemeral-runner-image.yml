@@ -9,7 +9,8 @@ on:
       - bin/**
       - packages/**
       - package.json
-      - package-lock.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
       - scripts/build-release.mjs
       - .github/workflows/ephemeral-runner-image.yml
   workflow_dispatch:

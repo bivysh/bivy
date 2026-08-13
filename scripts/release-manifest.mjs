@@ -42,6 +42,13 @@ export function curateManifest(pkg, readme) {
   // No packages/* workspaces ship (the web PWA is built/served by the control plane).
   delete out.workspaces;
 
+  // The repo develops with pnpm, but the published package is installed with npm
+  // (`npm i -g @bivy/bivy`, and install.sh runs `npm ci` against the lockfile
+  // build-release.mjs generates). Shipping `packageManager` would make corepack
+  // in a user's install try to fetch and run pnpm instead — a hard failure on a
+  // machine that has only npm. The dev-time package manager must not leak.
+  delete out.packageManager;
+
   // A packaged install has no dev toolchain — drop every devDependency.
   delete out.devDependencies;
 

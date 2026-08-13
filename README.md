@@ -69,8 +69,8 @@ For example: `BIVY_CHANNEL=staging curl -fsSL https://bivy.sh/install.sh | bash`
 Working from a checkout of this repository instead:
 
 ```bash
-npm install
-npm run setup
+pnpm install
+pnpm run setup
 ```
 
 See [`docs/install.md`](docs/install.md) for where data lives, service
@@ -90,7 +90,7 @@ background service so the node reconnects on the new build:
 |---|---|
 | npm global (`npm i -g`) | `npm install -g @bivy/bivy@<channel>`, then restart the service |
 | installer / packaged | re-runs `install.sh` (migrating to npm if needed), then restart |
-| git checkout | `git pull --ff-only` + `npm ci`, then restart |
+| git checkout | `git pull --ff-only` + `pnpm install --frozen-lockfile`, then restart |
 | `npx` run | nothing to update — each run already fetches the latest |
 
 Updates follow the release **channel** recorded at install time — `latest`
@@ -315,21 +315,21 @@ Apply `bivy` or `bivy/<node>` to a Linear issue to dispatch it to the same hoste
 ## Development
 
 ```bash
-npm install
-npm run dev          # node daemon on http://localhost:4317
-npm run dev:web      # web client dev server (proxies /api and /ws to the node)
+pnpm install
+pnpm run dev          # node daemon on http://localhost:4317
+pnpm run dev:web      # web client dev server (proxies /api and /ws to the node)
 ```
 
 Checks — all of these run in CI:
 
 ```bash
-npm run typecheck
-npm run typecheck:web
-npm run lint
-npm run test:unit
-npm run test:core
-npm run check:licenses
-npm run check:secrets
+pnpm run typecheck
+pnpm run typecheck:web
+pnpm run lint
+pnpm run test:unit
+pnpm run test:core
+pnpm run check:licenses
+pnpm run check:secrets
 ```
 
 Repository layout:

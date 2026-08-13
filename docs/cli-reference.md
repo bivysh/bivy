@@ -796,7 +796,7 @@ not.)
 
 What it actually does depends on how Bivy was installed (`<ch>` = the channel):
 
-- **git checkout** — `git pull --ff-only`, then `npm ci`/`npm install`.
+- **git checkout** — `git pull --ff-only`, then `pnpm install --frozen-lockfile`.
 - **`npm i -g @bivy/bivy`** — `npm install -g @bivy/bivy@<ch>`.
 - **`npx bivy`** — nothing; explains that npx always fetches the latest.
 - **installer tarball** — re-runs `curl -fsSL https://bivy.sh/install.sh | bash`

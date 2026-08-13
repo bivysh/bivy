@@ -31,6 +31,7 @@ test("sharedCacheEnvFor maps a root to cache-only knobs under it", () => {
   const root = path.join("/tmp", "cache-root");
   const env = sharedCacheEnvFor(root);
   assert.equal(env.npm_config_cache, path.join(root, "npm"));
+  assert.equal(env.PNPM_CONFIG_STORE_DIR, path.join(root, "pnpm"));
   assert.equal(env.YARN_CACHE_FOLDER, path.join(root, "yarn"));
   assert.equal(env.PIP_CACHE_DIR, path.join(root, "pip"));
   assert.equal(env.CARGO_HOME, path.join(root, "cargo"));
@@ -65,6 +66,48 @@ test("flag=explicit path → used verbatim as the cache root", () => {
     const root = initSharedDepCache(dataDir);
     assert.equal(root, explicit, "explicit path wins over the data-dir default");
     assert.equal(depCacheEnv().CARGO_HOME, path.join(explicit, "cargo"));
+  });
+});
+
+// pnpm 10+ reads PNPM_CONFIG_STORE_DIR only — not npm_config_store_dir,
+// PNPM_STORE_DIR, or an .npmrc `store-dir=` line. Getting this name wrong is
+// silent: pnpm just keeps using its own default store.
+test("pnpm gets PNPM_CONFIG_STORE_DIR, never the npm_config_ spelling", () => {
+  const env = sharedCacheEnvFor(path.join("/tmp", "cache-root"));
+  assert.equal(env.npm_config_store_dir, undefined);
+  assert.equal(env.PNPM_STORE_DIR, undefined);
+});
+
+test("init creates the pnpm store dir up front", () => {
+  withEnv("1", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-depcache-"));
+    const root = initSharedDepCache(dataDir);
+    assert.ok(fs.existsSync(path.join(root!, "pnpm")), "pnpm store exists before any install");
+  });
+});
+
+// Hardlinks cannot cross filesystems: pointing pnpm at a store on another device
+// makes it COPY, costing a full tree per worktree plus a full store. Dropping the
+// var leaves pnpm on its own (already per-user global) store instead.
+test("pnpm store dir is emitted only for a same-filesystem cwd", () => {
+  withEnv("1", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-depcache-"));
+    const root = initSharedDepCache(dataDir);
+    const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-worktree-"));
+    assert.equal(
+      depCacheEnv(worktree).PNPM_CONFIG_STORE_DIR,
+      path.join(root!, "pnpm"),
+      "same tmpdir filesystem → hardlinks possible",
+    );
+    // A cwd that does not exist yet resolves through its nearest live ancestor.
+    assert.equal(
+      depCacheEnv(path.join(worktree, "not-created-yet", "deeper")).PNPM_CONFIG_STORE_DIR,
+      path.join(root!, "pnpm"),
+    );
+    // No cwd → cannot prove linkability → fail closed.
+    assert.equal(depCacheEnv().PNPM_CONFIG_STORE_DIR, undefined);
+    // Non-pnpm knobs are unaffected by the guard.
+    assert.equal(depCacheEnv().npm_config_cache, path.join(root!, "npm"));
   });
 });
 
