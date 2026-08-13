@@ -45,6 +45,17 @@ export type { ApiKeyCredential, OAuthCredential, StoredCredential };
 
 export type CredentialTombstones = Record<string, number>;
 
+/**
+ * A "Test connection" result for one `provider:label` record, local to this
+ * node (see `BivyCredentialStore.readVerification`/`writeVerification`).
+ * Never carries key material — safe to echo straight back to a client.
+ */
+export interface CredentialVerification {
+  ok: boolean;
+  at: number;
+  reason?: "not_found" | "not_supported" | "network_error" | "unauthorized" | "expired" | "refresh_failed";
+}
+
 // The on-disk document is now v3 (a `provider:label`-keyed record map). The store
 // migrates any prior encoding on read and persists v3, while its public surface
 // keeps exchanging today's provider-keyed `StoredCredential` shapes via the
@@ -151,6 +162,7 @@ export class BivyCredentialStore {
   private readonly keyFile: string;
   private readonly legacyFile: string;
   private readonly lockDir: string;
+  private readonly verifyFile: string;
   private readonly plaintextDir: string;
   private readonly chains = new Map<string, Promise<unknown>>();
   private migrated = false;
@@ -163,6 +175,7 @@ export class BivyCredentialStore {
     this.blobFile = path.join(vaultDir, "auth.enc");
     this.keyFile = path.join(vaultDir, "auth.key");
     this.lockDir = path.join(vaultDir, "auth.enc.lock");
+    this.verifyFile = path.join(vaultDir, "verify.json");
     // The plaintext projection is an agent-specific concern (an agent whose CLI
     // reads its own `auth.json`), so it can live in a different dir than the
     // shared encrypted vault.
@@ -410,6 +423,52 @@ export class BivyCredentialStore {
         await this.releaseLock();
       }
     });
+  }
+
+  /**
+   * "Test connection" result for one `provider:label` record — deliberately
+   * NOT part of the encrypted document (`readDocument`/`writeDocument`/the
+   * cross-node sync and merge machinery above): whether a credential works is
+   * a fact about THIS node's network reachability of the provider, not a
+   * portable fact about the credential material, so it must never be synced
+   * to another device as if that device had verified it too. Held in a
+   * separate, non-secret, unencrypted sidecar file (never a secret — just an
+   * ok/timestamp/reason) so it can't accidentally ride along with `exportAll`
+   * / `importAll` / the device-vault sync payload.
+   */
+  async readVerification(provider: string, label: string = DEFAULT_LABEL): Promise<CredentialVerification | undefined> {
+    const id = providerId(provider);
+    if (!id) return undefined;
+    return this.readVerificationDocument()[credKey(id, normalizeLabel(label))];
+  }
+
+  async writeVerification(provider: string, label: string, result: CredentialVerification): Promise<void> {
+    const id = providerId(provider);
+    if (!id) throw new Error("Provider is required");
+    const key = credKey(id, normalizeLabel(label));
+    await this.enqueue(`verify:${id}`, async () => {
+      const document = this.readVerificationDocument();
+      document[key] = result;
+      this.writeVerificationDocument(document);
+    });
+  }
+
+  private readVerificationDocument(): Record<string, CredentialVerification> {
+    try {
+      const raw = fs.readFileSync(this.verifyFile, "utf8");
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, CredentialVerification>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private writeVerificationDocument(document: Record<string, CredentialVerification>): void {
+    fs.mkdirSync(this.vaultDir, { recursive: true, mode: 0o700 });
+    const tmp = `${this.verifyFile}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(document), { mode: 0o600 });
+    fs.renameSync(tmp, this.verifyFile);
+    try { fs.chmodSync(this.verifyFile, 0o600); } catch { /* best effort */ }
   }
 
   /** Forget one record by `provider:label`, leaving a tombstone for convergence. */

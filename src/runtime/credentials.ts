@@ -19,10 +19,16 @@ import {
   buildAgentCredentialEnv,
   apiKeyEnvVar,
 } from "../credentials/resolver.js";
+import { testCredential, type CredentialVerification } from "../credentials/api.js";
 import type { SecretResolver, OAuthRefresher } from "../credentials/ports.js";
 import type { AgentCredentialStore } from "../credentials/types.js";
 
 export { NodeCredentialResolver, buildAgentCredentialEnv, apiKeyEnvVar };
+export type { CredentialVerification };
+
+function oauthAdapter(credsDir: string): OAuthRefresher {
+  return { refresh: (provider, label) => refreshModelOAuth(credsDir, provider, label) };
+}
 
 /** Build the shared credential resolver, binding the node reference/OAuth adapters. */
 export function createCredentialStore(credsDir: string): AgentCredentialStore {
@@ -30,8 +36,11 @@ export function createCredentialStore(credsDir: string): AgentCredentialStore {
   // references (`op://`/`env://` need no dir). credsDir is `<appDir>/credentials`.
   const appDir = path.dirname(credsDir);
   const secrets: SecretResolver = { resolve: (ref) => resolveSecret(ref, appDir) };
-  const oauth: OAuthRefresher = {
-    refresh: (provider, label) => refreshModelOAuth(credsDir, provider, label),
-  };
-  return createResolver(credsDir, secrets, oauth);
+  return createResolver(credsDir, secrets, oauthAdapter(credsDir));
+}
+
+/** "Test connection": probe whether a stored credential actually works, binding
+ *  the same OAuth-refresh adapter the agent runtime uses. See credentials/api.ts. */
+export function testProviderCredential(credsDir: string, provider: string, label: string): Promise<CredentialVerification> {
+  return testCredential(credsDir, provider, label, oauthAdapter(credsDir));
 }

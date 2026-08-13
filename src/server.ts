@@ -29,7 +29,7 @@ import { InMemorySessionLocationRegistry, type SessionLocation, type SessionLoca
 import { InMemoryLocationRegistry } from "./runtime/location-registry.js";
 import { ControlPlaneSessionLocationRegistry, LayeredSessionLocationRegistry, type NodeSessionRow } from "./runtime/control-plane-location.js";
 import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption.js";
-import { createCredentialStore } from "./runtime/credentials.js";
+import { createCredentialStore, testProviderCredential } from "./runtime/credentials.js";
 import { isModelAuthError, authProviderForSession } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
@@ -2688,6 +2688,21 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       await pushModelAuthToControlPlane();
       relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
     } catch (error) {
+      relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  // "Test connection": a bounded, non-secret liveness probe for one credential
+  // record (see credentials/api.ts testCredential). The reply carries only
+  // ok/at/reason — the credential's own token never leaves this handler.
+  async "credential.test"(msg, ctx) {
+    const provider = String(msg.provider ?? "").trim().toLowerCase();
+    const label = String(msg.label ?? "");
+    try {
+      const result = await testProviderCredential(credsDir, provider, label);
+      ctx.reply({ type: "credential.test.result", requestId: msg.requestId, provider, label, ...result });
+      relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+    } catch (error) {
+      ctx.reply({ type: "credential.test.result", requestId: msg.requestId, provider, label, ok: false, at: Date.now(), reason: "network_error" });
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
     }
   },
