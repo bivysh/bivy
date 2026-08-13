@@ -6,6 +6,7 @@
 // chooses — never mid-session.
 
 import { registerSW } from "virtual:pwa-register";
+import { setUpdateAvailable } from "./pwaLifecycle.js";
 
 type UpdateListener = (needRefresh: boolean) => void;
 
@@ -18,6 +19,7 @@ export function initPwa(): void {
     immediate: true,
     onNeedRefresh() {
       needRefresh = true;
+      setUpdateAvailable(true);
       for (const l of listeners) l(true);
     },
   });

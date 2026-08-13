@@ -1,25 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { onUpdateAvailable, reloadForUpdate } from "../pwa.js";
+import { getPwaLifecycleState, subscribePwaLifecycle, updateBlockers } from "../pwaLifecycle.js";
 
-/**
- * World-class update UX: when a new version is precached, we show a small,
- * non-blocking prompt. We never reload mid-session — the user chooses. This
- * replaces the legacy hand-bumped cache version + surprise reloads.
- */
+/** A waiting worker never activates while user work could be displaced. */
 export function UpdatePrompt() {
   const [show, setShow] = useState(false);
+  const lifecycle = useSyncExternalStore(subscribePwaLifecycle, getPwaLifecycleState);
   useEffect(() => onUpdateAvailable(setShow), []);
   if (!show) return null;
+  const blockers = updateBlockers(lifecycle);
   return (
     <div className="update-toast" role="status">
-      <span>A new version of Bivy is ready.</span>
-      <button className="btn ghost" onClick={() => setShow(false)}>
-        Later
-      </button>
-      <button className="btn primary" onClick={reloadForUpdate}>
-        Reload
+      <span>
+        <strong>A Bivy update is ready.</strong>{" "}
+        {blockers.length
+          ? `Reload is available after ${blockers.join(", ")}.`
+          : "Reload preserves cached transcripts and draft text. Attached files must be re-selected; queued prompts should sync first."}
+      </span>
+      <button className="btn ghost" onClick={() => setShow(false)}>Later</button>
+      <button className="btn primary" onClick={reloadForUpdate} disabled={blockers.length > 0} aria-disabled={blockers.length > 0}>
+        Reload safely
       </button>
     </div>
   );

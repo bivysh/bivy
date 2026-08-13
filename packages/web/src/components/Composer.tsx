@@ -13,6 +13,8 @@ import { SANDBOX_TIERS } from "./Settings.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
 import { controller } from "../store/useStore.js";
+import { clearComposerDraft, composerDraftKey, readComposerDraft, writeComposerDraft, type PendingAttachmentMetadata } from "../composerDraft.js";
+import { setComposerLifecycle } from "../pwaLifecycle.js";
 
 type Picker = "repo" | "agent" | "model" | "sandbox" | null;
 
@@ -145,9 +147,12 @@ export function Composer({
   onAbort: () => void;
   onError?: (message: string) => void;
 }) {
-  const [text, setText] = useState("");
+  const initialDraft = useRef<ReturnType<typeof readComposerDraft> | null>(null);
+  if (!initialDraft.current) initialDraft.current = readComposerDraft(localStorage, state.activeSessionId);
+  const [text, setText] = useState(() => initialDraft.current?.text ?? "");
   const [picker, setPicker] = useState<Picker>(null);
   const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
+  const [recoveredAttachments, setRecoveredAttachments] = useState<PendingAttachmentMetadata[]>(() => initialDraft.current?.attachments ?? []);
   const [menuIndex, setMenuIndex] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [recording, setRecording] = useState<null | "server" | "webspeech">(null);
@@ -202,42 +207,49 @@ export function Composer({
   const fileRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const isDraft = !state.activeSessionId;
-  const draftKeyFor = (sessionId: string | null | undefined) => `bivy.composer.${sessionId || "new"}`;
-  const activeDraftKey = useRef(draftKeyFor(state.activeSessionId));
+  const activeDraftKey = useRef(composerDraftKey(state.activeSessionId));
+  const activeDraftSession = useRef(state.activeSessionId);
   const textRef = useRef(text);
+  const attachmentsRef = useRef(attachments);
+  const recoveredRef = useRef(recoveredAttachments);
   useEffect(() => { textRef.current = text; }, [text]);
+  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+  useEffect(() => { recoveredRef.current = recoveredAttachments; }, [recoveredAttachments]);
 
-  // Persist the composer text per active session/draft. Reconnects, reloads,
-  // accidental navigation, and session switches should never eat the user's
-  // half-written prompt. Attachments are intentionally not persisted because
-  // they can be large/sensitive blobs; text drafts are local-only in this
-  // browser profile.
+  // Persist text plus byte-less attachment metadata per Session. File bytes and
+  // extracted text deliberately stay in memory; after reload the user sees what
+  // was pending and must re-select the files before sending.
   useEffect(() => {
-    const nextKey = draftKeyFor(state.activeSessionId);
+    const nextKey = composerDraftKey(state.activeSessionId);
     if (activeDraftKey.current === nextKey) return;
-    try {
-      const currentText = textRef.current;
-      if (currentText.trim()) localStorage.setItem(activeDraftKey.current, currentText);
-      else localStorage.removeItem(activeDraftKey.current);
-      const saved = localStorage.getItem(nextKey) || "";
-      setText(saved);
-      setMenuDismissed(false);
-      setMenuIndex(0);
-      requestAnimationFrame(autosize);
-    } catch {
-      // Storage may be unavailable/private; draft persistence is best-effort.
-    }
+    writeComposerDraft(localStorage, activeDraftSession.current, textRef.current, [
+      ...attachmentsRef.current,
+      ...recoveredRef.current as PromptAttachment[],
+    ]);
+    const saved = readComposerDraft(localStorage, state.activeSessionId);
+    setText(saved.text);
+    setAttachments([]);
+    setRecoveredAttachments(saved.attachments);
+    setMenuDismissed(false);
+    setMenuIndex(0);
+    requestAnimationFrame(autosize);
     activeDraftKey.current = nextKey;
+    activeDraftSession.current = state.activeSessionId;
   }, [state.activeSessionId]);
 
   useEffect(() => {
-    try {
-      if (text) localStorage.setItem(activeDraftKey.current, text);
-      else localStorage.removeItem(activeDraftKey.current);
-    } catch {
-      // best-effort only
-    }
-  }, [text]);
+    writeComposerDraft(localStorage, activeDraftSession.current, text, [
+      ...attachments,
+      ...recoveredAttachments as PromptAttachment[],
+    ]);
+    setComposerLifecycle({
+      hasDraft: Boolean(text.trim()),
+      pendingAttachments: attachments.length + recoveredAttachments.length,
+      readingAttachments: readingCount > 0,
+    });
+  }, [text, attachments, recoveredAttachments, readingCount]);
+
+  useEffect(() => () => setComposerLifecycle({ hasDraft: false, pendingAttachments: 0, readingAttachments: false }), []);
 
   // Keep the textarea height in sync with its content on EVERY text change, not
   // just keystrokes. Programmatic updates — restoring a saved draft, or the long
@@ -439,7 +451,10 @@ export function Composer({
           onError?.(`Could not read ${file.name}.`);
         }
       }
-      if (next.length) setAttachments((prev) => [...prev, ...next]);
+      if (next.length) {
+        setAttachments((prev) => [...prev, ...next]);
+        setRecoveredAttachments((previous) => previous.filter((metadata) => !next.some((attachment) => attachment.name === metadata.name)));
+      }
       if (fileRef.current) fileRef.current.value = "";
     } finally {
       setReadingCount((n) => Math.max(0, n - 1));
@@ -451,9 +466,10 @@ export function Composer({
   }
 
   function clearComposer() {
-    try { localStorage.removeItem(activeDraftKey.current); } catch {}
+    clearComposerDraft(localStorage, activeDraftSession.current);
     setText("");
     setAttachments([]);
+    setRecoveredAttachments([]);
     setMenuDismissed(false);
     setMenuIndex(0);
     requestAnimationFrame(autosize);
@@ -705,6 +721,12 @@ export function Composer({
               {agentCommands.length === 0
                 ? "This agent has no slash commands."
                 : "No matching command — press Esc to send as a message."}
+            </div>
+          )}
+          {recoveredAttachments.length > 0 && (
+            <div className="attachment-recovery" role="status">
+              <span>Reload preserved metadata for {recoveredAttachments.map((attachment) => attachment.name).join(", ")}, not file contents. Re-select before sending.</span>
+              <button type="button" className="btn ghost" onClick={() => setRecoveredAttachments([])}>Clear</button>
             </div>
           )}
           {(attachments.length > 0 || readingCount > 0) && (

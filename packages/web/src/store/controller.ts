@@ -141,6 +141,7 @@ import {
 } from "@bivy/core";
 import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
+import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
 
 /**
  * Bounded discovery metadata for a provider-native session Bivy did not start
@@ -621,6 +622,7 @@ export class AppController {
     if (event.type === "session.history") return;
     const assistantCount = (state: typeof after) => state.transcript.filter((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool).length;
     if (assistantCount(before) === 0 && assistantCount(after) > 0) {
+      markFirstSuccessfulResponse();
       this.recordProductMilestone("first_useful_response", true);
     }
   }
