@@ -2111,7 +2111,7 @@ export class AppController {
         if (phase && phase !== this.bootstrapPhaseByNode.get(nodeId)) {
           this.bootstrapPhaseByNode.set(nodeId, phase);
           log(labels[phase] || `Bootstrap: ${phase}`);
-          if (phase === "failed") this.failPendingLaunch(provisionalId, labels.failed);
+          if (phase === "failed") this.failPendingLaunch(provisionalId, labels.failed!);
         }
       } catch {
         // The relay connection remains authoritative; status polling is additive.
