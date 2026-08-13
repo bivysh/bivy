@@ -86,6 +86,7 @@ export function RunDetails({
   onRetry,
   onClose,
   onOpenSession,
+  onReauthenticate,
   resolveMachineName,
   isSessionResolvable,
 }: {
@@ -101,6 +102,8 @@ export function RunDetails({
   onClose: () => void;
   /** Navigate to the Run's correlated Session — only wired when resolvable. */
   onOpenSession?: (sessionId: string) => void;
+  /** Open provider-specific auth on the Machine that executed this Run. */
+  onReauthenticate?: (provider: string, machineId: string | undefined, reason: string) => Promise<void>;
   resolveMachineName?: (machineId: string) => string | undefined;
   /** Whether the correlated Session exists in the current session list. */
   isSessionResolvable?: (sessionId: string) => boolean;
@@ -108,7 +111,7 @@ export function RunDetails({
   const [status, setStatus] = useState<RunDetailsStatus>("loading");
   const [record, setRecord] = useState<AccountAutomationRun | null>(null);
   const [stale, setStale] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<"cancel" | "retry" | "reauthenticate" | null>(null);
   const [actionError, setActionError] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
 
@@ -157,7 +160,7 @@ export function RunDetails({
 
   const cancel = useCallback(async () => {
     if (!onCancel) return;
-    setBusy(true);
+    setBusyAction("cancel");
     setActionError("");
     try {
       await onCancel(runId);
@@ -166,12 +169,12 @@ export function RunDetails({
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Could not cancel this Run.");
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   }, [onCancel, runId, refresh]);
   const retry = useCallback(async () => {
     if (!onRetry) return;
-    setBusy(true);
+    setBusyAction("retry");
     setActionError("");
     try {
       await onRetry(runId);
@@ -179,9 +182,21 @@ export function RunDetails({
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Could not retry this Run.");
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   }, [onRetry, runId, refresh]);
+  const reauthenticate = useCallback(async (provider: string, machineId: string | undefined, reason: string) => {
+    if (!onReauthenticate) return;
+    setBusyAction("reauthenticate");
+    setActionError("");
+    try {
+      await onReauthenticate(provider, machineId, reason);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not open model sign-in.");
+    } finally {
+      setBusyAction(null);
+    }
+  }, [onReauthenticate]);
 
   return (
     <div className="automations-view run-details" role="dialog" aria-modal="true" aria-label="Run details">
@@ -229,12 +244,13 @@ export function RunDetails({
           <RunBody
             run={run}
             stale={stale}
-            busy={busy}
+            busyAction={busyAction}
             actionError={actionError}
             onCancel={onCancel ? () => setConfirmCancel(true) : undefined}
             onRetry={onRetry ? retry : undefined}
             onRefresh={() => refresh()}
             onOpenSession={onOpenSession}
+            onReauthenticate={onReauthenticate ? reauthenticate : undefined}
             isSessionResolvable={isSessionResolvable}
           />
         )}
@@ -256,31 +272,41 @@ export function RunDetails({
 function RunBody({
   run,
   stale,
-  busy,
+  busyAction,
   actionError,
   onCancel,
   onRetry,
   onRefresh,
   onOpenSession,
+  onReauthenticate,
   isSessionResolvable,
 }: {
   run: Run;
   stale: boolean;
-  busy: boolean;
+  busyAction: "cancel" | "retry" | "reauthenticate" | null;
   actionError: string;
   onCancel?: () => void;
   onRetry?: () => void;
   onRefresh: () => void;
   onOpenSession?: (sessionId: string) => void;
+  onReauthenticate?: (provider: string, machineId: string | undefined, reason: string) => Promise<void>;
   isSessionResolvable?: (sessionId: string) => boolean;
 }) {
   const canCancel = Boolean(onCancel) && run.actions.some((a) => a.kind === "cancel");
   const canRetry = Boolean(onRetry) && run.actions.some((a) => a.kind === "retry");
+  const inspectChecks = run.actions.some((a) => a.kind === "inspect_checks");
+  const reviewSession = run.actions.some((a) => a.kind === "review_session");
+  const reauthenticate = run.actions.find((a) => a.kind === "reauthenticate" && a.provider);
   const sessionOpenable = Boolean(run.sessionId) && Boolean(onOpenSession)
     && (isSessionResolvable ? isSessionResolvable(run.sessionId!) : false);
   const agentLine = [run.requested.runtimeId, run.requested.model].filter(Boolean).join(" · ");
   const startedAt = run.timestamps.startedAt ?? run.timestamps.claimedAt;
   const receipt = useMemo(() => receiptV1FromRun(run, new Date().toISOString()), [run]);
+  const checksRef = useRef<HTMLDivElement>(null);
+  const startReauthentication = useCallback(async () => {
+    if (!onReauthenticate || !reauthenticate?.provider) return;
+    await onReauthenticate(reauthenticate.provider, run.machine?.id, run.failureSummary || "Authentication failed");
+  }, [onReauthenticate, reauthenticate, run.failureSummary, run.machine?.id]);
   const exportReceipt = useCallback(() => {
     const blob = new Blob([`${receiptV1Json(receipt)}\n`], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -345,7 +371,7 @@ function RunBody({
       </div>
 
       {run.checks.length > 0 && (
-        <div className="run-sheet-checks">
+        <div className="run-sheet-checks" ref={checksRef} tabIndex={-1}>
           {run.checks.map((c, i) => (
             <span key={`${c.name}-${i}`} className={`chk ${c.status}`}>
               {c.name} {c.status === "passed" ? "✓" : c.status === "failed" ? "✗" : "–"}
@@ -387,16 +413,31 @@ function RunBody({
 
       {actionError && <div className="run-sheet-failure" role="alert">{actionError}</div>}
 
-      {(canCancel || canRetry) && (
+      {(canCancel || canRetry || inspectChecks || (reviewSession && sessionOpenable) || (reauthenticate && onReauthenticate)) && (
         <div className="run-sheet-recovery" role="group" aria-label="Run actions">
+          {inspectChecks && (
+            <button type="button" className="btn small primary recover-checks" onClick={() => { checksRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); checksRef.current?.focus(); }}>
+              Review failed checks
+            </button>
+          )}
+          {reauthenticate && onReauthenticate && (
+            <button type="button" className="btn small primary recover-auth" disabled={busyAction !== null} onClick={() => void startReauthentication()}>
+              {busyAction === "reauthenticate" ? "Connecting…" : reauthenticate.label}
+            </button>
+          )}
+          {reviewSession && sessionOpenable && (
+            <button type="button" className="btn small primary recover-review" onClick={() => onOpenSession!(run.sessionId!)}>
+              Review Session
+            </button>
+          )}
           {canRetry && (
-            <button type="button" className="btn small primary recover-retry" disabled={busy} onClick={onRetry}>
-              {busy ? "Retrying…" : "Retry Run"}
+            <button type="button" className="btn small primary recover-retry" disabled={busyAction !== null} onClick={onRetry}>
+              {busyAction === "retry" ? "Retrying…" : "Retry Run"}
             </button>
           )}
           {canCancel && (
-            <button type="button" className="btn small recover-cancel" disabled={busy} onClick={onCancel}>
-              {busy ? "Cancelling…" : "Cancel Run"}
+            <button type="button" className="btn small recover-cancel" disabled={busyAction !== null} onClick={onCancel}>
+              {busyAction === "cancel" ? "Cancelling…" : "Cancel Run"}
             </button>
           )}
         </div>

@@ -22,12 +22,14 @@ export type RunStatus = GithubQueueItem["status"];
  *  Finished. Claim/lease/attempt states stay in storage and diagnostics. */
 export type RunLifecycle = "queued" | "running" | "waiting" | "needs_attention" | "finished";
 
-export type RunActionKind = "cancel" | "retry";
+export type RunActionKind = "cancel" | "retry" | "inspect_checks" | "review_session" | "reauthenticate";
 
 export interface RunAction {
   kind: RunActionKind;
   /** Customer-facing verb. */
   label: string;
+  /** Exact credential target for a re-authentication action. */
+  provider?: string;
 }
 
 export type RunCheck = NonNullable<GithubQueueItem["checks"]>[number];
@@ -171,12 +173,27 @@ function durationOf(t: RunTimestamps): number | undefined {
   return Number.isFinite(ms) && ms >= 0 ? ms : undefined;
 }
 
-function actionsFor(status: RunStatus, outcome: RunOutcome, attempt: number, maxAttempts?: number): RunAction[] {
+function authProviderForFailure(runtimeId: string | undefined, failure: string | undefined): string | undefined {
+  if (!failure || !/\b401\b|\b403\b|unauthori[sz]ed|authenticat|invalid x-api-key|(missing|no|invalid)[\s\S]*(bearer|api[\s_-]?key|token)/i.test(failure)) return undefined;
+  const runtime = String(runtimeId || "").trim().toLowerCase();
+  if (runtime.startsWith("codex")) return "openai-codex";
+  if (runtime.startsWith("claude")) return "anthropic";
+  return undefined;
+}
+
+function actionsFor(record: RunRecord, outcome: RunOutcome, sessionId: string | undefined): RunAction[] {
   const actions: RunAction[] = [];
-  if (CANCELLABLE.has(status)) actions.push({ kind: "cancel", label: "Cancel Run" });
+  const attempt = Math.max(1, Math.trunc(record.attempt ?? 1));
+  const provider = outcome.kind === "agent_failed" ? authProviderForFailure(record.runtimeId, record.output?.failure) : undefined;
+  if (outcome.kind === "checks_failed" && record.checks?.some((check) => check.status === "failed")) {
+    actions.push({ kind: "inspect_checks", label: "Review failed checks" });
+  }
+  if (provider) actions.push({ kind: "reauthenticate", label: "Re-authenticate", provider });
+  if (outcome.kind === "needs_review" && sessionId) actions.push({ kind: "review_session", label: "Review Session" });
+  if (CANCELLABLE.has(record.status)) actions.push({ kind: "cancel", label: "Cancel Run" });
   // Retry is another attempt of a Run that has ENDED in a failure the customer
   // can act on. A still-parked needs_attention Run is cancellable, not retryable.
-  if (FINISHED.has(status) && RETRYABLE_OUTCOMES.has(outcome.kind) && (!maxAttempts || attempt < maxAttempts)) actions.push({ kind: "retry", label: "Retry Run" });
+  if (FINISHED.has(record.status) && RETRYABLE_OUTCOMES.has(outcome.kind) && (!record.maxAttempts || attempt < record.maxAttempts)) actions.push({ kind: "retry", label: "Retry Run" });
   return actions;
 }
 
@@ -229,7 +246,7 @@ function projectRun(record: RunRecord, projection: RunProjectionSource, ctx?: Ru
     ...(record.receiptEvidence ? { receiptEvidence: record.receiptEvidence } : {}),
     references,
     ...(failure ? { failureSummary: failure.slice(0, MAX_FAILURE_SUMMARY) } : {}),
-    actions: actionsFor(record.status, outcome, Math.max(1, Math.trunc(record.attempt ?? 1)), record.maxAttempts),
+    actions: actionsFor(record, outcome, sessionId),
   };
 }
 

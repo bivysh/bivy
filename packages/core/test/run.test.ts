@@ -116,6 +116,24 @@ describe("canonical Run projection", () => {
       expect(runFromQueueItem(base("succeeded", { output: { prUrl: "https://example.test/pr/1" } })).actions.some((a) => a.kind === "retry")).toBe(false);
       expect(runFromQueueItem(base("failed", { attempt: 2, maxAttempts: 2, output: { failure: "runtime exited" } })).actions.some((a) => a.kind === "retry")).toBe(false);
     });
+
+    it("derives evidence-specific recovery actions without guessing a provider", () => {
+      expect(runFromQueueItem(base("failed", {
+        runtimeId: "codex", output: { failure: "401 Unauthorized" },
+      })).actions).toContainEqual({ kind: "reauthenticate", label: "Re-authenticate", provider: "openai-codex" });
+      expect(runFromQueueItem(base("failed", {
+        runtimeId: "claude-code-sdk", output: { failure: "Failed to authenticate" },
+      })).actions).toContainEqual({ kind: "reauthenticate", label: "Re-authenticate", provider: "anthropic" });
+      expect(runFromQueueItem(base("failed", {
+        runtimeId: "custom-agent", output: { failure: "401 Unauthorized" },
+      })).actions.some((a) => a.kind === "reauthenticate")).toBe(false);
+      expect(runFromQueueItem(base("failed", {
+        checks: [{ name: "CI", status: "failed" }], output: { failure: "checks failed" },
+      })).actions.some((a) => a.kind === "inspect_checks")).toBe(true);
+      expect(runFromQueueItem(base("succeeded", {
+        output: { sessionId: "sess_review" },
+      })).actions.some((a) => a.kind === "review_session")).toBe(true);
+    });
   });
 });
 
