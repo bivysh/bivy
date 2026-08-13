@@ -91,10 +91,15 @@ Known coherence gaps found in the same audit:
 within ten minutes.
 
 - [ ] Turn setup into one resumable sequence: install → repository → recommended agent → auth validation → remote reach → starter task.
+  **Progress:** the canonical readiness sequence is now rendered on a fresh PWA
+  draft and disappears from normal Session surfaces. Its one next action opens
+  the actual Machine, agent, Keys & OAuth, repository, or composer surface.
 - [ ] Certify Claude Code and Codex versions and move all other agents behind More agents.
 - [ ] Preselect the only sensible Machine, agent, model, and protection profile.
 - [ ] Present Machine online, agent installed, credential valid, repository ready,
   and ready-to-run as distinct checks.
+  **Progress:** the PWA renders these checks from the shared activation model and
+  cannot mark activation complete until a real assistant response is present.
 - [ ] Give each failed check one actionable remediation and verify that setup
   cannot report success before an agent answers.
 - [ ] Harden the account-free pairing path against the same activation gate.

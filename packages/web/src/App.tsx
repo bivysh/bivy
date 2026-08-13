@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { cancelAutomationRun, fetchAutomationRun, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { activationFromState, cancelAutomationRun, fetchAutomationRun, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -11,6 +11,7 @@ import { QuestionStack } from "./components/QuestionCard.js";
 import { TurnAttentionCard } from "./components/TurnAttentionCard.js";
 import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import { SetupNotice } from "./components/SetupNotice.js";
+import { ReadinessChecklist } from "./components/ReadinessChecklist.js";
 import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { closeAutomations, getAutomationsRoute, openAutomations, setAutomationsSection, subscribeAutomationsRoute } from "./automationsRoute.js";
@@ -177,6 +178,17 @@ export function App() {
     });
   }, []);
   const online = state.status === "online";
+  const activation = useMemo(() => activationFromState({
+    status: state.status,
+    runtimes: state.runtimes as unknown as ReadonlyArray<Record<string, unknown>>,
+    providers: state.providers,
+    reposAuthed: state.reposAuthed,
+    transcript: state.transcript.map((entry) => ({
+      role: entry.role,
+      text: typeof entry.text === "string" ? entry.text : "",
+      ...(entry.tool ? { tool: true } : {}),
+    })),
+  }), [state.providers, state.reposAuthed, state.runtimes, state.status, state.transcript]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
@@ -624,6 +636,19 @@ export function App() {
               {state.nodeUpdating ? "Updating…" : "Update this machine"}
             </button>
           </div>
+        )}
+
+        {!state.activeSessionId && state.transcript.length === 0 && (
+          <ReadinessChecklist
+            activation={activation}
+            onRemediate={{
+              connect_machine: () => openSettings("nodes"),
+              install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
+              authenticate_credential: () => openSettings("providers"),
+              grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
+              run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
+            }}
+          />
         )}
 
         {needsNode && (
