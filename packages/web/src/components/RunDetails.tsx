@@ -52,6 +52,13 @@ function formatWhen(value?: string): string {
   return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+function formatUsage(usage: Run["usage"]): string {
+  if (!usage) return "";
+  const tokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
+  const bits = [tokens ? `${tokens.toLocaleString()} tokens` : "", typeof usage.costUsd === "number" ? `$${usage.costUsd.toFixed(4)}` : ""];
+  return bits.filter(Boolean).join(" · ");
+}
+
 function formatDuration(ms?: number): string {
   if (typeof ms !== "number" || ms < 0) return "";
   const s = Math.round(ms / 1000);
@@ -379,7 +386,34 @@ function RunBody({
         {agentLine && <Row k="Ran on">{agentLine}</Row>}
         {run.requested.approvalMode && <Row k="Approvals">{APPROVAL_LABEL[run.requested.approvalMode] ?? run.requested.approvalMode}</Row>}
         {run.requested.sandbox && <Row k="Sandbox">{SANDBOX_LABEL[run.requested.sandbox] ?? run.requested.sandbox}</Row>}
+        <Row k="Attempt">{run.attempt}{run.maxAttempts ? ` of ${run.maxAttempts}` : ""}{run.attemptReason ? ` · ${run.attemptReason}` : ""}</Row>
+        <Row k="Usage / cost">{formatUsage(run.usage) || "Not reported by the provider"}</Row>
+        <Row k="Notification">
+          {run.notification
+            ? `${run.notification.status.replace("_", " ")}${run.notification.channel ? ` · ${run.notification.channel}` : ""}${run.notification.reason ? ` · ${run.notification.reason}` : ""}`
+            : "Not reported"}
+        </Row>
+        <Row k="Next action">{run.nextAction?.label ?? "No operator action available"}</Row>
       </div>
+
+      {run.timeline.length > 0 && (
+        <section className="run-timeline" aria-labelledby="run-timeline-heading">
+          <h2 id="run-timeline-heading">Lifecycle</h2>
+          <ol>
+            {run.timeline.map((milestone, index) => (
+              <li key={`${milestone.stage}-${milestone.at}-${index}`}>
+                <span className="run-timeline-dot" aria-hidden />
+                <div>
+                  <strong>{milestone.stage.replaceAll("_", " ")}</strong>
+                  <span>{formatWhen(milestone.at)}{milestone.attempt ? ` · attempt ${milestone.attempt}` : ""}</span>
+                  <p>{milestone.summary}</p>
+                  {milestone.evidenceRef && <code>{milestone.evidenceRef}</code>}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
 
       {run.checks.length > 0 && (
         <div className="run-sheet-checks" ref={checksRef} tabIndex={-1}>
@@ -402,6 +436,16 @@ function RunBody({
           {run.references.artifact && (
             <Row k="Artifact"><a href={run.references.artifact} target="_blank" rel="noopener">View artifact</a></Row>
           )}
+        </div>
+      )}
+
+      {run.operationalReferences.length > 0 && (
+        <div className="run-sheet-rows">
+          {run.operationalReferences.map((reference, index) => (
+            <Row k={reference.kind[0]!.toUpperCase() + reference.kind.slice(1)} key={`${reference.kind}-${reference.ref}-${index}`}>
+              {reference.url ? <a href={reference.url} target="_blank" rel="noopener">{reference.ref}</a> : <code>{reference.ref}</code>}
+            </Row>
+          ))}
         </div>
       )}
 

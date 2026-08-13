@@ -55,10 +55,10 @@ import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { AutomationsSection } from "../router.js";
 import type { GithubQueueItem } from "@bivy/core";
-import { isTerminalRun, projectRunDetail } from "../runDetail.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { CloseIcon, PlusIcon } from "./UiIcons.js";
 import { AutomationSourcesPanel } from "./AutomationSourcesPanel.js";
+import { RunHistory } from "./RunHistory.js";
 import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
@@ -541,6 +541,11 @@ export function AutomationsView({
   const [oneOffOpen, setOneOffOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  const refreshRuns = useCallback(async () => {
+    const recent = await fetchAutomationRuns(controller.local, 30);
+    setRuns(recent);
+  }, []);
+
   const refresh = useCallback(async () => {
     const canQuery = !controller.direct;
     const [definitions, recent, gh, lin, slack, nodes, hosted] = await Promise.all([
@@ -559,6 +564,17 @@ export function AutomationsView({
   }, []);
 
   useEffect(() => { void refresh().catch((e) => { setError(String(e)); setLoading(false); }); }, [refresh]);
+  useEffect(() => {
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = controller.onRunUpdated(() => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => void refreshRuns().catch(() => {}), 100);
+    });
+    // Polling is recovery only: a backgrounded browser or old relay can miss a
+    // best-effort hint. Keep the interval deliberately calm.
+    const recovery = section === "queue" ? setInterval(() => void refreshRuns().catch(() => {}), 30_000) : null;
+    return () => { unsubscribe(); if (debounce) clearTimeout(debounce); if (recovery) clearInterval(recovery); };
+  }, [refreshRuns, section]);
   useEffect(() => {
     controller.listRuntimes();
     controller.listModels();
@@ -1064,66 +1080,17 @@ export function AutomationsView({
 
         {section === "queue" && (
           <>
-            <section className="autom-section runs-overview">
-              <div className="autom-section-head">
-                <div>
-                  <h2 className="autom-section-label">Automation runs</h2>
-                  <p className="settings-hint">Current state and recent results from scheduled, webhook, and manual runs.</p>
-                </div>
-                <div className="autom-section-actions">
-                  <button type="button" className="btn sm" onClick={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}>Refresh</button>
-                  <button type="button" className="btn sm primary" onClick={() => setOneOffOpen(true)}>New Run</button>
-                </div>
-              </div>
-              {cancelError && <div className="banner error inline">Could not cancel run: {cancelError}</div>}
-              {definitionRuns.length === 0 ? (
-                <p className="settings-hint autom-empty-hint">
-                  No automation runs yet. Use <strong>Run now</strong> on an automation to test the full path.
-                </p>
-              ) : (
-                <div className="automation-list">
-                  {definitionRuns.slice(0, 12).map((run) => {
-                    const detail = projectRunDetail(run);
-                    const outcomeTone = detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "danger" ? "bad" : detail.outcome.tone === "warning" ? "warn" : "info";
-                    const defName = items.find((i) => i.id === run.definitionId)?.name;
-                    const sessionId = detail.sessionId;
-                    const rowMain = (
-                      <>
-                        <div className="automation-row-title">
-                          <strong>{run.title}</strong>
-                          <span className={`run-status ${outcomeTone}`}>{detail.outcome.label}</span>
-                        </div>
-                        <div className="settings-hint">
-                          {[defName, formatAutomationMoment(run.createdAt), run.triggerKind, detail.checksSummary, detail.attempt > 1 ? `attempt ${detail.attempt}` : null].filter(Boolean).join(" · ")}
-                        </div>
-                        {detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}
-                      </>
-                    );
-                    return (
-                      <div className="automation-row run-row" key={run.id}>
-                        {onOpenRun
-                          ? <button type="button" className="automation-row-main run-row-open" onClick={() => onOpenRun(run.id)}>{rowMain}</button>
-                          : <div className="automation-row-main">{rowMain}</div>}
-                        <div className="automation-row-actions">
-                          {!isTerminalRun(run) && (
-                            <button type="button" className="btn sm danger" disabled={cancelBusyId === run.id} onClick={() => { setCancelError(null); setCancelRun(run); }}>
-                              {cancelBusyId === run.id ? "Cancelling…" : "Cancel"}
-                            </button>
-                          )}
-                          {sessionId && (
-                            <button type="button" className="btn sm primary" onClick={() => { onOpenSession(sessionId); onClose(); }}>
-                              Open session
-                            </button>
-                          )}
-                          {run.output?.prUrl && <a className="btn sm" href={run.output.prUrl} target="_blank" rel="noreferrer">View PR</a>}
-                          {onOpenRun && <span className="run-row-chevron" aria-hidden="true">›</span>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
+            {cancelError && <div className="banner error inline">Could not cancel run: {cancelError}</div>}
+            <RunHistory
+              runs={definitionRuns}
+              definitions={items}
+              cancelBusyId={cancelBusyId}
+              onRefresh={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}
+              onNewRun={() => setOneOffOpen(true)}
+              onCancel={(run) => { setCancelError(null); setCancelRun(run); }}
+              onOpenRun={onOpenRun}
+              onOpenSession={(sessionId) => { onOpenSession(sessionId); onClose(); }}
+            />
             <GithubQueuePanel
               queue={githubQueue ?? null}
               onRefresh={() => onRefreshGithubQueue?.()}

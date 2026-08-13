@@ -1806,6 +1806,18 @@ button.template-card.is-featured .template-card-icon {
   overflow: hidden; background: var(--surface);
 }
 .run-details .run-sheet-checks { justify-content: flex-start; margin: 14px 2px 0; }
+.run-timeline { margin-top: 18px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.run-timeline h2 { margin: 0 0 12px; font-size: 14px; }
+.run-timeline ol { list-style: none; margin: 0; padding: 0; }
+.run-timeline li { position: relative; display: grid; grid-template-columns: 12px 1fr; gap: 10px; padding-bottom: 14px; }
+.run-timeline li:not(:last-child)::before { content: ""; position: absolute; left: 5px; top: 12px; bottom: 0; border-left: 1px solid var(--line-strong); }
+.run-timeline-dot { width: 9px; height: 9px; margin-top: 4px; border-radius: 50%; background: var(--accent); z-index: 1; }
+.run-timeline li div { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; }
+.run-timeline strong { text-transform: capitalize; font-size: 13px; }
+.run-timeline li span { color: var(--muted); font-size: 12px; }
+.run-timeline p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.run-timeline code { grid-column: 1 / -1; overflow-wrap: anywhere; font-size: 11px; }
+.run-history-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
 .run-details .run-sheet-failure { margin-top: 14px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line)); border-radius: 12px; }
 .run-details-receipt { margin-top: 18px !important; }
 .run-details-state {
