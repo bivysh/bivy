@@ -911,6 +911,10 @@ export interface AccountAutomation {
   nodeLabel?: string;
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  /** Explicit acknowledgement of autonomous + danger-full-access — without it
+   *  the server's shared preflight gate rejects save. See simulateAutomation
+   *  and docs/automation-evaluator.md. */
+  allowDangerous?: boolean;
   maxAttempts?: number;
   enabled: boolean;
   /** How this automation fires. Absent on legacy rows means "schedule".
@@ -1028,6 +1032,81 @@ export function updateAutomation(
   fetchImpl: typeof fetch = fetch,
 ): Promise<AccountAutomation> {
   return automationRequest(store, `/account/automations/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }, fetchImpl);
+}
+
+/** The event-fixture vocabulary documented in docs/automations-as-code.md —
+ *  the same shape `bivy automation test` accepts, so a representative event
+ *  means the same thing everywhere. */
+export interface AutomationSimulationEvent {
+  kind: "github" | "linear" | "schedule" | "webhook" | "manual";
+  repo?: string;
+  labels?: string[];
+  mention?: boolean;
+  event?: "issues" | "issue_comment" | "pull_request" | "pull_request_review_comment" | "workflow_run";
+  action?: string;
+  conclusion?: string;
+  workflow?: string;
+}
+
+export type AutomationSimulationDraft = Partial<CreateAutomationInput> & { allowDangerous?: boolean };
+
+export interface AutomationMatchTrailEntry {
+  id: string;
+  matched: boolean;
+  reason: string;
+}
+
+export interface AutomationOverlapFinding {
+  kind: "shadowed" | "overlaps";
+  beforeId: string;
+  afterId: string;
+  detail: string;
+}
+
+export type AutomationPreflightSeverity = "ok" | "info" | "warn" | "block" | "skipped";
+
+export interface AutomationPreflightCheck {
+  id: "source_connection" | "repo_access" | "encrypted_key_ownership" | "assigned_machine" | "agent_model_credentials" | "sandbox_policy" | "quota";
+  severity: AutomationPreflightSeverity;
+  label: string;
+  detail: string;
+  blocksSave: boolean;
+}
+
+export interface AutomationPreflightGate {
+  blocked: boolean;
+  blockingChecks: AutomationPreflightCheck[];
+  requiresAck: boolean;
+  warnChecks: AutomationPreflightCheck[];
+}
+
+/** Result of POST /account/automations/simulate — explains, without running
+ *  anything, which automation a representative event would fire (and why the
+ *  rest didn't), any overlap/shadow warnings across the account's rules, and
+ *  the seven-check preflight for the tested automation. Powers the
+ *  Automations editor's "Test event" workflow. */
+export interface AutomationSimulationResult {
+  /** The tested automation's id — real for an existing automation (with or
+   *  without a draft patch), synthetic for a brand-new never-saved draft. */
+  subjectId: string;
+  matchedId?: string;
+  trail: AutomationMatchTrailEntry[];
+  overlaps: AutomationOverlapFinding[];
+  preflight: AutomationPreflightCheck[];
+  gate: AutomationPreflightGate;
+}
+
+/**
+ * Explain what a representative event would do against either an existing
+ * automation (optionally previewing an unsaved `draft` patch) or a brand-new
+ * draft that has never been saved. Creates no run and persists nothing.
+ */
+export function simulateAutomation(
+  store: LocalStore,
+  input: { automationId?: string; draft?: AutomationSimulationDraft; event?: AutomationSimulationEvent },
+  fetchImpl: typeof fetch = fetch,
+): Promise<AutomationSimulationResult> {
+  return automationRequest(store, "/account/automations/simulate", { method: "POST", body: JSON.stringify(input) }, fetchImpl);
 }
 
 export async function deleteAutomation(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {

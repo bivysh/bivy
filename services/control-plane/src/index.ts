@@ -2968,6 +2968,11 @@ app.post("/account/automations/simulate", asyncHandler(async (req, res) => {
   const ctx = await preflightSignalContext(client.accountId);
   const result = evaluateAccountAutomation(subject, definitions, event, ctx);
   res.json({
+    // The subject's id — a real id when previewing an existing automation
+    // (with or without a draft patch), or a synthetic never-persisted one for
+    // a brand-new draft. Lets the client identify "which row is mine" in
+    // `trail`/`overlaps` without needing to already know a not-yet-saved id.
+    subjectId: subject.id,
     matchedId: result.match?.matched?.id,
     trail: result.match?.trail ?? [],
     overlaps: result.overlaps,
