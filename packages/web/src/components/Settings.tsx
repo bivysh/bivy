@@ -833,6 +833,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
 
   return (
     <div className="settings-form">
+      <AccountApiKeys />
       {showNodePicker && (
         <>
           <p className="muted settings-intro">
@@ -1174,12 +1175,6 @@ function LocalModelsPanel({ state }: { state: AppState }) {
 
 // ---- Voice input (speech-to-text) ----
 function VoicePanel({ state }: { state: AppState }) {
-  const [keys, setKeys] = useState<Record<string, string>>({});
-  // Keyed by provider id, not a single shared flag — saving one provider's key
-  // used to disable Save for every other row too (#140).
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [errById, setErrById] = useState<Record<string, string>>({});
-  const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
   useEffect(() => {
     controller.getSttConfig();
   }, []);
@@ -1188,21 +1183,10 @@ function VoicePanel({ state }: { state: AppState }) {
 
   return (
     <div className="settings-form">
-      {confirm && (
-        <ConfirmDialog
-          title={confirm.title}
-          message={confirm.message}
-          confirmLabel="Remove"
-          danger
-          onCancel={() => setConfirm(null)}
-          onConfirm={() => { confirm.action(); setConfirm(null); }}
-        />
-      )}
       <p className="muted settings-intro">
-        Dictate into the composer with the mic button. With a key set, recordings are transcribed by your chosen
-        provider using the key stored on this node. With no key, voice falls back to your browser's built-in dictation
-        (no key needed, but lower accuracy). Note: <strong>Groq</strong> (fast Whisper hosting, key from console.groq.com)
-        is a different company from <strong>xAI / Grok</strong> — an xAI key won't work here, and xAI has no speech API.
+        Dictate into the composer with the mic button. Voice uses the same Groq or OpenAI API key shown under
+        <strong> Keys &amp; OAuth</strong>; there is no separate speech key. With no key, voice falls back to your browser's
+        built-in dictation (no key needed, but lower accuracy). Note: <strong>Groq</strong> is different from xAI / Grok.
       </p>
 
       <label className="field-label">Preferred provider</label>
@@ -1224,59 +1208,9 @@ function VoicePanel({ state }: { state: AppState }) {
         <div key={p.id} className="voice-provider">
           <div className="voice-provider-head">
             <span className="field-label">{p.label}</span>
-            {p.configured ? <span className="chip ok">Key set</span> : <span className="chip">No key</span>}
+            {p.configured ? <span className="chip ok">Available from Keys &amp; OAuth</span> : <span className="chip">No account key</span>}
           </div>
-          <div className="muted small">{p.model}</div>
-          <div className="row-actions">
-            <input
-              className="picker-search"
-              type="password"
-              value={keys[p.id] || ""}
-              placeholder={p.configured ? "Replace API key" : "Paste API key"}
-              onChange={(e) => setKeys((k) => ({ ...k, [p.id]: e.target.value }))}
-            />
-          </div>
-          <div className="row-actions">
-            <button
-              className="btn primary"
-              disabled={!(keys[p.id] || "").trim() || busyId === p.id}
-              onClick={async () => {
-                setBusyId(p.id);
-                setErrById((e) => ({ ...e, [p.id]: "" }));
-                try {
-                  // Awaits the node's real ack instead of a blind timer — see #140.
-                  await controller.saveSttKey(p.id, (keys[p.id] || "").trim());
-                  setKeys((k) => ({ ...k, [p.id]: "" }));
-                  // "Key set" chip is reactive off state.sttConfig — refresh it.
-                  controller.getSttConfig();
-                } catch (e) {
-                  setErrById((cur) => ({ ...cur, [p.id]: String((e as Error)?.message || e) }));
-                } finally {
-                  setBusyId(null);
-                }
-              }}
-            >
-              {busyId === p.id ? "Saving…" : "Save key"}
-            </button>
-            {p.configured && (
-              <button
-                className="btn danger-ghost"
-                onClick={() => setConfirm({
-                  title: "Remove speech key?",
-                  message: `Remove the stored ${p.label} key?`,
-                  action: () => {
-                    controller.removeSttKey(p.id);
-                    // stt.config.set (remove) has no direct ack — re-fetch so
-                    // the "Key set" chip reflects the node's real outcome.
-                    setTimeout(() => controller.getSttConfig(), 500);
-                  },
-                })}
-              >
-                Remove
-              </button>
-            )}
-          </div>
-          {errById[p.id] && <div className="banner error inline">{errById[p.id]}</div>}
+          <div className="muted small">{p.model} · Add, rotate, scope, or remove this provider under Keys &amp; OAuth.</div>
         </div>
       ))}
     </div>
@@ -1750,7 +1684,6 @@ function EphemeralPanel() {
         })}
       </div>
       <EphemeralTokenSync />
-      <EphemeralModelKeys />
       {!controller.direct && <HostedRunnerManagement />}
     </div>
   );
@@ -1911,10 +1844,11 @@ const COMMON_MODEL_PROVIDERS = [
   "openrouter", "deepseek", "xai", "together", "fireworks", "cohere",
 ];
 
-function EphemeralModelKeys() {
+function AccountApiKeys() {
   const [keys, setKeys] = useState<EphemeralModelKeyInfo[]>([]);
   const [provider, setProvider] = useState("");
   const [key, setKey] = useState("");
+  const [scope, setScope] = useState<"account" | "device">("account");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -1927,10 +1861,10 @@ function EphemeralModelKeys() {
     setMsg(null);
     setErr(null);
     try {
-      await controller.setEphemeralModelKey(provider, key);
+      await controller.setEphemeralModelKey(provider, key, scope);
       setProvider("");
       setKey("");
-      setMsg("Saved on this device.");
+      setMsg(scope === "account" ? "Saved to your end-to-end encrypted account vault." : "Saved on this device only.");
       refresh();
     } catch (e) {
       setErr(String((e as Error)?.message || e));
@@ -1941,11 +1875,11 @@ function EphemeralModelKeys() {
 
   return (
     <section className="settings-section">
-      <h4 className="settings-subhead">Model keys for new machines</h4>
+      <h4 className="settings-subhead">Account API keys</h4>
       <p className="muted small">
-        API keys kept on this device and pushed into a freshly-launched machine over its encrypted channel, so a
-        brand-new machine has model credentials even when it's your only machine. Never sent to our servers or baked into
-        the machine image. API keys only — agent subscription logins can't be seeded this way.
+        Add model and voice API keys here even before you own a machine. Account keys synchronize end-to-end with your
+        PWAs and are installed on persistent and isolated machines when they connect. The control plane stores only
+        ciphertext. OAuth subscription logins still require a machine-assisted sign-in.
       </p>
       {keys.length > 0 && (
         <div className="picker-list">
@@ -1953,7 +1887,7 @@ function EphemeralModelKeys() {
             <PickerItem
               key={k.provider}
               title={k.provider}
-              meta={k.configured ? "Key saved on this device" : "Not set"}
+              meta={k.configured ? (k.scope === "account" ? "Account · end-to-end encrypted" : "This device only") : "Not set"}
               right={
                 <button
                   type="button"
@@ -1973,7 +1907,7 @@ function EphemeralModelKeys() {
       {confirmRemove && (
         <ConfirmDialog
           title="Remove model key?"
-          message={`Forget the ${confirmRemove} model key on this device? New machines won't be seeded with it.`}
+          message={`Forget the ${confirmRemove} API key from this device vault?`}
           confirmLabel="Remove"
           danger
           onCancel={() => setConfirmRemove(null)}
@@ -2005,6 +1939,11 @@ function EphemeralModelKeys() {
         placeholder="Paste key"
         onChange={(e) => setKey(e.target.value)}
       />
+      <label className="field-label">Scope</label>
+      <select className="picker-search" value={scope} onChange={(e) => setScope(e.target.value as "account" | "device")}>
+        <option value="account">My account — E2E sync to devices and machines</option>
+        <option value="device">This device only</option>
+      </select>
       <button className="btn primary" disabled={busy || !provider.trim() || !key.trim()} onClick={save}>
         {busy ? "Saving…" : "Save key"}
       </button>

@@ -20,7 +20,14 @@
 import { seal, open, importRoomKey } from "./crypto.js";
 import { wrapKeyFor, type DeviceKeypair } from "./pairing.js";
 import { b64, unb64 } from "./base64.js";
-import type { EphemeralKeyStore, ProviderKeyInfo } from "./ephemeral.js";
+import type {
+  DeviceCredentialScope,
+  EphemeralKeyStore,
+  EphemeralModelKeyEntry,
+  EphemeralModelKeyInfo,
+  EphemeralModelKeyStore,
+  ProviderKeyInfo,
+} from "./ephemeral.js";
 
 /** One device's ECDH-wrapped copy of the account vault key. */
 export interface DeviceVaultWrappedKey {
@@ -57,20 +64,46 @@ export interface DeviceVaultDeps {
   remote: DeviceVaultRemote;
   /** This device's X25519 keypair (`deviceKeypair()` in the app). */
   device: () => Promise<DeviceKeypair>;
-  /** Opt-in gate. When false the store is purely local (today's behavior). */
+  /** Account-vault gate. Normally true for a signed-in PWA, including a user
+   *  who has no node yet. When false every credential remains device-local. */
   enabled: () => boolean;
+  /** Compute-provider tokens have a wider billing permission and remain opt-in. */
+  providerTokenSyncEnabled?: () => boolean;
+  /** Device model/voice key storage. Account-scoped entries are synchronized. */
+  modelKeys?: EphemeralModelKeyStore;
   /** Injectable RNG for the vault key (tests). */
   randomKey?: () => Uint8Array;
 }
 
 export interface DeviceVaultKeyStore extends EphemeralKeyStore {
   /** Reconcile with the control plane: consume a wrapped key, or (if this device
-   *  holds tokens) become/refresh the producer and satisfy peers' requests. Safe
-   *  to call on app open and after any token change. No-op when disabled. */
+   *  holds credentials) become/refresh the producer and satisfy peers' requests. */
   sync(): Promise<void>;
+  listModelKeys(): Promise<EphemeralModelKeyInfo[]>;
+  modelKeyEntries(): Promise<EphemeralModelKeyEntry[]>;
+  getModelKey(provider: string): Promise<string>;
+  setModelKey(provider: string, key: string, scope?: DeviceCredentialScope): Promise<void>;
+  removeModelKey(provider: string): Promise<void>;
+  /** Merge account-scoped API keys exported by an enrolled node. */
+  importModelKeys(entries: Array<{ provider: string; key: string }>): Promise<void>;
 }
 
 type TokenMap = Record<string, string>;
+type ModelKeyMap = Record<string, { key: string; updatedAt?: string | null }>;
+type DeviceVaultPayload = { v: 2; providerTokens: TokenMap; modelKeys: ModelKeyMap };
+
+function normalizePayload(parsed: unknown): DeviceVaultPayload {
+  if (parsed && typeof parsed === "object" && (parsed as { v?: unknown }).v === 2) {
+    const value = parsed as Partial<DeviceVaultPayload>;
+    return {
+      v: 2,
+      providerTokens: value.providerTokens && typeof value.providerTokens === "object" ? value.providerTokens : {},
+      modelKeys: value.modelKeys && typeof value.modelKeys === "object" ? value.modelKeys : {},
+    };
+  }
+  // v1 was a bare compute-provider token map.
+  return { v: 2, providerTokens: parsed && typeof parsed === "object" ? parsed as TokenMap : {}, modelKeys: {} };
+}
 
 function defaultRandomKey(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(32));
@@ -81,13 +114,12 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
   const randomKey = deps.randomKey ?? defaultRandomKey;
   // In-memory caches, populated by sync().
   let vaultKey: Uint8Array | null = null;
-  let remoteTokens: TokenMap = {};
+  let remotePayload: DeviceVaultPayload = { v: 2, providerTokens: {}, modelKeys: {} };
 
-  const sealVault = async (tokens: TokenMap, key: Uint8Array) => seal(await importRoomKey(key), JSON.stringify(tokens));
-  const openVault = async (ciphertext: string, key: Uint8Array): Promise<TokenMap> => {
+  const sealVault = async (payload: DeviceVaultPayload, key: Uint8Array) => seal(await importRoomKey(key), JSON.stringify(payload));
+  const openVault = async (ciphertext: string, key: Uint8Array): Promise<DeviceVaultPayload> => {
     const json = await open(await importRoomKey(key), ciphertext);
-    const parsed: unknown = JSON.parse(json);
-    return parsed && typeof parsed === "object" ? (parsed as TokenMap) : {};
+    return normalizePayload(JSON.parse(json));
   };
   // Wrap/unwrap the vault key TO/FROM a peer device via ECDH(this, peer).
   const wrapVaultKeyFor = async (dev: DeviceKeypair, peerPub: string, key: Uint8Array) =>
@@ -102,6 +134,20 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
       if (t) out[info.id] = t;
     }
     return out;
+  }
+
+  async function localModelKeyMap(): Promise<ModelKeyMap> {
+    const out: ModelKeyMap = {};
+    if (!deps.modelKeys) return out;
+    for (const entry of await deps.modelKeys.entries()) {
+      if (entry.scope === "account") out[entry.provider] = { key: entry.key, updatedAt: entry.updatedAt };
+    }
+    return out;
+  }
+
+  async function publish(): Promise<void> {
+    if (!vaultKey) return;
+    await deps.remote.putVault(await sealVault(remotePayload, vaultKey));
   }
 
   async function sync(): Promise<void> {
@@ -120,22 +166,26 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
     // 2. With the key + ciphertext, decrypt the synced token map (consumer side).
     if (vaultKey && snap.vault) {
       try {
-        remoteTokens = await openVault(snap.vault, vaultKey);
+        remotePayload = await openVault(snap.vault, vaultKey);
       } catch {
         /* corrupt/foreign ciphertext — leave prior cache */
       }
     }
 
-    const localTokens = await localTokenMap();
-    const haveLocal = Object.keys(localTokens).length > 0;
+    const localTokens = deps.providerTokenSyncEnabled?.() === false ? {} : await localTokenMap();
+    const localModels = await localModelKeyMap();
+    const haveLocal = Object.keys(localTokens).length > 0 || Object.keys(localModels).length > 0;
 
     if (haveLocal) {
-      // Producer: ensure a key, publish the merged map, self-wrap for recovery,
-      // and satisfy every other device's outstanding request.
+      // Producer: ensure a key, publish the merged namespaced payload, self-wrap
+      // for recovery, and satisfy every other device's outstanding request.
       if (!vaultKey) vaultKey = randomKey();
-      const merged: TokenMap = { ...remoteTokens, ...localTokens };
-      remoteTokens = merged;
-      await deps.remote.putVault(await sealVault(merged, vaultKey));
+      remotePayload = {
+        v: 2,
+        providerTokens: { ...remotePayload.providerTokens, ...localTokens },
+        modelKeys: { ...remotePayload.modelKeys, ...localModels },
+      };
+      await publish();
       await deps.remote.putWrapped(dev.pub, await wrapVaultKeyFor(dev, dev.pub, vaultKey), dev.pub);
       for (const reqPub of snap.requests) {
         if (reqPub === dev.pub) continue;
@@ -153,18 +203,18 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
       const local = await deps.local.getToken(id);
       if (local) return local;
       if (!deps.enabled()) return "";
-      if (!(id in remoteTokens)) {
+      if (!(id in remotePayload.providerTokens)) {
         try {
           await sync();
         } catch {
           /* offline / not yet wrapped — fall through to whatever we have */
         }
       }
-      return remoteTokens[id] ?? "";
+      return remotePayload.providerTokens[id] ?? "";
     },
     async setToken(id: string, token: string): Promise<void> {
       await deps.local.setToken(id, token);
-      if (deps.enabled()) {
+      if (deps.enabled() && deps.providerTokenSyncEnabled?.() !== false) {
         try {
           await sync(); // republish as producer
         } catch {
@@ -175,12 +225,10 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
     async remove(id: string): Promise<void> {
       await deps.local.remove(id);
       if (!deps.enabled()) return;
-      delete remoteTokens[id];
+      delete remotePayload.providerTokens[id];
       if (vaultKey) {
         try {
-          const dev = await deps.device();
-          await deps.remote.putVault(await sealVault(remoteTokens, vaultKey));
-          void dev;
+          await publish();
         } catch {
           /* best effort */
         }
@@ -190,10 +238,55 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
       const local = await deps.local.list();
       const seen = new Set(local.map((i) => i.id));
       const merged = [...local];
-      for (const id of Object.keys(remoteTokens)) {
-        if (!seen.has(id)) merged.push({ id, name: id, configured: true, updatedAt: null });
+      if (deps.providerTokenSyncEnabled?.() !== false) {
+        for (const id of Object.keys(remotePayload.providerTokens)) {
+          if (!seen.has(id)) merged.push({ id, name: id, configured: true, updatedAt: null });
+        }
       }
       return merged;
+    },
+    async listModelKeys() {
+      const local = await deps.modelKeys?.list() ?? [];
+      const seen = new Set(local.map((entry) => entry.provider));
+      const merged = [...local];
+      for (const [provider, entry] of Object.entries(remotePayload.modelKeys)) {
+        if (!seen.has(provider)) merged.push({ provider, configured: true, updatedAt: entry.updatedAt ?? null, scope: "account" });
+      }
+      return merged.sort((a, b) => a.provider.localeCompare(b.provider));
+    },
+    async modelKeyEntries() {
+      const local = await deps.modelKeys?.entries() ?? [];
+      const byProvider = new Map(local.map((entry) => [entry.provider, entry]));
+      for (const [provider, entry] of Object.entries(remotePayload.modelKeys)) {
+        if (!byProvider.has(provider)) byProvider.set(provider, { provider, key: entry.key, updatedAt: entry.updatedAt, scope: "account" });
+      }
+      return [...byProvider.values()];
+    },
+    async getModelKey(provider) {
+      const id = String(provider || "").trim().toLowerCase();
+      const local = await deps.modelKeys?.get(id) ?? "";
+      if (local) return local;
+      if (deps.enabled() && !(id in remotePayload.modelKeys)) await sync().catch(() => {});
+      return remotePayload.modelKeys[id]?.key ?? "";
+    },
+    async setModelKey(provider, key, scope = "account") {
+      if (!deps.modelKeys) throw new Error("Device model-key storage is unavailable");
+      await deps.modelKeys.set(provider, key, scope);
+      if (scope === "device") {
+        delete remotePayload.modelKeys[String(provider).trim().toLowerCase()];
+        await publish().catch(() => {});
+      } else if (deps.enabled()) await sync().catch(() => {});
+    },
+    async removeModelKey(provider) {
+      const id = String(provider || "").trim().toLowerCase();
+      await deps.modelKeys?.remove(id);
+      delete remotePayload.modelKeys[id];
+      await publish().catch(() => {});
+    },
+    async importModelKeys(entries) {
+      if (!deps.modelKeys) return;
+      for (const entry of entries) await deps.modelKeys.set(entry.provider, entry.key, "account");
+      if (deps.enabled()) await sync().catch(() => {});
     },
   };
 }

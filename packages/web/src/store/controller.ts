@@ -1622,6 +1622,10 @@ export class AppController {
       openedAfterNodeSwitch = true;
     }
     void this.refreshAccountSessions();
+    // Converge account API keys in both directions. This also handles the
+    // node-less-first flow: keys added in the PWA are installed when the user's
+    // first persistent or ephemeral node appears.
+    void this.syncAccountCredentialsWithNode();
     // A scheduled message may have delivered while this device was offline —
     // drop its queue row so it stops showing as "scheduled" (see the method doc).
     void this.resyncScheduledFollowups();
@@ -2372,6 +2376,32 @@ export class AppController {
   listCredentialRecords(): void {
     this.send({ kind: "credentials.list" });
   }
+  private credentialSyncInFlight: Promise<void> | null = null;
+  /** Bidirectional API-key convergence between the PWA account vault and node. */
+  private syncAccountCredentialsWithNode(): Promise<void> {
+    if (this.direct || this.store.getState().status !== "online") return Promise.resolve();
+    if (this.credentialSyncInFlight) return this.credentialSyncInFlight;
+    this.credentialSyncInFlight = (async () => {
+      // Pull first so an existing node seeds a new device. Then push the merged
+      // account set so a node-less-created key reaches the newly enrolled node.
+      const event = await this.awaitAck({ kind: "credentials.account.export" });
+      const incoming = Array.isArray(event.entries)
+        ? event.entries.filter((entry): entry is { provider: string; key: string } => Boolean(entry)
+          && typeof (entry as { provider?: unknown }).provider === "string"
+          && typeof (entry as { key?: unknown }).key === "string")
+        : [];
+      await this.ephemeralKeys.importModelKeys(incoming);
+      const accountKeys = (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account");
+      for (const { provider, key } of accountKeys) {
+        await this.awaitAck({ kind: "credential.set", provider, label: "default", key });
+      }
+      this.listCredentialRecords();
+      this.listProviders();
+    })().catch(() => {
+      // Best effort during reconnect; the next reconnect/settings open retries.
+    }).finally(() => { this.credentialSyncInFlight = null; });
+    return this.credentialSyncInFlight;
+  }
   /** Add/replace a labeled credential — an API key, or an op://…/env://… reference. */
   setCredential(provider: string, label: string, value: { key?: string; ref?: string }): Promise<void> {
     return this.awaitAck({ kind: "credential.set", provider, label, ...value }).then(() => undefined);
@@ -2629,13 +2659,17 @@ export class AppController {
   // in (Settings), they're additionally synced to the account's other devices
   // through an E2E device vault so a second device can wake/reach a machine the
   // first launched (P2 / Gap A) — the control plane only ever sees ciphertext.
+  private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralKeys: DeviceVaultKeyStore = createDeviceVaultKeyStore({
     local: createEphemeralKeyStore(),
+    modelKeys: this.ephemeralModelKeys,
     remote: this.deviceVaultRemote(),
     device: () => deviceKeypair(this.local),
-    enabled: () => this.deviceTokenSyncEnabled(),
+    // The account credential vault is available before the first node exists.
+    // Compute-provider token widening remains a separate explicit opt-in.
+    enabled: () => !this.direct && Boolean(this.local.s),
+    providerTokenSyncEnabled: () => this.deviceTokenSyncEnabled(),
   });
-  private ephemeralModelKeys: EphemeralModelKeyStore = createEphemeralModelKeyStore();
   private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
   private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
   private ephemeralMachines: MachineStore = createMachineStore();
@@ -2657,13 +2691,13 @@ export class AppController {
    *  vault over the E2E channel (closes the cold-start gap — see
    *  docs/ephemeral-sessions.md, "Closing the cold-start gap"). API keys only. */
   listEphemeralModelKeys(): Promise<EphemeralModelKeyInfo[]> {
-    return this.ephemeralModelKeys.list();
+    return this.ephemeralKeys.listModelKeys();
   }
-  setEphemeralModelKey(provider: string, key: string): Promise<void> {
-    return this.ephemeralModelKeys.set(provider, key);
+  setEphemeralModelKey(provider: string, key: string, scope: "account" | "device" = "account"): Promise<void> {
+    return this.ephemeralKeys.setModelKey(provider, key, scope);
   }
   removeEphemeralModelKey(provider: string): Promise<void> {
-    return this.ephemeralModelKeys.remove(provider);
+    return this.ephemeralKeys.removeModelKey(provider);
   }
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralKeys.getToken(id);
@@ -2816,7 +2850,7 @@ export class AppController {
     if (!machines.some((m) => m.nodeId === nodeId)) return;
     let entries: { provider: string; key: string }[];
     try {
-      entries = await this.ephemeralModelKeys.entries();
+      entries = await this.ephemeralKeys.modelKeyEntries();
     } catch {
       return;
     }

@@ -18,7 +18,9 @@ const ASSETS = path.resolve("packages/web/dist/assets");
 const BUDGETS = {
   // Durable ephemeral-start recovery + real bootstrap status add a small amount
   // of first-load orchestration; compressed size remains below the prior cap.
-  "index": { rawKB: 830, gzipKB: 230 },
+  // Unified E2E credential-vault client (model/voice/device scopes) adds ~2 KB
+  // raw while remaining below the existing compressed budget.
+  "index": { rawKB: 835, gzipKB: 230 },
 };
 
 let files;
