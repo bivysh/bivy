@@ -21,6 +21,8 @@
 
 import { b64, b64url, unb64url } from "./base64.js";
 import type { LocalStore } from "./local-store.js";
+import type { EphemeralNodeConfig } from "./account.js";
+import type { Command, PromptAttachment } from "./protocol.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -537,6 +539,55 @@ export function createEphemeralSetupStore(
       if (!next.name) throw new Error("Setup name is required");
       await backend.put(id, next);
       return next;
+    },
+    async remove(id) {
+      await backend.delete(id);
+    },
+  };
+}
+
+/** Device-local durable intent for a first message waiting on an ephemeral
+ * runner. Prompt content stays on the user's device; the control plane only
+ * receives it later through the normal encrypted relay. */
+export interface PendingEphemeralLaunch {
+  id: string;
+  config: EphemeralNodeConfig;
+  prompt: {
+    text: string;
+    requestId: string;
+    clientMessageId: string;
+    attachments?: PromptAttachment[];
+    frame: Command;
+  };
+  followups: Array<{ text: string; clientMessageId: string; attachments?: PromptAttachment[] }>;
+  logs: string[];
+  phase: "provisioning" | "booting" | "failed";
+  machine?: EphemeralMachine;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PendingEphemeralLaunchStore {
+  list(): Promise<PendingEphemeralLaunch[]>;
+  put(launch: PendingEphemeralLaunch): Promise<void>;
+  remove(id: string): Promise<void>;
+}
+
+export function createPendingEphemeralLaunchStore(
+  backend: KvBackend = defaultBackend("pending-launches", "id"),
+): PendingEphemeralLaunchStore {
+  return {
+    async list() {
+      try {
+        return (await backend.getAll())
+          .filter((r) => r && r.id && r.config && r.prompt)
+          .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))) as PendingEphemeralLaunch[];
+      } catch {
+        return [];
+      }
+    },
+    async put(launch) {
+      await backend.put(launch.id, launch);
     },
     async remove(id) {
       await backend.delete(id);

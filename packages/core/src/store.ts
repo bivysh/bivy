@@ -116,6 +116,10 @@ export interface SessionSummary {
    *  carries this from the node — see src/server.ts — it was previously dropped
    *  here, which is why the sidebar had no branch/PR context per row). */
   branch?: string;
+  /** Device-local placeholder while an ephemeral runner is provisioning. It is
+   *  preserved across authoritative session-list refreshes until the controller
+   *  replaces it with the node's canonical session id. */
+  pendingLaunch?: boolean;
   /** This session's ephemeral node was torn down (unenrolled, gone from the
    *  registry) but is REBUILDABLE from a durable correlation + the room key this
    *  device still holds — so the row stays in the sidebar as offline-but-rebuildable
@@ -1838,11 +1842,14 @@ export class SessionStore {
    */
   setSessions(list: unknown): void {
     const sessions = this.withoutRecentlyDeleted(normalizeSessions(list, this.state.sessions));
+    const ids = new Set(sessions.map((s) => s.sessionId));
+    const pending = this.state.sessions.filter((s) => s.pendingLaunch && !ids.has(s.sessionId));
+    const merged = [...pending, ...sessions];
     const activeId = this.state.activeSessionId;
     this.set({
       sessions: activeId
-        ? sessions.map((s) => (s.sessionId === activeId ? { ...s, lastSeenAt: Date.now() } : s))
-        : sessions,
+        ? merged.map((s) => (s.sessionId === activeId ? { ...s, lastSeenAt: Date.now() } : s))
+        : merged,
     });
   }
 
@@ -2141,17 +2148,30 @@ export class SessionStore {
    *  lets the user leave it running and start another session without discarding
    *  the launch. The controller replaces this row with the node's canonical id
    *  as soon as session.new completes. */
-  persistPendingSession(sessionId: string, name: string): void {
+  persistPendingSession(sessionId: string, name: string, activate = true): void {
+    const existing = this.state.sessions.find((s) => s.sessionId === sessionId);
     const row: SessionSummary = {
+      ...existing,
       sessionId,
-      name: name.trim() || "New session",
-      status: "working",
-      updatedAt: Date.now(),
+      name: name.trim() || existing?.name || "New session",
+      status: existing?.status === "failed" ? "failed" : "working",
+      pendingLaunch: true,
+      updatedAt: existing?.updatedAt || Date.now(),
     };
     this.set({
-      activeSessionId: sessionId,
-      activeTitle: row.name,
+      ...(activate ? { activeSessionId: sessionId, activeTitle: row.name } : {}),
       sessions: [row, ...this.state.sessions.filter((s) => s.sessionId !== sessionId)],
+    });
+  }
+
+  retryPendingSession(sessionId: string): void {
+    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "working", updatedAt: Date.now() } : s) });
+  }
+
+  dismissPendingSession(sessionId: string): void {
+    this.set({
+      activeSessionId: this.state.activeSessionId === sessionId ? null : this.state.activeSessionId,
+      sessions: this.state.sessions.filter((s) => s.sessionId !== sessionId),
     });
   }
 
@@ -2169,6 +2189,7 @@ export class SessionStore {
       nodeId,
       name: pending?.name || "New session",
       status: "working",
+      pendingLaunch: false,
       updatedAt: Date.now(),
     };
     this.set({

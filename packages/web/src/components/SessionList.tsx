@@ -594,6 +594,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
           const hint =
             rowHint(runEvidence?.get(s.sessionId)) ??
             (attentionRank(s) > 0 ? { text: statusLabel(s), tone: "warn" as const } : null);
+          const failedLaunch = s.pendingLaunch && s.status === "failed";
           return (
             <li key={s.sessionId} className="session-row">
               <button
@@ -620,7 +621,12 @@ export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (
                   )}
                 </span>
               </button>
-              {(controller.direct || !s.nodeId || s.nodeId === currentNodeId) && (
+              {failedLaunch ? (
+                <span className="pending-launch-actions">
+                  <button type="button" onClick={() => void controller.retryPendingLaunch(s.sessionId)}>Retry</button>
+                  <button type="button" onClick={() => void controller.dismissPendingLaunch(s.sessionId)}>Dismiss</button>
+                </span>
+              ) : (controller.direct || !s.nodeId || s.nodeId === currentNodeId) && (
                 <RowMenu sessionId={s.sessionId} name={s.name} isRepo={Boolean(repoFromSource(s.source))} prs={s.prs} />
               )}
             </li>
