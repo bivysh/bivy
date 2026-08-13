@@ -20,6 +20,7 @@ import { deleteOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } f
 import { discoverNativeGrokSessions, listGrokSessions } from "./grok-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 import { AgentRegistry } from "../agents/registry.js";
+import { applyCertification } from "../certification/index.js";
 import {
   type AgentIntegration,
   type AgentIntegrationOrigin,
@@ -1066,7 +1067,7 @@ function agentRegistry(pluginDataDir?: string): AgentRegistry<RuntimeInfo, Runti
 
 /** All registered contributions, including hidden/planned rows, for diagnostics. */
 export function listRegisteredAgents(): RuntimeInfo[] {
-  return agentRegistry().list().map((entry) => entry.describe());
+  return agentRegistry().list().map((entry) => applyCertification(entry.describe()));
 }
 
 /** Resolve an id or historical alias through the authoritative registry. */
@@ -1080,6 +1081,10 @@ export function agentInstallSpec(id: string, prefix: string): AgentInstallComman
 }
 
 function runtimeCertification(runtime: RuntimeInfo): Pick<RuntimeInfo, "certification" | "testedVersion"> {
+  if (runtime.certification) return {
+    certification: runtime.certification,
+    ...(runtime.testedVersion ? { testedVersion: runtime.testedVersion } : {}),
+  };
   if (runtime.testedVersion) return { certification: "release-tested", testedVersion: runtime.testedVersion };
   return { certification: runtime.supportTier === "beta" ? "adapter-tested" : "unverified" };
 }
@@ -1117,7 +1122,7 @@ export function listRuntimes(currentId?: string): (RuntimeInfo & { current: bool
     // Keep the current runtime visible even if hidden, so a session pinned to a
     // hidden contribution still renders its selection instead of an empty picker.
     .filter((entry) => entry.visible || entry.id === selected)
-    .map((entry) => entry.describe())
+    .map((entry) => applyCertification(entry.describe()))
     .map((runtime) => ({
       ...runtime,
       ...runtimeProtection(runtime),

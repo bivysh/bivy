@@ -1,0 +1,132 @@
+{
+  "agentId": "claude-code-sdk",
+  "protocolVersion": 1,
+  "secretSentinel": "CERT_SECRET_claude_code_sdk",
+  "scenarios": {
+    "probe-install": [
+      {
+        "type": "probe.result",
+        "ok": true,
+        "version": "$PINNED_VERSION"
+      }
+    ],
+    "auth-handoff": [
+      {
+        "type": "auth.ready",
+        "environment": "<redacted>"
+      }
+    ],
+    "first-turn": [
+      {
+        "type": "session.started"
+      },
+      {
+        "type": "message.delta",
+        "text": "hello"
+      },
+      {
+        "type": "session.done"
+      }
+    ],
+    "structured-streaming": [
+      {
+        "type": "message.delta",
+        "text": "one "
+      },
+      {
+        "type": "message.reasoning",
+        "text": "thinking"
+      },
+      {
+        "type": "message.delta",
+        "text": "two"
+      },
+      {
+        "type": "session.done"
+      }
+    ],
+    "approval": [
+      {
+        "type": "tool.call",
+        "id": "tool-1"
+      },
+      {
+        "type": "tool.decision",
+        "decision": "allow"
+      },
+      {
+        "type": "tool.result",
+        "status": "ok"
+      }
+    ],
+    "denial": [
+      {
+        "type": "tool.call",
+        "id": "tool-2"
+      },
+      {
+        "type": "tool.decision",
+        "decision": "deny"
+      },
+      {
+        "type": "tool.result",
+        "status": "denied"
+      }
+    ],
+    "cancellation": [
+      {
+        "type": "session.status",
+        "status": "working"
+      },
+      {
+        "type": "session.cancelled"
+      }
+    ],
+    "resume": [
+      {
+        "type": "session.resumed",
+        "ref": "fixture-session"
+      },
+      {
+        "type": "session.done"
+      }
+    ],
+    "attachments": [
+      {
+        "type": "prompt.received",
+        "attachments": [
+          {
+            "mimeType": "image/png",
+            "data": "<fixture>"
+          }
+        ]
+      }
+    ],
+    "token-refresh": [
+      {
+        "type": "auth.refresh",
+        "token": "<redacted>"
+      },
+      {
+        "type": "auth.ready"
+      }
+    ],
+    "malformed-output": [
+      {
+        "raw": "{not-json"
+      },
+      {
+        "type": "protocol.error",
+        "code": "malformed_output"
+      }
+    ],
+    "version-drift": [
+      {
+        "type": "probe.result",
+        "ok": false,
+        "version": "999.0.0",
+        "code": "unsupported_version"
+      }
+    ]
+  }
+}
