@@ -99,6 +99,7 @@ export interface Command extends CommandBase {
     | "stt.config.get"
     | "stt.config.set"
     | "transcribe"
+    | "synthesize"
     | "terminal.list"
     | "terminal.multiplexers"
     | "terminal.takeover"

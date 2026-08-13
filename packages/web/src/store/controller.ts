@@ -258,8 +258,9 @@ export class AppController {
   private correlatedSessions = new Set<string>();
   /** Subscribers for terminal / multiplexer events (the terminal overlay). */
   private terminalListeners = new Set<(e: ServerEvent) => void>();
-  /** In-flight transcription requests, resolved when the node returns text. */
+  /** In-flight transcription and speech requests, correlated with node replies. */
   private pendingTranscriptions = new Map<string, { resolve: (text: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private pendingSpeech = new Map<string, { resolve: (audio: { audio: string; mimeType: string }) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight session-fork requests (export → bundle, import → done), by requestId. */
   private pendingForks = new Map<string, { resolve: (event: ServerEvent) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** In-flight saves awaiting a node ack (node.settings, provider.apiKey,
@@ -521,6 +522,10 @@ export class AppController {
         // it never touches the session reducer.
         if (type === "transcription") {
           this.resolveTranscription(event);
+          return;
+        }
+        if (type === "speech.audio") {
+          this.resolveSpeech(event);
           return;
         }
         // One-shot session-fork replies (bundle / done / error) resolve the
@@ -2507,6 +2512,30 @@ export class AppController {
     const error = (event as any).error;
     if (error) pending.reject(new Error(String(error)));
     else pending.resolve(String((event as any).text ?? "").trim());
+  }
+
+  /** Generate neural read-aloud audio on the node using its OpenAI key. */
+  synthesize(text: string, voice: string, instructions: string): Promise<{ audio: string; mimeType: string }> {
+    const rid = requestId();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingSpeech.delete(rid);
+        reject(new Error("Speech generation timed out. Check your connection and try again."));
+      }, 60_000);
+      this.pendingSpeech.set(rid, { resolve, reject, timer });
+      void this.transport.send({ kind: "synthesize", requestId: rid, text, voice, instructions });
+    });
+  }
+
+  private resolveSpeech(event: ServerEvent): void {
+    const rid = String(event.requestId || "");
+    const pending = rid ? this.pendingSpeech.get(rid) : undefined;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingSpeech.delete(rid);
+    const error = (event as any).error;
+    if (error) pending.reject(new Error(String(error)));
+    else pending.resolve({ audio: String((event as any).audio ?? ""), mimeType: String((event as any).mimeType ?? "audio/mpeg") });
   }
 
   // --- Settings: GitHub App one-click (manifest) flow --------------------

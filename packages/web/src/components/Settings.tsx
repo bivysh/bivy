@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AccountNode, AppState, CredentialPresetsView, CredentialRecordSummary, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
 import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice } from "@bivy/core";
@@ -13,6 +13,8 @@ import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
+
+const VoiceSettings = lazy(() => import("./VoiceSettings.js").then((module) => ({ default: module.VoiceSettings })));
 
 // The view enumeration lives in router.ts (as `SettingsView`) so the router can
 // validate a `/settings/:view` path without importing this component module;
@@ -137,7 +139,7 @@ const TITLES: Record<View, string> = {
   import: "Import session",
   providers: "Keys & OAuth",
   models: "Local models",
-  voice: "Voice input",
+  voice: "Voice",
   github: "GitHub App",
   linear: "Linear",
   slack: "Slack",
@@ -158,7 +160,7 @@ const SEARCH_TERMS: Record<View, string> = {
   import: "session transcript file upload migrate",
   providers: "api key oauth openai anthropic google login credentials",
   models: "ollama local model endpoint",
-  voice: "microphone speech transcription",
+  voice: "microphone speech transcription read aloud reader text to speech voice tone speed",
   github: "github app repository installation issue pull request",
   linear: "linear workspace issue integration",
   slack: "slack workspace channel integration",
@@ -257,7 +259,7 @@ export function Settings({
       items: [
         { id: "appearance", label: "Appearance", icon: <IconAppearance /> },
         { id: "notifications", label: "Notifications", icon: <IconBell /> },
-        { id: "voice", label: "Voice input", icon: <IconMic /> },
+        { id: "voice", label: "Voice", icon: <IconMic /> },
         { id: "import", label: "Import session", icon: <IconImport /> },
       ],
     },
@@ -348,7 +350,11 @@ export function Settings({
             {activeView === "import" && <ImportPanel onImported={(id) => onImported?.(id)} />}
             {activeView === "providers" && <ProvidersPanel state={state} />}
             {activeView === "models" && <LocalModelsPanel state={state} />}
-            {activeView === "voice" && <VoicePanel state={state} />}
+            {activeView === "voice" && (
+              <Suspense fallback={<div className="muted">Loading voice settings…</div>}>
+                <VoiceSettings state={state} />
+              </Suspense>
+            )}
             {/* github / linear / slack / queue / webhooks / rulesets moved to the
                 Automations hub — a deep link to any of them redirects there (see
                 the redirect effect above), so they render nothing here. */}
@@ -1169,50 +1175,6 @@ function LocalModelsPanel({ state }: { state: AppState }) {
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-// ---- Voice input (speech-to-text) ----
-function VoicePanel({ state }: { state: AppState }) {
-  useEffect(() => {
-    controller.getSttConfig();
-  }, []);
-  const config = state.sttConfig;
-  const providers = config?.providers ?? [];
-
-  return (
-    <div className="settings-form">
-      <p className="muted settings-intro">
-        Dictate into the composer with the mic button. Voice uses the same Groq or OpenAI API key shown under
-        <strong> Keys &amp; OAuth</strong>; there is no separate speech key. With no key, voice falls back to your browser's
-        built-in dictation (no key needed, but lower accuracy). Note: <strong>Groq</strong> is different from xAI / Grok.
-      </p>
-
-      <label className="field-label">Preferred provider</label>
-      <div className="seg-row">
-        {providers.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            className={`seg-btn${config?.provider === p.id ? " active" : ""}`}
-            onClick={() => controller.setSttProvider(p.id)}
-          >
-            {p.label}
-          </button>
-        ))}
-        {providers.length === 0 && <span className="muted">Loading…</span>}
-      </div>
-
-      {providers.map((p) => (
-        <div key={p.id} className="voice-provider">
-          <div className="voice-provider-head">
-            <span className="field-label">{p.label}</span>
-            {p.configured ? <span className="chip ok">Available from Keys &amp; OAuth</span> : <span className="chip">No account key</span>}
-          </div>
-          <div className="muted small">{p.model} · Add, rotate, scope, or remove this provider under Keys &amp; OAuth.</div>
-        </div>
-      ))}
     </div>
   );
 }
