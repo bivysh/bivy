@@ -860,13 +860,19 @@ export interface GithubQueueItem {
   checks?: Array<{ name: string; commandHash?: string; status: "passed" | "failed" | "skipped"; exitCode?: number; durationMs?: number }>;
   events?: Array<{
     at: string;
-    kind: "triggered" | "routed" | "claimed" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
-      | "retry" | "fallback" | "rate_limited" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
+    kind: "trigger_received" | "trigger_matched" | "queued" | "routed" | "provisioning" | "claimed"
+      | "agent_started" | "checks_started" | "checks_completed" | "result_delivery" | "notification"
+      | "retry" | "cancel_requested" | "terminal"
+      | "triggered" | "attempt_started" | "checkpoint" | "approval" | "policy_denial"
+      | "fallback" | "rate_limited" | "branch" | "pull_request" | "needs_attention" | "completed" | "cancelled";
     summary: string;
     attempt?: number;
     ref?: string;
     url?: string;
     status?: "passed" | "failed" | "denied" | "approved";
+    reasonCode?: string;
+    evidenceRef?: string;
+    milestoneId?: string;
   }>;
   receiptEvidence?: {
     approvals: { requests: number; approved: number; denied: number };
@@ -893,6 +899,10 @@ export interface GithubQueueItem {
       }>;
     };
   };
+  usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; costUsd?: number };
+  notification?: { status: "not_requested" | "pending" | "delivered" | "failed"; channel?: "push" | "email" | "webhook"; updatedAt: string; reason?: string };
+  references?: Array<{ kind: "receipt" | "evidence" | "log"; ref: string; url?: string }>;
+  attention?: { severity: "warning" | "error" | "critical"; reason: string; since: string };
 }
 
 export type AutomationSchedule =
@@ -981,6 +991,10 @@ export interface AccountAutomationRun {
   checks?: GithubQueueItem["checks"];
   events?: GithubQueueItem["events"];
   receiptEvidence?: GithubQueueItem["receiptEvidence"];
+  usage?: GithubQueueItem["usage"];
+  notification?: GithubQueueItem["notification"];
+  references?: GithubQueueItem["references"];
+  attention?: GithubQueueItem["attention"];
   output?: GithubQueueItem["output"];
 }
 

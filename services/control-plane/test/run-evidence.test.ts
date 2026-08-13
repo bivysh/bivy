@@ -55,6 +55,22 @@ test("evidence drops output fields outside the allowlist instead of storing them
   assert.equal(Object.hasOwn(patch.output ?? {}, "notAllowlisted"), false);
 });
 
+test("evidence accepts bounded operational usage, delivery, references, attention, and milestone ids", () => {
+  const patch = sanitizeEvidencePatch({
+    usage: { inputTokens: 1200.9, outputTokens: 300, costUsd: 0.01234567 },
+    notification: { status: "failed", channel: "push", updatedAt: "2026-08-13T00:00:00Z", reason: "endpoint expired" },
+    references: [{ kind: "log", ref: "node-log:abc", url: "https://logs.example/run/abc" }],
+    attention: { severity: "error", reason: "Notification delivery failed", since: "2026-08-13T00:00:00Z" },
+    events: [{ kind: "agent_started", summary: "Agent started.", milestoneId: "run:agent:1", reasonCode: "primary", evidenceRef: "receipt:abc" }],
+  });
+  assert.deepEqual(patch.usage, { inputTokens: 1200, outputTokens: 300, cacheReadTokens: undefined, cacheWriteTokens: undefined, costUsd: 0.012346 });
+  assert.equal(patch.notification?.status, "failed");
+  assert.equal(patch.references?.[0]?.kind, "log");
+  assert.equal(patch.attention?.severity, "error");
+  assert.equal(patch.events?.[0]?.milestoneId, "run:agent:1");
+  assert.throws(() => sanitizeEvidencePatch({ usage: { inputTokens: 1, bearerToken: "secret" } }), /sensitive evidence field rejected/);
+});
+
 test("evidence truncates summaries and caps histories per call", () => {
   const patch = sanitizeEvidencePatch({
     events: Array.from({ length: 150 }, (_, i) => ({ kind: "retry", summary: "x".repeat(500), attempt: i + 1 })),

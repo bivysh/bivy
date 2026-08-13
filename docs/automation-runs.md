@@ -140,16 +140,22 @@ they ever reach storage:
 - **`checks`** — declared validation commands and their `passed` / `failed` /
   `skipped` status plus exit code. The command text itself is never stored,
   only a name and, optionally, a hash of the command.
-- **`events`** — an ordered, capped (100 entries) timeline. Every lifecycle
-  transition (claimed, running, needs-attention, completed, cancelled) is
-  stamped automatically by the control plane, so a run has a readable
-  trigger→claim→attempt→outcome timeline even if the node never reports
-  anything further. A node MAY layer richer events on top through
-  `POST /node/work/:id/evidence` — routing changes, checkpoints, approvals,
-  policy denials, retries/fallback (each with its own attempt number and
-  reason), branch creation, and PR opened — plus `output` references
-  (`checkpoint`/`commit` in addition to the existing session/branch/PR/
-  artifact/failure fields).
+- **`events`** — the ordered, capped lifecycle/milestone timeline described
+  above. Stable `milestoneId` values make duplicate reports idempotent; attempt,
+  reason code, and evidence reference are bounded metadata.
+- **`usage`** — aggregate input/output/cache token counts and USD cost when the
+  provider reports them. Never token values or credentials.
+- **`notification`** — `not_requested`, `pending`, `delivered`, or `failed`, with
+  an allowlisted channel and bounded failure reason.
+- **`references` / `attention`** — bounded Receipt/evidence/log identifiers or
+  URLs and a structured warning/error/critical operator-attention reason. Log
+  content remains on the Machine.
+
+A node MAY layer richer events on top through `POST /node/work/:id/evidence` —
+routing changes, checkpoints, approvals, policy denials, retries/fallback (each
+with its own attempt number and reason), branch creation, and PR opened — plus
+`output` references (`checkpoint`/`commit` in addition to the existing
+session/branch/PR/artifact/failure fields).
 
 For unattended issue work, the node also runs declared standard package scripts
 (`test`, `lint`, and `typecheck` when present; configurable with
