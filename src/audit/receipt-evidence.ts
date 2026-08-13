@@ -34,3 +34,42 @@ export function receiptEvidenceFromAudit(events: AuditEvent[], storageReadable: 
     },
   };
 }
+
+export interface ReceiptExecutionContext {
+  profile: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+  controller: "customer" | "bivy_hosted_provisioning";
+  sandboxTier?: "read-only" | "workspace-write" | "danger-full-access";
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  runtimeEnforcement?: string;
+  toolInterception?: boolean;
+  agentVersion?: string;
+}
+
+/** Add only node-observed execution facts to the already bounded audit summary. */
+export function receiptEvidenceForRun(events: AuditEvent[], storageReadable: boolean, context: ReceiptExecutionContext) {
+  const audit = receiptEvidenceFromAudit(events, storageReadable);
+  const enforcement = context.runtimeEnforcement || "unavailable";
+  const sandboxClass = enforcement === "native-sandbox" ? "enforced" as const
+    : enforcement === "tool-controls" ? "observed" as const : "unavailable" as const;
+  return {
+    ...audit,
+    execution: {
+      profile: context.profile,
+      controller: context.controller,
+      ...(context.agentVersion ? { agentVersion: context.agentVersion } : {}),
+      modelVersionStatus: "unknown" as const,
+    },
+    protection: {
+      effective: {
+        executionProfile: context.profile,
+        ...(context.sandboxTier ? { sandboxTier: context.sandboxTier } : {}),
+        ...(context.approvalMode ? { approvalMode: context.approvalMode } : {}),
+        runtimeEnforcement: enforcement,
+      },
+      capabilities: [
+        { capability: "sandbox" as const, evidenceClass: sandboxClass, mechanism: enforcement },
+        { capability: "approval" as const, evidenceClass: context.toolInterception ? "enforced" as const : "unavailable" as const, mechanism: context.toolInterception ? "runtime tool interception" : "not observed" },
+      ],
+    },
+  };
+}

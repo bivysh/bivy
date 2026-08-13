@@ -14,6 +14,11 @@ test("evidence accepts the bounded metadata needed for an outcome report", () =>
       approvals: { requests: 2, approved: 1, denied: 1 },
       fileChanges: { files: [{ path: "src/app.ts", op: "modified", added: 4, removed: 2 }], added: 4, removed: 2 },
       auditHealth: { correlation: "healthy", readableStorage: "healthy", successfulWrites: "healthy" },
+      execution: { profile: "isolated_customer_cloud", controller: "bivy_hosted_provisioning", modelVersionStatus: "unknown" },
+      protection: {
+        effective: { executionProfile: "isolated_customer_cloud", sandboxTier: "workspace-write", approvalMode: "risky", runtimeEnforcement: "native-sandbox" },
+        capabilities: [{ capability: "sandbox", evidenceClass: "enforced", mechanism: "native-sandbox" }],
+      },
     },
   });
   assert.equal(patch.routingReason, "queue label");
@@ -24,6 +29,9 @@ test("evidence accepts the bounded metadata needed for an outcome report", () =>
   assert.equal(patch.checks?.[0]?.exitCode, 0);
   assert.equal(patch.receiptEvidence?.fileChanges.files[0]?.path, "src/app.ts");
   assert.equal(patch.receiptEvidence?.approvals.denied, 1);
+  assert.equal(patch.receiptEvidence?.execution?.profile, "isolated_customer_cloud");
+  assert.equal(patch.receiptEvidence?.protection?.effective?.runtimeEnforcement, "native-sandbox");
+  assert.equal(patch.receiptEvidence?.protection?.capabilities?.[0]?.evidenceClass, "enforced");
 });
 
 test("evidence rejects sensitive fields at every accepted level", () => {
@@ -35,6 +43,7 @@ test("evidence rejects sensitive fields at every accepted level", () => {
     { checks: [{ name: "test", status: "passed", rawCommand: "npm test" }] },
     { receiptEvidence: { transcript: "private" } },
     { receiptEvidence: { fileChanges: { files: [{ path: "src/app.ts", diff: "private patch" }] } } },
+    { receiptEvidence: { protection: { capabilities: [{ capability: "tool", evidenceClass: "observed", rawToolOutput: "private" }] } } },
   ]) {
     assert.throws(() => sanitizeEvidencePatch(payload), /sensitive evidence field rejected/);
   }

@@ -84,6 +84,28 @@ describe("Receipt v1 projection", () => {
     expect(receipt.missingEvidence).not.toContain("file_change_summary");
   });
 
+  it("carries node-observed execution and protection from a canonical Run", () => {
+    const run: Run = {
+      id: "run-observed", origin: { projection: "automation_run", status: "succeeded" }, lifecycle: "finished",
+      outcome: { kind: "changes_ready", label: "Changes ready", tone: "success", terminal: true, reviewable: true }, attempt: 1,
+      title: "Observed", source: { kind: "manual" }, sessionId: "session-observed", machine: { id: "node-1", name: "Machine" },
+      timestamps: { createdAt: "2026-08-13T12:00:00Z", startedAt: "2026-08-13T12:01:00Z", completedAt: "2026-08-13T12:02:00Z" },
+      requested: { runtimeId: "codex-approvals", model: "gpt-5", sandbox: "workspace-write", approvalMode: "risky" },
+      checks: [], events: [], references: { branch: "bivy/observed" }, actions: [],
+      receiptEvidence: {
+        approvals: { requests: 1, approved: 1, denied: 0 }, fileChanges: { files: [{ path: "src/app.ts" }], added: 1, removed: 0 },
+        auditHealth: { correlation: "healthy", readableStorage: "healthy", successfulWrites: "healthy" },
+        execution: { profile: "isolated_customer_cloud", controller: "bivy_hosted_provisioning", modelVersionStatus: "unknown" },
+        protection: { effective: { executionProfile: "isolated_customer_cloud", sandboxTier: "workspace-write", approvalMode: "risky", runtimeEnforcement: "native-sandbox" }, capabilities: [{ capability: "sandbox", evidenceClass: "enforced" }] },
+      },
+    };
+    const receipt = receiptV1FromRun(run, "2026-08-13T12:03:00Z");
+    expect(receipt.execution.profile).toBe("isolated_customer_cloud");
+    expect(receipt.protection.effective.runtimeEnforcement).toBe("native-sandbox");
+    expect(receipt.missingEvidence).not.toContain("effective_protection");
+    expect(receipt.missingEvidence).not.toContain("protection_evidence");
+  });
+
   it("does not infer a terminal outcome from process completion alone", () => {
     const receipt = projectReceiptV1(base({ output: { sessionId: "session-1" }, checks: undefined, events: [{ at: "2026-08-13T12:05:00Z", kind: "completed", summary: "process exited" }] }));
     expect(receipt.run.terminalOutcome).toBeUndefined();

@@ -105,9 +105,15 @@ export function sanitizeEvidencePatch(value: unknown): RunEvidencePatch {
     const approvals = raw.approvals && typeof raw.approvals === "object" ? raw.approvals as Record<string, unknown> : {};
     const changes = raw.fileChanges && typeof raw.fileChanges === "object" ? raw.fileChanges as Record<string, unknown> : {};
     const health = raw.auditHealth && typeof raw.auditHealth === "object" ? raw.auditHealth as Record<string, unknown> : {};
+    const execution = raw.execution && typeof raw.execution === "object" ? raw.execution as Record<string, unknown> : {};
+    const protection = raw.protection && typeof raw.protection === "object" ? raw.protection as Record<string, unknown> : {};
+    const effective = protection.effective && typeof protection.effective === "object" ? protection.effective as Record<string, unknown> : {};
     assertNoForbiddenKeys(approvals);
     assertNoForbiddenKeys(changes);
     assertNoForbiddenKeys(health);
+    assertNoForbiddenKeys(execution);
+    assertNoForbiddenKeys(protection);
+    assertNoForbiddenKeys(effective);
     const count = (value: unknown) => typeof value === "number" ? Math.max(0, Math.min(1_000_000, Math.trunc(value))) : 0;
     const auditState = (value: unknown): "healthy" | "missing" => value === "healthy" ? "healthy" : "missing";
     const files = Array.isArray(changes.files) ? changes.files.slice(0, 100).flatMap((value): RunReceiptEvidence["fileChanges"]["files"] => {
@@ -118,10 +124,43 @@ export function sanitizeEvidencePatch(value: unknown): RunEvidencePatch {
       if (!path) return [];
       return [{ path, ...(text(file.op, 20) ? { op: text(file.op, 20) } : {}), added: count(file.added), removed: count(file.removed) }];
     }) : [];
+    const oneOf = <T extends string>(value: unknown, allowed: readonly T[]): T | undefined => allowed.includes(value as T) ? value as T : undefined;
+    const profile = oneOf(execution.profile, ["trusted_workstation", "isolated_customer_cloud", "restricted"] as const);
+    const controller = oneOf(execution.controller, ["customer", "bivy_hosted_provisioning"] as const);
+    const modelVersionStatus = oneOf(execution.modelVersionStatus, ["available", "unavailable", "unknown"] as const);
+    const executionEvidence: RunReceiptEvidence["execution"] = {
+      ...(profile ? { profile } : {}), ...(controller ? { controller } : {}),
+      ...(text(execution.agentVersion, 80) ? { agentVersion: text(execution.agentVersion, 80) } : {}),
+      ...(modelVersionStatus ? { modelVersionStatus } : {}),
+    };
+    const executionProfile = oneOf(effective.executionProfile, ["trusted_workstation", "isolated_customer_cloud", "restricted"] as const);
+    const sandboxTier = oneOf(effective.sandboxTier, ["read-only", "workspace-write", "danger-full-access"] as const);
+    const approvalMode = oneOf(effective.approvalMode, ["never", "risky", "always", "autonomous"] as const);
+    const capabilityNames = ["sandbox", "approval", "tool", "network", "credential_custody", "runtime_policy"] as const;
+    const evidenceClasses = ["enforced", "observed", "unavailable"] as const;
+    type ProtectionCapability = NonNullable<NonNullable<RunReceiptEvidence["protection"]>["capabilities"]>[number];
+    const capabilities: ProtectionCapability[] = Array.isArray(protection.capabilities) ? protection.capabilities.slice(0, 20).flatMap((value): ProtectionCapability[] => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const capability = value as Record<string, unknown>;
+      assertNoForbiddenKeys(capability);
+      const name = oneOf(capability.capability, capabilityNames);
+      const evidenceClass = oneOf(capability.evidenceClass, evidenceClasses);
+      if (!name || !evidenceClass) return [];
+      return [{ capability: name, evidenceClass, ...(text(capability.mechanism, 120) ? { mechanism: text(capability.mechanism, 120) } : {}) }];
+    }) : [];
     patch.receiptEvidence = {
       approvals: { requests: count(approvals.requests), approved: count(approvals.approved), denied: count(approvals.denied) },
       fileChanges: { files, added: count(changes.added), removed: count(changes.removed) },
       auditHealth: { correlation: auditState(health.correlation), readableStorage: auditState(health.readableStorage), successfulWrites: auditState(health.successfulWrites) },
+      ...(Object.keys(executionEvidence).length ? { execution: executionEvidence } : {}),
+      ...((executionProfile || sandboxTier || approvalMode || text(effective.runtimeEnforcement, 120) || capabilities.length) ? { protection: {
+        effective: {
+          ...(executionProfile ? { executionProfile } : {}), ...(sandboxTier ? { sandboxTier } : {}), ...(approvalMode ? { approvalMode } : {}),
+          ...(text(effective.runtimeEnforcement, 120) ? { runtimeEnforcement: text(effective.runtimeEnforcement, 120) } : {}),
+          ...(Array.isArray(effective.trustModes) ? { trustModes: effective.trustModes.slice(0, 20).flatMap((value) => text(value, 80) ? [text(value, 80)!] : []) } : {}),
+        },
+        capabilities,
+      } } : {}),
     };
   }
 

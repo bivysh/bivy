@@ -219,13 +219,10 @@ export function projectReceiptV1(input: ReceiptV1ProjectionInput): ReceiptV1 {
   if (!input.execution?.profile || !input.execution.controller || !input.run.runtimeId || !input.run.model || !input.execution.modelVersionStatus) addMissing(missing, "execution_identity");
   if (!effective) addMissing(missing, "effective_protection");
   if (!capabilities.length) addMissing(missing, "protection_evidence");
-  // Current Run evidence has no correlated approval-decision list or bounded
-  // file/change summary. Keep every projection partial until those fields are
-  // added from the node audit stream; branch/commit references are not enough.
   if (!governance) addMissing(missing, "approval_decisions");
-  if (!Object.keys(changes).length) addMissing(missing, "change_evidence");
+  if (!changes.branch && !changes.commit && !changes.pullRequest && !changes.checkpoint && !changes.artifact && !changes.files.length) addMissing(missing, "change_evidence");
   if (!governance) addMissing(missing, "file_change_summary");
-  if (checks.some(() => true)) addMissing(missing, "check_details"); // current RunCheck lacks required + timeout evidence
+  if (checks.some((check) => !check.commandHash || typeof check.durationMs !== "number" || (check.status !== "skipped" && typeof check.exitCode !== "number"))) addMissing(missing, "check_details");
   if (auditHealth.correlation !== "healthy") addMissing(missing, "audit_correlation");
   if (auditHealth.readableStorage !== "healthy") addMissing(missing, "audit_storage");
   if (auditHealth.successfulWrites !== "healthy") addMissing(missing, "audit_writes");
@@ -309,7 +306,8 @@ export function receiptV1FromRun(run: Run, createdAt: string): ReceiptV1 {
       checks: run.checks,
       events: run.events,
     },
-    ...(run.machine?.name ? { execution: { machineName: run.machine.name } } : {}),
+    ...((run.machine?.name || run.receiptEvidence?.execution) ? { execution: { ...(run.receiptEvidence?.execution ?? {}), ...(run.machine?.name ? { machineName: run.machine.name } : {}) } } : {}),
+    ...(run.receiptEvidence?.protection ? { protection: run.receiptEvidence.protection } : {}),
     ...(run.receiptEvidence ? { governance: run.receiptEvidence, auditHealth: run.receiptEvidence.auditHealth } : {}),
   });
 }
