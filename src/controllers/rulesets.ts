@@ -2,8 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Ruleset controller — the ruleset operation domain lifted out of server.ts as
-// the first bounded-controller carve (platform modularization Phase 2; see
-// docs/internal/platform-modularization-plan.md). It owns the ruleset helpers
+// the first bounded-controller carve. It owns the ruleset helpers
 // that the RELAY_COMMANDS handlers, the REST `/api/rulesets` routes, and the
 // queue run-policy all share, behind injected node capabilities. `server.ts`
 // wires it and keeps the bare helper names, so every current call site is

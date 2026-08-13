@@ -695,6 +695,7 @@ export function AutomationsView({
     setMenuId(null);
     try {
       const run = await runAutomationNow(controller.local, item.id);
+      controller.recordProductMilestone("run_accepted");
       await refresh();
       const sessionId = run.output?.sessionId;
       setNotice({

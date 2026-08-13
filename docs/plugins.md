@@ -292,5 +292,4 @@ through channels you already trust, pin their versions, and install locally.
 - plugin lockfiles, signatures, or marketplace trust tiers;
 - `plugin dev` hot reload and distributable `plugin pack` archives.
 
-The staged roadmap is in
-[`internal/developer-platform-implementation-plan.md`](internal/developer-platform-implementation-plan.md).
+Further contribution types remain future work.

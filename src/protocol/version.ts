@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Command/event protocol versioning (platform modularization Phase 2 — the
-// "formalize the contract" slice; see docs/internal/platform-modularization-plan.md).
+// Command/event protocol versioning: the formalized contract behind every client.
 //
 // The command/event surface is becoming the public API behind every client
 // (CLI, PWA, TUI, SDK), so peers must be able to evolve without silently

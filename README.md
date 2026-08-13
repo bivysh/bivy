@@ -1,20 +1,21 @@
 # Bivy
 
-Route coding-agent work to infrastructure you own.
+**Run agents where your environment lives. Reach, automate, and govern them from
+anywhere.**
 
-Bivy turns GitHub issues, Slack requests, signed webhooks, schedules, and live
-prompts into governed agent runs on your laptop, server, or cloud account. Choose
-the node, agent, and model; burst onto a short-lived runner in your own cloud;
-then watch, steer, and approve from a phone, browser, or terminal.
+Bivy makes coding agents on your infrastructure available from anywhere. Use
+Claude Code or Codex with the repositories, tools, services, and compute already
+in your development environment; continue the same Session from a phone, leave
+work running, and return to checked changes or a pull request with a clear
+Receipt.
 
-Agents run with your repository, keys, and toolchain. Interactive session
-traffic is end-to-end encrypted between your node and devices; Bivy's relay and
-control plane do not receive repository contents, interactive prompts,
-transcripts, or model keys. Inbound Slack commands and generic webhook
-instructions necessarily reach the control plane and are retained with their
-queue item until it is deleted; GitHub and Linear issue text is fetched directly
-by the node instead. Bivy adds routing, durable sessions, approvals, fallback
-rules, and outcome reports around agents you already use.
+Interactive Session traffic is end-to-end encrypted between a Machine and its
+paired devices. The relay cannot decrypt it. Explicitly enabled hosted
+provisioning has a different boundary: the control plane may hold encrypted
+cloud, repository, or key-escrow material that the service can technically
+access. Slack and generic webhook instructions also reach the control plane in
+plaintext. See [Why Bivy](docs/why-bivy.md) and the
+[security model](docs/security-model.md) for the complete trust model.
 
 - **Website:** [bivy.sh](https://bivy.sh)
 - **Documentation:** [`docs/`](docs/README.md) — start with the [quickstart](docs/quickstart.md)
@@ -140,9 +141,9 @@ See [`docs/remote-access.md`](docs/remote-access.md) and
 
 ## Supported agents
 
-Nineteen agents are available in the picker, each driven through its native interface.
-Pi, Claude Code, Codex, and OpenCode are the release-tested **Supported** paths;
-the rest are explicitly Beta in the picker and support matrix:
+**Claude Code and Codex are the recommended, release-certified paths.** The
+broader catalog remains available under **More agents** for users who need it;
+capabilities and fidelity vary by runtime:
 
 | Agent | Command | Notes |
 |---|---|---|
@@ -254,11 +255,13 @@ picker's Protection label. **Bivy does not currently ship its own OS-level jail.
 
 ## Credentials
 
-Provider credentials stay on the node or in a vault you control. Bivy Cloud does
-not receive model keys, GitHub repository tokens, OAuth refresh tokens,
-interactive session prompts, transcripts, or workspace files. See the
-[security model](docs/security-model.md#what-the-control-plane-sees) for the
-separate inbound-automation data boundary.
+Interactive prompts, transcripts, and workspace files stay encrypted across the
+relay. Credentials can remain on a Machine or in a vault you control. If you
+explicitly enable hosted unattended provisioning, Bivy Cloud may instead store
+encrypted cloud, repository, model, or key-escrow material that the service can
+technically access. Treat this as an explicit hosted-custody mode, not as relay
+blindness. See the
+[security model](docs/security-model.md#what-the-control-plane-sees).
 
 ```bash
 bivy secrets list
@@ -288,11 +291,11 @@ lives beside the job—sandbox, approval mode, and a hard attempt ceiling that
 retry/fallback rules cannot exceed. See
 [`docs/automations-as-code.md`](docs/automations-as-code.md).
 
-## GitHub work queue
+## GitHub Runs
 
-Label an issue `bivy` (or `bivy/<node>` to target a machine), or mention the Bivy
-GitHub App in a comment. A node you own claims the work, runs the agent in an
-isolated worktree, and the agent opens the pull request itself.
+Label an issue `bivy` (or `bivy/<machine>` to target a Machine), or mention the
+Bivy GitHub App in a comment. Bivy creates a Run on the selected Machine, uses an
+isolated worktree, executes configured checks, and reports an explicit outcome.
 
 Available on every plan. On Bivy Cloud, the free trial shows the first 25
 distinct sessions in the hosted app and includes 10 unattended automations per
@@ -308,9 +311,12 @@ with its own key and `@`-mention handle.
 
 See [`docs/github-work-queue.md`](docs/github-work-queue.md).
 
-## Linear work queue
+## Linear Runs
 
-Apply `bivy` or `bivy/<node>` to a Linear issue to dispatch it to the same hosted queue. The node fetches issue content directly from Linear, works in an isolated GitHub worktree, and asks the agent to open a pull request. See [`docs/linear-work-queue.md`](docs/linear-work-queue.md).
+Apply `bivy` or `bivy/<machine>` to a Linear issue to create a Run on the selected
+Machine. The Machine fetches issue content directly from Linear, works in an
+isolated GitHub worktree, and asks the agent to open a pull request. See
+[`docs/linear-work-queue.md`](docs/linear-work-queue.md).
 
 ## Development
 

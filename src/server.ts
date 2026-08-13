@@ -866,7 +866,7 @@ function startOAuthLoginSweeper(): void {
 // SessionRecord + its prompt helper types now live in ./session/record.ts (the
 // SessionEngine decomposition, step 2a) — imported at the top of this file.
 // Kept as a plain mutable data shape; server.ts still reads/writes fields in
-// place. See docs/internal/platform-modularization-plan.md.
+// place.
 
 // Options for createSession. `worktree` runs the session in an isolated git
 // worktree/branch (optional for manual sessions, forced for issue pickup);
