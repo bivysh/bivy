@@ -69,7 +69,7 @@ export PATH="$HOME/.local/bin:$PATH"   # add to ~/.zshrc or ~/.bashrc
 ```
 
 Or call it directly: `~/.bivy/app/bin/bivy.mjs status`. From a git checkout:
-`npm run bivy -- status`.
+`pnpm run bivy -- status`.
 
 ## Node.js too old
 

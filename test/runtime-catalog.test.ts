@@ -64,9 +64,16 @@ for (const runtime of listRuntimes()) {
     assert.ok(runtime.testedVersion, `${runtime.id} must name the exact release-tested dependency version`);
   }
 }
-const lock = JSON.parse(fs.readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
-assert.equal(listRuntimes().find((r) => r.id === "pi")!.testedVersion, lock.packages["node_modules/@earendil-works/pi-coding-agent"].version);
-assert.equal(listRuntimes().find((r) => r.id === "claude-code-sdk")!.testedVersion, lock.packages["node_modules/@anthropic-ai/claude-agent-sdk"].version);
+// A "release-tested" runtime must name the version we actually ship against.
+// Read it from the INSTALLED package rather than a lockfile: pnpm-lock.yaml
+// keys entries by resolved peer set, so there is no single stable path to look
+// up, and the installed manifest is the thing the tests actually exercised.
+function installedVersion(pkg: string): string {
+  const manifest = new URL(`../node_modules/${pkg}/package.json`, import.meta.url);
+  return JSON.parse(fs.readFileSync(manifest, "utf8")).version;
+}
+assert.equal(listRuntimes().find((r) => r.id === "pi")!.testedVersion, installedVersion("@earendil-works/pi-coding-agent"));
+assert.equal(listRuntimes().find((r) => r.id === "claude-code-sdk")!.testedVersion, installedVersion("@anthropic-ai/claude-agent-sdk"));
 assert.equal(listRuntimes().find((r) => r.id === "pi")!.protectionLevel, "tool-controls");
 assert.equal(listRuntimes().find((r) => r.id === "claude-code-sdk")!.protectionLevel, "native-sandbox");
 assert.equal(listRuntimes().find((r) => r.id === "gemini")!.protectionLevel, "native-sandbox");

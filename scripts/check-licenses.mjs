@@ -1,11 +1,21 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+//
+// Audits the licenses of every installed third-party dependency.
+//
+// The root project installs with pnpm, whose lockfile records no license data at
+// all, so the root audit walks the INSTALLED tree and reads each package.json.
+// That is strictly better than reading a lockfile: it audits the bytes that are
+// actually on disk. It does require `pnpm install` to have run first.
+//
+// services/relay and services/control-plane are separate npm projects with their
+// own package-lock.json, and npm's lockfile does carry `license`, so those keep
+// the cheaper lockfile-based path (no install needed).
 import fs from "node:fs";
 import path from "node:path";
 
-const lockfiles = [
-  "package-lock.json",
+const npmLockfiles = [
   "services/relay/package-lock.json",
   "services/control-plane/package-lock.json",
 ].filter((file) => fs.existsSync(file));
@@ -44,7 +54,7 @@ const disallowedPattern = /\b(AGPL|GPL|LGPL|SSPL|BUSL|Commercial|Proprietary)\b/
 // the unknown-license check while still enforcing the disallowed-license denylist
 // above against them.
 const exemptScopes = ["@anthropic-ai/"];
-const isExemptPackage = (pkgPath) => exemptScopes.some((scope) => pkgPath.includes(`node_modules/${scope}`));
+const isExemptPackage = (pkgPath) => exemptScopes.some((scope) => pkgPath.includes(scope));
 
 const problems = [];
 
@@ -64,7 +74,63 @@ function licenseLooksAllowed(license) {
   return false;
 }
 
-for (const lockfile of lockfiles) {
+function check(source, name, pkgPath, license) {
+  if (disallowedPattern.test(license) || (!isExemptPackage(pkgPath) && !licenseLooksAllowed(license))) {
+    problems.push(`${source}: ${name} (${pkgPath}) has unsupported or unknown license: ${license || "<missing>"}`);
+  }
+}
+
+// --- Root project: walk the installed pnpm tree --------------------------------
+//
+// pnpm materializes every resolved package exactly once under node_modules/.pnpm
+// as `<name>@<version>[_<peer-hash>]/node_modules/<name>`, so one pass over that
+// directory covers the full dependency graph — including nested copies, which a
+// hoisted layout would hide behind a single top-level entry.
+const virtualStore = "node_modules/.pnpm";
+// Counted by name@version: a store entry's directory also contains links to its
+// peers, and a package with several peer resolutions gets one entry per
+// combination, so a raw directory count would badly overstate the audit.
+const rootPackages = new Set();
+if (fs.existsSync(virtualStore)) {
+  for (const entry of fs.readdirSync(virtualStore)) {
+    if (entry === "node_modules" || entry === ".") continue;
+    const inner = path.join(virtualStore, entry, "node_modules");
+    if (!fs.existsSync(inner)) continue;
+    // <inner>/<name> for an unscoped package, <inner>/@scope/<name> for a scoped
+    // one. Anything else at this level is a peer dependency link, not the package
+    // this store entry is for — but auditing those too is harmless (they resolve
+    // to their own store entry, which we visit on its own iteration).
+    for (const scopeOrName of fs.readdirSync(inner)) {
+      const dirs = scopeOrName.startsWith("@")
+        ? fs.readdirSync(path.join(inner, scopeOrName)).map((n) => path.join(scopeOrName, n))
+        : [scopeOrName];
+      for (const rel of dirs) {
+        const manifest = path.join(inner, rel, "package.json");
+        let meta;
+        try {
+          meta = JSON.parse(fs.readFileSync(manifest, "utf8"));
+        } catch {
+          continue; // not a package dir (or a dangling link) — skip
+        }
+        // Bivy's own workspace packages are AGPL and are not third-party.
+        if (typeof meta.name === "string" && meta.name.startsWith("@bivy/")) continue;
+        const key = `${meta.name ?? rel}@${meta.version ?? "?"}`;
+        if (rootPackages.has(key)) continue;
+        rootPackages.add(key);
+        check("node_modules", meta.name ?? rel, manifest, normalizeLicense(meta.license));
+      }
+    }
+  }
+} else {
+  console.error(
+    "Root dependencies are not installed, so their licenses cannot be audited.\n" +
+      "Run `pnpm install` and try again.",
+  );
+  process.exit(2);
+}
+
+// --- Services: npm lockfiles still carry license metadata ----------------------
+for (const lockfile of npmLockfiles) {
   const lock = JSON.parse(fs.readFileSync(lockfile, "utf8"));
   for (const [pkgPath, meta] of Object.entries(lock.packages ?? {})) {
     if (!pkgPath || meta.link) continue;
@@ -72,11 +138,7 @@ for (const lockfile of lockfiles) {
     // path rather than node_modules/) carry Bivy's own AGPL license, which isn't
     // in the third-party allowlist. Only audit installed dependencies.
     if (!pkgPath.startsWith("node_modules/")) continue;
-    const license = normalizeLicense(meta.license);
-    const name = meta.name ?? path.basename(pkgPath);
-    if (disallowedPattern.test(license) || (!isExemptPackage(pkgPath) && !licenseLooksAllowed(license))) {
-      problems.push(`${lockfile}: ${name} (${pkgPath}) has unsupported or unknown license: ${license || "<missing>"}`);
-    }
+    check(lockfile, meta.name ?? path.basename(pkgPath), pkgPath, normalizeLicense(meta.license));
   }
 }
 
@@ -85,4 +147,7 @@ if (problems.length) {
   process.exit(1);
 }
 
-console.log(`Dependency license audit passed for ${lockfiles.length} lockfile(s).`);
+console.log(
+  `Dependency license audit passed for ${rootPackages.size} installed root package(s) ` +
+    `and ${npmLockfiles.length} service lockfile(s).`,
+);
