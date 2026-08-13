@@ -222,6 +222,7 @@ function appliedInput(entry: AutomationConfigEntry, configOrder: number, nodeId:
     ephemeral: entry.routing.ephemeral,
     approvalMode: entry.safety.approval,
     sandbox: entry.safety.sandbox,
+    allowDangerous: entry.safety.allowDangerous,
     maxAttempts: entry.safety.maxAttempts,
   };
 }
