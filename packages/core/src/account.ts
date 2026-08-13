@@ -1088,6 +1088,19 @@ export async function fetchAutomationRun(
   return (await res.json()) as AccountAutomationRun;
 }
 
+export type ProductMetricEvent = "activation_ready" | "first_useful_response" | "remote_reconnect" | "remote_intervention" | "run_accepted" | "receipt_reviewed";
+export type ProductMetricClient = "desktop" | "mobile" | "cli" | "node";
+
+/** Emit one content-free milestone. The request contains closed enums only. */
+export async function recordProductMetric(store: LocalStore, event: ProductMetricEvent, client: ProductMetricClient, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const res = await fetchImpl(`${cpBase(store)}/account/product-events`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify({ event, client }),
+  });
+  if (!res.ok) throw new Error(`product event request failed: ${res.status}`);
+}
+
 /** Cancel a pending or active automation run. Repeating this call after a
  * successful cancellation is idempotent; completed/failed runs are rejected. */
 export function cancelAutomationRun(

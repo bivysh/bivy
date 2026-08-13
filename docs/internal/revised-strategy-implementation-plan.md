@@ -79,7 +79,11 @@ Known coherence gaps found in the same audit:
   complete; current UI must not overclaim it.
 - [ ] Add privacy-safe metrics for activation, first useful response, remote reconnect/intervention, Run acceptance/outcome, Receipt review, and failure stage.
   **Progress:** durable `succeeded`, `failed`, and `needs_attention` Run results
-  are aggregate counters. The metrics contract documents unobservable gaps.
+  are aggregate counters. A bounded, content-free product-event metric and
+  authenticated collection endpoint now cover the fixed activation, first-response,
+  remote-continuity, Run-acceptance, and Receipt-review vocabulary; Receipt review
+  is wired at the PWA Receipt surface. Remaining customer-path emission points and
+  elapsed-time histograms keep this item open.
 - [ ] Add a CI vocabulary check for prohibited terms in new customer-facing copy with explicit diagnostics/compatibility exceptions.
 
 **Gate:** no primary customer screen requires “work item,” “routing label,” or
