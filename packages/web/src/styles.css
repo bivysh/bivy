@@ -931,15 +931,14 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 
 /* ---- Composer ---- */
 .composer {
-  display: flex; padding: 12px 10px;
-  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  display: flex; padding: 8px 10px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
 }
 .composer-card {
   position: relative;
-  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px;
-  border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface-2);
-  padding: 10px 10px 10px 16px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-2);
+  padding: 8px 8px 8px 12px;
 }
 /* Slash-command autocomplete: a popover floating just above the composer. */
 .slash-menu {
@@ -1405,8 +1404,8 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .automations-view-head-text { min-width: 0; flex: 1 1 auto; }
 .automations-view-heading {
   margin: 0; min-width: 0;
-  font-size: clamp(22px, 5.6vw, 28px); font-weight: 700; letter-spacing: -0.02em;
-  line-height: 1.15; font-family: var(--font-serif);
+  font-size: clamp(20px, 5.2vw, 24px); font-weight: 650; letter-spacing: -0.02em;
+  line-height: 1.2;
 }
 .automations-view-sub {
   margin: 4px 0 0; font-size: 13px; color: var(--muted); line-height: 1.35;
@@ -1415,10 +1414,14 @@ button.action-sheet-item:last-child { border-bottom: 0; }
   display: flex; align-items: center; gap: 4px; flex: none; padding-top: 2px;
 }
 .autom-new-btn {
-  border-radius: 999px; padding: 8px 14px; font-weight: 600; white-space: nowrap;
-  background: var(--ink); border-color: var(--ink); color: var(--bg);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 38px; border: 1px solid var(--ink); border-radius: 10px;
+  padding: 7px 12px; font: inherit; font-weight: 600; white-space: nowrap;
+  background: var(--ink); color: var(--bg);
 }
 .autom-new-btn:hover { filter: brightness(1.08); }
+.autom-close-btn { display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 0; color: var(--muted); }
+.autom-close-btn:hover { color: var(--ink); }
 /* Tab bar under the header — Overview / Work Queue / Webhooks / Rulesets.
    Underline-style active state, horizontally scrollable on narrow screens. */
 .automations-tabs {
@@ -1457,51 +1460,41 @@ button.action-sheet-item:last-child { border-bottom: 0; }
   margin-bottom: 12px;
 }
 .autom-section-head .autom-section-label { margin: 0; }
+.autom-section-actions { display: flex; align-items: center; gap: 8px; }
 .autom-section-label {
   margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--muted);
   letter-spacing: 0.01em;
 }
-.autom-count {
-  font-size: 12px; font-weight: 700; color: var(--muted);
-  min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: var(--surface-2); border: 1px solid var(--line);
-}
 .autom-empty-hint { margin: 0; padding: 14px 16px; border-radius: 14px; background: var(--surface-2); }
 .autom-save-hint { margin: 0; font-style: italic; }
 
-/* Live source strip — one-tap connect without leaving Automations. */
-.autom-sources-strip {
-  display: flex; flex-wrap: wrap; gap: 8px;
-  margin: 6px 0 4px;
+/* Sources are one disclosure row by default. The old three bordered pills made
+   connection setup visually louder than the user's actual automations. */
+.autom-sources-panel {
+  margin: 0; border-bottom: 1px solid var(--line); background: transparent;
 }
-.autom-source-pill {
-  display: inline-flex; align-items: center; gap: 8px; min-width: 0;
-  padding: 8px 12px; border-radius: 999px;
-  border: 1px solid var(--line); background: var(--surface);
-  color: var(--ink); font: inherit; cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+.autom-sources-summary {
+  min-height: 58px; display: flex; align-items: center; gap: 12px;
+  padding: 8px 4px; cursor: pointer; list-style: none;
 }
-.autom-source-pill:hover {
-  border-color: var(--line-strong); background: var(--surface-2);
+.autom-sources-summary::-webkit-details-marker { display: none; }
+.autom-sources-summary-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.autom-sources-summary-copy strong { font-size: 14px; font-weight: 650; }
+.autom-sources-summary-copy span { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.autom-sources-chevron { flex: none; display: inline-flex; color: var(--muted); transition: transform 140ms ease; }
+.autom-sources-panel[open] .autom-sources-chevron { transform: rotate(90deg); }
+.autom-sources-list { border-top: 1px solid var(--line); }
+.autom-source-row {
+  width: 100%; min-height: 54px; display: flex; align-items: center; gap: 10px;
+  padding: 8px 4px; border: 0; border-bottom: 1px solid var(--line);
+  background: transparent; color: var(--ink); text-align: left; font: inherit;
 }
-.autom-source-pill:active { transform: scale(0.98); }
-.autom-source-pill.tone-off {
-  border-style: dashed; border-color: var(--line-strong);
-  background: transparent;
-}
-.autom-source-pill.tone-warn {
-  border-color: color-mix(in srgb, var(--warn, #d4a017) 45%, var(--line));
-  background: color-mix(in srgb, var(--warn, #d4a017) 8%, var(--surface));
-}
-.autom-source-pill.tone-on {
-  border-color: color-mix(in srgb, var(--ok) 35%, var(--line));
-}
-.autom-source-pill-name { font-size: 13px; font-weight: 650; }
-.autom-source-pill-cta {
-  font-size: 12px; font-weight: 650; color: var(--accent);
-}
-.autom-source-pill.tone-on .autom-source-pill-cta { color: var(--muted); font-weight: 550; }
+.autom-source-row:last-child { border-bottom: 0; }
+.autom-source-row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.autom-source-row-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.autom-source-row-copy strong { font-size: 14px; font-weight: 600; }
+.autom-source-row-copy span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.autom-source-row-cta { color: var(--accent); font-size: 13px; font-weight: 600; }
 
 /* Inline notices after create / enable / run. */
 .autom-notice {
@@ -1687,15 +1680,18 @@ button.template-card.is-featured .template-card-icon {
   margin-top: 2px; font-size: 12px; font-weight: 700; color: var(--accent);
 }
 
-/* Automation + run rows */
-.automation-list { display: flex; flex-direction: column; gap: 8px; }
+/* Automation + run rows. Flat rows and dividers make the content—not its
+   container chrome—the primary scan target. */
+.automation-list { display: flex; flex-direction: column; gap: 0; border-block: 1px solid var(--line); }
 .automation-row {
-  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px 12px; flex-wrap: wrap;
-  border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; background: var(--surface);
-  min-width: 0;
-  transition: opacity 120ms ease, border-color 120ms ease;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px 12px;
+  border: 0; border-bottom: 1px solid var(--line); border-radius: 0;
+  padding: 13px 4px; background: transparent; min-width: 0;
+  transition: opacity 120ms ease, background 120ms ease;
 }
-.automation-row.is-paused { opacity: 0.72; }
+.automation-row:last-child { border-bottom: 0; }
+.automation-row:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.automation-row.is-paused .settings-hint { opacity: 0.78; }
 .automation-row-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 180px; }
 .automation-row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .automation-row-title strong {
@@ -2260,24 +2256,27 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 
 @media (max-width: 720px) {
   .automations-view-head { align-items: center; padding-bottom: 8px; }
+  .automations-view-head-text { min-width: 0; }
   .automations-view-sub { display: none; }
+  .automations-view-head-actions { gap: 2px; }
   .automations-view-head-actions .icon-btn { min-width: 44px; min-height: 44px; }
-  .autom-new-btn { min-height: 44px; padding-inline: 13px; }
+  .autom-new-btn { width: 44px; min-height: 44px; padding: 0; border-radius: 10px; }
+  .autom-new-btn-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   .automations-tabs {
     flex-wrap: nowrap; overflow-x: auto; padding: 0 8px; margin-top: 0;
     scrollbar-width: none; background: var(--bg);
   }
   .automations-tabs::-webkit-scrollbar { display: none; }
   .automations-tab { flex: 1 0 auto; min-height: 44px; padding: 10px 14px; }
-  .automations-view-body { padding-inline: 12px; }
-  .autom-sources-strip { display: grid; grid-template-columns: 1fr; }
-  .autom-source-pill { width: 100%; min-height: 46px; justify-content: flex-start; }
-  .autom-source-pill-cta { margin-left: auto; }
-  .automation-row { padding: 13px 12px; }
-  .automation-row-main { flex-basis: 100%; }
-  .automation-row-actions { width: 100%; justify-content: flex-end; border-top: 1px solid var(--line); padding-top: 10px; }
+  .automations-view-body { padding-inline: 16px; }
+  .automation-row { padding: 14px 2px; }
+  .automation-row-main { flex-basis: auto; }
+  .automation-row-actions { width: auto; justify-content: flex-end; border-top: 0; padding-top: 0; }
   .automation-row-actions .btn { min-height: 40px; }
   .automation-row .row-menu-btn { min-width: 40px; min-height: 40px; opacity: 1; }
+  .run-row { align-items: flex-start; flex-wrap: wrap; }
+  .run-row .automation-row-main { flex-basis: 100%; }
+  .run-row .automation-row-actions { width: 100%; padding-top: 6px; }
   .run-row-chevron { margin-left: auto; }
   .runs-overview .autom-section-head { align-items: flex-end; }
   .run-details .automations-view-heading { font-size: 20px; }
@@ -2956,11 +2955,10 @@ select.picker-search { appearance: auto; }
 .stats-meta-row dd { margin: 0; color: var(--ink); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stats-note { color: var(--muted); font-size: 11px; margin: 2px 0 0; line-height: 1.4; }
 
-/* ---- Calm direction: editorial serif for the session header title ----
-   Scoped to the topbar so the generic `.title` elsewhere is untouched. */
+/* Session titles use the same sans-serif hierarchy as the rest of the shell.
+   The display serif remains available for the small Bivy wordmark only. */
 .topbar-title-row .title {
-  font-family: var(--font-serif);
-  font-weight: 500;
+  font-weight: 650;
   letter-spacing: -0.01em;
 }
 
