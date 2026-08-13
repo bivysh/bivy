@@ -132,6 +132,13 @@ export interface SessionSummary {
   approvalMode?: "never" | "risky" | "always" | "autonomous";
   ephemeral?: boolean;
   executionProfile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
+  auditHealth?: {
+    storage: "healthy" | "missing" | "corrupt" | "unreadable";
+    writes: "healthy" | "unknown" | "degraded";
+    failedWrites: number;
+    corruptLines: number;
+  };
+  eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
   /** Pull request opened for this session's branch, if any (the live open one). */
   prUrl?: string;
   /** Every PR seen for this session's branch (open, merged, closed). */

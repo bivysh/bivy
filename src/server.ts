@@ -1750,6 +1750,12 @@ const eventLog = new EventLog(eventLogDir, eventLogPath, redactSecrets, 500, (is
   broadcast({ type: "session.notice", sessionId: record.id, level: "error", message: warning });
 });
 
+function eventLogHealthForSession(sessionId: string): { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number } {
+  const issue = eventLogIssues.get(sessionId);
+  if (!issue) return { state: "healthy" };
+  return { state: "degraded", operation: issue.operation as "read" | "parse" | "append" | "rewrite", at: issue.at };
+}
+
 // Global content-addressed store for message attachments (images + files). Unlike
 // the per-session `.bivy-attachments/` worktree copy (kept so the agent can open
 // files with its tools), this is durable, session-independent, and re-findable:
@@ -2294,6 +2300,8 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
         approvalMode: rec?.approvalMode,
         ephemeral: rec?.ephemeral,
         executionProfile: rec ? (rec.ephemeral ? "isolated_customer_cloud" : "trusted_workstation") : undefined,
+        auditHealth: rec ? auditLog.health() : undefined,
+        eventLogHealth: rec ? eventLogHealthForSession(rec.id) : undefined,
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,
         status: needsAction ? "needs_action" : (rec ? sessionState(rec).displayStatus : "saved"),
@@ -6207,6 +6215,8 @@ function bivySessionEnvelope(record: SessionRecord): BivySessionRecord {
     approvalMode: record.approvalMode,
     ephemeral: record.ephemeral,
     executionProfile: record.ephemeral ? "isolated_customer_cloud" : "trusted_workstation",
+    auditHealth: auditLog.health(),
+    eventLogHealth: eventLogHealthForSession(record.id),
     repoSlug: gh.repoSlug,
     issueNumber: gh.issueNumber,
     issueUrl: issueUrl || record.githubIssueUrl,
@@ -8715,6 +8725,16 @@ app.get("/api/diagnostics", (_req, res) => {
       approvalMode,
       relayConnected: Boolean(relay?.connected),
       turnRecoveries: turnWatchdog.turnRecoveryStats(),
+      audit: auditLog.health(),
+      eventLog: {
+        ok: eventLog.health().ok,
+        pendingSessions: eventLog.health().pendingSessions,
+        affectedSessions: eventLogIssues.size,
+        issuesByOperation: [...eventLogIssues.values()].reduce<Record<string, number>>((counts, issue) => {
+          counts[issue.operation] = (counts[issue.operation] ?? 0) + 1;
+          return counts;
+        }, {}),
+      },
       plugins: (() => {
         const installed = listInstalledPlugins(appDir);
         return {

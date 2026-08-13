@@ -134,6 +134,8 @@ export function SessionMenu({
   executionProfile,
   effectiveProtection,
   trustMode,
+  auditHealth,
+  eventLogHealth,
   onContinueInTerminal,
 }: {
   sessionId: string;
@@ -148,6 +150,13 @@ export function SessionMenu({
   executionProfile?: string;
   effectiveProtection?: string;
   trustMode?: string;
+  auditHealth?: {
+    storage: "healthy" | "missing" | "corrupt" | "unreadable";
+    writes: "healthy" | "unknown" | "degraded";
+    failedWrites: number;
+    corruptLines: number;
+  };
+  eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
   /** "Continue in terminal": hand this session to the runtime's interactive TUI.
    *  Undefined (item hidden) when the runtime lacks `interactiveTui` or the node
    *  is offline — the reverse of the terminal's "continue in chat". */
@@ -263,6 +272,18 @@ export function SessionMenu({
             {effectiveProtection && <span><strong>Protection</strong>{effectiveProtection}</span>}
             {trustMode && <span><strong>Connection</strong>{trustMode}</span>}
           </div>
+          {auditHealth && (["corrupt", "unreadable"].includes(auditHealth.storage) || auditHealth.writes === "degraded") && (
+            <div className="session-actions-audit-warning" role="status">
+              <strong>Audit evidence degraded</strong>
+              <span>{auditHealth.writes === "degraded" ? `${auditHealth.failedWrites} audit write${auditHealth.failedWrites === 1 ? "" : "s"} failed.` : `Audit storage is ${auditHealth.storage}.`}</span>
+            </div>
+          )}
+          {eventLogHealth?.state === "degraded" && (
+            <div className="session-actions-audit-warning" role="status">
+              <strong>Session history persistence degraded</strong>
+              <span>The last {eventLogHealth.operation ?? "storage"} operation failed. History may be incomplete.</span>
+            </div>
+          )}
           <button className="session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
             Copy session reference
           </button>

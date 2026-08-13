@@ -63,14 +63,29 @@ export interface AuditLog {
   /** Append one event (ts stamped here). Best-effort — never throws, so an
    *  unwritable audit dir degrades observability but never breaks the daemon. */
   record(event: Omit<AuditEvent, "ts">): void;
+  /** Current persistence health. Counts only; never returns audit content. */
+  health(): AuditHealth;
   /** Absolute path of the JSONL file, for `bivy audit` / export tooling. */
   readonly file: string;
+}
+
+export interface AuditHealth {
+  storage: "healthy" | "missing" | "corrupt" | "unreadable";
+  writes: "healthy" | "unknown" | "degraded";
+  successfulWrites: number;
+  failedWrites: number;
+  corruptLines: number;
 }
 
 /** Build the node's audit log under `<dir>/audit.jsonl` (dir created lazily). */
 export function createAuditLog(dir: string): AuditLog {
   const file = path.join(dir, "audit.jsonl");
   let ensured = false;
+  let successfulWrites = 0;
+  let failedWrites = 0;
+  let cachedSignature = "";
+  let cachedStorage: AuditHealth["storage"] = "missing";
+  let cachedCorruptLines = 0;
   return {
     file,
     record(event) {
@@ -80,9 +95,44 @@ export function createAuditLog(dir: string): AuditLog {
           ensured = true;
         }
         fs.appendFileSync(file, `${JSON.stringify({ ts: Date.now(), ...event })}\n`);
+        successfulWrites += 1;
+        cachedSignature = "";
       } catch {
+        failedWrites += 1;
         /* best-effort: audit failure must never break a session */
       }
+    },
+    health() {
+      let storage: AuditHealth["storage"] = "missing";
+      let corruptLines = 0;
+      try {
+        const stat = fs.statSync(file);
+        const signature = `${stat.mtimeMs}:${stat.size}`;
+        if (signature === cachedSignature) {
+          storage = cachedStorage;
+          corruptLines = cachedCorruptLines;
+        } else {
+          const raw = fs.readFileSync(file, "utf8");
+          storage = "healthy";
+          for (const line of raw.split("\n")) {
+            if (!line.trim()) continue;
+            try { JSON.parse(line); } catch { corruptLines += 1; }
+          }
+          if (corruptLines) storage = "corrupt";
+          cachedSignature = signature;
+          cachedStorage = storage;
+          cachedCorruptLines = corruptLines;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") storage = "unreadable";
+      }
+      return {
+        storage,
+        writes: failedWrites ? "degraded" : successfulWrites ? "healthy" : "unknown",
+        successfulWrites,
+        failedWrites,
+        corruptLines,
+      };
     },
   };
 }

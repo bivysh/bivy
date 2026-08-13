@@ -117,8 +117,11 @@ complete the first task; no false-positive readiness.
   correct Session without duplicate prompts.
 - [ ] Show the active execution profile, effective enforcement, and trust mode
   in Session context.
-- [ ] Surface event-log persistence and audit-write degradation in the Session
-  and diagnostics export.
+- [x] Surface event-log persistence and audit-write degradation in the Session
+  and diagnostics export. **Implemented in PR #536:** node audit storage health and
+  best-effort write failures are exposed as bounded counters/states in diagnostics
+  and live Session context; corrupt, unreadable, or write-degraded state produces
+  an explicit Session warning without exposing audit content.
 - [ ] Productize supported native Session adoption and document fidelity limits.
 - [ ] Define and measure watchdog termination/recovery SLOs.
 
