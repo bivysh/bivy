@@ -15,6 +15,7 @@
 // screen must not overstate a Receipt.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ConfirmDialog } from "./AppDialog.js";
 import {
   RunFetchError,
   receiptV1FromRun,
@@ -109,6 +110,7 @@ export function RunDetails({
   const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   // App passes `load`/`resolveMachineName` as fresh closures every render; keep
   // them in refs so the fetch is keyed only on runId and never storms the
@@ -189,7 +191,7 @@ export function RunDetails({
           <p className="automations-view-sub">What this Run did, where it ran, and what remains unknown.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="icon-btn" onClick={onClose} title="Close" aria-label="Close run details">✕</button>
+          <button type="button" className="icon-btn run-details-close" onClick={onClose} title="Back" aria-label="Close run details"><span aria-hidden="true">‹</span><span>Back</span></button>
         </div>
       </header>
 
@@ -212,6 +214,7 @@ export function RunDetails({
               <strong>Sign in to view this Run</strong>
               <span>Your session isn&apos;t authorized. Sign in again to open this Run.</span>
             </div>
+            <button type="button" className="btn primary" onClick={() => window.location.assign("/")}>Sign in</button>
           </div>
         )}
 
@@ -228,7 +231,7 @@ export function RunDetails({
             stale={stale}
             busy={busy}
             actionError={actionError}
-            onCancel={onCancel ? cancel : undefined}
+            onCancel={onCancel ? () => setConfirmCancel(true) : undefined}
             onRetry={onRetry ? retry : undefined}
             onRefresh={() => refresh()}
             onOpenSession={onOpenSession}
@@ -236,6 +239,16 @@ export function RunDetails({
           />
         )}
       </div>
+      {confirmCancel && (
+        <ConfirmDialog
+          title="Cancel run?"
+          message="The agent may take a moment to stop. This page will refresh from the durable run record."
+          confirmLabel="Cancel run"
+          danger
+          onCancel={() => setConfirmCancel(false)}
+          onConfirm={() => { setConfirmCancel(false); void cancel(); }}
+        />
+      )}
     </div>
   );
 }

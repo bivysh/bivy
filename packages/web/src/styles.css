@@ -1689,8 +1689,43 @@ button.template-card.is-featured .template-card-icon {
   display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap;
   margin-top: 2px;
 }
-.automation-row .row-menu-btn { opacity: 0.55; }
+.automation-row .row-menu-btn { opacity: 0.72; }
 .automation-row:hover .row-menu-btn { opacity: 1; }
+.run-row { align-items: center; }
+.run-row-open {
+  appearance: none; border: 0; background: transparent; color: inherit; font: inherit;
+  text-align: left; padding: 0; cursor: pointer;
+}
+.run-row-open:disabled { cursor: default; }
+.run-row-open:not(:disabled):hover .automation-row-title strong { color: var(--accent); }
+.run-row-chevron { color: var(--muted); font-size: 24px; line-height: 1; padding-left: 2px; }
+.runs-overview { margin-top: 12px; }
+.runs-overview .autom-section-head > div { min-width: 0; }
+.runs-overview .autom-section-head .settings-hint { margin: 3px 0 0; }
+
+/* A runner is a first-class requirement, not a tiny select hidden under the
+   prompt. Pairing/key readiness is visible before Save can become disabled. */
+.autom-runner-card {
+  border: 1px solid var(--line); border-radius: 16px; background: var(--surface-2);
+  overflow: hidden; min-width: 0;
+}
+.autom-runner-card.ready { border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
+.autom-runner-card.warn { border-color: color-mix(in srgb, var(--warn, #d4a017) 45%, var(--line)); }
+.autom-runner-select-row { display: flex; align-items: center; gap: 10px; padding: 11px 12px; min-width: 0; }
+.autom-runner-icon {
+  width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+  border-radius: 11px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--accent); font-size: 20px;
+}
+.autom-runner-select-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.autom-runner-select-copy strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.autom-runner-select-copy span { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.autom-runner-select-row .autom-inline-select { flex: none; width: min(42%, 190px); }
+.autom-runner-help {
+  padding: 10px 12px; border-top: 1px solid var(--line);
+  color: var(--ink); background: color-mix(in srgb, var(--warn, #d4a017) 9%, var(--surface));
+  font-size: 12px; line-height: 1.45;
+}
 .autom-status, .run-status {
   font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px;
   border: 1px solid var(--line); color: var(--muted); background: var(--surface-2);
@@ -1727,6 +1762,34 @@ button.template-card.is-featured .template-card-icon {
 .run-status.bad { color: var(--danger); border-color: currentColor; }
 .run-status.info { color: var(--muted); }
 
+/* Routable run detail: readable as a page on desktop and a compact native-like
+   drill-in on mobile. The shared row primitives otherwise have no page rhythm. */
+.run-details-body { max-width: 760px; padding-top: 14px; }
+.run-details-title {
+  margin: 4px 0 8px; font-family: var(--font-serif); font-size: clamp(22px, 4vw, 30px);
+  font-weight: 700; line-height: 1.2; overflow-wrap: anywhere;
+}
+.run-details .run-sheet-status { margin-bottom: 18px; }
+.run-details .run-sheet-rows {
+  margin-top: 14px; border: 1px solid var(--line); border-radius: 14px;
+  overflow: hidden; background: var(--surface);
+}
+.run-details .run-sheet-checks { justify-content: flex-start; margin: 14px 2px 0; }
+.run-details .run-sheet-failure { margin-top: 14px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line)); border-radius: 12px; }
+.run-details-receipt { margin-top: 18px !important; }
+.run-details-state {
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  margin-top: 20px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+}
+.run-details-state p { margin: 0; color: var(--muted); }
+.run-details-muted { color: var(--muted); font-weight: 500; }
+.run-details-close { width: auto; gap: 3px; padding: 0 8px; font-size: 14px; }
+.run-details-close span:first-child { font-size: 24px; line-height: 1; }
+.run-details .run-sheet-recovery {
+  position: sticky; bottom: 0; margin: 18px -4px 0; padding: 12px 4px max(12px, env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, var(--bg) 18%);
+}
+
 /* Create/edit sheet: single-page form modal. */
 .wizard-scrim {
   position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,0.40);
@@ -1756,6 +1819,19 @@ button.template-card.is-featured .template-card-icon {
 .wizard-actions {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
   padding: 14px 16px max(18px, env(safe-area-inset-bottom)); flex: none;
+}
+@media (max-width: 479px) {
+  .wizard-scrim { align-items: flex-end; padding: 0; backdrop-filter: none; }
+  .wizard {
+    max-height: 100dvh; height: 100dvh; border-width: 0; border-radius: 0;
+    box-shadow: none;
+  }
+  .wizard-head { padding-top: max(14px, env(safe-area-inset-top)); border-bottom: 1px solid var(--line); }
+  .wizard-actions { border-top: 1px solid var(--line); background: var(--surface); }
+  .wizard-actions .btn { min-height: 44px; }
+  .wizard-actions .autom-save-btn { flex: 1; }
+  .autom-runner-select-row { align-items: flex-start; flex-wrap: wrap; }
+  .autom-runner-select-row .autom-inline-select { width: 100%; max-width: none; height: 44px; }
 }
 @media (min-width: 480px) {
   .wizard-scrim { padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)); }
@@ -1997,6 +2073,15 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .queue-run-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .queue-run-field select, .queue-run-field input { font-size: 16px; }
 .queue-run-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.routing-readiness {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2);
+}
+.routing-readiness.ready { border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); background: color-mix(in srgb, var(--ok) 8%, var(--surface)); }
+.routing-readiness.warn { border-color: color-mix(in srgb, var(--warn, #d4a017) 45%, var(--line)); background: color-mix(in srgb, var(--warn, #d4a017) 8%, var(--surface)); }
+.routing-readiness-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.routing-readiness-copy strong { font-size: 14px; }
+.routing-readiness-copy span { color: var(--muted); font-size: 12px; line-height: 1.4; }
 .chip.outcome-success { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
 .chip.outcome-warning { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
 .chip.outcome-danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
@@ -2145,6 +2230,38 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-toggle.on .settings-toggle-knob { transform: translateX(18px); }
 
 @media (max-width: 720px) {
+  .automations-view-head { align-items: center; padding-bottom: 8px; }
+  .automations-view-sub { display: none; }
+  .automations-view-head-actions .icon-btn { min-width: 44px; min-height: 44px; }
+  .autom-new-btn { min-height: 44px; padding-inline: 13px; }
+  .automations-tabs {
+    flex-wrap: nowrap; overflow-x: auto; padding: 0 8px; margin-top: 0;
+    scrollbar-width: none; background: var(--bg);
+  }
+  .automations-tabs::-webkit-scrollbar { display: none; }
+  .automations-tab { flex: 1 0 auto; min-height: 44px; padding: 10px 14px; }
+  .automations-view-body { padding-inline: 12px; }
+  .autom-sources-strip { display: grid; grid-template-columns: 1fr; }
+  .autom-source-pill { width: 100%; min-height: 46px; justify-content: flex-start; }
+  .autom-source-pill-cta { margin-left: auto; }
+  .automation-row { padding: 13px 12px; }
+  .automation-row-main { flex-basis: 100%; }
+  .automation-row-actions { width: 100%; justify-content: flex-end; border-top: 1px solid var(--line); padding-top: 10px; }
+  .automation-row-actions .btn { min-height: 40px; }
+  .automation-row .row-menu-btn { min-width: 40px; min-height: 40px; opacity: 1; }
+  .run-row-chevron { margin-left: auto; }
+  .runs-overview .autom-section-head { align-items: flex-end; }
+  .run-details .automations-view-heading { font-size: 20px; }
+  .run-details .automations-view-head-text { display: none; }
+  .run-details .automations-view-head { justify-content: flex-start; border-bottom: 1px solid var(--line); }
+  .run-details .automations-view-head-actions { width: 100%; }
+  .run-details-close { flex-direction: row; font-weight: 650; }
+  .run-details-body { padding-top: 10px; }
+  .run-details .run-sheet-row { flex-direction: column; gap: 4px; padding: 11px 12px; }
+  .run-details .run-sheet-row .v { justify-content: flex-start; text-align: left; overflow-wrap: anywhere; }
+  .run-details .run-sheet-recovery .btn { min-height: 44px; flex: 1; }
+  .routing-readiness { align-items: stretch; flex-direction: column; }
+  .routing-readiness .btn { min-height: 44px; }
   .inbox { inset: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)); max-height: none; border-radius: 14px; }
   .inbox-filters { display: grid; grid-template-columns: 1fr 1fr; }
   .inbox-filters select { width: 100%; }

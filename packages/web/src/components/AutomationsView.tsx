@@ -386,10 +386,10 @@ interface Notice {
   action?: { label: string; onClick: () => void };
 }
 
-/** Top-level tabs. Overview owns connections + your automations + activity; the
- *  other three moved here from Settings so Automations is the single hub. */
+/** Top-level destinations: definitions and source setup, the unified Run feed
+ *  and routing, then execution policy. The URL owns the selected tab. */
 const AUTOMATIONS_TABS: Array<{ label: string; section: AutomationsSection | null }> = [
-  { label: "Overview", section: null },
+  { label: "Automations", section: null },
   { label: "Runs", section: "queue" },
   { label: "Rulesets", section: "rulesets" },
 ];
@@ -763,9 +763,7 @@ export function AutomationsView({
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
         </div>
         <div className="automations-view-head-actions">
-          {section === null && (
-            <button type="button" className="btn autom-new-btn" onClick={openChooser}>New automation</button>
-          )}
+          <button type="button" className="btn autom-new-btn" onClick={openChooser}>New automation</button>
           <button type="button" className="icon-btn" onClick={onClose} title="Close" aria-label="Close automations">✕</button>
         </div>
       </header>
@@ -958,12 +956,25 @@ export function AutomationsView({
               </div>
             </section>
 
-            <section className="autom-section">
-              <h2 className="autom-section-label">Recent activity</h2>
-              {cancelError && <div className="banner error inline">Could not cancel Run: {cancelError}</div>}
+          </>
+        )}
+        </>
+        )}
+
+        {section === "queue" && (
+          <>
+            <section className="autom-section runs-overview">
+              <div className="autom-section-head">
+                <div>
+                  <h2 className="autom-section-label">Automation runs</h2>
+                  <p className="settings-hint">Current state and recent results from scheduled, webhook, and manual runs.</p>
+                </div>
+                <button type="button" className="btn sm" onClick={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}>Refresh</button>
+              </div>
+              {cancelError && <div className="banner error inline">Could not cancel run: {cancelError}</div>}
               {definitionRuns.length === 0 ? (
                 <p className="settings-hint autom-empty-hint">
-                  Runs show up here once an automation fires. Try <strong>Run now</strong> on a scheduled one to see it end-to-end.
+                  No automation runs yet. Use <strong>Run now</strong> on an automation to test the full path.
                 </p>
               ) : (
                 <div className="automation-list">
@@ -972,50 +983,36 @@ export function AutomationsView({
                     const outcomeTone = detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "danger" ? "bad" : detail.outcome.tone === "warning" ? "warn" : "info";
                     const defName = items.find((i) => i.id === run.definitionId)?.name;
                     const sessionId = detail.sessionId;
-                    return (
-                      <div className="automation-row" key={run.id}>
-                        <div className="automation-row-main">
-                          <div className="automation-row-title">
-                            <strong>{run.title}</strong>
-                            <span className={`run-status ${outcomeTone}`}>{detail.outcome.label}</span>
-                          </div>
-                          <div className="settings-hint">
-                            {[defName, new Date(run.createdAt).toLocaleString(), run.triggerKind, detail.checksSummary, detail.attempt > 1 ? `attempt ${detail.attempt}` : null].filter(Boolean).join(" · ")}
-                          </div>
-                          {detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}
+                    const rowMain = (
+                      <>
+                        <div className="automation-row-title">
+                          <strong>{run.title}</strong>
+                          <span className={`run-status ${outcomeTone}`}>{detail.outcome.label}</span>
                         </div>
+                        <div className="settings-hint">
+                          {[defName, new Date(run.createdAt).toLocaleString(), run.triggerKind, detail.checksSummary, detail.attempt > 1 ? `attempt ${detail.attempt}` : null].filter(Boolean).join(" · ")}
+                        </div>
+                        {detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}
+                      </>
+                    );
+                    return (
+                      <div className="automation-row run-row" key={run.id}>
+                        {onOpenRun
+                          ? <button type="button" className="automation-row-main run-row-open" onClick={() => onOpenRun(run.id)}>{rowMain}</button>
+                          : <div className="automation-row-main">{rowMain}</div>}
                         <div className="automation-row-actions">
-                          {onOpenRun && (
-                            <button
-                              type="button"
-                              className="btn sm"
-                              onClick={() => onOpenRun(run.id)}
-                            >
-                              Run details
-                            </button>
-                          )}
                           {!isTerminalRun(run) && (
-                            <button
-                              type="button"
-                              className="btn sm danger"
-                              disabled={cancelBusyId === run.id}
-                              onClick={() => { setCancelError(null); setCancelRun(run); }}
-                            >
-                              {cancelBusyId === run.id ? "Cancelling…" : "Cancel Run"}
+                            <button type="button" className="btn sm danger" disabled={cancelBusyId === run.id} onClick={() => { setCancelError(null); setCancelRun(run); }}>
+                              {cancelBusyId === run.id ? "Cancelling…" : "Cancel"}
                             </button>
                           )}
                           {sessionId && (
-                            <button
-                              type="button"
-                              className="btn sm primary"
-                              onClick={() => { onOpenSession(sessionId); onClose(); }}
-                            >
+                            <button type="button" className="btn sm primary" onClick={() => { onOpenSession(sessionId); onClose(); }}>
                               Open session
                             </button>
                           )}
-                          {run.output?.prUrl && (
-                            <a className="btn sm" href={run.output.prUrl} target="_blank" rel="noreferrer">View PR</a>
-                          )}
+                          {run.output?.prUrl && <a className="btn sm" href={run.output.prUrl} target="_blank" rel="noreferrer">View PR</a>}
+                          {onOpenRun && <span className="run-row-chevron" aria-hidden="true">›</span>}
                         </div>
                       </div>
                     );
@@ -1023,13 +1020,6 @@ export function AutomationsView({
                 </div>
               )}
             </section>
-          </>
-        )}
-        </>
-        )}
-
-        {section === "queue" && (
-          <>
             <GithubQueuePanel
               queue={githubQueue ?? null}
               onRefresh={() => onRefreshGithubQueue?.()}
@@ -1041,7 +1031,7 @@ export function AutomationsView({
               <section className="autom-section">
                 <h2 className="autom-section-label">Queue routing</h2>
                 <p className="settings-hint">Where queued work runs by default when an automation doesn&apos;t pin a machine.</p>
-                <QueueRoutingSection />
+                <QueueRoutingSection hosted={sources.hosted} onConfigureCredentials={() => openSetup("work-queue")} />
               </section>
             )}
           </>
@@ -1705,6 +1695,8 @@ function AutomationEditor({
   const tzList = useMemo(() => timezoneOptions(d.timezone), [d.timezone]);
   const cronHuman = useMemo(() => describeCron(d.cron), [d.cron]);
   const selectedNode = state.nodes.find((n) => n.id === d.nodeId);
+  const selectedNodeHasKey = Boolean(d.nodeId && controller.local.keys()[d.nodeId]);
+  const pairedNodes = state.nodes.filter((n) => Boolean(controller.local.keys()[n.id]));
   const pick = d.hasTrigger ? matchTriggerPick(d) : null;
   const canEditTrigger = !d.id;
 
@@ -2107,6 +2099,41 @@ function AutomationEditor({
                 )}
               </div>
 
+              <div className="autom-field-block autom-runner-block">
+                <div className="autom-field-label">Run on</div>
+                <div className={`autom-runner-card${selectedNodeHasKey ? " ready" : " warn"}`}>
+                  <label className="autom-runner-select-row">
+                    <span className="autom-runner-icon" aria-hidden="true">⌁</span>
+                    <span className="autom-runner-select-copy">
+                      <strong>{selectedNode ? String(selectedNode.name || selectedNode.id) : "Choose a paired machine"}</strong>
+                      <span>
+                        {selectedNode
+                          ? `${selectedNode.online ? "Online" : "Offline — the run will wait or use your configured fallback"}${selectedNodeHasKey ? " · encryption ready" : " · key missing on this device"}`
+                          : "The instructions are encrypted before they leave this device."}
+                      </span>
+                    </span>
+                    <select className="autom-inline-select" value={d.nodeId} onChange={(e) => set("nodeId", e.target.value)} aria-label="Run on machine">
+                      <option value="">Select…</option>
+                      {state.nodes.map((n) => {
+                        const hasKey = Boolean(controller.local.keys()[n.id]);
+                        return <option key={n.id} value={n.id}>{String(n.name || n.id)}{hasKey ? n.online ? " · online" : " · offline" : " · key unavailable"}</option>;
+                      })}
+                      {d.nodeId && !state.nodes.some((n) => n.id === d.nodeId) && <option value={d.nodeId}>{d.nodeId} · unavailable</option>}
+                    </select>
+                  </label>
+                  {!selectedNodeHasKey && (
+                    <div className="autom-runner-help" role="status">
+                      {pairedNodes.length === 0
+                        ? "Pair this phone or browser with a machine first. That pairing key protects the instructions; account sign-in alone cannot decrypt them."
+                        : "Choose a machine marked online or offline (not key unavailable). Offline machines can still own the encrypted job and use an isolated fallback from the Runs tab."}
+                    </div>
+                  )}
+                </div>
+                <p className="settings-hint">
+                  Persistent machine: runs there whenever it is online. Ephemeral-only setup: pair once to establish encryption, then set an isolated profile as the default or fallback under <strong>Runs → Queue routing</strong>. Cloud and model sign-ins are separate and are injected only when the runner starts.
+                </p>
+              </div>
+
               <div className="autom-field-block">
                 <div className="autom-field-label">Instructions</div>
                 <div className="autom-instructions">
@@ -2118,38 +2145,17 @@ function AutomationEditor({
                     placeholder="What should the agent do on your machine…"
                   />
                   <div className="autom-instructions-bar">
-                    <div className="autom-instructions-meta">
-                      <label className="autom-inline-label">
-                        <span>Machine</span>
-                        <select
-                          className="autom-inline-select"
-                          value={d.nodeId}
-                          onChange={(e) => set("nodeId", e.target.value)}
-                          aria-label="Machine"
-                        >
-                          {!d.nodeId && <option value="">Select…</option>}
-                          {state.nodes.map((n) => (
-                            <option key={n.id} value={n.id}>{String(n.name || n.id)}</option>
-                          ))}
-                          {d.nodeId && !state.nodes.some((n) => n.id === d.nodeId) && (
-                            <option value={d.nodeId}>{d.nodeId}</option>
-                          )}
-                        </select>
-                      </label>
-                      <button
-                        type="button"
-                        className="autom-advanced-link"
-                        onClick={() => setShowAdvanced((v) => !v)}
-                        aria-expanded={showAdvanced}
-                      >
-                        {showAdvanced ? "Hide advanced" : "Advanced"}
-                      </button>
-                    </div>
+                    <span className="settings-hint">Encrypted end to end</span>
+                    <button
+                      type="button"
+                      className="autom-advanced-link"
+                      onClick={() => setShowAdvanced((v) => !v)}
+                      aria-expanded={showAdvanced}
+                    >
+                      {showAdvanced ? "Hide advanced" : "Agent, model & safety"}
+                    </button>
                   </div>
                 </div>
-                {d.nodeId && !controller.local.keys()[d.nodeId] && (
-                  <p className="schedule-hint warn">This device doesn&apos;t hold that machine&apos;s encryption key. Pick a machine you&apos;re paired with.</p>
-                )}
                 {showAdvanced && (
                   <div className="wizard-advanced">
                     <div className="settings-field">
