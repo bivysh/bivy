@@ -89,6 +89,20 @@ export function normalizeSandboxTier(value: unknown): SandboxTier | undefined {
   return (SANDBOX_TIER_VALUES as string[]).includes(raw) ? (raw as SandboxTier) : undefined;
 }
 
+function normalizeApprovalMode(value: unknown): SessionSummary["approvalMode"] {
+  const raw = String(value ?? "").trim().toLowerCase();
+  type ApprovalMode = NonNullable<SessionSummary["approvalMode"]>;
+  return (["never", "risky", "always", "autonomous"] as const).includes(raw as ApprovalMode)
+    ? raw as SessionSummary["approvalMode"] : undefined;
+}
+
+function normalizeExecutionProfile(value: unknown): SessionSummary["executionProfile"] {
+  const raw = String(value ?? "").trim().toLowerCase();
+  type ExecutionProfile = NonNullable<SessionSummary["executionProfile"]>;
+  return (["trusted_workstation", "isolated_customer_cloud", "restricted"] as const).includes(raw as ExecutionProfile)
+    ? raw as ExecutionProfile : undefined;
+}
+
 /** `owner/name` for a repo-backed session's `source` (e.g. "repo:owner/name"),
  *  or null otherwise. Exported so view-layer code (session list rows, repo
  *  menu items) shares this one parse instead of re-deriving it per call site. */
@@ -238,6 +252,9 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       // a rebuilt session that reappears in the live list correctly loses the flag.
       rebuildable: s?.rebuildable ? true : undefined,
       sandbox: normalizeSandboxTier(s?.sandbox ?? s?.bivySession?.sandbox),
+      approvalMode: normalizeApprovalMode(s?.approvalMode ?? s?.bivySession?.approvalMode),
+      ephemeral: (s?.ephemeral ?? s?.bivySession?.ephemeral) === true ? true : undefined,
+      executionProfile: normalizeExecutionProfile(s?.executionProfile ?? s?.bivySession?.executionProfile),
       prUrl: s?.prUrl || undefined,
       prs: normalizePrs(s?.prs, s?.prUrl),
       attention: Array.isArray(s?.attention) ? s.attention : previous?.attention,

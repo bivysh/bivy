@@ -420,6 +420,11 @@ export function App() {
     | { interactiveTui?: boolean }
     | undefined;
   const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
+  const activeRuntime = state.runtimes.find((r) => r.id === activeSession?.runtimeId);
+  const executionProfile = activeSession?.executionProfile === "isolated_customer_cloud" ? "Isolated customer-cloud"
+    : activeSession?.executionProfile === "trusted_workstation" ? "Trusted workstation"
+      : activeSession?.executionProfile === "restricted" ? "Restricted" : undefined;
+  const trustMode = controller.direct ? "Direct to Machine" : "E2E relay-blind";
 
   // Approval/question cards render inline in the active session's chat scroll, so
   // only show the ones that belong to that session. Items are still kept globally
@@ -579,6 +584,9 @@ export function App() {
                 worktree={activeSession?.worktree}
                 branch={activeSession?.branch}
                 sessionFile={activeSession?.path}
+                executionProfile={executionProfile}
+                effectiveProtection={[activeSession?.sandbox, activeSession?.approvalMode, activeRuntime?.protectionLabel].filter(Boolean).join(" · ") || undefined}
+                trustMode={trustMode}
                 onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
               />
             )}

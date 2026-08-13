@@ -129,6 +129,9 @@ export interface SessionSummary {
    *  = the node default. Baked in at creation and read-only for the session's life
    *  — surfaced so a running session can show its sandbox mode read-only. */
   sandbox?: SandboxTier;
+  approvalMode?: "never" | "risky" | "always" | "autonomous";
+  ephemeral?: boolean;
+  executionProfile?: "trusted_workstation" | "isolated_customer_cloud" | "restricted";
   /** Pull request opened for this session's branch, if any (the live open one). */
   prUrl?: string;
   /** Every PR seen for this session's branch (open, merged, closed). */
