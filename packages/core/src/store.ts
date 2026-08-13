@@ -742,6 +742,13 @@ export interface AppState {
   draftBranch: string | null;
   /** Sandbox tier chosen for the next new session (draft only); null = node default. */
   draftSandbox: SandboxTier | null;
+  /** Whether the user explicitly confirmed launching the next new session on
+   *  `selectedAgentId` despite its Effective Session Contract preview reporting
+   *  `requiresAcknowledgement` (a "supported" profile whose live protection
+   *  would be degraded) — see AgentPicker's confirm-to-continue step. Reset
+   *  whenever the selected agent changes; a prior agent's acknowledgement must
+   *  never silently carry over to a different one. */
+  draftAcknowledgeReducedProtections: boolean;
   /** An ephemeral runner (saved config) chosen as the target for the next new
    *  session, before any machine exists. Null = run on the currently-connected
    *  node. When set, the first message launches a fresh machine from this config
@@ -928,6 +935,7 @@ export function initialState(): AppState {
     branchesLoading: false,
     draftBranch: null,
     draftSandbox: null,
+    draftAcknowledgeReducedProtections: false,
     draftEphemeralConfig: null,
     nodeSettings: null,
     providers: [],
@@ -2018,6 +2026,12 @@ export class SessionStore {
     this.set({ draftSandbox: tier });
   }
 
+  /** Record (or clear) the user's confirm-to-continue acknowledgement for the
+   *  next new session's Effective Session Contract preview. */
+  setDraftAcknowledgeReducedProtections(value: boolean): void {
+    this.set({ draftAcknowledgeReducedProtections: value });
+  }
+
   /** Remember the user's last-used model so the next fresh draft defaults to it
    *  (see the draftModel field). Purely a preference — the models.list reducer
    *  resolves it against what the runtime actually supports before it ever
@@ -2092,7 +2106,13 @@ export class SessionStore {
   /** Optimistically reflect an agent pick before runtime.updated arrives. */
   setSelectedAgentLocal(id: string): void {
     const rt = this.state.runtimes.find((a) => a.id === id);
-    const next: Partial<AppState> = { selectedAgentId: id, currentAgentName: agentLabel(rt) || this.state.currentAgentName };
+    // A prior agent's reduced-protections acknowledgement must never silently
+    // carry over to a different one — always re-confirm on switch.
+    const next: Partial<AppState> = {
+      selectedAgentId: id,
+      currentAgentName: agentLabel(rt) || this.state.currentAgentName,
+      draftAcknowledgeReducedProtections: false,
+    };
     // Only touch the model list when the held one belongs to a *different*
     // runtime; a null (unknown) id is left for the refresh to overwrite so we
     // don't needlessly blank a still-valid pill.

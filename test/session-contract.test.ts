@@ -114,3 +114,41 @@ test("computeSessionContract: mixed authOwner reports auth origin unknown rather
   const contract = computeSessionContract({ runtime, preview: true }, NOW);
   assert.equal(contract.auth.origin, "unknown");
 });
+
+// The following mirror the session.new / POST /api/session launch gate in
+// src/server.ts exactly: compute a contract with no acknowledgedAt to decide
+// whether to reject, and (only on retry) one with acknowledgedAt set.
+test("launch gate: a supported-but-degraded agent is rejected without acknowledgement, and admitted once acknowledged", () => {
+  const runtime: SessionContractRuntimeFacts = {
+    id: "codex",
+    supportTier: "supported",
+    protectionLevel: "user-permissions",
+    capabilities: { resume: true, toolInterception: true },
+  };
+  const unacknowledged = computeSessionContract({ runtime, preview: false }, NOW);
+  assert.equal(unacknowledged.requiresAcknowledgement, true, "the gate must reject this launch");
+
+  const acknowledged = computeSessionContract({ runtime, preview: false, acknowledgedAt: NOW }, NOW);
+  assert.equal(acknowledged.requiresAcknowledgement, false, "an explicit acknowledgement admits the launch");
+  assert.equal(acknowledged.acknowledgedAt, NOW);
+});
+
+test("launch gate: two concurrent unacknowledged requests for the same degraded profile are BOTH rejected — no race admits one", async () => {
+  const runtime: SessionContractRuntimeFacts = {
+    id: "codex",
+    supportTier: "supported",
+    protectionLevel: "user-permissions",
+  };
+  const [a, b] = await Promise.all([
+    Promise.resolve().then(() => computeSessionContract({ runtime, preview: false }, NOW)),
+    Promise.resolve().then(() => computeSessionContract({ runtime, preview: false }, NOW)),
+  ]);
+  assert.equal(a.requiresAcknowledgement, true);
+  assert.equal(b.requiresAcknowledgement, true);
+});
+
+test("launch gate: an unsupported (beta/experimental) agent is never rejected, even fully unprotected", () => {
+  const runtime: SessionContractRuntimeFacts = { id: "aider", supportTier: "experimental", protectionLevel: "user-permissions" };
+  const contract = computeSessionContract({ runtime, preview: false }, NOW);
+  assert.equal(contract.requiresAcknowledgement, false);
+});

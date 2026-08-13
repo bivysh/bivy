@@ -1337,6 +1337,15 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .runtime-protection.user-permissions { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); font-weight: 650; }
 .runtime-cap.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
 .runtime-cap.limited { opacity: 0.72; }
+.contract-areas { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.contract-area { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
+.contract-area-label { flex: none; width: 96px; font-weight: 600; font-size: 12px; }
+.contract-area-state { flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: 0.02em; }
+.contract-area-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contract-area-guaranteed .contract-area-state { color: var(--ok); }
+.contract-area-degraded .contract-area-state { color: var(--warn); }
+.contract-area-unavailable .contract-area-state { color: var(--err); font-weight: 650; }
+.contract-reasons { margin: 8px 0 0; padding-left: 16px; }
 .picker-action { flex: none; background: transparent; border: 1px solid var(--accent); color: var(--accent); border-radius: 8px; padding: 3px 10px; font-size: 12px; font-weight: 600; }
 /* Disclosure chevron on a repo row: drills into that repo's branch list (#466).
    A borderless, tappable chevron rather than the bordered action-button look —
