@@ -1035,6 +1035,15 @@ export interface ProviderAdapter {
   provision(args: { exec: ExecFn; token: string; config: any; userData: string; bootstrap?: BootstrapOpts }): Promise<EphemeralMachine>;
   status(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<string>;
   destroy(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
+  /** List every live resource tagged with `ownershipTag` at the provider,
+   *  independent of anything Bivy currently has tracked. This is the recovery
+   *  path for the one failure #554's per-attempt idempotent-create/adopt can't
+   *  cover: the durable attempt row itself being lost (both the row AND the
+   *  legacy inventory array) after a resource was actually created. Only
+   *  implemented for providers where an orphaned resource keeps billing
+   *  (Hetzner/Fly/EC2) — a suspend-when-idle managed sandbox (Sprites/E2B)
+   *  doesn't carry the same cost risk and is intentionally left without one. */
+  discover?(args: { exec: ExecFn; token: string; ownershipTag: string }): Promise<EphemeralMachine[]>;
   /** True when the provider's machines suspend themselves to ~zero cost while
    *  idle and resume with full state (Fly Sprites). Such a machine is kept —
    *  never TTL-destroyed on finish — and is woken via `wake` before reconnect.
@@ -1281,7 +1290,11 @@ const hetzner: ProviderAdapter = {
         location: config.region || "nbg1",
         user_data: userData,
         start_after_create: true,
-        labels: { bivy: "ephemeral", ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}) },
+        labels: {
+          bivy: "ephemeral",
+          ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}),
+          ...(config.ownershipTag ? { "bivy-account": String(config.ownershipTag) } : {}),
+        },
       },
     });
     if (res.status >= 300) throw new Error(providerError(res, "create server"));
@@ -1315,6 +1328,25 @@ const hetzner: ProviderAdapter = {
       headers: bearer(token),
     });
     if (res.status >= 300 && res.status !== 404) throw new Error(providerError(res, "delete server"));
+  },
+  async discover({ exec, token, ownershipTag }) {
+    const res = await call(exec, {
+      method: "GET",
+      url: `https://api.hetzner.cloud/v1/servers?label_selector=${encodeURIComponent(`bivy-account=${ownershipTag}`)}`,
+      headers: bearer(token),
+    });
+    if (res.status >= 300) throw new Error(providerError(res, "list servers"));
+    const servers = Array.isArray(res.body?.servers) ? res.body.servers : [];
+    return servers.map((s: any): EphemeralMachine => ({
+      id: String(s.id),
+      provider: "hetzner",
+      name: String(s.name || ""),
+      region: s.datacenter?.location?.name || "",
+      status: mapHetznerStatus(s.status),
+      ip: s.public_net?.ipv4?.ip || null,
+      createdAt: typeof s.created === "string" ? s.created : "",
+      attemptId: typeof s.labels?.["bivy-attempt"] === "string" ? s.labels["bivy-attempt"] : undefined,
+    }));
   },
 };
 
@@ -1446,7 +1478,11 @@ const fly: ProviderAdapter = {
           auto_destroy: bootstrap?.debugKeepMachine ? false : true,
           restart: { policy: "no" },
           guest: { cpu_kind: "shared", cpus: Number(config.cpus) || guest.cpus, memory_mb: Number(config.memoryMb) || guest.memoryMb },
-          metadata: { bivy: "ephemeral", ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}) },
+          metadata: {
+            bivy: "ephemeral",
+            ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}),
+            ...(config.ownershipTag ? { "bivy-account": String(config.ownershipTag) } : {}),
+          },
           ...machineInit,
         },
       },
@@ -1483,6 +1519,40 @@ const fly: ProviderAdapter = {
       headers: bearer(token),
     });
     if (res.status >= 300 && res.status !== 404) throw new Error(providerError(res, "delete machine"));
+  },
+  // Fly has no account-wide "list machines by tag" call — a Machine is scoped
+  // to its app. Discovery instead lists every `bivy-`-prefixed app reachable
+  // with this token and checks each one's machines for the ownership tag.
+  // Bounded by how many bivy- apps exist for the token (normally very few);
+  // one app's list call failing is skipped rather than aborting the scan.
+  async discover({ exec, token, ownershipTag }) {
+    const appsRes = await call(exec, { method: "GET", url: "https://api.machines.dev/v1/apps", headers: bearer(token) });
+    if (appsRes.status >= 300) throw new Error(providerError(appsRes, "list apps"));
+    const apps: any[] = Array.isArray(appsRes.body?.apps) ? appsRes.body.apps : Array.isArray(appsRes.body) ? appsRes.body : [];
+    const found: EphemeralMachine[] = [];
+    for (const a of apps) {
+      const name = String(a?.name || "");
+      if (!name.startsWith("bivy-")) continue;
+      const res = await call(exec, { method: "GET", url: `https://api.machines.dev/v1/apps/${encodeURIComponent(name)}/machines`, headers: bearer(token) });
+      if (res.status >= 300) continue;
+      const machines: any[] = Array.isArray(res.body) ? res.body : [];
+      for (const m of machines) {
+        const meta = m?.config?.metadata || {};
+        if (meta.bivy !== "ephemeral" || meta["bivy-account"] !== ownershipTag) continue;
+        found.push({
+          id: String(m.id),
+          provider: "fly",
+          app: name,
+          name,
+          region: m.region || "",
+          status: mapFlyStatus(m.state),
+          ip: null,
+          createdAt: typeof m.created_at === "string" ? m.created_at : "",
+          attemptId: typeof meta["bivy-attempt"] === "string" ? meta["bivy-attempt"] : undefined,
+        });
+      }
+    }
+    return found;
   },
 };
 
@@ -1937,6 +2007,10 @@ const aws: ProviderAdapter = {
           "TagSpecification.1.Tag.3.Key": "bivy-attempt",
           "TagSpecification.1.Tag.3.Value": String(config.attemptId),
         } : {}),
+        ...(config.ownershipTag ? {
+          "TagSpecification.1.Tag.4.Key": "bivy-account",
+          "TagSpecification.1.Tag.4.Value": String(config.ownershipTag),
+        } : {}),
       },
       "launch instance",
     );
@@ -1979,6 +2053,58 @@ const aws: ProviderAdapter = {
     } catch (err) {
       if (!String((err as Error).message || "").includes("InvalidInstanceID.NotFound")) throw err;
     }
+  },
+  // EC2 has no cross-region "list by tag" call — a DescribeInstances Filter is
+  // always scoped to the region it's sent to. Scanning the whole curated
+  // region list keeps this correct even if an account's config region ever
+  // changed; it's bounded (six regions) and this only runs on the slow,
+  // infrequent orphan-sweep cadence, not the fast convergence loop. One
+  // region failing (e.g. not opted into that region) is skipped, not fatal.
+  async discover({ exec, token, ownershipTag }) {
+    const creds = parseAwsToken(token);
+    const found: EphemeralMachine[] = [];
+    for (const region of AWS_REGIONS.map((r) => r.id)) {
+      let xml: XmlEl;
+      try {
+        xml = await awsEc2Call(
+          exec,
+          creds,
+          region,
+          "DescribeInstances",
+          {
+            "Filter.1.Name": "tag:bivy-account",
+            "Filter.1.Value.1": ownershipTag,
+            "Filter.2.Name": "instance-state-name",
+            "Filter.2.Value.1": "pending",
+            "Filter.2.Value.2": "running",
+            "Filter.2.Value.3": "stopping",
+            "Filter.2.Value.4": "stopped",
+          },
+          "list instances",
+        );
+      } catch {
+        continue;
+      }
+      for (const reservation of xmlChildren(xmlChild(xml, "reservationSet"), "item")) {
+        for (const item of xmlChildren(xmlChild(reservation, "instancesSet"), "item")) {
+          const instanceId = xmlChild(item, "instanceId")?.text;
+          if (!instanceId) continue;
+          const stateName = xmlChild(xmlChild(item, "instanceState"), "name")?.text;
+          const attemptTag = xmlChildren(xmlChild(item, "tagSet"), "item").find((t) => xmlChild(t, "key")?.text === "bivy-attempt");
+          found.push({
+            id: instanceId,
+            provider: "aws",
+            name: instanceId,
+            region,
+            status: mapAwsStatus(stateName),
+            ip: xmlChild(item, "ipAddress")?.text || null,
+            createdAt: xmlChild(item, "launchTime")?.text || "",
+            attemptId: attemptTag ? xmlChild(attemptTag, "value")?.text : undefined,
+          });
+        }
+      }
+    }
+    return found;
   },
 };
 
@@ -2333,6 +2459,12 @@ export interface LaunchOpts {
   /** The caller has an independent, durable controller holding deletion
    * authority. Required for providers where guest shutdown does not stop billing. */
   externalTeardownGuaranteed?: boolean;
+  /** Opaque per-account tag (see `ownershipTagFor` in the control plane's
+   * store) applied to the created resource alongside the attempt tag, so a
+   * later orphan-discovery scan can find it even if this specific attempt's
+   * record was lost. Hosted-only — device launches have no server-side
+   * discovery sweep to feed, so they omit it. */
+  ownershipTag?: string;
   /** Durable lifecycle sink. The initial `requested` callback is awaited before
    * enrollment, and `provider-accepted` is awaited before local machine storage. */
   onLifecycle?: (event: EphemeralLaunchEvent) => Promise<void>;
@@ -2575,7 +2707,7 @@ export async function launchEphemeralMachine(
       token,
       userData,
       bootstrap,
-      config: { slug: ephemeralNodeLabel(nodeId), region, size, image: opts.image, ttlMinutes: opts.ttlMinutes, attemptId },
+      config: { slug: ephemeralNodeLabel(nodeId), region, size, image: opts.image, ttlMinutes: opts.ttlMinutes, attemptId, ownershipTag: opts.ownershipTag },
     });
   } catch (error) {
     await opts.onLifecycle?.({

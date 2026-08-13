@@ -1344,6 +1344,12 @@ export interface MeshStore {
   listHostedMachineAccountIds(): Promise<string[]>;
   /** Accounts with at least one config requesting ready capacity. */
   listReadyCapacityAccountIds(): Promise<string[]>;
+  /** Accounts with hosted provisioning enabled — a superset of
+   * `listHostedMachineAccountIds()` that includes accounts with NO currently
+   * tracked machine/attempt. Used by the orphan-discovery sweep: the one
+   * failure mode it exists to catch is exactly "tracking itself was lost", so
+   * it cannot rely on tracking to know which accounts to check. */
+  listHostedEnabledAccountIds(): Promise<string[]>;
   // Append-only audit trail of hosted-credential use (capped, newest-first read).
   appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
   listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;
