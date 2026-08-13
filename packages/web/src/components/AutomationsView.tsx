@@ -57,6 +57,7 @@ import type { AutomationsSection } from "../router.js";
 import type { GithubQueueItem } from "@bivy/core";
 import { isTerminalRun, projectRunDetail } from "../runDetail.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
 
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
@@ -129,8 +130,8 @@ function scheduleSummary(item: AccountAutomation): string {
   if (item.trigger === "linear") return `Linear · label ${labels}${repo || repos}${node}`;
   if (item.trigger === "webhook") return `Webhook · runs on a signed request${repo}`;
   if (!item.schedule) return `Scheduled${repo}`;
-  if (item.schedule.kind === "once") return `Once · ${new Date(item.schedule.at).toLocaleString()}${repo}`;
-  const when = describeCron(item.schedule.expression) || `${item.schedule.expression} · ${item.schedule.timezone}`;
+  if (item.schedule.kind === "once") return `Runs once · ${formatAutomationMoment(item.schedule.at)}${repo}`;
+  const when = compactCronSummary(item.schedule.expression) || describeCron(item.schedule.expression) || `${item.schedule.expression} · ${item.schedule.timezone}`;
   return `${when}${repo}`;
 }
 
@@ -868,9 +869,11 @@ export function AutomationsView({
           <p className="automations-view-sub">Jobs that run on your machines while you&apos;re away.</p>
         </div>
         <div className="automations-view-head-actions">
-          <button type="button" className="btn primary" onClick={() => setOneOffOpen(true)}>New Run</button>
-          <button type="button" className="btn autom-new-btn" onClick={openChooser}>New automation</button>
-          <button type="button" className="icon-btn" onClick={onClose} title="Close" aria-label="Close automations">✕</button>
+          <button type="button" className="autom-new-btn" onClick={openChooser} aria-label="New automation">
+            <IconPlus />
+            <span className="autom-new-btn-label">New automation</span>
+          </button>
+          <button type="button" className="icon-btn autom-close-btn" onClick={onClose} title="Close" aria-label="Close automations"><IconClose /></button>
         </div>
       </header>
 
@@ -914,24 +917,15 @@ export function AutomationsView({
 
         {section === null && (
         <>
-        {/* Compact live source strip — connect stays in-sheet, never Settings. */}
-        <section className="autom-sources-strip" aria-label="Connected sources">
-          <SourcePill
-            name="GitHub"
-            status={ghStatus}
-            onClick={() => openSetup(ghStatus.tone === "on" ? "github" : "work-queue")}
-          />
-          <SourcePill
-            name="Linear"
-            status={linStatus}
-            onClick={() => openSetup("linear")}
-          />
-          <SourcePill
-            name="Slack"
-            status={slackStatus}
-            onClick={() => openSetup("slack")}
-          />
-        </section>
+        {/* Sources collapse to one overview row. Connection details stay nearby
+            without making three setup cards the first thing on every visit. */}
+        <SourcesPanel
+          sources={[
+            { name: "GitHub", status: ghStatus, onClick: () => openSetup(ghStatus.tone === "on" ? "github" : "work-queue") },
+            { name: "Linear", status: linStatus, onClick: () => openSetup("linear") },
+            { name: "Slack", status: slackStatus, onClick: () => openSetup("slack") },
+          ]}
+        />
 
         {items.some((i) => i.trigger === "github_ci" && i.enabled) && sources.github?.connected && (
           <div className="autom-banner" role="status">
@@ -970,7 +964,6 @@ export function AutomationsView({
             <section className="autom-section">
               <div className="autom-section-head">
                 <h2 className="autom-section-label">Your automations</h2>
-                <span className="autom-count">{items.length}</span>
               </div>
               <div className="automation-list">
                 {items.map((item) => {
@@ -978,25 +971,18 @@ export function AutomationsView({
                     ? sourceAutomationChip(item, sources)
                     : { tone: item.enabled ? "on" as const : "off" as const, label: item.enabled ? "Active" : "Paused" };
                   const needsConnect = isSourceTrigger(item.trigger) && chip.tone === "warn" && chip.label.toLowerCase().includes("needs");
+                  const nextRun = item.enabled && item.nextRunAt && item.schedule?.kind !== "once"
+                    ? formatNextAutomationRun(item.nextRunAt)
+                    : null;
+                  const meta = [scheduleSummary(item), item.configKey ? "Managed by file" : null, nextRun].filter(Boolean).join(" · ");
                   return (
                     <div className={`automation-row${item.enabled ? "" : " is-paused"}`} key={item.id}>
                       <div className="automation-row-main">
                         <div className="automation-row-title">
                           <strong>{item.name}</strong>
-                          <span className={`autom-status ${chip.tone}`}>{chip.label}</span>
-                          {item.configKey && <span className="autom-status off" title={`Managed from ${item.configKey}`}>Managed by file</span>}
+                          {chip.tone !== "on" && !needsConnect && <span className={`autom-status ${chip.tone}`}>{chip.label}</span>}
                         </div>
-                        <div className="settings-hint">
-                          {scheduleSummary(item)}
-                          {item.configKey ? ` · .bivy/automations.yaml#${item.configKey}` : ""}
-                          {item.enabled && item.nextRunAt ? ` · next ${new Date(item.nextRunAt).toLocaleString()}` : ""}
-                        </div>
-                        {item.trigger === "webhook" && item.webhookUrl && (
-                          <div className="reveal-row">
-                            <code className="reveal-value">{item.webhookUrl}</code>
-                            <button type="button" className="btn sm" onClick={() => copyText(item.webhookUrl!)}>Copy URL</button>
-                          </div>
-                        )}
+                        <div className="settings-hint">{meta}</div>
                         {item.trigger === "webhook" && rotated?.id === item.id && (
                           <div className="reveal-row">
                             <code className="reveal-value">{rotated.secret}</code>
@@ -1015,15 +1001,6 @@ export function AutomationsView({
                             Connect
                           </button>
                         )}
-                        {!isSourceTrigger(item.trigger) && (
-                          <button type="button" className="btn sm" onClick={() => void runNow(item)}>
-                            {item.trigger === "webhook" ? "Test run" : "Run now"}
-                          </button>
-                        )}
-                        {item.trigger === "webhook" && (
-                          <button type="button" className="btn sm" onClick={() => void rotate(item)}>Rotate secret</button>
-                        )}
-                        {!item.configKey && <button type="button" className="btn sm" onClick={() => void edit(item)}>Edit</button>}
                         {(!item.configKey || isSourceTrigger(item.trigger)) && <div className="row-menu" ref={menuId === item.id ? menuRef : undefined}>
                           <button
                             type="button"
@@ -1032,10 +1009,26 @@ export function AutomationsView({
                             aria-expanded={menuId === item.id}
                             onClick={() => setMenuId((cur) => (cur === item.id ? null : item.id))}
                           >
-                            ···
+                            …
                           </button>
                           {menuId === item.id && (
                             <div className="row-menu-pop" role="menu">
+                              {!isSourceTrigger(item.trigger) && (
+                                <button type="button" className="row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void runNow(item); }}>
+                                  {item.trigger === "webhook" ? "Test run" : "Run now"}
+                                </button>
+                              )}
+                              {!item.configKey && <button type="button" className="row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void edit(item); }}>Edit</button>}
+                              {item.trigger === "webhook" && item.webhookUrl && (
+                                <button type="button" className="row-menu-item" role="menuitem" onClick={() => {
+                                  setMenuId(null);
+                                  void copyText(item.webhookUrl!);
+                                  setNotice({ tone: "ok", title: "Webhook URL copied" });
+                                }}>Copy webhook URL</button>
+                              )}
+                              {item.trigger === "webhook" && (
+                                <button type="button" className="row-menu-item" role="menuitem" onClick={() => { setMenuId(null); void rotate(item); }}>Rotate secret</button>
+                              )}
                               {!item.configKey && <button type="button" className="row-menu-item" role="menuitem" onClick={() => void toggle(item)}>
                                 {item.enabled ? "Pause" : "Resume"}
                               </button>}
@@ -1075,7 +1068,10 @@ export function AutomationsView({
                   <h2 className="autom-section-label">Automation runs</h2>
                   <p className="settings-hint">Current state and recent results from scheduled, webhook, and manual runs.</p>
                 </div>
-                <button type="button" className="btn sm" onClick={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}>Refresh</button>
+                <div className="autom-section-actions">
+                  <button type="button" className="btn sm" onClick={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}>Refresh</button>
+                  <button type="button" className="btn sm primary" onClick={() => setOneOffOpen(true)}>New Run</button>
+                </div>
               </div>
               {cancelError && <div className="banner error inline">Could not cancel run: {cancelError}</div>}
               {definitionRuns.length === 0 ? (
@@ -1096,7 +1092,7 @@ export function AutomationsView({
                           <span className={`run-status ${outcomeTone}`}>{detail.outcome.label}</span>
                         </div>
                         <div className="settings-hint">
-                          {[defName, new Date(run.createdAt).toLocaleString(), run.triggerKind, detail.checksSummary, detail.attempt > 1 ? `attempt ${detail.attempt}` : null].filter(Boolean).join(" · ")}
+                          {[defName, formatAutomationMoment(run.createdAt), run.triggerKind, detail.checksSummary, detail.attempt > 1 ? `attempt ${detail.attempt}` : null].filter(Boolean).join(" · ")}
                         </div>
                         {detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}
                       </>
@@ -1388,24 +1384,50 @@ function NewAutomationPicker({
   );
 }
 
-// ── Source pill (compact strip) ─────────────────────────────────────────────
+// ── Sources overview ─────────────────────────────────────────────────────────
 
-function SourcePill({
-  name,
-  status,
-  onClick,
-}: {
+type SourceOverview = {
   name: string;
   status: { tone: "on" | "off" | "warn"; label: string };
   onClick: () => void;
-}) {
-  const cta = status.tone === "off" ? "Connect" : status.tone === "warn" ? "Fix" : "Manage";
+};
+
+function SourcesPanel({ sources }: { sources: SourceOverview[] }) {
+  const connected = sources.filter((source) => source.status.tone === "on");
+  const attention = sources.filter((source) => source.status.tone === "warn");
+  const summary = attention.length
+    ? `${attention.length} ${attention.length === 1 ? "source needs" : "sources need"} attention`
+    : connected.length === sources.length
+      ? `${connected.length} sources connected`
+      : connected.length
+        ? `${connected.map((source) => source.name).join(", ")} connected · ${sources.length - connected.length} more`
+        : "Connect GitHub, Linear, and Slack";
+
   return (
-    <button type="button" className={`autom-source-pill tone-${status.tone}`} onClick={onClick}>
-      <span className="autom-source-pill-name">{name}</span>
-      <span className={`autom-status ${status.tone}`}>{status.tone === "on" ? "Live" : status.label}</span>
-      <span className="autom-source-pill-cta">{cta}</span>
-    </button>
+    <details className="autom-sources-panel">
+      <summary className="autom-sources-summary">
+        <span className="autom-sources-summary-copy">
+          <strong>Sources</strong>
+          <span>{summary}</span>
+        </span>
+        <span className="autom-sources-chevron"><IconChevron /></span>
+      </summary>
+      <div className="autom-sources-list">
+        {sources.map((source) => {
+          const cta = source.status.tone === "off" ? "Connect" : source.status.tone === "warn" ? "Fix" : "Manage";
+          return (
+            <button type="button" className="autom-source-row" onClick={source.onClick} key={source.name}>
+              <span className="autom-source-row-copy">
+                <strong>{source.name}</strong>
+                <span>{source.status.tone === "on" ? "Connected" : source.status.label}</span>
+              </span>
+              <span className="autom-source-row-cta">{cta}</span>
+              <span aria-hidden="true">›</span>
+            </button>
+          );
+        })}
+      </div>
+    </details>
   );
 }
 
@@ -2334,6 +2356,27 @@ function AutomationEditor({
 
 // ── Icons (inline SVG, 18–20px) ─────────────────────────────────────────────
 
+function IconPlus() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+function IconClose() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <path d="m6 6 12 12M18 6 6 18" />
+    </svg>
+  );
+}
+function IconChevron() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
 function IconBolt() {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
