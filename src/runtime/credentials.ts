@@ -3,8 +3,7 @@
 //
 // Compatibility shim + node composition root for the credential resolver.
 //
-// The resolver itself moved to src/credentials/resolver.ts (pilot step 4 — see
-// docs/internal/platform-modularization-plan.md), where it depends on injected
+// The resolver itself moved to src/credentials/resolver.ts, where it depends on injected
 // ports instead of secrets.ts and the Pi OAuth bridge. This module binds the
 // node adapters for those ports and re-exposes the historical
 // `createCredentialStore(credsDir)` signature, so every existing importer

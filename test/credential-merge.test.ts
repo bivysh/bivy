@@ -4,7 +4,7 @@ import { preferIncomingCredential, type StoredCredential } from "../src/runtime/
 // The pure cross-node merge decision (credential-store.importAll). Freshest-wins,
 // rotation-safe: a lagging / refresh-less snapshot must never clobber a fresher
 // local login, ties keep local, and `refreshedAt` (mint order) beats `expires`
-// (which clock skew can inflate). See docs/internal/connect-computer-credential-sync-plan.md.
+// (which clock skew can inflate).
 
 let passed = 0;
 function test(name: string, fn: () => void) {

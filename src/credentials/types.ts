@@ -7,7 +7,6 @@
 // credential *is* without reaching up into runtime/. These types previously
 // lived in runtime/credential-store.ts; moving them here removes the last
 // reason the pure domain (records.ts, document.ts) pointed upward.
-// See docs/internal/platform-modularization-plan.md (credentials two-layer pilot).
 
 /** Stored api-key credential. `env` holds provider-scoped config (base URLs, ids). */
 export interface ApiKeyCredential {

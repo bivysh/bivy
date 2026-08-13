@@ -2,8 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Compatibility shim. The credential vault engine moved to
-// src/credentials/store.ts as part of the credentials two-layer split (pilot
-// step 3 — see docs/internal/platform-modularization-plan.md). Existing
+// src/credentials/store.ts as part of the credentials two-layer split. Existing
 // importers of this path keep working via the re-exports below; new
 // credentials-layer code imports from ../credentials/store.js directly. This
 // shim can be removed once all importers are re-pointed.
