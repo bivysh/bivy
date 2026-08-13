@@ -40,10 +40,11 @@ await assert.rejects(() => new CertificationHarness(base).run("auth-handoff"), /
 await assert.rejects(() => new CertificationHarness(fixtures[0]).run("not-certified"), /Missing certification scenario/);
 const malformed = structuredClone(fixtures[0]);
 malformed.scenarios["malformed-output"] = [{ raw: "{" }];
-await assert.rejects(() => new CertificationHarness(malformed).run("malformed-output"), /not contained/);
+await assert.rejects(() => new CertificationHarness(malformed).run("malformed-output"), /did not satisfy its contract/);
 const controller = new AbortController();
+const cancelledRun = new CertificationHarness(fixtures[0]).run("first-turn", controller.signal);
 controller.abort(new Error("cancelled by test"));
-await assert.rejects(() => new CertificationHarness(fixtures[0]).run("first-turn", controller.signal), /cancelled by test/);
+await assert.rejects(() => cancelledRun, /cancelled by test/);
 
 // Static profile data alone cannot assert Supported. Every certified path must
 // match active matrix data; OpenCode's non-ACP fallback is deliberately Beta.

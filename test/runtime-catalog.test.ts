@@ -266,13 +266,11 @@ try {
   process.env.BIVY_OPENCODE_ACP = "0";
 }
 
-// Both pin the exact external CLI release the adapter was certified against. These
-// are real binaries rather than lockfile dependencies, so nothing but this
-// assertion stops the tier from outliving the version it was validated on.
-for (const id of ["codex-approvals", "opencode"]) {
-  const info = listRuntimes().find((r) => r.id === id)!;
-  assert.equal(info.certification, "release-tested", `${id} must be release-tested to sit in the Supported tier`);
-  assert.match(info.testedVersion ?? "", /^\d+\.\d+\.\d+/, `${id} must name the exact CLI version it was certified against`);
-}
+// Codex pins the exact external CLI release certified for the governed path.
+// OpenCode's pin is asserted inside the ACP block above; its fallback is no longer
+// entitled to release-tested status merely because the profile carries a pin.
+const certifiedCodex = listRuntimes().find((r) => r.id === "codex-approvals")!;
+assert.equal(certifiedCodex.certification, "release-tested", "governed Codex must be release-tested to sit in the Supported tier");
+assert.match(certifiedCodex.testedVersion ?? "", /^\d+\.\d+\.\d+/, "governed Codex must name the exact CLI version it was certified against");
 
 console.log("runtime-catalog: all tests passed");
