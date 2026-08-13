@@ -2136,6 +2136,53 @@ export class SessionStore {
     });
   }
 
+  /** Materialize a first-message draft in the sidebar before its node is ready.
+   *  Ephemeral cold starts can take minutes; giving the draft a stable local id
+   *  lets the user leave it running and start another session without discarding
+   *  the launch. The controller replaces this row with the node's canonical id
+   *  as soon as session.new completes. */
+  persistPendingSession(sessionId: string, name: string): void {
+    const row: SessionSummary = {
+      sessionId,
+      name: name.trim() || "New session",
+      status: "working",
+      updatedAt: Date.now(),
+    };
+    this.set({
+      activeSessionId: sessionId,
+      activeTitle: row.name,
+      sessions: [row, ...this.state.sessions.filter((s) => s.sessionId !== sessionId)],
+    });
+  }
+
+  /** Add provider routing to a pending row once provisioning returns a node id. */
+  bindPendingSessionNode(sessionId: string, nodeId: string): void {
+    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, nodeId } : s) });
+  }
+
+  /** Replace a cold-start placeholder with the node's canonical session. */
+  completePendingSession(pendingId: string, sessionId: string, nodeId: string): void {
+    const pending = this.state.sessions.find((s) => s.sessionId === pendingId);
+    const row: SessionSummary = {
+      ...pending,
+      sessionId,
+      nodeId,
+      name: pending?.name || "New session",
+      status: "working",
+      updatedAt: Date.now(),
+    };
+    this.set({
+      activeSessionId: this.state.activeSessionId === pendingId ? sessionId : this.state.activeSessionId,
+      sessions: [row, ...this.state.sessions.filter((s) => s.sessionId !== pendingId && s.sessionId !== sessionId)],
+    });
+  }
+
+  /** Keep a failed cold start visible and clearly settled so its setup log can
+   *  still be opened, instead of leaving an endless working spinner. */
+  failPendingSession(sessionId: string): void {
+    this.set({ sessions: this.state.sessions.map((s) => s.sessionId === sessionId ? { ...s, status: "failed" } : s) });
+  }
+
   setActiveTitle(name: string): void {
     this.set({ activeTitle: name });
   }

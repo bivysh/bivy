@@ -121,6 +121,7 @@ import {
   type StreamingBehavior,
   supportsSteering as runtimeSupportsSteering,
   type Transport,
+  type LocalStore,
   importRoomKey,
   open as openSealed,
   unb64url,
@@ -173,15 +174,11 @@ export class NeedsDisclosureError extends Error {
 }
 
 function requestId(): string {
-  return `r${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `r-${crypto.randomUUID()}`;
 }
 
 function clientMessageId(): string {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `m${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  }
+  return crypto.randomUUID();
 }
 
 const LOOPBACK = /^(localhost|127\.0\.0\.1|\[?::1\]?)$/;
@@ -230,7 +227,21 @@ export class AppController {
    *  reconnect (mobile Safari can drop the reply while backgrounded) — the node
    *  dedupes by requestId, so the retry adopts the same session rather than
    *  creating a duplicate. See retryPendingSessionNew / maybeFlushPendingPrompt. */
-  private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[]; frame: Command } | null = null;
+  private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[]; frame: Command; provisionalId?: string } | null = null;
+  /** Ephemeral cold starts outlive the pane that launched them. Each first
+   *  message gets a sidebar placeholder immediately, and its launch continues
+   *  here even if the user presses New and starts another session. */
+  private pendingLaunches = new Map<string, {
+    prompt: NonNullable<AppController["pendingPrompt"]>;
+    config: EphemeralNodeConfig;
+    logs: string[];
+    followups: Array<{ text: string; clientMessageId: string; attachments?: PromptAttachment[] }>;
+    machine?: EphemeralMachine;
+    transport?: Transport;
+  }>();
+  /** Timed, factual boot updates. Provider creation returning only means the VM
+   *  exists; these heartbeats make the otherwise silent cloud-init wait visible. */
+  private bootProgressTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
   /** Further prompts sent by the user *while* that session is still being
    *  created — queued instead of firing their own `session.new`, then drained
    *  into the one real session by maybeFlushPendingPrompt. See sendPrompt. */
@@ -242,11 +253,6 @@ export class AppController {
   private pendingResume: Array<{ sessionId: string; text: string; clientMessageId: string; attachments?: PromptAttachment[] }> = [];
   /** Guards a resume/rebuild already in flight so repeated sends don't re-launch. */
   private resumingNode = new Set<string>();
-  /** Freshly-provisioned nodes still inside their boot grace. The relay quite
-   *  correctly reports these as offline before boot setup has started Bivy, but
-   *  that is launch progress rather than an actionable error. It also lets the
-   *  online edge finish the visible setup log. */
-  private startingEphemeralNodes = new Map<string, { name: string }>();
   // Durable session↔machine correlations fetched from the control plane (Gap 1),
   // so a torn-down destroy-lane session stays rebuildable after its node drops
   // from the registry. Refreshed on reconnect; written (deduped) before teardown.
@@ -544,11 +550,6 @@ export class AppController {
         const prev = this.store.getState().status;
         this.store.setStatus(status);
         if (status === "online" && prev !== "online") {
-          const starting = this.startingEphemeralNodes.get(this.local.cur);
-          if (starting) {
-            this.startingEphemeralNodes.delete(this.local.cur);
-            this.store.pushSystemMessage(`Setup · ${starting.name} is online. Running your message…`);
-          }
           this.onReconnected();
         } else if (status === "reconnecting" || status === "offline") {
           this.store.markStreamInterrupted();
@@ -561,10 +562,6 @@ export class AppController {
         }
       },
       onError: (message: string) => {
-        // A new ephemeral has been enrolled but its daemon has not joined the
-        // relay yet. "Node offline" is expected throughout that boot window;
-        // the setup log communicates the useful state instead of an error toast.
-        if (/^node offline$/i.test(message.trim()) && this.startingEphemeralNodes.has(this.local.cur)) return;
         this.store.setError(message);
       },
     };
@@ -1552,6 +1549,10 @@ export class AppController {
   }
 
   openSessionOnNode(sessionId: string, path?: string, nodeId?: string): void {
+    if (this.pendingLaunches.has(sessionId)) {
+      this.openPendingLaunch(sessionId);
+      return;
+    }
     if (!this.direct && nodeId && nodeId !== this.local.cur) {
       this.pendingCrossNodeOpen = { sessionId, path };
       navigate({ kind: "session", id: sessionId });
@@ -1568,6 +1569,10 @@ export class AppController {
   }
 
   openSession(sessionId: string, path?: string, opts: { navigate?: boolean } = {}): void {
+    if (this.pendingLaunches.has(sessionId)) {
+      this.openPendingLaunch(sessionId, opts);
+      return;
+    }
     // Reflect the open session in the URL (/sessions/:id) so it's copyable and
     // survives a reload. Skipped when the change *came from* the URL (initial
     // deep link / popstate); navigate() also no-ops on an identical path.
@@ -1744,6 +1749,9 @@ export class AppController {
     if (opts.navigate !== false) navigate({ kind: "new" });
     // Autofocus the composer so the user can start typing right away.
     this.focusComposer();
+    // Detach from an in-flight cold start, but do not cancel it. Its prompt and
+    // setup log live in pendingLaunches and its placeholder remains in the
+    // sidebar, so this pane is immediately free for another new session.
     this.pendingPrompt = null;
     this.pendingFollowups = [];
     this.store.resetActiveSession();
@@ -1839,6 +1847,14 @@ export class AppController {
     if (!trimmed && !files) return;
     const cmid = clientMessageId();
     const active = this.store.getState().activeSessionId;
+    // A cold-start placeholder is a persisted session intent, not a node
+    // session id. Keep extra messages queued locally until its session.new
+    // resolves instead of accidentally sending `prompt` with the placeholder.
+    if (active && this.pendingLaunches.has(active)) {
+      this.store.addUserMessage(trimmed, cmid, files);
+      this.pendingLaunches.get(active)!.followups.push({ text: trimmed, clientMessageId: cmid, attachments: files });
+      return;
+    }
     if (active) {
       if (this.mustQueue(active)) {
         this.store.enqueueFollowup(active, { id: cmid, text: trimmed, attachments: files }, Date.now());
@@ -1887,41 +1903,36 @@ export class AppController {
     const frame: Command = { kind: "session.new", requestId: rid, title: trimmed || undefined, ...this.draftSessionFields() };
     this.pendingPrompt = { text: trimmed, requestId: rid, clientMessageId: cmid, attachments: files, frame };
     // The draft targets a saved ephemeral runner that has no machine yet: sending
-    // IS the launch. Provision a fresh machine from the config, bind this session
-    // to it, and let the existing pendingPrompt/onReconnected replay fire
-    // session.new once it's online — no "launch machine" button, no modal. Guarded
-    // to the picked-runner case so ordinary sessions are completely unaffected.
+    // IS the launch. Persist a sidebar row, provision the machine, and use a
+    // background relay connection to create and start the real session once the
+    // node is online — no launch modal, and the main pane is immediately free.
     const runner = this.store.getState().draftEphemeralConfig;
     if (runner) {
-      void this.launchDraftRunnerAndBind(runner, trimmed, cmid, files);
+      const provisionalId = `starting-${rid}`;
+      this.pendingPrompt.provisionalId = provisionalId;
+      this.pendingLaunches.set(provisionalId, { prompt: this.pendingPrompt, config: runner, logs: [], followups: [] });
+      this.store.addUserMessage(trimmed, cmid, files);
+      this.store.persistPendingSession(provisionalId, trimmed);
+      // Persisting the placeholder before the first provider request is the key
+      // UX invariant: New is now safe immediately, not only after cloud-init and
+      // session.new eventually finish.
+      void this.launchDraftRunnerAndBind(provisionalId);
       return;
     }
     this.store.addUserMessage(trimmed, cmid, files);
     this.send(frame);
   }
 
-  /**
-   * First-message launch of a picked-but-unlaunched ephemeral runner. Provisions
-   * a fresh machine from the saved config, then binds the draft session to the
-   * new `eph-` node via switchNode. The stashed `pendingPrompt` survives the
-   * switch; once the node pairs, `onReconnected` → `retryPendingSessionNew` fires
-   * the `session.new` on it and `maybeFlushPendingPrompt` flushes this prompt.
-   * The exact analogue of the resume-on-send path, for a not-yet-created session.
-   */
-  private async launchDraftRunnerAndBind(
-    config: EphemeralNodeConfig,
-    text: string,
-    cmid: string,
-    files?: PromptAttachment[],
-  ): Promise<void> {
-    // Instant feedback on the current pane while the provider API call runs.
-    // switchNode below resets the pane, so retain and replay every setup line on
-    // the new node rather than replacing useful progress with one vague status.
-    this.store.addUserMessage(text, cmid, files);
-    const setupLog: string[] = [];
+  /** Provision the selected runner while its local sidebar row remains usable. */
+  private async launchDraftRunnerAndBind(provisionalId: string): Promise<void> {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task) return;
+    const { config } = task;
     const logSetup = (message: string) => {
-      setupLog.push(message);
-      this.store.pushSystemMessage(`Setup · ${message}`);
+      task.logs.push(message);
+      if (this.store.getState().activeSessionId === provisionalId || this.pendingPrompt?.provisionalId === provisionalId) {
+        this.store.pushSystemMessage(`Setup · ${message}`);
+      }
     };
     try {
       const machine = await this.launchEphemeral({
@@ -1935,41 +1946,126 @@ export class AppController {
         setupId: config.id,
         onProgress: logSetup,
       });
-      // Bind the draft to the freshly-enrolled node and connect. Mark it as
-      // starting BEFORE switchNode dials the relay, so an immediate expected
-      // "Node offline" response cannot flash as an error toast.
       if (!machine.nodeId) throw new Error("machine launched without a node id");
-      this.startingEphemeralNodes.set(machine.nodeId, { name: config.name });
-      this.switchNode(machine.nodeId);
-      // Re-show the message and the complete setup log after the pane reset. New
-      // progress (online / timeout) is appended on this bound pane.
-      this.store.addUserMessage(text, cmid, files);
-      for (const line of setupLog) this.store.pushSystemMessage(`Setup · ${line}`);
-      this.watchRunnerBoot(machine.nodeId, config.name, config.provider);
+      task.machine = machine;
+      this.store.bindPendingSessionNode(provisionalId, machine.nodeId);
+      this.startPendingRunner(provisionalId);
     } catch (e) {
-      this.pendingPrompt = null;
+      const message = `Launch failed: ${(e as Error)?.message || e}`;
+      task.logs.push(message);
+      if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
+      this.store.failPendingSession(provisionalId);
+      if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
       this.store.setError(`Couldn't start ${config.name}: ${(e as Error)?.message || e}`);
     }
   }
 
-  /**
-   * Surface a boot failure instead of an endless "Reconnecting…". A bare ephemeral
-   * VM installs from scratch and, if any step fails, self-destructs (Fly
-   * `auto_destroy`) — so the device would otherwise dial a node that no longer
-   * exists forever. If the runner isn't online within the boot window, drop a
-   * clear system note. Non-fatal: a slower-than-expected boot still connects and
-   * runs (pendingPrompt is left intact), the note just may arrive early.
-   */
-  private watchRunnerBoot(nodeId: string, name: string, provider: string): void {
-    this.waitForOnline(RUNNER_BOOT_TIMEOUT_MS).catch(() => {
-      this.startingEphemeralNodes.delete(nodeId);
-      // Moved to another node, or it actually came online right at the edge.
-      if (this.local.cur !== nodeId || this.store.getState().status === "online") return;
-      const mins = Math.round(RUNNER_BOOT_TIMEOUT_MS / 60000);
-      this.store.pushSystemMessage(
-        `${name} still isn't online after ${mins} min. A temporary machine self-destructs if its boot install fails, so it may be gone — check your ${provider} dashboard for a "bivy-…" app and its logs. Start a new session to try again.`,
-      );
+  private openPendingLaunch(provisionalId: string, opts: { navigate?: boolean } = {}): void {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task) return;
+    if (opts.navigate !== false) navigate({ kind: "session", id: provisionalId });
+    this.store.beginOpen(provisionalId);
+    this.store.addUserMessage(task.prompt.text, task.prompt.clientMessageId, task.prompt.attachments);
+    for (const line of task.logs) this.store.pushSystemMessage(`Setup · ${line}`);
+    this.pendingPrompt = task.prompt;
+  }
+
+  /** Connect a freshly-created runner on its own small transport. This is what
+   *  makes the placeholder genuinely independent: pressing New can switch the
+   *  main pane anywhere while this node finishes booting and starts its prompt. */
+  private startPendingRunner(provisionalId: string): void {
+    const task = this.pendingLaunches.get(provisionalId);
+    const nodeId = task?.machine?.nodeId;
+    if (!task || !nodeId || task.transport) return;
+    const log = (message: string) => {
+      task.logs.push(message);
+      if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · ${message}`);
+    };
+    log("Machine accepted. Waiting for its secure Bivy service to come online…");
+    this.startBootProgress(nodeId, provisionalId, log);
+
+    // RelayTransport reads `cur` from its store. Scope only that property to the
+    // new node; credentials and room keys still come from the normal local store.
+    const scopedStore = new Proxy(this.local, {
+      get: (target, property, receiver) => property === "cur" ? nodeId : Reflect.get(target, property, receiver),
+      set: (target, property, value, receiver) => property === "cur" ? true : Reflect.set(target, property, value, receiver),
+    }) as LocalStore;
+    let transport: Transport;
+    transport = new RelayTransport({
+      store: scopedStore,
+      handlers: {
+        onStatus: (status) => {
+          if (status !== "online") return;
+          log(`${task.config.name} is online. Creating the session…`);
+          this.clearBootProgress(nodeId);
+          void transport.send(task.prompt.frame);
+        },
+        onEvent: (event) => {
+          if (event.type === "session.error") {
+            this.failPendingLaunch(provisionalId, String(event.error || "Session creation failed."));
+            return;
+          }
+          if (event.type !== "session.history" || event.requestId !== task.prompt.requestId || !event.sessionId) return;
+          void this.finishPendingLaunch(provisionalId, String(event.sessionId), transport);
+        },
+        onError: (message) => {
+          if (!/^node offline$/i.test(message.trim())) log(`Connection retry: ${message}`);
+        },
+      },
     });
+    task.transport = transport;
+    void transport.connect();
+  }
+
+  private async finishPendingLaunch(provisionalId: string, sessionId: string, transport: Transport): Promise<void> {
+    const task = this.pendingLaunches.get(provisionalId);
+    const nodeId = task?.machine?.nodeId;
+    if (!task || !nodeId) return;
+    await transport.send({ kind: "prompt", sessionId, text: task.prompt.text, clientMessageId: task.prompt.clientMessageId, attachments: task.prompt.attachments });
+    for (const followup of task.followups) {
+      await transport.send({ kind: "prompt", sessionId, ...followup });
+    }
+    this.clearBootProgress(nodeId);
+    this.pendingLaunches.delete(provisionalId);
+    if (this.pendingPrompt?.provisionalId === provisionalId) this.pendingPrompt = null;
+    this.store.completePendingSession(provisionalId, sessionId, nodeId);
+    const wasOpen = this.store.getState().activeSessionId === sessionId;
+    if (wasOpen) this.openSessionOnNode(sessionId, undefined, nodeId);
+    // Keep the transport alive long enough to flush its sealed frames, then let
+    // the normal account index/main connection own the now-real session.
+    setTimeout(() => transport.close(), 1000);
+    setTimeout(() => this.refreshSessions(), 1500);
+  }
+
+  private failPendingLaunch(provisionalId: string, message: string): void {
+    const task = this.pendingLaunches.get(provisionalId);
+    if (!task) return;
+    if (task.machine?.nodeId) this.clearBootProgress(task.machine.nodeId);
+    task.transport?.close();
+    task.logs.push(`Startup failed: ${message}`);
+    this.store.failPendingSession(provisionalId);
+    if (this.store.getState().activeSessionId === provisionalId) this.store.pushSystemMessage(`Setup · Startup failed: ${message}`);
+    this.store.setError(`Couldn't start ${task.config.name}: ${message}`);
+  }
+
+  private startBootProgress(nodeId: string, provisionalId: string, log: (message: string) => void): void {
+    this.clearBootProgress(nodeId);
+    const updates = [
+      [15_000, "Booting the machine and installing Bivy…"],
+      [45_000, "Still installing Bivy (45s elapsed). A first boot can take a few minutes…"],
+      [90_000, "Still waiting for Bivy to join the secure relay (90s elapsed)…"],
+      [180_000, "Boot is taking longer than usual (3 min elapsed). Still retrying…"],
+      [RUNNER_BOOT_TIMEOUT_MS, `Still offline after ${Math.round(RUNNER_BOOT_TIMEOUT_MS / 60000)} min. Check the provider's machine logs for a failed install.`],
+    ] as const;
+    const timers = updates.map(([delay, message]) => setTimeout(() => {
+      if (this.pendingLaunches.has(provisionalId)) log(message);
+    }, delay));
+    this.bootProgressTimers.set(nodeId, timers);
+  }
+
+  private clearBootProgress(nodeId: string): void {
+    for (const timer of this.bootProgressTimers.get(nodeId) ?? []) clearTimeout(timer);
+    this.bootProgressTimers.delete(nodeId);
   }
 
   /**

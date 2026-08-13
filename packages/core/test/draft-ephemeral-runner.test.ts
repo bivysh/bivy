@@ -41,4 +41,38 @@ describe("draftEphemeralConfig (pick-a-runner-then-send)", () => {
     store.resetActiveSession();
     expect(store.getState().draftEphemeralConfig).toBeNull();
   });
+
+  it("persists a cold-start placeholder before the runner is online", () => {
+    const store = new SessionStore();
+    store.persistPendingSession("starting-request-1", "Fix the flaky test");
+
+    expect(store.getState().activeSessionId).toBe("starting-request-1");
+    expect(store.getState().sessions[0]).toMatchObject({
+      sessionId: "starting-request-1",
+      name: "Fix the flaky test",
+      status: "working",
+    });
+  });
+
+  it("replaces the placeholder with the canonical node session", () => {
+    const store = new SessionStore();
+    store.persistPendingSession("starting-request-1", "Fix the flaky test");
+    store.completePendingSession("starting-request-1", "session-real", "eph-node");
+
+    expect(store.getState().activeSessionId).toBe("session-real");
+    expect(store.getState().sessions).toHaveLength(1);
+    expect(store.getState().sessions[0]).toMatchObject({
+      sessionId: "session-real",
+      nodeId: "eph-node",
+      name: "Fix the flaky test",
+      status: "working",
+    });
+  });
+
+  it("settles a failed placeholder instead of spinning forever", () => {
+    const store = new SessionStore();
+    store.persistPendingSession("starting-request-1", "Fix the flaky test");
+    store.failPendingSession("starting-request-1");
+    expect(store.getState().sessions[0]?.status).toBe("failed");
+  });
 });
