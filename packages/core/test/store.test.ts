@@ -81,6 +81,19 @@ describe("SessionStore", () => {
     expect(store.getState().activationReadiness).toEqual({ credential: { configured: true, probed: true, ok: true }, repository: { chosen: false, probed: true, ok: false, authed: true } });
   });
 
+  it("retains a credential's testable/verification fields, feeding the redacted readiness projection", () => {
+    const store = new SessionStore();
+    store.apply({
+      type: "credentials.records",
+      records: [
+        { provider: "anthropic", label: "default", kind: "api_key", sync: "node", origin: "bivy", testable: true, lastVerifiedAt: 1700000000000, lastVerifiedOk: true },
+      ],
+    } as never);
+    expect(store.getState().credentialRecords).toEqual([
+      { provider: "anthropic", label: "default", kind: "api_key", sync: "node", origin: "bivy", testable: true, lastVerifiedAt: 1700000000000, lastVerifiedOk: true },
+    ]);
+  });
+
   it("retains node audit degradation in Session context", () => {
     const store = new SessionStore();
     store.apply({ type: "sessions.list", sessions: [{ id: "s1", name: "One", auditHealth: { storage: "corrupt", writes: "degraded", failedWrites: 2, corruptLines: 1 }, eventLogHealth: { state: "degraded", operation: "append", at: 42 } }] } as never);

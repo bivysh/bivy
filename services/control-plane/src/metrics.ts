@@ -82,6 +82,7 @@ new client.Gauge({
  */
 export type FunnelEvent =
   | "sign_in_completed"
+  | "sign_in_failed"
   | "node_enrolled"
   | "run_started"
   | "quota_blocked"
@@ -112,8 +113,6 @@ export const PRODUCT_EVENT_VALUES = [
   "remote_intervention",
   "run_accepted",
   "receipt_reviewed",
-  "first_run_signed_in",
-  "first_run_signed_in_failed",
   "first_run_machine_ready",
   "first_run_machine_failed",
   "first_run_provider_connected",

@@ -31,8 +31,6 @@ test("product metric dimensions are closed low-cardinality enums", () => {
     "remote_intervention",
     "run_accepted",
     "receipt_reviewed",
-    "first_run_signed_in",
-    "first_run_signed_in_failed",
     "first_run_machine_ready",
     "first_run_machine_failed",
     "first_run_provider_connected",
