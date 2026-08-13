@@ -36,7 +36,7 @@ import { ReadinessChecklist } from "./components/ReadinessChecklist.js";
 import { buildInboxItems } from "./components/Inbox.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 import { PwaLifecycleNotice } from "./components/PwaLifecycleNotice.js";
-import { clearQueuedPrompts, markPromptQueued, setTurnActive } from "./pwaLifecycle.js";
+import { clearQueuedPrompts, markPromptQueued, setFollowupQueuedPrompts, setTurnActive } from "./pwaLifecycle.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
 // bundle). It's an on-demand overlay, so load it lazily to keep the initial app
 // paint fast; the chunk is fetched the first time the user opens a terminal.
@@ -187,6 +187,8 @@ export function App() {
   const online = state.status === "online";
   useEffect(() => setTurnActive(state.working), [state.working]);
   useEffect(() => { if (online) clearQueuedPrompts(); }, [online]);
+  const queuedFollowupCount = Object.values(state.followupsBySession).reduce((total, items) => total + items.length, 0);
+  useEffect(() => setFollowupQueuedPrompts(queuedFollowupCount), [queuedFollowupCount]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair

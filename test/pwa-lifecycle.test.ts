@@ -11,8 +11,12 @@ import {
 } from "../packages/web/src/composerDraft.js";
 import {
   canActivateUpdate,
+  clearQueuedPrompts,
   describeAvailability,
   fallbackInstallChoice,
+  getPwaLifecycleState,
+  markPromptQueued,
+  setFollowupQueuedPrompts,
   updateBlockers,
   type PwaLifecycleState,
 } from "../packages/web/src/pwaLifecycle.js";
@@ -109,6 +113,16 @@ assert.equal(describeAvailability("offline", true, idle).kind, "cached-transcrip
 assert.equal(describeAvailability("offline", false, idle).kind, "cached-shell");
 assert.equal(describeAvailability("offline", false, { ...idle, shellCached: false }).kind, "offline-page");
 assert.equal(describeAvailability("online", true, { ...idle, locallyQueuedPrompts: 1 }).kind, "local-queue");
+
+// Reconnect buffering and visible follow-up queues are independent concurrent
+// sources: reconnect recovery must not accidentally clear a queued follow-up.
+setFollowupQueuedPrompts(2);
+markPromptQueued();
+assert.equal(getPwaLifecycleState().locallyQueuedPrompts, 3);
+clearQueuedPrompts();
+assert.equal(getPwaLifecycleState().locallyQueuedPrompts, 2);
+setFollowupQueuedPrompts(0);
+assert.equal(getPwaLifecycleState().locallyQueuedPrompts, 0);
 
 assert.equal(fallbackInstallChoice("Mozilla/5.0 (iPhone) AppleWebKit Safari", "iPhone", 5), "ios");
 assert.equal(fallbackInstallChoice("Mozilla/5.0 AppleWebKit Version/17.4 Safari/605.1.15", "MacIntel", 0), "safari");

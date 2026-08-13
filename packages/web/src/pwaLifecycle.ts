@@ -41,6 +41,8 @@ const LEGACY_FIRST_SUCCESS_KEY = "bivy.product-metric.first_useful_response";
 const listeners = new Set<() => void>();
 let installEvent: BeforeInstallPromptEvent | null = null;
 let installedThisRun = false;
+let reconnectQueuedPrompts = 0;
+let followupQueuedPrompts = 0;
 
 function storedFirstSuccess(): boolean {
   try {
@@ -156,8 +158,26 @@ export function setComposerLifecycle(activity: Pick<PwaLifecycleState, "hasDraft
 
 export function setTurnActive(turnActive: boolean): void { publish({ turnActive }); }
 
-export function markPromptQueued(): void { publish({ locallyQueuedPrompts: state.locallyQueuedPrompts + 1 }); }
-export function clearQueuedPrompts(): void { publish({ locallyQueuedPrompts: 0 }); }
+function publishQueuedPrompts(): void {
+  publish({ locallyQueuedPrompts: reconnectQueuedPrompts + followupQueuedPrompts });
+}
+
+/** Track prompts buffered by a reconnecting transport until it returns online. */
+export function markPromptQueued(): void {
+  reconnectQueuedPrompts += 1;
+  publishQueuedPrompts();
+}
+
+export function clearQueuedPrompts(): void {
+  reconnectQueuedPrompts = 0;
+  publishQueuedPrompts();
+}
+
+/** Track the controller's visible in-memory follow-up queues across Sessions. */
+export function setFollowupQueuedPrompts(count: number): void {
+  followupQueuedPrompts = Math.max(0, Math.floor(count));
+  publishQueuedPrompts();
+}
 
 export function markFirstSuccessfulResponse(): void {
   try { localStorage.setItem(FIRST_SUCCESS_KEY, "1"); } catch {}
