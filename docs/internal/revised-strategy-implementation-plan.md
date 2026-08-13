@@ -80,7 +80,7 @@ Known coherence gaps found in the same audit:
 - [ ] Add privacy-safe metrics for activation, first useful response, remote reconnect/intervention, Run acceptance/outcome, Receipt review, and failure stage.
   **Progress:** durable `succeeded`, `failed`, and `needs_attention` Run results
   are aggregate counters. The metrics contract documents unobservable gaps.
-- [ ] Add a CI vocabulary check for prohibited terms in new customer-facing copy with explicit diagnostics/compatibility exceptions.
+- [x] Add a CI vocabulary check for prohibited terms in new customer-facing copy with explicit diagnostics/compatibility exceptions. **Implemented in PR #535:** the required root quality job rejects newly added legacy terms in PWA, CLI, README, and docs copy, reports the exact location and canonical replacement, and requires an explicit inline compatibility exception for deliberate API/storage terminology.
 
 **Gate:** no primary customer screen requires “work item,” “routing label,” or
 “ephemeral config”; one product specification governs all clients.
