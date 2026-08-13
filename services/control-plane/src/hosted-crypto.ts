@@ -33,6 +33,20 @@ interface Keyring {
   keys: Map<string, Buffer>;
 }
 
+/** Hosted-key boundary for KMS/HSM implementations. Providers own encryption
+ * and key derivation; the control plane stores only their opaque envelope.
+ * Async methods support network KMS APIs without exposing key material. */
+export interface HostedKeyProvider {
+  available(): Promise<boolean>;
+  primaryKeyId(): Promise<string | null>;
+  encrypt(accountId: string, plaintext: string): Promise<SecretEnvelope>;
+  decrypt(accountId: string, envelope: SecretEnvelope): Promise<string>;
+}
+
+let configuredProvider: HostedKeyProvider | null = null;
+export function setHostedKeyProvider(provider: HostedKeyProvider | null): void { configuredProvider = provider; }
+export function hostedKeyProvider(): HostedKeyProvider { return configuredProvider ?? environmentHostedKeyProvider; }
+
 function decode32(b64: string): Buffer | null {
   let buf: Buffer;
   try {
@@ -80,7 +94,18 @@ function requireKeyring(): Keyring {
   return kr;
 }
 
-/** Whether at least one valid master key is configured. */
+export const environmentHostedKeyProvider: HostedKeyProvider = {
+  available: async () => hostedEncryptionAvailable(),
+  primaryKeyId: async () => hostedPrimaryKid(),
+  encrypt: async (accountId, plaintext) => encryptSecret(accountId, plaintext),
+  decrypt: async (accountId, envelope) => decryptSecret(accountId, envelope),
+};
+
+/** Provider-driven async operations for hosted paths that may use KMS/HSM. */
+export const encryptHostedSecret = (accountId: string, plaintext: string) => hostedKeyProvider().encrypt(accountId, plaintext);
+export const decryptHostedSecret = (accountId: string, envelope: SecretEnvelope) => hostedKeyProvider().decrypt(accountId, envelope);
+
+/** Whether at least one valid environment master key is configured. */
 export function hostedEncryptionAvailable(): boolean {
   return loadKeyring() != null;
 }
