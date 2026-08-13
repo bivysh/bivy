@@ -31,9 +31,10 @@ the user's native login or configuration.
 ## Models
 
 The app-server's picker lists whatever models Codex's own catalog advertises
-for your account (its `hello` handshake), defaulting to GPT-5 Codex. The
-session-less placeholder shown before that handshake is GPT-5 Codex and GPT-5
-under the `openai-codex` provider.
+for your account (its `hello` handshake), defaulting to the account's frontier
+model (currently GPT-5.6 Sol). The session-less placeholder shown before that
+handshake is the current Codex line — GPT-5.6 Sol/Terra/Luna, GPT-5.5, GPT-5.4
+(and mini), and GPT-5.3 Codex Spark — under the `openai-codex` provider.
 
 ## Resume
 
