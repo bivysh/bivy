@@ -103,13 +103,36 @@ reclaim on a fresh process. That path is tracked separately.
 stopped short (`checks` / `timeout` / `agent` / `needs_review`), derived from the
 run's own evidence. Neither carries a run, session, account, or user identifier.
 
-## Run evidence and outcome reports
+## Observable lifecycle and outcome reports
+
+A Run keeps one causal, append-only milestone timeline. The vocabulary covers
+`trigger_received`, `trigger_matched`, `queued`, `routed`, `provisioning`,
+`claimed`, `agent_started`, `checks_started`, `checks_completed`,
+`result_delivery`, `notification`, `retry`, `cancel_requested`, and exactly one
+`terminal` outcome. A stage is recorded only when the system observes it; old
+rows may therefore have gaps rather than invented timestamps. Each milestone is
+bounded, attempt-aware, and may carry only an allowlisted reason or evidence
+reference. Repeated reports with the same milestone id are idempotent.
+
+Active Run changes are pushed as content-free `run.updated` hints over the
+existing relay connection to every connected client on the account. A hint
+contains the Run id and revision, not instructions or evidence. The client then
+fetches the canonical account-scoped record. Periodic and reconnect polling
+remain as recovery when a hint is dropped or a client version does not support
+it.
+
+Operational state is explicit: **parked** means a nonterminal Run is waiting for
+an operator or an external dependency; **dead-letter** means it terminated
+without an automatic retry remaining. Both can be filtered independently from
+the ordinary active/history feed. Attention severity and the canonical Run
+projection determine the next valid operator action; clients do not manufacture
+a retry, cancel, or review action from presentation state.
 
 Every run also carries a small, structured **evidence** record — the piece a
 PR alone can't show: what triggered the job, where it ran, which agent/model
-and why, what checks passed, and why any retry or fallback happened. Three
-fields, all allowlisted and bounded by
-`services/control-plane/src/run-evidence.ts` before they ever reach storage:
+and why, what checks passed, and why any retry or fallback happened. Fields are
+allowlisted and bounded by `services/control-plane/src/run-evidence.ts` before
+they ever reach storage:
 
 - **`routingReason`** — a short, free-text explanation of why this node/
   runtime/model was chosen (queue label, manual override, node default,
