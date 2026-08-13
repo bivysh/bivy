@@ -16,7 +16,7 @@
 // `approvalPolicy: "untrusted"` Codex escalates every model-proposed action, so
 // Bivy's guardianInterceptor sees — and can veto — each one.
 //
-// Protocol surfaces (verified against codex-cli 0.144.1):
+// Protocol surfaces (verified against codex-cli 0.147.0):
 //   • initialize                              → handshake
 //   • thread/start {cwd, approvalPolicy, sandbox}  → threadId
 //   • thread/resume {threadId, cwd, approvalPolicy, sandbox} → threadId
@@ -27,8 +27,8 @@
 //   • turn/completed                          → turn done
 //
 // This is a first-class v1: governed sessions with shell/patch approvals and a
-// generic protocol `session.resume` primitive (thread/resume — validated against
-// codex-cli 0.144.1). MCP-tool routing is still a follow-up.
+// generic protocol `session.resume` primitive (thread/resume), plus observed
+// MCP/dynamic tools and Codex collaboration/sub-agent activity.
 
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -69,6 +69,9 @@ const itemInputs = new Map();
 const itemOutputs = new Map();
 const agentMessageItems = new Set();
 const reasoningItems = new Set();
+const activeObservedItems = new Set();
+let pendingTurnCompletion = false;
+let turnCompletionTimer = null;
 
 function text(value) {
   if (Array.isArray(value)) return value.map(text).filter(Boolean).join("\n");
@@ -101,6 +104,16 @@ function rememberItem(item) {
     itemInputs.set(id, { changes: item.changes ?? [], status: item.status });
   } else if (item.type === "mcpToolCall") {
     itemInputs.set(id, { server: item.server, tool: item.tool, arguments: item.arguments });
+  } else if (item.type === "dynamicToolCall") {
+    itemInputs.set(id, { namespace: item.namespace, arguments: item.arguments });
+  } else if (item.type === "collabAgentToolCall") {
+    itemInputs.set(id, {
+      agent: item.model || item.receiverThreadIds?.[0],
+      description: item.prompt,
+      operation: item.tool,
+      model: item.model,
+      receiverThreadIds: item.receiverThreadIds,
+    });
   }
 }
 
@@ -116,7 +129,16 @@ function appendOutput(itemId, delta) {
 
 function emitToolUpdate(itemId, name, input) {
   if (!itemId) return;
-  bivy({ type: "tool_execution_update", toolCallId: itemId, toolName: name, input });
+  bivy({ type: "tool.update", toolCallId: itemId, name, input });
+}
+
+// App-server item/started is observational: approval-capable shell/patch calls
+// were already surfaced by requestApproval, while MCP, dynamic, and collaboration
+// items may already be running. `tool.observe` gives all of them a live,
+// persisted card without asking the user to approve work that has already begun.
+function emitToolObserved(itemId, name, input) {
+  if (!itemId) return;
+  bivy({ type: "tool.observe", toolCallId: itemId, name, input });
 }
 
 function emitReasoning(itemId, delta) {
@@ -128,6 +150,21 @@ function emitReasoning(itemId, delta) {
 
 function reasoningFromItem(item) {
   return text(item?.summary).trim() || text(item?.content).trim();
+}
+
+function finishCompletedTurn() {
+  if (!pendingTurnCompletion) return;
+  pendingTurnCompletion = false;
+  if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
+  turnCompletionTimer = null;
+  activeObservedItems.clear();
+  bivy({ type: "session.status", status: "idle" });
+  if (sawError) { bivy({ type: "session.error", error: sawError }); sawError = null; }
+  else bivy({ type: "session.done" });
+}
+
+function maybeFinishCompletedTurn() {
+  if (pendingTurnCompletion && activeObservedItems.size === 0) finishCompletedTurn();
 }
 
 function handleCompletedItem(params) {
@@ -154,20 +191,38 @@ function handleCompletedItem(params) {
       const output = text(item.aggregatedOutput ?? itemOutputs.get(itemId));
       if (output) itemOutputs.set(itemId, output.slice(-4000));
       emitToolUpdate(itemId, "shell", updateInput(itemId, { output }));
-      bivy({ type: "tool.result", toolCallId: itemId, name: "shell", result: output || text(item.status || "completed") });
+      const exitCode = typeof item.exitCode === "number" ? item.exitCode : undefined;
+      bivy({
+        type: "tool.result",
+        toolCallId: itemId,
+        name: "shell",
+        result: { content: output || text(item.status || "completed"), ...(exitCode === undefined ? {} : { exitCode }) },
+        isError: (exitCode !== undefined && exitCode !== 0) || item.status === "failed",
+      });
       return;
     }
     case "fileChange": {
       const status = text(item.status || "completed");
       itemInputs.set(itemId, updateInput(itemId, { changes: item.changes ?? [], status }));
       emitToolUpdate(itemId, "apply_patch", updateInput(itemId));
-      bivy({ type: "tool.result", toolCallId: itemId, name: "apply_patch", result: status });
+      bivy({ type: "tool.result", toolCallId: itemId, name: "apply_patch", result: status, isError: status === "failed" });
       return;
     }
     case "mcpToolCall": {
       const name = text(item.tool || "mcp");
       const result = text(item.result ?? item.error ?? "");
-      bivy({ type: "tool.result", toolCallId: itemId, name, result });
+      bivy({ type: "tool.result", toolCallId: itemId, name, result, isError: Boolean(item.error) || item.status === "failed" });
+      return;
+    }
+    case "dynamicToolCall": {
+      const name = text(item.tool || "tool");
+      const result = text(item.contentItems ?? item.result ?? item.status ?? "completed");
+      bivy({ type: "tool.result", toolCallId: itemId, name, result, isError: item.success === false || item.status === "failed" });
+      return;
+    }
+    case "collabAgentToolCall": {
+      const result = text(item.status || "completed");
+      bivy({ type: "tool.result", toolCallId: itemId, name: "spawn_agent", result, isError: item.status === "failed" });
       return;
     }
     default:
@@ -278,13 +333,20 @@ function onNotification(m) {
       const item = params?.item;
       rememberItem(item);
       const itemId = paramsItemId(params);
-      if (item?.type === "commandExecution") emitToolUpdate(itemId, "shell", updateInput(itemId));
-      if (item?.type === "fileChange") emitToolUpdate(itemId, "apply_patch", updateInput(itemId));
+      if (["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall"].includes(item?.type) && itemId) activeObservedItems.add(itemId);
+      if (item?.type === "commandExecution") emitToolObserved(itemId, "shell", updateInput(itemId));
+      if (item?.type === "fileChange") emitToolObserved(itemId, "apply_patch", updateInput(itemId));
+      if (item?.type === "mcpToolCall") emitToolObserved(itemId, text(item.tool || "mcp"), updateInput(itemId));
+      if (item?.type === "dynamicToolCall") emitToolObserved(itemId, text(item.tool || "tool"), updateInput(itemId));
+      if (item?.type === "collabAgentToolCall") emitToolObserved(itemId, "spawn_agent", updateInput(itemId));
       return;
     }
-    case "item/completed":
+    case "item/completed": {
       handleCompletedItem(params);
+      activeObservedItems.delete(paramsItemId(params));
+      maybeFinishCompletedTurn();
       return;
+    }
     case "thread/tokenUsage/updated":
       if (params?.tokenUsage) bivy({ type: "usage", usage: params.tokenUsage.last ?? params.tokenUsage.total ?? params.tokenUsage });
       return;
@@ -295,9 +357,14 @@ function onNotification(m) {
       bivy({ type: "session.status", status: "working" });
       return;
     case "turn/completed": {
-      bivy({ type: "session.status", status: "idle" });
-      if (sawError) { bivy({ type: "session.error", error: sawError }); sawError = null; }
-      else bivy({ type: "session.done" });
+      // Codex 0.147 can publish turn/completed just before the final
+      // collabAgentToolCall item/completed notification. Sealing immediately
+      // leaves the sub-agent card running forever and drops its persisted
+      // tool_result. Drain known started items first, with a bounded fallback
+      // for runtimes that omit a completion notification.
+      pendingTurnCompletion = true;
+      if (activeObservedItems.size === 0) finishCompletedTurn();
+      else turnCompletionTimer = setTimeout(finishCompletedTurn, 500);
       return;
     }
     case "turn/failed":
@@ -414,7 +481,7 @@ async function onBivyCommand(msg) {
 
 // Announce capabilities; ProtocolRuntime finalizes them from this handshake.
 // resume: true — thread/resume reconnects a prior thread by its rollout id
-// (verified against codex-cli 0.144.1); the resume plumbing is Bivy-side.
+// (verified against codex-cli 0.147.0); the resume plumbing is Bivy-side.
 async function announceHello() {
   try {
     await ensureInitialized();
