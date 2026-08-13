@@ -31,10 +31,18 @@ Commands:
   test [path] --event <file>  Simulate an event and explain the first match
   apply [path] [--prune]      Encrypt instructions and reconcile the control plane
 
-One-off Run flags (used by 'bivy runs start'):
+Run commands (normally invoked as 'bivy runs ...'):
+  start <instructions>          Queue definition-free unattended work
+  list [--limit <n>] [--json]  List recent Runs and their current status
+  status <id> [--json]         Inspect one Run's status, evidence, and outputs
+  wait <id> [options]          Poll until the Run reaches a terminal status
+
+Start flags:
   --name <title>  --repo <owner/name>  --agent <id>  --model <id>
   --approval <mode>  --sandbox <tier>  --max-attempts <1-10>  --json
   Pass '-' as the instructions to read them from stdin.
+Wait flags: --interval <seconds> (default 2), --timeout <seconds> (default 3600),
+--json. Wait exits 0 for succeeded, 1 for failed/cancelled, and 2 on timeout.
 
 Default path: ${DEFAULT_AUTOMATION_CONFIG_PATH}
 List, trigger, and apply require an enrolled node ('bivy setup'). Instructions
@@ -61,6 +69,30 @@ function load(file: string) {
     process.exit(1);
   }
   return result.config;
+}
+
+type RunSummary = {
+  id: string;
+  title: string;
+  status: "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled";
+  triggerKind?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  attempt?: number;
+  maxAttempts?: number;
+  runtimeId?: string;
+  model?: string;
+  output?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
+  checks?: Array<{ name: string; status: string; exitCode?: number }>;
+  events?: Array<{ at: string; kind: string; summary: string }>;
+};
+
+const TERMINAL_RUN_STATUSES = new Set<RunSummary["status"]>(["succeeded", "failed", "cancelled"]);
+
+function runLine(run: RunSummary): string {
+  const attempt = run.attempt && run.attempt > 1 ? ` · attempt ${run.attempt}` : "";
+  return `${run.status.padEnd(15)} ${run.id}  ${run.title}${attempt}`;
 }
 
 function appDataDir(): string {
@@ -173,6 +205,58 @@ async function main() {
       if (run.status) console.log(`  status ${run.status}`);
     }
     return;
+  }
+
+  if (command === "runs-list") {
+    const relay = relayConfig(appDataDir());
+    const rawLimit = Number(value(args, "--limit") ?? 30);
+    const limit = Number.isInteger(rawLimit) ? Math.max(1, Math.min(100, rawLimit)) : 30;
+    const result = await request<{ runs: RunSummary[] }>(relay, `/node/automation-runs?limit=${limit}`);
+    if (args.includes("--json")) console.log(JSON.stringify(result.runs, null, 2));
+    else if (!result.runs.length) console.log("No Runs.");
+    else for (const run of result.runs) console.log(runLine(run));
+    return;
+  }
+
+  if (command === "runs-status" || command === "runs-wait") {
+    const id = args.find((arg, index) => !arg.startsWith("-") && (index === 0 || !["--interval", "--timeout"].includes(args[index - 1]!)));
+    if (!id) throw new Error(`Usage: bivy runs ${command === "runs-wait" ? "wait" : "status"} <id> [--json]`);
+    const relay = relayConfig(appDataDir());
+    if (command === "runs-status") {
+      const run = await request<RunSummary>(relay, `/node/automation-runs/${encodeURIComponent(id)}`);
+      if (args.includes("--json")) console.log(JSON.stringify(run, null, 2));
+      else {
+        console.log(runLine(run));
+        if (run.output?.sessionId) console.log(`  session ${run.output.sessionId}`);
+        if (run.output?.branch) console.log(`  branch ${run.output.branch}`);
+        if (run.output?.prUrl) console.log(`  pull request ${run.output.prUrl}`);
+        if (run.output?.failure) console.log(`  failure ${run.output.failure}`);
+      }
+      return;
+    }
+    const intervalSeconds = Number(value(args, "--interval") ?? 2);
+    const timeoutSeconds = Number(value(args, "--timeout") ?? 3600);
+    if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) throw new Error("--interval must be a positive number of seconds");
+    if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) throw new Error("--timeout must be a positive number of seconds");
+    const deadline = Date.now() + timeoutSeconds * 1_000;
+    let previous = "";
+    while (true) {
+      const run = await request<RunSummary>(relay, `/node/automation-runs/${encodeURIComponent(id)}`);
+      if (!args.includes("--json") && run.status !== previous) console.error(runLine(run));
+      previous = run.status;
+      if (TERMINAL_RUN_STATUSES.has(run.status)) {
+        if (args.includes("--json")) console.log(JSON.stringify(run, null, 2));
+        process.exitCode = run.status === "succeeded" ? 0 : 1;
+        return;
+      }
+      if (Date.now() >= deadline) {
+        if (args.includes("--json")) console.log(JSON.stringify({ id: run.id, status: run.status, timedOut: true }, null, 2));
+        else console.error(`Timed out waiting for Run ${run.id} (${run.status}).`);
+        process.exitCode = 2;
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1_000));
+    }
   }
 
   if (command === "start-run") {

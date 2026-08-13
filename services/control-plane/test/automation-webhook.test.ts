@@ -140,6 +140,14 @@ async function main() {
   const pendingNodeWork = await json(port, "GET", "/node/work?labels=bivy%2Fconfig-runner", undefined, nodeToken);
   const privateCliWork = pendingNodeWork.body.items.find((w: any) => w.id === oneOffCliRun.body.id);
   expect(cliWork?.repo === "acme/api" && cliWork?.maxAttempts === 3 && privateCliWork?.body === "bivy-room-v1:node-as-code:opaque-one-off", "one-off Run preserves encrypted instructions and bounded routing");
+  const nodeRunList = await json(port, "GET", "/node/automation-runs?limit=10", undefined, nodeToken);
+  expect(nodeRunList.status === 200 && nodeRunList.body.runs.some((r: any) => r.id === oneOffCliRun.body.id), "an enrolled node can list Run statuses for orchestration");
+  const nodeRunStatus = await json(port, "GET", `/node/automation-runs/${oneOffCliRun.body.id}`, undefined, nodeToken);
+  expect(nodeRunStatus.status === 200 && nodeRunStatus.body.status === "pending" && nodeRunStatus.body.body === undefined, "an enrolled node can inspect content-free Run status");
+  const unknownNodeRun = await json(port, "GET", "/node/automation-runs/not-a-run", undefined, nodeToken);
+  expect(unknownNodeRun.status === 404, "Run status lookup is account-scoped and returns 404 for unknown Runs");
+  const unauthorizedNodeRuns = await json(port, "GET", "/node/automation-runs");
+  expect(unauthorizedNodeRuns.status === 401, "Run status probing requires node authentication");
 
   // --- Webhook-triggered automation *definition* (runs the operator's own
   //     pre-configured routing/agent/model/sandbox + E2E template) ---

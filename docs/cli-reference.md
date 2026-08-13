@@ -170,6 +170,35 @@ Flags: `--name`, `--repo owner/name`, `--agent`, `--model`, `--approval`,
 `--sandbox`, `--max-attempts`, and `--json`. The Run targets the node where the
 command is executed. Remote-machine selection is available in the React app.
 
+### `bivy runs <list|status|wait>`
+
+Inspect Runs from a terminal or another agent without exposing instructions or
+transcripts:
+
+```bash
+bivy runs list --json
+bivy runs status <run-id> --json
+bivy runs wait <run-id> --timeout 1800 --json
+```
+
+`list` returns recent account Runs and accepts `--limit 1..100`. `status` returns
+the lifecycle, attempt, bounded check/evidence metadata, and output references
+such as session, branch, or pull request. `wait` polls until `succeeded`,
+`failed`, or `cancelled`; it exits 0 for success, 1 for failed/cancelled, and 2
+on timeout. `--interval` and `--timeout` are seconds, defaulting to 2 and 3600.
+This makes a machine-readable handoff straightforward:
+
+```bash
+run_id=$(bivy runs start "Implement the parser" --repo acme/api --json | jq -r .id)
+if result=$(bivy runs wait "$run_id" --json); then
+  pr=$(jq -r '.output.prUrl // empty' <<<"$result")
+fi
+```
+
+These APIs return the bounded Run title and metadata, but intentionally omit the
+encrypted instruction body, inbound event context, transcript, diff, file
+content, and raw tool/check output.
+
 ### `bivy agents [--json]`
 
 Lists known agent integrations, whether each upstream CLI is installed, and its

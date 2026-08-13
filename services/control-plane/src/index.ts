@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import Stripe from "stripe";
 import webpush from "web-push";
-import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { providerCredentialFingerprint, type Account, type NodeRecord, type Plan, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, LEGACY_PLAN_IDS, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret } from "./hosted-crypto.js";
 import { listAppInstallations, listInstallationRepositories } from "./hosted-github-auth.js";
@@ -2537,6 +2537,28 @@ app.put("/node/automation-config/:key", requireNode, asyncHandler(async (req, re
 // Start a one-off governed Run from the CLI. Unlike `bivy run`, this is
 // unattended queue work: the instruction is E2E-encrypted for this node, gets
 // checks/evidence, and does not leave behind an Automation definition.
+// Account-scoped Run inspection for local operators and agent orchestration.
+// Strip the encrypted instruction and inbound webhook context; callers receive
+// lifecycle/evidence/output references, not instruction bodies, transcripts,
+// diffs, file content, or raw tool/check output.
+function nodePublicRun(run: AutomationRun) {
+  const { accountId: _accountId, body: _body, eventContext: _eventContext, ...metadata } = run;
+  return metadata;
+}
+
+app.get("/node/automation-runs", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30));
+  res.json({ runs: (await store.listAutomationRuns(node.accountId, limit)).map(nodePublicRun) });
+}));
+
+app.get("/node/automation-runs/:id", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const run = await store.getAutomationRun(node.accountId, String(req.params.id));
+  if (!run) return res.status(404).json({ error: "Run not found" });
+  res.json(nodePublicRun(run));
+}));
+
 app.post("/node/automation-runs", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
