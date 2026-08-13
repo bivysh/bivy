@@ -17,7 +17,7 @@ export function UpdatePrompt() {
         <strong>A Bivy update is ready.</strong>{" "}
         {blockers.length
           ? `Reload is available after ${blockers.join(", ")}.`
-          : "Reload preserves cached transcripts and draft text. Attached files must be re-selected; queued prompts should sync first."}
+          : "Draft text and attachment names are stored in this browser; cached transcripts remain when browser storage is available. File contents must be re-selected."}
       </span>
       <button className="btn ghost" onClick={() => setShow(false)}>Later</button>
       <button className="btn primary" onClick={reloadForUpdate} disabled={blockers.length > 0} aria-disabled={blockers.length > 0}>

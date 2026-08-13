@@ -1,12 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 
+import type { ConnectionStatus } from "@bivy/core";
+
 export type InstallChoice = "native" | "ios" | "safari" | null;
+export type AvailabilityKind =
+  | "live-control"
+  | "local-queue"
+  | "reconnecting"
+  | "cached-transcript"
+  | "cached-shell"
+  | "offline-page";
+
+export interface AvailabilityMessage {
+  kind: AvailabilityKind;
+  label: string;
+  detail: string;
+}
 
 export interface PwaLifecycleState {
   updateAvailable: boolean;
   installChoice: InstallChoice;
   standalone: boolean;
+  shellCached: boolean;
   firstSuccess: boolean;
   hasDraft: boolean;
   pendingAttachments: number;
@@ -21,11 +37,17 @@ type BeforeInstallPromptEvent = Event & {
 };
 
 const FIRST_SUCCESS_KEY = "bivy.pwa.first-success";
+const LEGACY_FIRST_SUCCESS_KEY = "bivy.product-metric.first_useful_response";
 const listeners = new Set<() => void>();
 let installEvent: BeforeInstallPromptEvent | null = null;
+let installedThisRun = false;
 
 function storedFirstSuccess(): boolean {
-  try { return localStorage.getItem(FIRST_SUCCESS_KEY) === "1"; } catch { return false; }
+  try {
+    return localStorage.getItem(FIRST_SUCCESS_KEY) === "1" || localStorage.getItem(LEGACY_FIRST_SUCCESS_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 function isStandalone(): boolean {
@@ -34,19 +56,30 @@ function isStandalone(): boolean {
     (navigator as Navigator & { standalone?: boolean }).standalone === true;
 }
 
-function fallbackInstallChoice(): InstallChoice {
-  if (typeof navigator === "undefined" || isStandalone()) return null;
-  const ua = navigator.userAgent;
-  const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+/** Browser-family fallback used only when the native install event is absent. */
+export function fallbackInstallChoice(
+  userAgent: string,
+  platform: string,
+  maxTouchPoints: number,
+  standalone = false,
+): InstallChoice {
+  if (standalone) return null;
+  const ios = /iPad|iPhone|iPod/.test(userAgent) || (platform === "MacIntel" && maxTouchPoints > 1);
   if (ios) return "ios";
-  const safari = /Safari/.test(ua) && !/Chrome|Chromium|CriOS|Edg|OPR|FxiOS/.test(ua);
+  const safari = /Safari/.test(userAgent) && !/Chrome|Chromium|CriOS|Edg|OPR|FxiOS/.test(userAgent);
   return safari ? "safari" : null;
+}
+
+function browserFallbackInstallChoice(): InstallChoice {
+  if (typeof navigator === "undefined") return null;
+  return fallbackInstallChoice(navigator.userAgent, navigator.platform, navigator.maxTouchPoints, isStandalone());
 }
 
 let state: PwaLifecycleState = {
   updateAvailable: false,
   installChoice: null,
   standalone: isStandalone(),
+  shellCached: false,
   firstSuccess: typeof window !== "undefined" && storedFirstSuccess(),
   hasDraft: false,
   pendingAttachments: 0,
@@ -64,7 +97,21 @@ function publish(patch: Partial<PwaLifecycleState>): void {
 
 function refreshInstallChoice(): void {
   const standalone = isStandalone();
-  publish({ standalone, installChoice: standalone || !state.firstSuccess ? null : installEvent ? "native" : fallbackInstallChoice() });
+  publish({
+    standalone,
+    installChoice: standalone || installedThisRun || !state.firstSuccess
+      ? null
+      : installEvent ? "native" : browserFallbackInstallChoice(),
+  });
+}
+
+async function refreshShellCache(): Promise<void> {
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration();
+    publish({ shellCached: Boolean(registration?.active) });
+  } catch {
+    publish({ shellCached: false });
+  }
 }
 
 export function initializeInstallLifecycle(): () => void {
@@ -73,15 +120,23 @@ export function initializeInstallLifecycle(): () => void {
     installEvent = event as BeforeInstallPromptEvent;
     refreshInstallChoice();
   };
-  const onInstalled = () => { installEvent = null; publish({ standalone: true, installChoice: null }); };
+  const onInstalled = () => {
+    installEvent = null;
+    installedThisRun = true;
+    refreshInstallChoice();
+  };
+  const onControllerChange = () => { void refreshShellCache(); };
   const media = window.matchMedia?.("(display-mode: standalone)");
   window.addEventListener("beforeinstallprompt", onPrompt);
   window.addEventListener("appinstalled", onInstalled);
+  navigator.serviceWorker?.addEventListener("controllerchange", onControllerChange);
   media?.addEventListener?.("change", refreshInstallChoice);
   refreshInstallChoice();
+  void refreshShellCache();
   return () => {
     window.removeEventListener("beforeinstallprompt", onPrompt);
     window.removeEventListener("appinstalled", onInstalled);
+    navigator.serviceWorker?.removeEventListener("controllerchange", onControllerChange);
     media?.removeEventListener?.("change", refreshInstallChoice);
   };
 }
@@ -115,10 +170,15 @@ export async function requestInstall(): Promise<"accepted" | "dismissed" | "unav
   if (!event || state.standalone || !state.firstSuccess) return "unavailable";
   installEvent = null;
   publish({ installChoice: null });
-  await event.prompt();
-  const choice = await event.userChoice;
-  if (choice.outcome === "dismissed") refreshInstallChoice();
-  return choice.outcome;
+  try {
+    await event.prompt();
+    const choice = await event.userChoice;
+    // A beforeinstallprompt event is one-shot. A dismissal stays hidden until
+    // the browser decides the app is eligible again and emits a fresh event.
+    return choice.outcome;
+  } catch {
+    return "unavailable";
+  }
 }
 
 export function updateBlockers(value = state): string[] {
@@ -129,4 +189,58 @@ export function updateBlockers(value = state): string[] {
   if (value.pendingAttachments) blockers.push("pending attachments are sent or cleared");
   if (value.locallyQueuedPrompts) blockers.push("locally queued prompts reach the Machine");
   return blockers;
+}
+
+export function canActivateUpdate(value = state): boolean {
+  return value.updateAvailable && updateBlockers(value).length === 0;
+}
+
+/** Pure copy model so every availability state remains independently testable. */
+export function describeAvailability(
+  status: ConnectionStatus,
+  hasCachedTranscript: boolean,
+  value = state,
+): AvailabilityMessage {
+  if (value.locallyQueuedPrompts > 0) {
+    return {
+      kind: "local-queue",
+      label: value.locallyQueuedPrompts === 1 ? "Prompt queued on this device" : `${value.locallyQueuedPrompts} prompts queued on this device`,
+      detail: "This work has not reached the Machine. Keep Bivy open; it will send after the connection recovers.",
+    };
+  }
+  if (status === "reconnecting" || status === "connecting" || status === "linking" || status === "pairing") {
+    return {
+      kind: "reconnecting",
+      label: "Reconnecting Machine",
+      detail: hasCachedTranscript
+        ? "The transcript shown is the cached copy. You can keep drafting; live control returns after reconnect."
+        : "The app is open, but live Machine control is still reconnecting.",
+    };
+  }
+  if (status === "offline" && hasCachedTranscript) {
+    return {
+      kind: "cached-transcript",
+      label: "Cached transcript",
+      detail: "This readable copy is stored on this device. It may be behind the Machine; prompts cannot send until reconnect.",
+    };
+  }
+  if (status === "offline" && value.shellCached) {
+    return {
+      kind: "cached-shell",
+      label: "Cached app shell",
+      detail: "Bivy can reopen from this device's cache, but no transcript or live Machine control is available yet.",
+    };
+  }
+  if (status === "offline") {
+    return {
+      kind: "offline-page",
+      label: "Offline",
+      detail: "This open page can preserve a draft, but the app shell is not confirmed cached and live Machine control is unavailable.",
+    };
+  }
+  return {
+    kind: "live-control",
+    label: "Live control",
+    detail: "This Machine is connected. Prompts send now and transcript changes sync live.",
+  };
 }
