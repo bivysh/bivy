@@ -3,7 +3,7 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { AccountMe, AccountNode, AppState, CredentialPresetsView, CredentialRecordSummary, EphemeralNodeConfig, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, SandboxTier, EphemeralMachine, EphemeralModelKeyInfo, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice } from "@bivy/core";
+import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice, deriveCredentialReadiness } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -555,7 +555,7 @@ function nodeProviderSummary(n: AccountNode): { text: string; expired: boolean }
 // keys, plus password-manager references. The single "API key" field above is the
 // provider's `default` credential; this manages the extra labeled ones and each
 // one's cross-node sync (the per-credential opt-out).
-function ProviderCredentials({ providerId, records, presets }: { providerId: string; records: CredentialRecordSummary[]; presets: CredentialPresetsView | null }) {
+function ProviderCredentials({ providerId, records, presets, accountEmail }: { providerId: string; records: CredentialRecordSummary[]; presets: CredentialPresetsView | null; accountEmail?: string }) {
   const [label, setLabel] = useState("");
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -594,21 +594,24 @@ function ProviderCredentials({ providerId, records, presets }: { providerId: str
       {extra.length > 0 && (
         <div className="picker-list">
           {extra.map((r) => (
-            <div key={r.label} className="cred-row" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
-              <span style={{ fontWeight: 600 }}>{r.label}</span>
-              <span className="chip">{r.kind === "reference" ? "reference" : r.kind === "oauth" ? "OAuth" : "API key"}</span>
-              {r.origin === "agent-native" && <span className="chip">from agent</span>}
-              <span style={{ flex: 1 }} />
-              <button
-                className="link-btn"
-                title={r.sync === "account" ? "Syncs to your other machines — tap to keep on this machine only" : "Stays on this machine — tap to sync across your machines"}
-                onClick={() => controller.setCredentialSync(providerId, r.label, r.sync === "account" ? "node" : "account")}
-              >
-                {r.sync === "account" ? "Syncing" : "This machine only"}
-              </button>
-              <button className="link-btn danger" onClick={() => { controller.removeCredential(providerId, r.label); setTimeout(() => controller.listCredentialRecords(), 400); }}>
-                Remove
-              </button>
+            <div key={r.label} className="cred-row-group" style={{ padding: "6px 0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontWeight: 600 }}>{r.label}</span>
+                <span className="chip">{r.kind === "reference" ? "reference" : r.kind === "oauth" ? "OAuth" : "API key"}</span>
+                {r.origin === "agent-native" && <span className="chip">from agent</span>}
+                <span style={{ flex: 1 }} />
+                <button
+                  className="link-btn"
+                  title={r.sync === "account" ? "Syncs to your other machines — tap to keep on this machine only" : "Stays on this machine — tap to sync across your machines"}
+                  onClick={() => controller.setCredentialSync(providerId, r.label, r.sync === "account" ? "node" : "account")}
+                >
+                  {r.sync === "account" ? "Syncing" : "This machine only"}
+                </button>
+                <button className="link-btn danger" onClick={() => { controller.removeCredential(providerId, r.label); setTimeout(() => controller.listCredentialRecords(), 400); }}>
+                  Remove
+                </button>
+              </div>
+              <CredentialReadinessRow providerId={providerId} record={r} accountEmail={accountEmail} />
             </div>
           ))}
         </div>
@@ -638,6 +641,74 @@ function ProviderCredentials({ providerId, records, presets }: { providerId: str
       )}
     </div>
   );
+}
+
+/** One credential's redacted provider × machine × agent readiness — who it
+ *  belongs to, whether it syncs across your machines, and whether it's been
+ *  verified to actually work — replacing a plain "Connected" boolean. Derived
+ *  by packages/core/src/credentialReadiness.ts, which never fabricates an
+ *  owner or a verification result it doesn't have. */
+function CredentialReadinessRow({ providerId, record, accountEmail }: { providerId: string; record: CredentialRecordSummary; accountEmail?: string }) {
+  const [testing, setTesting] = useState(false);
+  const [testErr, setTestErr] = useState<string | null>(null);
+  const readiness = deriveCredentialReadiness(record, accountEmail);
+  const verifiedLabel =
+    readiness.verified === "verified" ? `Verified ${relativeTime(readiness.lastVerifiedAt)}`
+    : readiness.verified === "failed" ? `Verification failed ${relativeTime(readiness.lastVerifiedAt)}`
+    : "Not yet verified";
+  return (
+    <div className="cred-readiness" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+      <span className="muted small">{readiness.ownerLabel}</span>
+      <span className="muted small" aria-hidden>·</span>
+      <span className={`chip small ${readiness.verified === "verified" ? "ok" : readiness.verified === "failed" ? "warn" : ""}`}>{verifiedLabel}</span>
+      {readiness.testable && (
+        <button
+          type="button"
+          className="link-btn"
+          disabled={testing}
+          onClick={async () => {
+            setTesting(true);
+            setTestErr(null);
+            try {
+              const result = await controller.testCredential(providerId, record.label);
+              if (!result.ok) setTestErr(testFailureReason(result.reason));
+              controller.listCredentialRecords();
+            } catch (e) {
+              setTestErr(String((e as Error)?.message || e));
+            } finally {
+              setTesting(false);
+            }
+          }}
+        >
+          {testing ? "Testing…" : "Test connection"}
+        </button>
+      )}
+      {testErr && <span className="muted small">{testErr}</span>}
+    </div>
+  );
+}
+
+function testFailureReason(reason?: string): string {
+  switch (reason) {
+    case "unauthorized": return "The provider rejected this credential.";
+    case "expired": return "The credential has expired.";
+    case "refresh_failed": return "Couldn't refresh the OAuth session.";
+    case "not_supported": return "This provider isn't testable yet.";
+    case "not_found": return "No credential to test.";
+    default: return "Couldn't reach the provider.";
+  }
+}
+
+function relativeTime(at?: number): string {
+  if (!at) return "";
+  const deltaSec = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (deltaSec < 60) return "just now";
+  const minutes = Math.round(deltaSec / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
 }
 
 // The active-preset chooser at the top of Keys & OAuth. A preset picks which
@@ -700,6 +771,10 @@ function ProvidersPanel({ state }: { state: AppState }) {
   const [busy, setBusy] = useState(false);
   const [keyErr, setKeyErr] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
+  // The signed-in account's own email, fetched once — used only to label an
+  // account-synced credential's redacted owner (see CredentialReadinessRow).
+  // Never fetched/shown in direct/self-host mode, which has no account.
+  const [accountEmail, setAccountEmail] = useState<string | undefined>(undefined);
   useEffect(() => {
     controller.listProviders();
     controller.listCredentialRecords();
@@ -707,6 +782,7 @@ function ProvidersPanel({ state }: { state: AppState }) {
     // Pull the node list (with each node's plaintext OAuth summary) so the
     // switcher can describe every node's login state up front.
     if (hosted) void controller.refreshNodes();
+    if (hosted) controller.fetchMe().then((me) => setAccountEmail(me?.account?.email)).catch(() => {});
   }, [hosted]);
   // Switching node reconnects the transport to a different daemon, so the
   // provider list open before the switch belongs to the old node — drop back to
@@ -832,7 +908,11 @@ function ProvidersPanel({ state }: { state: AppState }) {
             )}
           </>
         )}
-        <ProviderCredentials providerId={managing.id} records={state.credentialRecords} presets={state.credentialPresets} />
+        {(() => {
+          const defaultRecord = state.credentialRecords.find((r) => r.provider === managing.id && r.label === "default");
+          return defaultRecord ? <CredentialReadinessRow providerId={managing.id} record={defaultRecord} accountEmail={accountEmail} /> : null;
+        })()}
+        <ProviderCredentials providerId={managing.id} records={state.credentialRecords} presets={state.credentialPresets} accountEmail={accountEmail} />
       </div>
     );
   }
@@ -887,7 +967,18 @@ function ProvidersPanel({ state }: { state: AppState }) {
               key={p.id}
               title={p.name || p.id}
               meta={p.configured ? (p.kind === "oauth" ? "OAuth token" : `API key${p.source ? ` · ${p.source}` : ""}`) : "Not connected"}
-              right={p.configured ? <span className="chip ok">Connected</span> : undefined}
+              right={(() => {
+                if (!p.configured) return undefined;
+                // A record in the vault gets the honest, never-overclaiming
+                // readiness label (only "Verified" once an actual test ran);
+                // an env-sourced credential has no record to test, so it keeps
+                // the plain "Connected" chip it always had.
+                const record = state.credentialRecords.find((r) => r.provider === p.id && r.label === "default");
+                const verified = record ? deriveCredentialReadiness(record, accountEmail).verified : undefined;
+                if (verified === "verified") return <span className="chip ok">Verified</span>;
+                if (verified === "failed") return <span className="chip warn">Verification failed</span>;
+                return <span className="chip ok">Connected</span>;
+              })()}
               onClick={() => setManagingId(p.id)}
             />
           ))}
