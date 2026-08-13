@@ -163,7 +163,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .sidebar-head-actions { display: flex; align-items: center; gap: 8px; }
 .brand { font-family: var(--font-serif); font-weight: 500; font-size: 17px; letter-spacing: 0; }
-.sidebar-foot { margin-top: auto; padding: 12px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+.sidebar-foot { margin-top: auto; padding: 8px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
 /* Red dot on the mobile ☰ burger when something needs the user that they
    haven't seen (an agent blocked on approval/question, an unseen finished run,
    a provider needing auth). Replaces the old separate inbox surface — the
@@ -227,12 +227,13 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    alone makes overflow-x compute to auto too (CSS Overflow spec), so any child
    that doesn't shrink to fit would otherwise turn the whole list into a
    sideways-scrollable pane instead of just clipping. */
-.session-list { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 10px; }
-.session-list-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.session-list { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px; }
+.session-list-tools { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .session-search {
-  flex: 1; min-width: 0; width: 100%; padding: 8px 10px;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); color: var(--ink);
+  flex: 1; min-width: 0; width: 100%; padding: 7px 9px;
+  border: 1px solid transparent; border-radius: 8px; background: var(--surface-2); color: var(--ink);
 }
+.session-search:focus { border-color: var(--line-strong); }
 .session-filter { position: relative; flex: none; }
 .session-filter-btn {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
@@ -266,11 +267,11 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-filter-clear { flex: none; border: 0; background: transparent; color: var(--accent); padding: 2px 0; font-size: 12px; }
 .session-list ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .session-item {
-  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
-  padding: 10px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--ink);
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 9px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink);
 }
 .session-item:hover { background: var(--surface-2); }
-.session-item.active { background: var(--surface-3); }
+.session-item.active { background: var(--surface-2); }
 /* Trial-locked row: muted, with a lock glyph where the status dot would be. Still
    clickable — it routes to checkout — so keep a hover affordance. */
 .session-item.locked { opacity: 0.7; }
@@ -436,7 +437,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    backstop with no scrollbar. Giving the box a definite (stretched) width
    instead means children can only overflow *themselves* (the .pre already has
    its own overflow-x:auto), never the parent. */
-.msg.assistant { align-self: stretch; width: 100%; }
+.msg.assistant { align-self: stretch; width: 100%; font-size: 15px; line-height: 1.6; }
 /* Live streaming prose is rendered as plain text (no markdown pass per update);
    preserve its newlines/indentation and wrap long lines so it reads naturally
    until the finished markdown bubble replaces it at message_end. */
@@ -579,8 +580,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 /* ---- Tool activity (grouped summary line -> bottom sheet detail + diff) ---- */
 .tool-group { align-self: stretch; width: 100%; max-width: 760px; }
 .tool-group-line {
-  width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: transparent;
-  color: var(--muted); padding: 2px 0; font: inherit; font-size: 14px; text-align: left;
+  width: 100%; display: flex; align-items: center; gap: 7px; border: 0; background: transparent;
+  color: var(--muted); padding: 2px 0; font: inherit; font-size: 13px; text-align: left;
 }
 .tool-group-line:hover .tool-group-summary, .tool-group-line:hover .tool-chevron { color: var(--ink); }
 .tool-group-summary { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -761,11 +762,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-mark {
   position: relative; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; border-radius: 8px;
-  color: var(--muted);
-  background: var(--surface-3);
+  width: 22px; height: 24px; border-radius: 0;
+  color: var(--muted); background: transparent;
 }
-.session-mark svg { width: 16px; height: 16px; display: block; }
+.session-mark svg { width: 15px; height: 15px; display: block; }
 /* The presence dot. A 2px ring in the sidebar's own surface colour lifts it off
    the tile; colour/shape mirror the old bare .session-dot states. */
 .mark-badge {
@@ -777,7 +777,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .mark-badge.needs-action { background: var(--danger); }
 .mark-badge.failed { background: var(--danger); }
 .mark-badge.saved { background: transparent; border: 1.5px solid var(--muted); }
-.mark-badge.idle { background: var(--line-strong); }
+.mark-badge.idle, .mark-badge.saved { display: none; }
 /* Finished-and-unseen keeps its own colour whichever base state it rode in on,
    so it must come after .idle. */
 .mark-badge.unseen { background: var(--unseen); }
@@ -971,10 +971,10 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 }
 .pill {
   display: inline-flex; align-items: center; gap: 5px; min-width: 0; flex: 0 1 auto;
-  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
-  border-radius: 999px; padding: 5px 11px; font-size: 12px; font-weight: 600;
+  border: 0; background: transparent; color: var(--ink);
+  border-radius: 8px; padding: 5px 8px; font-size: 12px; font-weight: 600;
 }
-.pill:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-3); }
+.pill:hover:not(:disabled) { background: var(--surface-3); }
 .pill:disabled { opacity: 0.5; cursor: default; }
 .pill-glyph { color: var(--accent); flex: none; display: inline-flex; align-items: center; }
 .pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2255,6 +2255,12 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-toggle.on .settings-toggle-knob { transform: translateX(18px); }
 
 @media (max-width: 720px) {
+  .chat-inner { padding: 16px; gap: 12px; }
+  .topbar { padding-inline: 12px; }
+  .topbar-title-row .session-dot.idle, .topbar-title-row .session-dot.saved { display: none; }
+  .agent-pill .pill-label { display: none; }
+  .agent-pill { flex: none; }
+  .composer-meta { gap: 2px; }
   .automations-view-head { align-items: center; padding-bottom: 8px; }
   .automations-view-head-text { min-width: 0; }
   .automations-view-sub { display: none; }
@@ -2629,11 +2635,11 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .icon-btn { border: 0; background: transparent; color: var(--ink); font-size: 20px; }
 /* ---- Sidebar settings gear (single entry point, ChatGPT-style) ---- */
 .settings-gear {
-  display: inline-flex; align-items: center; justify-content: center; position: relative;
-  border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
-  border-radius: 10px; padding: 9px 12px; flex: 1; min-height: 42px; font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: flex-start; gap: 10px; position: relative;
+  width: 100%; border: 0; background: transparent; color: var(--ink);
+  border-radius: 8px; padding: 9px 10px; min-height: 40px; font-size: 13px; font-weight: 550;
 }
-.settings-gear:hover { border-color: var(--line-strong); background: var(--surface-3); }
+.settings-gear:hover { background: var(--surface-2); }
 .settings-gear svg { flex: none; color: var(--muted); }
 .settings-gear:hover svg { color: var(--ink); }
 

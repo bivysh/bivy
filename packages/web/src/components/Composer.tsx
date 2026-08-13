@@ -112,6 +112,22 @@ export function AttachGlyph() {
   );
 }
 
+function AgentGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="8" r="3" /><path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
+    </svg>
+  );
+}
+
+function ModelGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m12 3 1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4L12 3Z" /><path d="m18.5 14 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z" />
+    </svg>
+  );
+}
+
 export function Composer({
   state,
   disabled,
@@ -801,7 +817,7 @@ export function Composer({
                 <span className="pill-glyph"><AttachGlyph /></span>
               </button>
               <button type="button" className="pill agent-pill" onClick={() => setPicker("agent")} title="Agent">
-                <span className="pill-glyph">◎</span>
+                <span className="pill-glyph"><AgentGlyph /></span>
                 <span className="pill-label">{state.currentAgentName || "Agent"}</span>
               </button>
               <button
@@ -811,7 +827,7 @@ export function Composer({
                 disabled={!modelSelectable}
                 title={modelSelectable ? "Model" : "This agent uses its own default model"}
               >
-                <span className="pill-glyph">✦</span>
+                <span className="pill-glyph"><ModelGlyph /></span>
                 <span className="pill-label">{modelLabel}</span>
               </button>
             </div>
