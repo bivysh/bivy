@@ -742,6 +742,10 @@ export interface AppState {
   /** Current node's settings (Settings → Nodes), or null until fetched. */
   nodeSettings: NodeSettings | null;
   providers: ProviderInfo[];
+  activationReadiness: {
+    credential: { configured: boolean; probed: boolean; ok: boolean; reason?: string };
+    repository: { chosen: boolean; probed: boolean; ok: boolean; authed: boolean; reason?: string };
+  } | null;
   providerAuth: ProviderAuth | null;
   /** Labeled credentials per provider (Settings → Keys & OAuth), from `credentials.records`. */
   credentialRecords: CredentialRecordSummary[];
@@ -918,6 +922,7 @@ export function initialState(): AppState {
     draftEphemeralConfig: null,
     nodeSettings: null,
     providers: [],
+    activationReadiness: null,
     providerAuth: null,
     credentialRecords: [],
     credentialPresets: null,
@@ -2880,6 +2885,11 @@ export class SessionStore {
           reposReason: e.reason === "gh-unauthed" || e.reason === "no-token" ? e.reason : null,
           reposLoading: false,
         });
+        return;
+      }
+      case "activation.readiness": {
+        const e = event as any;
+        if (e.credential && e.repository) this.set({ activationReadiness: { credential: e.credential, repository: e.repository } });
         return;
       }
       case "github.connect.status": {

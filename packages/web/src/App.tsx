@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { activationFromState, cancelAutomationRun, fetchAutomationRun, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { deriveActivation, cancelAutomationRun, fetchAutomationRun, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -178,17 +178,13 @@ export function App() {
     });
   }, []);
   const online = state.status === "online";
-  const activation = useMemo(() => activationFromState({
-    status: state.status,
-    runtimes: state.runtimes as unknown as ReadonlyArray<Record<string, unknown>>,
-    providers: state.providers,
-    reposAuthed: state.reposAuthed,
-    transcript: state.transcript.map((entry) => ({
-      role: entry.role,
-      text: typeof entry.text === "string" ? entry.text : "",
-      ...(entry.tool ? { tool: true } : {}),
-    })),
-  }), [state.providers, state.reposAuthed, state.runtimes, state.status, state.transcript]);
+  const activation = useMemo(() => deriveActivation({
+    machineOnline: state.status === "online" ? true : state.status === "offline" ? false : undefined,
+    agentInstalled: state.runtimes.length ? state.runtimes.some((runtime) => String(runtime.status ?? "available") === "available") : undefined,
+    credentialValid: state.activationReadiness ? state.activationReadiness.credential.ok : undefined,
+    repositoryReady: state.activationReadiness ? state.activationReadiness.repository.ok : undefined,
+    agentAnswered: state.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) ? true : undefined,
+  }), [state.activationReadiness, state.runtimes, state.status, state.transcript]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
