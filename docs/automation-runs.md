@@ -23,6 +23,10 @@ The domain separates four records:
   evidence timeline (below) can record a `retry`/`fallback` event with a bounded
   reason and an incremented attempt number.
 
+A one-off Run can be started directly with **New Run** in the app or
+`bivy runs start "<instructions>"`; it does not require or save an Automation
+definition. Instructions are encrypted for the selected Machine before upload.
+
 Each run targets a new session. Routing intent carries the
 node label, runtime, model, ephemeral preference, sandbox tier, and approval
 mode (`never` / `risky` / `always` / `autonomous`, the same vocabulary as

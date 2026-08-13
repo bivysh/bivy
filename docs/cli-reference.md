@@ -15,6 +15,7 @@ get shell completion.
 | See what's running and rejoin it | `bivy sessions` |
 | Rejoin the last session | `bivy resume` |
 | Ask one question and get one answer | `bivy exec "…"` |
+| Delegate one-off unattended work with checks and a Receipt | `bivy runs start "…"` |
 | Continue an existing session non-interactively | `bivy send <id> "…"` |
 | Send a file/image from the agent into the chat | `bivy attach <file>` |
 | Stop a session | `bivy kill <id>` |
@@ -140,6 +141,23 @@ bivy run aider --workspace ~/src/api
 bivy run claude --node work
 bivy run -- npm run my-agent
 ```
+
+### `bivy runs start "<instructions>" [flags]`
+
+Queues a one-off unattended **Run** without saving an Automation definition. The
+instruction is end-to-end encrypted for this node. Unlike `bivy run <agent>`,
+which opens an interactive Session, this command returns after queueing governed
+background work with checks, evidence, and a Receipt.
+
+```bash
+bivy runs start "Fix the flaky auth test and open a PR" --repo acme/api
+bivy runs start "Audit dependency licenses" --agent claude --sandbox read-only
+cat task.md | bivy runs start - --name "Dependency cleanup" --json
+```
+
+Flags: `--name`, `--repo owner/name`, `--agent`, `--model`, `--approval`,
+`--sandbox`, `--max-attempts`, and `--json`. The Run targets the node where the
+command is executed. Remote-machine selection is available in the React app.
 
 ### `bivy agents [--json]`
 

@@ -116,6 +116,31 @@ async function main() {
   const managedWork = await json(port, "GET", "/account/work-items", undefined, token);
   expect(managedWork.body.find((w: any) => w.id === managedRun.body.id)?.maxAttempts === 2, "managed run inherits its hard attempt ceiling");
 
+  // --- One-off Runs: CLI/node and PWA/account paths create queue work without
+  //     leaving an Automation definition behind. ---
+  const oneOffCliRun = await json(port, "POST", "/node/automation-runs", {
+    title: "Inspect flaky tests",
+    body: "bivy-room-v1:node-as-code:opaque-one-off",
+    repo: "acme/api",
+    runtimeId: "pi",
+    maxAttempts: 3,
+  }, nodeToken);
+  expect(oneOffCliRun.status === 201 && !oneOffCliRun.body.definitionId, "node API creates a definition-free one-off Run");
+  const wrongCipherRun = await json(port, "POST", "/node/automation-runs", { title: "No", body: "plaintext" }, nodeToken);
+  expect(wrongCipherRun.status === 400, "node API rejects plaintext one-off instructions");
+  const appRun = await json(port, "POST", "/account/automation-runs", {
+    title: "Update docs",
+    body: "bivy-room-v1:node-as-code:opaque-app-run",
+    label: "bivy/config-runner",
+    sandbox: "read-only",
+  }, token);
+  expect(appRun.status === 201 && appRun.body.triggerKind === "manual" && !appRun.body.definitionId, "account API creates a manual one-off Run");
+  const oneOffWork = await json(port, "GET", "/account/work-items", undefined, token);
+  const cliWork = oneOffWork.body.find((w: any) => w.id === oneOffCliRun.body.id);
+  const pendingNodeWork = await json(port, "GET", "/node/work?labels=bivy%2Fconfig-runner", undefined, nodeToken);
+  const privateCliWork = pendingNodeWork.body.items.find((w: any) => w.id === oneOffCliRun.body.id);
+  expect(cliWork?.repo === "acme/api" && cliWork?.maxAttempts === 3 && privateCliWork?.body === "bivy-room-v1:node-as-code:opaque-one-off", "one-off Run preserves encrypted instructions and bounded routing");
+
   // --- Webhook-triggered automation *definition* (runs the operator's own
   //     pre-configured routing/agent/model/sandbox + E2E template) ---
   const auto = await json(port, "POST", "/account/automations", {

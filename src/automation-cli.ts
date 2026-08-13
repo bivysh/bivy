@@ -31,6 +31,11 @@ Commands:
   test [path] --event <file>  Simulate an event and explain the first match
   apply [path] [--prune]      Encrypt instructions and reconcile the control plane
 
+One-off Run flags (used by 'bivy runs start'):
+  --name <title>  --repo <owner/name>  --agent <id>  --model <id>
+  --approval <mode>  --sandbox <tier>  --max-attempts <1-10>  --json
+  Pass '-' as the instructions to read them from stdin.
+
 Default path: ${DEFAULT_AUTOMATION_CONFIG_PATH}
 List, trigger, and apply require an enrolled node ('bivy setup'). Instructions
 are encrypted on this machine before upload; the control plane receives
@@ -166,6 +171,49 @@ async function main() {
       console.log(`Started ${automation.name}`);
       console.log(`  run ${run.id}`);
       if (run.status) console.log(`  status ${run.status}`);
+    }
+    return;
+  }
+
+  if (command === "start-run") {
+    if (args.includes("-h") || args.includes("--help")) usage();
+    const valuedFlags = new Set(["--name", "--repo", "--agent", "--model", "--approval", "--sandbox", "--max-attempts"]);
+    const positional: string[] = [];
+    for (let i = 0; i < args.length; i += 1) {
+      const arg = args[i]!;
+      if (valuedFlags.has(arg)) { i += 1; continue; }
+      if (arg.startsWith("--") && arg.includes("=")) continue;
+      if (arg === "--json") continue;
+      positional.push(arg);
+    }
+    let instructions = positional.join(" ").trim();
+    if (instructions === "-") instructions = fs.readFileSync(0, "utf8").trim();
+    if (!instructions) throw new Error("instructions are required (or pass '-' to read stdin)");
+    const appDir = appDataDir();
+    const relay = relayConfig(appDir);
+    const identity = NodeIdentity.load(appDir);
+    const pairing = PairingStore.load(appDir, relay.e2eKey);
+    const approvalMode = value(args, "--approval") ?? "risky";
+    const sandbox = value(args, "--sandbox") ?? "workspace-write";
+    const maxAttempts = Number(value(args, "--max-attempts") ?? 2);
+    const title = (value(args, "--name") ?? instructions.split(/\r?\n/, 1)[0] ?? "One-off Run").slice(0, 120);
+    const created = await request<{ id: string; status: string }>(relay, "/node/automation-runs", {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        body: `bivy-room-v1:${identity.nodeId}:${seal(pairing.roomKey(), instructions)}`,
+        repo: value(args, "--repo"),
+        runtimeId: value(args, "--agent"),
+        model: value(args, "--model"),
+        approvalMode,
+        sandbox,
+        maxAttempts,
+      }),
+    });
+    if (args.includes("--json")) console.log(JSON.stringify(created, null, 2));
+    else {
+      console.log(`Queued Run ${created.id} on ${identity.name}.`);
+      console.log(`Status: ${created.status}`);
     }
     return;
   }
