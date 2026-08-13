@@ -96,10 +96,14 @@ bivy completions fish > ~/.config/fish/completions/bivy.fish
 
 ### `bivy run [agent] [flags] [-- command…]`
 
-Launches an agent inside a PTY owned by the node. The agent's real TUI runs in
-your terminal, but because the node owns the PTY the same live session is
-visible and drivable from the web/PWA app, and resumable later with
+By default, launches an agent inside a PTY owned by the node. The agent's real
+TUI runs in your terminal, but because the node owns the PTY the same live
+session is visible and drivable from the web/PWA app, and resumable later with
 `bivy resume`.
+
+With `--chat`, creates a governed chat session through the same runtime path as
+the web/PWA app and opens that session in the app. It does not launch the
+agent's native TUI.
 
 Built-in runnable agent ids: `pi`, `claude`, `openclaw`, `codex`, `opencode`,
 `aider`, `hermes`, `goose`, `gemini`, `qwen`, `cline`, `crush`, `cursor`,
@@ -115,8 +119,10 @@ Flags (consumed by Bivy; everything else is forwarded to the agent):
 
 | Flag | Meaning |
 | --- | --- |
+| `--chat` | Start a governed app/chat session instead of a native PTY |
+| `--no-open` | With `--chat`, create the session and print its app URL without launching a browser |
 | `--name <label>` | Session label shown in `bivy sessions` and the app |
-| `--model <model>` | Recorded as run-terminal metadata **and** prepended to the agent's args as `--model <model>`. Not injected for the `-- <command>` form |
+| `--model <model>` | Select the governed session model with `--chat`; otherwise record run-terminal metadata and prepend `--model <model>` to the agent's args. Not injected for the `-- <command>` form |
 | `--node <name>` | Start the session on another registered node instead (see `bivy nodes`) |
 | `--workspace <dir>` | Start in an existing directory. Must exist |
 | `--clone` | Clone the current folder's `origin` remote (or the local checkout if there is no remote) into `<data-dir>/workspaces/<repo>-<rand>` and start there |
@@ -125,7 +131,10 @@ Flags (consumed by Bivy; everything else is forwarded to the agent):
 Everything after a bare `--` is passed through untouched.
 
 `--clone` and `--workspace` cannot be combined with `--node` — the checkout
-would only exist on the local machine.
+would only exist on the local machine. `--chat` currently targets the local node
+and cannot be combined with `--node`. Native agent arguments and the raw
+`-- <command>` form are not accepted with `--chat`, because governed runtimes
+select their own protocol or headless launch arguments.
 
 For `claude`, Bivy pins a session UUID at launch (`--session-id`) unless you
 already passed `--session-id`, `--resume`, `-r`, `-c`, or `--continue`. It
@@ -133,6 +142,8 @@ prints the pinned id so you can resume in a plain terminal later.
 
 ```bash
 bivy run claude
+bivy run claude --chat
+bivy run codex --chat --no-open --name "auth refactor"
 bivy run codex --name "auth refactor"
 bivy run gemini --model gemini-2.5-pro
 bivy run claude --clone git@github.com:acme/api.git

@@ -922,9 +922,10 @@ async function resolveRunSpec(agentId, extraArgs) {
   return { spec: { agent: id, label: agent.label, command, args: [...(agent.args ?? []), ...extraArgs] } };
 }
 
-// Pull bivy's own `--name`/`--model` flags (space or `=` form) out of the run
-// args so they aren't blindly forwarded. Only honored before a `--` separator,
-// past which everything is the raw command the user asked to run.
+// Pull bivy's own run flags out of the args so they aren't blindly forwarded.
+// Only honored before a `--` separator, past which everything is the raw command
+// the user asked to run. `--chat` selects the governed app-session path instead
+// of the native PTY path; `--no-open` keeps that path headless after creation.
 // Does a token look like a git remote (URL, scp-style, owner/repo, or a path)
 // rather than an agent id? Lets `--clone <remote>` disambiguate from bare
 // `--clone` (= current folder's repo) without a required `=`.
@@ -936,10 +937,14 @@ function looksLikeRemote(value) {
 function extractRunFlags(args) {
   const rest = [];
   let name, model, node, workspace;
+  let chat = false;
+  let noOpen = false;
   let clone; // undefined = no clone; true = current repo; string = explicit remote
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--") { rest.push(...args.slice(i)); break; }
+    if (a === "--chat") { chat = true; continue; }
+    if (a === "--no-open") { noOpen = true; continue; }
     if (a === "--name" && args[i + 1] !== undefined) { name = args[++i]; continue; }
     if (a.startsWith("--name=")) { name = a.slice("--name=".length); continue; }
     if (a === "--model" && args[i + 1] !== undefined) { model = args[++i]; continue; }
@@ -952,7 +957,7 @@ function extractRunFlags(args) {
     if (a === "--clone") { clone = looksLikeRemote(args[i + 1]) ? args[++i] : true; continue; }
     rest.push(a);
   }
-  return { name: name?.trim() || undefined, model: model?.trim() || undefined, node: node?.trim() || undefined, workspace: workspace?.trim() || undefined, clone, rest };
+  return { name: name?.trim() || undefined, model: model?.trim() || undefined, node: node?.trim() || undefined, workspace: workspace?.trim() || undefined, chat, noOpen, clone, rest };
 }
 
 // A safe-ish workspace dir name from a remote or path (basename minus .git).
@@ -1793,11 +1798,66 @@ complete -c bivy -n '__fish_seen_subcommand_from run' -a '${agents.join(" ")}'`)
 // flag on top of it.
 async function cmdRun(args = []) {
   if (!(await ensureDeps())) process.exit(1);
-  const { name, model, node, workspace, clone, rest } = extractRunFlags(args);
+  const { name, model, node, workspace, chat, noOpen, clone, rest } = extractRunFlags(args);
   // Bare `bivy` (empty rest) resolves to the configured default agent; an
   // explicit `bivy run <agent>` keeps that agent verbatim.
   const [agentIdArg, ...extraArgs] = rest;
   const agentId = agentIdArg || resolveDefaultAgent();
+
+  if (chat) {
+    if (node) {
+      console.error(c.red("--chat currently starts a governed session on this node; it can't be combined with --node."));
+      process.exit(1);
+      return;
+    }
+    if (agentId === "--" || extraArgs.length) {
+      console.error(c.red("--chat starts a governed agent integration and does not accept native agent arguments or the raw '-- <command>' form."));
+      process.exit(1);
+      return;
+    }
+    let requestedWorkspace;
+    try { requestedWorkspace = resolveWorkspaceDir({ clone, workspace }); }
+    catch (error) { console.error(c.red(error?.message || String(error))); process.exit(1); return; }
+    const config = loadConfig();
+    // Preserve `bivy run`'s cwd contract: from inside a git checkout, a chat run
+    // targets that checkout; elsewhere it uses the node's configured workspace.
+    const sessionWorkspace = requestedWorkspace || defaultRunWorkspace(config);
+    if (!(await ensureNodeRunning(config))) {
+      console.error(c.red(`Could not start the Bivy node at ${url(config)}.`));
+      process.exit(1);
+      return;
+    }
+    try {
+      const created = await localApi(config, "/api/session", {
+        method: "POST",
+        body: JSON.stringify({ agent: agentId, ...(model ? { model: { provider: "", id: model } } : {}), ...(sessionWorkspace ? { workspace: sessionWorkspace } : {}) }),
+      });
+      if (name) {
+        await localApi(config, "/api/sessions/rename", {
+          method: "POST",
+          body: JSON.stringify({ sessionId: created.id, name }),
+        });
+      }
+      const sessionPath = `/sessions/${encodeURIComponent(created.id)}`;
+      const remote = await openRemoteApp({ open: !noOpen, remotePath: sessionPath });
+      console.log(c.green(`Started chat session ${created.id} (${created.agentName || created.runtimeId || agentId}).`));
+      if (remote && (noOpen || !canOpenBrowser())) console.log(`Open it in the Bivy app: ${c.cyan(remote.openUrl)}`);
+      else if (!remote) {
+        console.log(c.yellow("Remote app access is not configured on this node."));
+        console.log(`Run ${c.cyan("bivy relay:setup")}, then open session ${c.cyan(created.id)} in the app.`);
+      }
+      return;
+    } catch (error) {
+      console.error(c.red(`Could not start chat session: ${error?.message || String(error)}`));
+      process.exit(1);
+      return;
+    }
+  }
+  if (noOpen) {
+    console.error(c.red("--no-open is only valid together with --chat."));
+    process.exit(1);
+    return;
+  }
 
   // A cloned/explicit workspace lives on THIS machine, so it only applies to the
   // local node. For a remote --node run the checkout would need to be made there.
@@ -4573,9 +4633,10 @@ async function main() {
       // args (including its own --help) pass straight through to it — e.g.
       // 'bivy run claude --help' must show Claude's help, not bivy's.
       if (args[0] === "-h" || args[0] === "--help") {
-        console.log(`Usage: bivy run <agent> [--name <label>] [--model <model>] [--node <name>] [--clone [remote]] [--workspace <dir>] | -- <command>
+        console.log(`Usage: bivy run <agent> [--chat [--no-open]] [--name <label>] [--model <model>] [--node <name>] [--clone [remote]] [--workspace <dir>] | -- <command>
 
 Run a native agent (real CLI/TUI) as a relay-visible session.
+Use --chat to start the governed session used by the app instead; --no-open prints its URL without launching a browser.
 Agents: ${[...AGENT_INTEGRATIONS.keys()].join(", ")}, or -- <command> for anything else.
 An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
         break;

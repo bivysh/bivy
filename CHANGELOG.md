@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `bivy run <agent> --chat` starts a governed session through the same runtime
+  path as the web/PWA app and opens it directly; `--no-open` creates it without
+  launching a browser and prints the session URL instead.
 - Declarative agent plugins: `bivy plugin init|validate|doctor|test|install|list|remove`
   scaffolds and installs strict `bivy.sh/v1alpha1` manifests from local files.
   Plugins can contribute process or ACP agents to the CLI and web runtime catalog
