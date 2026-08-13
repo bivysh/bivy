@@ -7,6 +7,7 @@
  * apply only sends the normalized result after all errors have been reported.
  */
 import { parse as parseYaml } from "yaml";
+import { matchFirst } from "./automation/index.js";
 
 export const AUTOMATION_CONFIG_VERSION = 1 as const;
 export const DEFAULT_AUTOMATION_CONFIG_PATH = ".bivy/automations.yaml";
@@ -229,45 +230,15 @@ export function parseAutomationConfig(text: string): AutomationConfigResult {
   return { ok: errors.length === 0, config: errors.length ? undefined : { version: 1, automations: entries }, errors, warnings };
 }
 
-function listMatches(filter: string[] | undefined, values: string[], prefix = false): boolean {
-  if (!filter?.length) return true;
-  const actual = values.map((v) => v.toLowerCase());
-  return filter.some((f) => actual.some((v) => v === f.toLowerCase() || (prefix && v.startsWith(`${f.toLowerCase()}/`))));
-}
-
-function githubRuleMatches(rule: AutomationEventRule, event: SimulationEvent): boolean {
-  if (rule.event !== event.event) return false;
-  if (!listMatches(rule.actions, event.action ? [event.action] : [])) return false;
-  if (rule.event === "workflow_run") {
-    const conclusions = rule.conclusions?.length ? rule.conclusions : ["failure", "timed_out", "startup_failure"];
-    return listMatches(conclusions, event.conclusion ? [event.conclusion] : [])
-      && listMatches(rule.workflows, event.workflow ? [event.workflow] : []);
-  }
-  if (rule.mention) {
-    if (!event.mention) return false;
-    return !rule.labels?.length || listMatches(rule.labels, event.labels ?? [], true);
-  }
-  return listMatches(rule.labels?.length ? rule.labels : ["bivy"], event.labels ?? [], true);
-}
-
+/**
+ * Explain which automation would fire for a fixture, without running anything.
+ * Delegates to the shared evaluator (src/automation) so config-as-code `test`
+ * uses the exact same first-match contract as live control-plane intake —
+ * see docs/automation-evaluator.md.
+ */
 export function simulateAutomation(config: AutomationConfig, event: SimulationEvent): { matched?: AutomationConfigEntry; reasons: Array<{ id: string; matched: boolean; reason: string }> } {
-  const reasons: Array<{ id: string; matched: boolean; reason: string }> = [];
-  for (const entry of config.automations) {
-    if (!entry.enabled) { reasons.push({ id: entry.id, matched: false, reason: "disabled" }); continue; }
-    if (entry.trigger !== event.kind) { reasons.push({ id: entry.id, matched: false, reason: `trigger is ${entry.trigger}` }); continue; }
-    const allowedRepos = entry.repos?.length ? entry.repos : entry.repo ? [entry.repo] : undefined;
-    if (allowedRepos?.length && (!event.repo || !listMatches(allowedRepos, [event.repo]))) { reasons.push({ id: entry.id, matched: false, reason: "repository is not allowed" }); continue; }
-    if (event.kind === "github") {
-      const rules = entry.on?.length ? entry.on : [{ event: "issues" as const, labels: entry.labels }, { event: "issue_comment" as const, mention: true }];
-      if (!rules.some((rule) => githubRuleMatches(rule, event))) { reasons.push({ id: entry.id, matched: false, reason: "no event rule matched" }); continue; }
-    }
-    if (event.kind === "linear" && !event.mention && !listMatches(entry.labels?.length ? entry.labels : ["bivy"], event.labels ?? [], true)) {
-      reasons.push({ id: entry.id, matched: false, reason: "labels do not match" }); continue;
-    }
-    reasons.push({ id: entry.id, matched: true, reason: "first matching enabled automation" });
-    return { matched: entry, reasons };
-  }
-  return { reasons };
+  const { matched, trail } = matchFirst(config.automations, event);
+  return { matched, reasons: trail };
 }
 
 export function parseSimulationEvent(text: string): SimulationEvent {
