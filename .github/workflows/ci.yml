@@ -71,6 +71,7 @@ jobs:
               - 'bin/**'
               - 'test/**'
               - 'scripts/**'
+              - 'certification/**'
             relay:
               - *common
               - 'services/relay/**'
@@ -184,6 +185,29 @@ jobs:
       # Exercise the emitted node RELEASE build and curated standalone package,
       # which catches cross-boundary imports that tsc --noEmit can miss.
       - run: pnpm run build:release
+
+  # The Supported promise is a release gate of its own. Run deterministic pinned
+  # fixtures on every certified OS family; no live credentials or latest-version
+  # resolution is allowed in this lane.
+  agent-certification:
+    needs: changes
+    if: inputs.force_all || needs.changes.outputs.root == 'true'
+    name: Pinned agent certification (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.19.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run certification:check
+      - run: pnpm exec tsx test/agent-certification.test.ts
 
   # Install the exact curated npm tarball into a fresh consumer project on both
   # supported desktop OS families. This catches release-only dependency/audit,
@@ -331,6 +355,7 @@ jobs:
       - root-quality
       - root-tests
       - root-builds
+      - agent-certification
       - release-consumer
       - browser
       - docs-links

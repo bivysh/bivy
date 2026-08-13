@@ -1,0 +1,37 @@
+name: Agent certification live credentials
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent_ids:
+        description: 'Explicit comma-separated runtime ids to probe (for example: codex-approvals,pi)'
+        required: true
+        type: string
+      confirm_live:
+        description: 'Type LIVE to permit credential-bearing agent probes'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    if: inputs.confirm_live == 'LIVE'
+    environment: agent-certification-live
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.19.0'
+      # Secrets are injected only into this manually approved environment. The
+      # runner reports pass/fail and redacts command output by construction.
+      - run: node scripts/certification.mjs --live
+        env:
+          BIVY_CERTIFICATION_LIVE: '1'
+          BIVY_LIVE_AGENT_IDS: ${{ inputs.agent_ids }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
