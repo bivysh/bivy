@@ -40,3 +40,15 @@ test("ephemeral-only routing reports credential readiness instead of failing lat
   expect(routing).toContain('hosted.credential !== "none"');
   expect(routing).toContain("GitHub/model sign-ins available to the fresh runner");
 });
+
+test("connecting an existing GitHub App waits for and reports the machine result", async () => {
+  const [sheet, controller] = await Promise.all([
+    read("../../packages/web/src/components/WorkQueueSetupSheet.tsx"),
+    read("../../packages/web/src/store/controller.ts"),
+  ]);
+  expect(sheet).toContain("await controller.githubAppConnectExisting");
+  expect(sheet).toContain("App connected.</strong> This machine now holds the key");
+  expect(sheet).toContain('role="alert">{ceHostedError}');
+  expect(controller).toContain("await this.awaitAck({");
+  expect(controller).toContain('kind: "github.app.connect-existing"');
+});

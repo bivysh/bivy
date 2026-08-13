@@ -97,6 +97,7 @@ export function WorkQueueSetupSheet({
   const [ceHostedBusy, setCeHostedBusy] = useState(false);
   const [ceHostedResult, setCeHostedResult] = useState<{ webhookUrl: string; webhookSecret: string } | null>(null);
   const [ceHostedError, setCeHostedError] = useState("");
+  const [ceNodeConnected, setCeNodeConnected] = useState(false);
   const [ceApp, setCeApp] = useState<GithubAppEntry | null>(null);
   const [addAppOpen, setAddAppOpen] = useState(false);
   const appEditorRef = useRef<HTMLDivElement>(null);
@@ -192,19 +193,22 @@ export function WorkQueueSetupSheet({
   }
 
   async function connectExistingApp() {
-    if (state.currentNodeId) {
-      controller.githubAppConnectExisting({ appId: ceAppId.trim(), privateKeyPem: cePem.trim() });
-      return;
-    }
     setCeHostedBusy(true);
     setCeHostedError("");
+    setCeNodeConnected(false);
+    setCeHostedResult(null);
     try {
-      const result = await controller.connectHostedGithubApp({
-        appId: ceAppId.trim(),
-        privateKeyPem: cePem.trim(),
-        ...(ceInstallationId.trim() ? { installationId: ceInstallationId.trim() } : {}),
-      });
-      setCeHostedResult({ webhookUrl: result.webhookUrl, webhookSecret: result.webhookSecret });
+      if (state.currentNodeId) {
+        await controller.githubAppConnectExisting({ appId: ceAppId.trim(), privateKeyPem: cePem.trim() });
+        setCeNodeConnected(true);
+      } else {
+        const result = await controller.connectHostedGithubApp({
+          appId: ceAppId.trim(),
+          privateKeyPem: cePem.trim(),
+          ...(ceInstallationId.trim() ? { installationId: ceInstallationId.trim() } : {}),
+        });
+        setCeHostedResult({ webhookUrl: result.webhookUrl, webhookSecret: result.webhookSecret });
+      }
       setCePem("");
       await refresh();
       onChanged?.();
@@ -261,6 +265,9 @@ export function WorkQueueSetupSheet({
     setCeApp(entry ?? null);
     setCeAppId(entry?.appId ?? "");
     setCePem("");
+    setCeHostedError("");
+    setCeNodeConnected(false);
+    setCeHostedResult(null);
     setShowExisting(true);
     setAddAppOpen(true);
   }
@@ -472,7 +479,12 @@ export function WorkQueueSetupSheet({
                       >
                         {phase === "completing" || ceHostedBusy ? "Connecting…" : state.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
                       </button>
-                      {ceHostedError && <div className="banner error inline">{ceHostedError}</div>}
+                      {ceHostedError && <div className="banner error inline" role="alert">{ceHostedError}</div>}
+                      {ceNodeConnected && (
+                        <div className="autom-success" role="status">
+                          <strong>App connected.</strong> This machine now holds the key and can claim GitHub work.
+                        </div>
+                      )}
                       {ceHostedResult && (
                         <div className="autom-success" role="status">
                           <strong>Hosted App ready.</strong> Set its webhook URL to <code>{ceHostedResult.webhookUrl}</code> and secret to <code>{ceHostedResult.webhookSecret}</code>.
@@ -671,7 +683,12 @@ export function WorkQueueSetupSheet({
                           >
                             {phase === "completing" || ceHostedBusy ? "Connecting…" : state.currentNodeId ? "Connect app to this machine" : "Connect app for isolated runs"}
                           </button>
-                          {ceHostedError && <div className="banner error inline">{ceHostedError}</div>}
+                          {ceHostedError && <div className="banner error inline" role="alert">{ceHostedError}</div>}
+                          {ceNodeConnected && (
+                            <div className="autom-success" role="status">
+                              <strong>App connected.</strong> This machine now holds the key and can claim GitHub work.
+                            </div>
+                          )}
                           {ceHostedResult && (
                             <div className="autom-success" role="status">
                               <strong>Hosted App ready.</strong> Set its webhook URL to <code>{ceHostedResult.webhookUrl}</code> and secret to <code>{ceHostedResult.webhookSecret}</code>.
