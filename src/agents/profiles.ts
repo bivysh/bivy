@@ -200,6 +200,11 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
       flag: "--model",
       insertAt: 1,
       models: [
+        // OpenCode's own gateway ("opencode Zen") serves the openai-codex frontier
+        // line (`opencode/gpt-5.6-sol`) without a separate provider key — the honest
+        // default to surface first. The provider-scoped ids below resolve once the
+        // matching provider is configured in OpenCode.
+        { id: "opencode/gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "opencode" },
         { id: "anthropic/claude-sonnet-4-5", name: "Claude Sonnet 4.5", provider: "anthropic" },
         { id: "openai/gpt-5", name: "GPT-5", provider: "openai" },
         { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google" },
