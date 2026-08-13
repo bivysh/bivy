@@ -32,7 +32,6 @@ import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
-import { ReadinessChecklist } from "./components/ReadinessChecklist.js";
 import { buildInboxItems } from "./components/Inbox.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
