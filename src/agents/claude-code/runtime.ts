@@ -864,7 +864,7 @@ class ClaudeSession implements RuntimeSession {
     // Start from the process env (the SDK's `env` replaces, not merges), layer in
     // any configured extras, then the shared-vault credential so one login at the
     // Bivy level serves this agent too. The vault wins over an ambient key.
-    const env: Record<string, string> = { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env } as Record<string, string>;
+    const env: Record<string, string> = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env } as Record<string, string>;
     const credEnv = await this.resolveCredentialEnv();
     Object.assign(env, credEnv);
     // Let the agent's own shell surface a file into the chat via `bivy attach`
@@ -1253,7 +1253,7 @@ class ClaudeSession implements RuntimeSession {
     // reach the SDK, surface an actionable message instead of letting it spawn
     // and fail its first request with an opaque `401 Unauthorized`.
     if (!this.query) {
-      const env = { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(() => ({}))) } as Record<string, string>;
+      const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv().catch(() => ({}))) } as Record<string, string>;
       const preflightError = anthropicCredentialPreflight(env);
       if (preflightError) {
         this.messages.push({ role: "user", content: hasImages ? content : prompt, timestamp: Date.now() });
@@ -1363,7 +1363,7 @@ class ClaudeSession implements RuntimeSession {
     const prompt = firstPrompt.trim();
     if (!prompt) return undefined;
 
-    const env = { ...process.env, ...depCacheEnv(), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv()) } as Record<string, string>;
+    const env = { ...process.env, ...depCacheEnv(this.cwd), ...this.runtimeOptions.env, ...(await this.resolveCredentialEnv()) } as Record<string, string>;
     const apiKey = env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN;
     if (!apiKey) return undefined;
 
