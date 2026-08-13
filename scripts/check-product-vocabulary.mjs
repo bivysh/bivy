@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { spawnSync } from "node:child_process";
 
-const base = process.env.BIVY_VOCAB_BASE || "HEAD^";
-const diff = spawnSync("git", ["diff", "--unified=0", "--no-ext-diff", base, "HEAD", "--", "packages/web/src", "bin", "README.md", "docs"], {
-  encoding: "utf8",
-});
+let base = process.env.BIVY_VOCAB_BASE || "HEAD^";
+const runDiff = () => spawnSync("git", ["diff", "--unified=0", "--no-ext-diff", base, "HEAD", "--", "packages/web/src", "bin", "README.md", "docs"], { encoding: "utf8" });
+let diff = runDiff();
+// actions/checkout intentionally uses a one-commit clone. Fetch only the named
+// event base when its parent object is absent; no workflow permission is needed.
+if (diff.status !== 0 && process.env.GITHUB_BASE_REF) {
+  const fetched = spawnSync("git", ["fetch", "--no-tags", "--depth=1", "origin", process.env.GITHUB_BASE_REF], { encoding: "utf8" });
+  if (fetched.status === 0) {
+    base = "FETCH_HEAD";
+    diff = runDiff();
+  }
+}
 if (diff.status !== 0) {
   process.stderr.write(diff.stderr || `Could not compare customer copy with ${base}.\n`);
   process.exit(2);
