@@ -582,12 +582,25 @@ export function Composer({
     modelManagedByAgent: !modelSelectable,
     protection: sandboxLabel || state.draftSandbox || undefined,
   });
+  const firstIsolatedRun = isDraft && Boolean(state.draftEphemeralConfig);
+  const starterTask = "Inspect this repository and explain how to run its tests. Do not change files.";
 
   return (
     <>
       {isDraft && (
         <div className="composer-first-session" title="A first session decides just four things: machine, repository, agent/model, and protection.">
           Starting on <span className="fs-decisions">{firstSessionLine}</span>
+        </div>
+      )}
+      {firstIsolatedRun && !text.trim() && attachments.length === 0 && (
+        <div className="composer-starter" role="note">
+          <div>
+            <strong>Start with a safe read-only task</strong>
+            <span>Verify the Machine, repository, agent, and model before asking it to edit code.</span>
+          </div>
+          <button type="button" className="btn small" onClick={() => setText(starterTask)}>
+            Use starter task
+          </button>
         </div>
       )}
       {isDraft && (
@@ -724,7 +737,7 @@ export function Composer({
           <textarea
             ref={taRef}
             className="composer-input"
-            placeholder={disabled ? disabledHint || "Connecting…" : "Message your agent…"}
+            placeholder={disabled ? disabledHint || "Connecting…" : firstIsolatedRun ? "Describe your first task…" : "Message your agent…"}
             rows={1}
             hidden={Boolean(recording)}
             value={text}
@@ -854,7 +867,8 @@ export function Composer({
                 type="submit"
                 className="composer-btn send"
                 disabled={!canSend}
-                title={working ? "Queue follow-up" : accountMode ? "Send — hold to schedule for later" : "Send"}
+                title={working ? "Queue follow-up" : firstIsolatedRun ? "Launch Machine and send task" : accountMode ? "Send — hold to schedule for later" : "Send"}
+                aria-label={firstIsolatedRun ? "Launch Machine and send task" : working ? "Queue follow-up" : "Send"}
                 onPointerDown={(e) => {
                   if (e.button !== 0) return;
                   startLongPress();

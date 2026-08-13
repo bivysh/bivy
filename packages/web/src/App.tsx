@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { cancelAutomationRun, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
+import { activationFromState, cancelAutomationRun, fetchAutomationRun, recordProductMetric, retryAutomationRun, type AccountAutomationRun, type GithubQueueItem } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -32,6 +32,7 @@ import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
+import { ReadinessChecklist } from "./components/ReadinessChecklist.js";
 import { buildInboxItems } from "./components/Inbox.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
@@ -121,6 +122,11 @@ export function App() {
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
   const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
+  const activation = useMemo(() => activationFromState(state), [state]);
+  // Keep first-use readiness in the customer journey, not in Settings. Scope it
+  // to an isolated Machine so established workstation Sessions never acquire an
+  // onboarding panel; it disappears only after a real assistant response.
+  const showFirstRunReadiness = Boolean(state.currentNodeId?.startsWith("eph-") && !activation.activated);
   const inboxItems = useMemo(() => buildInboxItems({
     sessions: state.sessions,
     approvals: state.approvals,
@@ -667,6 +673,14 @@ export function App() {
           />
         ) : (
           <>
+            {showFirstRunReadiness && (
+              <ReadinessChecklist
+                activation={activation}
+                onRemediate={{
+                  authenticate_credential: () => openSettings("providers"),
+                }}
+              />
+            )}
             <ChatView
               entries={state.transcript}
               working={state.working}
