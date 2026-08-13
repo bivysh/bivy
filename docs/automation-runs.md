@@ -26,6 +26,10 @@ The domain separates four records:
 A one-off Run can be started directly with **New Run** in the app or
 `bivy runs start "<instructions>"`; it does not require or save an Automation
 definition. Instructions are encrypted for the selected Machine before upload.
+Operators and other agents can probe lifecycle metadata with `bivy runs list`,
+`bivy runs status <id>`, or block on a handoff with `bivy runs wait <id>`. These
+surfaces expose bounded status/evidence/output references, not instructions or
+transcripts.
 
 Each run targets a new session. Routing intent carries the
 node label, runtime, model, ephemeral preference, sandbox tier, and approval

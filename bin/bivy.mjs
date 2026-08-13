@@ -4703,11 +4703,27 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       if (!(await ensureDeps())) process.exit(1);
       const [action, ...runArgs] = args;
       if (!action || ["-h", "--help", "help"].includes(action)) {
-        console.log('Usage: bivy runs start "<instructions>" [--name <title>] [--repo <owner/name>] [--agent <id>] [--model <id>] [--approval <mode>] [--sandbox <tier>] [--max-attempts <n>] [--json]\n\nStart a one-off unattended Run. Unlike `bivy run`, this queues governed background work with checks, evidence, and a Receipt.');
+        console.log(`Usage: bivy runs <command> [options]
+
+  start "<instructions>"  Queue a one-off unattended Run
+  list                    List recent Runs and current status (--limit, --json)
+  status <id>             Inspect status, evidence, and output references (--json)
+  wait <id>               Wait for completion (--interval, --timeout, --json)
+
+Unlike 'bivy run', these commands operate on governed background Runs with checks, evidence, and Receipts.`);
         break;
       }
-      if (action !== "start" && action !== "create") { console.error(c.red(`Unknown runs action: ${action}`)); process.exit(1); break; }
-      process.exit(await run(nodeBin, [...nodeScriptArgs(automationEntry), "start-run", ...runArgs], { cwd: process.cwd(), env: process.env }));
+      const internalAction = action === "start" || action === "create"
+        ? "start-run"
+        : action === "list" || action === "ls"
+          ? "runs-list"
+          : action === "status" || action === "get" || action === "show"
+            ? "runs-status"
+            : action === "wait" || action === "watch"
+              ? "runs-wait"
+              : "";
+      if (!internalAction) { console.error(c.red(`Unknown runs action: ${action}`)); process.exit(1); break; }
+      process.exit(await run(nodeBin, [...nodeScriptArgs(automationEntry), internalAction, ...runArgs], { cwd: process.cwd(), env: process.env }));
       break;
     }
     case "automation":
