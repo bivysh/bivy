@@ -122,11 +122,6 @@ export function App() {
   // Feeds the sidebar's exception hints and the run pill's outcome. Declared up
   // here (not by activeSession below) so the hook stays above any early return.
   const runEvidence = useMemo(() => indexRunEvidence(githubQueue), [githubQueue]);
-  const activation = useMemo(() => activationFromState(state), [state]);
-  // Keep first-use readiness in the customer journey, not in Settings. Scope it
-  // to an isolated Machine so established workstation Sessions never acquire an
-  // onboarding panel; it disappears only after a real assistant response.
-  const showFirstRunReadiness = Boolean(state.currentNodeId?.startsWith("eph-") && !activation.activated);
   const inboxItems = useMemo(() => buildInboxItems({
     sessions: state.sessions,
     approvals: state.approvals,
@@ -183,6 +178,17 @@ export function App() {
     });
   }, []);
   const online = state.status === "online";
+  const activation = useMemo(() => activationFromState({
+    status: state.status,
+    runtimes: state.runtimes as unknown as ReadonlyArray<Record<string, unknown>>,
+    providers: state.providers,
+    reposAuthed: state.reposAuthed,
+    transcript: state.transcript.map((entry) => ({
+      role: entry.role,
+      text: typeof entry.text === "string" ? entry.text : "",
+      ...(entry.tool ? { tool: true } : {}),
+    })),
+  }), [state.providers, state.reposAuthed, state.runtimes, state.status, state.transcript]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
@@ -634,6 +640,19 @@ export function App() {
           </div>
         )}
 
+        {!state.activeSessionId && state.transcript.length === 0 && (
+          <ReadinessChecklist
+            activation={activation}
+            onRemediate={{
+              connect_machine: () => openSettings("nodes"),
+              install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
+              authenticate_credential: () => openSettings("providers"),
+              grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
+              run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
+            }}
+          />
+        )}
+
         {needsNode && (
           <div className="connect-runner-scroll">
             <ConnectRunner
@@ -675,14 +694,6 @@ export function App() {
           />
         ) : (
           <>
-            {showFirstRunReadiness && (
-              <ReadinessChecklist
-                activation={activation}
-                onRemediate={{
-                  authenticate_credential: () => openSettings("providers"),
-                }}
-              />
-            )}
             <ChatView
               entries={state.transcript}
               working={state.working}
