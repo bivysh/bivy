@@ -33,6 +33,45 @@ const flyExec: ExecFn = async (req) => {
   return { status: 200, body: { id: "flymachine123", state: "created" } };
 };
 
+describe("launchEphemeralMachine — durable lifecycle", () => {
+  it("awaits durable intent before enrollment and records provider identity before tracking", async () => {
+    const keys = createEphemeralKeyStore(memoryBackend());
+    await keys.setToken("fly", "fly-tok");
+    const machines = createMachineStore(memoryBackend());
+    const order: string[] = [];
+    const attemptId = "attempt-001";
+    const machine = await launchEphemeralMachine(
+      {
+        provider: "fly", attemptId,
+        onLifecycle: async (event) => { order.push(event.phase); },
+      },
+      {
+        store: fakeStore(), exec: flyExec, keys, machines,
+        fetchImpl: (async () => {
+          expect(order).toEqual(["requested"]);
+          return { ok: true, json: async () => ({ enrollmentToken: "enroll-tok" }) };
+        }) as unknown as typeof fetch,
+      },
+    );
+    expect(machine.attemptId).toBe(attemptId);
+    expect(order).toEqual(["requested", "enrolled", "provider-accepted", "tracked"]);
+  });
+
+  it("does not enroll if durable intent persistence fails", async () => {
+    const keys = createEphemeralKeyStore(memoryBackend());
+    await keys.setToken("fly", "fly-tok");
+    let fetched = false;
+    await expect(launchEphemeralMachine(
+      { provider: "fly", onLifecycle: async () => { throw new Error("database unavailable"); } },
+      {
+        store: fakeStore(), exec: flyExec, keys, machines: createMachineStore(memoryBackend()),
+        fetchImpl: (async () => { fetched = true; return {} as Response; }) as typeof fetch,
+      },
+    )).rejects.toThrow("database unavailable");
+    expect(fetched).toBe(false);
+  });
+});
+
 describe("launchEphemeralMachine — machine record naming", () => {
   it("persists the setup's chosen name and setupId onto the stored machine", async () => {
     const keys = createEphemeralKeyStore(memoryBackend());
