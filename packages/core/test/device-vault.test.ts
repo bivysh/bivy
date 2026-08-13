@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDeviceVaultKeyStore,
   createEphemeralKeyStore,
+  createEphemeralModelKeyStore,
   memoryBackend,
   wrapKeyFor,
   seal,
@@ -49,7 +50,13 @@ function fakeControlPlane() {
 }
 
 const store = (dev: DeviceKeypair, remote: DeviceVaultRemote, enabled = true) =>
-  createDeviceVaultKeyStore({ local: createEphemeralKeyStore(memoryBackend()), remote, device: async () => dev, enabled: () => enabled });
+  createDeviceVaultKeyStore({
+    local: createEphemeralKeyStore(memoryBackend()),
+    modelKeys: createEphemeralModelKeyStore(memoryBackend()),
+    remote,
+    device: async () => dev,
+    enabled: () => enabled,
+  });
 
 describe("device vault — cross-device token sync", () => {
   it("delivers a token from the producing device to a fresh second device", async () => {
@@ -72,6 +79,23 @@ describe("device vault — cross-device token sync", () => {
     // Device B can now unwrap the vault key and read the synced token.
     await b.sync();
     expect(await b.getToken("fly")).toBe("fly-token-123");
+  });
+
+  it("syncs account model/voice keys, but never device-only keys", async () => {
+    const A = await makeDevice();
+    const B = await makeDevice();
+    const cp = fakeControlPlane();
+    const a = store(A, cp.forDevice(A.pub));
+    const b = store(B, cp.forDevice(B.pub));
+
+    await a.setModelKey("openai", "account-openai", "account");
+    await a.setModelKey("groq", "device-groq", "device");
+    expect(cp.peekVault()).not.toContain("account-openai");
+    expect(await b.getModelKey("openai")).toBe(""); // requests a wrap
+    await a.sync();
+    await b.sync();
+    expect(await b.getModelKey("openai")).toBe("account-openai");
+    expect(await b.getModelKey("groq")).toBe("");
   });
 
   it("prefers the device-local token over the synced copy", async () => {

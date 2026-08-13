@@ -50,7 +50,7 @@ import type { BivySessionRecord, BivySessionStatus } from "./session/bivy-sessio
 import { deriveSessionState, type SessionState } from "./session/session-state.js";
 import type { SessionRecord, PromptOptions, StreamingBehavior, PromptImage } from "./session/record.js";
 import { createSessionEngine } from "./session/engine.js";
-import { exportProviderAuth, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
+import { exportProviderAuth, exportAccountApiKeys, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
@@ -2637,6 +2637,11 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
   // --- Multiple credentials per provider (labeled). ----------------------
   async "credentials.list"() {
     relay?.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
+  },
+  async "credentials.account.export"(_msg, ctx) {
+    // This reply travels inside the already-paired E2E node channel. It contains
+    // API keys only; OAuth/ref/node-local material is excluded by the API.
+    ctx.reply({ type: "credentials.account.export", requestId: _msg.requestId, entries: await exportAccountApiKeys(credsDir) });
   },
   async "credential.set"(msg, ctx) {
     try {
@@ -9338,12 +9343,12 @@ async function applySttConfigChange(body: {
   if (setKey && setKey.provider !== undefined) {
     const p = String(setKey.provider);
     if (!isSttProvider(p)) throw new Error(`Unknown speech provider: ${p}`);
-    setSttKey(appDir, p, String(setKey.value ?? ""));
+    await setSttKey(appDir, p, String(setKey.value ?? ""));
   }
   if (body.removeKey !== undefined) {
     const p = String(body.removeKey);
     if (!isSttProvider(p)) throw new Error(`Unknown speech provider: ${p}`);
-    removeSttKey(appDir, p);
+    await removeSttKey(appDir, p);
   }
   return getSttConfig(appDir);
 }

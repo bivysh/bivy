@@ -63,6 +63,7 @@ export interface Command extends CommandBase {
     // `credentials.records` ({ records: CredentialRecordSummary[] }). set/remove/
     // sync.set mutate one `provider:label` slot and ack via requestId.
     | "credentials.list"
+    | "credentials.account.export"
     | "credential.set"
     | "credential.remove"
     | "credential.sync.set"

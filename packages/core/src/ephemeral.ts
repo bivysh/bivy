@@ -278,15 +278,21 @@ export function createEphemeralKeyStore(backend: KvBackend = defaultBackend("pro
   };
 }
 
+export type DeviceCredentialScope = "device" | "account";
+
 export interface EphemeralModelKeyInfo {
   provider: string;
   configured: boolean;
   updatedAt: string | null;
+  /** Account keys enter the E2E device vault; device keys never leave this PWA. */
+  scope: DeviceCredentialScope;
 }
 
 export interface EphemeralModelKeyEntry {
   provider: string;
   key: string;
+  updatedAt?: string | null;
+  scope: DeviceCredentialScope;
 }
 
 /**
@@ -308,7 +314,7 @@ export interface EphemeralModelKeyStore {
   /** The stored keys, for seeding a node. Secrets — never surface in the UI. */
   entries(): Promise<EphemeralModelKeyEntry[]>;
   get(provider: string): Promise<string>;
-  set(provider: string, key: string): Promise<void>;
+  set(provider: string, key: string, scope?: DeviceCredentialScope): Promise<void>;
   remove(provider: string): Promise<void>;
 }
 
@@ -328,14 +334,27 @@ export function createEphemeralModelKeyStore(
       const stored = await all();
       return stored
         .filter((r) => r && r.provider)
-        .map((r) => ({ provider: String(r.provider), configured: Boolean(r.key), updatedAt: r.updatedAt ?? null }))
+        .map((r) => ({
+          provider: String(r.provider),
+          configured: Boolean(r.key),
+          updatedAt: r.updatedAt ?? null,
+          // Existing ephemeral seed keys become account keys: this preserves their
+          // old purpose (making a newly-created node usable) while moving them to
+          // the unified account vault.
+          scope: r.scope === "device" ? "device" as const : "account" as const,
+        }))
         .sort((a, b) => a.provider.localeCompare(b.provider));
     },
     async entries() {
       const stored = await all();
       return stored
         .filter((r) => r && r.provider && r.key)
-        .map((r) => ({ provider: String(r.provider), key: String(r.key) }));
+        .map((r) => ({
+          provider: String(r.provider),
+          key: String(r.key),
+          updatedAt: r.updatedAt ?? null,
+          scope: r.scope === "device" ? "device" as const : "account" as const,
+        }));
     },
     async get(provider) {
       const id = norm(provider);
@@ -343,12 +362,13 @@ export function createEphemeralModelKeyStore(
       const rec = (await all()).find((r) => r.provider === id);
       return rec && rec.key ? rec.key : "";
     },
-    async set(provider, key) {
+    async set(provider, key, scope = "account") {
       const id = norm(provider);
       if (!id) throw new Error("Provider is required");
       const value = String(key || "").trim();
       if (!value) throw new Error("API key cannot be empty");
-      await backend.put(id, { provider: id, key: value, updatedAt: nowIso() });
+      if (scope !== "account" && scope !== "device") throw new Error("Credential scope must be account or device");
+      await backend.put(id, { provider: id, key: value, scope, updatedAt: nowIso() });
     },
     async remove(provider) {
       const id = norm(provider);
