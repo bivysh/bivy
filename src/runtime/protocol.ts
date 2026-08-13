@@ -682,22 +682,31 @@ class ProtocolSession implements RuntimeSession {
       this.emit({ type: "agent_end" });
       return;
     }
-    if (type === "tool.call") {
+    if (type === "tool.call" || type === "tool.observe") {
       const toolCallId = String(msg.toolCallId || msg.id || "");
       const toolName = String(msg.name || "tool");
       const detail = mapToolCall(toolName, msg.input, { provider: this.runtimeOptions.id || "acp", protocol: "protocol" });
       if (detail) this.toolDetailsByCallId.set(toolCallId, detail);
-      this.flushPendingTurnText();
-      this.turnContent.push({ type: "tool_use", id: toolCallId, name: toolName, input: msg.input ?? {}, ...(detail ? { detail } : {}) });
-      // Stream the live tool card for EVERY protocol agent, with its normalized
-      // detail — not only ones that gate tool calls. Interception is an
-      // additional approve/deny round-trip for agents that advertise it, not a
-      // prerequisite for surfacing the call; emitting it here (rather than only
-      // inside the interception branch) means an ACP agent with
-      // `toolInterception:false` still shows its activity live instead of only
-      // after the turn ends and history reconciles.
-      this.emit({ type: "tool_call", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}) });
-      if (this.capabilitiesRef.toolInterception && this.toolInterceptor) {
+      // `tool.observe` is for activity an upstream runtime reports after it has
+      // already begun (Codex read-only MCP and sub-agent items, for example).
+      // It must render and persist exactly like a call, but must never open a
+      // misleading approval that can no longer stop the work. A preceding
+      // governed `tool.call` may be followed by an observed item/started update;
+      // refresh that block in place rather than duplicating it in the transcript.
+      const existing = this.turnContent.find((b) => b.type === "tool_use" && b.id === toolCallId);
+      if (existing) {
+        existing.name = toolName;
+        existing.input = msg.input ?? {};
+        if (detail) existing.detail = detail;
+      } else {
+        this.flushPendingTurnText();
+        this.turnContent.push({ type: "tool_use", id: toolCallId, name: toolName, input: msg.input ?? {}, ...(detail ? { detail } : {}) });
+      }
+      // Stream the live tool card for every protocol agent. Interception is an
+      // additional round-trip only for a real `tool.call`; observed activity is
+      // informational because the upstream runtime is already executing it.
+      this.emit({ type: existing ? "tool_execution_update" : "tool_call", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}) });
+      if (type === "tool.call" && this.capabilitiesRef.toolInterception && this.toolInterceptor) {
         const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
         try {
           this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, decision: decision?.block ? "deny" : "allow", reason: decision?.reason });

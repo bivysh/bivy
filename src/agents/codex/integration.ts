@@ -17,7 +17,7 @@ import { ProtocolRuntime } from "../../runtime/protocol.js";
 import { codexSlashCommands } from "../../runtime/slash-commands.js";
 import type { AgentRuntime } from "../../runtime/types.js";
 
-export const CODEX_TESTED_VERSION = "0.145.0";
+export const CODEX_TESTED_VERSION = "0.147.0";
 const CODEX_AVAILABLE_CACHE = new Map<string, boolean>();
 
 function codexCommand(): string {

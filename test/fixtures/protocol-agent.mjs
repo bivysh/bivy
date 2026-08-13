@@ -28,6 +28,9 @@ const streamingBehaviors = process.env.FIXTURE_STREAMING_BEHAVIORS
 // stream the tool_call card live; when set, this fixture delivers the tool
 // result itself instead of waiting for a tool.decision that will never come.
 const advertiseInterception = !process.env.FIXTURE_NO_INTERCEPTION;
+// Activity already started by the upstream runtime: it must be visible without
+// triggering this otherwise interception-capable fixture's approval round-trip.
+const observedTool = process.env.FIXTURE_OBSERVED_TOOL === '1';
 let selectedModel = 'fixture-small';
 send({
   type: 'hello',
@@ -118,8 +121,8 @@ rl.on('line', (line) => {
     send({ type: 'message.reasoning', sessionId: msg.sessionId, text: `thinking with ${selectedModel}` });
     send({ type: 'message.delta', sessionId: msg.sessionId, role: 'assistant', text: 'hello ' });
     pendingTool = { sessionId: msg.sessionId, toolCallId: 'tc_fixture' };
-    send({ type: 'tool.call', sessionId: msg.sessionId, toolCallId: pendingTool.toolCallId, name: 'shell', risk: 'medium', input: { cmd: 'echo ok' } });
-    if (!advertiseInterception) {
+    send({ type: observedTool ? 'tool.observe' : 'tool.call', sessionId: msg.sessionId, toolCallId: pendingTool.toolCallId, name: observedTool ? 'spawn_agent' : 'shell', risk: 'medium', input: observedTool ? { agent: 'explorer', description: 'Inspect the workspace' } : { cmd: 'echo ok' } });
+    if (!advertiseInterception || observedTool) {
       // No tool.decision will arrive — run the tool ourselves and finish the turn.
       send({ type: 'tool.result', sessionId: msg.sessionId, toolCallId: pendingTool.toolCallId, status: 'ok', summary: 'auto' });
       send({ type: 'message.delta', sessionId: msg.sessionId, role: 'assistant', text: 'world' });
