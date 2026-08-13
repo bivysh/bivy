@@ -89,9 +89,15 @@ export function codexAppServerRuntime(tier?: SandboxTier): AgentRuntime {
       id: "openai-codex",
       name: "OpenAI Codex (ChatGPT)",
       oauth: true,
+      // Static fallback lineup shown before the live app-server reports its
+      // authoritative `model/list` (see bin/codex-app-server-shim.mjs). Kept in
+      // step with the current Codex CLI: the GPT-5.6 generation (Sol is the
+      // default "latest frontier agentic coding model") superseded the retired
+      // gpt-5-codex / gpt-5 ids. Once a session is up, the shim replaces these.
       models: [
-        { provider: "openai-codex", id: "gpt-5-codex", name: "GPT-5 Codex", reasoning: true },
-        { provider: "openai-codex", id: "gpt-5", name: "GPT-5", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.6-sol", name: "GPT-5.6 Sol", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.6-terra", name: "GPT-5.6 Terra", reasoning: true },
+        { provider: "openai-codex", id: "gpt-5.6-luna", name: "GPT-5.6 Luna", reasoning: true },
       ],
     }],
     capabilities: {

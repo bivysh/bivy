@@ -168,8 +168,10 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // `codex exec --json --sandbox <tier> <prompt>` — native OS sandbox.
     composeArgs: ({ structured, tier }) => ["exec", ...(structured ? ["--json"] : []), "--sandbox", tier],
     // Reasoning effort via a config override, after the `exec` subcommand.
-    // `codex exec -c model_reasoning_effort=<level> …`.
-    thinking: { levels: ["minimal", "low", "medium", "high"], default: "medium", template: ["-c", "model_reasoning_effort={level}"], insertAt: 1 },
+    // `codex exec -c model_reasoning_effort=<level> …`. The GPT-5.6 generation
+    // retired "minimal" and added "xhigh"/"max", so the level list tracks the
+    // efforts the current models actually accept.
+    thinking: { levels: ["low", "medium", "high", "xhigh", "max"], default: "medium", template: ["-c", "model_reasoning_effort={level}"], insertAt: 1 },
     packageName: "@openai/codex",
     promptMode: "argv",
     // Hidden from the picker: the governed `codex-approvals` app-server shim
@@ -200,8 +202,12 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
       flag: "--model",
       insertAt: 1,
       models: [
+        // OpenCode routes the ChatGPT/Codex subscription lineup under its own
+        // `opencode/` provider (the opencode-zen gateway); gpt-5.6-sol is the
+        // current frontier Codex model (see `opencode models`). The live ACP
+        // session still lists the authoritative set via session/set_model.
+        { id: "opencode/gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai-codex" },
         { id: "anthropic/claude-sonnet-4-5", name: "Claude Sonnet 4.5", provider: "anthropic" },
-        { id: "openai/gpt-5", name: "GPT-5", provider: "openai" },
         { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google" },
       ],
     },
