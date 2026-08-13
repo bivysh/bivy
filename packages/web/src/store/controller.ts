@@ -2501,15 +2501,25 @@ export class AppController {
    * app's webhook keeps working. Reuses the manifest flow's done/error events, so
    * the phase machine surfaces success/failure just like the create flow.
    */
-  githubAppConnectExisting(input: { appId: string; privateKeyPem: string; nodeLabel?: string }): void {
+  async githubAppConnectExisting(input: { appId: string; privateKeyPem: string; nodeLabel?: string }): Promise<void> {
     this.store.setGithubAppPhase("completing");
-    this.send({
-      kind: "github.app.connect-existing",
-      requestId: requestId(),
-      appId: input.appId,
-      privateKeyPem: input.privateKeyPem,
-      nodeLabel: input.nodeLabel || undefined,
-    });
+    try {
+      // This used to be fire-and-forget. A dropped relay command, offline node,
+      // or validation failure therefore left the form looking unchanged (or
+      // stuck on “Connecting…”) with no actionable result for the user.
+      await this.awaitAck({
+        kind: "github.app.connect-existing",
+        appId: input.appId,
+        privateKeyPem: input.privateKeyPem,
+        nodeLabel: input.nodeLabel || undefined,
+      }, 60_000);
+    } catch (error) {
+      this.store.setGithubAppPhase("error", {
+        error: error instanceof Error ? error.message : String(error),
+        returning: false,
+      });
+      throw error;
+    }
   }
 
   /** Store and validate an App for unattended execution without a node. */
