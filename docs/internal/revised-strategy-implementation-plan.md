@@ -179,7 +179,13 @@ or PR → Receipt.
   Known gap documented: random-branch Slack/schedule/webhook runs.
 - [ ] Give every failed outcome a working next action (fix, retry, fork, review,
   re-auth, or cancel as applicable).
-- [ ] Add end-to-end tests for the golden workflow on both recommended agents.
+- [x] Add end-to-end tests for the golden workflow on both recommended agents.
+  **Implemented 2026-08-13:** one shared contract now certifies the real Claude
+  Code and Codex adapter identities/version pins/capabilities, then carries each
+  deterministic agent boundary through an isolated worktree, checks, commit,
+  push, idempotent PR creation, explicit outcome, correlated audit evidence, and
+  the bounded Receipt projection. Live provider calls remain an opt-in release
+  exercise because CI must not hold customer model credentials.
 
 **Gate:** 90–95% of accepted beta Runs reach an explicit outcome; process exit
 alone never means success; users understand results without transcripts; every
