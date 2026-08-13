@@ -989,6 +989,19 @@ function defaultRunWorkspace(config) {
   return res.code === 0 && res.stdout.trim() === "true" ? cwd : fallback;
 }
 
+/** First setup should use the repository the developer deliberately ran it
+ * from, when there is one. Never mistake Bivy's own source/install checkout for
+ * the customer's first repository; that path keeps the safe dedicated folder. */
+function firstSetupWorkspace(config) {
+  if (config.workspace && config.workspace !== repoRoot) return config.workspace;
+  const cwd = path.resolve(process.cwd());
+  if (cwd !== repoRoot) {
+    const top = runQuiet("git", ["-C", cwd, "rev-parse", "--show-toplevel"]);
+    if (top.code === 0 && top.stdout.trim()) return path.resolve(top.stdout.trim());
+  }
+  return path.join(os.homedir(), "bivy-workspace");
+}
+
 // --- nodes registry ---------------------------------------------------------
 // Other Bivy nodes this machine can reach directly (LAN, Tailscale, SSH tunnel,
 // VPN). name → { url, token }. `bivy run --node <name>` starts the session on
@@ -3344,9 +3357,9 @@ async function cmdSetup(args = []) {
   const rl = createPrompter();
   const { ask, askChoice, askYesNo } = rl;
 
-  // 1. Workspace + local port — chosen for the user, no prompts. The workspace
-  // defaults to a dedicated ~/bivy-workspace folder that won't collide with the
-  // user's own projects; the local port is for this machine only (remote access
+  // 1. Repository workspace + local port — chosen for the user, no prompts. If
+  // setup is run from a repository, that repository is the first-task workspace;
+  // otherwise use a dedicated ~/bivy-workspace folder. The local port is for this machine only (remote access
   // goes through the relay). Both are changeable later in Settings.
   //
   // Port selection auto-avoids collisions so multiple nodes on one machine (e.g.
@@ -3355,7 +3368,7 @@ async function cmdSetup(args = []) {
   // otherwise we take the first free port at or above 4317. Without this the
   // second node would default to 4317 too and silently fail to bind.
   if (!existingConfig || config.workspace === repoRoot) {
-    const workspace = config.workspace !== repoRoot ? config.workspace : path.join(os.homedir(), "bivy-workspace");
+    const workspace = firstSetupWorkspace(config);
     if (!fs.existsSync(workspace)) fs.mkdirSync(workspace, { recursive: true });
     config.workspace = workspace;
     const explicitPort = Number(process.env.PORT);

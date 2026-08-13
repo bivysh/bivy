@@ -14,5 +14,7 @@ assert.match(source, /\{ key: "m", label: "More agents…" \}/, "other agents st
 assert.match(source, /runtimeId: "codex-approvals"/, "setup uses the governed Codex adapter rather than the legacy exec path");
 assert.match(source, /if \(runtimeId === "codex"\) runtimeId = "codex-approvals";/, "re-running setup migrates the former Codex default");
 assert.doesNotMatch(source, /Pi \(default/, "Pi is no longer presented as the strategy default");
+assert.match(source, /function firstSetupWorkspace\(config\)/, "setup has one repository-aware workspace selection path");
+assert.match(source, /rev-parse", "--show-toplevel"/, "fresh setup preselects the repository it was launched from");
 
 console.log("setup-contract: all tests passed");
