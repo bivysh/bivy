@@ -673,8 +673,8 @@ function CredentialReadinessRow({ providerId, record, accountEmail }: { provider
               const result = await controller.testCredential(providerId, record.label);
               if (!result.ok) setTestErr(testFailureReason(result.reason));
               controller.listCredentialRecords();
-            } catch (e) {
-              setTestErr(String((e as Error)?.message || e));
+            } catch {
+              setTestErr("Couldn't reach your machine to test this connection.");
             } finally {
               setTesting(false);
             }
@@ -691,7 +691,6 @@ function CredentialReadinessRow({ providerId, record, accountEmail }: { provider
 function testFailureReason(reason?: string): string {
   switch (reason) {
     case "unauthorized": return "The provider rejected this credential.";
-    case "expired": return "The credential has expired.";
     case "refresh_failed": return "Couldn't refresh the OAuth session.";
     case "not_supported": return "This provider isn't testable yet.";
     case "not_found": return "No credential to test.";

@@ -53,7 +53,7 @@ export type CredentialTombstones = Record<string, number>;
 export interface CredentialVerification {
   ok: boolean;
   at: number;
-  reason?: "not_found" | "not_supported" | "network_error" | "unauthorized" | "expired" | "refresh_failed";
+  reason?: "not_found" | "not_supported" | "network_error" | "unauthorized" | "refresh_failed";
 }
 
 // The on-disk document is now v3 (a `provider:label`-keyed record map). The store
