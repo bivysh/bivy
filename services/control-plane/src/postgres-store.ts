@@ -33,6 +33,7 @@ import {
   DEFAULT_HOSTED_PROVISIONING,
   type HostedProvisioningStatus,
   type HostedAuditEvent,
+  type HostedMachineAttempt,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
@@ -195,6 +196,23 @@ export class PostgresStore implements MeshStore {
         holder      TEXT NOT NULL,
         expires_at  TIMESTAMPTZ NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS hosted_machine_attempts (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        attempt_id  TEXT NOT NULL,
+        provider    TEXT NOT NULL,
+        config_id   TEXT,
+        node_id     TEXT NOT NULL,
+        state       TEXT NOT NULL,
+        desired     JSONB NOT NULL DEFAULT '{}',
+        machine     JSONB,
+        last_error  TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, attempt_id)
+      );
+      CREATE INDEX IF NOT EXISTS hosted_machine_attempts_active_idx
+        ON hosted_machine_attempts (account_id, state, updated_at);
       -- The paid single-user plan was renamed 'individual' -> 'pro' to match what
       -- it is sold as. The plan column is plain TEXT with no enum or CHECK, so the
       -- backfill is a straight UPDATE; it is idempotent (the second run matches no
@@ -1675,12 +1693,57 @@ export class PostgresStore implements MeshStore {
     return arr;
   }
 
+  private hostedAttemptFromRow(row: Record<string, any>): HostedMachineAttempt {
+    return {
+      accountId: String(row.account_id), attemptId: String(row.attempt_id),
+      provider: String(row.provider), configId: row.config_id || undefined,
+      nodeId: String(row.node_id), state: row.state,
+      desired: row.desired && typeof row.desired === "object" ? row.desired : {},
+      machine: row.machine && typeof row.machine === "object" ? row.machine : undefined,
+      lastError: row.last_error || undefined, retryCount: Number(row.retry_count) || 0,
+      createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
+    };
+  }
+
+  async putHostedMachineAttempt(attempt: HostedMachineAttempt): Promise<HostedMachineAttempt> {
+    const { rows } = await this.query(
+      `INSERT INTO hosted_machine_attempts
+         (account_id, attempt_id, provider, config_id, node_id, state, desired, machine, last_error, retry_count, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (account_id, attempt_id) DO UPDATE SET
+         provider=EXCLUDED.provider, config_id=EXCLUDED.config_id, node_id=EXCLUDED.node_id,
+         state=EXCLUDED.state, desired=EXCLUDED.desired, machine=EXCLUDED.machine,
+         last_error=EXCLUDED.last_error, retry_count=EXCLUDED.retry_count, updated_at=EXCLUDED.updated_at
+       RETURNING *`,
+      [attempt.accountId, attempt.attemptId, attempt.provider, attempt.configId ?? null, attempt.nodeId,
+       attempt.state, JSON.stringify(attempt.desired ?? {}), attempt.machine ? JSON.stringify(attempt.machine) : null,
+       attempt.lastError ?? null, attempt.retryCount, attempt.createdAt, attempt.updatedAt],
+    );
+    return this.hostedAttemptFromRow(rows[0]);
+  }
+
+  async getHostedMachineAttempt(accountId: string, attemptId: string): Promise<HostedMachineAttempt | undefined> {
+    const { rows } = await this.query(`SELECT * FROM hosted_machine_attempts WHERE account_id=$1 AND attempt_id=$2`, [accountId, attemptId]);
+    return rows[0] ? this.hostedAttemptFromRow(rows[0]) : undefined;
+  }
+
+  async listHostedMachineAttempts(accountId: string, activeOnly = false): Promise<HostedMachineAttempt[]> {
+    const { rows } = await this.query(
+      `SELECT * FROM hosted_machine_attempts WHERE account_id=$1${activeOnly ? " AND state <> 'deleted'" : ""} ORDER BY created_at`,
+      [accountId],
+    );
+    return rows.map((row) => this.hostedAttemptFromRow(row));
+  }
+
   async listHostedMachineAccountIds(): Promise<string[]> {
     // Filter in JS: pg-mem (the dev/test backend) does not implement Postgres's
     // jsonb_typeof/jsonb_array_length functions, and this scan runs only on the
     // small account metadata rows (never session content).
     const { rows } = await this.query(`SELECT id, hosted_machines FROM accounts WHERE hosted_machines IS NOT NULL`);
-    return rows.filter((row) => Array.isArray(row.hosted_machines) && row.hosted_machines.length > 0).map((row) => String(row.id));
+    const ids = new Set(rows.filter((row) => Array.isArray(row.hosted_machines) && row.hosted_machines.length > 0).map((row) => String(row.id)));
+    const attempts = await this.query(`SELECT DISTINCT account_id FROM hosted_machine_attempts WHERE state <> 'deleted'`);
+    for (const row of attempts.rows) ids.add(String(row.account_id));
+    return [...ids];
   }
 
   async listReadyCapacityAccountIds(): Promise<string[]> {
@@ -1697,6 +1760,16 @@ export class PostgresStore implements MeshStore {
        SET holder = EXCLUDED.holder, expires_at = EXCLUDED.expires_at
        WHERE hosted_provision_leases.expires_at < now()
        RETURNING holder`,
+      [accountId, holder, expiresAt],
+    );
+    return rows[0]?.holder === holder;
+  }
+
+  async renewHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean> {
+    const expiresAt = new Date(Date.now() + Math.max(30, ttlSeconds) * 1000).toISOString();
+    const { rows } = await this.query(
+      `UPDATE hosted_provision_leases SET expires_at=$3
+       WHERE account_id=$1 AND holder=$2 AND expires_at >= now() RETURNING holder`,
       [accountId, holder, expiresAt],
     );
     return rows[0]?.holder === holder;

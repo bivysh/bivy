@@ -292,7 +292,7 @@ describe("aws ProviderAdapter", () => {
     const machine = await adapter.provision({
       exec,
       token: TOKEN,
-      config: { slug: "abc123", region: "us-east-1", size: "t3.medium", ttlMinutes: 60 },
+      config: { slug: "abc123", region: "us-east-1", size: "t3.medium", ttlMinutes: 60, attemptId: "attempt-abc123" },
       userData: "#cloud-config\nruncmd: []\n",
     });
 
@@ -323,6 +323,9 @@ describe("aws ProviderAdapter", () => {
     expect(params.get("InstanceInitiatedShutdownBehavior")).toBe("terminate");
     expect(params.get("TagSpecification.1.Tag.1.Key")).toBe("Name");
     expect(params.get("TagSpecification.1.Tag.2.Value")).toBe("ephemeral");
+    expect(params.get("ClientToken")).toBe("attempt-abc123");
+    expect(params.get("TagSpecification.1.Tag.3.Key")).toBe("bivy-attempt");
+    expect(params.get("TagSpecification.1.Tag.3.Value")).toBe("attempt-abc123");
     // UserData must be base64-encoded, not sent as raw cloud-config text.
     const userData = params.get("UserData")!;
     expect(userData).not.toContain("#cloud-config");

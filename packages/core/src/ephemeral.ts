@@ -624,6 +624,10 @@ export interface EphemeralMachine {
   status: string; // starting | running | stopped | gone
   ip: string | null;
   createdAt: string;
+  /** Stable id for the launch operation. Provider resources are tagged with it
+   * and idempotent create APIs use it, so a controller can recover an accepted
+   * create whose response was lost instead of launching a duplicate. */
+  attemptId?: string;
   /** Cold-start timestamps. `requestedAt` begins the user-visible budget;
    * `providerAcceptedAt` means the create API returned, not that the agent is
    * ready. Later milestones are server-stamped from the enrolled node. */
@@ -1015,6 +1019,10 @@ export interface ProviderAdapter {
    * invalid/under-scoped credentials fail before Bivy stores or launches with
    * them. Must never create, update, wake, stop, or delete a resource. */
   validateToken?(args: { exec: ExecFn; token: string; region?: string }): Promise<void>;
+  /** False when guest shutdown does not delete the paid resource. Such a
+   * provider may launch only when an independent controller has teardown
+   * credentials; device-only TTL shutdown is not a billing guarantee. */
+  guestCanEnsureDeletion?: boolean;
   /** Optionally fetch the provider's live, currently-orderable sizes so the
    *  hardcoded `sizes` list can't silently go stale (e.g. a plan gets
    *  deprecated). When a region is given, results are narrowed to what that
@@ -1214,6 +1222,9 @@ const hetzner: ProviderAdapter = {
   // x86, 4 GB — closest drop-in for the retired cx22, and x86 avoids the
   // Arm-compat pitfalls of the cax line for Docker images and binaries.
   defaultSize: "cpx21",
+  // `shutdown -h now` only powers a Hetzner server off; billing continues until
+  // the API resource is deleted. Hosted reconciliation supplies that authority.
+  guestCanEnsureDeletion: false,
   async validateToken({ exec, token }) {
     const res = await call(exec, {
       method: "GET",
@@ -1245,6 +1256,20 @@ const hetzner: ProviderAdapter = {
   },
   async provision({ exec, token, config, userData }) {
     const name = `bivy-${config.slug}`;
+    // Hetzner has no create idempotency token. The stable attempt label is the
+    // recovery key: after a timeout, a retry adopts the accepted server instead
+    // of issuing another paid create.
+    if (config.attemptId) {
+      const found = await call(exec, {
+        method: "GET",
+        url: `https://api.hetzner.cloud/v1/servers?label_selector=${encodeURIComponent(`bivy-attempt=${config.attemptId}`)}`,
+        headers: bearer(token),
+      });
+      if (found.status < 300 && Array.isArray(found.body?.servers) && found.body.servers[0]) {
+        const s = found.body.servers[0];
+        return { id: String(s.id), provider: "hetzner", name, region: config.region || "nbg1", status: mapHetznerStatus(s.status), ip: s.public_net?.ipv4?.ip || null, createdAt: nowIso(), ttlMinutes: config.ttlMinutes };
+      }
+    }
     const res = await call(exec, {
       method: "POST",
       url: "https://api.hetzner.cloud/v1/servers",
@@ -1256,7 +1281,7 @@ const hetzner: ProviderAdapter = {
         location: config.region || "nbg1",
         user_data: userData,
         start_after_create: true,
-        labels: { bivy: "ephemeral" },
+        labels: { bivy: "ephemeral", ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}) },
       },
     });
     if (res.status >= 300) throw new Error(providerError(res, "create server"));
@@ -1382,6 +1407,19 @@ const fly: ProviderAdapter = {
       body: { app_name: app, org_slug: org },
     });
     if (created.status >= 300 && created.status !== 409) throw new Error(providerError(created, "create app"));
+    // Fly app creation is naturally name-idempotent, but machine creation is
+    // not. Adopt a machine carrying this attempt metadata before retrying create.
+    if (config.attemptId) {
+      const found = await call(exec, {
+        method: "GET",
+        url: `https://api.machines.dev/v1/apps/${encodeURIComponent(app)}/machines`,
+        headers: bearer(token),
+      });
+      const existing = Array.isArray(found.body) ? found.body.find((m: any) => m?.config?.metadata?.["bivy-attempt"] === String(config.attemptId)) : null;
+      if (found.status < 300 && existing?.id) {
+        return { id: String(existing.id), provider: "fly", app, name: app, region: existing.region || config.region || "iad", status: mapFlyStatus(existing.state), ip: null, createdAt: nowIso(), ttlMinutes: config.ttlMinutes };
+      }
+    }
     // A Fly Machine is an OCI image in a Firecracker microVM, NOT a cloud-init
     // VM: the `#cloud-config` user_data the other providers use is never
     // executed, and a bare `ubuntu:24.04` just runs `/bin/bash`, which exits
@@ -1389,15 +1427,11 @@ const fly: ProviderAdapter = {
     // self-destructs before it ever installs Bivy (that's the "app has no
     // machines" / node-offline symptom). Instead we materialize the same
     // relay.json + start.sh via `files` and run them ourselves as a blocking
-    // foreground init process. `auto_destroy` then tears the machine down once
-    // the daemon exits — but note the daemon (`bivy start`) is a persistent
-    // session process that stays alive across turns to serve follow-ups, so it
-    // does NOT exit on a single `agent_end`. In practice this fires only when the
-    // TTL `timeout` elapses (or the daemon crashes) — i.e. it implements the TTL
-    // safety fallback, NOT the per-turn "destroy when the agent finishes"
-    // contract. That per-turn teardown is device-driven (the launching browser
-    // issues the destroy on `agent_end`; see controller.maybeTeardownFinishedEphemeral).
-    // Falls back to user_data only if no structured bootstrap is given.
+    // foreground init process. `auto_destroy` tears the machine down when the
+    // daemon exits. The daemon's quiet-state teardown snapshots completed work
+    // and exits after `agent_end`, so this no longer depends on a watching
+    // device; the TTL `timeout` remains an independent hard backstop. Falls back
+    // to user_data only if no structured bootstrap is given.
     const machineInit = bootstrap ? flyInit(bootstrap) : { init: { user_data: userData } };
     const machine = await call(exec, {
       method: "POST",
@@ -1412,7 +1446,7 @@ const fly: ProviderAdapter = {
           auto_destroy: bootstrap?.debugKeepMachine ? false : true,
           restart: { policy: "no" },
           guest: { cpu_kind: "shared", cpus: Number(config.cpus) || guest.cpus, memory_mb: Number(config.memoryMb) || guest.memoryMb },
-          metadata: { bivy: "ephemeral" },
+          metadata: { bivy: "ephemeral", ...(config.attemptId ? { "bivy-attempt": String(config.attemptId) } : {}) },
           ...machineInit,
         },
       },
@@ -1891,11 +1925,18 @@ const aws: ProviderAdapter = {
         MaxCount: "1",
         UserData: b64(utf8.encode(userData)),
         InstanceInitiatedShutdownBehavior: "terminate",
+        // EC2 makes RunInstances idempotent for this token. A retry after a
+        // timeout returns the original instance rather than billing for another.
+        ...(config.attemptId ? { ClientToken: String(config.attemptId) } : {}),
         "TagSpecification.1.ResourceType": "instance",
         "TagSpecification.1.Tag.1.Key": "Name",
         "TagSpecification.1.Tag.1.Value": name,
         "TagSpecification.1.Tag.2.Key": "bivy",
         "TagSpecification.1.Tag.2.Value": "ephemeral",
+        ...(config.attemptId ? {
+          "TagSpecification.1.Tag.3.Key": "bivy-attempt",
+          "TagSpecification.1.Tag.3.Value": String(config.attemptId),
+        } : {}),
       },
       "launch instance",
     );
@@ -2274,8 +2315,27 @@ function randHex(bytes: number): string {
   return [...arr].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+export type EphemeralLaunchPhase = "requested" | "enrolled" | "provider-accepted" | "tracked" | "failed";
+
+export interface EphemeralLaunchEvent {
+  attemptId: string;
+  nodeId: string;
+  phase: EphemeralLaunchPhase;
+  machine?: EphemeralMachine;
+  error?: string;
+}
+
 export interface LaunchOpts {
   provider: string;
+  /** Stable operation identity. Hosted controllers persist this before any
+   * side effect; device launches generate one locally. */
+  attemptId?: string;
+  /** The caller has an independent, durable controller holding deletion
+   * authority. Required for providers where guest shutdown does not stop billing. */
+  externalTeardownGuaranteed?: boolean;
+  /** Durable lifecycle sink. The initial `requested` callback is awaited before
+   * enrollment, and `provider-accepted` is awaited before local machine storage. */
+  onLifecycle?: (event: EphemeralLaunchEvent) => Promise<void>;
   region?: string;
   size?: string;
   /** Optional, device-local progress sink for an interactive launch. Messages
@@ -2432,11 +2492,18 @@ export async function launchEphemeralMachine(
   progress(`Preparing ${adapter.name} launch…`);
   const token = await deps.keys.getToken(opts.provider);
   if (!token) throw new Error(`Add a ${adapter.name} token first.`);
+  if (adapter.guestCanEnsureDeletion === false && !opts.externalTeardownGuaranteed) {
+    throw new Error(`${adapter.name} requires hosted provisioning: powering off its guest does not delete the billable server, so a device-only launch is unsafe.`);
+  }
 
   // Rebuild-resume reuses the torn-down session's node id so the launching device
   // still reaches it (it holds that node's room key) and the daemon knows which
-  // snapshot to restore; a normal launch mints a fresh one.
+  // snapshot to restore; a normal launch mints a fresh one. Persist the stable
+  // attempt before enrollment: after this callback every later side effect has a
+  // durable owner even if this process crashes.
+  const attemptId = opts.attemptId || randHex(16);
   const nodeId = opts.reuseNodeId || "eph-" + randHex(8);
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "requested" });
   const enrollBody = JSON.stringify({ nodeId, name: opts.name || `Ephemeral ${adapter.name}` });
   progress("Enrolling a secure Bivy node…");
   const enrollOnce = async () => {
@@ -2459,7 +2526,12 @@ export async function launchEphemeralMachine(
   if (!enrollRes.ok && enrollRes.status === 402 && /node limit/i.test(String(enroll?.error ?? ""))) {
     if ((await reapOrphanEphemeralNodes(deps, fetchImpl)) > 0) ({ res: enrollRes, data: enroll } = await enrollOnce());
   }
-  if (!enrollRes.ok || !enroll?.enrollmentToken) throw new Error(enroll?.error || "Could not enroll the machine");
+  if (!enrollRes.ok || !enroll?.enrollmentToken) {
+    const error = enroll?.error || "Could not enroll the machine";
+    await opts.onLifecycle?.({ attemptId, nodeId, phase: "failed", error });
+    throw new Error(error);
+  }
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "enrolled" });
   progress("Node enrolled. Building its secure bootstrap…");
 
   // Reuse the old session's room key on rebuild so the device (which already
@@ -2496,13 +2568,26 @@ export async function launchEphemeralMachine(
   const size = opts.size || adapter.defaultSize;
   const region = opts.region || adapter.defaultRegion;
   progress(`Creating the machine in ${region} (${size})…`);
-  const machine = await adapter.provision({
-    exec: deps.exec,
-    token,
-    userData,
-    bootstrap,
-    config: { slug: ephemeralNodeLabel(nodeId), region, size, image: opts.image, ttlMinutes: opts.ttlMinutes },
-  });
+  let machine: EphemeralMachine;
+  try {
+    machine = await adapter.provision({
+      exec: deps.exec,
+      token,
+      userData,
+      bootstrap,
+      config: { slug: ephemeralNodeLabel(nodeId), region, size, image: opts.image, ttlMinutes: opts.ttlMinutes, attemptId },
+    });
+  } catch (error) {
+    await opts.onLifecycle?.({
+      attemptId,
+      nodeId,
+      phase: "failed",
+      error: String((error as Error)?.message || error).slice(0, 500),
+    });
+    throw error;
+  }
+  machine.attemptId = attemptId;
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "provider-accepted", machine });
   progress("Machine created. Boot setup is installing and starting Bivy…");
   machine.size = size;
   machine.milestones = { ...(machine.milestones ?? {}), requestedAt, providerAcceptedAt: nowIso() };
@@ -2520,6 +2605,7 @@ export async function launchEphemeralMachine(
   if (opts.workItemId) machine.workItemId = opts.workItemId;
   if (opts.purpose) machine.purpose = opts.purpose;
   await deps.machines.add(machine);
+  await opts.onLifecycle?.({ attemptId, nodeId, phase: "tracked", machine });
   return machine;
 }
 

@@ -419,6 +419,28 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
   };
 }
 
+/** Durable control-plane intent for one paid machine creation. Written before
+ * enrollment/provider calls and retained through confirmed deletion so a crash
+ * cannot make a provider resource invisible to reconciliation. */
+export type HostedMachineAttemptState =
+  | "requested" | "enrolled" | "provider-accepted" | "tracked"
+  | "ready" | "claimed" | "working" | "deleting" | "deleted" | "failed";
+
+export interface HostedMachineAttempt {
+  accountId: string;
+  attemptId: string;
+  provider: string;
+  configId?: string;
+  nodeId: string;
+  state: HostedMachineAttemptState;
+  desired: Record<string, unknown>;
+  machine?: Record<string, unknown>;
+  lastError?: string;
+  retryCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
@@ -1213,9 +1235,14 @@ export interface MeshStore {
   setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
   getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
   setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
+  putHostedMachineAttempt(attempt: HostedMachineAttempt): Promise<HostedMachineAttempt>;
+  getHostedMachineAttempt(accountId: string, attemptId: string): Promise<HostedMachineAttempt | undefined>;
+  listHostedMachineAttempts(accountId: string, activeOnly?: boolean): Promise<HostedMachineAttempt[]>;
   /** Cross-replica mutex around the read/decide/provider-launch sequence. The
    * lease expires so a crashed control-plane process cannot wedge the account. */
   acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean>;
+  /** Extend only a lease still owned by `holder`; false means ownership was lost. */
+  renewHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean>;
   releaseHostedProvisionLease(accountId: string, holder: string): Promise<void>;
   /** Accounts that currently track at least one control-plane-provisioned
    * machine. Used by the global lifecycle reconciler; returns ids only. */
