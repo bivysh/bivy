@@ -22,9 +22,9 @@ test("the readiness strip renders nothing once activated and never claims premat
   expect(view).toContain("activation.checks.map((check)");
 });
 
-test("setup readiness is wired only into a fresh draft and credential repair opens Keys & OAuth", async () => {
+test("setup readiness is wired only into a first-ever draft and credential repair opens Keys & OAuth", async () => {
   const app = await read("../../packages/web/src/App.tsx");
-  expect(app).toContain("!state.activeSessionId && state.transcript.length === 0");
+  expect(app).toContain("!state.activeSessionId && state.transcript.length === 0 && state.sessions.length === 0");
   expect(app).toContain("<ReadinessChecklist");
   expect(app).toContain("deriveActivation({");
   expect(app).toContain("state.activationReadiness ? state.activationReadiness.credential.ok : undefined");

@@ -18,6 +18,13 @@ test("the first isolated Run offers a safe task and names the billable launch ac
   expect(composer).toContain("Launch Machine and send task");
 });
 
+test("voice input remains available after the user types a message", async () => {
+  const composer = await read("../../packages/web/src/components/Composer.tsx");
+  const mic = composer.indexOf('className="composer-btn mic"');
+  expect(mic).toBeGreaterThan(-1);
+  expect(composer.slice(mic - 250, mic)).not.toContain("!canSend &&");
+});
+
 test("source Automations remain drafts until their source is connected", async () => {
   const view = await read("../../packages/web/src/components/AutomationsView.tsx");
   expect(view).toContain("enabled: sourceReady");

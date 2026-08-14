@@ -654,7 +654,7 @@ export function App() {
           </div>
         )}
 
-        {!state.activeSessionId && state.transcript.length === 0 && (
+        {!state.activeSessionId && state.transcript.length === 0 && state.sessions.length === 0 && (
           <Suspense fallback={null}>
             <ReadinessChecklist
               activation={activation}
