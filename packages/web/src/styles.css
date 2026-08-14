@@ -1382,7 +1382,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .settings-form .muted { color: var(--muted); font-size: 13px; margin: 0; }
 /* Password-manager-style provider credential vault. Saved items are the primary
    list; the provider catalog appears only inside Add. */
-.credential-vault { gap: 14px; }
+.credential-vault { gap: 14px; max-width: 680px; width: 100%; }
 .vault-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .vault-title-row > div { min-width: 0; }
 .vault-title-row h3 { margin: 0 0 4px; }
@@ -1390,11 +1390,20 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .vault-empty h4 { margin: 0; }
 .vault-items .picker-item, .credential-vault > .picker-list .picker-item { justify-content: space-between; width: 100%; cursor: pointer; }
 .vault-items .picker-item > span:first-child, .credential-vault > .picker-list .picker-item > span:first-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.vault-items .picker-item small, .credential-vault > .picker-list .picker-item small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.vault-items .picker-item small, .credential-vault > .picker-list .picker-item small { color: var(--muted); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+.vault-items .picker-item strong, .credential-vault > .picker-list .picker-item strong { overflow-wrap: anywhere; }
+.custom-provider-card { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; width: 100%; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 14px; padding: 14px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--ink); text-align: left; }
+.custom-provider-card:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, var(--surface)); }
+.custom-provider-card > span:nth-child(2) { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.custom-provider-card small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.custom-provider-card-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 15%, var(--surface)); color: var(--accent); font-size: 20px; }
+.vault-picker-label { margin: 5px 0 -5px; color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
 .vault-row-status { display: flex; align-items: center; gap: 10px; }
 .vault-methods { display: flex; flex-wrap: wrap; gap: 8px; }
 .vault-detail-grid { display: grid; grid-template-columns: minmax(110px, auto) 1fr; gap: 10px 18px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.vault-detail-grid strong { min-width: 0; overflow-wrap: anywhere; }
 .vault-detail-grid code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vault-custody-note { padding: 12px 14px; border-left: 3px solid var(--accent); border-radius: 4px 10px 10px 4px; background: var(--surface-2); line-height: 1.5; }
 .vault-advanced { padding: 10px 0; border-top: 1px solid var(--line); }
 .vault-advanced summary { cursor: pointer; color: var(--ink); font-weight: 600; }
 .vault-advanced[open] summary { margin-bottom: 10px; }
@@ -2390,7 +2399,16 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .settings-nav-chevron { display: inline-flex; }
   .settings-content { padding-top: max(0px, env(safe-area-inset-top)); }
   .settings-back { display: inline-flex; }
-  .settings-body { padding: 14px 12px max(28px, env(safe-area-inset-bottom)); }
+  .settings-body { padding: 14px 16px max(28px, env(safe-area-inset-bottom)); }
+  .vault-title-row { align-items: center; }
+  .vault-title-row .btn { flex: none; min-height: 40px; }
+  .credential-vault > .picker-list .picker-item { align-items: flex-start; padding: 13px 10px; }
+  .vault-row-status { flex: none; }
+  .vault-detail-grid { grid-template-columns: 1fr; gap: 3px; padding: 14px; }
+  .vault-detail-grid > strong { margin-bottom: 9px; }
+  .vault-detail-grid > strong:last-child { margin-bottom: 0; }
+  .credential-vault .row-actions { align-items: stretch; }
+  .credential-vault .row-actions .btn { flex: 1 1 auto; min-height: 42px; }
 
   /* Ruleset editing is input-heavy: use the full mobile width, predictable
      button grids, and stacked fields instead of squeezing desktop rows until

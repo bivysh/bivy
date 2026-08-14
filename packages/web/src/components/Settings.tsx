@@ -72,9 +72,6 @@ const IconServer = () => (
 const IconBolt = () => (
   <Glyph><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" /></Glyph>
 );
-const IconCpu = () => (
-  <Glyph><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" /></Glyph>
-);
 const IconSun = () => (
   <Glyph><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></Glyph>
 );
@@ -139,8 +136,8 @@ const TITLES: Record<View, string> = {
   appearance: "Appearance",
   notifications: "Notifications",
   import: "Import session",
-  providers: "Keys & sign-ins",
-  models: "Local models",
+  providers: "Models & keys",
+  models: "Models & keys",
   voice: "Voice",
   github: "GitHub App",
   linear: "Linear",
@@ -160,8 +157,8 @@ const SEARCH_TERMS: Record<View, string> = {
   appearance: "theme system light dark",
   notifications: "push alerts attention approval permission idle completed",
   import: "session transcript file upload migrate",
-  providers: "api key oauth openai anthropic google login credentials",
-  models: "ollama local model endpoint",
+  providers: "model provider api key oauth openai anthropic google login credentials custom endpoint local ollama",
+  models: "model provider api key oauth ollama local custom endpoint",
   voice: "microphone speech transcription read aloud reader text to speech voice tone speed",
   github: "github app repository installation issue pull request",
   linear: "linear workspace issue integration",
@@ -238,10 +235,9 @@ export function Settings({
 
   const groups: NavGroup[] = [
     {
-      label: "Models & agents",
+      label: "Models & keys",
       items: [
-        { id: "providers", label: "Keys & sign-ins", icon: <IconKey /> },
-        { id: "models", label: "Local models", icon: <IconCpu /> },
+        { id: "providers", label: "Providers & credentials", icon: <IconKey /> },
       ],
     },
     {
@@ -316,7 +312,7 @@ export function Settings({
                   {visible.map((it) => (
                     <button
                       key={it.id}
-                      className={`settings-nav-item${activeView === it.id ? " active" : ""}`}
+                      className={`settings-nav-item${activeView === it.id || (it.id === "providers" && activeView === "models") ? " active" : ""}`}
                       onClick={() => onViewChange(it.id)}
                     >
                       <span className="settings-nav-icon">{it.icon}</span>
@@ -351,6 +347,9 @@ export function Settings({
             {activeView === "notifications" && <NotificationsPanel />}
             {activeView === "import" && <ImportPanel onImported={(id) => onImported?.(id)} />}
             {activeView === "providers" && <CredentialVault state={state} />}
+            {/* Compatibility for old /settings/models links. New endpoints are
+                added from Models & keys; this keeps the full legacy endpoint
+                editor reachable without splitting the primary navigation. */}
             {activeView === "models" && <LocalModelsPanel state={state} onStartWork={onClose} />}
             {activeView === "voice" && (
               <Suspense fallback={<div className="muted">Loading voice settings…</div>}>
