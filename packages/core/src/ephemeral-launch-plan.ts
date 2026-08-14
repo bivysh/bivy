@@ -5,17 +5,13 @@
 // supplied facts into a plan and projects a provider result into tracked data.
 
 import type { EphemeralMachine, EphemeralMachinePurpose } from "./ephemeral-machine.js";
-import type { BootstrapOpts, ProviderProvisionConfig } from "./ephemeral-provider-ports.js";
+import type { ProviderProvisionConfig } from "./ephemeral-provider-ports.js";
 
 export interface EphemeralLaunchPlanInput {
   provider: string;
   attemptId: string;
   nodeId: string;
   requestedAt: string;
-  enrollmentToken: string;
-  roomKeyB64: string;
-  relayUrl: string;
-  controlPlaneUrl: string;
   defaultRegion: string;
   defaultSize: string;
   region?: string;
@@ -27,13 +23,9 @@ export interface EphemeralLaunchPlanInput {
   setupId?: string;
   teardownOnAgentFinish?: boolean;
   debugKeepMachine?: boolean;
-  hostedTasks?: boolean;
-  githubToken?: string;
-  hostedMint?: boolean;
   workItemId?: string;
   purpose?: EphemeralMachinePurpose;
   ownershipTag?: string;
-  restoreSessionId?: string;
 }
 
 export interface EphemeralLaunchPlan {
@@ -43,7 +35,6 @@ export interface EphemeralLaunchPlan {
   provider: string;
   region: string;
   size: string;
-  bootstrap: BootstrapOpts;
   providerConfig: ProviderProvisionConfig;
   machineFacts: Partial<Pick<EphemeralMachine, "name" | "setupId" | "repo" | "teardownOnAgentFinish" | "workItemId" | "purpose">>;
 }
@@ -64,22 +55,6 @@ export function planEphemeralLaunch(input: EphemeralLaunchPlanInput): EphemeralL
     provider: input.provider,
     region,
     size,
-    bootstrap: {
-      relayUrl: input.relayUrl,
-      controlPlaneUrl: input.controlPlaneUrl,
-      enrollmentToken: input.enrollmentToken,
-      e2eKeyB64: input.roomKeyB64,
-      ttlMinutes: input.ttlMinutes,
-      repo: input.repo,
-      hostedTasks: input.hostedTasks,
-      nodeLabel: input.hostedTasks ? label : undefined,
-      githubToken: input.githubToken,
-      hostedMint: input.hostedMint,
-      provider: input.provider,
-      teardownOnAgentFinish: input.teardownOnAgentFinish,
-      debugKeepMachine: input.debugKeepMachine,
-      restoreSessionId: input.restoreSessionId,
-    },
     providerConfig: {
       slug: label,
       region,

@@ -177,8 +177,8 @@ export function RulesetsPanel({ state }: { state: AppState }) {
       </p>
 
       <div className="picker-list">
-        {state.rulesets.length === 0 && <div className="picker-empty">No rulesets yet.</div>}
-        {state.rulesets.map((rs) => (
+        {state.settings.rulesets.length === 0 && <div className="picker-empty">No rulesets yet.</div>}
+        {state.settings.rulesets.map((rs) => (
           <PickerItem
             key={rs.name}
             title={rs.name}

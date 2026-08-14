@@ -26,10 +26,18 @@ const globalEnforce = process.argv.includes("--enforce");
 /**
  * Each rule: files under `dir` (recursively) may not `import`/`export ... from`
  * any specifier matching one of `forbid` (substring match against the raw
- * specifier string). `enforce` promotes this rule's violations to failures even
- * without the global --enforce flag.
+ * specifier string). `allowOnly`, when present, rejects every specifier not in
+ * that exact allowlist. `enforce` promotes violations to failures even without
+ * the global --enforce flag.
  */
 const RULES = [
+  {
+    name: "session-contract-values-are-dependency-neutral",
+    dir: "packages/core/src/session-contract.ts",
+    forbid: [""],
+    enforce: true,
+    note: "session wire values and their pure resolver are the canonical source for node and client builds and import no implementation.",
+  },
   {
     name: "credentials-is-a-leaf",
     dir: "src/credentials",
@@ -47,6 +55,13 @@ const RULES = [
     // Pilot boundary (Phase 1) — two-layer split landed, boundary enforced.
     enforce: true,
     note: "credentials must be a pure domain + injected-port service; upward deps become ports (see pilot spec).",
+  },
+  {
+    name: "agent-profiles-are-declarative-data",
+    dir: "src/agents/profiles.ts",
+    forbid: ["../runtime", "../harness", "node:", "process", "=>"],
+    enforce: true,
+    note: "agent definitions are immutable recipes; runtime factories interpret launch and history-loader identities.",
   },
   {
     name: "controllers-dont-import-server",
@@ -77,11 +92,25 @@ const RULES = [
     note: "the audit trail is a pure fs leaf; the daemon hands it decisions to record. It imports no kernel implementation (moat #1).",
   },
   {
+    name: "web-coordinators-are-standalone",
+    dir: "packages/web/src/store/coordinators",
+    forbid: ["../controller", "react", "ephemeral-provider-adapters", "services/control-plane", "session-contract", "agent-profile"],
+    enforce: true,
+    note: "coordinators receive effects as explicit dependencies and never reach back into AppController or prohibited implementation modules.",
+  },
+  {
     name: "ephemeral-lifecycle-is-pure-data",
     dir: "packages/core/src/ephemeral-lifecycle.ts",
     forbid: ["./", "../", "node:", "@"],
     enforce: true,
     note: "ephemeral lifecycle projections are data-in/data-out and import no storage, provider, transport, browser, or clock implementation.",
+  },
+  {
+    name: "session-draft-is-a-pure-reducer",
+    dir: "packages/core/src/session-draft.ts",
+    forbid: ["./store", "./transport", "./local-store", "node:", "react"],
+    enforce: true,
+    note: "new-session target choices share one explicit value and are reduced without effects or store identity.",
   },
   {
     name: "followup-queue-is-a-pure-reducer",
@@ -90,6 +119,29 @@ const RULES = [
     enforce: true,
     note: "follow-up commands reduce immutable queue values; the SessionStore is only an identity/subscription shell.",
   },
+  ...[
+    "connection-event-fold.ts",
+    "session-index-event-fold.ts",
+    "catalog-settings-event-fold.ts",
+    "presentation-event-fold.ts",
+  ].map((file) => ({
+    name: `${file.replace(/\\.ts$/, "")}-is-pure`,
+    dir: `packages/core/src/${file}`,
+    forbid: ["./store", "./transport", "./local-store", "./ephemeral", "node:", "react"],
+    enforce: true,
+    note: "event folds are standalone data transformations; SessionStore installs their returned values.",
+  })),
+  ...[
+    "active-session-event-fold.ts",
+    "attention-event-fold.ts",
+    "transcript-event-fold.ts",
+  ].map((file) => ({
+    name: `${file.replace(/\\.ts$/, "")}-is-pure`,
+    dir: `packages/core/src/${file}`,
+    forbid: ["./store.js", "./transport", "./local-store", "./ephemeral", "session-contract", "agent-profile", "node:", "react"],
+    enforce: true,
+    note: "active-session folds are standalone immutable decisions; the SessionStore only interprets their patches and commands.",
+  })),
   {
     name: "ephemeral-catalog-is-pure-data",
     dir: "packages/core/src/ephemeral-catalog.ts",
@@ -105,11 +157,11 @@ const RULES = [
     note: "provider-neutral machine facts depend only on other value projections.",
   },
   {
-    name: "ephemeral-launch-plan-is-a-pure-decision",
+    name: "ephemeral-launch-plan-is-a-safe-pure-decision",
     dir: "packages/core/src/ephemeral-launch-plan.ts",
-    forbid: ["./ephemeral-storage", "./ephemeral-provider-adapters", "./ephemeral.js", "./transport", "./local-store", "node:", "react"],
+    forbid: ["./ephemeral-execution-envelope", "./ephemeral-storage", "./ephemeral-provider-adapters", "./ephemeral.js", "./transport", "./local-store", "BootstrapOpts", "enrollmentToken", "roomKeyB64", "githubToken", "node:", "react"],
     enforce: true,
-    note: "launch planning combines supplied facts into intent data; orchestration interprets the plan at the effect edge.",
+    note: "inspectable launch plans contain no bootstrap credentials; the execution envelope is separate and effect-edge-only.",
   },
   {
     name: "ephemeral-provider-ports-dont-import-effects",
@@ -117,6 +169,32 @@ const RULES = [
     forbid: ["./ephemeral-storage", "./ephemeral-provider-adapters", "./ephemeral.js", "./transport", "./local-store"],
     enforce: true,
     note: "provider contracts depend on values; adapter and persistence implementations depend on the contracts.",
+  },
+  {
+    name: "ephemeral-provider-interpreters-only-depend-downward",
+    dir: "packages/core/src/ephemeral-providers",
+    allowOnly: [
+      "../base64.js",
+      "../ephemeral-provider-bootstrap.js",
+      "../ephemeral-catalog.js",
+      "../ephemeral-lifecycle.js",
+      "../ephemeral-machine.js",
+      "../ephemeral-provider-ports.js",
+      "../ephemeral-provider-utils.js",
+    ],
+    forbid: [
+      "../ephemeral.js",
+      "../ephemeral-storage",
+      "../ephemeral-launch-plan",
+      "../store",
+      "../local-store",
+      "../transport",
+      "../account",
+      "node:",
+      "react",
+    ],
+    enforce: true,
+    note: "provider interpreters may depend on provider ports, shared provider utilities, and values; never launch orchestration, persistence, stores, or transports.",
   },
   {
     name: "ephemeral-storage-does-not-import-providers",
@@ -159,6 +237,62 @@ function specifiersOf(source) {
 let totalViolations = 0;
 let hardFailures = 0;
 
+// @bivy/core compiles the canonical source through this stable package-local
+// alias. Requiring identity (not equal copied text) prevents synchronization by
+// convention from returning while preserving both packages' existing output
+// paths and the root release artifact layout.
+const sessionContractAlias = path.join(repoRoot, "src/session/session-contract-values.ts");
+const canonicalSessionContract = path.join(repoRoot, "packages/core/src/session-contract.ts");
+const contractHasOneSource =
+  fs.existsSync(sessionContractAlias) &&
+  fs.existsSync(canonicalSessionContract) &&
+  fs.realpathSync(sessionContractAlias) === fs.realpathSync(canonicalSessionContract);
+console.log(`\n[${contractHasOneSource ? "CLEAN" : "FAIL"}] session-contract-has-one-canonical-source  — ${contractHasOneSource ? 0 : 1} violation(s)`);
+console.log("        node and @bivy/core must compile the same dependency-neutral session contract source.");
+if (!contractHasOneSource) {
+  totalViolations += 1;
+  hardFailures += 1;
+}
+
+// Compatibility entrypoints must enumerate the API they support. This keeps
+// internal interpreter details from leaking accidentally as modules are split.
+const explicitFacadeChecks = [
+  {
+    file: "packages/core/src/ephemeral.ts",
+    reject: /export\s*\*/,
+    reason: "the ephemeral compatibility facade must use explicit exports",
+  },
+  {
+    file: "packages/core/src/ephemeral-provider-adapters.ts",
+    reject: /export\s*\*/,
+    reason: "the provider compatibility facade must use explicit exports",
+  },
+  ...[
+    "ephemeral.js",
+    "connection-event-fold.js",
+    "session-index-event-fold.js",
+    "catalog-settings-event-fold.js",
+    "presentation-event-fold.js",
+    "active-session-event-fold.js",
+    "attention-event-fold.js",
+    "transcript-event-fold.js",
+  ].map((specifier) => ({
+    file: "packages/core/src/index.ts",
+    reject: new RegExp(`export\\s*\\*\\s*from\\s*["']\\./${specifier.replace(".", "\\.")}["']`),
+    reason: `the core entrypoint must explicitly export supported ${specifier} symbols`,
+  })),
+];
+const facadeViolations = explicitFacadeChecks.filter(({ file, reject }) =>
+  reject.test(fs.readFileSync(path.join(repoRoot, file), "utf8")),
+);
+console.log(`\n[${facadeViolations.length ? "FAIL" : "CLEAN"}] core-facades-have-explicit-exports  — ${facadeViolations.length} violation(s)`);
+console.log("        touched compatibility facades enumerate their supported exports.");
+for (const violation of facadeViolations) console.log(`        ${violation.file}  → ${violation.reason}`);
+if (facadeViolations.length) {
+  totalViolations += facadeViolations.length;
+  hardFailures += facadeViolations.length;
+}
+
 for (const rule of RULES) {
   const files = walk(rule.dir);
   const violations = [];
@@ -168,10 +302,11 @@ for (const rule of RULES) {
     for (const spec of specifiersOf(source)) {
       if (rule.allow?.some((a) => spec === a || spec.includes(a))) continue;
       const hit = rule.forbid.find((f) => spec.includes(f));
-      if (!hit) continue;
+      const outsideAllowlist = rule.allowOnly && !rule.allowOnly.includes(spec);
+      if (!hit && !outsideAllowlist) continue;
       // Best-effort line number for the specifier.
       const lineNo = lines.findIndex((l) => l.includes(`"${spec}"`) || l.includes(`'${spec}'`)) + 1;
-      violations.push({ file, lineNo, spec, hit });
+      violations.push({ file, lineNo, spec, hit: hit || "not in allowOnly" });
     }
   }
   const enforced = globalEnforce || rule.enforce;

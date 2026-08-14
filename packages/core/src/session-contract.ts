@@ -2,6 +2,11 @@
 // Copyright (c) 2026 Petter André Sjulstad
 
 /**
+ * Canonical dependency-neutral source for Effective Session Contract wire
+ * values and pure resolution. The node build compiles this same file through
+ * src/session/session-contract-values.ts; neither side depends on the other's
+ * package or runtime implementation.
+ *
  * The Effective Session Contract is an observation report, not an
  * attestation — same discipline as Receipt v1 (see receipt-v1.ts): report
  * what was actually observed, keep "requested" and "effective" distinct,

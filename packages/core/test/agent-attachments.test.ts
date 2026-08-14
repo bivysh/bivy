@@ -18,7 +18,7 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
 
   it("is buffered until the turn ends (no standalone entry mid-turn)", () => {
     const store = play([{ type: "attachment", id: "att1", ref: imageRef, caption: "cap" }]);
-    expect(store.getState().transcript).toHaveLength(0);
+    expect(store.getState().activeSession.transcript).toHaveLength(0);
   });
 
   it("lands under the turn's final assistant bubble, even when attached before the reply", () => {
@@ -28,7 +28,7 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
       { type: "message_end", message: { role: "assistant", content: "Here it is." } }, // …then writes the reply
       { type: "agent_end" },
     ]);
-    const t = store.getState().transcript;
+    const t = store.getState().activeSession.transcript;
     expect(t).toHaveLength(1);
     expect(t[0]!.role).toBe("assistant");
     expect(t[0]!.text).toBe("Here it is.");
@@ -44,7 +44,7 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
       { type: "attachment", id: "a2", ref: csv }, // after the reply
       { type: "agent_end" },
     ]);
-    const t = store.getState().transcript;
+    const t = store.getState().activeSession.transcript;
     expect(t).toHaveLength(1);
     expect(t[0]!.text).toBe("Two files:");
     expect(t[0]!.attachments?.map((a) => a.hash)).toEqual([HASH, "b".repeat(64)]);
@@ -55,7 +55,7 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
       { type: "attachment", id: "att1", ref: imageRef, caption: "just a file" },
       { type: "agent_end" },
     ]);
-    const t = store.getState().transcript;
+    const t = store.getState().activeSession.transcript;
     expect(t).toHaveLength(1);
     expect(t[0]!.role).toBe("assistant");
     expect(t[0]!.text).toBe("just a file");
@@ -67,12 +67,12 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
       { type: "attachment", id: "att1", ref: imageRef, caption: "cap", artifact: true },
       { type: "agent_end" },
     ]);
-    expect(store.getState().transcript[0]!.attachments?.[0]?.artifact).toBe(true);
+    expect(store.getState().activeSession.transcript[0]!.attachments?.[0]?.artifact).toBe(true);
   });
 
   it("omits the artifact field for an ordinary (unmarked) attachment", () => {
     const store = play([{ type: "attachment", id: "att1", ref: imageRef, caption: "cap" }, { type: "agent_end" }]);
-    expect(store.getState().transcript[0]!.attachments?.[0]?.artifact).toBeUndefined();
+    expect(store.getState().activeSession.transcript[0]!.attachments?.[0]?.artifact).toBeUndefined();
   });
 
   it("ignores malformed attachment events (no entry even after the turn ends)", () => {
@@ -82,7 +82,7 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
       { type: "attachment", id: "y", ref: { hash: HASH, kind: "video" } }, // bad kind
       { type: "agent_end" },
     ]);
-    expect(store.getState().transcript).toHaveLength(0);
+    expect(store.getState().activeSession.transcript).toHaveLength(0);
   });
 });
 
@@ -169,7 +169,7 @@ describe("agent attachment — sticky across a lossy reconcile (append-only)", (
   const historyEvent = (messages: unknown[], count: number, hash: string, requestId?: string) => ({
     type: "session.history", requestId, sessionId: "s1", runtimeId: "claude", mode: "full", count, historyHash: hash, messages,
   });
-  const attCount = (s: SessionStore) => s.getState().transcript.reduce((n, e) => n + (e.attachments?.length ?? 0), 0);
+  const attCount = (s: SessionStore) => s.getState().activeSession.transcript.reduce((n, e) => n + (e.attachments?.length ?? 0), 0);
 
   it("a later snapshot that omits the overlay does not erase the chip", () => {
     const s = new SessionStore();
@@ -178,7 +178,7 @@ describe("agent attachment — sticky across a lossy reconcile (append-only)", (
     expect(attCount(s)).toBe(1);
     s.apply(historyEvent(withoutOverlay, 2, "hRaw") as never); // post-resume reconcile, lossy
     expect(attCount(s)).toBe(1); // sticky — chip survives
-    const chip = s.getState().transcript.find((e) => e.attachments?.length)?.attachments?.[0];
+    const chip = s.getState().activeSession.transcript.find((e) => e.attachments?.length)?.attachments?.[0];
     expect(chip?.hash).toBe(HASH);
   });
 
@@ -204,7 +204,7 @@ describe("agent attachment — sticky across a lossy reconcile (append-only)", (
     s.apply(historyEvent(two, 4, "h4", "r1") as never);
     expect(attCount(s)).toBe(2);
     s.apply(historyEvent(withoutOverlay, 2, "hRaw") as never);
-    const hashes = s.getState().transcript.flatMap((e) => e.attachments?.map((a) => a.hash) ?? []);
+    const hashes = s.getState().activeSession.transcript.flatMap((e) => e.attachments?.map((a) => a.hash) ?? []);
     expect(new Set(hashes)).toEqual(new Set([HASH, HASH2]));
   });
 

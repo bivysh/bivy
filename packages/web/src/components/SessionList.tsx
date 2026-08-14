@@ -150,7 +150,7 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
   // finished (or errored) is the shared `prResult`/`error` state. Watch both so
   // tapping "Update GitHub status" doesn't just look like nothing happened
   // while the node is thinking.
-  const { prResult, error } = useAppState();
+  const { presentation: { prResult, error } } = useAppState();
   const prBusyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -285,7 +285,7 @@ function RowMenu({ sessionId, name, isRepo, prs }: { sessionId: string; name: st
 const PAGE = 10;
 
 export function SessionList({ onPick, onPickTerminal, runEvidence }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem> }) {
-  const { sessions, runTerminals, activeSessionId, nodes, currentNodeId } = useAppState();
+  const { sessionIndex: { sessions, runTerminals }, activeSession: { activeSessionId }, connection: { nodes, currentNodeId } } = useAppState();
   const [query, setQuery] = useState("");
   const [repoFilter, setRepoFilter] = useState("");
   const [nodeFilter, setNodeFilter] = useState("");

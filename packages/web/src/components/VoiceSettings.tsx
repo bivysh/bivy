@@ -24,7 +24,7 @@ export function VoiceSettings({ state }: { state: AppState }) {
     setSpeech(next);
     setSpeechPreferences(next);
   };
-  const config = state.sttConfig;
+  const config = state.settings.sttConfig;
   const providers = config?.providers ?? [];
   const openAiReady = providers.some((provider) => provider.id === "openai" && provider.configured);
 

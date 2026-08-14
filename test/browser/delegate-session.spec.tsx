@@ -8,7 +8,7 @@ test("the composer starts a Run from one message without turning the Session int
   const [composer, sheet, controller, menu] = await Promise.all([
     read("../../packages/web/src/components/Composer.tsx"),
     read("../../packages/web/src/components/RunTaskSheet.tsx"),
-    read("../../packages/web/src/store/controller.ts"),
+    read("../../packages/web/src/store/coordinators/automations-account-coordinator.ts"),
     read("../../packages/web/src/components/SessionMenu.tsx"),
   ]);
   expect(composer).toContain('className="split-send"');
@@ -16,8 +16,8 @@ test("the composer starts a Run from one message without turning the Session int
   expect(composer).toContain("Schedule for later");
   expect(sheet).toContain("You can continue to follow and steer the Session");
   expect(controller).toContain("async startRun(");
-  expect(controller).toContain('targetKind: sessionId ? "existing_session" : "new_session"');
-  expect(controller).toContain("targetSessionId: sessionId");
+  expect(controller).toContain('targetKind: context.sessionId ? "existing_session" : "new_session"');
+  expect(controller).toContain("targetSessionId: context.sessionId");
   expect(menu).not.toContain("Delegate this Session");
 });
 

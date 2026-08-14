@@ -35,6 +35,15 @@ const methodLabel = (kind: VaultItem["kind"]) => kind === "oauth" ? "Subscriptio
 const availabilityLabel = (value: Availability) => value === "account" ? "All my machines" : value === "node" ? "Only this machine" : "Only this device";
 
 export function CredentialVault({ state }: { state: AppState }) {
+  const status = state.connection.status;
+  const currentNodeId = state.connection.currentNodeId;
+  const nodes = state.connection.nodes;
+  const providers = state.catalogs.providers;
+  const repos = state.catalogs.repos;
+  const credentialRecords = state.settings.credentialRecords;
+  const credentialPresets = state.settings.credentialPresets;
+  const localModels = state.settings.localModels;
+  const oauth = state.presentation.oauth;
   const [deviceKeys, setDeviceKeys] = useState<EphemeralModelKeyInfo[]>([]);
   const [view, setView] = useState<"list" | "add" | "detail">("list");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -47,7 +56,7 @@ export function CredentialVault({ state }: { state: AppState }) {
   const [customApi, setCustomApi] = useState("openai-completions");
   const [customModels, setCustomModels] = useState("");
   const [availability, setAvailability] = useState<Availability>("account");
-  const [assignmentProject, setAssignmentProject] = useState(state.draftRepo ?? "");
+  const [assignmentProject, setAssignmentProject] = useState(state.draft.repo ?? "");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -66,25 +75,25 @@ export function CredentialVault({ state }: { state: AppState }) {
     controller.getCredentialPresets();
     controller.listRepos();
     void controller.listEphemeralModelKeys().then(setDeviceKeys).catch(() => setDeviceKeys([]));
-  }, [state.currentNodeId]);
+  }, [currentNodeId]);
 
   const catalog = useMemo(() => {
     const by = new Map(BASE_PROVIDERS.map((p) => [p.id, p]));
-    for (const p of state.providers) by.set(p.id, { ...by.get(p.id), id: p.id, name: p.name || p.id, oauth: p.oauth });
-    for (const r of state.credentialRecords) if (!by.has(r.provider)) by.set(r.provider, { id: r.provider, name: r.provider });
+    for (const p of providers) by.set(p.id, { ...by.get(p.id), id: p.id, name: p.name || p.id, oauth: p.oauth });
+    for (const r of credentialRecords) if (!by.has(r.provider)) by.set(r.provider, { id: r.provider, name: r.provider });
     for (const k of deviceKeys) if (!by.has(k.provider)) by.set(k.provider, { id: k.provider, name: k.provider });
     return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [state.providers, state.credentialRecords, deviceKeys]);
+  }, [providers, credentialRecords, deviceKeys]);
   const providerName = (id: string) => catalog.find((p) => p.id === id)?.name || id;
 
   const items = useMemo(() => {
     const out = new Map<string, VaultItem>();
     const logicalItems = mergeCredentialItems(
       migrateBrowserModelKeys(deviceKeys),
-      migrateNodeCredentialSummaries(state.credentialRecords, state.currentNodeId || "current-node"),
+      migrateNodeCredentialSummaries(credentialRecords, currentNodeId || "current-node"),
     );
     for (const item of logicalItems) {
-      const record = state.credentialRecords.find((candidate) => candidate.provider === item.provider && candidate.label === item.label);
+      const record = credentialRecords.find((candidate) => candidate.provider === item.provider && candidate.label === item.label);
       const device = deviceKeys.find((candidate) => candidate.provider === item.provider && candidate.label === item.label);
       out.set(keyOf(item.provider, item.label), {
         provider: item.provider,
@@ -96,7 +105,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         ...(device ? { device } : {}),
       });
     }
-    for (const p of state.providers) if (p.configured && ![...out.values()].some((item) => item.provider === p.id)) {
+    for (const p of providers) if (p.configured && ![...out.values()].some((item) => item.provider === p.id)) {
       out.set(keyOf(p.id, "default"), {
         provider: p.id, providerName: p.name || p.id, label: "default",
         kind: p.kind === "oauth" ? "oauth" : "environment", availability: "node", ambient: true,
@@ -104,7 +113,7 @@ export function CredentialVault({ state }: { state: AppState }) {
     }
     return [...out.values()].sort((a, b) => a.providerName.localeCompare(b.providerName) || a.label.localeCompare(b.label));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.credentialRecords, state.providers, state.currentNodeId, deviceKeys, catalog]);
+  }, [credentialRecords, providers, currentNodeId, deviceKeys, catalog]);
 
   const selected = selectedKey ? items.find((item) => keyOf(item.provider, item.label) === selectedKey) : undefined;
   const providerCounts = useMemo(() => new Map(items.map((item) => [item.provider, items.filter((x) => x.provider === item.provider).length])), [items]);
@@ -118,13 +127,13 @@ export function CredentialVault({ state }: { state: AppState }) {
     const account = label.trim().toLowerCase() || "default";
     if (!id) return;
     const catalogKnown = BASE_PROVIDERS.some((entry) => entry.id === id)
-      || (state.providers.some((entry) => entry.id === id) && !state.localModels.some((entry) => entry.id === id))
-      || items.some((entry) => entry.provider === id && !state.localModels.some((model) => model.id === id));
+      || (providers.some((entry) => entry.id === id) && !localModels.some((entry) => entry.id === id))
+      || items.some((entry) => entry.provider === id && !localModels.some((model) => model.id === id));
     if (catalogKnown && method !== "oauth" && !secret.trim()) return;
     setBusy(true); setError(null); setMessage(null);
     try {
       if (!catalogKnown) {
-        if (state.status !== "online") throw new Error("Connect a machine to configure a custom model endpoint.");
+        if (status !== "online") throw new Error("Connect a machine to configure a custom model endpoint.");
         if (!customBaseUrl.trim()) throw new Error("A custom provider needs a base URL.");
         const savedId = await controller.saveLocalModel({
           providerId: id,
@@ -142,15 +151,15 @@ export function CredentialVault({ state }: { state: AppState }) {
         return;
       }
       if (method === "oauth") {
-        if (state.status !== "online") throw new Error("An online machine is needed to complete subscription sign-in.");
+        if (status !== "online") throw new Error("An online machine is needed to complete subscription sign-in.");
         if (deviceKeys.some((record) => record.provider === id && record.label === account)) await controller.removeEphemeralModelKey(id, account);
         controller.startOauth(id, account);
         return;
       }
       if (method === "api_key") {
-        const nodeRecord = state.credentialRecords.find((record) => record.provider === id && record.label === account);
+        const nodeRecord = credentialRecords.find((record) => record.provider === id && record.label === account);
         const deviceRecord = deviceKeys.find((record) => record.provider === id && record.label === account);
-        if (availability === "device" && nodeRecord && state.status !== "online") {
+        if (availability === "device" && nodeRecord && status !== "online") {
           throw new Error("Connect a machine to remove its existing copy before making this credential device-only.");
         }
         if (availability === "account" || availability === "device") {
@@ -160,13 +169,13 @@ export function CredentialVault({ state }: { state: AppState }) {
         }
         if (availability === "device") {
           if (nodeRecord) await controller.removeCredential(id, account);
-        } else if (state.status !== "online") {
+        } else if (status !== "online") {
           if (availability === "node") throw new Error("Connect to the machine where this key should be stored.");
         } else {
           await controller.setCredential(id, account, { key: secret.trim(), sync: availability === "node" ? "node" : "account" });
         }
       } else {
-        if (state.status !== "online") throw new Error("Connect a machine to add a password-manager reference.");
+        if (status !== "online") throw new Error("Connect a machine to add a password-manager reference.");
         if (deviceKeys.some((record) => record.provider === id && record.label === account)) await controller.removeEphemeralModelKey(id, account);
         await controller.setCredential(id, account, { ref: secret.trim(), sync: availability === "account" ? "account" : "node" });
       }
@@ -198,7 +207,7 @@ export function CredentialVault({ state }: { state: AppState }) {
   const remove = async (item: VaultItem) => {
     setBusy(true); setError(null);
     try {
-      if (state.localModels.some((model) => model.id === item.provider)) controller.removeLocalModel(item.provider);
+      if (localModels.some((model) => model.id === item.provider)) controller.removeLocalModel(item.provider);
       if (item.device) await controller.removeEphemeralModelKey(item.provider, item.label);
       if (item.record) await controller.removeCredential(item.provider, item.label);
       setConfirmDelete(null);
@@ -226,8 +235,8 @@ export function CredentialVault({ state }: { state: AppState }) {
         </div>
       </div>;
     }
-    const customProvider = state.localModels.some((entry) => entry.id === chosen.id)
-      || (!BASE_PROVIDERS.some((entry) => entry.id === chosen.id) && !state.providers.some((entry) => entry.id === chosen.id) && !items.some((entry) => entry.provider === chosen.id));
+    const customProvider = localModels.some((entry) => entry.id === chosen.id)
+      || (!BASE_PROVIDERS.some((entry) => entry.id === chosen.id) && !providers.some((entry) => entry.id === chosen.id) && !items.some((entry) => entry.provider === chosen.id));
     const editingItem = selected?.provider === chosen.id;
     const discloseOptions = editingItem || items.some((item) => item.provider === chosen.id);
     const identityOptions = <>
@@ -247,7 +256,7 @@ export function CredentialVault({ state }: { state: AppState }) {
     return <div className="settings-form credential-vault">
       <button className="link-btn" onClick={() => setProvider("")}>‹ Providers</button>
       <h3>{customProvider ? "Custom provider" : chosen.name}</h3>
-      {state.oauth?.provider === chosen.id ? <OauthStep /> : <>
+      {oauth?.provider === chosen.id ? <OauthStep /> : <>
         {customProvider && <>
           <label className="field-label" htmlFor="custom-provider-id">Provider ID</label>
           <input id="custom-provider-id" className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value.toLowerCase())} />
@@ -282,17 +291,17 @@ export function CredentialVault({ state }: { state: AppState }) {
 
   if (view === "detail" && selected) {
     const count = providerCounts.get(selected.provider) ?? 1;
-    const isDefault = (state.credentialPresets?.presets?.default?.[selected.provider] ?? "default") === selected.label;
+    const isDefault = (credentialPresets?.presets?.default?.[selected.provider] ?? "default") === selected.label;
     const projectId = assignmentProject.trim();
     const projectPreset = projectId ? `project:${projectId}` : undefined;
-    const projectLabel = projectPreset ? state.credentialPresets?.presets?.[projectPreset]?.[selected.provider] : undefined;
+    const projectLabel = projectPreset ? credentialPresets?.presets?.[projectPreset]?.[selected.provider] : undefined;
     const usedByProject = projectLabel === selected.label;
-    const assignedProjects = Object.entries(state.credentialPresets?.presets ?? {})
+    const assignedProjects = Object.entries(credentialPresets?.presets ?? {})
       .filter(([name, mapping]) => name.startsWith("project:") && mapping?.[selected.provider] === selected.label)
       .map(([name]) => name.slice("project:".length));
     const projectOptions = [...new Set([
-      ...state.repos.map((repo) => repo.slug),
-      ...Object.keys(state.credentialPresets?.presets ?? {}).filter((name) => name.startsWith("project:")).map((name) => name.slice("project:".length)),
+      ...repos.map((repo) => repo.slug),
+      ...Object.keys(credentialPresets?.presets ?? {}).filter((name) => name.startsWith("project:")).map((name) => name.slice("project:".length)),
     ])].sort();
     return <div className="settings-form credential-vault">
       {confirmDelete && <ConfirmDialog
@@ -329,13 +338,13 @@ export function CredentialVault({ state }: { state: AppState }) {
       {!selected.ambient && <>
         <details className="vault-advanced"><summary>Replace or change availability</summary>
           <p className="muted small">Re-enter the secret to replace it or move it. Bivy never displays saved secrets.</p>
-          <button className="btn" onClick={() => { const custom = state.localModels.find((model) => model.id === selected.provider); resetAdd(selected.provider); setLabel(selected.label === "default" ? "" : selected.label); setMethod(selected.kind === "reference" ? "reference" : "api_key"); setAvailability(selected.availability); if (custom) { setCustomBaseUrl(custom.baseUrl); setCustomApi(custom.api); setCustomModels(custom.models.map((model) => model.id).join("\n")); } setView("add"); }}>Edit credential</button>
+          <button className="btn" onClick={() => { const custom = localModels.find((model) => model.id === selected.provider); resetAdd(selected.provider); setLabel(selected.label === "default" ? "" : selected.label); setMethod(selected.kind === "reference" ? "reference" : "api_key"); setAvailability(selected.availability); if (custom) { setCustomBaseUrl(custom.baseUrl); setCustomApi(custom.api); setCustomModels(custom.models.map((model) => model.id).join("\n")); } setView("add"); }}>Edit credential</button>
         </details>
         <button className="btn danger-ghost" disabled={busy} onClick={() => setConfirmDelete(selected)}>Delete credential</button>
       </>}
       {message && <p className="banner inline">{message}</p>}{error && <div className="banner error inline">{error}</div>}
-      {state.nodes.length > 0 && <details className="vault-advanced"><summary>Machine availability</summary><div className="picker-list">{state.nodes.map((n) => {
-        const available = selected.availability === "account" || (selected.availability === "node" && n.id === state.currentNodeId);
+      {nodes.length > 0 && <details className="vault-advanced"><summary>Machine availability</summary><div className="picker-list">{nodes.map((n) => {
+        const available = selected.availability === "account" || (selected.availability === "node" && n.id === currentNodeId);
         const status = !available ? "Not available" : n.online ? "Available" : selected.availability === "account" ? "Will sync when online" : "Offline";
         return <div className="picker-item" key={n.id}><span><strong>{n.name || n.id}</strong><small>{status}</small></span><span className={`chip ${available && n.online ? "ok" : ""}`}>{status}</span></div>;
       })}</div></details>}

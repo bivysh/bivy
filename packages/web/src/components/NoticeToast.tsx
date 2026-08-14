@@ -13,7 +13,7 @@ function dismissDelay(raw: string): number {
 }
 
 export function NoticeToast() {
-  const { notice } = useAppState();
+  const { presentation: { notice } } = useAppState();
 
   useEffect(() => {
     if (!notice) return;

@@ -148,7 +148,7 @@ export function RunPill({
   onOpenChanges?: () => void;
   /** Count of distinct artifacts (agent-sent attachments, user uploads,
    *  resolved inline images) this session's transcript carries — from
-   *  deriveArtifacts(state.transcript), computed in App. */
+   *  deriveArtifacts(state.activeSession.transcript), computed in App. */
   artifactsCount?: number;
   /** Open the Artifacts sheet. */
   onOpenArtifacts?: () => void;

@@ -393,7 +393,7 @@ function emptyDraft(nodeId: string): Draft {
 
 /** Prefer the composer's current draft repo so templates open pre-filled. */
 function rememberedRepo(state: AppState): string {
-  return state.draftRepo || "";
+  return state.draft.repo || "";
 }
 
 // Soft glyph for each suggested template card.
@@ -530,7 +530,7 @@ export function AutomationsView({
     };
   }, [menuId]);
 
-  const defaultNodeId = state.currentNodeId || controller.local.cur || "";
+  const defaultNodeId = state.connection.currentNodeId || controller.local.cur || "";
   const isEmpty = !loading && items.length === 0;
 
   function openSetup(focus: SourceSetupFocus) {
@@ -1754,10 +1754,10 @@ function SourceAutomationEditor({
                 onChange={(e) => setRepoDefault(e.target.value)}
               >
                 <option value="">None</option>
-                {repoDefault && !state.repos.some((r) => r.slug === repoDefault) && (
+                {repoDefault && !state.catalogs.repos.some((r) => r.slug === repoDefault) && (
                   <option value={repoDefault}>{repoDefault}</option>
                 )}
-                {state.repos.map((r) => (
+                {state.catalogs.repos.map((r) => (
                   <option key={r.slug} value={r.slug}>{r.slug}</option>
                 ))}
               </select>
@@ -1781,7 +1781,7 @@ function SourceAutomationEditor({
               <label className="field-label" htmlFor="src-agent">Agent</label>
               <select id="src-agent" className="picker-search" value={runtimeId} onChange={(e) => setRuntimeId(e.target.value)}>
                 <option value="">Machine default</option>
-                {state.runtimes.map((r) => (
+                {state.catalogs.runtimes.map((r) => (
                   <option key={r.id} value={r.id}>{r.name || r.id}</option>
                 ))}
               </select>
@@ -1858,9 +1858,9 @@ function AutomationEditor({
 
   const tzList = useMemo(() => timezoneOptions(d.timezone), [d.timezone]);
   const cronHuman = useMemo(() => describeCron(d.cron), [d.cron]);
-  const selectedNode = state.nodes.find((n) => n.id === d.nodeId);
+  const selectedNode = state.connection.nodes.find((n) => n.id === d.nodeId);
   const selectedNodeHasKey = Boolean(d.nodeId && controller.local.keys()[d.nodeId]);
-  const pairedNodes = state.nodes.filter((n) => Boolean(controller.local.keys()[n.id]));
+  const pairedNodes = state.connection.nodes.filter((n) => Boolean(controller.local.keys()[n.id]));
   const pick = d.hasTrigger ? matchTriggerPick(d) : null;
   const canEditTrigger = !d.id;
 
@@ -2294,10 +2294,10 @@ function AutomationEditor({
                         onChange={(e) => set("repo", e.target.value)}
                       >
                         <option value="">{d.trigger === "schedule" ? "Select a GitHub repo…" : "Event may supply the repo"}</option>
-                        {d.repo && !state.repos.some((r) => r.slug === d.repo) && (
+                        {d.repo && !state.catalogs.repos.some((r) => r.slug === d.repo) && (
                           <option value={d.repo}>{d.repo}</option>
                         )}
-                        {state.repos.map((r) => (
+                        {state.catalogs.repos.map((r) => (
                           <option key={r.slug} value={r.slug}>{r.slug}</option>
                         ))}
                       </select>
@@ -2308,7 +2308,7 @@ function AutomationEditor({
                       </p>
                       {!d.repo && d.trigger === "schedule" && (
                         <p className="schedule-hint warn">
-                          {state.repos.length === 0
+                          {state.catalogs.repos.length === 0
                             ? "No repos listed yet — connect GitHub on the machine, or type nothing and pick after the list loads."
                             : "Pick a repository so scheduled runs land in the right project."}
                         </p>
@@ -2333,11 +2333,11 @@ function AutomationEditor({
                     </span>
                     <select className="autom-inline-select" value={d.nodeId} onChange={(e) => set("nodeId", e.target.value)} aria-label="Run on machine">
                       <option value="">Select…</option>
-                      {state.nodes.map((n) => {
+                      {state.connection.nodes.map((n) => {
                         const hasKey = Boolean(controller.local.keys()[n.id]);
                         return <option key={n.id} value={n.id}>{String(n.name || n.id)}{hasKey ? n.online ? " · online" : " · offline" : " · key unavailable"}</option>;
                       })}
-                      {d.nodeId && !state.nodes.some((n) => n.id === d.nodeId) && <option value={d.nodeId}>{d.nodeId} · unavailable</option>}
+                      {d.nodeId && !state.connection.nodes.some((n) => n.id === d.nodeId) && <option value={d.nodeId}>{d.nodeId} · unavailable</option>}
                     </select>
                   </label>
                   {!selectedNodeHasKey && (
@@ -2381,8 +2381,8 @@ function AutomationEditor({
                       <label className="field-label" htmlFor="autom-runtime">Agent</label>
                       <select id="autom-runtime" className="picker-search" value={d.runtimeId} onChange={(e) => set("runtimeId", e.target.value)}>
                         <option value="">Machine default</option>
-                        {state.runtimes.map((r) => <option key={r.id} value={r.id}>{String(r.displayName || r.name || r.id)}</option>)}
-                        {d.runtimeId && !state.runtimes.some((r) => r.id === d.runtimeId) && (
+                        {state.catalogs.runtimes.map((r) => <option key={r.id} value={r.id}>{String(r.displayName || r.name || r.id)}</option>)}
+                        {d.runtimeId && !state.catalogs.runtimes.some((r) => r.id === d.runtimeId) && (
                           <option value={d.runtimeId}>{d.runtimeId} (not installed here)</option>
                         )}
                       </select>
@@ -2391,10 +2391,10 @@ function AutomationEditor({
                       <label className="field-label" htmlFor="autom-model">Model</label>
                       <select id="autom-model" className="picker-search" value={d.model} onChange={(e) => set("model", e.target.value)}>
                         <option value="">Agent default</option>
-                        {state.models.map((m) => (
+                        {state.catalogs.models.map((m) => (
                           <option key={String((m as { provider?: string }).provider || "") + ":" + m.id} value={m.id}>{m.label || m.id}</option>
                         ))}
-                        {d.model && !state.models.some((m) => m.id === d.model) && <option value={d.model}>{d.model}</option>}
+                        {d.model && !state.catalogs.models.some((m) => m.id === d.model) && <option value={d.model}>{d.model}</option>}
                       </select>
                     </div>
                     <div className="settings-field">

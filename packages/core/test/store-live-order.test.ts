@@ -27,7 +27,7 @@ function play(events: Ev[]): SessionStore {
 
 /** Just the prose text / tool callId of each transcript entry, in order. */
 function shape(store: SessionStore): Array<{ role: string; text?: string; tool?: string }> {
-  return store.getState().transcript.map((e) => (e.tool ? { role: "tool", tool: e.tool.callId } : { role: e.role, text: e.text }));
+  return store.getState().activeSession.transcript.map((e) => (e.tool ? { role: "tool", tool: e.tool.callId } : { role: e.role, text: e.text }));
 }
 
 describe("live-stream reasoning/tool order (reducer)", () => {

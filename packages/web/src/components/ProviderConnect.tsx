@@ -6,13 +6,13 @@ import { controller } from "../store/useStore.js";
 
 /**
  * The device-code / callback-url step of an in-flight OAuth login
- * (`state.oauth`). Shared by the Settings "Keys & OAuth" panel and the model
+ * (`state.presentation.oauth`). Shared by the Settings "Keys & OAuth" panel and the model
  * picker's inline connect flow — both just need to show whichever "waiting
  * for the node" or "paste this code back" step the current provider's login
  * is on, driven purely by `controller.store`'s live `oauth` state.
  */
 export function OauthStep() {
-  const oauth = controller.store.getState().oauth;
+  const oauth = controller.store.getState().presentation.oauth;
   const [code, setCode] = useState("");
   if (!oauth) return null;
   const url = oauth.authUrl || oauth.deviceCode?.verificationUri;
@@ -78,7 +78,7 @@ export function ProviderConnectForm({
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const provider = state.providers.find((p) => p.id === providerId);
+  const provider = state.catalogs.providers.find((p) => p.id === providerId);
   const name = provider?.name || providerId;
   const keyProvider = apiKeyProvider || providerId;
 
@@ -93,7 +93,7 @@ export function ProviderConnectForm({
     );
   }
 
-  if (state.oauth && state.oauth.provider === providerId) {
+  if (state.presentation.oauth && state.presentation.oauth.provider === providerId) {
     return <OauthStep />;
   }
 

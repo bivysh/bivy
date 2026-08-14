@@ -85,7 +85,7 @@ export function GithubQueuePanel({
    * session/report projections available for standalone queue consumers only. */
   showHistory?: boolean;
 }) {
-  const { sessions, activeSessionId, prRefreshAllResult, runtimes } = useAppState();
+  const { sessionIndex: { sessions }, activeSession: { activeSessionId }, presentation: { prRefreshAllResult }, catalogs: { runtimes } } = useAppState();
   const canQuery = !controller.direct;
 
   // The "Run…" agent picker offers the same picker-visible runtimes shown

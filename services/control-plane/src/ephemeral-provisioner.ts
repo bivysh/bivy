@@ -30,9 +30,43 @@ import {
   type MachineStore,
   type EphemeralLaunchEvent,
 } from "@bivy/core";
-import { providerCredentialFingerprint, ownershipTagFor, ConcurrentAttemptUpdateError, type MeshStore, type EphemeralNodeConfig, type QueueRouting, type HostedAuditEvent, type HostedMachineAttempt, type HostedMachineAttemptState } from "./store.js";
+import {
+  providerCredentialFingerprint,
+  ownershipTagFor,
+  ConcurrentAttemptUpdateError,
+  type EphemeralConfigurationRepository,
+  type HostedMachineRepository,
+  type EphemeralNodeConfig,
+  type QueueRouting,
+  type HostedAuditEvent,
+  type HostedMachineAttempt,
+  type HostedMachineAttemptState,
+  type NodeRecord,
+  type SessionCorrelation,
+  type WorkItem,
+} from "./store.js";
+import type { SecretEnvelope } from "./hosted-crypto.js";
 import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
+
+/** Persistence needed by unattended machine orchestration. Deliberately omits
+ * account administration, billing, notifications, device vaults, and automation
+ * definition management even though the concrete adapter provides them. */
+export interface EphemeralProvisioningPort
+  extends EphemeralConfigurationRepository, HostedMachineRepository {
+  createSession(accountId: string): Promise<string>;
+  listNodes(accountId: string): Promise<NodeRecord[]>;
+  removeNode(accountId: string, nodeId: string): Promise<boolean>;
+  listWorkItems(accountId: string, limit?: number): Promise<WorkItem[]>;
+  assignWorkItem(
+    accountId: string,
+    id: string,
+    input: { label: string; runtimeId?: string; model?: string; ephemeral?: boolean },
+  ): Promise<WorkItem | undefined>;
+  getSessionCorrelation(accountId: string, sessionId: string): Promise<SessionCorrelation | undefined>;
+  getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined>;
+  setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void>;
+}
 
 export interface ProvisionEnv {
   /** Public control-plane base URL the booted machine enrolls/reports to. */
@@ -51,7 +85,7 @@ export interface HostedExecutionReadiness { ready: boolean; reason: string; conf
 
 /** Static account capability for automation UI. Unlike planAutoProvision this
  * does not inspect pending work, active machines, rate limits, or node liveness. */
-export async function hostedExecutionReadiness(store: MeshStore, accountId: string): Promise<HostedExecutionReadiness> {
+export async function hostedExecutionReadiness(store: EphemeralProvisioningPort, accountId: string): Promise<HostedExecutionReadiness> {
   if (!ephemeralMachinesEnabled()) return { ready: false, reason: "deployment emergency switch is off" };
   const hosted = await store.getHostedProvisioning(accountId);
   if (!hosted.enabled) return { ready: false, reason: "unattended provisioning is disabled" };
@@ -72,7 +106,7 @@ export type EphemeralMilestone = (typeof EPHEMERAL_MILESTONES)[number];
 /** Server-stamp a hosted runner milestone. First write wins so reconnects and
  * repeated agent events cannot move the SLO boundary later. */
 export async function markHostedMachineMilestone(
-  store: MeshStore,
+  store: EphemeralProvisioningPort,
   accountId: string,
   nodeId: string,
   milestone: EphemeralMilestone,
@@ -157,7 +191,7 @@ function computeAttemptDeadline(
  * cancelled once sent, but a caller can (and does, see `maybeAutoProvision`)
  * refuse to COMMIT a claim/route write once it knows a second holder may
  * already own the account. */
-function startLeaseHeartbeat(store: MeshStore, accountId: string, holder: string): { stop: () => void; isLost: () => boolean } {
+function startLeaseHeartbeat(store: EphemeralProvisioningPort, accountId: string, holder: string): { stop: () => void; isLost: () => boolean } {
   let lost = false;
   const timer = setInterval(() => {
     void store.renewHostedProvisionLease(accountId, holder, PROVISION_LEASE_SECONDS).then((owned) => {
@@ -194,7 +228,7 @@ function withinMs(iso: unknown, ms: number, nowMs: number): boolean {
 
 // Best-effort append to the account's hosted-credential audit trail. `at` is
 // stamped here; failures never block provisioning.
-async function audit(store: MeshStore, accountId: string, event: Omit<HostedAuditEvent, "at">): Promise<void> {
+async function audit(store: EphemeralProvisioningPort, accountId: string, event: Omit<HostedAuditEvent, "at">): Promise<void> {
   try {
     await store.appendHostedAudit(accountId, { at: new Date().toISOString(), ...event });
   } catch {
@@ -218,7 +252,7 @@ export function resolveAutoProvisionTarget(
 }
 
 /** Decide whether to provision, without launching. Safe to expose for dry-runs. */
-export async function planAutoProvision(store: MeshStore, accountId: string, nowMs = Date.now()): Promise<ProvisionPlan> {
+export async function planAutoProvision(store: EphemeralProvisioningPort, accountId: string, nowMs = Date.now()): Promise<ProvisionPlan> {
   // Deployment emergency gate: exact `0` disables new launches; otherwise the
   // per-account hosted opt-in is authoritative. This is the single choke point
   // for ALL server-initiated auto-launches — both maybeAutoProvision
@@ -296,7 +330,7 @@ function serverKeyStore(providerToken: string): EphemeralKeyStore {
 // Machine records persisted to the account's hosted_machines JSONB. On add we
 // prune to a recent window so the list can't grow unbounded (TTL destroys the
 // real VMs; this is only bookkeeping for dedupe/teardown).
-function serverMachineStore(store: MeshStore, accountId: string, nowMs: number): MachineStore {
+function serverMachineStore(store: EphemeralProvisioningPort, accountId: string, nowMs: number): MachineStore {
   return {
     list: async () => (await store.getHostedMachines(accountId)) as unknown as EphemeralMachine[],
     add: async (m) => {
@@ -357,7 +391,7 @@ function serverLocalStore(opts: { sessionToken: string; env: ProvisionEnv; onAdd
  * via `correlateHostedSessions` (hosted-correlation.ts).
  */
 async function planRestoreProvision(
-  store: MeshStore,
+  store: EphemeralProvisioningPort,
   accountId: string,
 ): Promise<{ reuseNodeId: string; restoreSessionId: string } | null> {
   const items = await store.listWorkItems(accountId, 50).catch(() => []);
@@ -374,7 +408,7 @@ async function planRestoreProvision(
 
 /** Launch an ephemeral machine for `config` on behalf of the account. */
 export async function provisionEphemeralForAccount(
-  store: MeshStore,
+  store: EphemeralProvisioningPort,
   accountId: string,
   config: EphemeralNodeConfig,
   env: ProvisionEnv,
@@ -467,7 +501,7 @@ export async function provisionEphemeralForAccount(
   }
 }
 
-async function routePendingWorkToMachine(store: MeshStore, accountId: string, target: EphemeralNodeConfig, machine: EphemeralMachine): Promise<void> {
+async function routePendingWorkToMachine(store: EphemeralProvisioningPort, accountId: string, target: EphemeralNodeConfig, machine: EphemeralMachine): Promise<void> {
   if (!machine.nodeId) return;
   const routing = await store.getQueueRouting(accountId);
   const sourceLabel = routing.primary.kind === "node" ? `bivy/${routing.primary.node}` : "bivy";
@@ -482,7 +516,7 @@ async function routePendingWorkToMachine(store: MeshStore, accountId: string, ta
 /** Maintain at most one account-owned, credential-empty ready runner per opted-in
  * stable BYO config. Calls are serialized with the same lease as work claims. */
 export async function ensureReadyCapacity(
-  store: MeshStore,
+  store: EphemeralProvisioningPort,
   accountId: string,
   env: ProvisionEnv,
   launcher = launchEphemeralMachine,
@@ -518,7 +552,7 @@ export async function ensureReadyCapacity(
   }
 }
 
-export async function reconcileAllReadyCapacity(store: MeshStore, env: ProvisionEnv): Promise<{ accounts: number; created: number; failed: number }> {
+export async function reconcileAllReadyCapacity(store: EphemeralProvisioningPort, env: ProvisionEnv): Promise<{ accounts: number; created: number; failed: number }> {
   const accountIds = await store.listReadyCapacityAccountIds();
   const result = { accounts: accountIds.length, created: 0, failed: 0 };
   for (const accountId of accountIds) {
@@ -538,7 +572,7 @@ export async function reconcileAllReadyCapacity(store: MeshStore, env: Provision
  * account's stored provider token and a previously escrowed room key.
  */
 export async function provisionEphemeralRestore(
-  store: MeshStore,
+  store: EphemeralProvisioningPort,
   accountId: string,
   config: EphemeralNodeConfig,
   env: ProvisionEnv,
@@ -620,7 +654,7 @@ export async function provisionEphemeralRestore(
  * git op instead of holding a long-lived one. Returns null if hosted
  * provisioning is off or no app is configured.
  */
-export async function mintHostedInstallationToken(store: MeshStore, accountId: string): Promise<{ token: string; expiresAt: string } | null> {
+export async function mintHostedInstallationToken(store: EphemeralProvisioningPort, accountId: string): Promise<{ token: string; expiresAt: string } | null> {
   const hosted = await store.getHostedProvisioning(accountId);
   if (!hosted.enabled || !hosted.githubApp) return null;
   const minted = await mintInstallationToken(hosted.githubApp);
@@ -643,7 +677,7 @@ const observeProviderMachine: ObserveFn = async (machine, providerToken) => {
 };
 
 async function destroyOneHostedMachine(
-  store: MeshStore,
+  store: EphemeralProvisioningPort,
   accountId: string,
   machine: EphemeralMachine,
   providerToken: string,
@@ -671,7 +705,7 @@ async function destroyOneHostedMachine(
  * endpoint simply 200s).
  */
 export async function reapSettledHostedMachine(
-  store: MeshStore,
+  store: EphemeralProvisioningPort,
   accountId: string,
   nodeId: string,
   env: ProvisionEnv,
@@ -751,7 +785,7 @@ export async function reapSettledHostedMachine(
  * node — the VM self-destructs at its own TTL for Fly/EC2). Returns the number
  * reaped. Safe to run lazily or on a timer.
  */
-export async function reconcileHostedMachines(store: MeshStore, accountId: string, nowMs = Date.now(), env?: ProvisionEnv, destroy: DestroyFn = destroyEphemeralMachine, observe: ObserveFn = observeProviderMachine): Promise<number> {
+export async function reconcileHostedMachines(store: EphemeralProvisioningPort, accountId: string, nowMs = Date.now(), env?: ProvisionEnv, destroy: DestroyFn = destroyEphemeralMachine, observe: ObserveFn = observeProviderMachine): Promise<number> {
   let machines = await store.getHostedMachines(accountId);
   // Older self-hosted/test store shims may not expose the new attempt table
   // until their migration completes; legacy tracked-machine cleanup must still run.
@@ -980,7 +1014,7 @@ export interface ReconcileAllResult {
  * backstop when no new work arrives and a runner never sends /node/settled.
  * Accounts are isolated: one provider/store failure cannot stop the rest. */
 export async function reconcileAllHostedMachines(
-  store: MeshStore,
+  store: EphemeralProvisioningPort,
   env: ProvisionEnv,
   nowMs = Date.now(),
   destroy: DestroyFn = destroyEphemeralMachine,
@@ -1047,7 +1081,7 @@ const discoverProviderResources: DiscoverFn = async (provider, token, ownershipT
 };
 
 export async function sweepOrphanProviderResources(
-  store: MeshStore,
+  store: EphemeralProvisioningPort,
   accountId: string,
   env: ProvisionEnv,
   nowMs = Date.now(),
@@ -1132,7 +1166,7 @@ export interface OrphanSweepAllResult extends OrphanSweepResult {
  * every attempt row) was lost. Runs on its own, coarser interval than the
  * fast convergence sweep: `discover` is a heavier, multi-call provider
  * operation and has no business running every tick (see index.ts wiring). */
-export async function sweepAllOrphanProviderResources(store: MeshStore, env: ProvisionEnv, nowMs = Date.now()): Promise<OrphanSweepAllResult> {
+export async function sweepAllOrphanProviderResources(store: EphemeralProvisioningPort, env: ProvisionEnv, nowMs = Date.now()): Promise<OrphanSweepAllResult> {
   const accountIds = await store.listHostedEnabledAccountIds();
   const result: OrphanSweepAllResult = { accounts: accountIds.length, found: 0, reaped: 0, failed: 0 };
   for (const accountId of accountIds) {
@@ -1155,7 +1189,7 @@ export async function sweepAllOrphanProviderResources(store: MeshStore, env: Pro
  * launches. Never throws to its caller — provisioning failures are logged.
  */
 export async function maybeAutoProvision(
-  store: MeshStore,
+  store: EphemeralProvisioningPort,
   accountId: string,
   env: ProvisionEnv,
   launcher = launchEphemeralMachine,

@@ -8,7 +8,7 @@ import { ProviderConnectForm } from "./ProviderConnect.js";
 
 /**
  * First-run "sign in to your model" prompt for a freshly-launched ephemeral
- * runner that came online with no model credentials (`state.needsModelAuth`).
+ * runner that came online with no model credentials (`state.presentation.needsModelAuth`).
  *
  * This is the one case the vault-sync paths can't cover — a phone-only account
  * whose very first runner has nothing to inherit (no device key, no peer, no
@@ -23,12 +23,12 @@ import { ProviderConnectForm } from "./ProviderConnect.js";
  * render while `needsModelAuth` is set for the current node.
  */
 export function FirstRunModelAuthSheet({ state }: { state: AppState }) {
-  const req = state.needsModelAuth;
+  const req = state.presentation.needsModelAuth;
   // Only show it for the runner it was raised for — a node switch clears it in
   // the store, but guard here too so a stale render can never target the wrong
   // node.
-  if (!req || req.nodeId !== state.currentNodeId) return null;
-  const provider = state.providers.find((p) => p.id === req.provider);
+  if (!req || req.nodeId !== state.connection.currentNodeId) return null;
+  const provider = state.catalogs.providers.find((p) => p.id === req.provider);
   const name = provider?.name || req.provider;
   // A `reason` means an already-running agent hit an auth failure mid-session
   // (missing/expired credential → 401), not a fresh ephemeral runner. Explain the

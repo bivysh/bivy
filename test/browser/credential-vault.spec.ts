@@ -26,7 +26,7 @@ test("vault has saved-items, catalog add, detail, assignment and custody flows",
 });
 
 test("browser-node convergence preserves an offline key rotation", async () => {
-  const controller = await read("../../packages/web/src/store/controller.ts");
+  const controller = await read("../../packages/web/src/store/coordinators/credentials-models-coordinator.ts");
   expect(controller).toContain("acceptedIncoming");
   expect(controller).toContain("remoteAt > localAt");
   expect(controller).toContain("deletedAt[recordId]");

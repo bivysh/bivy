@@ -15,7 +15,7 @@ function dismissDelay(raw: string): number {
 }
 
 export function ErrorToast() {
-  const { error } = useAppState();
+  const { presentation: { error } } = useAppState();
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {

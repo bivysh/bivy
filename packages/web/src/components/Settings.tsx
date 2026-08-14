@@ -843,8 +843,8 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
 
       <label className="field-label">Configured for this account</label>
       <div className="picker-list">
-        {state.localModels.length === 0 && <div className="picker-empty">No local or custom endpoints yet.</div>}
-        {state.localModels.map((p) => (
+        {state.settings.localModels.length === 0 && <div className="picker-empty">No local or custom endpoints yet.</div>}
+        {state.settings.localModels.map((p) => (
           <PickerItem
             key={p.id}
             title={p.name || p.id}
@@ -881,11 +881,11 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
 
       <button className="btn primary block" onClick={() => openDraft({ ...EMPTY_DRAFT })}>+ Add endpoint</button>
 
-      {state.localModelPresets.length > 0 && (
+      {state.settings.localModelPresets.length > 0 && (
         <>
           <label className="field-label">Quick add</label>
           <div className="row-actions" style={{ flexWrap: "wrap" }}>
-            {state.localModelPresets.map((preset) => (
+            {state.settings.localModelPresets.map((preset) => (
               <button key={preset.id} className="btn" title={preset.note} onClick={() => openDraft(draftFromPreset(preset))}>
                 {preset.name}
               </button>
@@ -921,10 +921,10 @@ function NodesPanel({ state }: { state: AppState }) {
   useEffect(reload, [hosted]);
 
   // The node whose settings we're editing is only ever the one the transport
-  // is actually connected to (`state.status === "online"`) — never a guess
+  // is actually connected to (`state.connection.status === "online"`) — never a guess
   // based on a fixed timeout. While it's offline/connecting, don't trust
-  // whatever is left in `state.nodeSettings` (a prior node's data, or none).
-  const nodeOnline = state.status === "online";
+  // whatever is left in `state.settings.nodeSettings` (a prior node's data, or none).
+  const nodeOnline = state.connection.status === "online";
   useEffect(() => {
     if (hosted && nodeOnline) controller.getNodeSettings();
   }, [hosted, nodeOnline, currentNodeId]);
@@ -932,7 +932,7 @@ function NodesPanel({ state }: { state: AppState }) {
   // Re-seed the editable form whenever fresh settings arrive from the node
   // (initial load, or after switching to a different node). Keyed on the node
   // name so an in-progress edit isn't clobbered by an unrelated re-render.
-  const settings = nodeOnline ? state.nodeSettings : null;
+  const settings = nodeOnline ? state.settings.nodeSettings : null;
   // Includes githubIssuePrompt so `resetIssuePrompt` (which doesn't touch the
   // rest of the form) re-seeds once the node echoes back the restored default.
   const sig = settings ? `${settings.name}|${settings.defaultAgent}|${settings.githubIssuePrompt}` : "";
@@ -942,10 +942,10 @@ function NodesPanel({ state }: { state: AppState }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setForm(settings); }, [sig]);
 
-  const runtimes = state.runtimes.filter((r) => String((r as { status?: string }).status ?? "available") === "available");
-  const agentCaps = state.runtimes.find((r) => r.id === form?.defaultAgent)?.capabilities as { modelSelection?: boolean } | undefined;
+  const runtimes = state.catalogs.runtimes.filter((r) => String((r as { status?: string }).status ?? "available") === "available");
+  const agentCaps = state.catalogs.runtimes.find((r) => r.id === form?.defaultAgent)?.capabilities as { modelSelection?: boolean } | undefined;
   const modelSelectable = agentCaps?.modelSelection !== false;
-  const models = state.models;
+  const models = state.catalogs.models;
 
   const save = async () => {
     if (!form || saving) return;
@@ -1025,7 +1025,7 @@ function NodesPanel({ state }: { state: AppState }) {
 
       {!nodeOnline ? (
         <p className="muted">
-          {state.status === "offline"
+          {state.connection.status === "offline"
             ? "This machine is offline — its settings aren't reachable until it reconnects."
             : "Connecting to this machine…"}
         </p>
