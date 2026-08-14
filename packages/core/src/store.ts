@@ -3670,7 +3670,8 @@ export class SessionStore {
         const ref = (event as any).ref;
         if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return;
         const caption = typeof (event as any).caption === "string" ? (event as any).caption : "";
-        this.pendingAgentAttachments.push({ attachment: attachmentFromRef(ref), caption });
+        const artifact = Boolean((event as any).artifact);
+        this.pendingAgentAttachments.push({ attachment: attachmentFromRef(ref, { createdAt: Date.now(), artifact }), caption });
         return;
       }
       case "inlineImage": {

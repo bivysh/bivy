@@ -32,7 +32,7 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
     expect(t).toHaveLength(1);
     expect(t[0]!.role).toBe("assistant");
     expect(t[0]!.text).toBe("Here it is.");
-    expect(t[0]!.attachments).toEqual([{ kind: "image", name: "chart.png", size: 1234, mimeType: "image/png", hash: HASH }]);
+    expect(t[0]!.attachments).toEqual([{ kind: "image", name: "chart.png", size: 1234, mimeType: "image/png", hash: HASH, createdAt: expect.any(Number) }]);
   });
 
   it("groups MULTIPLE attachments from one turn under the final bubble, in emit order", () => {
@@ -60,6 +60,19 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
     expect(t[0]!.role).toBe("assistant");
     expect(t[0]!.text).toBe("just a file");
     expect(t[0]!.attachments?.[0]?.hash).toBe(HASH);
+  });
+
+  it("carries an explicit artifact:true marking through to the rendered chip", () => {
+    const store = play([
+      { type: "attachment", id: "att1", ref: imageRef, caption: "cap", artifact: true },
+      { type: "agent_end" },
+    ]);
+    expect(store.getState().transcript[0]!.attachments?.[0]?.artifact).toBe(true);
+  });
+
+  it("omits the artifact field for an ordinary (unmarked) attachment", () => {
+    const store = play([{ type: "attachment", id: "att1", ref: imageRef, caption: "cap" }, { type: "agent_end" }]);
+    expect(store.getState().transcript[0]!.attachments?.[0]?.artifact).toBeUndefined();
   });
 
   it("ignores malformed attachment events (no entry even after the turn ends)", () => {
@@ -105,6 +118,13 @@ describe("agent attachment — history render (grouped onto the final bubble)", 
     expect(entries.map((e) => e.role)).toEqual(["user", "assistant"]);
     expect(entries[1]!.text).toBe("Here are both.");
     expect(entries[1]!.attachments?.map((a) => a.hash)).toEqual([HASH, "b".repeat(64)]);
+  });
+
+  it("carries an explicit artifact:true block field and the message's createdAt through history render", () => {
+    const entries = renderHistory([
+      { role: "assistant", createdAt: 1700000000000, content: [{ type: "bivy_attachment", ref: imageRef, caption: "cap", artifact: true }] },
+    ]);
+    expect(entries[0]!.attachments?.[0]).toMatchObject({ hash: HASH, artifact: true, createdAt: 1700000000000 });
   });
 
   it("keeps a lone attachment (no prose in its turn) as a standalone entry", () => {

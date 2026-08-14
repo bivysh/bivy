@@ -1274,7 +1274,7 @@ function materializeAttachments(record: SessionRecord, files: DecodedAttachment[
 function recordAttachment(
   record: SessionRecord,
   bytes: Buffer,
-  opts: { name: string; mimeType: string; kind: "image" | "file"; caption?: string },
+  opts: { name: string; mimeType: string; kind: "image" | "file"; caption?: string; artifact?: boolean },
 ): { ref: AttachmentRef } | { error: string } {
   let ref: AttachmentRef;
   try {
@@ -1285,11 +1285,12 @@ function recordAttachment(
   (record.seenAttachmentHashes ??= new Set()).add(ref.hash);
   const entryId = `att-${randomBytes(8).toString("hex")}`;
   const caption = opts.caption ? String(opts.caption).slice(0, 2000) : undefined;
+  const artifact = Boolean(opts.artifact);
   // Anchor at the current base length so history replay interleaves the
   // attachment where it was emitted (see event-log outbound projection).
   const afterMessageCount = record.session.getMessages().length;
-  eventLog.appendOutboundAttachment(record.id, { afterMessageCount, id: entryId, ref, caption });
-  broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "attachment", id: entryId, ref, caption } }));
+  eventLog.appendOutboundAttachment(record.id, { afterMessageCount, id: entryId, ref, caption, artifact });
+  broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "attachment", id: entryId, ref, caption, ...(artifact ? { artifact } : {}) } }));
   return { ref };
 }
 
@@ -1302,7 +1303,7 @@ function recordAttachment(
  */
 function attachToChat(
   record: SessionRecord,
-  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string; artifact?: boolean },
 ): { ref: AttachmentRef } | { error: string } {
   const plan = planAttachment({
     workspaceDir: harnessDirFor(record),
@@ -1311,7 +1312,7 @@ function attachToChat(
     name: opts.name,
   });
   if (isAttachPlanError(plan)) return { error: plan.error };
-  return recordAttachment(record, plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind, caption: opts.caption });
+  return recordAttachment(record, plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind, caption: opts.caption, artifact: opts.artifact });
 }
 
 /** Extension guess for a passively-surfaced tool image, from its mime type. */
@@ -1368,7 +1369,7 @@ function handlePassiveToolImage(record: SessionRecord, event: Record<string, unk
  */
 function attachToChatForSession(
   sessionId: string,
-  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string; artifact?: boolean },
 ): { ref: AttachmentRef } | { error: string } {
   const record = openSessions.get(sessionId);
   if (!record) return { error: "Session not found" };
@@ -10728,6 +10729,7 @@ app.post("/api/session/:id/attach", (req, res) => {
     caption: typeof req.body?.caption === "string" ? req.body.caption : undefined,
     mimeType: typeof req.body?.mimeType === "string" ? req.body.mimeType : undefined,
     name: typeof req.body?.name === "string" ? req.body.name : undefined,
+    artifact: req.body?.artifact === true,
   });
   if ("error" in result) return res.status(400).json({ error: result.error });
   const { hash, name, mimeType, size, kind } = result.ref;

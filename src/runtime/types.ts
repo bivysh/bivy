@@ -247,7 +247,7 @@ export interface AttachToChatRef {
  */
 export type AttachToChatFn = (
   sessionId: string,
-  opts: { filePath: string; caption?: string; mimeType?: string; name?: string },
+  opts: { filePath: string; caption?: string; mimeType?: string; name?: string; artifact?: boolean },
 ) => { ref: AttachToChatRef } | { error: string };
 
 /** Lightweight session listing (maps to Pi's SessionManager.listAll). */

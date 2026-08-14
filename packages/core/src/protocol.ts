@@ -181,6 +181,23 @@ export interface PromptAttachment {
    * what makes attachments re-findable after a reload or on another device.
    */
   hash?: string;
+  /**
+   * Epoch ms this attachment was produced, when known. Set for an agent-sent
+   * (outbound) or resolved inline-image attachment — both carry a durable
+   * `createdAt` on the node (see OutboundAttachmentLogEntry / InlineImageLogEntry)
+   * — absent for an ordinary user upload, which has no equivalent durable
+   * timestamp today. Best-effort: a consumer (e.g. the Artifacts sheet) must
+   * treat its absence as "unknown", not as "now".
+   */
+  createdAt?: number;
+  /**
+   * Whether the sender explicitly marked this as a named artifact — a durable
+   * output worth surfacing outside the transcript (a report, a benchmark
+   * result, a build archive) — rather than an incidental inline image. Set via
+   * `attach_to_chat`'s / `bivy attach`'s `artifact` flag (see AttachmentEvent).
+   * Ordinary attachments simply omit it; existing callers need no changes.
+   */
+  artifact?: boolean;
 }
 
 /**
@@ -216,6 +233,10 @@ export interface AttachmentEvent {
   id: string;
   ref: AttachmentRef;
   caption?: string;
+  /** See PromptAttachment.artifact — carried through unchanged from the
+   *  `bivy attach --artifact` / `attach_to_chat({ artifact: true })` call that
+   *  produced this attachment. */
+  artifact?: boolean;
 }
 
 /**

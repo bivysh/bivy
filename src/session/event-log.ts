@@ -113,6 +113,11 @@ export interface OutboundAttachmentLogEntry {
   id: string;
   ref: AttachmentRef;
   caption?: string;
+  /** Whether the sender (agent-side `bivy attach --artifact` / `attach_to_chat({
+   *  artifact: true })`) explicitly marked this as a named artifact rather than
+   *  an incidental inline image — see AGENT_ATTACHMENT_BLOCK's `artifact` field.
+   *  Absent = an ordinary attachment; existing callers are unaffected. */
+  artifact?: boolean;
 }
 
 /**
@@ -305,7 +310,7 @@ export function replayOutboundAttachments(entries: readonly LogRecord[]): Sideca
   }
   return [...byId.values()].map((entry) => ({
     role: "assistant",
-    content: [{ type: AGENT_ATTACHMENT_BLOCK, ref: entry.ref, caption: entry.caption }],
+    content: [{ type: AGENT_ATTACHMENT_BLOCK, ref: entry.ref, caption: entry.caption, ...(entry.artifact ? { artifact: true } : {}) }],
     afterMessageCount: entry.afterMessageCount,
     createdAt: entry.createdAt,
     id: entry.id,
@@ -517,7 +522,7 @@ export class EventLog {
    * length so history replay interleaves it where it was emitted. Coalesces on
    * the transcript-entry id so a re-emit of the same attachment updates in place.
    */
-  appendOutboundAttachment(id: string, entry: { afterMessageCount: number; id: string; ref: AttachmentRef; caption?: string }): void {
+  appendOutboundAttachment(id: string, entry: { afterMessageCount: number; id: string; ref: AttachmentRef; caption?: string; artifact?: boolean }): void {
     this.load(id);
     const record: OutboundAttachmentLogEntry = {
       bivyKind: "outbound-attachment",
@@ -526,6 +531,7 @@ export class EventLog {
       id: entry.id,
       ref: { ...entry.ref },
       ...(entry.caption ? { caption: entry.caption } : {}),
+      ...(entry.artifact ? { artifact: true } : {}),
     };
     this.enqueue(id, `oa:${entry.id}`, record);
   }
