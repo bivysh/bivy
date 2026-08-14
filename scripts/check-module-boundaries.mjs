@@ -32,6 +32,13 @@ const globalEnforce = process.argv.includes("--enforce");
  */
 const RULES = [
   {
+    name: "session-contract-values-are-dependency-neutral",
+    dir: "packages/core/src/session-contract.ts",
+    forbid: [""],
+    enforce: true,
+    note: "session wire values and their pure resolver are the canonical source for node and client builds and import no implementation.",
+  },
+  {
     name: "credentials-is-a-leaf",
     dir: "src/credentials",
     // The rule is architectural: no runtime/, agents/, session/, server, or
@@ -218,6 +225,23 @@ function specifiersOf(source) {
 
 let totalViolations = 0;
 let hardFailures = 0;
+
+// @bivy/core compiles the canonical source through this stable package-local
+// alias. Requiring identity (not equal copied text) prevents synchronization by
+// convention from returning while preserving both packages' existing output
+// paths and the root release artifact layout.
+const sessionContractAlias = path.join(repoRoot, "src/session/session-contract-values.ts");
+const canonicalSessionContract = path.join(repoRoot, "packages/core/src/session-contract.ts");
+const contractHasOneSource =
+  fs.existsSync(sessionContractAlias) &&
+  fs.existsSync(canonicalSessionContract) &&
+  fs.realpathSync(sessionContractAlias) === fs.realpathSync(canonicalSessionContract);
+console.log(`\n[${contractHasOneSource ? "CLEAN" : "FAIL"}] session-contract-has-one-canonical-source  — ${contractHasOneSource ? 0 : 1} violation(s)`);
+console.log("        node and @bivy/core must compile the same dependency-neutral session contract source.");
+if (!contractHasOneSource) {
+  totalViolations += 1;
+  hardFailures += 1;
+}
 
 for (const rule of RULES) {
   const files = walk(rule.dir);

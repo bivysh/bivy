@@ -18,7 +18,31 @@ export * from "./activation.js";
 export * from "./capabilities.js";
 export * from "./credentialReadiness.js";
 export * from "./receipt-v1.js";
-export * from "./session-contract.js";
+export {
+  SESSION_CONTRACT_SCHEMA_VERSION,
+  resolveSessionContract,
+  type ContractGuaranteeState,
+  type SessionContract,
+  type SessionContractAgentFacts,
+  type SessionContractApprovalMode,
+  type SessionContractArea,
+  type SessionContractAuthFacts,
+  type SessionContractAuthKind,
+  type SessionContractAuthOrigin,
+  type SessionContractCertification,
+  type SessionContractDegradedReason,
+  type SessionContractEvidenceClass,
+  type SessionContractExecutionModeFacts,
+  type SessionContractExecutionModeKind,
+  type SessionContractInput,
+  type SessionContractModelFacts,
+  type SessionContractResumeFacts,
+  type SessionContractRuntimeEnforcement,
+  type SessionContractSandboxFacts,
+  type SessionContractSandboxTier,
+  type SessionContractSupportTier,
+  type SessionContractToolInterceptionFacts,
+} from "./session-contract.js";
 export * from "./linking.js";
 export * from "./protocol.js";
 export * from "./local-store.js";
