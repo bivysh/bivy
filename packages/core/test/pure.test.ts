@@ -76,6 +76,11 @@ describe("markdown", () => {
   it("renders fenced code without interpreting markup", () => {
     expect(toHtml("```\n<b>&\n```")).toBe('<pre><code>&lt;b&gt;&amp;</code></pre>');
   });
+  it("marks Mermaid fences for client-side diagram rendering", () => {
+    expect(toHtml("```mermaid\nflowchart TD\n  A --> B\n```")).toBe(
+      '<pre><code class="language-mermaid">flowchart TD\n  A --&gt; B</code></pre>',
+    );
+  });
   it("renders tables", () => {
     const html = toHtml("| a | b |\n| --- | --- |\n| 1 | 2 |");
     expect(html).toContain("<table>");

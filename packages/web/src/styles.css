@@ -508,6 +508,17 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 @media (hover: none) { .code-copy-btn { opacity: 0.6; } }
 .msg.assistant code { background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 0.9em; }
 .msg.assistant pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+/* Mermaid fences are replaced with SVG after the lazy renderer loads. Keep
+   large diagrams inside the message on phones while allowing a reader to pan
+   horizontally when labels would otherwise become unreadably small. */
+.msg.assistant .mermaid-diagram {
+  max-width: 100%; margin: 0.75em 0; overflow-x: auto; padding: 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  text-align: center; -webkit-overflow-scrolling: touch;
+}
+.msg.assistant .mermaid-diagram:first-child { margin-top: 0; }
+.msg.assistant .mermaid-diagram:last-child { margin-bottom: 0; }
+.msg.assistant .mermaid-diagram svg { display: inline-block; max-width: none; height: auto; vertical-align: top; }
 /* Syntax highlighting for fenced code blocks (highlight.js token classes).
    Colors use light-dark() so one rule set tracks the app's light/dark scheme
    (color-scheme is set on :root). A GitHub-flavored palette that sits well on

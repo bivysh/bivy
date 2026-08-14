@@ -15,6 +15,10 @@ type Hljs = (typeof import("highlight.js/lib/common"))["default"];
 
 let hljsPromise: Promise<Hljs> | null = null;
 
+function isMermaidCode(code: Element): boolean {
+  return Array.from(code.classList).some((name) => name.toLowerCase() === "language-mermaid");
+}
+
 // Matches ChatView's CopyGlyph/CheckGlyph so the per-code-block button reads the
 // same as the message-level copy affordance. Inline SVG (not a component) because
 // this decorates raw innerHTML-injected markup outside React's tree.
@@ -36,9 +40,10 @@ const CHECK_ICON =
  * within a single pass. Copies the `<code>` text verbatim. */
 export function decorateCodeBlocks(root: HTMLElement | null): void {
   if (!root) return;
-  const blocks = Array.from(root.querySelectorAll<HTMLPreElement>("pre")).filter(
-    (pre) => pre.querySelector("code") && !pre.parentElement?.classList.contains("code-block-wrap"),
-  );
+  const blocks = Array.from(root.querySelectorAll<HTMLPreElement>("pre")).filter((pre) => {
+    const code = pre.querySelector("code");
+    return code && !isMermaidCode(code) && !pre.parentElement?.classList.contains("code-block-wrap");
+  });
   for (const pre of blocks) {
     const wrap = document.createElement("div");
     wrap.className = "code-block-wrap";
@@ -73,7 +78,7 @@ export function decorateCodeBlocks(root: HTMLElement | null): void {
 export function highlightCode(root: HTMLElement | null): void {
   if (!root) return;
   const pending = Array.from(root.querySelectorAll<HTMLElement>("pre code")).filter(
-    (el) => el.dataset.highlighted !== "yes",
+    (el) => !isMermaidCode(el) && el.dataset.highlighted !== "yes",
   );
   if (pending.length === 0) return;
   hljsPromise ??= import("highlight.js/lib/common").then((m) => m.default);
