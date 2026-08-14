@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { formatTool, toHtml, toolGroupSummary, toolRowLabel, type ToolActivity, type ToolFormat, type ToolGlyph } from "@bivy/core";
 import { DiffView } from "./DiffView.js";
 import { Sheet } from "./Sheet.js";
+import { ChevronRightIcon } from "./UiIcons.js";
 
 function GlyphIcon({ glyph }: { glyph: ToolGlyph }) {
   const common = { width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
@@ -82,7 +83,7 @@ function ToolListRow({ tool, f, onSelect }: { tool: ToolActivity; f: ToolFormat;
         <span className="activity-desc">{label}</span>
         {f.isError && <span className="tool-fail" title={typeof f.exitCode === "number" ? `exit ${f.exitCode}` : "failed"}>Failed</span>}
         <DiffStat added={f.added} removed={f.removed} />
-        <span className="tool-chevron">›</span>
+        <span className="tool-chevron"><ChevronRightIcon size={14} /></span>
       </button>
     </div>
   );
@@ -254,7 +255,7 @@ export const ToolGroup = memo(function ToolGroup({ tools }: { tools: ToolActivit
       <button className={`tool-group-line${running ? " is-running" : ""}${hasError ? " is-error" : ""}`} onClick={() => setOpen(true)}>
         <span className="tool-group-state" aria-hidden />
         <span className="tool-group-summary">{summary}</span>
-        <span className="tool-chevron">›</span>
+        <span className="tool-chevron"><ChevronRightIcon size={14} /></span>
       </button>
       {open && <ToolActivitySheet tools={tools} summary={summary} onClose={close} />}
     </div>
