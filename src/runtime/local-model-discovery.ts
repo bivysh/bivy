@@ -222,6 +222,9 @@ async function probe(
   };
   try {
     const response = await Promise.race([
+      // lgtm[js/request-forgery] Custom URLs reach here only after scheme/credential checks,
+      // all-address DNS validation, unsafe-address rejection, DNS pinning, redirect
+      // denial, and an explicit user action; fixed discovery never accepts a URL.
       (options.fetchImpl ?? fetch)(target.catalogUrl, {
         method: "GET",
         headers: { accept: "application/json", ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}) },
