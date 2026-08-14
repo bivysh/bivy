@@ -12,6 +12,39 @@ notes in [credentials-service-plan.md](credentials-service-plan.md).
 
 ## The mental model
 
+At a glance, keys and provider sign-ins follow the same path. You choose where a
+credential is available; unattended use is a separate, explicit opt-in.
+
+```text
+                    MODEL & KEY VAULT
+
+   API key          Provider sign-in        Custom endpoint
+      │                    │                       │
+      └────────────────────┴───────────────────────┘
+                           ▼
+                  ┌─────────────────┐
+                  │ Encrypted vault │
+                  │ Secrets hidden  │
+                  └────────┬────────┘
+                           │
+                  You choose availability
+             ┌─────────────┼─────────────┐
+             ▼             ▼             ▼
+        This device   One machine   All machines
+                                           │
+                                           │ Optional
+                                           ▼
+                               ┌──────────────────────┐
+                               │ Unattended runs      │
+                               │ Separate encrypted   │
+                               │ cloud copy           │
+                               └──────────────────────┘
+```
+
+The unattended copy exists only when you enable unattended runs for that
+credential. Disabling access removes it; ordinary account sync does not enable
+unattended use.
+
 Every model credential is a **record** with a natural identity: **`provider:label`**.
 
 - **provider** — `anthropic`, `openai`, `xai`, `openai-codex`, …
