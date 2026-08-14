@@ -26,7 +26,7 @@ export interface EphemeralProviderCatalog {
   suspendsWhenIdle?: boolean;
 }
 
-export const EPHEMERAL_PROVIDERS = [
+export const EPHEMERAL_PROVIDERS: readonly EphemeralProviderCatalog[] = [
   {
     id: "fly",
     name: "Fly.io",
@@ -116,7 +116,7 @@ export const EPHEMERAL_PROVIDERS = [
       { label: "Minimal IAM policy (Bivy docs)", url: "https://github.com/bivysh/bivy/blob/main/docs/ephemeral-sessions.md#aws-ec2" },
     ],
   },
-] as const satisfies readonly EphemeralProviderCatalog[];
+];
 
 export function ephemeralCatalogEntry(id: string): EphemeralProviderCatalog | null {
   const key = String(id || "").trim().toLowerCase();
