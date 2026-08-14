@@ -17,12 +17,14 @@ import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
+  createBashToolDefinition,
   SessionManager,
   SettingsManager,
   type AgentSession,
   type CreateAgentSessionRuntimeFactory,
   type ExtensionAPI,
   type ExtensionFactory,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { createPiModelRuntime } from "../../runtime/pi-oauth.js";
 import { toModelInfo as sharedToModelInfo } from "../../runtime/normalize.js";
@@ -52,6 +54,7 @@ import type {
 } from "../../runtime/types.js";
 import { withExactCapabilitySurface } from "../../runtime/types.js";
 import { mapToolCall, mapToolResult } from "../../runtime/tool-call-map.js";
+import { BackgroundShellTracker, createBackgroundAwareBashOperations } from "./background-shell.js";
 
 /**
  * Extract Pi's own slash commands from a live AgentSession: extension commands
@@ -196,7 +199,11 @@ function toolProviderFactory(provider: ToolProvider): ExtensionFactory {
 class PiSession implements RuntimeSession {
   private readonly toolDetails = new Map<string, ReturnType<typeof mapToolCall>>();
 
-  constructor(private readonly runtime: AgentSessionRuntime, private readonly tui: PiTuiLaunch) {}
+  constructor(
+    private readonly runtime: AgentSessionRuntime,
+    private readonly tui: PiTuiLaunch,
+    private readonly backgroundShells: BackgroundShellTracker,
+  ) {}
 
   private get session(): AgentSession {
     return this.runtime.session;
@@ -260,6 +267,7 @@ class PiSession implements RuntimeSession {
   }
 
   dispose(): void {
+    this.backgroundShells.dispose();
     void this.runtime.dispose();
   }
 
@@ -268,7 +276,10 @@ class PiSession implements RuntimeSession {
   }
 
   subscribe(listener: (event: any) => void): () => void {
-    return this.session.subscribe((event: any) => {
+    const unsubscribeBackground = this.backgroundShells.subscribe((count) => {
+      listener({ type: "background_tasks_changed", count });
+    });
+    const unsubscribeSession = this.session.subscribe((event: any) => {
       const type = String(event?.type ?? "");
       const callId = String(event?.toolCallId ?? event?.toolUseId ?? event?.tool_use_id ?? event?.id ?? "");
       if (type === "tool_call" || type === "tool_execution_start") {
@@ -287,6 +298,10 @@ class PiSession implements RuntimeSession {
       }
       listener(event);
     });
+    return () => {
+      unsubscribeBackground();
+      unsubscribeSession();
+    };
   }
 
   /**
@@ -487,6 +502,7 @@ export class PiRuntime implements AgentRuntime {
           allowModelNetwork: true,
         })
       : await createPiModelRuntime({ credsDir, piDir, allowModelNetwork: true });
+    const backgroundShells = new BackgroundShellTracker();
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
       const sessionId = sessionManager.getSessionId();
       const providedTools = options.toolProvider ? [toolProviderFactory(options.toolProvider)] : [];
@@ -498,7 +514,13 @@ export class PiRuntime implements AgentRuntime {
           extensionFactories: [guardianFactory(sessionId, options.toolInterceptor), ...providedTools],
         },
       });
-      const result = await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent });
+      // Override only the built-in bash definition. Pi still owns rendering,
+      // truncation and execution; the operations wrapper observes process groups
+      // that remain alive after a `command &` shell call returns.
+      const bash = createBashToolDefinition(cwd, {
+        operations: createBackgroundAwareBashOperations(backgroundShells),
+      });
+      const result = await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, customTools: [bash as unknown as ToolDefinition] });
       return { ...result, services, diagnostics: services.diagnostics };
     };
 
@@ -515,7 +537,7 @@ export class PiRuntime implements AgentRuntime {
       piCommand: resolvePiCommand(),
       credentialOwner: this.options.credentialOwner ?? "bivy",
     };
-    return { session: new PiSession(runtime, tui), warning: runtime.modelFallbackMessage };
+    return { session: new PiSession(runtime, tui, backgroundShells), warning: runtime.modelFallbackMessage };
   }
 
   createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {

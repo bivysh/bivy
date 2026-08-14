@@ -31,6 +31,16 @@ assert.deepEqual(working, {
   displayStatus: "working",
 });
 
+const waiting = deriveSessionState({
+  transportReachable: true,
+  working: false,
+  waitingBackground: true,
+  awaitingInput: false,
+  workspace: "clean",
+});
+assert.equal(waiting.agent, "waiting");
+assert.equal(waiting.displayStatus, "working", "background work must keep the session visibly active");
+
 const awaiting = deriveSessionState({
   transportReachable: true,
   processAlive: true,

@@ -64,7 +64,7 @@ export type SessionStatus = "idle" | "working" | "needs_action" | "failed" | "sa
 export interface SessionState {
   transport: "reachable" | "unreachable";
   process: "alive" | "exited" | "none";
-  agent: "idle" | "working" | "awaiting-input";
+  agent: "idle" | "working" | "waiting" | "awaiting-input";
   workspace: "clean" | "dirty" | "checkpointing";
   displayStatus: "idle" | "working" | "needs_attention" | "failed";
 }

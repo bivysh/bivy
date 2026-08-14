@@ -6,7 +6,7 @@ export type SessionTransportState = "reachable" | "unreachable";
 /** State of the runtime's child process, when the runtime exposes one. */
 export type SessionProcessState = "alive" | "exited" | "none";
 /** Runtime-neutral state of the agent turn. */
-export type SessionAgentState = "idle" | "working" | "awaiting-input";
+export type SessionAgentState = "idle" | "working" | "waiting" | "awaiting-input";
 /** State of the workspace/checkpoint boundary. */
 export type SessionWorkspaceState = "clean" | "dirty" | "checkpointing";
 export type SessionDisplayStatus = "idle" | "working" | "needs_attention" | "failed";
@@ -30,6 +30,8 @@ export interface SessionStateEvidence {
    * the runtime has no independently observable child process. */
   processAlive?: boolean;
   working: boolean;
+  /** The agent turn is idle but shell work it launched is still running. */
+  waitingBackground?: boolean;
   awaitingInput: boolean;
   workspace: SessionWorkspaceState;
   lastTurnFailed?: boolean;
@@ -55,7 +57,9 @@ export function deriveSessionState(evidence: SessionStateEvidence): SessionState
     ? "awaiting-input"
     : evidence.working
       ? "working"
-      : "idle";
+      : evidence.waitingBackground
+        ? "waiting"
+        : "idle";
 
   let displayStatus: SessionDisplayStatus;
   if (agent === "awaiting-input") displayStatus = "needs_attention";
@@ -63,7 +67,7 @@ export function deriveSessionState(evidence: SessionStateEvidence): SessionState
   // A working turn the watchdog flagged for review is actionable even though the
   // agent is still technically "working" — surface it so the user sees the card.
   else if (agent === "working" && evidence.turnNeedsAttention) displayStatus = "needs_attention";
-  else if (agent === "working") displayStatus = "working";
+  else if (agent === "working" || agent === "waiting") displayStatus = "working";
   else if (evidence.lastTurnFailed) displayStatus = "failed";
   else displayStatus = "idle";
 
