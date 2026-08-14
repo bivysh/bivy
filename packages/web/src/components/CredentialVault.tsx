@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useMemo, useState } from "react";
-import type { AppState, CredentialRecordSummary, EphemeralModelKeyInfo } from "@bivy/core";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { AppState, CredentialRecordSummary, EphemeralModelKeyInfo, LocalModelEndpointResult } from "@bivy/core";
 import { BIVY_PROVIDER_CATALOG, mergeCredentialItems, migrateBrowserModelKeys, migrateNodeCredentialSummaries } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { OauthStep } from "./ProviderConnect.js";
@@ -52,9 +52,12 @@ export function CredentialVault({ state }: { state: AppState }) {
   const [method, setMethod] = useState<"api_key" | "oauth" | "reference">("api_key");
   const [label, setLabel] = useState("");
   const [secret, setSecret] = useState("");
+  const [customName, setCustomName] = useState("");
   const [customBaseUrl, setCustomBaseUrl] = useState("");
   const [customApi, setCustomApi] = useState("openai-completions");
   const [customModels, setCustomModels] = useState("");
+  const [customMode, setCustomMode] = useState(false);
+  const [verification, setVerification] = useState<LocalModelEndpointResult | null>(null);
   const [availability, setAvailability] = useState<Availability>("account");
   const [assignmentProject, setAssignmentProject] = useState(state.draft.repo ?? "");
   const [busy, setBusy] = useState(false);
@@ -73,17 +76,39 @@ export function CredentialVault({ state }: { state: AppState }) {
     controller.listProviders();
     controller.listCredentialRecords();
     controller.getCredentialPresets();
+    controller.listLocalModels();
     controller.listRepos();
     void controller.listEphemeralModelKeys().then(setDeviceKeys).catch(() => setDeviceKeys([]));
   }, [currentNodeId]);
+
+  // OAuth completion clears the shared OAuth state. Return to the same saved
+  // provider detail shown when a user opens it from the list, rather than
+  // leaving them on a now-empty sign-in form with no success confirmation.
+  const oauthAttempt = useRef<{ provider: string; label: string } | null>(null);
+  const pendingOauthDetail = useRef<string | null>(null);
+  useEffect(() => {
+    if (oauth) {
+      oauthAttempt.current = { provider: oauth.provider || provider, label: label.trim().toLowerCase() || "default" };
+      return;
+    }
+    if (!oauthAttempt.current) return;
+    const completed = oauthAttempt.current;
+    oauthAttempt.current = null;
+    pendingOauthDetail.current = keyOf(completed.provider, completed.label);
+    setMessage("Sign-in complete.");
+    refresh();
+  // `label` is deliberately captured while the attempt is active.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oauth]);
 
   const catalog = useMemo(() => {
     const by = new Map(BASE_PROVIDERS.map((p) => [p.id, p]));
     for (const p of providers) by.set(p.id, { ...by.get(p.id), id: p.id, name: p.name || p.id, oauth: p.oauth });
     for (const r of credentialRecords) if (!by.has(r.provider)) by.set(r.provider, { id: r.provider, name: r.provider });
     for (const k of deviceKeys) if (!by.has(k.provider)) by.set(k.provider, { id: k.provider, name: k.provider });
+    for (const endpoint of localModels) by.set(endpoint.id, { id: endpoint.id, name: endpoint.name || endpoint.id });
     return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [providers, credentialRecords, deviceKeys]);
+  }, [providers, credentialRecords, deviceKeys, localModels]);
   const providerName = (id: string) => catalog.find((p) => p.id === id)?.name || id;
 
   const items = useMemo(() => {
@@ -111,24 +136,36 @@ export function CredentialVault({ state }: { state: AppState }) {
         kind: p.kind === "oauth" ? "oauth" : "environment", availability: "node", ambient: true,
       });
     }
+    for (const endpoint of localModels) if (!out.has(keyOf(endpoint.id, "default"))) {
+      out.set(keyOf(endpoint.id, "default"), {
+        provider: endpoint.id, providerName: endpoint.name || endpoint.id, label: "default",
+        kind: "api_key", availability: endpoint.scope === "machine" ? "node" : "account",
+      });
+    }
     return [...out.values()].sort((a, b) => a.providerName.localeCompare(b.providerName) || a.label.localeCompare(b.label));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [credentialRecords, providers, currentNodeId, deviceKeys, catalog]);
+  }, [credentialRecords, providers, currentNodeId, deviceKeys, catalog, localModels]);
 
   const selected = selectedKey ? items.find((item) => keyOf(item.provider, item.label) === selectedKey) : undefined;
+  useEffect(() => {
+    if (!pendingOauthDetail.current || !items.some((item) => keyOf(item.provider, item.label) === pendingOauthDetail.current)) return;
+    setSelectedKey(pendingOauthDetail.current);
+    pendingOauthDetail.current = null;
+    setView("detail");
+  }, [items]);
   const providerCounts = useMemo(() => new Map(items.map((item) => [item.provider, items.filter((x) => x.provider === item.provider).length])), [items]);
 
   const resetAdd = (id = "") => {
-    setProvider(id); setMethod("api_key"); setLabel(""); setSecret(""); setCustomBaseUrl(""); setCustomApi("openai-completions"); setCustomModels(""); setAvailability("account"); setError(null); setMessage(null);
+    setProvider(id); setMethod("api_key"); setLabel(""); setSecret(""); setCustomName(""); setCustomBaseUrl(""); setCustomApi("openai-completions"); setCustomModels(""); setCustomMode(false); setVerification(null); setAvailability("account"); setError(null); setMessage(null);
   };
 
   const save = async () => {
     const id = provider.trim().toLowerCase();
     const account = label.trim().toLowerCase() || "default";
     if (!id) return;
-    const catalogKnown = BASE_PROVIDERS.some((entry) => entry.id === id)
+    const catalogKnown = !customMode && (BASE_PROVIDERS.some((entry) => entry.id === id)
       || (providers.some((entry) => entry.id === id) && !localModels.some((entry) => entry.id === id))
-      || items.some((entry) => entry.provider === id && !localModels.some((model) => model.id === id));
+      || items.some((entry) => entry.provider === id && !localModels.some((model) => model.id === id)));
     if (catalogKnown && method !== "oauth" && !secret.trim()) return;
     setBusy(true); setError(null); setMessage(null);
     try {
@@ -137,7 +174,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         if (!customBaseUrl.trim()) throw new Error("A custom provider needs a base URL.");
         const savedId = await controller.saveLocalModel({
           providerId: id,
-          name: id,
+          name: customName.trim() || id,
           baseUrl: customBaseUrl.trim(),
           api: customApi,
           ...(secret.trim() ? { apiKey: secret.trim() } : {}),
@@ -222,20 +259,24 @@ export function CredentialVault({ state }: { state: AppState }) {
       const matches = catalog.filter((p) => `${p.name} ${p.id}`.toLowerCase().includes(query.toLowerCase()));
       return <div className="settings-form credential-vault">
         <button className="link-btn" onClick={() => setView("list")}>‹ Credentials</button>
-        <h3>Add credential</h3>
-        <p className="muted">Choose the provider you want Bivy to use.</p>
+        <h3>Add model access</h3>
+        <p className="muted">Connect a hosted provider or point Bivy at a model server you control.</p>
+        <button className="custom-provider-card" onClick={() => { const id = query.trim().toLowerCase() || "local"; resetAdd(id); setProvider(id); setCustomMode(true); }}>
+          <span className="custom-provider-card-icon" aria-hidden>＋</span>
+          <span><strong>Local server or custom endpoint</strong><small>Ollama, LM Studio, vLLM, Azure, or another compatible API</small></span>
+          <span aria-hidden>›</span>
+        </button>
+        <div className="vault-picker-label">Hosted providers</div>
         <input autoFocus className="picker-search" placeholder="Search providers…" value={query} onChange={(e) => setQuery(e.target.value)} />
         <div className="picker-list">
           {matches.map((p) => <button key={p.id} className="picker-item" onClick={() => { resetAdd(p.id); setProvider(p.id); if (p.apiKey === false && p.oauth) setMethod("oauth"); }}>
             <span><strong>{p.name}</strong><small>{p.id}</small></span><span aria-hidden>›</span>
           </button>)}
-          {matches.length === 0 && <button className="picker-item" onClick={() => { resetAdd(query.trim().toLowerCase()); setProvider(query.trim().toLowerCase()); }}>
-            <span><strong>Custom provider</strong><small>Use “{query}” as the provider ID</small></span><span aria-hidden>›</span>
-          </button>}
+          {matches.length === 0 && <div className="picker-empty">No hosted providers match. Add it as a custom endpoint above.</div>}
         </div>
       </div>;
     }
-    const customProvider = localModels.some((entry) => entry.id === chosen.id)
+    const customProvider = customMode || localModels.some((entry) => entry.id === chosen.id)
       || (!BASE_PROVIDERS.some((entry) => entry.id === chosen.id) && !providers.some((entry) => entry.id === chosen.id) && !items.some((entry) => entry.provider === chosen.id));
     const editingItem = selected?.provider === chosen.id;
     const discloseOptions = editingItem || items.some((item) => item.provider === chosen.id);
@@ -258,8 +299,11 @@ export function CredentialVault({ state }: { state: AppState }) {
       <h3>{customProvider ? "Custom provider" : chosen.name}</h3>
       {oauth?.provider === chosen.id ? <OauthStep /> : <>
         {customProvider && <>
+          <p className="muted">Use a local model server or any OpenAI-, Anthropic-, or Azure-compatible endpoint.</p>
+          <label className="field-label" htmlFor="custom-provider-name">Display name</label>
+          <input id="custom-provider-name" className="picker-search" placeholder="My local models" value={customName} onChange={(e) => setCustomName(e.target.value)} />
           <label className="field-label" htmlFor="custom-provider-id">Provider ID</label>
-          <input id="custom-provider-id" className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value.toLowerCase())} />
+          <input id="custom-provider-id" className="picker-search" value={provider} disabled={editingItem} onChange={(e) => setProvider(e.target.value.toLowerCase())} />
           <label className="field-label" htmlFor="custom-provider-endpoint">Endpoint</label>
           <input id="custom-provider-endpoint" className="picker-search" placeholder="https://api.example.com/v1" value={customBaseUrl} onChange={(e) => setCustomBaseUrl(e.target.value)} />
           <label className="field-label" htmlFor="custom-provider-api">API compatibility</label>
@@ -269,7 +313,23 @@ export function CredentialVault({ state }: { state: AppState }) {
             <option value="azure-openai-responses">Azure OpenAI</option>
             <option value="anthropic-messages">Anthropic Messages</option>
           </select>
-          <label className="field-label" htmlFor="custom-provider-models">Models <span className="muted">(one per line, optional)</span></label>
+          <label className="field-label" htmlFor="custom-provider-key">API key <span className="muted">(optional)</span></label>
+          <input id="custom-provider-key" className="picker-search" type="password" placeholder="Leave blank for local servers without authentication" value={secret} onChange={(e) => setSecret(e.target.value)} />
+          <div className="row-actions">
+            <button className="btn" disabled={busy || !customBaseUrl.trim()} onClick={async () => {
+              setBusy(true); setError(null); setVerification(null);
+              try {
+                const result = await controller.verifyLocalModel(customBaseUrl.trim(), secret.trim() || undefined);
+                setVerification(result);
+                if (result.status === "ready") setCustomModels(result.models.map((model) => model.id).join("\n"));
+              } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+              finally { setBusy(false); }
+            }}>{busy ? "Checking…" : "Test endpoint & find models"}</button>
+          </div>
+          {verification && <div className={`banner inline ${verification.status === "ready" ? "success" : "error"}`}>
+            {verification.status === "ready" ? `Connected on ${verification.machineName}. Found ${verification.models.length} model${verification.models.length === 1 ? "" : "s"}.` : verification.detail || "This endpoint could not be reached."}
+          </div>}
+          <label className="field-label" htmlFor="custom-provider-models">Models <span className="muted">(one per line)</span></label>
           <textarea id="custom-provider-models" className="picker-search" rows={3} placeholder="model-id" value={customModels} onChange={(e) => setCustomModels(e.target.value)} />
         </>}
         {!customProvider && <div className="vault-methods" role="group" aria-label="Sign-in method">
@@ -278,7 +338,7 @@ export function CredentialVault({ state }: { state: AppState }) {
           {chosen.reference !== false && <button aria-pressed={method === "reference"} className={`btn ${method === "reference" ? "primary" : ""}`} onClick={() => { setMethod("reference"); if (availability === "device") setAvailability("node"); }}>Password manager</button>}
         </div>}
         {!customProvider && (discloseOptions ? identityOptions : method !== "oauth" ? <details className="vault-advanced"><summary>Advanced options</summary>{identityOptions}</details> : null)}
-        {method !== "oauth" && <>
+        {method !== "oauth" && !customProvider && <>
           <label className="field-label" htmlFor="credential-secret">{method === "reference" ? "Reference" : "API key"}</label>
           <input id="credential-secret" className="picker-search" type={method === "reference" ? "text" : "password"} placeholder={method === "reference" ? "op://Vault/Item/field, env://NAME, or cmd://…" : "Paste API key"} value={secret} onChange={(e) => setSecret(e.target.value)} />
           {chosen.help && method === "api_key" && <a className="link-btn" href={chosen.help} target="_blank" rel="noreferrer">Where to create a key ↗</a>}
@@ -305,21 +365,21 @@ export function CredentialVault({ state }: { state: AppState }) {
     ])].sort();
     return <div className="settings-form credential-vault">
       {confirmDelete && <ConfirmDialog
-        title="Delete credential?"
-        message={`Delete ${titleFor(confirmDelete)}? Agents and projects using it will lose access.`}
+        title={localModels.some((model) => model.id === confirmDelete.provider) ? "Remove endpoint?" : "Delete credential?"}
+        message={localModels.some((model) => model.id === confirmDelete.provider) ? `Remove ${titleFor(confirmDelete)} and its models?` : `Delete ${titleFor(confirmDelete)}? Agents and projects using it will lose access.`}
         confirmLabel="Delete"
         danger
         onCancel={() => setConfirmDelete(null)}
         onConfirm={() => void remove(confirmDelete)}
       />}
       <button className="link-btn" onClick={() => setView("list")}>‹ Credentials</button>
-      <div className="vault-title-row"><div><h3>{titleFor(selected)}</h3><p className="muted">{methodLabel(selected.kind)}</p></div><span className={`chip ${selected.record?.lastVerifiedOk ? "ok" : ""}`}>{selected.record?.lastVerifiedOk ? "Verified" : selected.ambient ? "Provided by environment" : "Saved"}</span></div>
+      <div className="vault-title-row"><div><h3>{titleFor(selected)}</h3><p className="muted">{localModels.some((model) => model.id === selected.provider) ? "Local or custom endpoint" : methodLabel(selected.kind)}</p></div><span className={`chip ${selected.record?.lastVerifiedOk ? "ok" : ""}`}>{selected.record?.lastVerifiedOk ? "Verified" : selected.ambient ? "Provided by environment" : "Saved"}</span></div>
       <div className="vault-detail-grid">
         <span className="muted">Available on</span><strong>{availabilityLabel(selected.availability)}</strong>
         <span className="muted">Used by default</span><strong>{isDefault ? "Yes" : "No"}</strong>
         <span className="muted">Used by projects</span><strong>{assignedProjects.length ? assignedProjects.join(", ") : "None explicitly — projects use the default"}</strong>
         {assignmentProject && <><span className="muted">Selected project</span><strong>{usedByProject ? "Uses this credential" : projectLabel ? `Uses ${projectLabel}` : "Uses provider default"}</strong></>}
-        {selected.record && <><span className="muted">Unattended runs</span><strong>{selected.record.unattended ? "Allowed (separate hosted custody)" : "Not allowed"}</strong></>}
+        {selected.record && <><span className="muted">Unattended runs</span><strong>{selected.record.unattended ? "Allowed — encrypted cloud copy enabled" : "Not allowed"}</strong></>}
         {selected.record?.origin === "agent-native" && <><span className="muted">Added by</span><strong>Agent sign-in</strong></>}
         {selected.record?.ref && <><span className="muted">Reference</span><code>{selected.record.ref}</code></>}
       </div>
@@ -328,8 +388,9 @@ export function CredentialVault({ state }: { state: AppState }) {
         {count > 1 && !isDefault && <button className="btn" disabled={busy} onClick={() => void assign("default", selected.provider, selected.label, "Now used by default.")}>Use by default</button>}
         {count > 1 && projectPreset && !usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, selected.label, `Assigned to ${projectId}.`)}>Use for {projectId}</button>}
         {projectPreset && usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, "", `${projectId} now uses the provider default.`)}>Clear project assignment</button>}
-        {selected.record.sync === "account" && selected.record.kind !== "reference" && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); try { await controller.setCredentialUnattended(selected.provider, selected.label, !selected.record!.unattended); setMessage(selected.record!.unattended ? "Unattended access revoked." : "Unattended access granted with separate hosted custody."); refresh(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } }}>{selected.record.unattended ? "Revoke unattended access" : "Allow unattended runs"}</button>}
+        {selected.record.sync === "account" && selected.record.kind !== "reference" && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); try { await controller.setCredentialUnattended(selected.provider, selected.label, !selected.record!.unattended); setMessage(selected.record!.unattended ? "Unattended access revoked and its encrypted cloud copy removed." : "Unattended access enabled with a separate encrypted cloud copy."); refresh(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } }}>{selected.record.unattended ? "Disable unattended runs" : "Allow unattended runs"}</button>}
       </div>}
+      {selected.record?.sync === "account" && selected.record.kind !== "reference" && <p className="muted vault-custody-note">To run while all your devices are offline, Bivy stores a separate encrypted copy of this credential in its control plane. This is opt-in, used only for unattended runs, and removed when you disable access.</p>}
       {count > 1 && <div>
         <label className="field-label" htmlFor="credential-project">Assign for project or repository</label>
         <input id="credential-project" className="picker-search" list="credential-project-options" placeholder="owner/repository or project ID" value={assignmentProject} onChange={(e) => setAssignmentProject(e.target.value)} />
@@ -338,9 +399,9 @@ export function CredentialVault({ state }: { state: AppState }) {
       {!selected.ambient && <>
         <details className="vault-advanced"><summary>Replace or change availability</summary>
           <p className="muted small">Re-enter the secret to replace it or move it. Bivy never displays saved secrets.</p>
-          <button className="btn" onClick={() => { const custom = localModels.find((model) => model.id === selected.provider); resetAdd(selected.provider); setLabel(selected.label === "default" ? "" : selected.label); setMethod(selected.kind === "reference" ? "reference" : "api_key"); setAvailability(selected.availability); if (custom) { setCustomBaseUrl(custom.baseUrl); setCustomApi(custom.api); setCustomModels(custom.models.map((model) => model.id).join("\n")); } setView("add"); }}>Edit credential</button>
+          <button className="btn" onClick={() => { const custom = localModels.find((model) => model.id === selected.provider); resetAdd(selected.provider); setLabel(selected.label === "default" ? "" : selected.label); setMethod(selected.kind === "reference" ? "reference" : "api_key"); setAvailability(selected.availability); if (custom) { setCustomMode(true); setCustomName(custom.name || custom.id); setCustomBaseUrl(custom.baseUrl); setCustomApi(custom.api); setCustomModels(custom.models.map((model) => model.id).join("\n")); } setView("add"); }}>Edit credential</button>
         </details>
-        <button className="btn danger-ghost" disabled={busy} onClick={() => setConfirmDelete(selected)}>Delete credential</button>
+        <button className="btn danger-ghost" disabled={busy} onClick={() => setConfirmDelete(selected)}>{localModels.some((model) => model.id === selected.provider) ? "Remove endpoint" : "Delete credential"}</button>
       </>}
       {message && <p className="banner inline">{message}</p>}{error && <div className="banner error inline">{error}</div>}
       {nodes.length > 0 && <details className="vault-advanced"><summary>Machine availability</summary><div className="picker-list">{nodes.map((n) => {
@@ -353,11 +414,11 @@ export function CredentialVault({ state }: { state: AppState }) {
 
   const filtered = items.filter((item) => `${item.providerName} ${item.provider} ${item.label}`.toLowerCase().includes(query.toLowerCase()));
   return <div className="settings-form credential-vault">
-    <div className="vault-title-row"><div><h3>Credential vault</h3><p className="muted settings-intro">Model keys and subscription sign-ins, encrypted and ready where you allow them.</p></div><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setQuery(""); setView("add"); }}>+ Add</button></div>
-    {items.length === 0 ? <div className="vault-empty"><h4>No credentials yet</h4><p className="muted">Add a model provider to start using agents.</p><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setView("add"); }}>Add credential</button></div> : <>
+    <div className="vault-title-row"><div><h3>Your model access</h3><p className="muted settings-intro">Hosted providers, subscription sign-ins, API keys, and your own model endpoints.</p></div><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setQuery(""); setView("add"); }}>+ Add</button></div>
+    {items.length === 0 ? <div className="vault-empty"><h4>No providers yet</h4><p className="muted">Add a sign-in, API key, local model, or custom endpoint.</p><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setView("add"); }}>Add provider</button></div> : <>
       <input className="picker-search" placeholder="Search credentials…" value={query} onChange={(e) => setQuery(e.target.value)} />
       <div className="picker-list vault-items">{filtered.map((item) => <button className="picker-item" key={keyOf(item.provider, item.label)} onClick={() => { setSelectedKey(keyOf(item.provider, item.label)); setMessage(null); setError(null); setView("detail"); }}>
-        <span><strong>{titleFor(item)}</strong><small>{methodLabel(item.kind)} · {availabilityLabel(item.availability)}</small></span><span className="vault-row-status">{item.record?.lastVerifiedOk && <span className="chip ok">Verified</span>}<span aria-hidden>›</span></span>
+        <span><strong>{titleFor(item)}</strong><small>{localModels.some((model) => model.id === item.provider) ? "Local or custom endpoint" : methodLabel(item.kind)} · {availabilityLabel(item.availability)}</small></span><span className="vault-row-status">{item.record?.lastVerifiedOk && <span className="chip ok">Verified</span>}<span aria-hidden>›</span></span>
       </button>)}</div>
     </>}
   </div>;
