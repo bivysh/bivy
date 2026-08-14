@@ -89,7 +89,10 @@ export class NodeCredentialResolver implements AgentCredentialStore {
     const cred = source.cred;
 
     if (cred.type === "api_key") {
-      const token = typeof cred.key === "string" ? cred.key : "";
+      // Keyless local endpoints are valid. They still need a harmless value in
+      // the conventional API-key variable because several OpenAI-compatible
+      // clients require the variable even when the server ignores auth.
+      const token = typeof cred.key === "string" && cred.key ? cred.key : cred.env ? "local" : "";
       if (!token) return undefined;
       return { provider: id, kind: "api_key", token, ...(cred.env ? { env: cred.env } : {}) };
     }

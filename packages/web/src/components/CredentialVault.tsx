@@ -115,14 +115,14 @@ export function CredentialVault({ state }: { state: AppState }) {
     const id = provider.trim().toLowerCase();
     const account = label.trim().toLowerCase() || "default";
     if (!id) return;
-    if (method !== "oauth" && !secret.trim()) return;
+    const catalogKnown = BASE_PROVIDERS.some((entry) => entry.id === id);
+    if (catalogKnown && method !== "oauth" && !secret.trim()) return;
     setBusy(true); setError(null); setMessage(null);
     try {
-      const catalogKnown = BASE_PROVIDERS.some((entry) => entry.id === id);
       if (!catalogKnown) {
         if (state.status !== "online") throw new Error("Connect a machine to configure a custom model endpoint.");
         if (!customBaseUrl.trim()) throw new Error("A custom provider needs a base URL.");
-        await controller.saveLocalModel({
+        const savedId = await controller.saveLocalModel({
           providerId: id,
           name: id,
           baseUrl: customBaseUrl.trim(),
@@ -133,7 +133,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         controller.listLocalModels();
         refresh();
         setMessage("Custom provider saved.");
-        setSelectedKey(keyOf(id, "default"));
+        setSelectedKey(keyOf(savedId, "default"));
         setView("detail");
         return;
       }
