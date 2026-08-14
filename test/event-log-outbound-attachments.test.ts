@@ -35,6 +35,30 @@ test("appendOutboundAttachment folds into a synthetic assistant message and surv
   assert.equal(block.caption, "chart");
 });
 
+test("an explicit artifact:true marking survives a flush + fresh EventLog reload", () => {
+  const { log, mk } = tmpLog();
+  log.appendOutboundAttachment("s1", { afterMessageCount: 2, id: "att1", ref: ref("a".repeat(64)), caption: "coverage", artifact: true });
+  log.flush("s1");
+
+  const extras = mk().read("s1");
+  const block = (extras[0]!.content as Array<Record<string, unknown>>)[0]!;
+  assert.equal(block.artifact, true);
+});
+
+test("an ordinary (unmarked) attachment carries no artifact field at all — not even artifact:false", () => {
+  const { log, dir } = tmpLog();
+  log.appendOutboundAttachment("s1", { afterMessageCount: 1, id: "att1", ref: ref("a".repeat(64)) });
+  log.flush("s1");
+
+  const extras = log.read("s1");
+  const block = (extras[0]!.content as Array<Record<string, unknown>>)[0]!;
+  assert.equal("artifact" in block, false);
+  // ...and the raw on-disk line matches, so an old client reading this log
+  // sees byte-for-byte what it did before this field existed.
+  const raw = fs.readFileSync(path.join(dir, `${encodeURIComponent("s1")}.jsonl`), "utf8");
+  assert.equal(raw.includes("artifact"), false);
+});
+
 test("replayOutboundAttachments is last-write-wins per id, preserving first-seen order", () => {
   const records: LogRecord[] = [
     { bivyKind: "outbound-attachment", createdAt: 1, afterMessageCount: 1, id: "a", ref: ref("1".repeat(64)) },
