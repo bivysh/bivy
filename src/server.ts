@@ -147,6 +147,7 @@ import {
 import { ReplicationService } from "./session/replication-service.js";
 import type { ReplWireFrame } from "./session/replicator.js";
 import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
+import { computeSessionContract, type SessionContractRuntimeFacts } from "./session/session-contract.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereqInput, type ForkPrereq } from "./session/fork-prereqs.js";
 import { SecretVault, resolveSecret } from "./secrets.js";
 import { deviceFlowClientId, requestDeviceCode, pollAccessTokenOnce, REPO_CONNECT_SCOPE, type DeviceCode } from "./github-device-auth.js";
@@ -2312,6 +2313,7 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
         approvalMode: rec?.approvalMode,
         ephemeral: rec?.ephemeral,
         executionProfile: rec ? (rec.ephemeral ? "isolated_customer_cloud" : "trusted_workstation") : undefined,
+        contract: rec?.contract ?? meta?.contract,
         auditHealth: rec ? auditLog.health() : undefined,
         eventLogHealth: rec ? eventLogHealthForSession(rec.id) : undefined,
         prUrl: rec?.prUrl ?? meta?.prUrl,
@@ -3124,6 +3126,32 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
     const workspaceInput = typeof msg.workspace === "string" ? msg.workspace.trim() : "";
     const title = typeof msg.title === "string" ? msg.title : undefined;
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+    // Prevent silent downgrade: for a "supported" (certified) agent whose live
+    // protection would be degraded, require the client to have explicitly
+    // acknowledged it (the picker's confirm-to-continue step) before this
+    // request is allowed to launch a session — checked before any side-effecting
+    // work (repo clone / worktree allocation) so a rejection is cheap. Gating
+    // facts (protectionLevel, executionMode, capabilities, supportTier) are all
+    // runtime-level, not workspace-policy-dependent, so this pre-creation check
+    // stays correct regardless of what per-workspace sandbox/approval policy
+    // resolves to afterward.
+    const acknowledgeReducedProtections = msg.acknowledgeReducedProtections === true;
+    const gateNow = new Date().toISOString();
+    const rt = getRuntime(agentFrom(msg) ?? defaultRuntimeId);
+    const gateContract = computeSessionContract(
+      { runtime: rt as SessionContractRuntimeFacts, preview: false, sandbox: sandboxFrom(msg), acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
+      gateNow,
+    );
+    if (gateContract.requiresAcknowledgement) {
+      relay?.sendEvent({
+        type: "session.error",
+        code: "reduced_protections_ack_required",
+        error: `${rt.displayName || rt.id} would run this session with reduced protections for a certified profile. Confirm to continue.`,
+        contract: gateContract,
+        requestId,
+      });
+      return;
+    }
     let record: SessionRecord;
     try {
       // Deduped by requestId so a client's post-reconnect retry adopts the
@@ -3151,6 +3179,14 @@ const RELAY_COMMANDS: Record<string, RegisteredCommand> = {
       relay?.sendEvent({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
       return;
     }
+    // Resolve once from the session's actual, now-known launch facts (final
+    // sandbox/approval after per-workspace policy) and store it — never
+    // live-recomputed later, so it can't silently "improve" behind the user.
+    record.contract = computeSessionContract(
+      { runtime: getRuntime(record.runtimeId) as SessionContractRuntimeFacts, preview: false, sandbox: record.sandbox, approvalMode: record.approvalMode, acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
+      gateNow,
+    );
+    persistSessionMetadata(record);
     relay?.sendEvent({
       ...transcripts.buildHistoryEvent({
         sessionId: record.id,
@@ -6279,6 +6315,7 @@ function bivySessionEnvelope(record: SessionRecord): BivySessionRecord {
     approvalMode: record.approvalMode,
     ephemeral: record.ephemeral,
     executionProfile: record.ephemeral ? "isolated_customer_cloud" : "trusted_workstation",
+    contract: record.contract,
     auditHealth: auditLog.health(),
     eventLogHealth: eventLogHealthForSession(record.id),
     repoSlug: gh.repoSlug,
@@ -6322,6 +6359,7 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
     runtimeId: record.runtimeId,
     sandbox: record.sandbox,
     agentName: getRuntime(record.runtimeId).displayName,
+    contract: record.contract,
     status,
     branch: record.worktree?.branch,
     worktree: record.worktree?.path,
@@ -6368,6 +6406,7 @@ function bivySessionEnvelopeFromSummary(s: SessionSummary & { agent: string; age
     // `rec` is undefined here (the live path returned above via bivySessionEnvelope),
     // so the tier comes from the persisted metadata row.
     sandbox: normalizeSandboxTier(meta?.sandbox),
+    contract: meta?.contract,
     repoSlug,
     issueNumber: gh.issueNumber,
     issueUrl,
@@ -7963,7 +8002,25 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // bump it to now (only real activity should reorder the sidebar). A brand-new
   // session legitimately starts "active now".
   const resumedLastActive = requestedSessionFile ? metaLastActiveMs(storedMeta) : undefined;
-  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: sessionSafety.approval, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
+  // Rehydrate the persisted contract on resume/reopen (not recomputed — a
+  // stored contract reflects what the original launch actually got, per
+  // session-contract.ts). Brand-new sessions (no storedMeta) start undefined
+  // here; session.new stamps a freshly computed one right after creation.
+  // Rehydrating (rather than leaving this undefined for a resumed session)
+  // also avoids a persistSessionMetadata call later silently clobbering the
+  // stored contract with undefined via its `{...prev, ...input}` merge.
+  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, sandbox: sessionSandbox, approvalMode: sessionSafety.approval, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, contract: storedMeta?.contract, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
+  // Migration: a session resumed/reopened from before this feature (or from a
+  // node that predates it) has no stored contract. Stamp an honest one now
+  // from currently-observed facts rather than leaving it blank forever or
+  // inventing what launch actually got years ago — the same "don't fabricate
+  // history" rule session-contract.ts applies elsewhere.
+  if (!record.contract) {
+    record.contract = computeSessionContract(
+      { runtime: getRuntime(rt.id) as SessionContractRuntimeFacts, preview: false, sandbox: sessionSandbox, approvalMode: sessionSafety.approval },
+      new Date().toISOString(),
+    );
+  }
   // Apply this session's sandbox network policy as a per-session egress proxy
   // (its own proxy/decider, never the node-global one). Opt-in via BIVY_SANDBOX_NET:
   // a read-only session then actually blocks outbound network even for a CLI agent
@@ -9766,6 +9823,24 @@ app.post("/api/session", async (req, res, next) => {
       parsed = parseRepo(repoInput);
       if (!parsed) return res.status(400).json({ error: `Invalid repository "${repoInput}" — use owner/repo.` });
     }
+    // Same downgrade gate as the relay session.new handler — this direct API
+    // route (CLI/scripted callers, no picker in front of it) must not launch a
+    // "supported" profile with degraded live protection any more silently than
+    // the PWA can.
+    const acknowledgeReducedProtections = req.body?.acknowledgeReducedProtections === true;
+    const gateNow = new Date().toISOString();
+    const rt = getRuntime(agentFrom(req.body ?? {}) ?? defaultRuntimeId);
+    const gateContract = computeSessionContract(
+      { runtime: rt as SessionContractRuntimeFacts, preview: false, sandbox: sandboxFrom(req.body ?? {}), acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
+      gateNow,
+    );
+    if (gateContract.requiresAcknowledgement) {
+      return res.status(409).json({
+        error: `${rt.displayName || rt.id} would run this session with reduced protections for a certified profile. Pass acknowledgeReducedProtections: true to confirm.`,
+        code: "reduced_protections_ack_required",
+        contract: gateContract,
+      });
+    }
     let session: SessionRecord;
     try {
       // Deduped by requestId so a direct client's post-reconnect retry adopts the
@@ -9782,6 +9857,11 @@ app.post("/api/session", async (req, res, next) => {
       if (parsed) return res.status(502).json({ error: `Could not clone ${parsed.slug}: ${error instanceof Error ? error.message : String(error)}` });
       throw error;
     }
+    session.contract = computeSessionContract(
+      { runtime: getRuntime(session.runtimeId) as SessionContractRuntimeFacts, preview: false, sandbox: session.sandbox, approvalMode: session.approvalMode, acknowledgedAt: acknowledgeReducedProtections ? gateNow : undefined },
+      gateNow,
+    );
+    persistSessionMetadata(session);
     res.json({ id: session.id, workspace: session.workspace, source: session.source, branch: session.worktree?.branch, prUrl: session.prUrl, sessionFile: session.sessionFile, name: session.session.getName(), runtimeId: session.runtimeId, agentName: getRuntime(session.runtimeId).displayName, model: publicModel(session.session.getCurrentModel(), session.session.getCurrentModel()), sessionState: sessionState(session) });
   } catch (error) {
     res.status(400).json({ error: actionableAgentError(agentFrom(req.body ?? {}) ?? defaultRuntimeId, error) });

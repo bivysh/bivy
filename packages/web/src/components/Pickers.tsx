@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AppState, ModelInfo, RuntimeInfo } from "@bivy/core";
+import type { AppState, ModelInfo, RuntimeInfo, SessionContract } from "@bivy/core";
+import { resolveSessionContract } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { Sheet, PickerItem } from "./Sheet.js";
 import { useModalEscape } from "../modalStack.js";
@@ -41,6 +42,37 @@ function runtimeCapabilityChips(a: RuntimeInfo): Array<{ label: string; ok: bool
 
 function runtimeTier(runtime: RuntimeInfo): string {
   return String((runtime as { supportTier?: unknown }).supportTier || "experimental");
+}
+
+/**
+ * Preview an Effective Session Contract for a runtime BEFORE a session
+ * exists, from the same `RuntimeInfo` the picker already renders — no extra
+ * round trip. Mirrors the node's `computeSessionContract` (src/session/
+ * session-contract.ts): same field mapping, `preview: true` instead of a
+ * live-resolved agent version/credential kind. Used to decide whether the
+ * picker must gate the pick behind a confirm-to-continue step, and the node
+ * re-checks this itself on session.new — this preview is UX, not the floor.
+ */
+function previewContractForRuntime(a: RuntimeInfo): SessionContract {
+  const caps = (a.capabilities || {}) as { resume?: boolean; sessionRefIsPath?: boolean; toolInterception?: boolean; mcpToolApprovals?: boolean };
+  const authOwner = (a as { authOwner?: string }).authOwner;
+  return resolveSessionContract({
+    now: new Date().toISOString(),
+    preview: true,
+    agentId: a.id,
+    agentDisplayName: agentLabel(a),
+    detectedVersion: a.testedVersion,
+    versionSource: a.testedVersion ? "tested-pin" : undefined,
+    supportTier: a.supportTier,
+    certification: a.certification,
+    executionMode: a.executionMode,
+    authOrigin: authOwner === "bivy" ? "bivy" : authOwner === "agent" ? "agent-native" : "unknown",
+    resumeAdvertised: caps.resume === true,
+    resumeRefIsPath: caps.sessionRefIsPath === true,
+    toolInterceptionEnforced: caps.toolInterception === true,
+    mcpToolApprovalsOnly: caps.mcpToolApprovals === true,
+    runtimeEnforcement: a.protectionLevel,
+  });
 }
 
 function tierLabel(tier: string): string {
@@ -509,8 +541,20 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
     const installable = !available && Boolean((a as any).install);
     const installing = state.installingRuntimeId === a.id;
     const active = a.id === selectedAgentId;
-    const needsProtectionConfirmation = !cloningActiveSession && a.protectionLevel === "user-permissions";
+    // The Effective Session Contract preview (see previewContractForRuntime):
+    // requiresAcknowledgement fires ONLY for a "supported" (certified) profile
+    // whose live protection would be degraded — a broken promise, not merely
+    // an unprotected experimental agent. Union it with the existing raw
+    // protection-level check (which already covers any tier's zero-isolation
+    // case) so a certified agent degraded in a DIFFERENT area (auth/resume/
+    // tool interception, not just sandbox) still gets caught.
+    const previewContract = !cloningActiveSession ? previewContractForRuntime(a) : undefined;
+    const needsProtectionConfirmation = !cloningActiveSession
+      && (a.protectionLevel === "user-permissions" || Boolean(previewContract?.requiresAcknowledgement));
     const confirming = needsProtectionConfirmation && confirmingId === a.id;
+    const confirmText = previewContract?.degradedReasons.length
+      ? `${previewContract.degradedReasons.map((r) => r.message).join(" ")} Select again to continue.`
+      : "Runs with your OS user permissions and no Bivy-owned isolation. Use a container/VM for unattended or untrusted work. Select again to continue.";
     const chips = [
       installing ? "setting up…" : null,
       !available ? status : null,
@@ -526,7 +570,7 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
           <RuntimeMeta
             runtime={a}
             text={confirming
-              ? "Runs with your OS user permissions and no Bivy-owned isolation. Use a container/VM for unattended or untrusted work. Select again to continue."
+              ? confirmText
               : cloningActiveSession
                 ? ["Fork + handoff", chips || (a as any).description].filter(Boolean).join(" · ")
                 : chips || (a as any).description}
@@ -557,6 +601,10 @@ export function AgentPicker({ state, onClose }: { state: AppState; onClose: () =
             setConfirmingId(a.id);
             return;
           }
+          // Certified-profile downgrades need a durable acknowledgement (the
+          // node re-checks it on session.new); the raw user-permissions warning
+          // above is UX-only and doesn't set it.
+          if (previewContract?.requiresAcknowledgement) controller.acknowledgeSessionAgentReducedProtections(true);
           controller.chooseAgent(a);
           onClose();
         }}

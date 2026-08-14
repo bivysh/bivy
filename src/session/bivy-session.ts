@@ -4,6 +4,7 @@ import type { RuntimeCapabilities } from "../runtime/types.js";
 import type { SandboxTier } from "../harness/sandbox.js";
 import type { WorkspaceContext } from "./workspace-context.js";
 import type { SessionState } from "./session-state.js";
+import type { SessionContract } from "./session-contract.js";
 
 export type BivySessionSource = "manual" | "github_issue" | "api" | `repo:${string}` | string;
 
@@ -53,6 +54,11 @@ export interface BivySessionRecord {
     corruptLines: number;
   };
   eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
+  /** The Effective Session Contract resolved once at session creation (see
+   *  session-contract.ts) — what this session actually got, distinct from
+   *  the catalog-level `capabilities` promise above. Absent for a session
+   *  that predates this field until it's next opened. */
+  contract?: SessionContract;
 
   /** GitHub context for issue-driven or repo sessions (for pills + links) */
   repoSlug?: string;
