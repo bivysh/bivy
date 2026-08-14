@@ -1,7 +1,23 @@
 # Bivy documentation
 
-**Start here:** [Quickstart](quickstart.md) — install Bivy, start a node, and
-run your first agent session.
+**Start here:** [Quickstart](quickstart.md) — install Bivy, start a Machine, and
+run your first agent Session.
+
+## Choose an outcome
+
+| I want to… | Start here | Then use |
+| --- | --- | --- |
+| Give an agent my real repo, services, database, private network, or GPU | [Capability recipes](capability-recipes.md#work-in-the-real-environment) | [Runtime support matrix](runtime-support-matrix.md) |
+| Continue work from my phone with voice and files | [Capability recipes](capability-recipes.md#continue-from-a-phone-with-voice-and-files) | [Remote access](remote-access.md) |
+| Hand work between terminal and chat, or import an existing agent Session | [Capability recipes](capability-recipes.md#switch-surfaces-and-import-native-sessions) | [Agent shims](agent-shim.md) |
+| Fork work to another agent, model, or Machine | [Capability recipes](capability-recipes.md#fork-or-move-a-session) | [Runtime support matrix](runtime-support-matrix.md) |
+| Use a fleet of workstations, servers, and GPU Machines | [Capability recipes](capability-recipes.md#use-multiple-machines) | [CLI reference](cli-reference.md#machines-and-remote-access) |
+| Start checked work from failed CI, an issue, a schedule, or a webhook | [Capability recipes](capability-recipes.md#let-events-start-runs) | [Automations as code](automations-as-code.md) |
+| Bring an ACP or headless process agent | [Capability recipes](capability-recipes.md#bring-a-custom-agent) | [Plugins](plugins.md) |
+| Understand what leaves my Machine | [Why Bivy](why-bivy.md#a-precise-trust-boundary) | [Security model](security-model.md) |
+
+The reference organization below remains the fastest path when you already know
+which subsystem or command you need.
 
 ## Getting started
 
@@ -14,6 +30,7 @@ run your first agent session.
 
 | Doc | Who it's for |
 | --- | --- |
+| [capability-recipes.md](capability-recipes.md) | Developers applying Bivy to real environments, remote continuity, Machine fleets, and event-driven work. |
 | [agent-shim.md](agent-shim.md) | Users wrapping an agent's native terminal session with Bivy. |
 | [plugins.md](plugins.md) | Developers adding an external process or ACP agent through a declarative plugin manifest. |
 | [automations-as-code.md](automations-as-code.md) | Developers defining, validating, simulating, and applying automations from YAML. |
