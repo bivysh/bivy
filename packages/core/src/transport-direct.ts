@@ -705,10 +705,20 @@ export class DirectTransport implements Transport {
         case "provider.oauth.start":
           this.emitMerged(
             "provider.oauth.started",
-            await this.directApi("/api/auth/oauth/start", { method: "POST", body: JSON.stringify({ provider: obj.provider }) }),
+            await this.directApi("/api/auth/oauth/start", { method: "POST", body: JSON.stringify({ provider: obj.provider, label: obj.label }) }),
             { provider: String(obj.provider ?? "") },
           );
           break;
+        case "provider.oauth.open_on_node": {
+          const requestId = String(obj.requestId ?? "");
+          try {
+            const result = await this.directApi(`/api/auth/oauth/${encodeURIComponent(String(obj.id))}/open-on-node`, { method: "POST", body: "{}" });
+            this.emit({ type: "provider.oauth.open_on_node.result", requestId, ...result });
+          } catch (error) {
+            this.emit({ type: "provider.oauth.open_on_node.result", requestId, opened: false, error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
         case "provider.oauth.code":
           await this.directApi(`/api/auth/oauth/${encodeURIComponent(String(obj.id))}/manual-code`, {
             method: "POST",
