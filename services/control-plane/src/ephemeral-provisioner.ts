@@ -405,7 +405,7 @@ export async function provisionEphemeralForAccount(
   let attempt: HostedMachineAttempt | undefined = retry ? await store.getHostedMachineAttempt(accountId, attemptId) : undefined;
   const onLifecycle = async (event: EphemeralLaunchEvent): Promise<void> => {
     const phase = event.phase as HostedMachineAttemptState;
-    const eventCreatedAt = typeof (event.machine as any)?.createdAt === "string" ? (event.machine as any).createdAt : undefined;
+    const eventCreatedAt = typeof event.machine?.createdAt === "string" ? event.machine.createdAt : undefined;
     attempt = await store.putHostedMachineAttempt({
       accountId, attemptId: event.attemptId, provider: config.provider, configId: config.id,
       nodeId: event.nodeId, state: phase,
@@ -564,7 +564,7 @@ export async function provisionEphemeralRestore(
   let attempt: HostedMachineAttempt | undefined = opts.attemptId ? await store.getHostedMachineAttempt(accountId, attemptId) : undefined;
   const onLifecycle = async (event: EphemeralLaunchEvent): Promise<void> => {
     const phase = event.phase as HostedMachineAttemptState;
-    const eventCreatedAt = typeof (event.machine as any)?.createdAt === "string" ? (event.machine as any).createdAt : undefined;
+    const eventCreatedAt = typeof event.machine?.createdAt === "string" ? event.machine.createdAt : undefined;
     attempt = await store.putHostedMachineAttempt({
       accountId, attemptId: event.attemptId, provider: config.provider, configId: config.id,
       nodeId: event.nodeId, state: phase,
@@ -705,7 +705,7 @@ export async function reapSettledHostedMachine(
       // rather than trusting the delete call on its own.
       if (machine.attemptId) {
         const attempt = await store.getHostedMachineAttempt(accountId, machine.attemptId).catch(() => undefined);
-        let confirmed = false;
+        let confirmed: boolean;
         try {
           confirmed = providerToken ? (await observe(machine, providerToken)) === "gone" : false;
         } catch {
@@ -919,7 +919,7 @@ export async function reconcileHostedMachines(store: MeshStore, accountId: strin
       // drop the resource from inventory or finalize the attempt until a
       // fresh observe agrees it's actually gone.
       if (deletingAttemptId) {
-        let confirmed = false;
+        let confirmed: boolean;
         try {
           confirmed = (await observe(m as unknown as EphemeralMachine, providerToken)) === "gone";
         } catch {
@@ -1098,7 +1098,7 @@ export async function sweepOrphanProviderResources(
       await audit(store, accountId, { action: "orphan_detected", provider, nodeId: orphan.nodeId, detail: `resource ${orphan.id} untracked by inventory or any attempt` });
       try {
         await destroyOneHostedMachine(store, accountId, orphan, token, env, nowMs, destroy);
-        let confirmed = false;
+        let confirmed: boolean;
         try {
           confirmed = (await observe(orphan, token)) === "gone";
         } catch {

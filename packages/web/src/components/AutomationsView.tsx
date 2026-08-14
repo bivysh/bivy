@@ -51,6 +51,7 @@ import { WorkQueueSetupSheet, type SourceSetupFocus } from "./WorkQueueSetupShee
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { RulesetsPanel } from "./Rulesets.js";
 import { QueueRoutingSection } from "./QueueRouting.js";
+import { HostedMachinesPanel } from "./HostedMachines.js";
 import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { AutomationsSection } from "../router.js";
@@ -1116,6 +1117,7 @@ export function AutomationsView({
                 showHistory={false}
               />
             </section>
+            {EPHEMERAL_MACHINES_ENABLED && <HostedMachinesPanel />}
           </>
         )}
 
