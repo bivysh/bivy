@@ -75,16 +75,16 @@ export interface DeviceVaultKeyStore extends EphemeralKeyStore {
   listModelKeys(): Promise<EphemeralModelKeyInfo[]>;
   modelKeyEntries(): Promise<EphemeralModelKeyEntry[]>;
   getModelKey(provider: string): Promise<string>;
-  setModelKey(provider: string, key: string, scope?: DeviceCredentialScope): Promise<void>;
-  removeModelKey(provider: string): Promise<void>;
-  importModelKeys(entries: Array<{ provider: string; key: string }>): Promise<void>;
+  setModelKey(provider: string, key: string, scope?: DeviceCredentialScope, label?: string): Promise<void>;
+  removeModelKey(provider: string, label?: string): Promise<void>;
+  importModelKeys(entries: Array<{ provider: string; label?: string; key: string }>): Promise<void>;
 }
 
 type VersionedRecord<T> = { value: T | null; updatedAt: number; tombstone?: true };
 type DeviceVaultPayload = {
   v: 3;
   providerTokens: Record<string, VersionedRecord<string>>;
-  modelKeys: Record<string, VersionedRecord<{ key: string }>>;
+  modelKeys: Record<string, VersionedRecord<{ provider: string; label: string; key: string }>>;
 };
 type LegacyV2 = { v: 2; providerTokens?: Record<string, string>; modelKeys?: Record<string, { key: string; updatedAt?: string | null }> };
 
@@ -98,14 +98,22 @@ const stamp = (value: string | null | undefined): number => {
 function normalizePayload(parsed: unknown): DeviceVaultPayload {
   if (parsed && typeof parsed === "object" && (parsed as { v?: unknown }).v === 3) {
     const p = parsed as Partial<DeviceVaultPayload>;
-    return { v: 3, providerTokens: p.providerTokens && typeof p.providerTokens === "object" ? p.providerTokens : {}, modelKeys: p.modelKeys && typeof p.modelKeys === "object" ? p.modelKeys : {} };
+    const modelKeys: DeviceVaultPayload["modelKeys"] = {};
+    for (const [id, record] of Object.entries(p.modelKeys && typeof p.modelKeys === "object" ? p.modelKeys : {})) {
+      if (!record || typeof record !== "object") continue;
+      const rec = record as VersionedRecord<{ provider?: string; label?: string; key: string }>;
+      modelKeys[id] = rec.value
+        ? { ...rec, value: { provider: rec.value.provider || id.split(":")[0] || id, label: rec.value.label || id.split(":").slice(1).join(":") || "default", key: rec.value.key } }
+        : rec as VersionedRecord<{ provider: string; label: string; key: string }>;
+    }
+    return { v: 3, providerTokens: p.providerTokens && typeof p.providerTokens === "object" ? p.providerTokens : {}, modelKeys };
   }
   const migrated = emptyPayload();
   const now = Date.now();
   if (parsed && typeof parsed === "object" && (parsed as { v?: unknown }).v === 2) {
     const p = parsed as LegacyV2;
     for (const [id, value] of Object.entries(p.providerTokens ?? {})) if (typeof value === "string") migrated.providerTokens[id] = { value, updatedAt: now };
-    for (const [id, value] of Object.entries(p.modelKeys ?? {})) if (value && typeof value.key === "string") migrated.modelKeys[id] = { value: { key: value.key }, updatedAt: stamp(value.updatedAt) || now };
+    for (const [id, value] of Object.entries(p.modelKeys ?? {})) if (value && typeof value.key === "string") migrated.modelKeys[id] = { value: { provider: id, label: "default", key: value.key }, updatedAt: stamp(value.updatedAt) || now };
   } else if (parsed && typeof parsed === "object") {
     for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) if (typeof value === "string") migrated.providerTokens[id] = { value, updatedAt: now };
   }
@@ -125,6 +133,12 @@ function mergePayload(a: DeviceVaultPayload, b: DeviceVaultPayload): DeviceVault
   for (const id of new Set([...Object.keys(a.providerTokens), ...Object.keys(b.providerTokens)])) out.providerTokens[id] = choose(a.providerTokens[id], b.providerTokens[id])!;
   for (const id of new Set([...Object.keys(a.modelKeys), ...Object.keys(b.modelKeys)])) out.modelKeys[id] = choose(a.modelKeys[id], b.modelKeys[id])!;
   return out;
+}
+
+function modelRecordId(provider: string, label = "default"): string {
+  const p = String(provider || "").trim().toLowerCase();
+  const l = String(label || "default").trim().toLowerCase() || "default";
+  return l === "default" ? p : `${p}:${l}`;
 }
 
 function defaultRandomKey(): Uint8Array { return crypto.getRandomValues(new Uint8Array(32)); }
@@ -171,7 +185,10 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
     }
     for (const [id, updatedAt] of Object.entries(tokenTombstones)) out.providerTokens[id] = choose(out.providerTokens[id], { value: null, updatedAt, tombstone: true })!;
     if (deps.modelKeys) {
-      for (const entry of await deps.modelKeys.entries()) if (entry.scope === "account") out.modelKeys[entry.provider] = { value: { key: entry.key }, updatedAt: Math.max(stamp(entry.updatedAt), modelVersions[entry.provider] ?? 1) };
+      for (const entry of await deps.modelKeys.entries()) if (entry.scope === "account") {
+        const id = modelRecordId(entry.provider, entry.label);
+        out.modelKeys[id] = { value: { provider: entry.provider, label: entry.label, key: entry.key }, updatedAt: Math.max(stamp(entry.updatedAt), modelVersions[id] ?? 1) };
+      }
     }
     for (const [id, updatedAt] of Object.entries(modelTombstones)) out.modelKeys[id] = choose(out.modelKeys[id], { value: null, updatedAt, tombstone: true })!;
     return out;
@@ -191,13 +208,15 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
       }
     }
     if (deps.modelKeys) for (const [id, rec] of Object.entries(payload.modelKeys)) {
-      const local = (await deps.modelKeys.list()).find((v) => v.provider === id);
+      const provider = rec.value?.provider ?? id;
+      const label = rec.value?.label ?? "default";
+      const local = (await deps.modelKeys.list()).find((v) => v.provider === provider && v.label === label);
       const localStamp = stamp(local?.updatedAt);
       if (rec.tombstone) {
         modelTombstones[id] = Math.max(modelTombstones[id] ?? 0, rec.updatedAt);
-        if (localStamp <= rec.updatedAt) await deps.modelKeys.remove(id);
+        if (localStamp <= rec.updatedAt) await deps.modelKeys.remove(provider, label);
       } else if (rec.value && (!local?.configured || localStamp < rec.updatedAt)) {
-        await deps.modelKeys.set(id, rec.value.key, "account");
+        await deps.modelKeys.set(provider, rec.value.key, "account", label);
         modelVersions[id] = rec.updatedAt;
         delete modelTombstones[id];
       }
@@ -278,11 +297,11 @@ export function createDeviceVaultKeyStore(deps: DeviceVaultDeps): DeviceVaultKey
       if (deps.providerTokenSyncEnabled?.() !== false) for (const [id, rec] of Object.entries(remotePayload.providerTokens)) if (!rec.tombstone && rec.value && !seen.has(id)) merged.push({ id, name: id, configured: true, updatedAt: new Date(rec.updatedAt).toISOString() });
       return merged;
     },
-    async listModelKeys() { const local = await deps.modelKeys?.list() ?? []; const seen = new Set(local.filter((v) => v.configured).map((v) => v.provider)); for (const [provider, rec] of Object.entries(remotePayload.modelKeys)) if (!rec.tombstone && rec.value && !seen.has(provider)) local.push({ provider, configured: true, updatedAt: new Date(rec.updatedAt).toISOString(), scope: "account" }); return local.sort((a, b) => a.provider.localeCompare(b.provider)); },
-    async modelKeyEntries() { const local = await deps.modelKeys?.entries() ?? []; const by = new Map(local.map((v) => [v.provider, v])); for (const [provider, rec] of Object.entries(remotePayload.modelKeys)) if (!rec.tombstone && rec.value && !by.has(provider)) by.set(provider, { provider, key: rec.value.key, updatedAt: new Date(rec.updatedAt).toISOString(), scope: "account" }); return [...by.values()]; },
-    async getModelKey(provider) { const id = String(provider || "").trim().toLowerCase(); const local = await deps.modelKeys?.get(id) ?? ""; if (local) return local; if (deps.enabled() && !remotePayload.modelKeys[id]) await sync(); const rec = remotePayload.modelKeys[id]; return rec && !rec.tombstone ? rec.value?.key ?? "" : ""; },
-    async setModelKey(provider, key, scope = "account") { if (!deps.modelKeys) throw new Error("Device model-key storage is unavailable"); await init(); const id = String(provider).trim().toLowerCase(); await deps.modelKeys.set(id, key, scope); if (scope === "device") modelTombstones[id] = nextStamp(); else { modelVersions[id] = nextStamp(); delete modelTombstones[id]; } await persist(); if (deps.enabled()) await sync(); },
-    async removeModelKey(provider) { await init(); const id = String(provider || "").trim().toLowerCase(); await deps.modelKeys?.remove(id); modelTombstones[id] = nextStamp(); await persist(); if (deps.enabled()) await sync(); },
-    async importModelKeys(entries) { if (!deps.modelKeys) return; await init(); for (const entry of entries) { const id = entry.provider.trim().toLowerCase(); await deps.modelKeys.set(id, entry.key, "account"); modelVersions[id] = nextStamp(); delete modelTombstones[id]; } await persist(); if (deps.enabled()) await sync(); },
+    async listModelKeys() { const local = await deps.modelKeys?.list() ?? []; const seen = new Set(local.filter((v) => v.configured).map((v) => modelRecordId(v.provider, v.label))); for (const [id, rec] of Object.entries(remotePayload.modelKeys)) if (!rec.tombstone && rec.value && !seen.has(id)) local.push({ provider: rec.value.provider, label: rec.value.label, configured: true, updatedAt: new Date(rec.updatedAt).toISOString(), scope: "account" }); return local.sort((a, b) => a.provider.localeCompare(b.provider) || a.label.localeCompare(b.label)); },
+    async modelKeyEntries() { const local = await deps.modelKeys?.entries() ?? []; const by = new Map(local.map((v) => [modelRecordId(v.provider, v.label), v])); for (const [id, rec] of Object.entries(remotePayload.modelKeys)) if (!rec.tombstone && rec.value && !by.has(id)) by.set(id, { provider: rec.value.provider, label: rec.value.label, key: rec.value.key, updatedAt: new Date(rec.updatedAt).toISOString(), scope: "account" }); return [...by.values()]; },
+    async getModelKey(provider) { const id = modelRecordId(provider); const local = await deps.modelKeys?.get(provider) ?? ""; if (local) return local; if (deps.enabled() && !remotePayload.modelKeys[id]) await sync(); const rec = remotePayload.modelKeys[id]; return rec && !rec.tombstone ? rec.value?.key ?? "" : ""; },
+    async setModelKey(provider, key, scope = "account", label = "default") { if (!deps.modelKeys) throw new Error("Device model-key storage is unavailable"); await init(); const id = modelRecordId(provider, label); await deps.modelKeys.set(provider, key, scope, label); if (scope === "device") modelTombstones[id] = nextStamp(); else { modelVersions[id] = nextStamp(); delete modelTombstones[id]; } await persist(); if (deps.enabled()) await sync(); },
+    async removeModelKey(provider, label = "default") { await init(); const id = modelRecordId(provider, label); await deps.modelKeys?.remove(provider, label); modelTombstones[id] = nextStamp(); await persist(); if (deps.enabled()) await sync(); },
+    async importModelKeys(entries) { if (!deps.modelKeys) return; await init(); for (const entry of entries) { const label = entry.label ?? "default"; const id = modelRecordId(entry.provider, label); await deps.modelKeys.set(entry.provider, entry.key, "account", label); modelVersions[id] = nextStamp(); delete modelTombstones[id]; } await persist(); if (deps.enabled()) await sync(); },
   };
 }

@@ -2507,14 +2507,14 @@ export class AppController {
       // account set so a node-less-created key reaches the newly enrolled node.
       const event = await this.awaitAck({ kind: "credentials.account.export" });
       const incoming = Array.isArray(event.entries)
-        ? event.entries.filter((entry): entry is { provider: string; key: string } => Boolean(entry)
+        ? event.entries.filter((entry): entry is { provider: string; label?: string; key: string } => Boolean(entry)
           && typeof (entry as { provider?: unknown }).provider === "string"
           && typeof (entry as { key?: unknown }).key === "string")
         : [];
       await this.ephemeralKeys.importModelKeys(incoming);
       const accountKeys = (await this.ephemeralKeys.modelKeyEntries()).filter((entry) => entry.scope === "account");
-      for (const { provider, key } of accountKeys) {
-        await this.awaitAck({ kind: "credential.set", provider, label: "default", key });
+      for (const { provider, label, key } of accountKeys) {
+        await this.awaitAck({ kind: "credential.set", provider, label, key });
       }
       this.listCredentialRecords();
       this.listProviders();
@@ -2860,11 +2860,11 @@ export class AppController {
   listEphemeralModelKeys(): Promise<EphemeralModelKeyInfo[]> {
     return this.ephemeralKeys.listModelKeys();
   }
-  setEphemeralModelKey(provider: string, key: string, scope: "account" | "device" = "account"): Promise<void> {
-    return this.ephemeralKeys.setModelKey(provider, key, scope);
+  setEphemeralModelKey(provider: string, key: string, scope: "account" | "device" = "account", label = "default"): Promise<void> {
+    return this.ephemeralKeys.setModelKey(provider, key, scope, label);
   }
-  removeEphemeralModelKey(provider: string): Promise<void> {
-    return this.ephemeralKeys.removeModelKey(provider);
+  removeEphemeralModelKey(provider: string, label = "default"): Promise<void> {
+    return this.ephemeralKeys.removeModelKey(provider, label);
   }
   getEphemeralToken(id: string): Promise<string> {
     return this.ephemeralKeys.getToken(id);

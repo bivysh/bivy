@@ -115,13 +115,13 @@ export async function exportSyncableRecords(credsDir: string): Promise<Record<st
  * E2E account vault with an enrolled node. OAuth refresh tokens, references,
  * non-default labels, and node-local records are deliberately excluded.
  */
-export async function exportAccountApiKeys(credsDir: string): Promise<Array<{ provider: string; key: string; updatedAt?: number }>> {
+export async function exportAccountApiKeys(credsDir: string): Promise<Array<{ provider: string; label: string; key: string; updatedAt?: number }>> {
   return (await createCredentialVault(credsDir).listRecords())
     .flatMap((record) => {
-      if (record.label !== DEFAULT_LABEL || record.sync !== "account" || record.source.kind !== "stored") return [];
+      if (record.sync !== "account" || record.source.kind !== "stored") return [];
       const credential = record.source.cred;
       return credential.type === "api_key" && typeof credential.key === "string"
-        ? [{ provider: record.provider, key: credential.key, updatedAt: record.updatedAt }]
+        ? [{ provider: record.provider, label: record.label, key: credential.key, updatedAt: record.updatedAt }]
         : [];
     });
 }
