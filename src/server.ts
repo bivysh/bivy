@@ -6240,6 +6240,7 @@ function sessionState(record: SessionRecord): SessionState {
     transportReachable: clients.size > 0 || Boolean(relay?.connected),
     processAlive,
     working: sessionBusy(record),
+    waitingBackground: (record.backgroundTaskCount ?? 0) > 0,
     awaitingInput: sessionHasPendingApproval(record),
     workspace: record.workspaceState ?? "clean",
     lastTurnFailed: Boolean(record.lastFailureAt),
@@ -7337,6 +7338,28 @@ function attachSessionListeners(record: SessionRecord) {
       persistSessionMetadata(record);
       broadcast({ type: "session.updated", sessionId: record.id, sessionFile: record.sessionFile, bivySession: bivySessionEnvelope(record) });
     }
+    if (event.type === "background_tasks_changed") {
+      const previous = record.backgroundTaskCount ?? 0;
+      const countValue = Number((event as Record<string, unknown>).count);
+      const count = Number.isSafeInteger(countValue) && countValue > 0 ? countValue : 0;
+      record.backgroundTaskCount = count;
+      touchSession(record);
+      persistSessionMetadata(record);
+      broadcastSessionState(record);
+      scheduleAdvertise();
+      // A background process ending is the real completion boundary when the
+      // agent already ended its turn. Do not claim the session finished while
+      // tests/builds it launched are still running.
+      if (previous > 0 && count === 0 && !sessionBusy(record)) {
+        void sendNotificationHint({
+          kind: "session_done",
+          sessionId: record.id,
+          targetSessionId: record.id,
+          title: "Background work finished",
+          body: `${sessionNotifyLabel(record)} finished its background tasks — tap to review the result.`,
+        });
+      }
+    }
     if ([
       "agent_start",
       "turn_start",
@@ -7496,7 +7519,7 @@ function attachSessionListeners(record: SessionRecord) {
           title: "Session hit an error",
           body: `${sessionNotifyLabel(record)} failed its last turn — tap to see what went wrong.`,
         });
-      } else if (!record.isWorking && !record.remoteActive) {
+      } else if (!record.isWorking && !record.remoteActive && (record.backgroundTaskCount ?? 0) === 0) {
         void sendNotificationHint({
           kind: "session_done",
           sessionId: record.id,

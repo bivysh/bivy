@@ -310,7 +310,7 @@ export function normalizeSessionState(value: unknown): SessionState | undefined 
   const s = value as Record<string, unknown>;
   if (s.transport !== "reachable" && s.transport !== "unreachable") return undefined;
   if (s.process !== "alive" && s.process !== "exited" && s.process !== "none") return undefined;
-  if (s.agent !== "idle" && s.agent !== "working" && s.agent !== "awaiting-input") return undefined;
+  if (s.agent !== "idle" && s.agent !== "working" && s.agent !== "waiting" && s.agent !== "awaiting-input") return undefined;
   if (s.workspace !== "clean" && s.workspace !== "dirty" && s.workspace !== "checkpointing") return undefined;
   if (s.displayStatus !== "idle" && s.displayStatus !== "working" && s.displayStatus !== "needs_attention" && s.displayStatus !== "failed") return undefined;
   return s as unknown as SessionState;
