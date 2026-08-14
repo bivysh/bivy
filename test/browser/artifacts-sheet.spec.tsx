@@ -2,11 +2,13 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
+const TOKENS = new URL("../../packages/ui/tokens.css", import.meta.url);
 const STYLES = new URL("../../packages/web/src/styles.css", import.meta.url);
 const COMPONENT = new URL("../../packages/web/src/components/ArtifactsSheet.tsx", import.meta.url);
 
 test("Artifacts sheet groups images/files, badges named artifacts, and shows an honest unavailable state", async ({ page }) => {
-  const [css, source] = await Promise.all([
+  const [tokens, css, source] = await Promise.all([
+    readFile(TOKENS, "utf8"),
     readFile(STYLES, "utf8"),
     readFile(COMPONENT, "utf8"),
   ]);
@@ -18,7 +20,7 @@ test("Artifacts sheet groups images/files, badges named artifacts, and shows an 
   expect(source).toContain('className="artifact-unavailable"');
 
   await page.setContent(`<!doctype html>
-    <html><head><style>${css}</style></head><body>
+    <html><head><style>${tokens}</style><style>${css}</style></head><body>
       <div class="sheet" role="dialog" aria-modal="true">
         <div class="sheet-backdrop"></div>
         <div class="sheet-body">
