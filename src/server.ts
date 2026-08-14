@@ -5298,9 +5298,9 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   const request = item.source === "schedule" || delegatedProvenance
     ? (item.body || item.title)
     : item.body ? `${item.title}\n\n${item.body}` : item.title;
-  // Plain chat messages (scheduled "message me later" reminders) skip the
-  // automation boilerplate, auto-push and required checks — even when a
-  // workspace target happens to be a git checkout.
+  // Plain chat messages (scheduled "message me later" reminders) skip
+  // auto-push and required checks — even when a workspace target happens to be
+  // a git checkout.
   const isMessage = item.message === true;
   // Case B (provider-agnostic): a follow-up the control plane correlated to an
   // existing session continues it as a normal chat. Reached by Slack the moment a
@@ -5355,17 +5355,10 @@ async function runWorkItem(item: ControlPlaneWorkItem, report: (patch: EvidenceP
   // duplicate session while the original sat abandoned on disk (two sidebar
   // sessions for one Run). Mirrors the Linear path's create-then-report ordering.
   await report({ output: { sessionId: record.id, branch: record.worktree?.branch } });
-  const prompt = isMessage
-    ? request
-    : (parsedRepo || record.worktree)
-      ? [
-          request,
-          "",
-          "Work carefully in this repository and implement the request completely. Run the relevant tests, linter, and type-checker.",
-          "When finished, commit and push your changes, then open a pull request with a clear title and description. If you cannot open it, leave the changes committed on this branch.",
-        ].join("\n")
-      : request;
-  await runSessionTurn(record, prompt, signal);
+  // The agent receives exactly the request supplied by the user. Repository
+  // workflow guidance can be offered as an explicit template, but must never be
+  // silently appended to every Run.
+  await runSessionTurn(record, request, signal);
   if (signal.aborted) throw signal.reason ?? new Error("Run cancelled");
   if (!isMessage && record.worktree) {
     await branchPublish.maybePushWorktreeBranch(record);
