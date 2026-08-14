@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useState } from "react";
 import type { AppState, CredentialRecordSummary, EphemeralModelKeyInfo } from "@bivy/core";
+import { BIVY_PROVIDER_CATALOG } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { OauthStep } from "./ProviderConnect.js";
 
@@ -18,24 +19,12 @@ type VaultItem = {
   ambient?: boolean;
 };
 
-// Browser-safe fallback. The shared Bivy provider registry replaces/augments
-// this list at build time; live nodes are always merged below so custom and
-// newly-added providers remain visible.
-const BASE_PROVIDERS: CatalogProvider[] = [
-  { id: "anthropic", name: "Anthropic", oauth: true, help: "https://console.anthropic.com/settings/keys" },
-  { id: "openai", name: "OpenAI", help: "https://platform.openai.com/api-keys" },
-  { id: "openai-codex", name: "OpenAI — ChatGPT subscription", oauth: true },
-  { id: "google", name: "Google Gemini", help: "https://aistudio.google.com/app/apikey" },
-  { id: "xai", name: "xAI", oauth: true, help: "https://console.x.ai" },
-  { id: "openrouter", name: "OpenRouter", help: "https://openrouter.ai/keys" },
-  { id: "groq", name: "Groq", help: "https://console.groq.com/keys" },
-  { id: "mistral", name: "Mistral" },
-  { id: "deepseek", name: "DeepSeek" },
-  { id: "together", name: "Together AI" },
-  { id: "fireworks", name: "Fireworks AI" },
-  { id: "cohere", name: "Cohere" },
-  { id: "perplexity", name: "Perplexity" },
-];
+const BASE_PROVIDERS: CatalogProvider[] = BIVY_PROVIDER_CATALOG.map((provider) => ({
+  id: provider.id,
+  name: provider.name,
+  oauth: provider.authMethods.some((method) => method.kind === "oauth"),
+  help: provider.authMethods.find((method) => method.kind === "api_key")?.helpUrl,
+}));
 
 const keyOf = (provider: string, label: string) => `${provider}\u0000${label || "default"}`;
 const titleFor = (item: VaultItem) => item.label === "default" ? item.providerName : `${item.providerName} — ${item.label}`;

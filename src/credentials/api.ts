@@ -80,7 +80,7 @@ export async function joinProviderCatalog(
     id: provider.id,
     name: provider.name,
     oauth: provider.oauth,
-    configured: provider.configured,
+    configured: provider.configured || infoById.has(provider.id),
     kind: infoById.get(provider.id)?.type,
     source: provider.source,
     expiresAt: infoById.get(provider.id)?.expiresAt,

@@ -8,12 +8,21 @@
 // point — it fetches Pi's catalog and hands it in. Swapping Pi for a Bivy-owned
 // catalog later is a change here and nowhere else.
 
+import { BIVY_PROVIDER_CATALOG } from "../../packages/core/src/provider-catalog.js";
 import { listPiProviders } from "./pi-oauth.js";
-import { joinProviderCatalog, type ProviderAuthInfo } from "../credentials/api.js";
+import { joinProviderCatalog, type ProviderAuthInfo, type ProviderCatalogEntry } from "../credentials/api.js";
 
 export type { ProviderAuthInfo };
 
-/** Enumerate model providers with their current auth status (catalog from Pi). */
+/** Enumerate Bivy's authoritative providers, overlaid with Pi's live status. */
 export async function listProviders(credsDir: string, piDir: string): Promise<ProviderAuthInfo[]> {
-  return joinProviderCatalog(credsDir, await listPiProviders(credsDir, piDir));
+  const byId = new Map<string, ProviderCatalogEntry>();
+  for (const provider of BIVY_PROVIDER_CATALOG) byId.set(provider.id, {
+    id: provider.id,
+    name: provider.name,
+    oauth: provider.authMethods.some((method) => method.kind === "oauth"),
+    configured: false,
+  });
+  for (const provider of await listPiProviders(credsDir, piDir).catch(() => [])) byId.set(provider.id, provider);
+  return joinProviderCatalog(credsDir, [...byId.values()].sort((a, b) => a.name.localeCompare(b.name)));
 }

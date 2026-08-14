@@ -10,6 +10,7 @@
 // supported dynamically (the provider→env mapping is generic); OAuth providers
 // are those in Bivy's native registry.
 
+import { BIVY_PROVIDER_CATALOG } from "../../packages/core/src/provider-catalog.js";
 import type { AgentRuntime, CatalogProvider, ModelInfo } from "./types.js";
 import { createCredentialVault } from "./credential-store.js";
 import { isNativeOAuthProvider } from "./oauth/model-oauth-providers.js";
@@ -53,6 +54,19 @@ export async function aggregateModelCatalog(runtimes: AgentRuntime[], credsDir: 
 
   const byProvider = new Map<string, AggregatedProvider>();
   const seenModel = new Map<string, Set<string>>();
+  // Start with Bivy's browser-safe baseline so provider/model discovery works
+  // with no installed agent and no network. Live runtimes overlay and extend it.
+  for (const provider of BIVY_PROVIDER_CATALOG) {
+    byProvider.set(provider.id, {
+      id: provider.id,
+      name: provider.name,
+      oauth: provider.authMethods.some((method) => method.kind === "oauth"),
+      configured: configured.has(provider.id),
+      agents: [],
+      models: provider.models.map((model) => ({ provider: provider.id, ...model })),
+    });
+    seenModel.set(provider.id, new Set(provider.models.map((model) => model.id)));
+  }
   for (const { agent, providers } of perAgent) {
     for (const provider of providers) {
       const id = provider.id.trim().toLowerCase();
