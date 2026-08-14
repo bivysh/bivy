@@ -41,6 +41,7 @@ export function CredentialVault({ state }: { state: AppState }) {
   const [label, setLabel] = useState("");
   const [secret, setSecret] = useState("");
   const [customBaseUrl, setCustomBaseUrl] = useState("");
+  const [customApi, setCustomApi] = useState("openai-completions");
   const [customModels, setCustomModels] = useState("");
   const [availability, setAvailability] = useState<Availability>("account");
   const [assignmentProject, setAssignmentProject] = useState(state.draftRepo ?? "");
@@ -105,7 +106,7 @@ export function CredentialVault({ state }: { state: AppState }) {
   const providerCounts = useMemo(() => new Map(items.map((item) => [item.provider, items.filter((x) => x.provider === item.provider).length])), [items]);
 
   const resetAdd = (id = "") => {
-    setProvider(id); setMethod("api_key"); setLabel(""); setSecret(""); setCustomBaseUrl(""); setCustomModels(""); setAvailability("account"); setError(null); setMessage(null);
+    setProvider(id); setMethod("api_key"); setLabel(""); setSecret(""); setCustomBaseUrl(""); setCustomApi("openai-completions"); setCustomModels(""); setAvailability("account"); setError(null); setMessage(null);
   };
 
   const save = async () => {
@@ -115,7 +116,7 @@ export function CredentialVault({ state }: { state: AppState }) {
     if (method !== "oauth" && !secret.trim()) return;
     setBusy(true); setError(null); setMessage(null);
     try {
-      const catalogKnown = catalog.some((entry) => entry.id === id);
+      const catalogKnown = BASE_PROVIDERS.some((entry) => entry.id === id);
       if (!catalogKnown) {
         if (state.status !== "online") throw new Error("Connect a machine to configure a custom model endpoint.");
         if (!customBaseUrl.trim()) throw new Error("A custom provider needs a base URL.");
@@ -123,7 +124,7 @@ export function CredentialVault({ state }: { state: AppState }) {
           providerId: id,
           name: id,
           baseUrl: customBaseUrl.trim(),
-          api: "openai-completions",
+          api: customApi,
           ...(secret.trim() ? { apiKey: secret.trim() } : {}),
           models: customModels.split(/[,\n]/).map((model) => model.trim()).filter(Boolean).map((modelId) => ({ id: modelId, name: modelId })),
         });
@@ -198,7 +199,7 @@ export function CredentialVault({ state }: { state: AppState }) {
         </div>
       </div>;
     }
-    const customProvider = !catalog.some((entry) => entry.id === chosen.id);
+    const customProvider = !BASE_PROVIDERS.some((entry) => entry.id === chosen.id);
     return <div className="settings-form credential-vault">
       <button className="link-btn" onClick={() => setProvider("")}>‹ Providers</button>
       <h3>{customProvider ? "Custom provider" : chosen.name}</h3>
@@ -208,6 +209,13 @@ export function CredentialVault({ state }: { state: AppState }) {
           <input className="picker-search" value={provider} onChange={(e) => setProvider(e.target.value.toLowerCase())} />
           <label className="field-label">Endpoint</label>
           <input className="picker-search" placeholder="https://api.example.com/v1" value={customBaseUrl} onChange={(e) => setCustomBaseUrl(e.target.value)} />
+          <label className="field-label">API compatibility</label>
+          <select className="picker-search" value={customApi} onChange={(e) => setCustomApi(e.target.value)}>
+            <option value="openai-completions">OpenAI-compatible</option>
+            <option value="openai-responses">OpenAI Responses</option>
+            <option value="azure-openai-responses">Azure OpenAI</option>
+            <option value="anthropic-messages">Anthropic Messages</option>
+          </select>
           <label className="field-label">Models <span className="muted">(one per line, optional)</span></label>
           <textarea className="picker-search" rows={3} placeholder="model-id" value={customModels} onChange={(e) => setCustomModels(e.target.value)} />
         </>}
@@ -274,7 +282,7 @@ export function CredentialVault({ state }: { state: AppState }) {
       {!selected.ambient && <>
         <details className="vault-advanced"><summary>Replace or change availability</summary>
           <p className="muted small">Re-enter the secret to replace it or move it. Bivy never displays saved secrets.</p>
-          <button className="btn" onClick={() => { resetAdd(selected.provider); setLabel(selected.label === "default" ? "" : selected.label); setMethod(selected.kind === "reference" ? "reference" : "api_key"); setAvailability(selected.availability); setView("add"); }}>Edit credential</button>
+          <button className="btn" onClick={() => { const custom = state.localModels.find((model) => model.id === selected.provider); resetAdd(selected.provider); setLabel(selected.label === "default" ? "" : selected.label); setMethod(selected.kind === "reference" ? "reference" : "api_key"); setAvailability(selected.availability); if (custom) { setCustomBaseUrl(custom.baseUrl); setCustomApi(custom.api); setCustomModels(custom.models.map((model) => model.id).join("\n")); } setView("add"); }}>Edit credential</button>
         </details>
         <button className="btn danger-ghost" disabled={busy} onClick={() => void remove(selected)}>Delete credential</button>
       </>}
