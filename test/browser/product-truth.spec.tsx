@@ -58,7 +58,7 @@ test("GitHub trigger creation stays in one complete automation editor", async ()
 
 test("provider key save awaits an authoritative acknowledgement", async () => {
   const source = await readFile(new URL("../../packages/web/src/components/ProviderConnect.tsx", import.meta.url), "utf8");
-  expect(source).toContain("await controller.saveApiKey");
+  expect(source).toContain("await controller.setCredential");
   expect(source).toContain('role="alert"');
   expect(source).not.toContain("setTimeout(() => {\n              controller.listProviders()");
 });

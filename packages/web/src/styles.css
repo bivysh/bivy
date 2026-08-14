@@ -1421,6 +1421,24 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .settings-form { display: flex; flex-direction: column; gap: 10px; padding: 8px; }
 .settings-form h3 { margin: 2px 0; }
 .settings-form .muted { color: var(--muted); font-size: 13px; margin: 0; }
+/* Password-manager-style provider credential vault. Saved items are the primary
+   list; the provider catalog appears only inside Add. */
+.credential-vault { gap: 14px; }
+.vault-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.vault-title-row > div { min-width: 0; }
+.vault-title-row h3 { margin: 0 0 4px; }
+.vault-empty { display: flex; min-height: 220px; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed var(--line-strong); border-radius: 14px; text-align: center; padding: 24px; }
+.vault-empty h4 { margin: 0; }
+.vault-items .picker-item, .credential-vault > .picker-list .picker-item { justify-content: space-between; width: 100%; cursor: pointer; }
+.vault-items .picker-item > span:first-child, .credential-vault > .picker-list .picker-item > span:first-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.vault-items .picker-item small, .credential-vault > .picker-list .picker-item small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.vault-row-status { display: flex; align-items: center; gap: 10px; }
+.vault-methods { display: flex; flex-wrap: wrap; gap: 8px; }
+.vault-detail-grid { display: grid; grid-template-columns: minmax(110px, auto) 1fr; gap: 10px 18px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.vault-detail-grid code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vault-advanced { padding: 10px 0; border-top: 1px solid var(--line); }
+.vault-advanced summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+.vault-advanced[open] summary { margin-bottom: 10px; }
 .settings-intro { padding: 4px 10px 8px; }
 .settings-subhead { margin: 8px 0 0; font-size: 13px; font-weight: 700; }
 /* Groups a panel's sections (e.g. GitHub App: connected apps / add app /

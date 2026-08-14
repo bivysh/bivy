@@ -67,8 +67,8 @@ export interface ProviderCredential {
  * (the storage interface Bivy's store implements for injection into Pi).
  */
 export interface AgentCredentialStore {
-  /** Resolve a usable credential for a provider, or undefined if none is configured. */
-  getCredential(provider: string): Promise<ProviderCredential | undefined>;
+  /** Resolve a usable credential for a provider, optionally in a project context. */
+  getCredential(provider: string, context?: { project?: string; workspace?: string; preferLabel?: string }): Promise<ProviderCredential | undefined>;
   /** Provider ids the vault currently holds a credential for (for bulk env injection). */
   listConfigured?(): Promise<string[]>;
 }

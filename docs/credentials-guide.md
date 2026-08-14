@@ -50,28 +50,26 @@ Each record has:
 When a session needs a provider (say `anthropic`), selection runs a simple ladder
 and records **why** it chose — it never silently guesses between two accounts:
 
-1. an explicit label you asked for, else
-2. the **active preset**'s mapping for that provider, else
-3. the `default` preset's mapping, else
+1. an explicit label requested by the session, else
+2. that project's provider assignment, else
+3. the account default for the provider, else
 4. the `default`-labelled credential, else the provider's only one, else
-5. nothing — if there are several accounts and no preset, you're asked to pick.
+5. nothing — if there are several accounts and no assignment, you're asked to pick.
 
-**Presets** are named sets of "for this provider, use this label", stored in
-`.bivy/credentials.config.json`:
+The vault hides assignment controls until a provider has multiple credentials.
+Open an item and choose **Use by default**, or select a repository under
+**Assign for project**. Project rules are stored as `project:<owner/repo>` maps in
+`.bivy/credentials.config.json`; the node resolves the repository from each
+session workspace, so assignments apply independently without a global mode.
 
 ```jsonc
 {
-  "active": "work",
   "presets": {
-    "work":     { "anthropic": "work",     "openai": "work" },
-    "personal": { "anthropic": "personal" }
+    "default": { "anthropic": "personal" },
+    "project:acme/service": { "anthropic": "work", "openai": "work" }
   }
 }
 ```
-
-Edit it by hand, or in the PWA: create/activate a preset in the **preset bar**,
-then in a provider's detail choose *"In preset 'work', use: …"*. A provider with
-no mapping in the active preset just uses its default key.
 
 ---
 
@@ -131,9 +129,12 @@ others (e.g. Gemini CLI) remain per-node native logins.
   `op://…` / `env://NAME` reference.
 - **Use a password-manager key:** add it as a **reference** instead of pasting
   the secret — Bivy stores only the pointer and resolves it on each node.
-- **Point a project at a specific key:** create a preset, activate it, and map the
-  provider to the label.
-- **Keep a key on one machine:** toggle its sync to "This node only".
+- **Point a project at a specific key:** open the credential in the vault, choose
+  the repository under **Assign for project**, then select **Use for …**.
+- **Keep a key on one machine:** set **Available on** to “Only this machine”.
+- **Allow unattended runs:** explicitly enable it on that credential. Bivy writes
+  a separately encrypted hosted snapshot containing only granted credentials;
+  account sync alone never grants hosted custody.
 - **Rotate a key:** re-save it at the same label. OAuth refresh happens
   automatically and touches only that specific account.
 

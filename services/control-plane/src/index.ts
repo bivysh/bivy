@@ -1848,27 +1848,18 @@ app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
   }
 }));
 
-// E2E model-provider auth vault. The control plane stores only ciphertext and
-// per-node wrapped vault keys; API keys/OAuth records are encrypted/decrypted on
-// enrolled nodes with a vault key the control plane never sees.
+// E2E model-provider auth vault. Ordinary account sync stores only ciphertext
+// and per-node wrapped keys. Hosted custody is a separate, filtered ciphertext
+// whose distinct key is escrowed only after an explicit per-item grant.
 app.get("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  // Hosted escrow (node-less inheritance): for a hosted-provisioning account, hand
-  // the vault key straight to the node so a lone hosted ephemeral can decrypt the
-  // synced vault without a peer to wrap it. Served ONLY when hosted is enabled;
-  // non-hosted accounts get null here and stay fully peer-wrapped (CP-blind).
-  let hostedKey: string | null = null;
-  try {
-    if ((await store.getHostedProvisioning(node.accountId)).enabled) {
-      const enc = await store.getHostedModelAuthVaultKey(node.accountId);
-      if (enc) hostedKey = decryptSecret(node.accountId, enc);
-    }
-  } catch { /* best effort — fall back to peer wrapping */ }
+  // Keep this legacy response peer-vault-only. Older nodes interpret any
+  // `hostedKey` here as the key for `vault`, so mixing the distinct filtered
+  // custody key into this shape would break rolling upgrades.
   res.json({
     ok: true,
     vault: await store.getModelAuthVault(node.accountId) ?? null,
     wrappedKey: await store.getModelAuthWrappedKey(node.accountId, node.id) ?? null,
-    hostedKey,
     requests: await store.listModelAuthKeyRequests(node.accountId, node.id),
   });
 }));
@@ -1879,14 +1870,54 @@ app.put("/node/model-auth-key/hosted-escrow", requireNode, asyncHandler(async (r
   if (!vaultKeyB64 || Buffer.from(vaultKeyB64, "base64").length !== 32) {
     return res.status(400).json({ error: "Missing/invalid vaultKeyB64" });
   }
-  // Hosted-provisioning accounts only — otherwise the CP would hold a key it must
-  // not (E2E is preserved for everyone else). A non-hosted node never calls this
-  // (gated node-side on BIVY_GITHUB_HOSTED_TASKS); reject defensively regardless.
+  // Legacy endpoint retained only so pre-vault nodes fail safely during a rolling
+  // upgrade. Once a filtered hosted snapshot exists, an old node must not replace
+  // its distinct key with the ordinary account-vault key.
   if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
     return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
   }
+  if (await store.getHostedModelAuthVault(node.accountId)) {
+    return res.status(409).json({ error: "filtered hosted credential vault already active" });
+  }
   await store.setHostedModelAuthVaultKey(node.accountId, encryptSecret(node.accountId, vaultKeyB64));
   res.json({ ok: true });
+}));
+
+app.get("/node/model-auth-hosted-vault", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
+    return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
+  }
+  const [enc, vault] = await Promise.all([
+    store.getHostedModelAuthVaultKey(node.accountId),
+    store.getHostedModelAuthVault(node.accountId),
+  ]);
+  res.json({
+    ok: true,
+    hostedVault: vault ? { ciphertext: vault.ciphertext, generation: vault.generation, revision: vault.revision } : null,
+    hostedKey: enc && vault ? decryptSecret(node.accountId, enc) : null,
+  });
+}));
+
+app.put("/node/model-auth-hosted-vault", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const vaultKeyB64 = String(req.body?.vaultKeyB64 ?? "").trim();
+  const ciphertext = String(req.body?.ciphertext ?? "").trim();
+  const expectedGeneration = Number(req.body?.expectedGeneration);
+  const revision = Number(req.body?.revision);
+  if (!ciphertext || !vaultKeyB64 || Buffer.from(vaultKeyB64, "base64").length !== 32 || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0 || !Number.isSafeInteger(revision) || revision < 0) {
+    return res.status(400).json({ error: "Missing/invalid hosted vault" });
+  }
+  if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
+    return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
+  }
+  const generation = await store.setHostedModelAuthVault(node.accountId, ciphertext, encryptSecret(node.accountId, vaultKeyB64), expectedGeneration, revision);
+  if (generation === undefined) {
+    const current = await store.getHostedModelAuthVault(node.accountId);
+    return res.status(409).json({ error: "hosted credential vault changed", generation: current?.generation ?? 0, revision: current?.revision ?? 0 });
+  }
+  await store.appendHostedAudit(node.accountId, { at: new Date().toISOString(), action: "model_credential_escrowed", nodeId: node.id });
+  res.json({ ok: true, generation, revision });
 }));
 
 app.put("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => {

@@ -351,12 +351,12 @@ export { isNativeOAuthProvider, nativeOAuthProviderIds } from "./model-oauth-pro
  * store. The interaction (prompt/notify) is caller-supplied; the whole flow —
  * PKCE, callback server, token exchange — is Bivy's.
  */
-export async function loginModelOAuth(credsDir: string, providerId: string, interaction: AuthInteraction): Promise<void> {
+export async function loginModelOAuth(credsDir: string, providerId: string, interaction: AuthInteraction, label: string = DEFAULT_LABEL): Promise<void> {
   const provider = getModelOAuthProvider(providerId);
   if (!provider) throw new Error(`Provider "${providerId}" does not support subscription login`);
   const tokens = provider.flow === "device_code" ? await loginDeviceCode(provider, interaction) : await loginAuthCode(provider, interaction);
   const credential: OAuthCredential = { type: "oauth", access: tokens.access, refresh: tokens.refresh, expires: tokens.expires, refreshedAt: tokens.refreshedAt, ...(tokens.accountId ? { accountId: tokens.accountId } : {}) };
-  await createCredentialVault(credsDir).modify(providerId, async () => credential);
+  await createCredentialVault(credsDir).modifyRecord(providerId, label, async () => credential);
 }
 
 /** Exchange the refresh token for a fresh credential (network call; throws on failure). */

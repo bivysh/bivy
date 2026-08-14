@@ -82,7 +82,7 @@ Gating and shape (`HostedProvisioning` in `services/control-plane/src/store.ts`)
 | Cloud provider token | Device local storage only | **+ Control plane** (per account) |
 | GitHub token | Device local storage only | **+ Control plane** (per account) |
 | E2E room key | Device-generated, device-held | CP generates it and **escrows it at rest** (`node_room_keys`, sealed with the per-account hosted key) so it can rebuild a torn-down session with no device online — injected into the new machine, never used to decrypt a snapshot CP-side |
-| Model-auth vault key | Peer-wrapped only (CP-blind) | **Escrowed at rest** (`hosted_model_auth_keys`, sealed with the per-account hosted key) so a LONE hosted ephemeral inherits the account's model credentials (incl. subscription OAuth) with no peer to wrap the key — enables "sign in once from the app, every hosted ephemeral inherits it." Non-hosted accounts stay fully peer-wrapped. |
+| Model credentials | Peer-wrapped account vault (CP-blind) | **Per-item opt-in.** Bivy creates a separate filtered ciphertext containing only credentials marked “Allow unattended runs”, encrypts it under a different key, and seals that key at rest in `hosted_model_auth_keys`. Escrowing the hosted key cannot decrypt the ordinary account vault. Non-hosted accounts stay fully peer-wrapped. |
 | Account session token | Device | CP mints one per launch (`createSession`) to self-enroll |
 | GitHub App private key | Node vault only | Unchanged (not used by this path) |
 
