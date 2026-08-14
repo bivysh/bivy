@@ -11,7 +11,11 @@
 // All app metrics carry a `bivy_` prefix. Metadata only — never session content.
 import client from "prom-client";
 import type { Request, Response, NextFunction } from "express";
-import type { MeshStore } from "./store.js";
+import type { UsageMetrics } from "./store.js";
+
+export interface UsageMetricsReader {
+  usageMetrics(): Promise<UsageMetrics>;
+}
 
 export const register = new client.Registry();
 client.collectDefaultMetrics({ register });
@@ -238,7 +242,7 @@ const sessions = new client.Gauge({
  * Returns a stop function. The timer is unref'd so it never holds the process
  * open on its own.
  */
-export function startUsageCollector(store: MeshStore, intervalMs = 30_000): () => void {
+export function startUsageCollector(store: UsageMetricsReader, intervalMs = 30_000): () => void {
   let stopped = false;
 
   const refresh = async () => {
