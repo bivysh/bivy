@@ -426,6 +426,13 @@ export type HostedMachineAttemptState =
   | "requested" | "enrolled" | "provider-accepted" | "tracked"
   | "ready" | "claimed" | "working" | "deleting" | "deleted" | "failed";
 
+/** What the controller wants for this attempt, independent of `state` (what has
+ * actually been observed). "deleted" is set by TTL/boot-deadline expiry, a user
+ * force-destroy, or the reconciler abandoning a hopeless create — and, once set,
+ * is never reverted; the reconciler's only remaining job for that attempt is to
+ * drive `state` to "deleted" and stop retrying creation. */
+export type HostedMachineAttemptDesiredState = "active" | "deleted";
+
 export interface HostedMachineAttempt {
   accountId: string;
   attemptId: string;
@@ -433,18 +440,57 @@ export interface HostedMachineAttempt {
   configId?: string;
   nodeId: string;
   state: HostedMachineAttemptState;
+  /** Controller intent — see `HostedMachineAttemptDesiredState`. Optional on
+   * write (defaults to "active"); always present on read. */
+  desiredState?: HostedMachineAttemptDesiredState;
+  /** Last raw status string the provider reported for this resource (e.g.
+   * Hetzner "running"/"off"), distinct from the coarse controller `state`. */
+  observedState?: string;
+  /** Next moment the reconciler should force a transition for this attempt
+   * (boot timeout, TTL+grace, etc.) — persisted so it survives a controller
+   * restart and can be shown verbatim in the UI/audit trail. */
+  deadlineAt?: string;
+  /** Opaque per-account tag applied to every provider resource this attempt
+   * creates (see `ownershipTagFor`), so an orphan sweep can discover resources
+   * belonging to this account without ever tagging providers with a raw id. */
+  ownershipTag?: string;
   desired: Record<string, unknown>;
   machine?: Record<string, unknown>;
   lastError?: string;
   retryCount: number;
+  /** Optimistic-concurrency counter. Incremented by the store on every write
+   * (the input value is ignored — always read back from the row); callers
+   * that read-modify-write under contention (the reconciler) may pass
+   * `expectedVersion` to `putHostedMachineAttempt` to fence a stale write. */
+  version?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Thrown by `putHostedMachineAttempt` when `expectedVersion` no longer matches
+ * the stored row — another writer (a second reconciler pass, a concurrent
+ * replica) has already moved this attempt forward. Callers should re-read and
+ * decide whether their update still applies rather than blindly retrying. */
+export class ConcurrentAttemptUpdateError extends Error {
+  constructor(accountId: string, attemptId: string) {
+    super(`hosted machine attempt ${accountId}/${attemptId} was updated concurrently`);
+    this.name = "ConcurrentAttemptUpdateError";
+  }
+}
+
+/** Stable, non-reversible per-account tag applied to every provider resource a
+ * hosted launch creates (Hetzner label, Fly metadata, EC2 tag). Never the raw
+ * account id — a provider account/API console may be shared or visible to
+ * support staff, and the tag's only job is to scope an orphan-discovery scan to
+ * "resources this Bivy account is responsible for", not to identify the account. */
+export function ownershipTagFor(accountId: string): string {
+  return createHash("sha256").update(`bivy-ownership:${accountId}`).digest("hex").slice(0, 24);
 }
 
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
-  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed";
+  action: "credential_updated" | "credential_rotated" | "credential_validation_failed" | "github_app_connected" | "github_app_disconnected" | "provision_attempt" | "provision_launched" | "provision_failed" | "token_minted" | "machine_reaped" | "machine_milestone" | "reconcile_failed" | "room_key_escrowed" | "room_key_reused" | "work_routed" | "capacity_ready" | "capacity_claimed" | "orphan_reaped" | "orphan_detected" | "attempt_abandoned" | "force_destroy_requested";
   provider?: string;
   configId?: string;
   nodeId?: string;
@@ -1280,7 +1326,11 @@ export interface MeshStore {
   setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
   getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
   setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
-  putHostedMachineAttempt(attempt: HostedMachineAttempt): Promise<HostedMachineAttempt>;
+  /** Upsert an attempt row. When `opts.expectedVersion` is given, the write is
+   * fenced: it only applies if the stored row's `version` still matches, else
+   * throws `ConcurrentAttemptUpdateError`. Omitted, this is last-write-wins
+   * (the shape every pre-existing call site relies on). */
+  putHostedMachineAttempt(attempt: HostedMachineAttempt, opts?: { expectedVersion?: number }): Promise<HostedMachineAttempt>;
   getHostedMachineAttempt(accountId: string, attemptId: string): Promise<HostedMachineAttempt | undefined>;
   listHostedMachineAttempts(accountId: string, activeOnly?: boolean): Promise<HostedMachineAttempt[]>;
   /** Cross-replica mutex around the read/decide/provider-launch sequence. The
@@ -1294,6 +1344,12 @@ export interface MeshStore {
   listHostedMachineAccountIds(): Promise<string[]>;
   /** Accounts with at least one config requesting ready capacity. */
   listReadyCapacityAccountIds(): Promise<string[]>;
+  /** Accounts with hosted provisioning enabled — a superset of
+   * `listHostedMachineAccountIds()` that includes accounts with NO currently
+   * tracked machine/attempt. Used by the orphan-discovery sweep: the one
+   * failure mode it exists to catch is exactly "tracking itself was lost", so
+   * it cannot rely on tracking to know which accounts to check. */
+  listHostedEnabledAccountIds(): Promise<string[]>;
   // Append-only audit trail of hosted-credential use (capped, newest-first read).
   appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
   listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;

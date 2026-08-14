@@ -81,11 +81,15 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
     putHostedMachineAttempt: async (next: unknown) => next,
     getEphemeralConfigs: async () => [],
   });
+  // Two observe calls now: the pre-destroy check (still "starting", which is
+  // what triggers the boot-deadline destroy) and the post-destroy confirmed-
+  // deletion check (returns "gone", so the attempt/machine actually finalize).
   let observed = 0;
   let destroyed = 0;
-  const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; }, async () => { observed++; return "starting"; });
+  const observeFn = async () => { observed++; return observed === 1 ? "starting" : "gone"; };
+  const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; }, observeFn);
   assert.equal(n, 1);
-  assert.equal(observed, 1);
+  assert.equal(observed, 2);
   assert.equal(destroyed, 1);
 }
 

@@ -34,6 +34,7 @@ import {
   type HostedProvisioningStatus,
   type HostedAuditEvent,
   type HostedMachineAttempt,
+  ConcurrentAttemptUpdateError,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
@@ -213,6 +214,15 @@ export class PostgresStore implements MeshStore {
       );
       CREATE INDEX IF NOT EXISTS hosted_machine_attempts_active_idx
         ON hosted_machine_attempts (account_id, state, updated_at);
+      -- Durable lifecycle hardening (docs/ephemeral-lifecycle-review.md): explicit
+      -- desired vs. observed state, a persisted next-deadline, the per-account
+      -- ownership tag applied to provider resources, and an optimistic-concurrency
+      -- version so a reconciler can fence a write against a stale read.
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS desired_state TEXT NOT NULL DEFAULT 'active';
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS observed_state TEXT;
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS ownership_tag TEXT;
+      ALTER TABLE hosted_machine_attempts ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
       -- The paid single-user plan was renamed 'individual' -> 'pro' to match what
       -- it is sold as. The plan column is plain TEXT with no enum or CHECK, so the
       -- backfill is a straight UPDATE; it is idempotent (the second run matches no
@@ -1726,26 +1736,63 @@ export class PostgresStore implements MeshStore {
       accountId: String(row.account_id), attemptId: String(row.attempt_id),
       provider: String(row.provider), configId: row.config_id || undefined,
       nodeId: String(row.node_id), state: row.state,
+      desiredState: row.desired_state === "deleted" ? "deleted" : "active",
+      observedState: row.observed_state || undefined,
+      deadlineAt: row.deadline_at ? new Date(row.deadline_at).toISOString() : undefined,
+      ownershipTag: row.ownership_tag || undefined,
       desired: row.desired && typeof row.desired === "object" ? row.desired : {},
       machine: row.machine && typeof row.machine === "object" ? row.machine : undefined,
       lastError: row.last_error || undefined, retryCount: Number(row.retry_count) || 0,
+      version: Number(row.version) || 0,
       createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
     };
   }
 
-  async putHostedMachineAttempt(attempt: HostedMachineAttempt): Promise<HostedMachineAttempt> {
+  async putHostedMachineAttempt(attempt: HostedMachineAttempt, opts?: { expectedVersion?: number }): Promise<HostedMachineAttempt> {
+    const expectedVersion = opts?.expectedVersion;
+    const params = [
+      attempt.accountId, attempt.attemptId, attempt.provider, attempt.configId ?? null, attempt.nodeId,
+      attempt.state, attempt.desiredState ?? "active", attempt.observedState ?? null,
+      attempt.deadlineAt ?? null, attempt.ownershipTag ?? null,
+      JSON.stringify(attempt.desired ?? {}), attempt.machine ? JSON.stringify(attempt.machine) : null,
+      attempt.lastError ?? null, attempt.retryCount, attempt.createdAt, attempt.updatedAt,
+    ];
+    if (expectedVersion != null) {
+      // A fenced write only ever applies to an existing row (the caller must
+      // have already read it to know its version), so this is a plain
+      // conditional UPDATE rather than an upsert. Deliberately NOT expressed
+      // as `INSERT ... ON CONFLICT DO UPDATE ... WHERE ... RETURNING`: that
+      // form does not reliably return zero rows on a WHERE mismatch under
+      // pg-mem (the in-memory Postgres this store also runs against for
+      // dev/tests — see postgres-store.test evidence in the PR), silently
+      // turning a rejected fence into an apparent success. A bare UPDATE with
+      // a WHERE clause is unambiguous under both.
+      const { rows } = await this.query(
+        `UPDATE hosted_machine_attempts SET
+           provider=$3, config_id=$4, node_id=$5, state=$6, desired_state=$7, observed_state=$8,
+           deadline_at=$9, ownership_tag=$10, desired=$11, machine=$12, last_error=$13, retry_count=$14,
+           version=version + 1, updated_at=$16
+         WHERE account_id=$1 AND attempt_id=$2 AND version=$17
+         RETURNING *`,
+        [...params, expectedVersion],
+      );
+      if (!rows[0]) throw new ConcurrentAttemptUpdateError(attempt.accountId, attempt.attemptId);
+      return this.hostedAttemptFromRow(rows[0]);
+    }
     const { rows } = await this.query(
       `INSERT INTO hosted_machine_attempts
-         (account_id, attempt_id, provider, config_id, node_id, state, desired, machine, last_error, retry_count, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         (account_id, attempt_id, provider, config_id, node_id, state, desired_state, observed_state,
+          deadline_at, ownership_tag, desired, machine, last_error, retry_count, version, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,$15,$16)
        ON CONFLICT (account_id, attempt_id) DO UPDATE SET
          provider=EXCLUDED.provider, config_id=EXCLUDED.config_id, node_id=EXCLUDED.node_id,
-         state=EXCLUDED.state, desired=EXCLUDED.desired, machine=EXCLUDED.machine,
-         last_error=EXCLUDED.last_error, retry_count=EXCLUDED.retry_count, updated_at=EXCLUDED.updated_at
+         state=EXCLUDED.state, desired_state=EXCLUDED.desired_state, observed_state=EXCLUDED.observed_state,
+         deadline_at=EXCLUDED.deadline_at, ownership_tag=EXCLUDED.ownership_tag,
+         desired=EXCLUDED.desired, machine=EXCLUDED.machine,
+         last_error=EXCLUDED.last_error, retry_count=EXCLUDED.retry_count,
+         version=hosted_machine_attempts.version + 1, updated_at=EXCLUDED.updated_at
        RETURNING *`,
-      [attempt.accountId, attempt.attemptId, attempt.provider, attempt.configId ?? null, attempt.nodeId,
-       attempt.state, JSON.stringify(attempt.desired ?? {}), attempt.machine ? JSON.stringify(attempt.machine) : null,
-       attempt.lastError ?? null, attempt.retryCount, attempt.createdAt, attempt.updatedAt],
+      params,
     );
     return this.hostedAttemptFromRow(rows[0]);
   }
@@ -1777,6 +1824,11 @@ export class PostgresStore implements MeshStore {
   async listReadyCapacityAccountIds(): Promise<string[]> {
     const { rows } = await this.query(`SELECT id, ephemeral_configs FROM accounts WHERE ephemeral_configs IS NOT NULL`);
     return rows.filter((row) => normalizeEphemeralConfigs(row.ephemeral_configs).some((config) => (config.readyCapacity ?? 0) > 0)).map((row) => String(row.id));
+  }
+
+  async listHostedEnabledAccountIds(): Promise<string[]> {
+    const { rows } = await this.query(`SELECT id, hosted_provisioning FROM accounts WHERE hosted_provisioning IS NOT NULL`);
+    return rows.filter((row) => normalizeHostedProvisioning(row.hosted_provisioning).enabled).map((row) => String(row.id));
   }
 
   async acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean> {
