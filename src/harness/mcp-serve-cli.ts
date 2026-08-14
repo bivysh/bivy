@@ -17,7 +17,9 @@
 // BIVY_MCP_ENDPOINT), stamped into the injected server spec.
 //
 // The attach client is factored out and unit-tested (test/harness-mcp-serve.test.ts)
-// with an injected fetch; the process/transport wiring is thin.
+// with an injected fetch; the process/transport wiring is thin. Deliberately do
+// not expose governed Runs here: agents should use their native sub-agent tools,
+// which stay inside the parent Session instead of cluttering the Session list.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,21 +57,6 @@ export const BIVY_MCP_TOOLS = [
       required: ["path"],
       additionalProperties: false,
     },
-  },
-  {
-    name: "start_run",
-    description: "Delegate one bounded task to another governed Bivy Run or Machine. Returns lifecycle and safe references only, never the child transcript, raw tool output, secrets, or file contents.",
-    inputSchema: { type: "object", properties: { instructions: { type: "string", maxLength: 16000 }, repo: { type: "string" }, machine: { type: "string" }, agent: { type: "string" }, model: { type: "string" }, safety: { type: "object", properties: { approval: { type: "string", enum: ["never", "risky", "always", "autonomous"] }, sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] }, maxAttempts: { type: "integer", minimum: 1, maximum: 10 } }, additionalProperties: false }, idempotencyKey: { type: "string", maxLength: 128 } }, required: ["instructions"], additionalProperties: false },
-  },
-  {
-    name: "get_run_status",
-    description: "Inspect a child Run started by this Session. Returns bounded lifecycle, check states, and safe output references only.",
-    inputSchema: { type: "object", properties: { runId: { type: "string" } }, required: ["runId"], additionalProperties: false },
-  },
-  {
-    name: "wait_for_run",
-    description: "Wait up to 300 seconds for a child Run. A wait timeout is reported honestly and does not cancel the child.",
-    inputSchema: { type: "object", properties: { runId: { type: "string" }, timeoutSeconds: { type: "number", minimum: 1, maximum: 300 } }, required: ["runId", "timeoutSeconds"], additionalProperties: false },
   },
 ] as const;
 
@@ -118,20 +105,6 @@ export async function runAttachToChat(
   return { isError: false, text: `Attached ${name} to the chat as ${body?.kind === "image" ? "an inline image" : "a downloadable file"}. The user can see it now.` };
 }
 
-export async function runBivyRunTool(endpoint: string, sessionId: string, name: string, args: Record<string, unknown>, fetchImpl: FetchLike, token?: string): Promise<AttachResult> {
-  if (!sessionId) return { isError: true, text: "No active Bivy Session (BIVY_SESSION_ID is not set)." };
-  const suffix = name === "start_run" ? "delegated-runs" : name === "get_run_status" ? `delegated-runs/${encodeURIComponent(String(args.runId ?? ""))}` : `delegated-runs/${encodeURIComponent(String(args.runId ?? ""))}/wait`;
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (token) headers.authorization = `Bearer ${token}`;
-  try {
-    const method = name === "get_run_status" ? "GET" : "POST";
-    const res = await fetchImpl(`${endpoint.replace(/\/+$/, "")}/api/session/${encodeURIComponent(sessionId)}/${suffix}`, { method, headers, ...(method === "POST" ? { body: JSON.stringify(args) } : {}) });
-    const body = await res.json().catch(() => ({})) as Record<string, unknown>;
-    if (!res.ok) return { isError: true, text: typeof body.error === "string" ? body.error : `Bivy node returned ${res.status}` };
-    return { isError: false, text: JSON.stringify(body) };
-  } catch (error) { return { isError: true, text: `Could not reach the Bivy node: ${error instanceof Error ? error.message : String(error)}` }; }
-}
-
 export interface McpServeDeps {
   endpoint?: string;
   sessionId?: string;
@@ -154,9 +127,7 @@ export function createBivyMcpServer(deps: McpServeDeps = {}): Server {
     const args = (req.params.arguments ?? {}) as Record<string, unknown>;
     const result = req.params.name === "attach_to_chat"
       ? await runAttachToChat(endpoint, sessionId, args, fetchImpl, token)
-      : ["start_run", "get_run_status", "wait_for_run"].includes(req.params.name)
-        ? await runBivyRunTool(endpoint, sessionId, req.params.name, args, fetchImpl, token)
-        : { isError: true, text: `Unknown tool: ${req.params.name}` };
+      : { isError: true, text: `Unknown tool: ${req.params.name}` };
     return { isError: result.isError, content: [{ type: "text", text: result.text }] };
   });
 

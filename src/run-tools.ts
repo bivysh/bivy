@@ -2,7 +2,6 @@
 // Copyright (c) 2026 Petter André Sjulstad
 
 import { createHash } from "node:crypto";
-import type { ToolProvider, ToolResult, ToolSpec } from "./runtime/types.js";
 
 export const RUN_TOOL_LIMITS = {
   maxInstructions: 16_000,
@@ -157,24 +156,4 @@ export class RunDelegationService {
       await this.sleep(Math.min(RUN_TOOL_LIMITS.minPollMs, Math.max(1, deadline - this.now())), signal);
     }
   }
-}
-
-const START_SPEC: ToolSpec = { name: "start_run", label: "Delegate Run", description: "Delegate one bounded task to another governed Bivy Run or Machine. Returns references only; never the child transcript or file contents.", promptSnippet: "Use start_run for a focused independent review, test, GPU, or implementation task; then use wait_for_run or get_run_status.", parameters: { type: "object", properties: { instructions: { type: "string", maxLength: RUN_TOOL_LIMITS.maxInstructions }, repo: { type: "string" }, machine: { type: "string" }, agent: { type: "string" }, model: { type: "string" }, safety: { type: "object", properties: { approval: { type: "string", enum: ["never", "risky", "always", "autonomous"] }, sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] }, maxAttempts: { type: "integer", minimum: 1, maximum: 10 } }, additionalProperties: false }, idempotencyKey: { type: "string", maxLength: RUN_TOOL_LIMITS.maxIdempotencyKey } }, required: ["instructions"], additionalProperties: false } };
-const STATUS_SPEC: ToolSpec = { name: "get_run_status", label: "Inspect delegated Run", description: "Inspect a child Run started by this Session. Returns bounded lifecycle, check states, and safe references only.", parameters: { type: "object", properties: { runId: { type: "string" } }, required: ["runId"], additionalProperties: false } };
-const WAIT_SPEC: ToolSpec = { name: "wait_for_run", label: "Wait for delegated Run", description: `Wait for a child Run for at most ${RUN_TOOL_LIMITS.maxWaitSeconds} seconds. A wait timeout does not cancel the child.`, parameters: { type: "object", properties: { runId: { type: "string" }, timeoutSeconds: { type: "number", minimum: 1, maximum: RUN_TOOL_LIMITS.maxWaitSeconds } }, required: ["runId", "timeoutSeconds"], additionalProperties: false } };
-export const RUN_TOOL_SPECS = [START_SPEC, STATUS_SPEC, WAIT_SPEC] as const;
-
-export function runToolProvider(service: RunDelegationService, sessionId: () => string | undefined): ToolProvider {
-  const text = (value: unknown, field: string) => { if (typeof value !== "string" || !value.trim()) throw new Error(`${field} is required`); return value.trim(); };
-  return { list: () => [...RUN_TOOL_SPECS], invoke: async (name, _id, params, signal): Promise<ToolResult> => {
-    try {
-      const sid = sessionId(); if (!sid) throw new Error("Session is not ready yet — try again in a moment");
-      const p = (params ?? {}) as Record<string, unknown>;
-      const result = name === "start_run" ? await service.startRun(sid, p as StartRunInput)
-        : name === "get_run_status" ? await service.getRunStatus(sid, text(p.runId, "runId"))
-          : name === "wait_for_run" ? await service.waitForRun(sid, text(p.runId, "runId"), Number(p.timeoutSeconds), signal)
-            : (() => { throw new Error(`Unknown Bivy Run tool: ${name}`); })();
-      return { content: [{ type: "text", text: JSON.stringify(result) }], details: { run: result } };
-    } catch (error) { return { content: [{ type: "text", text: (error instanceof Error ? error.message : String(error)).slice(0, 500) }], details: {}, isError: true }; }
-  } };
 }
