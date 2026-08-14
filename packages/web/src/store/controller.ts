@@ -290,6 +290,9 @@ export class AppController {
   private pendingRouteNode: string | null = null;
   /** Session selected from another node in the all-node sidebar; opened after reconnecting to its owner node. */
   private pendingCrossNodeOpen: { sessionId: string; path?: string } | null = null;
+  /** Subscribers for content-free control-plane Run-change hints. The relay
+   *  never carries the Run body/evidence here; subscribers refetch canonically. */
+  private runUpdateListeners = new Set<(runId: string, revision?: string) => void>();
   /** Subscribers that want the composer input focused (e.g. after "New"). */
   private composerFocusListeners = new Set<() => void>();
   /** Subscribers that accept editable text drafted by contextual UI actions. */
@@ -526,6 +529,15 @@ export class AppController {
           for (const fn of this.terminalListeners) fn(event);
           return;
         }
+        // Content-free control-plane hint delivered over the existing relay.
+        // Keep it out of the Session reducer; feature subscribers refetch the
+        // canonical account-scoped Run and polling remains their recovery path.
+        if (type === "run.updated") {
+          const runId = typeof event.runId === "string" ? event.runId : "";
+          const revision = typeof event.revision === "string" ? event.revision : undefined;
+          if (runId) for (const listener of this.runUpdateListeners) listener(runId, revision);
+          return;
+        }
         // One-shot transcription result — resolve the awaiting caller and stop;
         // it never touches the session reducer.
         if (type === "transcription") {
@@ -741,6 +753,13 @@ export class AppController {
     // Back/forward navigation between sessions: sync the app to the URL the user
     // landed on, without writing history back (the browser already did).
     window.addEventListener("popstate", () => this.applyRoute(parseRoute(), { navigate: false }));
+  }
+
+  /** Subscribe to account Run changes pushed over the relay. The callback is a
+   *  cache-invalidation hint only; callers must fetch durable state. */
+  onRunUpdated(fn: (runId: string, revision?: string) => void): () => void {
+    this.runUpdateListeners.add(fn);
+    return () => this.runUpdateListeners.delete(fn);
   }
 
   /** Subscribe to composer-focus requests (the Composer wires its textarea here).

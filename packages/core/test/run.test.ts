@@ -71,6 +71,38 @@ describe("canonical Run projection", () => {
     expect(run.references).toEqual({});
   });
 
+  it("projects causal milestones, operations metadata, and exactly the next action", () => {
+    const run = runFromQueueItem({
+      id: "run_ops", source: "manual", status: "needs_attention", label: "bivy/x", title: "Observe me",
+      createdAt: "2026-08-12T10:00:00.000Z", attempt: 2, maxAttempts: 3,
+      routingReason: "fallback after quota",
+      events: [
+        { at: "2026-08-12T10:00:00.000Z", kind: "trigger_received", summary: "received", milestoneId: "received" },
+        { at: "2026-08-12T10:00:05.000Z", kind: "fallback", summary: "fallback after quota", attempt: 2 },
+        { at: "2026-08-12T10:00:06.000Z", kind: "agent_started", summary: "started", attempt: 2, evidenceRef: "receipt:r1" },
+      ],
+      usage: { inputTokens: 10, outputTokens: 20, costUsd: 0.01 },
+      notification: { status: "failed", channel: "push", updatedAt: "2026-08-12T10:01:00.000Z" },
+      references: [{ kind: "log", ref: "node-log:r1" }],
+      attention: { severity: "error", reason: "Authentication required", since: "2026-08-12T10:01:00.000Z" },
+    });
+    expect(run.timeline.map((event) => event.stage)).toEqual(["trigger_received", "agent_started"]);
+    expect(run.timeline[1]?.evidenceRef).toBe("receipt:r1");
+    expect(run.operationalState).toBe("parked");
+    expect(run.attemptReason).toBe("fallback after quota");
+    expect(run.usage?.costUsd).toBe(0.01);
+    expect(run.notification?.status).toBe("failed");
+    expect(run.operationalReferences[0]?.kind).toBe("log");
+    expect(run.nextAction).toEqual({ kind: "cancel", label: "Cancel Run" });
+  });
+
+  it("derives only timestamp-supported milestones for legacy rows", () => {
+    const run = runFromQueueItem({ id: "legacy", source: "manual", status: "failed", label: "bivy", title: "Legacy", createdAt: "2026-08-12T10:00:00Z", claimedAt: "2026-08-12T10:00:01Z", completedAt: "2026-08-12T10:00:02Z" });
+    expect(run.timeline.map((event) => event.stage)).toEqual(["trigger_received", "claimed", "terminal"]);
+    expect(run.timeline.some((event) => event.stage === "trigger_matched")).toBe(false);
+    expect(run.operationalState).toBe("dead_letter");
+  });
+
   it("carries Machine identity only when known and resolves a name via context", () => {
     const item: GithubQueueItem = {
       id: "run_3", source: "manual", status: "running", label: "l", title: "t",

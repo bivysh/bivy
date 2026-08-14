@@ -162,6 +162,19 @@ function relayHttpUrl(relayUrl: string): string {
   return relayUrl;
 }
 
+async function notifyRelaysRunUpdated(accountId: string, run: Pick<AutomationRun, "id" | "events" | "completedAt" | "startedAt" | "claimedAt" | "createdAt">) {
+  const revision = run.events?.at(-1)?.at ?? run.completedAt ?? run.startedAt ?? run.claimedAt ?? run.createdAt;
+  await Promise.allSettled(
+    relayShardUrls.map(async (url) => {
+      await fetch(`${relayHttpUrl(url).replace(/\/$/, "")}/internal/run-updated`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${process.env.RELAY_SECRET ?? "dev-relay-secret"}` },
+        body: JSON.stringify({ accountId, id: run.id, revision }),
+      });
+    }),
+  );
+}
+
 async function notifyRelaysWorkAvailable(
   accountId: string,
   item: { id: string; label: string },
@@ -179,6 +192,10 @@ async function notifyRelaysWorkAvailable(
       });
     }),
   );
+  // The same relay is also the active operator update channel. Enqueue callers
+  // have only routing metadata here, so use the id as a content-free revision;
+  // later lifecycle mutations publish their durable event timestamp.
+  void notifyRelaysRunUpdated(accountId, { id: item.id, createdAt: item.id });
   // Cancelling must never start a machine. Normal enqueue notifications retain
   // the unattended-provisioning check.
   if (options.autoProvision !== false) void maybeAutoProvision(store, accountId, provisionEnv());
@@ -2878,6 +2895,7 @@ app.post("/account/automation-runs/:id/cancel", asyncHandler(async (req, res) =>
   }
   if (result.transitioned) {
     recordDurableRunLifecycleResult(result.run, "cancelled");
+    void notifyRelaysRunUpdated(client.accountId, result.run);
     const owner = result.run.claimedByNodeId;
     if (owner) {
       void notifyRelaysWorkAvailable(client.accountId, { id: result.run.id, label: result.run.routing.nodeLabel }, {
@@ -3702,6 +3720,10 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   }
   const item = await store.claimWorkItem(node.accountId, node.id, String(req.params.id));
   if (!item) return res.status(409).json({ error: "Already claimed or unknown" });
+  void notifyRelaysRunUpdated(node.accountId, {
+    id: item.id, events: item.events, completedAt: item.completedAt,
+    startedAt: item.startedAt, claimedAt: item.claimedAt, createdAt: item.createdAt,
+  });
   res.json({ ok: true, item });
 }));
 
@@ -3744,6 +3766,7 @@ app.post("/node/work/:id/complete", requireNode, asyncHandler(async (req, res) =
   // Compatibility for older nodes that skip the explicit /running transition.
   const started = await store.recordRunStart(node.accountId, `automation:${id}`);
   if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3758,6 +3781,7 @@ app.post("/node/work/:id/running", requireNode, asyncHandler(async (req, res) =>
   if (!run) return res.status(409).json({ error: "Run is no longer claimed by this node" });
   const started = await store.recordRunStart(node.accountId, `automation:${id}`);
   if (started) recordFunnelEvent("run_started", "automation", (await store.entitlements(node.accountId)).plan);
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3774,6 +3798,7 @@ app.post("/node/work/:id/fail", requireNode, asyncHandler(async (req, res) => {
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "failed");
   recordRunFailureStage(classifyRunFailureStage(run));
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3794,6 +3819,7 @@ app.post("/node/work/:id/needs-attention", requireNode, asyncHandler(async (req,
   if (!run) return res.status(409).json({ error: "Run already reached a terminal outcome or was reclaimed" });
   recordDurableRunLifecycleResult(run, "needs_attention");
   recordRunFailureStage(classifyRunFailureStage(run, true));
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 
@@ -3818,8 +3844,9 @@ app.post("/node/work/:id/evidence", requireNode, asyncHandler(async (req, res) =
   } catch (error) {
     return res.status(400).json({ error: (error as Error).message });
   }
-  const run = await store.appendRunEvidence(node.accountId, id, patch);
-  if (!run) return res.status(404).json({ error: "Unknown run" });
+  const run = await store.appendRunEvidence(node.accountId, id, patch, node.id);
+  if (!run) return res.status(409).json({ error: "Run ownership changed before evidence was persisted" });
+  void notifyRelaysRunUpdated(node.accountId, run);
   res.json({ ok: true, run });
 }));
 

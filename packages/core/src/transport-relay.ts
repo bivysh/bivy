@@ -232,6 +232,16 @@ export class RelayTransport implements Transport {
         await this.handlePairFrame(env.p);
       } else if (env.t === "error") {
         this.handlers.onError?.(env.error || "relay error");
+      } else if (env.t === "run.updated" && typeof (env as { id?: unknown }).id === "string") {
+        // Content-free control-plane hint. The controller/UI must fetch the
+        // canonical account-scoped Run before rendering its new state.
+        this.handlers.onEvent({
+          type: "run.updated",
+          runId: (env as { id: string }).id,
+          revision: typeof (env as { revision?: unknown }).revision === "string"
+            ? (env as { revision: string }).revision
+            : undefined,
+        });
       } else if (env.t === "frame" && typeof env.p === "string") {
         if (!this.curKey) return;
         const full = this.reassemble(env);
