@@ -274,9 +274,17 @@ export function CredentialVault({ state }: { state: AppState }) {
   if (view === "detail" && selected) {
     const count = providerCounts.get(selected.provider) ?? 1;
     const isDefault = (state.credentialPresets?.presets?.default?.[selected.provider] ?? "default") === selected.label;
-    const projectPreset = assignmentProject ? `project:${assignmentProject}` : undefined;
+    const projectId = assignmentProject.trim();
+    const projectPreset = projectId ? `project:${projectId}` : undefined;
     const projectLabel = projectPreset ? state.credentialPresets?.presets?.[projectPreset]?.[selected.provider] : undefined;
     const usedByProject = projectLabel === selected.label;
+    const assignedProjects = Object.entries(state.credentialPresets?.presets ?? {})
+      .filter(([name, mapping]) => name.startsWith("project:") && mapping?.[selected.provider] === selected.label)
+      .map(([name]) => name.slice("project:".length));
+    const projectOptions = [...new Set([
+      ...state.repos.map((repo) => repo.slug),
+      ...Object.keys(state.credentialPresets?.presets ?? {}).filter((name) => name.startsWith("project:")).map((name) => name.slice("project:".length)),
+    ])].sort();
     return <div className="settings-form credential-vault">
       {confirmDelete && <ConfirmDialog
         title="Delete credential?"
@@ -291,7 +299,8 @@ export function CredentialVault({ state }: { state: AppState }) {
       <div className="vault-detail-grid">
         <span className="muted">Available on</span><strong>{availabilityLabel(selected.availability)}</strong>
         <span className="muted">Used by default</span><strong>{isDefault ? "Yes" : "No"}</strong>
-        {assignmentProject && <><span className="muted">Project assignment</span><strong>{usedByProject ? assignmentProject : projectLabel ? `Uses ${projectLabel}` : "Uses provider default"}</strong></>}
+        <span className="muted">Used by projects</span><strong>{assignedProjects.length ? assignedProjects.join(", ") : "None explicitly — projects use the default"}</strong>
+        {assignmentProject && <><span className="muted">Selected project</span><strong>{usedByProject ? "Uses this credential" : projectLabel ? `Uses ${projectLabel}` : "Uses provider default"}</strong></>}
         {selected.record && <><span className="muted">Unattended runs</span><strong>{selected.record.unattended ? "Allowed (separate hosted custody)" : "Not allowed"}</strong></>}
         {selected.record?.origin === "agent-native" && <><span className="muted">Added by</span><strong>Agent sign-in</strong></>}
         {selected.record?.ref && <><span className="muted">Reference</span><code>{selected.record.ref}</code></>}
@@ -299,16 +308,14 @@ export function CredentialVault({ state }: { state: AppState }) {
       {selected.record && <div className="row-actions">
         {selected.record.testable && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); const result = await controller.testCredential(selected.provider, selected.label).catch(() => ({ ok: false, at: Date.now(), reason: "network_error" })); setMessage(result.ok ? "Connection verified." : `Verification failed: ${result.reason || "unknown error"}.`); refresh(); setBusy(false); }}>Test connection</button>}
         {count > 1 && !isDefault && <button className="btn" disabled={busy} onClick={() => void assign("default", selected.provider, selected.label, "Now used by default.")}>Use by default</button>}
-        {count > 1 && projectPreset && !usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, selected.label, `Assigned to ${assignmentProject}.`)}>Use for {assignmentProject}</button>}
-        {projectPreset && usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, "", `${assignmentProject} now uses the provider default.`)}>Clear project assignment</button>}
+        {count > 1 && projectPreset && !usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, selected.label, `Assigned to ${projectId}.`)}>Use for {projectId}</button>}
+        {projectPreset && usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, "", `${projectId} now uses the provider default.`)}>Clear project assignment</button>}
         {selected.record.sync === "account" && selected.record.kind !== "reference" && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); try { await controller.setCredentialUnattended(selected.provider, selected.label, !selected.record!.unattended); setMessage(selected.record!.unattended ? "Unattended access revoked." : "Unattended access granted with separate hosted custody."); refresh(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); } }}>{selected.record.unattended ? "Revoke unattended access" : "Allow unattended runs"}</button>}
       </div>}
-      {count > 1 && state.repos.length > 0 && <div>
-        <label className="field-label">Assign for project</label>
-        <select className="picker-search" value={assignmentProject} onChange={(e) => setAssignmentProject(e.target.value)}>
-          <option value="">Choose a project…</option>
-          {state.repos.map((repo) => <option key={repo.slug} value={repo.slug}>{repo.slug}</option>)}
-        </select>
+      {count > 1 && <div>
+        <label className="field-label" htmlFor="credential-project">Assign for project or repository</label>
+        <input id="credential-project" className="picker-search" list="credential-project-options" placeholder="owner/repository or project ID" value={assignmentProject} onChange={(e) => setAssignmentProject(e.target.value)} />
+        <datalist id="credential-project-options">{projectOptions.map((project) => <option key={project} value={project} />)}</datalist>
       </div>}
       {!selected.ambient && <>
         <details className="vault-advanced"><summary>Replace or change availability</summary>
