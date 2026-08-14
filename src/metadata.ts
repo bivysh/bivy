@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
 import path from "node:path";
+import type { SessionContract } from "./session/session-contract.js";
 
 /** State of a pull request as GitHub reports it. "merged" is a closed PR whose
  *  `merged_at` is set — surfaced separately so the UI can distinguish it from a
@@ -63,6 +64,11 @@ export type MetadataSession = {
    *  clears can't re-send forever. Reset to 0 (absent) whenever a turn ends without
    *  scheduling another resume. */
   resumeAttempts?: number;
+  /** The Effective Session Contract resolved once at session creation (see
+   *  src/session/session-contract.ts), persisted so a closed/resumed session
+   *  still shows what it actually got rather than the node re-deriving a
+   *  possibly-different one from the runtime's current catalog entry. */
+  contract?: SessionContract;
   createdAt: string;
   updatedAt: string;
   lastActivityAt?: string;

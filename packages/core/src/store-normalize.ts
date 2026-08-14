@@ -21,6 +21,7 @@ import type {
   Usage,
   UserQuestionItem,
 } from "./store.js";
+import { SESSION_CONTRACT_SCHEMA_VERSION, type SessionContract } from "./session-contract.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -101,6 +102,31 @@ function normalizeExecutionProfile(value: unknown): SessionSummary["executionPro
   type ExecutionProfile = NonNullable<SessionSummary["executionProfile"]>;
   return (["trusted_workstation", "isolated_customer_cloud", "restricted"] as const).includes(raw as ExecutionProfile)
     ? raw as ExecutionProfile : undefined;
+}
+
+const GUARANTEE_STATES = ["guaranteed", "degraded", "unavailable"];
+
+function hasState(value: unknown): value is { state: unknown } {
+  return Boolean(value) && typeof value === "object" && GUARANTEE_STATES.includes((value as { state?: unknown }).state as string);
+}
+
+/**
+ * Coerce a wire `contract` payload into a trusted `SessionContract`, or
+ * `undefined` if it's missing, malformed, or from a node that predates this
+ * field (schemaVersion mismatch) — never a best-effort partial reconstruction,
+ * since a contract is only trustworthy read as a whole (mirrors receipt-v1's
+ * "never invent a fact" discipline: an untrustworthy contract is reported as
+ * absent, not repaired into something that looks complete).
+ */
+export function normalizeSessionContract(value: unknown): SessionContract | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const c = value as Record<string, unknown>;
+  if (c.schemaVersion !== SESSION_CONTRACT_SCHEMA_VERSION) return undefined;
+  if (typeof c.resolvedAt !== "string" || typeof c.preview !== "boolean") return undefined;
+  if (!c.agent || typeof c.agent !== "object" || typeof (c.agent as { id?: unknown }).id !== "string") return undefined;
+  if (!hasState(c.executionMode) || !hasState(c.auth) || !hasState(c.resume) || !hasState(c.toolInterception) || !hasState(c.sandbox)) return undefined;
+  if (!Array.isArray(c.degradedReasons) || typeof c.requiresAcknowledgement !== "boolean") return undefined;
+  return c as unknown as SessionContract;
 }
 
 /** `owner/name` for a repo-backed session's `source` (e.g. "repo:owner/name"),
@@ -255,6 +281,7 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       approvalMode: normalizeApprovalMode(s?.approvalMode ?? s?.bivySession?.approvalMode),
       ephemeral: (s?.ephemeral ?? s?.bivySession?.ephemeral) === true ? true : undefined,
       executionProfile: normalizeExecutionProfile(s?.executionProfile ?? s?.bivySession?.executionProfile),
+      contract: normalizeSessionContract(s?.contract ?? s?.bivySession?.contract),
       auditHealth: s?.auditHealth ?? s?.bivySession?.auditHealth,
       eventLogHealth: s?.eventLogHealth ?? s?.bivySession?.eventLogHealth,
       prUrl: s?.prUrl || undefined,

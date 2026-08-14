@@ -1820,6 +1820,7 @@ export class AppController {
       branch: s.draftRepo ? s.draftBranch || undefined : undefined,
       agent: s.selectedAgentId || undefined,
       sandbox: s.draftSandbox || undefined,
+      acknowledgeReducedProtections: s.draftAcknowledgeReducedProtections || undefined,
       model,
     };
   }
@@ -1837,6 +1838,14 @@ export class AppController {
   /** Sandbox tier for the next new session (null = use the node default). */
   setSessionSandbox(tier: import("@bivy/core").SandboxTier | null): void {
     this.store.setDraftSandbox(tier);
+  }
+
+  /** Record the confirm-to-continue acknowledgement for the currently selected
+   *  agent's Effective Session Contract preview (see AgentPicker) so the next
+   *  session.new carries it — the node re-checks server-side and would
+   *  otherwise reject a "supported" profile whose live protection is degraded. */
+  acknowledgeSessionAgentReducedProtections(value: boolean): void {
+    this.store.setDraftAcknowledgeReducedProtections(value);
   }
 
   /**
