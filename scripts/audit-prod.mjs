@@ -24,7 +24,7 @@ import { execFileSync } from "node:child_process";
 // GHSA id -> why it is accepted. Revisit on or before `review`.
 const ALLOW = {
   // (empty — previous undici advisories in pi-coding-agent are no longer reported
-  // after the postinstall patch to undici@8.9.0)
+  // after the postinstall patch to undici@8.10.0)
 };
 
 const BLOCKING = new Set(["high", "critical"]);
