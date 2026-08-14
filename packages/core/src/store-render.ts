@@ -25,6 +25,9 @@ interface AgentAttachmentBlock {
   type: typeof AGENT_ATTACHMENT_BLOCK;
   ref: AttachmentRef;
   caption?: string;
+  /** See PromptAttachment.artifact — carried on the block by the node's
+   *  outbound-attachment log entry (src/session/event-log.ts). */
+  artifact?: boolean;
 }
 
 function isAgentAttachmentBlock(block: any): block is AgentAttachmentBlock {
@@ -39,9 +42,21 @@ function isAgentAttachmentBlock(block: any): block is AgentAttachmentBlock {
 
 /** A durable AttachmentRef → the (byte-less) PromptAttachment the view renders
  *  by hash. Shared by history render and the live reducer so both produce an
- *  identical chip. */
-export function attachmentFromRef(ref: AttachmentRef): PromptAttachment {
-  return { kind: ref.kind, name: ref.name, size: ref.size, mimeType: ref.mimeType, hash: ref.hash };
+ *  identical chip. `extra` carries the fields a ref alone can't: `createdAt`
+ *  (only known to the caller — the message's own timestamp on history replay,
+ *  "now" on a live event) and `artifact` (the sender's explicit marking, not
+ *  part of the content-addressed ref itself since the same bytes can be
+ *  attached casually elsewhere too). */
+export function attachmentFromRef(ref: AttachmentRef, extra?: { createdAt?: number; artifact?: boolean }): PromptAttachment {
+  return {
+    kind: ref.kind,
+    name: ref.name,
+    size: ref.size,
+    mimeType: ref.mimeType,
+    hash: ref.hash,
+    ...(extra?.createdAt !== undefined ? { createdAt: extra.createdAt } : {}),
+    ...(extra?.artifact ? { artifact: true } : {}),
+  };
 }
 
 let idSeq = 0;
@@ -210,11 +225,12 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
             // Seal any prose/reasoning before the attachment so its source order
             // is retained and the chip lands as its own entry.
             flushRuns();
+            const createdAt = typeof msg?.createdAt === "number" ? msg.createdAt : undefined;
             entries.push({
               id: nextId(),
               role: "assistant",
               text: typeof block.caption === "string" ? block.caption : "",
-              attachments: [attachmentFromRef(block.ref)],
+              attachments: [attachmentFromRef(block.ref, { createdAt, artifact: block.artifact })],
             });
           } else if (isTextBlock(block)) {
             flushThinking();

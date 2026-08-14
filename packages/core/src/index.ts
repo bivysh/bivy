@@ -33,3 +33,4 @@ export * from "./followups.js";
 export * from "./transcript-cache.js";
 export * from "./slash.js";
 export * from "./nl-cron.js";
+export * from "./artifacts.js";
