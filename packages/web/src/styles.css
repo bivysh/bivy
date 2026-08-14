@@ -210,9 +210,6 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .session-actions-btn { border: 0; background: transparent; color: var(--ink); font-size: 20px; line-height: 1; padding: 4px 8px; border-radius: 8px; }
 .session-actions-btn:hover, .session-actions-btn[aria-expanded="true"] { background: var(--surface-3); }
 .session-actions-menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 190px; z-index: 40; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.28); overflow: hidden; padding: 4px; animation: sheet-up 0.14s ease; }
-.session-actions-context { display: grid; gap: 5px; padding: 8px 10px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; line-height: 1.35; }
-.session-actions-context span { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 6px; }
-.session-actions-context strong { color: var(--text); font-weight: 600; }
 .session-actions-audit-warning { display: grid; gap: 3px; margin: 4px; padding: 8px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--warn, #d4a017) 40%, var(--line)); background: color-mix(in srgb, var(--warn, #d4a017) 10%, var(--surface)); color: var(--ink); font-size: 11px; }
 .session-actions-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--ink); padding: 9px 12px; font-size: 13px; border-radius: 8px; }
 .session-actions-item:has(svg) { display: flex; align-items: center; gap: 8px; }
@@ -894,8 +891,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
    draft (.composer-lead) and the issue/PR context pill on an active session
    (.composer-gh). .composer-gh collapses out of flow when there's no context. */
 .composer-gh, .composer-lead { display: flex; padding: 8px 10px 0; }
-/* The GitHub band also carries the "/" slash-command pill on its right edge, so
-   center the two vertically and keep a gap when both are present. */
 .composer-gh { align-items: center; gap: 6px; }
 /* The draft lead row carries more than one pick (repo + sandbox), so space them
    and let them wrap on a narrow phone instead of squashing. */
@@ -918,21 +913,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .tui-locked-node { color: var(--ink); font-weight: 600; }
 .tui-locked-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; justify-content: center; }
 .tui-locked-hint { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
-
-/* "/" slash-command pill: opens the composer's command menu. `margin-left: auto`
-   parks it on the right edge of the band (top-right over the composer) whether or
-   not a GitHub pill shares the row. Sized/round like the GitHub pill for a matched
-   set; the glyph picks up the accent so it reads as an action. */
-.slash-pill {
-  margin-left: auto; flex: none;
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; padding: 0;
-  border: 1px solid var(--line); background: var(--surface-2); color: var(--accent);
-  border-radius: 999px;
-}
-.slash-pill:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-3); }
-.slash-pill:disabled { opacity: 0.5; cursor: default; }
-.slash-pill .slash-glyph { display: block; }
 
 /* ---- Composer ---- */
 .composer {
@@ -995,27 +975,6 @@ button.action-sheet-item:last-child { border-bottom: 0; }
 .composer-btn.send:not(:disabled):hover { background: var(--accent-hover); }
 .composer-btn.send:not(:disabled):active { transform: scale(0.92); }
 .composer-btn.send:disabled { opacity: 0.35; cursor: default; }
-/* Send is a compound control in account mode: the primary segment keeps the
-   one-tap message path while the narrow segment exposes Run and Schedule. */
-.split-send { position: relative; flex: none; display: flex; height: 40px; border-radius: 20px; background: var(--accent); }
-.split-send .composer-btn.send { border-radius: 20px 0 0 20px; }
-.split-send-toggle {
-  width: 34px; height: 40px; padding: 0 3px 1px 0; border: 0; border-left: 1px solid color-mix(in srgb, var(--accent-contrast) 28%, transparent);
-  border-radius: 0 20px 20px 0; background: var(--accent); color: var(--accent-contrast); font-size: 13px; cursor: pointer;
-}
-.split-send-toggle:not(:disabled):hover { background: var(--accent-hover); }
-.split-send-toggle:disabled { opacity: 0.35; cursor: default; }
-.send-options-menu {
-  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 35; width: min(300px, calc(100vw - 28px));
-  padding: 6px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface);
-  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-}
-.send-option { width: 100%; display: flex; flex-direction: column; gap: 2px; padding: 9px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
-.send-option:hover:not(:disabled) { background: var(--surface-2); }
-.send-option:disabled { opacity: 0.52; cursor: default; }
-.send-option strong { font-size: 14px; }
-.send-option span { color: var(--muted); font-size: 12px; line-height: 1.35; }
-.send-options-divider { height: 1px; margin: 4px 8px; background: var(--line); }
 .composer-btn.stop { background: var(--danger); color: #fff; }
 .composer-btn.stop:active { transform: scale(0.92); }
 /* "Steer current turn": an explicit interrupt, distinct from the default Send

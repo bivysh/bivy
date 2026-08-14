@@ -8,9 +8,6 @@ import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
 import { firstSessionSummary } from "../firstSession.js";
 import { FollowupQueue } from "./FollowupQueue.js";
-import { ScheduleSheet } from "./ScheduleSheet.js";
-import { RunTaskSheet } from "./RunTaskSheet.js";
-import { openRun } from "../runRoute.js";
 import { SANDBOX_TIERS } from "./Settings.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
@@ -167,12 +164,6 @@ export function Composer({
   const [readingCount, setReadingCount] = useState(0);
   const [viewing, setViewing] = useState<string | null>(null);
   const dragDepth = useRef(0);
-  // Alternative delivery modes live behind one compound Send control so Run
-  // and Schedule stay discoverable without adding permanent composer buttons.
-  const [sendOptionsOpen, setSendOptionsOpen] = useState(false);
-  const [scheduling, setScheduling] = useState(false);
-  const [startingRun, setStartingRun] = useState(false);
-  const sendOptionsRef = useRef<HTMLDivElement>(null);
 
   // Some runtimes (e.g. Codex / Codex approvals) own model selection themselves
   // and expose no in-app model list — advertised via
@@ -553,26 +544,6 @@ export function Composer({
       : state.settings.nodeSettings?.defaultSandbox ?? "";
   const sandboxTitle = draftTier ? draftTier.hint : "Sandbox mode for this session (machine default)";
   const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
-  // Scheduled messages land on the account's control plane and are delivered by
-  // the always-on node, so the affordance only exists when signed in.
-  const accountMode = Boolean(controller.local.s && controller.local.cp);
-
-  useEffect(() => {
-    if (!sendOptionsOpen) return;
-    const close = (event: MouseEvent) => {
-      if (!sendOptionsRef.current?.contains(event.target as Node)) setSendOptionsOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSendOptionsOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", escape);
-    };
-  }, [sendOptionsOpen]);
-
   // B2 — a first session exposes exactly four decisions: machine, repo,
   // agent/model, protection. On a draft we render a single explicit summary of
   // them (the machine otherwise lives only in the topbar switcher), so a new user
@@ -873,54 +844,6 @@ export function Composer({
               <button type="button" className="composer-btn stop" onClick={onAbort} title="Stop">
                 ■
               </button>
-            ) : accountMode ? (
-              <div className="split-send" ref={sendOptionsRef}>
-                <button
-                  type="submit"
-                  className="composer-btn send split-send-main"
-                  disabled={!canSend}
-                  title={working ? "Queue follow-up" : firstIsolatedRun ? "Launch Machine and send task" : "Send message"}
-                  aria-label={firstIsolatedRun ? "Launch Machine and send task" : working ? "Queue follow-up" : "Send message"}
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  className="split-send-toggle"
-                  disabled={!canSend}
-                  aria-label="More send options"
-                  aria-haspopup="menu"
-                  aria-expanded={sendOptionsOpen}
-                  onClick={() => setSendOptionsOpen((open) => !open)}
-                >
-                  ▾
-                </button>
-                {sendOptionsOpen && (
-                  <div className="send-options-menu" role="menu">
-                    <button
-                      type="button"
-                      className="send-option"
-                      role="menuitem"
-                      disabled={attachments.length > 0 || !text.trim()}
-                      onClick={() => { setSendOptionsOpen(false); setStartingRun(true); }}
-                    >
-                      <strong>Start a Run</strong>
-                      <span>{attachments.length ? "Runs currently support text instructions only." : "Checks, evidence, attempts, and recovery."}</span>
-                    </button>
-                    <div className="send-options-divider" />
-                    <button
-                      type="button"
-                      className="send-option"
-                      role="menuitem"
-                      disabled={attachments.length > 0 || !text.trim()}
-                      onClick={() => { setSendOptionsOpen(false); setScheduling(true); }}
-                    >
-                      <strong>Schedule for later</strong>
-                      <span>{attachments.length ? "Scheduled messages currently support text only." : "Send at a chosen time, even if the app is closed."}</span>
-                    </button>
-                  </div>
-                )}
-              </div>
             ) : (
               <button
                 type="submit"
@@ -939,26 +862,6 @@ export function Composer({
       {picker === "sandbox" && <SandboxPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "agent" && <AgentPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "model" && modelSelectable && <ModelPicker state={state} onClose={() => setPicker(null)} />}
-      {startingRun && accountMode && (
-        <RunTaskSheet
-          state={state}
-          text={text}
-          onClose={() => setStartingRun(false)}
-          onStarted={(runId) => {
-            setStartingRun(false);
-            clearComposer();
-            openRun(runId);
-          }}
-        />
-      )}
-      {scheduling && accountMode && (
-        <ScheduleSheet
-          state={state}
-          text={text}
-          onClose={() => setScheduling(false)}
-          onScheduled={clearComposer}
-        />
-      )}
       {/* Portal to <body>. Like the pickers' Sheet, the viewer is
           `position: fixed` but rendered from deep inside the `.chat` scroll
           container. On iOS a fixed element does NOT escape a scrolling ancestor
