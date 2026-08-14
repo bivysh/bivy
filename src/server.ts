@@ -1496,7 +1496,13 @@ const capabilitiesController = createCapabilitiesController({
     return [...new Set(configured.map((entry) => entry.providerId))];
   },
   listLocalEndpoints: async () =>
-    (await localModelSummaries()).map((provider) => ({ id: provider.id, modelCount: provider.modelCount })),
+    (await localModelSummaries())
+      // Machine-scoped endpoints (see local-model-discovery.ts) belong to
+      // whichever Machine's loopback actually serves them; a synced entry
+      // for a *different* Machine must not inflate this one's inventory.
+      // Network-scoped custom endpoints have no owning Machine and always count.
+      .filter((provider) => provider.availableOnThisMachine)
+      .map((provider) => ({ id: provider.id, modelCount: provider.modelCount })),
   listPlugins: () =>
     listInstalledPlugins(appDir).map((plugin) => ({
       id: plugin.id,

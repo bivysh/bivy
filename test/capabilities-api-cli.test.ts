@@ -24,7 +24,8 @@ assert.match(server, /createCapabilitiesController\(/, "server.ts wires the capa
 // stores, not a fresh scan (no new registries, no unbounded enumeration).
 assert.match(server, /listRuntimes\(\)\.map\(\(runtime\)/, "agent facts come from the existing agent registry");
 assert.match(server, /createCredentialVault\(credsDir, piDir\)\.list\(\)/, "provider facts come from the existing credential vault, not a new key scan");
-assert.match(server, /localModelSummaries\(\)\)\.map\(\(provider\)/, "local endpoint facts come from the existing local-model registry, not an active port probe");
+assert.match(server, /localModelSummaries\(\)\)/, "local endpoint facts come from the existing local-model registry, not an active port probe");
+assert.match(server, /\.filter\(\(provider\) => provider\.availableOnThisMachine\)/, "a Machine-scoped local endpoint synced from another Machine must not inflate this Machine's inventory");
 assert.match(server, /listInstalledPlugins\(appDir\)\.map\(\(plugin\)/, "plugin facts come from the existing plugin store");
 assert.match(server, /loadSavedWorkspaces\(\)\.length/, "workspace count is a bound (.length), not a path enumeration");
 
