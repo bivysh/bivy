@@ -441,6 +441,7 @@ function NotificationsPanel() {
   const [status, setStatus] = useState<{ supported: boolean; subscribed: boolean; permission: string } | null>(null);
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const reloadStatus = () => controller.pushStatus().then(setStatus).catch(() => {});
@@ -452,10 +453,10 @@ function NotificationsPanel() {
   // The enable/disable result (or a save error) used to sit there forever —
   // auto-dismiss it like every other transient status message in Settings (#140).
   useEffect(() => {
-    if (!msg) return;
-    const t = setTimeout(() => setMsg(null), 5000);
+    if (!msg && !err) return;
+    const t = setTimeout(() => { setMsg(null); setErr(null); }, 5000);
     return () => clearTimeout(t);
-  }, [msg]);
+  }, [msg, err]);
 
   // Push notifications are included on every plan, so there's no upgrade gate.
   const on = Boolean(status?.subscribed);
@@ -463,10 +464,11 @@ function NotificationsPanel() {
   const setMaster = async (next: boolean) => {
     setBusy(true);
     setMsg(null);
+    setErr(null);
     try {
       setMsg(next ? await controller.enablePush() : await controller.disablePush());
     } catch (e) {
-      setMsg(String((e as Error).message || e));
+      setErr(String((e as Error).message || e));
     } finally {
       setBusy(false);
       reloadStatus();
@@ -479,7 +481,7 @@ function NotificationsPanel() {
     setPrefs(next); // optimistic
     controller.setNotificationPreferences({ [id]: value }).then(setPrefs).catch((e) => {
       setPrefs(prefs); // revert
-      setMsg(String((e as Error).message || e));
+      setErr(String((e as Error).message || e));
     });
   };
 
@@ -495,17 +497,18 @@ function NotificationsPanel() {
     <div className="settings-form">
       <div className="settings-toggle-row">
         <div className="settings-toggle-text">
-          <span className="field-label">Push notifications</span>
+          <span className="settings-toggle-title">Push notifications</span>
           <p className="muted">{on ? "This device receives Bivy push notifications." : "Turn on to get notified about your sessions on this device."}</p>
         </div>
         <Toggle checked={on} disabled={busy} onChange={setMaster} label="Enable push notifications" />
       </div>
       {status?.permission === "denied" && (
-        <p className="muted">Notifications are blocked in your browser settings — allow them there to enable push.</p>
+        <div className="banner warn inline">Notifications are blocked in your browser settings — allow them there to enable push.</div>
       )}
-      {msg && <p className="muted">{msg}</p>}
+      {msg && <div className="banner inline">{msg}</div>}
+      {err && <div className="banner error inline" role="alert">{err}</div>}
 
-      <label className="field-label" style={{ marginTop: 8 }}>What to notify me about</label>
+      <label className="field-label">What to notify me about</label>
       <div className="settings-toggle-list" aria-disabled={!on}>
         {NOTIFICATION_KIND_META.map((k) => (
           <div className={`settings-toggle-row${on ? "" : " disabled"}`} key={k.id}>
