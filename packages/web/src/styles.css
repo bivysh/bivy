@@ -1472,7 +1472,7 @@ button.action-sheet-item:last-child { border-bottom: 0; }
   .automations-tabs { padding: 0 24px; }
 }
 .automations-view-body {
-  flex: 1; min-height: 0; overflow-y: auto;
+  flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
   padding: 8px 16px max(48px, env(safe-area-inset-bottom));
   width: 100%; max-width: 980px; margin: 0 auto; box-sizing: border-box;
 }
@@ -1738,10 +1738,34 @@ button.template-card.is-featured .template-card-icon {
 }
 .run-row-open:disabled { cursor: default; }
 .run-row-open:not(:disabled):hover .automation-row-title strong { color: var(--accent); }
-.run-row-chevron { color: var(--muted); font-size: 24px; line-height: 1; padding-left: 2px; }
-.runs-overview { margin-top: 12px; }
+.run-row-chevron {
+  display: grid; place-items: center; flex: none; width: 40px; min-height: 40px;
+  border: 0; border-radius: 10px; padding: 0; background: transparent;
+  color: var(--muted); font: inherit; font-size: 24px; line-height: 1; cursor: pointer;
+}
+.run-row-chevron:hover { color: var(--ink); background: var(--surface-2); }
+.runs-setup {
+  margin-top: 8px; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--surface); overflow: hidden;
+}
+.runs-setup > summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  min-height: 58px; padding: 10px 14px; list-style: none; cursor: pointer;
+}
+.runs-setup > summary::-webkit-details-marker { display: none; }
+.runs-setup > summary > span:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.runs-setup > summary strong { font-size: 14px; }
+.runs-setup > summary small { color: var(--muted); font-size: 12px; }
+.runs-setup-chevron { color: var(--muted); font-size: 24px; transition: transform 140ms ease; }
+.runs-setup[open] .runs-setup-chevron { transform: rotate(90deg); }
+.runs-setup-body { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-top: 1px solid var(--line); }
+.runs-setup-body .picker-search { max-width: 100%; box-sizing: border-box; }
+.runs-overview { margin-top: 18px; }
 .runs-overview .autom-section-head > div { min-width: 0; }
 .runs-overview .autom-section-head .settings-hint { margin: 3px 0 0; }
+.incoming-work { margin-top: 22px; }
+.incoming-work > .autom-section-label { margin-bottom: 8px; }
+.incoming-work > .settings-form { gap: 14px; }
 
 /* A runner is a first-class requirement, not a tiny select hidden under the
    prompt. Pairing/key readiness is visible before Save can become disabled. */
@@ -2324,7 +2348,12 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .run-row .automation-row-main { flex-basis: 100%; }
   .run-row .automation-row-actions { width: 100%; padding-top: 6px; }
   .run-row-chevron { margin-left: auto; }
-  .runs-overview .autom-section-head { align-items: flex-end; }
+  .runs-overview .autom-section-head { align-items: stretch; flex-direction: column; }
+  .runs-overview .autom-section-actions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .runs-overview .autom-section-actions .btn { min-width: 0; width: 100%; }
+  .queue-head { align-items: flex-start; gap: 10px; }
+  .queue-head-actions { justify-content: flex-end; gap: 8px; min-width: 0; text-align: right; }
+  .queue-head-actions .link-btn { overflow-wrap: anywhere; }
   .run-details .automations-view-heading { font-size: 20px; }
   .run-details .automations-view-head-text { display: none; }
   .run-details .automations-view-head { justify-content: flex-start; border-bottom: 1px solid var(--line); }

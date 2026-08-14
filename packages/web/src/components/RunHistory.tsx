@@ -54,12 +54,12 @@ export function RunHistory({
     <section className="autom-section runs-overview">
       <div className="autom-section-head">
         <div>
-          <h2 className="autom-section-label">Automation runs</h2>
-          <p className="settings-hint">Live lifecycle and recent outcomes. Polling recovers any missed relay update.</p>
+          <h2 className="autom-section-label">Recent runs</h2>
+          <p className="settings-hint">Live status and recent outcomes.</p>
         </div>
         <div className="autom-section-actions">
           <button type="button" className="btn sm" onClick={onRefresh}>Refresh</button>
-          <button type="button" className="btn sm primary" onClick={onNewRun}>New Run</button>
+          <button type="button" className="btn sm primary" onClick={onNewRun}>New run</button>
         </div>
       </div>
       {attentionCount > 0 && <div className="autom-notice warn" role="alert"><div className="autom-notice-text"><strong>{attentionCount} Run{attentionCount === 1 ? "" : "s"} need attention</strong><span>Review parked work, failed notification delivery, or terminal failures before retrying.</span></div></div>}
@@ -80,7 +80,7 @@ export function RunHistory({
                 {canonical.actions.some((action) => action.kind === "cancel") && <button type="button" className="btn sm danger" disabled={cancelBusyId === run.id} onClick={() => onCancel(run)}>{cancelBusyId === run.id ? "Cancelling…" : "Cancel"}</button>}
                 {canonical.sessionId && <button type="button" className="btn sm primary" onClick={() => onOpenSession(canonical.sessionId!)}>Open session</button>}
                 {run.output?.prUrl && <a className="btn sm" href={run.output.prUrl} target="_blank" rel="noreferrer">View PR</a>}
-                {onOpenRun && <span className="run-row-chevron" aria-hidden="true">›</span>}
+                {onOpenRun && <button type="button" className="run-row-chevron" aria-label={`Open Run details for ${run.title}`} onClick={() => onOpenRun(run.id)}>›</button>}
               </div>
             </div>;
           })}
