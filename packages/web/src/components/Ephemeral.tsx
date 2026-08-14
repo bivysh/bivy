@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useState } from "react";
-import { EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, type EphemeralNodeConfig, type ProviderKeyInfo } from "@bivy/core";
+import { EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCostHint, type DeviceVaultSyncState, type EphemeralNodeConfig, type ProviderKeyInfo } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { Sheet, PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -87,9 +87,11 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
   const [err, setErr] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | { title: string; message: string; action: () => void }>(null);
   const [pendingRunner, setPendingRunner] = useState<EphemeralNodeConfig | null>(null);
+  const [syncState, setSyncState] = useState<DeviceVaultSyncState>(() => controller.getDeviceVaultSyncState());
 
   useEffect(() => {
     controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
+    setSyncState(controller.getDeviceVaultSyncState());
   }, [providerId]);
 
   // Connect the token, then pick the provider's (auto-created) default runner for
@@ -103,6 +105,7 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
       setToken("");
       setHasToken(true);
       onKeysChanged();
+      setSyncState(controller.getDeviceVaultSyncState());
       if (runner) setPendingRunner(runner);
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -150,6 +153,12 @@ function ProviderConnectPanel({ providerId, onKeysChanged, onDone }: { providerI
         <>
           <p className="chip ok">✓ {catalog.name} connected</p>
           <p className="muted small">A default isolated machine profile is ready. Pick it and send your first message to launch a machine — no launch button. Adjust its region / size / TTL anytime in Settings → Isolated machine profiles.</p>
+          {controller.getDeviceTokenSync() && syncState.phase !== "idle" && (
+            <div role="status" className={`chip ${syncState.phase === "failed" ? "err" : syncState.phase === "synced" ? "ok" : ""}`}>
+              {syncState.phase === "failed" ? `Credential sync pending: ${syncState.failure ?? "retry needed"}` : syncState.phase === "synced" ? "Credentials synced" : "Credential sync pending"}
+              {syncState.phase === "failed" && <button className="btn ghost" onClick={() => controller.syncDeviceVault().then(() => setSyncState(controller.getDeviceVaultSyncState())).catch(() => setSyncState(controller.getDeviceVaultSyncState()))}>Retry</button>}
+            </div>
+          )}
           <div className="row-actions">
             <button className="btn primary" disabled={busy} onClick={useRunner}>{busy ? "…" : "Use this profile"}</button>
             <button

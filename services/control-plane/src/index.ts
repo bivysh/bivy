@@ -1126,11 +1126,15 @@ app.get("/device-vault", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const devicePub = String(req.query.device ?? "");
   const rec = devicePub ? await store.getDeviceVaultWrappedKey(account.id, devicePub) : undefined;
+  const vault = await store.getDeviceVault(account.id);
   res.json({
     ok: true,
-    vault: (await store.getDeviceVault(account.id))?.ciphertext ?? null,
-    wrappedKey: rec ? { wrappedKey: rec.wrappedKey, wrappedByPublicKeyB64: rec.wrappedByPublicKey } : null,
+    vault: vault?.ciphertext ?? null,
+    generation: vault?.generation ?? 0,
+    keyGeneration: vault?.keyGeneration ?? 0,
+    wrappedKey: rec ? { wrappedKey: rec.wrappedKey, wrappedByPublicKeyB64: rec.wrappedByPublicKey, generation: rec.generation } : null,
     requests: devicePub ? (await store.listDeviceVaultKeyRequests(account.id, devicePub)).map((r) => r.devicePublicKey) : [],
+    recipients: (await store.listPairedDevices(account.id)).map((device) => device.id),
   });
 }));
 
@@ -1138,9 +1142,11 @@ app.put("/device-vault", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const devicePub = String(req.body?.devicePublicKeyB64 ?? "");
   const ciphertext = String(req.body?.ciphertext ?? "");
-  if (!devicePub || !ciphertext) { res.status(400).json({ error: "devicePublicKeyB64 and ciphertext required" }); return; }
-  await store.setDeviceVault(account.id, devicePub, ciphertext);
-  res.json({ ok: true });
+  const expectedGeneration = Number(req.body?.expectedGeneration ?? 0);
+  const keyGeneration = Number(req.body?.keyGeneration ?? 0);
+  if (!devicePub || !ciphertext || !Number.isSafeInteger(expectedGeneration) || !Number.isSafeInteger(keyGeneration)) { res.status(400).json({ error: "devicePublicKeyB64, ciphertext and valid generations required" }); return; }
+  const updated = await store.setDeviceVault(account.id, devicePub, ciphertext, expectedGeneration, keyGeneration);
+  res.json({ ok: true, generation: updated.generation });
 }));
 
 app.post("/device-vault/key/request", requireUser, asyncHandler(async (req, res) => {
@@ -1156,8 +1162,9 @@ app.put("/device-vault/key/wrapped", requireUser, asyncHandler(async (req, res) 
   const target = String(req.body?.targetDevicePublicKeyB64 ?? "");
   const wrappedByPublicKey = String(req.body?.wrappedByPublicKeyB64 ?? "");
   const wrappedKey = String(req.body?.wrappedKey ?? "");
-  if (!target || !wrappedByPublicKey || !wrappedKey) { res.status(400).json({ error: "target, wrappedBy and wrappedKey required" }); return; }
-  await store.setDeviceVaultWrappedKey(account.id, target, wrappedByPublicKey, wrappedKey);
+  const generation = Number(req.body?.generation ?? 0);
+  if (!target || !wrappedByPublicKey || !wrappedKey || !Number.isSafeInteger(generation)) { res.status(400).json({ error: "target, wrappedBy, wrappedKey and generation required" }); return; }
+  await store.setDeviceVaultWrappedKey(account.id, target, wrappedByPublicKey, wrappedKey, generation);
   res.json({ ok: true });
 }));
 

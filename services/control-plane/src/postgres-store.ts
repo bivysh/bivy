@@ -430,17 +430,23 @@ export class PostgresStore implements MeshStore {
         account_id         TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         ciphertext         TEXT NOT NULL,
         updated_by_device  TEXT NOT NULL,
+        generation         BIGINT NOT NULL DEFAULT 1,
+        key_generation     BIGINT NOT NULL DEFAULT 0,
         updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      ALTER TABLE device_vaults ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 1;
+      ALTER TABLE device_vaults ADD COLUMN IF NOT EXISTS key_generation BIGINT NOT NULL DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS device_vault_wrapped_keys (
         account_id             TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         device_pub             TEXT NOT NULL,
         wrapped_key            TEXT NOT NULL,
         wrapped_by_public_key  TEXT NOT NULL,
+        generation             BIGINT NOT NULL DEFAULT 0,
         updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (account_id, device_pub)
       );
+      ALTER TABLE device_vault_wrapped_keys ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS device_vault_key_requests (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -1007,11 +1013,29 @@ export class PostgresStore implements MeshStore {
   }
 
   async removePairedDevice(accountId: string, publicKeyB64: string): Promise<boolean> {
-    const result = await this.query(
-      `DELETE FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`,
-      [accountId, publicKeyB64],
-    );
-    return (result.rowCount ?? 0) > 0;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `DELETE FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`,
+        [accountId, publicKeyB64],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        // The revoked device's old wrap must never be copied forward. Advancing
+        // the epoch asks any surviving holder to generate a new vault key and
+        // rewrap it only for the still-paired recipient list.
+        await client.query(`DELETE FROM device_vault_wrapped_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
+        await client.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
+        await client.query(`UPDATE device_vaults SET key_generation = key_generation + 1, updated_at = now() WHERE account_id = $1`, [accountId]);
+      }
+      await client.query("COMMIT");
+      return (result.rowCount ?? 0) > 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async createRelayTicket(input: { role: RelayRole; accountId: string; nodeId: string | null; ttlMs?: number }): Promise<string> {
@@ -2004,25 +2028,37 @@ export class PostgresStore implements MeshStore {
     const { rows } = await this.query(`SELECT * FROM device_vaults WHERE account_id = $1`, [accountId]);
     const row = rows[0];
     if (!row) return undefined;
-    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString() };
+    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString(), generation: Number(row.generation), keyGeneration: Number(row.key_generation) };
   }
 
-  async setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string): Promise<DeviceVault> {
+  async setDeviceVault(accountId: string, byDevicePublicKey: string, ciphertext: string, expectedGeneration = 0, keyGeneration = 0): Promise<DeviceVault> {
+    // Give callers an immediate useful conflict (and support pg-mem, which does
+    // not fully implement ON CONFLICT ... WHERE); the SQL predicate below is the
+    // authoritative cross-replica compare-and-set.
+    const observed = await this.getDeviceVault(accountId);
+    if (observed && (observed.generation !== expectedGeneration || observed.keyGeneration !== keyGeneration)) {
+      throw Object.assign(new Error("Device vault changed concurrently"), { status: 409 });
+    }
+    // The WHERE on the conflict update makes this a real compare-and-set, not a
+    // read/check/write race across control-plane replicas.
     const { rows } = await this.query(
-      `INSERT INTO device_vaults (account_id, ciphertext, updated_by_device, updated_at)
-       VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_device = EXCLUDED.updated_by_device, updated_at = now()
+      `INSERT INTO device_vaults (account_id, ciphertext, updated_by_device, generation, key_generation, updated_at)
+       VALUES ($1, $2, $3, 1, $5, now())
+       ON CONFLICT (account_id) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_by_device = EXCLUDED.updated_by_device, generation = device_vaults.generation + 1, updated_at = now()
+       WHERE device_vaults.generation = $4 AND device_vaults.key_generation = $5
        RETURNING *`,
-      [accountId, ciphertext, byDevicePublicKey],
+      [accountId, ciphertext, byDevicePublicKey, expectedGeneration, keyGeneration],
     );
-    return { ciphertext: rows[0].ciphertext, updatedByDevice: rows[0].updated_by_device, updatedAt: new Date(rows[0].updated_at).toISOString() };
+    const row = rows[0];
+    if (!row) throw Object.assign(new Error("Device vault changed concurrently"), { status: 409 });
+    return { ciphertext: row.ciphertext, updatedByDevice: row.updated_by_device, updatedAt: new Date(row.updated_at).toISOString(), generation: Number(row.generation), keyGeneration: Number(row.key_generation) };
   }
 
   async getDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<DeviceVaultWrappedKeyRecord | undefined> {
     const { rows } = await this.query(`SELECT * FROM device_vault_wrapped_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, devicePublicKey]);
     const row = rows[0];
     if (!row) return undefined;
-    return { devicePublicKey: row.device_pub, wrappedKey: row.wrapped_key, wrappedByPublicKey: row.wrapped_by_public_key, updatedAt: new Date(row.updated_at).toISOString() };
+    return { devicePublicKey: row.device_pub, wrappedKey: row.wrapped_key, wrappedByPublicKey: row.wrapped_by_public_key, generation: Number(row.generation), updatedAt: new Date(row.updated_at).toISOString() };
   }
 
   async requestDeviceVaultWrappedKey(accountId: string, devicePublicKey: string): Promise<void> {
@@ -2043,16 +2079,20 @@ export class PostgresStore implements MeshStore {
     return rows.map((row: any) => ({ devicePublicKey: row.device_pub, createdAt: new Date(row.created_at).toISOString() }));
   }
 
-  async setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<DeviceVaultWrappedKeyRecord> {
+  async setDeviceVaultWrappedKey(accountId: string, targetDevicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string, generation = 0): Promise<DeviceVaultWrappedKeyRecord> {
+    const current = await this.getDeviceVault(accountId);
+    if (current && generation !== current.keyGeneration) throw Object.assign(new Error("Device vault key generation is stale"), { status: 409 });
+    const paired = await this.query(`SELECT 1 FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`, [accountId, targetDevicePublicKey]);
+    if (!paired.rows[0]) throw Object.assign(new Error("Vault recipient is not a paired device"), { status: 403 });
     const { rows } = await this.query(
-      `INSERT INTO device_vault_wrapped_keys (account_id, device_pub, wrapped_key, wrapped_by_public_key, updated_at)
-       VALUES ($1, $2, $3, $4, now())
-       ON CONFLICT (account_id, device_pub) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, updated_at = now()
+      `INSERT INTO device_vault_wrapped_keys (account_id, device_pub, wrapped_key, wrapped_by_public_key, generation, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (account_id, device_pub) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, generation = EXCLUDED.generation, updated_at = now()
        RETURNING *`,
-      [accountId, targetDevicePublicKey, wrappedKey, wrappedByPublicKey],
+      [accountId, targetDevicePublicKey, wrappedKey, wrappedByPublicKey, generation],
     );
     await this.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, targetDevicePublicKey]);
-    return { devicePublicKey: rows[0].device_pub, wrappedKey: rows[0].wrapped_key, wrappedByPublicKey: rows[0].wrapped_by_public_key, updatedAt: new Date(rows[0].updated_at).toISOString() };
+    return { devicePublicKey: rows[0].device_pub, wrappedKey: rows[0].wrapped_key, wrappedByPublicKey: rows[0].wrapped_by_public_key, generation: Number(rows[0].generation), updatedAt: new Date(rows[0].updated_at).toISOString() };
   }
 
   // --- Durable E2E session snapshots (Gap B) ---------------------------
