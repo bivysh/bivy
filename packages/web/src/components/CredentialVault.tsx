@@ -5,6 +5,7 @@ import type { AppState, CredentialRecordSummary, EphemeralModelKeyInfo } from "@
 import { BIVY_PROVIDER_CATALOG } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { OauthStep } from "./ProviderConnect.js";
+import { ConfirmDialog } from "./AppDialog.js";
 
 type CatalogProvider = { id: string; name: string; oauth?: boolean; help?: string };
 type Availability = "account" | "node" | "device";
@@ -48,6 +49,7 @@ export function CredentialVault({ state }: { state: AppState }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<VaultItem | null>(null);
 
   const refreshDevice = () => controller.listEphemeralModelKeys().then(setDeviceKeys).catch(() => setDeviceKeys([]));
   const refresh = () => {
@@ -170,11 +172,11 @@ export function CredentialVault({ state }: { state: AppState }) {
   };
 
   const remove = async (item: VaultItem) => {
-    if (!window.confirm(`Delete ${titleFor(item)}? Agents using it will lose access.`)) return;
     setBusy(true); setError(null);
     try {
       if (item.device) await controller.removeEphemeralModelKey(item.provider, item.label);
       if (item.record) await controller.removeCredential(item.provider, item.label);
+      setConfirmDelete(null);
       setView("list"); setSelectedKey(null); refresh();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
@@ -255,6 +257,14 @@ export function CredentialVault({ state }: { state: AppState }) {
     const projectLabel = projectPreset ? state.credentialPresets?.presets?.[projectPreset]?.[selected.provider] : undefined;
     const usedByProject = projectLabel === selected.label;
     return <div className="settings-form credential-vault">
+      {confirmDelete && <ConfirmDialog
+        title="Delete credential?"
+        message={`Delete ${titleFor(confirmDelete)}? Agents and projects using it will lose access.`}
+        confirmLabel="Delete"
+        danger
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => void remove(confirmDelete)}
+      />}
       <button className="link-btn" onClick={() => setView("list")}>‹ Credentials</button>
       <div className="vault-title-row"><div><h3>{titleFor(selected)}</h3><p className="muted">{methodLabel(selected.kind)}</p></div><span className={`chip ${selected.record?.lastVerifiedOk ? "ok" : ""}`}>{selected.record?.lastVerifiedOk ? "Verified" : selected.ambient ? "Provided by environment" : "Saved"}</span></div>
       <div className="vault-detail-grid">
@@ -284,7 +294,7 @@ export function CredentialVault({ state }: { state: AppState }) {
           <p className="muted small">Re-enter the secret to replace it or move it. Bivy never displays saved secrets.</p>
           <button className="btn" onClick={() => { const custom = state.localModels.find((model) => model.id === selected.provider); resetAdd(selected.provider); setLabel(selected.label === "default" ? "" : selected.label); setMethod(selected.kind === "reference" ? "reference" : "api_key"); setAvailability(selected.availability); if (custom) { setCustomBaseUrl(custom.baseUrl); setCustomApi(custom.api); setCustomModels(custom.models.map((model) => model.id).join("\n")); } setView("add"); }}>Edit credential</button>
         </details>
-        <button className="btn danger-ghost" disabled={busy} onClick={() => void remove(selected)}>Delete credential</button>
+        <button className="btn danger-ghost" disabled={busy} onClick={() => setConfirmDelete(selected)}>Delete credential</button>
       </>}
       {message && <p className="banner inline">{message}</p>}{error && <div className="banner error inline">{error}</div>}
       {state.nodes.length > 0 && <details className="vault-advanced"><summary>Machine availability</summary><div className="picker-list">{state.nodes.map((n) => <div className="picker-item" key={n.id}><span><strong>{n.name || n.id}</strong><small>{n.online ? selected.availability === "device" ? "Device-only credential is not available" : "Online" : "Will sync when online"}</small></span><span className={`chip ${n.online ? "ok" : ""}`}>{n.online ? "Online" : "Offline"}</span></div>)}</div></details>}
