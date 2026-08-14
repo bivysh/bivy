@@ -36,7 +36,7 @@ await test("api_key: a 200 response is ok, and no secret reaches the result or t
     label: "default",
     origin: "bivy",
     sync: "account",
-    source: { kind: "stored", cred: { type: "api_key", key: "sk-super-secret-value" } },
+    source: { kind: "stored", cred: { type: "api_key", key: "sk-fixture-super-secret-value" } },
   });
 
   let seenHeaders: Record<string, string> | undefined;
@@ -48,12 +48,12 @@ await test("api_key: a 200 response is ok, and no secret reaches the result or t
   const result = await testCredential(dir, "anthropic", "default", noRefresh, fakeFetch);
   assert.equal(result.ok, true);
   assert.equal(result.reason, undefined);
-  assert.equal(seenHeaders?.["x-api-key"], "sk-super-secret-value", "the secret DOES go to the provider's own API — that's the point of the probe");
-  assert.ok(!JSON.stringify(result).includes("sk-super-secret-value"), "the secret never appears in the returned CredentialVerification");
+  assert.equal(seenHeaders?.["x-api-key"], "sk-fixture-super-secret-value", "the secret DOES go to the provider's own API — that's the point of the probe");
+  assert.ok(!JSON.stringify(result).includes("sk-fixture-super-secret-value"), "the secret never appears in the returned CredentialVerification");
 
   const persisted = await vault.readVerification("anthropic", "default");
   assert.deepEqual(persisted, { ok: true, at: result.at });
-  assert.ok(!JSON.stringify(persisted).includes("sk-super-secret-value"), "the secret never appears in the persisted verification record");
+  assert.ok(!JSON.stringify(persisted).includes("sk-fixture-super-secret-value"), "the secret never appears in the persisted verification record");
 });
 
 await test("api_key: 401/403 is reported as unauthorized, not a generic failure", async () => {
